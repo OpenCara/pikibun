@@ -5,6 +5,7 @@ import { defaultNetworkPolicy, egressGitServices, egressGrantPolicy, egressLfsSe
 import { sessionBranchRefusal, type PushCommand } from '../../../packages/shared/src/git-push.js';
 import { fetchGit, gitUpstreamHeaders } from '../../../packages/shared/src/git-transfer.js';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
+import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import type { AppContext, Env, RepositoryRow, SessionRow, WorkerEnv } from './types.js';
 import type { Database } from './db/types.js';
 import { auditStatement, requireMember, sessionAccess } from './db.js';
@@ -18,6 +19,7 @@ import { sessionBranchPush, sessionBranchTarget } from './push/session-branch.js
 import { requireBinding } from './push/broker.js';
 import { mintPushToken, mintRepositoryReadToken, type MintedToken } from './push/mint.js';
 import { sessionApis } from './api-access.js';
+import { sourceReadAs, workspaceAccess, workspaceGitAccess } from './workspace-connections.js';
 import { webSearchProvider } from './web-search.js';
 
 /** Owner/admin authority, re-checked inside the write (binds workspace id, user id). */
@@ -68,6 +70,12 @@ export function registerNetworkPolicies(app: Hono<WorkerEnv>): void {
   });
 }
 
+async function connectorAcceptsGitServers(env: Env, connectorId: string): Promise<boolean> {
+  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(connectorId).first();
+  try { return (JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities).gitServers === true; }
+  catch { return false; }
+}
+
 /**
  * What one session's egress proxy may do: the workspace's network policy and its repositories. Hosts ask again every
  * minute, so a changed policy or a removed repository reaches running sessions without a restart.
@@ -79,8 +87,11 @@ export async function egressGrant(c: AppContext, connectorId: string | null): Pr
   if (!row) fail(404, 'not_found', 'Session not found.');
   await requireCallbackScope(c, row, connectorId);
   if (row.status === 'archived') fail(403, 'session_archived', 'Archived sessions have no network access.');
-  const repositories = await c.env.DB.query<RepositorySettingsRow>(`${repositorySettingsSelect} WHERE r.workspace_id = ? ORDER BY r.id`)
+  const bound = await c.env.DB.query<RepositorySettingsRow>(`${repositorySettingsSelect} WHERE r.workspace_id = ? ORDER BY r.id`)
     .bind(row.workspace_id).all();
+  // A connector from before plain Git servers refuses a whole grant that names one, so its sessions get the others.
+  const repositories = !connectorId || await connectorAcceptsGitServers(c.env, connectorId)
+    ? bound : bound.filter(repository => repository.provider !== 'git');
   const grant: EgressGrant = {
     // Without the web search setting, which the control plane checks itself (web-search.ts): older connectors refuse a
     // policy that names it.
@@ -146,8 +157,19 @@ async function gitAuthority(c: AppContext, connector: ConnectorRow | null, sessi
   const binding = await c.env.DB.query<RepositoryRow>('SELECT * FROM workspace_repositories WHERE id = ? AND workspace_id = ?')
     .bind(bindingId, original.workspace_id).first();
   if (!binding) fail(404, 'repository_not_bound', 'This repository is not bound to the session\'s workspace.');
-  const access = await repositoryAccess(c.env, original.owner_id, binding.provider, binding.host, binding.full_name);
-  return { session: original, binding, access, authorize };
+  // Pushes are always the owner's; reads use the identity the source reads with (the owner's, or the workspace's connection).
+  const readAs = push ? null : await sourceReadAs(c.env, original.workspace_id, binding.id);
+  const access = readAs === 'workspace' ? await workspaceGitAccess(c.env, original.workspace_id, binding.provider, binding.host, binding.full_name)
+    : await repositoryAccess(c.env, original.owner_id, binding.provider, binding.host, binding.full_name);
+  // A read never completes with an identity the repository no longer reads with: every recheck before an effect (an
+  // upstream Git or LFS transfer, a direct grant) also compares the setting with the one this request started with.
+  const current = async () => {
+    await authorize();
+    if (readAs !== null && await sourceReadAs(c.env, original.workspace_id, binding.id) !== readAs) {
+      fail(409, 'source_read_as_changed', 'The account this repository reads with changed; retry with the current one.');
+    }
+  };
+  return { session: original, binding, access, authorize: current };
 }
 
 /**
@@ -182,7 +204,7 @@ export async function gitRelay(c: AppContext, connector: ConnectorRow | null): P
   let upstream: { body: ReadableStream<Uint8Array>; contentType: string };
   try {
     upstream = await fetchGit({ remote, service: read, authorization: ownerGitAuthorization(access), headers, body,
-      provider: gitProviderNames[binding.provider], fullName: binding.full_name, identity: 'owner' });
+      provider: gitProviderNames[binding.provider], fullName: binding.full_name, identity: workspaceAccess(access) ? 'workspace' : 'owner' });
   } catch (error) { failTransfer(error); }
   return new Response(upstream.body, { headers: { 'Content-Type': upstream.contentType, 'Cache-Control': 'private, no-store' } });
 }
@@ -289,6 +311,8 @@ export async function gitDirect(c: AppContext, connector: ConnectorRow | null): 
         cacheSeconds: GIT_DIRECT_CACHE_SECONDS });
     }
   }
+  // A workspace connection never leaves the control plane, not even for the owner's own host: its reads are relayed.
+  if (workspaceAccess(access)) return relay(`${binding.full_name} reads with the workspace's connection, which Pistead relays`);
   if (trusted) return grant({ remote, authorization: ownerGitAuthorization(access), kind: 'owner-account', expiresAt: expires(3600), cacheSeconds: GIT_DIRECT_CACHE_SECONDS });
   return relay(`No credential limited to reading ${binding.full_name} is available for a host shared with the workspace`);
 }

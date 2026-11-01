@@ -68,8 +68,11 @@ export interface GitUpstreamRequest {
   body?: Uint8Array<ArrayBuffer> | ReadableStream<Uint8Array>;
   /** The provider's display name and the repository, for messages. */
   provider: string; fullName: string;
-  /** Who the credential is, for the refusal's message: the session owner (reads) or the workspace's push identity. */
-  identity: "owner" | "push";
+  /**
+   * Who the credential is, for the refusal's message: the session owner or the workspace's connection (reads), or the
+   * workspace's push identity.
+   */
+  identity: "owner" | "workspace" | "push";
   fetch?: typeof fetch;
   signal?: AbortSignal;
 }
@@ -98,7 +101,7 @@ export async function fetchGit(request: GitUpstreamRequest): Promise<{ body: Rea
     throw push
       ? new GitTransferError(403, "push_identity_denied", `${provider} did not let the workspace's push identity push to ${request.fullName}.`)
       : new GitTransferError(403, "repository_unavailable", request.authorization
-        ? `${provider} did not let the session owner's account read ${request.fullName}.`
+        ? `${provider} did not let ${request.identity === "workspace" ? "the workspace's connection" : "the session owner's account"} read ${request.fullName}.`
         : `${provider} did not serve ${request.fullName} without credentials.`);
   }
   return { body: upstream.body, contentType: gitServiceTypes[service] };

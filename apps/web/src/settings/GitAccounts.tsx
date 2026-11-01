@@ -1,10 +1,10 @@
-import { useState, type FormEvent } from "react";
+import { Fragment, useEffect, useState, type FormEvent } from "react";
 import { gitProviderHosts, gitProviderNames, gitProviders, type GitAccount, type TokenGitProvider } from "../../../../packages/shared/src/repositories";
 import { api, segment } from "../api";
 import { useApp } from "../app-context";
 import { GitHubMark, Icon } from "../icons";
 import { gitAccountLabel, useGitAccounts } from "../repositories";
-import { Button, CardBody, Combobox, Feedback, Field, LinkButton, ResourceState, Row, Section, Sheet, StatusBadge, confirmDialog, useAction } from "../ui";
+import { Button, CardBody, Feedback, Field, LinkButton, ResourceState, Row, Sheet, StatusBadge, confirmDialog, useAction } from "../ui";
 
 const tokenProviders = gitProviders.filter((provider): provider is TokenGitProvider => provider !== "github");
 
@@ -14,14 +14,26 @@ const tokenScopes: Record<TokenGitProvider, string> = {
   bitbucket: "API token with read:repository:bitbucket and read:user:bitbucket, connected with your Atlassian account email above; agent pushes need this API token (workspace or repository access tokens can browse but cannot pass the push owner check); opening pull requests needs write:pullrequest:bitbucket, and pushing with your account write:repository:bitbucket",
   "azure-devops": "Code (Read); opening pull requests or pushing with your account needs Code (Read & write)",
   gitea: "read:repository and read:user; opening pull requests or pushing with your account needs write:repository",
+  git: "read access to the repositories; pushing with your account needs write access",
 };
 
-/** Profile section listing the GitHub sign-in account and personal-access-token accounts for other Git providers. */
-export function GitAccountsSection() {
+/** What the Git accounts are for, as part of the Connected accounts section's info. */
+export const gitAccountsInfo = "Repositories you bind or pin are read with your Git accounts, and the pull requests your agents ask for are opened with them. Their tokens are encrypted on the server and never sent to other people's hosts. Where a workspace's push access uses the session owner's account, your own host receives yours in memory for each push in your sessions; Pistead resets your GitHub token when the push ends, so that copy stops working.";
+
+/** Where a provider's accounts live: its fixed host, its default one, or self-hosted. */
+function providerHost(provider: TokenGitProvider): string {
+  if (provider === "git") return "Any server over HTTPS, without pull requests";
+  const hosts = gitProviderHosts[provider];
+  return hosts.fixed ?? (hosts.default ? `${hosts.default} or self-managed` : "Self-hosted");
+}
+
+/** The Git group of the profile's Connected accounts: one row per supported Git provider, like the document providers,
+ * each with its connected accounts under it. GitHub is the sign-in account; the others connect with tokens. */
+export function GitAccountsGroup() {
   const { user } = useApp();
   const { accounts, loading, error, refresh } = useGitAccounts();
   const action = useAction();
-  const [adding, setAdding] = useState(false);
+  const [connecting, setConnecting] = useState<TokenGitProvider | null>(null);
   async function remove(account: GitAccount) {
     if (action.busy) return;
     const confirmed = await confirmDialog({
@@ -36,49 +48,65 @@ export function GitAccountsSection() {
       refresh();
     }, "Git account removed.");
   }
-  return <Section title="Git accounts"
-    info="Repositories you bind or pin are read with these accounts, and the pull requests your agents ask for are opened with them. Tokens are encrypted on the server and never sent to other people's hosts. Where a workspace's push access uses the session owner's account, your own host receives yours in memory for each push in your sessions; Pistead resets your GitHub token when the push ends, so that copy stops working. Your sign-in stays GitHub; viewing a session, sharing a host or publishing an agent never grants access to your accounts."
-    action={<Button variant="outline" size="sm" icon="plus" onClick={() => setAdding(true)}>Add account</Button>}>
-    {/* Continuing with GitHub would sign in as a separate GitHub account, so a password account isn't offered it here. */}
-    {user.passwordSignIn
-      ? <Row leading={<GitHubMark />} title={`${gitProviderNames.github} · ${gitProviderHosts.github.default}`}
-          hint="Repositories on github.com need an account that signs in with GitHub. This account signs in with a password; add accounts for other Git providers below."
-          trailing={<StatusBadge tone="warning">Not available</StatusBadge>} />
-      : <Row leading={<GitHubMark />} title={`${gitProviderNames.github} · ${gitProviderHosts.github.default}`} hint={user.githubLogin ? `@${user.githubLogin}` : undefined}
-          trailing={<>
-            <StatusBadge tone={user.githubConnected ? "success" : "warning"}>{user.githubConnected ? "Connected" : "Not connected"}</StatusBadge>
-            {!user.githubConnected && <LinkButton variant="outline" size="sm" href="/api/auth/github">Connect GitHub</LinkButton>}
-          </>} />}
-    <ResourceState loading={loading && !accounts} error={error} retry={refresh}>
-      {accounts?.filter(account => account.provider !== "github").map(account => <Row key={account.id} leading={<Icon name="git-branch" size={16} />}
-        title={gitAccountLabel(account)} hint={account.login}
-        trailing={<Button variant="ghost" size="sm" disabled={action.busy} aria-label={`Remove ${gitAccountLabel(account)}`} onClick={() => void remove(account)}>Remove</Button>} />)}
-    </ResourceState>
-    {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
-    <AddGitAccountSheet open={adding} close={() => setAdding(false)} added={refresh} />
-  </Section>;
+  return <div className="stack" id="git-accounts">
+    <div className="section-header"><h3 className="section-title">Git</h3></div>
+    <div className="card">
+      {/* Continuing with GitHub would sign in as a separate GitHub account, so a password account isn't offered it here. */}
+      {user.passwordSignIn
+        ? <Row leading={<GitHubMark />} title={gitProviderNames.github}
+            hint={`${gitProviderHosts.github.default} · Repositories on github.com need an account that signs in with GitHub; this account signs in with a password`}
+            trailing={<StatusBadge tone="warning">Not available</StatusBadge>} />
+        : <Row leading={<GitHubMark />} title={gitProviderNames.github}
+            hint={user.githubConnected ? `${gitProviderHosts.github.default} · ${user.githubLogin ? `@${user.githubLogin} · ` : ""}signed in` : `${gitProviderHosts.github.default} · Not connected`}
+            trailing={user.githubConnected
+              ? <StatusBadge tone="success">Connected</StatusBadge>
+              : <LinkButton variant="outline" size="sm" href="/api/auth/github">Sign in</LinkButton>} />}
+      <ResourceState loading={loading && !accounts} error={error} retry={refresh}>
+        {tokenProviders.map(provider => {
+          const connected = accounts?.filter(account => account.provider === provider) ?? [];
+          const name = gitProviderNames[provider];
+          return <Fragment key={provider}>
+            <Row leading={<Icon name="git-branch" size={16} />} title={name}
+              hint={`${providerHost(provider)} · ${connected.length ? `${connected.length} connected` : "Not connected"}`}
+              trailing={<>
+                {connected.length > 0 && <StatusBadge tone="success">Connected</StatusBadge>}
+                <Button variant={connected.length ? "ghost" : "outline"} size="sm" disabled={action.busy} aria-label={`Connect ${name}`} onClick={() => setConnecting(provider)}>{connected.length ? "Add another" : "Connect"}</Button>
+              </>} />
+            {connected.map(account => <Row key={account.id} leading={<span className="git-account-indent" aria-hidden />}
+              title={`${account.host}${account.organization ? `/${account.organization}` : ""}`} hint={account.login}
+              trailing={<Button variant="ghost" size="sm" disabled={action.busy} aria-label={`Remove ${gitAccountLabel(account)}`} onClick={() => void remove(account)}>Remove</Button>} />)}
+          </Fragment>;
+        })}
+      </ResourceState>
+      {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
+    </div>
+    <ConnectGitAccountSheet provider={connecting} close={() => setConnecting(null)} added={refresh} />
+  </div>;
 }
 
-function AddGitAccountSheet({ open, close, added }: { open: boolean; close: () => void; added: () => void }) {
-  const [provider, setProvider] = useState<TokenGitProvider | "">("");
+/**
+ * Connects a token account for one provider, chosen by its row: the member's own, or with `save` another holder's (a
+ * workspace's connection), which gets the same verified body.
+ */
+export function ConnectGitAccountSheet({ provider, close, added, save, initial }: { provider: TokenGitProvider | null; close: () => void; added: () => void;
+  save?: (body: Record<string, unknown>) => Promise<void>;
+  /** Replacing a connection: its host, Azure DevOps organization and user name, kept; only the secret is entered again. */
+  initial?: { host: string; organization: string; username?: string } | null }) {
   const [host, setHost] = useState("");
   const [organization, setOrganization] = useState("");
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
   const action = useAction();
   const fixedHost = provider ? gitProviderHosts[provider].fixed : null;
-  function choose(next: TokenGitProvider) {
-    setProvider(next);
-    setHost(gitProviderHosts[next].default ?? "");
-    setOrganization("");
-    setUsername("");
-  }
+  // Each opening starts from the provider's defaults.
+  useEffect(() => {
+    setHost(initial?.host ?? (provider ? gitProviderHosts[provider].default ?? "" : ""));
+    setOrganization(initial?.organization ?? "");
+    setUsername(initial?.username ?? "");
+    setToken("");
+  }, [provider, initial]);
   function dismiss() {
     if (action.busy) return;
-    setProvider("");
-    setHost("");
-    setOrganization("");
-    setUsername("");
     setToken("");
     close();
   }
@@ -90,34 +118,31 @@ function AddGitAccountSheet({ open, close, added }: { open: boolean; close: () =
       token,
       ...(fixedHost ? {} : { host: host.trim() }),
       ...(provider === "azure-devops" ? { organization: organization.trim() } : {}),
-      ...(provider === "bitbucket" && username.trim() ? { username: username.trim() } : {}),
+      ...((provider === "bitbucket" || provider === "git") && username.trim() ? { username: username.trim() } : {}),
     };
     void action.run(async () => {
       try {
-        await api<{ account: GitAccount }>("/api/git/accounts", { method: "POST", body });
+        if (save) await save(body);
+        else await api<{ account: GitAccount }>("/api/git/accounts", { method: "POST", body });
       } finally {
         setToken("");
       }
       added();
-      setProvider("");
-      setHost("");
-      setOrganization("");
-      setUsername("");
       close();
     });
   }
-  const ready = Boolean(provider && token && (fixedHost || host.trim()) && (provider !== "azure-devops" || organization.trim()));
-  return <Sheet open={open} title="Add Git account" onClose={dismiss} footer={<>
+  const ready = Boolean(provider && token && (fixedHost || host.trim()) && (provider !== "azure-devops" || organization.trim()) && (provider !== "git" || username.trim()));
+  // With `save`, the account is the workspace's: a service account that only reads.
+  const forWorkspace = Boolean(save);
+  return <Sheet open={provider !== null} title={`Connect ${provider ? gitProviderNames[provider] : "Git"}${forWorkspace ? " for the workspace" : ""}`} onClose={dismiss} footer={<>
     <Button disabled={action.busy} onClick={dismiss}>Cancel</Button>
-    <Button variant="default" type="submit" form="git-account-form" disabled={!ready || action.busy}>{action.busy ? "Verifying..." : "Add account"}</Button>
+    <Button variant="default" type="submit" form="git-account-form" disabled={!ready || action.busy}>{action.busy ? "Verifying..." : "Connect"}</Button>
   </>}>
     <form id="git-account-form" className="stack" onSubmit={submit}>
-      <div className="field"><span className="field-label">Provider</span>
-        <Combobox<TokenGitProvider> label="Provider" placeholder="Choose a provider" value={provider} disabled={action.busy}
-          options={tokenProviders.map(item => ({ value: item, label: gitProviderNames[item], hint: gitProviderHosts[item].fixed ?? gitProviderHosts[item].default ?? "Self-hosted" }))} onChange={choose} />
-      </div>
       {provider && <>
-        {!fixedHost && <Field label="Host" hint="HTTPS host name of the instance, without https://, for example git.example.com">
+        {forWorkspace && <p className="muted small">Use a service account made for this, such as a bot or a deploy user, never your own: every member's sessions read with it. It only reads; pushes keep using each session owner's account or the workspace's push access.</p>}
+        {provider === "git" && <p className="muted small">Any Git server that serves smart HTTP over HTTPS (git http-backend, cgit, Gerrit, a forge without its API). There is no repository list and agents can't open pull requests; you add each repository by its clone URL. SSH isn't supported.</p>}
+        {!fixedHost && <Field label="Host" hint={provider === "git" ? "The host name in the server's https:// clone URLs, with its port if it has one, for example git.example.com" : "HTTPS host name of the instance, without https://, for example git.example.com"}>
           <input className="input" required value={host} onChange={event => setHost(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} maxLength={253} placeholder="git.example.com" />
         </Field>}
         {provider === "azure-devops" && <Field label="Organization" hint={`From dev.azure.com/<organization>`}>
@@ -126,7 +151,14 @@ function AddGitAccountSheet({ open, close, added }: { open: boolean; close: () =
         {provider === "bitbucket" && <Field label="Username or email" hint="Your Atlassian account email when using an API token (required for agent pushes); leave blank for a workspace or repository access token, which can browse but not push">
           <input className="input" value={username} onChange={event => setUsername(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} maxLength={254} />
         </Field>}
-        <Field label="Token" hint={`Scopes: ${tokenScopes[provider]}. Verified with ${gitProviderNames[provider]}, then encrypted on the server`}>
+        {provider === "git" && <Field label="User name" hint={forWorkspace ? "The service account's user name over HTTPS" : "The user name you clone with over HTTPS"}>
+          <input className="input" required value={username} onChange={event => setUsername(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} maxLength={254} />
+        </Field>}
+        <Field label={provider === "git" ? "Password or token" : "Token"} hint={forWorkspace
+          ? `Read access to the repositories it will read is enough. ${provider === "git" ? "Encrypted on the server and checked when a repository reads with it" : `Verified with ${gitProviderNames[provider]}, then encrypted on the server`}`
+          : provider === "git"
+          ? `Needs ${tokenScopes.git}. Encrypted on the server and checked when you add a repository: a Git server has no account to verify it against`
+          : `Scopes: ${tokenScopes[provider]}. Verified with ${gitProviderNames[provider]}, then encrypted on the server`}>
           <input className="input" required type="password" value={token} onChange={event => setToken(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} />
         </Field>
       </>}

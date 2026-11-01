@@ -1,19 +1,23 @@
 import type { Hono } from 'hono';
 import type { GitAccount, GitProvider, ProviderRepository, ProviderRepositoryList, TokenGitProvider } from '../../../../packages/shared/src/repositories.js';
-import { gitProviderHosts, gitProviderNames, gitProviders, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../packages/shared/src/repositories.js';
+import { gitProviderHosts, gitProviderNames, gitProviders, plainRepositoryPath, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../packages/shared/src/repositories.js';
 import type { Env, GitCredentialRow, WorkerEnv } from '../types.js';
 import { auditStatement, getUser } from '../db.js';
 import { fail, id, identifier, jsonObject, now, testMode } from '../http.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { githubRepositories, validRepositoryRef } from '../repositories.js';
-import { gitProviderAdapters } from './providers.js';
+import { gitProviderAdapters, plainRepositoryId } from './providers.js';
 import type { GitCredential } from './types.js';
 
-/** A decrypted token account plus the exact ciphertext it was read from, for authority rechecks. */
+/**
+ * A decrypted token account plus the exact ciphertext it was read from, for authority rechecks: a member's own account
+ * (`userId`), or with `workspaceId` the workspace connection it is (and then `userId` is empty).
+ */
 export interface LoadedCredential {
   credential: GitCredential;
   ciphertext: string;
   userId: string;
+  workspaceId?: string;
 }
 
 const accountLimit = 20;
@@ -70,6 +74,12 @@ export async function loadCredential(env: Env, userId: string, provider: TokenGi
 }
 
 export async function recheckCredential(env: Env, access: LoadedCredential): Promise<void> {
+  if (access.workspaceId !== undefined) {
+    const current = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM workspace_connections WHERE id = ? AND workspace_id = ?')
+      .bind(access.credential.id, access.workspaceId).first();
+    if (current?.ciphertext !== access.ciphertext) fail(403, 'workspace_connection_changed', 'The workspace connection changed; retry with the current one.');
+    return;
+  }
   const row = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM git_credentials WHERE id = ? AND user_id = ?')
     .bind(access.credential.id, access.userId).first();
   if (row?.ciphertext !== access.ciphertext) fail(403, 'git_access_changed', 'Git account access changed; retry with the current connection.');
@@ -89,7 +99,7 @@ function publicAccount(row: Pick<GitCredentialRow, 'id' | 'provider' | 'host' | 
   return { id: row.id, provider: row.provider, host: row.host, organization: row.organization, login: row.login, createdAt: row.created_at };
 }
 
-function accountInput(input: Record<string, unknown>) {
+export function accountInput(input: Record<string, unknown>) {
   if (Object.keys(input).some(key => !['provider', 'host', 'organization', 'username', 'token'].includes(key))) {
     fail(400, 'invalid_git_account', 'Only provider, host, organization, username and token are accepted.');
   }
@@ -107,17 +117,24 @@ function accountInput(input: Record<string, unknown>) {
     fail(400, 'invalid_git_organization', `${name} accounts do not take an organization.`);
   }
   let username: string | null = null;
-  if (provider === 'bitbucket' && input.username !== undefined && input.username !== '') {
+  const takesUsername = provider === 'bitbucket' || provider === 'git';
+  if (provider === 'git' && (typeof input.username !== 'string' || !input.username.trim())) {
+    fail(400, 'invalid_git_username', 'Enter the user name for this Git server.');
+  }
+  if (takesUsername && input.username !== undefined && input.username !== '') {
     // Basic auth: a colon or control character would change the credential's meaning.
     if (typeof input.username !== 'string' || !/^[^\s:\x00-\x1f\x7f]{1,254}$/.test(input.username.trim())) {
-      fail(400, 'invalid_git_username', 'Use your Atlassian account email or username.');
+      fail(400, 'invalid_git_username', provider === 'git' ? 'Use the user name you sign in to the Git server with, without colons or spaces.'
+        : 'Use your Atlassian account email or username.');
     }
     username = input.username.trim();
-  } else if (provider !== 'bitbucket' && input.username !== undefined && input.username !== '') {
+  } else if (!takesUsername && input.username !== undefined && input.username !== '') {
     fail(400, 'invalid_git_username', `${name} accounts do not take a username.`);
   }
   const token = typeof input.token === 'string' ? input.token.trim() : '';
-  if (!/^[\x21-\x7e]{1,4096}$/.test(token)) fail(400, 'invalid_git_token', `Paste a ${name} personal access token.`);
+  if (!/^[\x21-\x7e]{1,4096}$/.test(token)) {
+    fail(400, 'invalid_git_token', provider === 'git' ? 'Paste the password or access token for this Git server.' : `Paste a ${name} personal access token.`);
+  }
   return { provider, host, organization, username, token };
 }
 
@@ -177,14 +194,27 @@ export function registerGitAccounts(app: Hono<WorkerEnv>): void {
     return c.body(null, 204);
   });
 
+  // The repositories an account can read, for the repository picker. A plain Git server lists nothing, so its picker asks
+  // for one repository by its path (`?path=team/project.git`), which is read with the account like any other.
   app.get('/api/git/accounts/:id/repositories', async c => {
     const userId = c.get('auth').userId;
     const accountId = c.req.param('id');
+    const path = c.req.query('path');
+    if (path !== undefined && accountId === 'github') fail(400, 'invalid_repository', 'Only Git server accounts look repositories up by path.');
     if (accountId === 'github') return c.json(await githubRepositories(c.env, userId));
     const row = await c.env.DB.query<GitCredentialRow>('SELECT * FROM git_credentials WHERE id = ? AND user_id = ?')
       .bind(identifier(accountId), userId).first();
     if (!row) fail(404, 'not_found', 'Git account not found.');
     const access = await loaded(c.env, row);
+    if (path !== undefined) {
+      if (row.provider !== 'git') fail(400, 'invalid_repository', 'Only Git server accounts look repositories up by path.');
+      const fullName = plainRepositoryPath(row.host, path) ?? fail(400, 'invalid_repository',
+        `Enter the repository's clone URL on ${row.host}, or its path there, such as team/project.git.`);
+      const repository = providerRepository('git', await gitProviderAdapters.git.repository(access.credential,
+        { id: await plainRepositoryId(fullName), fullName }));
+      await recheckCredential(c.env, access);
+      return c.json({ repositories: [repository], truncated: false } satisfies ProviderRepositoryList);
+    }
     const result = await gitProviderAdapters[row.provider].list(access.credential);
     if (!Array.isArray(result?.repositories) || result.repositories.length > repositoryLimits.pickerRepositories) {
       fail(502, 'invalid_git_response', `${gitProviderNames[row.provider]} returned invalid repository metadata.`);

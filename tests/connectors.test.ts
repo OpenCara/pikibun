@@ -16,6 +16,7 @@ import { retiredToolNames, toolNames } from '../packages/shared/src/types.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
+import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'connectors-test-secret-not-for-deployment';
@@ -3605,6 +3606,74 @@ test('owners and admins bind Notion pages as workspace sources; sessions read th
   assert.deepEqual((await json<{ sources: unknown[] }>(await self(f, s.connector, 'network', { sessionId: s.session.id }))).sources, []);
   await json(await s.creator.request('DELETE', '/api/source-accounts/notion'));
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM source_accounts WHERE user_id = ?').get(s.creator.user.id)!.n, 0);
+});
+
+test('a source an admin sets to read as the workspace reads with the workspace\'s Notion connection, and only then', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'source_read']);
+  const tokens = { bot: 'ntn_workspace_bot_0123456789abcdef', creator: 'ntn_creator_secret_0123456789abcdef' };
+  const notion = notionFake(t, tokens);
+  const path = `/api/workspaces/${s.team.id}/connections`;
+  // Only owners and admins connect one; it's verified with Notion, and nobody gets its secret back.
+  await denied(await s.creator.request('POST', path, { family: 'document', provider: 'notion', token: tokens.bot }), 403, 'forbidden');
+  await denied(await s.admin.request('POST', path, { family: 'document', provider: 'notion', token: 'ntn_wrong_secret_0123456789abcdef' }), 403, 'source_account_rejected');
+  await denied(await s.admin.request('POST', path, { family: 'document', provider: 'dropbox', token: 'x'.repeat(40) }), 400, 'invalid_workspace_connection');
+  await denied(await s.admin.request('POST', path, { family: 'svn', provider: 'notion', token: tokens.bot }), 400, 'invalid_workspace_connection');
+  const { connection } = await json<{ connection: WorkspaceConnection }>(await s.admin.request('POST', path, { family: 'document', provider: 'notion', token: tokens.bot }), 201);
+  assert.deepEqual([connection.family, connection.provider, connection.host, connection.name, connection.sources], ['document', 'notion', '', 'Acme', 0]);
+  const listed = await s.creator.request('GET', path);
+  const listedText = await listed.clone().text();
+  assert.deepEqual((await json<{ connections: WorkspaceConnection[] }>(listed)).connections.map(item => item.id), [connection.id]);
+  assert.ok(!listedText.includes(tokens.bot) && !listedText.includes('ciphertext'));
+  // Reconnecting replaces the secret and keeps the connection.
+  assert.equal((await json<{ connection: WorkspaceConnection }>(await s.admin.request('POST', path, { family: 'document', provider: 'notion', token: tokens.bot }))).connection.id, connection.id);
+
+  // The admin has no Notion account of their own: the workspace's connection checks and names the page.
+  const { source } = await json<{ source: WorkspaceDocumentSource }>(await s.admin.request('POST', `/api/workspaces/${s.team.id}/sources`,
+    { kind: 'notion', target: notion.ids.root, readAs: 'workspace' }), 201);
+  assert.equal(source.readAs, 'workspace');
+  assert.equal((await json<{ connections: WorkspaceConnection[] }>(await s.creator.request('GET', path))).connections[0]!.sources, 1);
+
+  // The session's owner has no Notion account either: the read uses the workspace's, and says so in the audit.
+  const owner = s.session.ownerId;
+  const admissionId = admit(f, s.session.id, owner);
+  const read = () => self(f, s.connector, 'sources/read', { sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', source: source.id });
+  const before = notion.calls.length;
+  assert.equal((await json<SourceReadView>(await read())).title, 'Specs');
+  assert.ok(notion.calls.slice(before).every(call => call.token === tokens.bot));
+  const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().map(row => JSON.parse(String(row.detail_json)));
+  assert.deepEqual(audit.map(item => item.readAs), ['workspace']);
+
+  // A switch while the read is in flight: what was read with the workspace's connection isn't returned.
+  const inner = globalThis.fetch;
+  let flipped = false;
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!flipped) { flipped = true; f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'members' WHERE source_id = ?").run(source.id); }
+    return inner(input, init);
+  });
+  await denied(await read(), 409, 'source_read_as_changed');
+  assert.ok(flipped);
+  f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'workspace' WHERE source_id = ?").run(source.id);
+  assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length, 1, 'The refused read is not audited as a read');
+
+  // A connection in use can't be removed; switching back to members' accounts never falls back to the workspace's.
+  await denied(await s.admin.request('DELETE', `${path}/${connection.id}`), 409, 'workspace_connection_in_use');
+  await denied(await s.creator.request('PUT', `/api/workspaces/${s.team.id}/sources/${source.id}/read-as`, { readAs: 'members' }), 403, 'forbidden');
+  await denied(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/sources/${source.id}/read-as`, { readAs: 'bot' }), 400, 'invalid_read_as');
+  assert.deepEqual(await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/sources/${source.id}/read-as`, { readAs: 'members' })), { readAs: 'members' });
+  await denied(await read(), 409, 'source_account_required');
+  await json(await s.creator.request('PUT', '/api/source-accounts/notion', { token: tokens.creator }));
+  const mine = notion.calls.length;
+  await json<SourceReadView>(await read());
+  assert.ok(notion.calls.slice(mine).every(call => call.token === tokens.creator));
+
+  // Without a connection, a source can't be set to read as the workspace: it is read first, and refused.
+  assert.equal((await s.admin.request('DELETE', `${path}/${connection.id}`)).status, 204);
+  await denied(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/sources/${source.id}/read-as`, { readAs: 'workspace' }), 409, 'workspace_connection_required');
+  await denied(await s.admin.request('POST', `/api/workspaces/${s.team.id}/sources`, { kind: 'notion', target: notion.ids.child, readAs: 'workspace' }), 409, 'workspace_connection_required');
+  const everything = JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()) + JSON.stringify(f.sqlite.prepare('SELECT * FROM workspace_connections').all());
+  assert.ok(!everything.includes(tokens.bot), 'The secret is stored only encrypted and never audited');
+  const actions = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.connection.%' OR action = 'workspace.source.read_as' ORDER BY created_at").all().map(row => row.action);
+  assert.deepEqual(actions.sort(), ['workspace.connection.connected', 'workspace.connection.connected', 'workspace.connection.removed', 'workspace.source.read_as']);
 });
 
 test('source reads need the source_read tool or the owner\'s permission for that read', async t => {

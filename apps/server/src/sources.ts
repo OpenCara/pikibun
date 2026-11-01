@@ -18,24 +18,29 @@ import { dropboxAdapter } from './dropbox.js';
 import { onedriveAdapter } from './onedrive.js';
 import { tencentDocsAdapter } from './tencent-docs.js';
 import { configuredOAuth, refreshedSecret, type OAuthSecret } from './source-oauth.js';
+import { recheckWorkspaceDocument, sourceReadAs, workspaceDocumentAccount, type WorkspaceDocumentAccount } from './workspace-connections.js';
+import { workspaceDocumentProviders, type SourceReadAs } from '../../../packages/shared/src/workspace-connections.js';
 
 /**
  * Workspace sources other than Git repositories (docs/design/external-sources.md): Notion pages and databases, Google
  * Drive folders and files, Feishu/Lark folders, documents and wiki pages. Owners and admins bind them; every session in
- * the workspace reads them, each with its owner's own connected account of that kind, through the control plane
- * (source_read). Secrets never reach a host.
+ * the workspace reads them, each with its owner's own connected account of that kind, or where an owner or admin chose
+ * that, with the workspace's own connection (workspace-connections.ts), through the control plane (source_read). Secrets
+ * never reach a host.
  */
 export const documentAdapters: Record<DocumentKind, DocumentAdapter> = {
   notion: notionAdapter, 'google-drive': googleDriveAdapter, feishu: feishuAdapter, dropbox: dropboxAdapter, onedrive: onedriveAdapter, 'tencent-docs': tencentDocsAdapter,
 };
 
 interface SourceAccountRow { id: string; user_id: string; provider: DocumentKind; ciphertext: string; account_name: string; method: 'secret' | 'oauth'; created_at: string }
-interface DocumentSourceRow { source_id: string; workspace_id: string; kind: DocumentKind; item_id: string; item_type: DocumentItemType; title: string; url: string; created_by: string; created_at: string }
+interface DocumentSourceRow { source_id: string; workspace_id: string; kind: DocumentKind; item_id: string; item_type: DocumentItemType; title: string; url: string; created_by: string; created_at: string; read_as?: string | null }
 
-const documentSourceSelect = `SELECT d.*, s.created_at FROM document_sources d JOIN workspace_sources s ON s.id = d.source_id AND s.kind = d.kind`;
+const documentSourceSelect = `SELECT d.*, s.created_at, r.read_as FROM document_sources d JOIN workspace_sources s ON s.id = d.source_id AND s.kind = d.kind
+  LEFT JOIN source_read_settings r ON r.source_id = d.source_id AND r.workspace_id = d.workspace_id`;
 
 function publicSource(row: DocumentSourceRow): WorkspaceDocumentSource {
-  return { id: row.source_id, workspaceId: row.workspace_id, kind: row.kind, itemId: row.item_id, itemType: row.item_type, title: row.title, url: row.url, createdAt: row.created_at };
+  return { id: row.source_id, workspaceId: row.workspace_id, kind: row.kind, itemId: row.item_id, itemType: row.item_type, title: row.title, url: row.url, createdAt: row.created_at,
+    readAs: row.read_as === 'workspace' ? 'workspace' : 'members' };
 }
 
 export async function workspaceDocumentSources(env: Env, workspaceId: string): Promise<WorkspaceDocumentSource[]> {
@@ -127,14 +132,30 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
   };
   const { row, source } = await authorize();
   const adapter = documentAdapters[source.kind];
-  const loaded = await loadAccount(c.env, row.owner_id, source.kind);
-  if (!loaded) fail(409, 'source_account_required', `The session owner has not connected ${adapter.name} in Settings → Profile → Connected accounts.`);
-  const { account, secret } = await adapterSecret(c.env, loaded);
+  // The identity the source reads with: the session owner's own account, or where an admin chose it, the workspace's.
+  const readAs = await sourceReadAs(c.env, row.workspace_id, source.source_id);
+  let secret: string;
+  let recheck: () => Promise<void>;
+  if (readAs === 'workspace') {
+    const workspace: WorkspaceDocumentAccount = await workspaceDocumentAccount(c.env, row.workspace_id, source.kind);
+    secret = workspace.secret;
+    recheck = () => recheckWorkspaceDocument(c.env, workspace);
+  } else {
+    const loaded = await loadAccount(c.env, row.owner_id, source.kind);
+    if (!loaded) fail(409, 'source_account_required', `The session owner has not connected ${adapter.name} in Settings → Profile → Connected accounts.`);
+    const owner = await adapterSecret(c.env, loaded);
+    secret = owner.secret;
+    recheck = () => recheckAccount(c.env, owner.account);
+  }
   const read = await adapter.read(secret, { id: source.item_id, type: source.item_type, title: source.title, url: source.url }, item);
   const view = fit<SourceReadView>({ source: source.title, kind: source.kind, ...read });
-  await recheckAccount(c.env, account);
+  await recheck();
   await authorize();
-  await auditStatement(c.env, actorId, 'source.read', row.workspace_id, sessionId, { source: source.source_id, kind: source.kind, item: view.id, type: view.type }).run();
+  // Nothing read with an identity the source no longer reads with leaves the control plane.
+  if (await sourceReadAs(c.env, row.workspace_id, source.source_id) !== readAs) {
+    fail(409, 'source_read_as_changed', 'The account this source reads with changed; retry with the current one.');
+  }
+  await auditStatement(c.env, actorId, 'source.read', row.workspace_id, sessionId, { source: source.source_id, kind: source.kind, item: view.id, type: view.type, readAs }).run();
   return c.json(view);
 }
 
@@ -180,15 +201,26 @@ export function registerSources(app: Hono<WorkerEnv>): void {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
     const input = await jsonObject(c, 8192);
-    if (Object.keys(input).some(key => !['kind', 'target'].includes(key))) fail(400, 'invalid_source', 'Only the kind and target are accepted.');
+    if (Object.keys(input).some(key => !['kind', 'target', 'readAs'].includes(key))) fail(400, 'invalid_source', 'Only the kind, target and readAs are accepted.');
+    if (input.readAs !== undefined && input.readAs !== 'members' && input.readAs !== 'workspace') fail(400, 'invalid_read_as', 'Set readAs to members or workspace.');
+    const readAs: SourceReadAs = input.readAs === 'workspace' ? 'workspace' : 'members';
     if (!documentKind(input.kind)) fail(400, 'invalid_source', 'Add Git repositories under Repositories; other sources are documents: Notion, Google Drive, Feishu/Lark, Dropbox, OneDrive or Tencent Docs.');
     const kind = input.kind;
     const adapter = documentAdapters[kind];
-    // The admin's own account checks the item and names it; sessions read it with their owners' accounts.
-    const loaded = await loadAccount(c.env, actor, kind) ?? fail(409, 'source_account_required', `Connect ${adapter.name} in Settings → Profile → Connected accounts first.`);
-    const { account, secret } = await adapterSecret(c.env, loaded);
-    const item = await adapter.resolve(secret, input.target);
-    await recheckAccount(c.env, account);
+    // The identity the source will read with checks the item and names it: the admin's own account for a source members
+    // read with their own, or the workspace's connection.
+    let item;
+    if (readAs === 'workspace') {
+      if (!workspaceDocumentProviders.includes(kind)) fail(409, 'workspace_connection_unsupported', `${adapter.name} sources read with members' own sign-ins.`);
+      const workspace = await workspaceDocumentAccount(c.env, workspaceId, kind);
+      item = await adapter.resolve(workspace.secret, input.target);
+      await recheckWorkspaceDocument(c.env, workspace);
+    } else {
+      const loaded = await loadAccount(c.env, actor, kind) ?? fail(409, 'source_account_required', `Connect ${adapter.name} in Settings → Profile → Connected accounts first.`);
+      const { account, secret } = await adapterSecret(c.env, loaded);
+      item = await adapter.resolve(secret, input.target);
+      await recheckAccount(c.env, account);
+    }
     const sourceId = id(); const created = now();
     const limit = () => fail(409, 'source_limit', `A workspace has at most ${sourceLimits.documents} sources besides its repositories.`);
     // The count below keeps a lone admin within the limit; the database's trigger keeps concurrent adds within it too.
@@ -201,6 +233,10 @@ export function registerSources(app: Hono<WorkerEnv>): void {
       c.env.DB.query(`INSERT INTO document_sources (source_id, workspace_id, kind, item_id, item_type, title, url, created_by)
         SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM workspace_sources WHERE id = ?)`)
         .bind(sourceId, workspaceId, kind, item.id, item.type, item.title, item.url, actor, sourceId),
+      // In the same write: a source never reads, even once, with an identity other than the one it was added with.
+      c.env.DB.query(`INSERT INTO source_read_settings (source_id, workspace_id, read_as, updated_by, updated_at)
+        SELECT ?, ?, 'workspace', ?, ? WHERE ? = 'workspace' AND EXISTS (SELECT 1 FROM workspace_sources WHERE id = ?)`)
+        .bind(sourceId, workspaceId, actor, created, readAs, sourceId),
     ]).catch((error: unknown) => { if (/document source limit/.test(String(error instanceof Error ? error.message : error))) limit(); throw error; });
     if (!results[0].results[0]) {
       const existing = await c.env.DB.query('SELECT 1 FROM document_sources WHERE workspace_id = ? AND kind = ? AND item_id = ?').bind(workspaceId, kind, item.id).first();
@@ -208,9 +244,9 @@ export function registerSources(app: Hono<WorkerEnv>): void {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
       limit();
     }
-    await auditStatement(c.env, actor, 'workspace.source.added', workspaceId, null, { source: sourceId, kind, type: item.type, item: item.id }).run();
+    await auditStatement(c.env, actor, 'workspace.source.added', workspaceId, null, { source: sourceId, kind, type: item.type, item: item.id, readAs }).run();
     return c.json({ source: publicSource({ source_id: sourceId, workspace_id: workspaceId, kind, item_id: item.id, item_type: item.type,
-      title: item.title, url: item.url, created_by: actor, created_at: created }) }, 201);
+      title: item.title, url: item.url, created_by: actor, created_at: created, read_as: readAs }) }, 201);
   });
   app.delete('/api/workspaces/:id/sources/:sourceId', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;

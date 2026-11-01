@@ -821,7 +821,7 @@ test('account input is validated before any provider request and rejected tokens
 test('token-provider bindings use each actor\'s own account, and sessions borrow none', async t => {
   const s = await providerSetup(t);
   assert.deepEqual({ ...s.repository, id: '', createdAt: '' }, { id: '', workspaceId: s.team.id, provider: 'gitea', host: giteaHost,
-    repositoryId: '42', fullName: 'acme/tools', ref: 'main', private: true, createdAt: '', forbidDefaultBranchPush: false, lfs: false });
+    repositoryId: '42', fullName: 'acme/tools', ref: 'main', private: true, createdAt: '', forbidDefaultBranchPush: false, lfs: false, readAs: 'members' });
   assert.deepEqual((await json<{ repositories: WorkspaceRepository[] }>(await s.owner.request('GET', `/api/workspaces/${s.team.id}/repositories`))).repositories, [s.repository]);
   const session = await s.start();
   assert.deepEqual(session.repositories, []);
@@ -907,6 +907,150 @@ test('workspace network policies: members read, administrators write, invalid do
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.network_policy.updated'").get()!.n, 3);
   const outsider = await f.client('outsider');
   await denied(await outsider.request('GET', path), 404, 'not_found');
+});
+
+const gitServerHost = 'git.example.com';
+const gitServerRemote = `https://${gitServerHost}/team/app.git`;
+/** A pkt-line advertisement of `main` at commitA, as git http-backend sends it. */
+function gitServerAdvertisement(service: string): string {
+  const pkt = (line: string) => `${(line.length + 4).toString(16).padStart(4, '0')}${line}`;
+  return `${pkt(`# service=${service}\n`)}0000${pkt(`${commitA} HEAD\0symref=HEAD:refs/heads/main\n`)}${pkt(`${commitA} refs/heads/main\n`)}0000`;
+}
+/** A plain Git server with one private repository, team/app.git, readable with `dev` and its password. */
+function gitServer(t: TestContext) {
+  const calls: { url: string; authorization: string | null; redirect: RequestRedirect | undefined }[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const authorization = new Headers(init?.headers).get('authorization');
+    calls.push({ url, authorization, redirect: init?.redirect });
+    if (url !== `${gitServerRemote}/info/refs?service=git-upload-pack`) return new Response('Not found', { status: 404 });
+    if (authorization !== `Basic ${Buffer.from('dev:server-password').toString('base64')}`) return new Response('Authentication required', { status: 401 });
+    return new Response(gitServerAdvertisement('git-upload-pack'), { headers: { 'Content-Type': 'application/x-git-upload-pack-advertisement' } });
+  });
+  return calls;
+}
+
+test('a plain Git server account takes a user name, looks repositories up by path and binds them', async t => {
+  const f = await fixture(t); const calls = gitServer(t); const alice = await f.client('alice');
+  for (const [input, code] of [
+    [{ provider: 'git', host: gitServerHost, token: 'server-password' }, 'invalid_git_username'],
+    [{ provider: 'git', host: gitServerHost, username: 'a:b', token: 'server-password' }, 'invalid_git_username'],
+    [{ provider: 'git', token: 'server-password', username: 'dev' }, 'invalid_git_host'],
+    [{ provider: 'git', host: 'github.com', token: 'server-password', username: 'dev' }, 'invalid_git_host'],
+    [{ provider: 'git', host: gitServerHost, organization: 'x', token: 'server-password', username: 'dev' }, 'invalid_git_organization'],
+  ] as const) await denied(await alice.request('POST', '/api/git/accounts', input), 400, code);
+  // Nothing on the server answers for an account: connecting it fetches nothing.
+  const account = (await json<{ account: GitAccount }>(await alice.request('POST', '/api/git/accounts',
+    { provider: 'git', host: `https://${gitServerHost.toUpperCase()}/`, username: 'dev', token: 'server-password' }), 201)).account;
+  assert.deepEqual({ ...account, id: '', createdAt: '' }, { id: '', provider: 'git', host: gitServerHost, organization: '', login: 'dev', createdAt: '' });
+  assert.equal(calls.length, 0);
+  const picker = `/api/git/accounts/${account.id}/repositories`;
+  // Without a path it lists nothing; with one, it reads that repository with the account.
+  assert.deepEqual(await json(await alice.request('GET', picker)), { repositories: [], truncated: false });
+  const found = await json<ProviderRepositoryList>(await alice.request('GET', `${picker}?path=${encodeURIComponent(gitServerRemote)}`));
+  assert.equal(found.repositories.length, 1);
+  const repository = found.repositories[0]!;
+  assert.deepEqual({ ...repository, id: '' }, { id: '', fullName: 'team/app.git', defaultBranch: 'main', private: true });
+  assert.ok(calls.every(call => call.url.startsWith(`https://${gitServerHost}/`) && call.redirect === 'manual'));
+  await denied(await alice.request('GET', `${picker}?path=${encodeURIComponent('https://other.example.com/team/app.git')}`), 400, 'invalid_repository');
+  await denied(await alice.request('GET', `${picker}?path=team/missing.git`), 403, 'git_repository_unavailable');
+  await denied(await alice.request('GET', `/api/git/accounts/github/repositories?path=team/app.git`), 400, 'invalid_repository');
+
+  const team = await workspace(alice);
+  const bound = await bindRepository(alice, team.id, { provider: 'git', host: gitServerHost, repositoryId: repository.id, fullName: repository.fullName } as never);
+  assert.deepEqual({ ...bound, id: '', workspaceId: '', createdAt: '' }, { id: '', workspaceId: '', provider: 'git', host: gitServerHost,
+    repositoryId: repository.id, fullName: 'team/app.git', ref: 'main', private: true, createdAt: '', forbidDefaultBranchPush: false, lfs: false, readAs: 'members' });
+  // A path the server doesn't know under that identity is refused, as a rename would be.
+  await denied(await alice.request('POST', `/api/workspaces/${team.id}/repositories`,
+    { provider: 'git', host: gitServerHost, repositoryId: 'f'.repeat(40), fullName: 'team/app.git' }), 409, 'repository_identity_changed');
+});
+
+test('a repository set to read as the workspace is relayed with the workspace\'s connection, which never reaches a host or pushes', async t => {
+  const { f, admin, owner, team, connector, start } = await connectedSetup(t);
+  const session = await start();
+  // The plain Git server answers this test's requests; the GitHub fixture keeps answering its own.
+  const calls = gitServer(t);
+  const path = `/api/workspaces/${team.id}/connections`;
+  await denied(await owner.request('POST', path, { family: 'git', provider: 'git', host: gitServerHost, username: 'dev', token: 'server-password' }), 403, 'forbidden');
+  await denied(await admin.request('POST', path, { family: 'git', provider: 'github', token: 'x' }), 400, 'invalid_git_provider');
+  const { connection } = await json<{ connection: { id: string; name: string } }>(await admin.request('POST', path,
+    { family: 'git', provider: 'git', host: gitServerHost, username: 'dev', token: 'server-password' }), 201);
+  assert.equal(connection.name, 'dev');
+  // The admin has no account on the server: the connection looks the repository up and checks the binding.
+  const picker = await json<ProviderRepositoryList>(await admin.request('GET', `${path}/${connection.id}/repositories?path=${encodeURIComponent(gitServerRemote)}`));
+  const found = picker.repositories[0]!;
+  await denied(await admin.request('POST', `/api/workspaces/${team.id}/repositories`,
+    { provider: 'git', host: gitServerHost, repositoryId: found.id, fullName: found.fullName }), 409, 'git_account_required');
+  const bound = await bindRepository(admin, team.id, { provider: 'git', host: gitServerHost, repositoryId: found.id, fullName: found.fullName, readAs: 'workspace' } as never);
+  assert.equal(bound.readAs, 'workspace');
+
+  const headers = { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken };
+  const relay = (service: string) => app.request(`${origin}/api/connectors/self/git/relay/${bound.id}/${service}?sessionId=${session.id}`,
+    { method: 'POST', headers: { ...headers, 'Git-Protocol': 'version=2' }, body: '' }, f.env);
+  // The session's owner has no account on the server either: reads use the workspace's connection.
+  const before = calls.length;
+  const refs = await relay('info-refs');
+  assert.equal(refs.status, 200);
+  assert.ok((await refs.text()).includes('refs/heads/main'));
+  const basic = `Basic ${Buffer.from('dev:server-password').toString('base64')}`;
+  assert.ok(calls.slice(before).length > 0 && calls.slice(before).every(call => call.authorization === basic || call.authorization === null));
+  // Pushes stay the owner's: without their own account there is none.
+  await denied(await relay('receive-refs'), 409, 'git_account_required');
+
+  // A direct grant never hands the connection over, whoever's host it is (gitDirect refuses before it asks): the read is relayed.
+  const direct = await json<{ direct: boolean; reason?: string }>(await f.request('POST', '/api/connectors/self/git/direct',
+    { sessionId: session.id, bindingId: bound.id, access: 'read' }, headers));
+  assert.equal(direct.direct, false);
+  assert.match(direct.reason ?? '', /workspace's connection/);
+
+  // A switch while a read is in flight ends it before anything is fetched upstream with the identity it no longer uses.
+  const inner = globalThis.fetch;
+  let flipped = false;
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!flipped && String(input).startsWith(gitServerRemote)) {
+      flipped = true;
+      f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'members' WHERE source_id = ?").run(bound.id);
+    }
+    return inner(input, init);
+  });
+  await denied(await relay('info-refs'), 409, 'source_read_as_changed');
+  assert.ok(flipped);
+  f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'workspace' WHERE source_id = ?").run(bound.id);
+
+  // At the cap, reconnecting an existing connection still replaces it; only a new one is refused.
+  const timestamp = new Date().toISOString();
+  for (let index = 0; index < 19; index++) {
+    f.sqlite.prepare(`INSERT INTO workspace_connections (id,workspace_id,family,provider,host,organization,username,name,ciphertext,created_by,created_at,updated_at)
+      VALUES (?,?,'git','gitea',?,'',NULL,'bot','x',?,?,?)`).run(`filler-${index}`, team.id, `h${index}.example.com`, admin.user.id, timestamp, timestamp);
+  }
+  const replaced = await json<{ connection: { id: string } }>(await admin.request('POST', path,
+    { family: 'git', provider: 'git', host: gitServerHost, username: 'dev', token: 'server-password' }));
+  assert.equal(replaced.connection.id, connection.id);
+  await denied(await admin.request('POST', path, { family: 'git', provider: 'git', host: 'other.example.com', username: 'dev', token: 'x' }), 409, 'workspace_connection_limit');
+  f.sqlite.prepare("DELETE FROM workspace_connections WHERE id LIKE 'filler-%'").run();
+
+  // Switched back to members' accounts, the owner's own account is required again: no fallback.
+  await json(await admin.request('PUT', `/api/workspaces/${team.id}/sources/${bound.id}/read-as`, { readAs: 'members' }));
+  await denied(await relay('info-refs'), 409, 'git_account_required');
+  await denied(await admin.request('DELETE', `${path}/missing`), 404, 'not_found');
+  assert.equal((await admin.request('DELETE', `${path}/${connection.id}`)).status, 204);
+  assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM workspace_connections').all()).includes('server-password'));
+});
+
+test('egress grants name plain Git server repositories only to connectors that accept them', async t => {
+  const { f, repository, connector, team, start } = await connectedSetup(t);
+  const session = await start();
+  f.sqlite.prepare(`INSERT INTO workspace_repositories (id,workspace_id,provider,host,repository_id,full_name,ref,private,created_at)
+    VALUES ('server-binding',?,'git',?,?,'team/app.git','main',1,?)`).run(team.id, gitServerHost, 'f'.repeat(40), new Date().toISOString());
+  const headers = { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken };
+  const grant = async () => (await json<{ repositories: { bindingId: string; provider: string }[] }>(
+    await f.request('POST', '/api/connectors/self/network', { sessionId: session.id }, headers))).repositories.map(item => item.bindingId).sort();
+  // An older connector would refuse the whole grant over a provider it doesn't know.
+  assert.deepEqual(await grant(), [repository.id]);
+  const capabilities = JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(connector.connectorId)!.capabilities_json));
+  f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify({ ...capabilities, gitServers: true }), connector.connectorId);
+  assert.deepEqual(await grant(), [repository.id, 'server-binding'].sort());
+  assert.equal(parseManifest({ ...manifest, capabilities: { ...manifest.capabilities, gitServers: true } }, f.env).capabilities.gitServers, true);
 });
 
 test('egress grants and the Git relay serve only the connector running the session, with the owner credential', async t => {
