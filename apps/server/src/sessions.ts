@@ -29,6 +29,7 @@ import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL,
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
+import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 
 /**
  * Per-message model, reasoning and access. The model must be one the session's own host offers: one it advertises that its
@@ -575,19 +576,28 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
     const archived = await archiveSession(c, identifier(c.req.param('id')));
     return c.json({ session: sessionRecord(archived.row, archived.permissions) });
   });
+  // Packing an archived session's files on its host saves its disk; only its owner packs them, and unarchiving it unpacks
+  // them first (session-packing.ts).
+  app.post('/api/sessions/:id/pack', async c => {
+    const packed = await packSession(c, identifier(c.req.param('id')));
+    return c.json({ session: sessionRecord(packed.row, packed.permissions) });
+  });
   app.post('/api/sessions/:id/unarchive', async c => {
     // Archived sessions only admit read access; managing the session is what authorizes bringing one back.
     const access = await requireSessionManager(c, identifier(c.req.param('id')), 'read', 'Only the session owner, or the workspace\'s owner or an admin, can unarchive it.');
-    const { row } = access;
     const actorId = c.get('auth').userId;
-    if (row.status !== 'archived') fail(409, 'session_not_archived', 'Session is not archived.');
+    if (access.row.status !== 'archived') fail(409, 'session_not_archived', 'Session is not archived.');
+    // Packed files come back first, while the session is still archived: it never runs without them.
+    const row = await unpackSession(c, access);
     // It lands only while the actor still manages the session, checked as it writes, as archiving does.
     const restored = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = COALESCE(archived_status, 'ready'), archived_status = NULL,
         policy_version = policy_version + 1
-      WHERE id = ? AND owner_id = ? AND policy_version = ? AND status = 'archived' AND ${sessionManagerSQL('sessions')}
+      WHERE id = ? AND owner_id = ? AND policy_version = ? AND status = 'archived' AND packed_at IS NULL AND ${sessionManagerSQL('sessions')}
       RETURNING *`).bind(row.id, row.owner_id, row.policy_version, actorId).first();
     if (!restored) fail(409, 'policy_changed', 'Session status or permissions changed; reload and retry.');
     await auditStatement(c.env, actorId, 'session.unarchived', row.workspace_id, row.id, { status: restored.status }).run();
+    // Unpacked while archived, without network: it opens again to clone its repositories.
+    if (access.row.packed_at) await reopenUnpacked(c, restored);
     return c.json({ session: sessionRecord(restored, access.permissions) });
   });
   app.get('/api/sessions/:id/view', async c => {

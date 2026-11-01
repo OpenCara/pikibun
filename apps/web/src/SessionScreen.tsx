@@ -262,7 +262,12 @@ function SessionPane({ id }: { id: string }) {
     menu.push({ label: "Archive", icon: "archive", disabled: actions.action.busy, onSelect: actions.archive });
   }
   if (session && manages && archived) {
-    menu.push({ label: "Unarchive", icon: "archive", disabled: actions.action.busy, onSelect: actions.unarchive });
+    // Packed files come back as the session is unarchived, which only its owner may then do.
+    menu.push({ label: "Unarchive", icon: "archive", disabled: actions.action.busy || (Boolean(session.packed) && !isOwner), onSelect: actions.unarchive });
+    // Its owner packs an archived session's files to save the host's disk; a session that runs on its host has none to pack.
+    if (isOwner && !session.packed && !frozen && !session.hostEnvironment) {
+      menu.push({ label: "Pack files", icon: "archive", disabled: actions.action.busy, onSelect: actions.pack });
+    }
   }
   if (known) menu.push("separator", { label: "Open in workspace settings", icon: "settings", onSelect: () => navigate({ name: "settings", section: "workspaces", id: known.workspaceId }) });
 
@@ -305,7 +310,7 @@ function SessionPane({ id }: { id: string }) {
         title={known?.title ?? "Session"}
         subtitle={workspaceName}
         actions={<>
-          {session && <span className="session-badges">{archived ? <StatusBadge tone="neutral">Archived</StatusBadge> : badge}<StatusBadge>{visibility === "workspace" ? "Workspace-visible" : "Private"}</StatusBadge>{session.linkShared && <StatusBadge tone="info">Link shared</StatusBadge>}</span>}
+          {session && <span className="session-badges">{archived ? <StatusBadge tone="neutral">Archived</StatusBadge> : badge}{session.packed && <StatusBadge tone="neutral">Files packed</StatusBadge>}<StatusBadge>{visibility === "workspace" ? "Workspace-visible" : "Private"}</StatusBadge>{session.linkShared && <StatusBadge tone="info">Link shared</StatusBadge>}</span>}
           {session && pullRequest && <PullRequestLink pull={pullRequest} />}
           {session && <Button variant="ghost" size="xs" icon="panel-right" aria-label="Toggle session panel" title="Session panel" aria-pressed={panelOpen} onClick={() => setPanelOpen(!panelOpen)} />}
           <DropdownMenu label="Session actions" items={menu} />
@@ -316,8 +321,10 @@ function SessionPane({ id }: { id: string }) {
           This session pinned its repositories when it started, which sessions no longer do. Its conversation, approvals and backups stay viewable, but it no longer runs. Start a new session to continue the work.
         </Alert>}
         {session?.cloneUnavailable && !frozen && <Alert variant="warning" title="Can't clone repositories">{session.cloneUnavailable}</Alert>}
-        {archived && <Alert title="Archived" actions={manages && <Button variant="outline" size="sm" disabled={actions.action.busy} onClick={actions.unarchive}>Unarchive</Button>}>
-          This session is read-only. {manages ? "Unarchive it to continue the work." : "Only its owner, or the workspace's owner or an admin, can unarchive it."}
+        {archived && <Alert title="Archived" actions={manages && (!session?.packed || isOwner) && <Button variant="outline" size="sm" disabled={actions.action.busy} onClick={actions.unarchive}>Unarchive</Button>}>
+          This session is read-only. {session?.packed
+            ? isOwner ? "Its files are packed on its host. Unarchiving unpacks them and clones its repositories again, so its host must be online." : "Its files are packed on its host, so only its owner can unarchive it."
+            : manages ? "Unarchive it to continue the work." : "Only its owner, or the workspace's owner or an admin, can unarchive it."}
         </Alert>}
         {live.error && !startFailed && <Alert variant="error" title={session ? "Live updates interrupted" : "Unable to open session"} actions={<Button variant="outline" size="sm" onClick={live.reconnect}>Reconnect and check access</Button>}>{live.error}</Alert>}
         <Feedback {...actions.action} />

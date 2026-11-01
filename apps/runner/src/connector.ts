@@ -63,7 +63,7 @@ const welcomeSchema = z.object({
 const actorSchema = z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f]+$/);
 const ticketSchema = z.object({
   aud: z.literal("runner"), sessionId: z.string().regex(IDENTIFIER), actorId: actorSchema, ownerId: actorSchema,
-  action: z.enum(["create", "view", "events", "submit", "ask", "operations", "approve", "backup", "restart", "restore", "stop", "files", "revert", "fork"]),
+  action: z.enum(["create", "view", "events", "submit", "ask", "operations", "approve", "backup", "restart", "restore", "stop", "files", "revert", "fork", "pack", "unpack"]),
   policyVersion: z.number().int().positive(), iat: z.number().int(), exp: z.number().int(),
   jti: z.string().regex(IDENTIFIER), bodyHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/), connectorId: z.string().regex(IDENTIFIER),
 }).strict();
@@ -209,7 +209,7 @@ function capabilities(value?: ConnectorCapabilities, mode: { unsandboxed?: boole
     github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, sessionBranches: true, conversationBackups: true, hostConfig: true, compactionConfig: true, ...cache };
   return { platform: result.platform, sandbox: result.sandbox, productionShell: result.productionShell, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true,
     github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, hostConfig: true, compactionConfig: true, ...cache,
-    ...(mode.gpu ? { gpu: mode.gpu } : {}) };
+    sessionPacking: true, ...(mode.gpu ? { gpu: mode.gpu } : {}) };
 }
 
 export async function claimConnectorPairing(options: {
@@ -246,7 +246,7 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
     if (binding.session.connectorId !== connectorId || binding.model?.connectorId !== connectorId
       || binding.owner?.id !== rpc.ticket?.ownerId || binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign connector binding");
   } else {
-    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|operations|restart|backup|restore|stop|files|revert|fork|approvals\/[A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(rpc.path);
+    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|operations|restart|backup|restore|stop|files|revert|fork|pack|unpack|approvals\/[A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(rpc.path);
     if (!match) throw new Error("Relay path is not allowed");
     sessionId = match[1]!;
     action = match[2]!.startsWith("approvals/") ? "approve" : match[2]!.startsWith("view/") ? "view" : match[2] as RunnerAction;
@@ -261,7 +261,7 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
   const ticket = rpc.ticket;
   if (ticket.connectorId !== connectorId
     || (rpc.method === "GET" && rpc.body !== "")
-    || (["create", "restore", "restart", "fork"].includes(action) && ticket.actorId !== ticket.ownerId)) throw new Error("Invalid relay ticket");
+    || (["create", "restore", "restart", "fork", "pack", "unpack"].includes(action) && ticket.actorId !== ticket.ownerId)) throw new Error("Invalid relay ticket");
   const authorization = await signToken(ticket, verifierSecret);
   await verifyRunnerTicket(authorization, verifierSecret, action, sessionId, rpc.body);
   return { rpc, authorization };
@@ -808,7 +808,7 @@ export class LocalConnector {
 
   private async authorize(generation: Generation, request: AuthorizationRequest): Promise<AuthorizationResult> {
     const payload = { sessionId: request.sessionId, actorId: request.actorId, ownerId: request.ownerId, permission: request.permission, ...(request.host ? { host: true } : {}),
-      ...(request.host && request.hostSessions ? { hostSessions: true } : {}) };
+      ...(request.host && request.hostSessions ? { hostSessions: true } : {}), ...(request.archived ? { archived: true } : {}) };
     const result = z.object({
       allowed: z.boolean(), ownerId: actorSchema, policyVersion: z.number().int().positive(), hostCommands: z.enum(["approve", "auto"]).optional(),
       hostSessions: z.literal(true).optional(),

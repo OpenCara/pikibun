@@ -39,7 +39,7 @@ export interface RestoreManifest {
  * rebind app metadata, reset authority, and checkpoint/close before returning. */
 export type PrepareRestore = (stage: string, manifest: RestoreManifest, options: { conversationOnly: boolean }) => Promise<void>;
 
-type SnapshotFile = { path: string; bytes: Buffer; mode: number };
+export type SnapshotFile = { path: string; bytes: Buffer; mode: number };
 /** `conversationOnly`: the backup kept only the conversation, so the restored session starts with an empty worktree. */
 type Snapshot = { manifest: RestoreManifest; sqlite: Buffer; files: SnapshotFile[]; conversationOnly: boolean };
 type PublicationFence = { publish(stage: string, dev: string, ino: string): Promise<void>; close(): Promise<void> };
@@ -180,7 +180,17 @@ function snapshot(bytes: Uint8Array, descriptor: RestoreDescriptor, target: Runn
   if (manifest.queue !== undefined && (!Array.isArray(manifest.queue) || manifest.queue.length)) invalid("Backup requires an empty queue");
   const sqlite = base64(value.sqlite);
   if (sqlite.length < 100 || Buffer.from(sqlite.subarray(0, 16)).toString("binary") !== "SQLite format 3\0") invalid("Invalid backup SQLite header");
-  let total = sqlite.length;
+  const files = sandboxContent(value, target, sqlite.length);
+  return { manifest: manifest as unknown as RestoreManifest, sqlite, files, conversationOnly };
+}
+
+/**
+ * The sandbox files of a backup, or of a packed session (pack.ts): `value.files` and `value.clones` checked and turned
+ * into the files to write below the session's `sandbox` directory, the clones as bundles and the list of what is pending.
+ * `total` is what the rest of the backup already counts against its size bound.
+ */
+export function sandboxContent(value: Record<string, unknown>, target: RunnerBinding, total = 0): SnapshotFile[] {
+  if (!Array.isArray(value.files) || value.files.length > MAX_FILES) invalid("Invalid backup format");
   const paths = new Set<string>();
   const directories = new Set<string>();
   const files: SnapshotFile[] = [];
@@ -256,7 +266,7 @@ function snapshot(bytes: Uint8Array, descriptor: RestoreDescriptor, target: Runn
   if (paths.has("git/objects/info/alternates") || (markerVersion !== undefined && markerVersion !== 1)) {
     invalid("Backups of sessions checked out from the host repository cache cannot be restored yet");
   }
-  return { manifest: manifest as unknown as RestoreManifest, sqlite, files, conversationOnly };
+  return files;
 }
 
 async function privateDirectory(path: string): Promise<FileHandle> {
@@ -269,7 +279,7 @@ async function privateDirectory(path: string): Promise<FileHandle> {
   } catch (error) { await handle.close(); throw error; }
 }
 
-async function writePrivate(path: string, bytes: string | Uint8Array, mode = 0o600): Promise<void> {
+export async function writePrivate(path: string, bytes: string | Uint8Array, mode = 0o600): Promise<void> {
   const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
   try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
 }

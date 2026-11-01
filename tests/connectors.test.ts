@@ -2256,6 +2256,103 @@ test('owners rename and archive sessions; archived sessions are read-only and un
   assert.equal(s.hub.requests.length, 1, 'Renaming and archiving must not contact the host');
 });
 
+test('owners pack an archived session\'s files on its host, and unarchiving unpacks them first, which only the owner does then', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const path = `/api/sessions/${s.session.id}`;
+  const actions: string[] = [];
+  let packReply = () => Response.json({ packed: true, files: 3, clones: 1, bytes: 2048 });
+  let unpackReply = () => Response.json({ unpacked: true });
+  const requests = rpcHub(f, s.connector, envelope => {
+    const { action } = envelope.request.ticket;
+    actions.push(action);
+    assert.equal(envelope.request.body, '{}');
+    assert.equal(envelope.request.ticket.actorId, s.owner.user.id);
+    if (action === 'pack') return packReply();
+    if (action === 'unpack') return unpackReply();
+    if (action === 'restart') return Response.json({ ok: true, sessionId: s.session.id });
+    return Response.json({ error: 'Unexpected test relay request' }, { status: 503 });
+  });
+  const packedAt = () => (f.sqlite.prepare('SELECT packed_at FROM sessions WHERE id = ?').get(s.session.id) as { packed_at: string | null }).packed_at;
+  const capabilities = (f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(s.connector.connectorId) as { capabilities_json: string }).capabilities_json;
+  // The member manages the session's grants; the workspace's admin manages every session there. Neither packs it.
+  await json(await s.owner.request('POST', `${path}/grants`, { userId: s.member.user.id, permissions: ['manage'] }));
+  f.sqlite.prepare("UPDATE workspace_members SET role = 'admin' WHERE workspace_id = ? AND user_id = ?").run(s.team.id, s.member.user.id);
+
+  // Only an archived session, on a host whose connector packs sessions, and only by its owner.
+  await denied(await s.owner.request('POST', `${path}/pack`), 409, 'session_not_archived');
+  await json(await s.owner.request('POST', `${path}/archive`));
+  await denied(await s.owner.request('POST', `${path}/pack`), 409, 'connector_outdated');
+  f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(capabilities), sessionPacking: true }), s.connector.connectorId);
+  await denied(await s.member.request('POST', `${path}/pack`), 403, 'owner_required');
+  assert.deepEqual(actions, []);
+  assert.equal(packedAt(), null);
+
+  const packed = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/pack`));
+  assert.equal(packed.session.packed, true);
+  assert.equal(packed.session.status, 'archived');
+  assert.deepEqual(actions, ['pack']);
+  assert.equal(requests[0]!.request.path, `/v1/sessions/${s.session.id}/pack`);
+  assert.ok(packedAt());
+  const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE session_id = ? AND action = 'session.packed'").get(s.session.id) as { detail_json: string };
+  assert.deepEqual(JSON.parse(audit.detail_json), { files: 3, clones: 1, bytes: 2048 });
+  assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', path))).session.packed, true);
+  // Still archived: nothing else reaches the host.
+  await denied(await s.owner.request('POST', `${path}/submit`, { content: 'hi', requestId: 'packed-request' }), 409, 'session_archived');
+
+  // The admin may unarchive other sessions, but this one's files come back first, which only its owner asks for.
+  await denied(await s.member.request('POST', `${path}/unarchive`), 403, 'owner_required');
+  const restored = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/unarchive`));
+  assert.equal(restored.session.status, 'ready');
+  assert.equal(restored.session.packed, undefined);
+  // Unpacked while archived, without network: once unarchived, its host opens it again to clone its repositories.
+  assert.deepEqual(actions, ['pack', 'unpack', 'restart']);
+  assert.equal(requests[1]!.request.path, `/v1/sessions/${s.session.id}/unpack`);
+  assert.equal(packedAt(), null);
+  const recorded = (f.sqlite.prepare('SELECT action FROM audit WHERE session_id = ? ORDER BY created_at, rowid').all(s.session.id) as { action: string }[]).map(row => row.action);
+  for (const action of ['session.packed', 'session.unpacked', 'session.unarchived']) assert.ok(recorded.includes(action), action);
+
+  // A host that refuses says why, and the session stays as it was.
+  await json(await s.owner.request('POST', `${path}/archive`));
+  packReply = () => Response.json({ error: 'This session\'s files are too large to pack: a pack holds at most 24 MiB' }, { status: 422 });
+  const refused = await s.owner.request('POST', `${path}/pack`);
+  const reason = await json<{ code: string; error: string }>(refused, 422);
+  assert.equal(reason.code, 'runner_error');
+  assert.match(reason.error, /too large to pack/);
+  assert.equal(packedAt(), null);
+  // Without the host's answer the outcome is unclear: the session is unpacked when it is unarchived all the same, which
+  // changes nothing on a host that didn't pack it.
+  packReply = () => Response.json({ error: 'Runner operation failed' }, { status: 500 });
+  assert.equal((await s.owner.request('POST', `${path}/pack`)).status, 502);
+  assert.ok(packedAt());
+  unpackReply = () => Response.json({ error: 'Unavailable' }, { status: 503 });
+  assert.equal((await s.owner.request('POST', `${path}/unarchive`)).status, 503);
+  assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', path))).session.status, 'archived', 'never unarchived without its files');
+  unpackReply = () => Response.json({ unpacked: false });
+  assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/unarchive`))).session.status, 'ready');
+  assert.equal(packedAt(), null);
+  assert.deepEqual(actions, ['pack', 'unpack', 'restart', 'pack', 'pack', 'unpack', 'unpack', 'restart']);
+  // A session that was never packed is unarchived as before, without asking its host.
+  await json(await s.owner.request('POST', `${path}/archive`));
+  await json(await s.owner.request('POST', `${path}/unarchive`));
+  assert.equal(actions.length, 8);
+});
+
+test('the host\'s authorization callback admits packing and unpacking an archived session, and nothing else of it', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const manage = { ...authorization(s.session), permission: 'manage' };
+  const allowed = async (body: unknown) => (await json<{ allowed: boolean }>(await self(f, s.connector, 'authorize', body))).allowed;
+  assert.equal(await allowed(manage), true);
+  assert.equal(await allowed({ ...manage, archived: true }), false, 'only while archived');
+  await json(await s.owner.request('POST', `/api/sessions/${s.session.id}/archive`));
+  assert.equal(await allowed(manage), false);
+  assert.equal(await allowed(authorization(s.session)), false);
+  assert.equal(await allowed({ ...manage, archived: true }), true);
+  assert.equal(await allowed({ ...manage, archived: true, actorId: s.member.user.id }), false);
+  for (const body of [{ ...manage, archived: false }, { ...manage, permission: 'write', archived: true }, { ...manage, archived: true, host: true }]) {
+    await denied(await self(f, s.connector, 'authorize', body), 400, 'invalid_authorization');
+  }
+});
+
 test('the workspace\'s owner and admins manage every session there, private ones included, but nothing that is its owner\'s alone', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   // The creator's private session on the host s.host shares; s.admin owns the workspace.

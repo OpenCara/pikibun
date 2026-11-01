@@ -12,8 +12,25 @@ import type { AppContext, Env, SessionRow } from './types.js';
 export const connectorPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write',
-  revert: 'write', fork: 'write',
+  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage',
 };
+/** What only the session's owner asks of its host. */
+export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack'];
+
+/**
+ * An archived session admits only reads, and packing and unpacking its files, which it admits only while archived. A
+ * session whose files are packed admits nothing else even if something unarchived it without unpacking them.
+ */
+export function requireArchivedAction(row: SessionRow, action: RunnerAction): void {
+  if (action === 'view' || action === 'events') return;
+  if (action === 'pack' || action === 'unpack') {
+    if (row.status !== 'archived') fail(409, 'session_not_archived', 'Only an archived session\'s files are packed or unpacked.');
+    return;
+  }
+  if (row.status === 'archived') fail(409, 'session_archived', 'Session is archived.');
+  if (row.packed_at) fail(409, 'session_packed', 'This session\'s files are packed. Archive and unarchive it to unpack them.');
+}
+
 export const connectorRequestFrameBytes = connectorLimits.requestBytes * 6 + 16384;
 export interface ConnectorConnection {
   id: string;
@@ -41,6 +58,7 @@ export function connectorPath(action: RunnerAction, sessionId: string, suffix = 
       if (!isRevision(suffix)) fail(400, 'invalid_revision', 'Invalid view revision.');
       return `${base}/view/${suffix}`;
     case 'events': case 'submit': case 'ask': case 'operations': case 'backup': case 'restart': case 'restore': case 'stop': case 'files': case 'revert': case 'fork':
+    case 'pack': case 'unpack':
       return `${base}/${action}`;
     default: return fail(400, 'invalid_action', 'Invalid connector action.');
   }
@@ -69,8 +87,8 @@ export async function authorizeConnectorTicket(env: Env, ticket: RunnerTicket, c
       access.row.policy_version !== ticket.policyVersion || !await mayRequestAction(env, access, ticket.actorId, ticket.action, permission)) {
     fail(403, 'permission_revoked', 'Session access is no longer authorized.');
   }
-  if (access.row.status === 'archived' && ticket.action !== 'view' && ticket.action !== 'events') fail(409, 'session_archived', 'Session is archived.');
-  if (['create', 'restart', 'restore', 'backup', 'fork'].includes(ticket.action) && ticket.actorId !== ticket.ownerId) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
+  requireArchivedAction(access.row, ticket.action);
+  if (ownerActions.includes(ticket.action) && ticket.actorId !== ticket.ownerId) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
   await requireConnectorSession(env, ticket.connectorId, access.row, connectionHash);
   return access.row;
 }

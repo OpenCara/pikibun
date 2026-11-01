@@ -89,6 +89,11 @@ export interface ConnectorCapabilities {
    */
   conversationBackups?: boolean;
   /**
+   * The connector packs an archived session's files when its owner asks, and unpacks them when it is unarchived
+   * (apps/runner/src/pack.ts). Advertised by sandboxed connectors only; absent on older ones.
+   */
+  sessionPacking?: boolean;
+  /**
    * The connector runs the session owner's GitHub comments, issues and merges under Auto-approve, through the control
    * plane with the message's admission; merges only in a message marked `autoMerge`, as the apps mark each Auto-approve
    * message to such a host (see ChatOptions). Absent on older connectors, which still ask for each.

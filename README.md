@@ -35,6 +35,7 @@ And around them:
   - [GitHub issues and pull requests](#github-issues-and-pull-requests)
   - [Host commands](#host-commands)
   - [Backups, restores and exports](#backups-restores-and-exports)
+  - [Packing archived sessions](#packing-archived-sessions)
   - [Moving a session to another host](#moving-a-session-to-another-host)
   - [iPhone, iPad and Mac apps](#iphone-ipad-and-mac-apps)
 - [Running Pistead on your own computer](#running-pistead-on-your-own-computer)
@@ -550,7 +551,7 @@ The **Approvals** list keeps to what people decide. Shell and host commands that
 
 Session lists show what each session's agent is doing: **Starting**, **Not started**, **In progress**, **Needs approval**, **Done**, **Failed**, **Idle** or **Archived**. A session at rest with a [scheduled prompt](#scheduled-prompts) shows **Scheduled**, with a clock in place of its status dot. The **Sessions** page groups sessions by workspace, with a search box, **Show archived** and **Open by ID** (for a session ID someone gave you).
 
-The session's menu offers **Copy session ID** and **Open in workspace settings**; to its owner and the workspace's owner and admins **Rename**, **Make private** or **Make workspace-visible** and **Archive** (or **Unarchive**); and to its owner **Create backup** too. Archiving makes a session read-only for everyone and hides it from lists; unarchiving brings it back as it was.
+The session's menu offers **Copy session ID** and **Open in workspace settings**; to its owner and the workspace's owner and admins **Rename**, **Make private** or **Make workspace-visible** and **Archive** (or **Unarchive**); and to its owner **Create backup** too, and **Pack files** on an archived session (see [Packing archived sessions](#packing-archived-sessions)). Archiving makes a session read-only for everyone and hides it from lists; unarchiving brings it back as it was.
 
 The session panel has five tabs:
 
@@ -733,6 +734,16 @@ Exports are JSON records without secrets; a session's conversation is in its bac
 
 - Session owners export a session (details, people, approvals, pushes, backup list and activity) under **Details → Export**.
 - Workspace owners and admins export a workspace (settings, members, models, published agents, repositories, push access, its session database connection and activity, with their own sessions in full and the records of every other session there, which they manage) under **Settings → Workspaces → Data export**. The rest of another member's session (its people, approvals, pushes and activity) is in its owner's export of it.
+
+### Packing archived sessions
+
+A session's files stay on its host when it is archived: clones, dependencies such as `node_modules`, and caches in its home folder, often tens of thousands of files. To save the host's disk, and its inodes above all, the session's owner can pack an archived session's files into one compressed file on the host (session menu → **Pack files**, or `POST /api/sessions/:id/pack`). The session shows **Files packed**.
+
+- **What a pack keeps** is what a full [backup](#backups-restores-and-exports) keeps, without its conversation, which stays on the host as it is: each clone's local work (its branches, commits its `origin` doesn't have, and its uncommitted changes and untracked files, but not ignored files such as `node_modules`), and the session's other files. It leaves out package managers' caches and temporary files in the session's home folder (`.cache`, `.npm`, `.pnpm-store`, `.yarn`, `.bun`, `.local/share/pnpm`, `.cargo/registry` and `.cargo/git`, `go/pkg/mod`, `.m2/repository`, `.gradle/caches`, `.nuget/packages` and `.tmp`). Install dependencies again when you need them.
+- **Unarchiving unpacks it first**: the host writes the files back, the session is unarchived, and its host opens it again, now with network access, so its clones are cloned again through its egress proxy, with its owner's access, before its work resumes, as after a restore. Reflogs and tags created locally on pushed commits aren't kept. So only the session's owner can unarchive a packed session, and its host must be online.
+- **Some sessions can't be packed**, and the host says why: one with more than 10,000 files outside its clones, or more than 24 MiB, the limits of a backup; one with symlinks or special files outside its clones; one with a clone a pack couldn't bring back in full, since packing deletes the original: stashed changes (`git stash`), refs other than branches and tags (notes, say), or tags on commits its origin doesn't have (push them first); one whose clones borrow from the host's [repository cache](#repository-cache-preview), which an archived session can't read, so sessions on a cache host can't be packed yet; one that runs directly on its host or on a host without the sandbox; a session on macOS or native Windows, or on a host started with `--resources` (each session has its own volume there, so packing would free nothing); and one that is still working. Nothing changes then.
+- A pack is written in full before the session's files go, and unpacked files are written in full before the pack goes, so a host that stops halfway keeps one or the other. If the server doesn't hear back from the host, the session still shows as packed, and unarchiving unpacks whatever the host packed.
+- Packing needs a current connector on the session's host (`sessionPacking` capability). Packing and unpacking are audited as `session.packed` and `session.unpacked`.
 
 ### Moving a session to another host
 
