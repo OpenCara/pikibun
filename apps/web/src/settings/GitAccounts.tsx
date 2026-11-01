@@ -88,8 +88,10 @@ export function GitAccountsGroup() {
  * Connects a token account for one provider, chosen by its row: the member's own, or with `save` another holder's (a
  * workspace's connection), which gets the same verified body.
  */
-export function ConnectGitAccountSheet({ provider, close, added, save }: { provider: TokenGitProvider | null; close: () => void; added: () => void;
-  save?: (body: Record<string, unknown>) => Promise<void> }) {
+export function ConnectGitAccountSheet({ provider, close, added, save, initial }: { provider: TokenGitProvider | null; close: () => void; added: () => void;
+  save?: (body: Record<string, unknown>) => Promise<void>;
+  /** Replacing a connection: its host, Azure DevOps organization and user name, kept; only the secret is entered again. */
+  initial?: { host: string; organization: string; username?: string } | null }) {
   const [host, setHost] = useState("");
   const [organization, setOrganization] = useState("");
   const [username, setUsername] = useState("");
@@ -98,11 +100,11 @@ export function ConnectGitAccountSheet({ provider, close, added, save }: { provi
   const fixedHost = provider ? gitProviderHosts[provider].fixed : null;
   // Each opening starts from the provider's defaults.
   useEffect(() => {
-    setHost(provider ? gitProviderHosts[provider].default ?? "" : "");
-    setOrganization("");
-    setUsername("");
+    setHost(initial?.host ?? (provider ? gitProviderHosts[provider].default ?? "" : ""));
+    setOrganization(initial?.organization ?? "");
+    setUsername(initial?.username ?? "");
     setToken("");
-  }, [provider]);
+  }, [provider, initial]);
   function dismiss() {
     if (action.busy) return;
     setToken("");
@@ -116,7 +118,7 @@ export function ConnectGitAccountSheet({ provider, close, added, save }: { provi
       token,
       ...(fixedHost ? {} : { host: host.trim() }),
       ...(provider === "azure-devops" ? { organization: organization.trim() } : {}),
-      ...(provider === "bitbucket" && username.trim() ? { username: username.trim() } : {}),
+      ...((provider === "bitbucket" || provider === "git") && username.trim() ? { username: username.trim() } : {}),
     };
     void action.run(async () => {
       try {

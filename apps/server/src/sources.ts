@@ -151,6 +151,10 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
   const view = fit<SourceReadView>({ source: source.title, kind: source.kind, ...read });
   await recheck();
   await authorize();
+  // Nothing read with an identity the source no longer reads with leaves the control plane.
+  if (await sourceReadAs(c.env, row.workspace_id, source.source_id) !== readAs) {
+    fail(409, 'source_read_as_changed', 'The account this source reads with changed; retry with the current one.');
+  }
   await auditStatement(c.env, actorId, 'source.read', row.workspace_id, sessionId, { source: source.source_id, kind: source.kind, item: view.id, type: view.type, readAs }).run();
   return c.json(view);
 }

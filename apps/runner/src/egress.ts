@@ -187,6 +187,32 @@ function repositoryKey(hostAndPath: string): string {
   return value.toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "");
 }
 
+/** A plain Git server's repository as its path names it exactly: the host lowercase, the path as written, ".git" kept. */
+function exactRepositoryKey(hostAndPath: string): string {
+  let value = hostAndPath;
+  try { value = decodeURIComponent(value); } catch { /* compared as written */ }
+  const slash = value.indexOf("/");
+  const host = slash < 0 ? value : value.slice(0, slash);
+  return `${host.toLowerCase()}${slash < 0 ? "" : value.slice(slash)}`.replace(/\/+$/, "");
+}
+
+const remoteKeyPath = (repository: EgressRepository) => bindingRemote(repository).replace(/^https:\/\//, "");
+
+/**
+ * The workspace repository `target` (host/path) names. A forge's paths are case-insensitive and ".git" is optional; a
+ * plain Git server's path is exact, so `team/app` and `team/app.git` there are two repositories. For a Git LFS request,
+ * git-lfs asks `<remote>.git/info/lfs` of a remote without ".git", which names that remote when no binding is exactly it.
+ */
+export function findRepository(repositories: readonly EgressRepository[], target: string, lfs = false): EgressRepository | undefined {
+  const exact = exactRepositoryKey(target);
+  const servers = repositories.filter(repository => repository.provider === "git");
+  const server = servers.find(repository => exactRepositoryKey(remoteKeyPath(repository)) === exact)
+    ?? (lfs ? servers.find(repository => !repository.fullName.endsWith(".git") && `${exactRepositoryKey(remoteKeyPath(repository))}.git` === exact) : undefined);
+  if (server) return server;
+  const key = repositoryKey(target);
+  return repositories.find(repository => repository.provider !== "git" && repositoryKey(remoteKeyPath(repository)) === key);
+}
+
 /**
  * A git-lfs request: its endpoint for a remote is `<remote>/info/lfs` (git-lfs adds `.git` first where the remote has
  * none), so the proxy sees the batch API below a rewritten remote, and object downloads where its own batch answers
@@ -627,7 +653,7 @@ export class EgressProxy {
       return refuse(response, 403, "Pushes don't go through the egress proxy in this session: commit, then use the git_push tool");
     }
     const grant = await this.#currentGrant();
-    const repository = grant.repositories.find(item => repositoryKey(bindingRemote(item).replace(/^https:\/\//, "")) === key);
+    const repository = findRepository(grant.repositories, target);
     if (repository) return push ? this.#push(request, response, repository, parsed.service, label) : this.#relay(request, response, repository, parsed.service, label);
     if (push) {
       this.#record({ kind: "git", target: label, outcome: "refused", reason: "push: not a workspace repository" });
@@ -697,7 +723,7 @@ export class EgressProxy {
       this.#record({ kind: "git", target: label, outcome: "refused", reason: `lfs: ${reason}` });
       refuseLfs(response, status, reason);
     };
-    const repository = (await this.#currentGrant()).repositories.find(item => repositoryKey(bindingRemote(item).replace(/^https:\/\//, "")) === repositoryKey(target));
+    const repository = findRepository((await this.#currentGrant()).repositories, target, true);
     if (!repository) return deny(403, `${target.slice(0, 300)} is not one of this workspace's repositories; Git LFS goes only to them`);
     if (!repository.lfs) {
       return deny(403, `Git LFS is off for ${repository.fullName} in this workspace; a workspace owner or admin can turn it on in the workspace's repository settings`);
@@ -820,8 +846,7 @@ export function repositoryForRemote(repositories: readonly EgressRepository[], u
     if (ssh) target = `${ssh[1]}/${ssh[2]}`;
   }
   if (!target) return undefined;
-  const key = repositoryKey(target.split(/[?#]/)[0]!);
-  return repositories.find(repository => repositoryKey(bindingRemote(repository).replace(/^https:\/\//, "")) === key);
+  return findRepository(repositories, target.split(/[?#]/)[0]!);
 }
 
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;

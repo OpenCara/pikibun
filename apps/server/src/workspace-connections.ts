@@ -12,7 +12,7 @@ import { decryptToken, encryptToken } from './vault.js';
 import { accountInput, credentialOrganization, providerRepository } from './git/accounts.js';
 import { gitProviderAdapters, plainRepositoryId } from './git/providers.js';
 import type { GitCredential } from './git/types.js';
-import { recheckAccess, repositoryAccess, verifyRepository, type RepositoryAccess } from './repositories.js';
+import { recheckAccess, verifyRepository, type RepositoryAccess } from './repositories.js';
 import { documentAdapters } from './sources.js';
 
 /**
@@ -61,13 +61,6 @@ export async function workspaceGitAccess(env: Env, workspaceId: string, provider
 /** True for access through a workspace connection: it never leaves the control plane. */
 export function workspaceAccess(access: RepositoryAccess): boolean {
   return access.provider !== 'github' && access.account.workspaceId !== undefined;
-}
-
-/** The identity a session reads a bound repository with: its owner's own account, or the workspace's connection. */
-export async function repositoryReadAccess(env: Env, binding: RepositoryRow, ownerId: string): Promise<RepositoryAccess> {
-  return await sourceReadAs(env, binding.workspace_id, binding.id) === 'workspace'
-    ? workspaceGitAccess(env, binding.workspace_id, binding.provider, binding.host, binding.full_name)
-    : repositoryAccess(env, ownerId, binding.provider, binding.host, binding.full_name);
 }
 
 export interface WorkspaceDocumentAccount { secret: string; ciphertext: string; connectionId: string; workspaceId: string }

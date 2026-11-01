@@ -1003,6 +1003,32 @@ test('a repository set to read as the workspace is relayed with the workspace\'s
   assert.equal(direct.direct, false);
   assert.match(direct.reason ?? '', /workspace's connection/);
 
+  // A switch while a read is in flight ends it before anything is fetched upstream with the identity it no longer uses.
+  const inner = globalThis.fetch;
+  let flipped = false;
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!flipped && String(input).startsWith(gitServerRemote)) {
+      flipped = true;
+      f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'members' WHERE source_id = ?").run(bound.id);
+    }
+    return inner(input, init);
+  });
+  await denied(await relay('info-refs'), 409, 'source_read_as_changed');
+  assert.ok(flipped);
+  f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'workspace' WHERE source_id = ?").run(bound.id);
+
+  // At the cap, reconnecting an existing connection still replaces it; only a new one is refused.
+  const timestamp = new Date().toISOString();
+  for (let index = 0; index < 19; index++) {
+    f.sqlite.prepare(`INSERT INTO workspace_connections (id,workspace_id,family,provider,host,organization,username,name,ciphertext,created_by,created_at,updated_at)
+      VALUES (?,?,'git','gitea',?,'',NULL,'bot','x',?,?,?)`).run(`filler-${index}`, team.id, `h${index}.example.com`, admin.user.id, timestamp, timestamp);
+  }
+  const replaced = await json<{ connection: { id: string } }>(await admin.request('POST', path,
+    { family: 'git', provider: 'git', host: gitServerHost, username: 'dev', token: 'server-password' }));
+  assert.equal(replaced.connection.id, connection.id);
+  await denied(await admin.request('POST', path, { family: 'git', provider: 'git', host: 'other.example.com', username: 'dev', token: 'x' }), 409, 'workspace_connection_limit');
+  f.sqlite.prepare("DELETE FROM workspace_connections WHERE id LIKE 'filler-%'").run();
+
   // Switched back to members' accounts, the owner's own account is required again: no fallback.
   await json(await admin.request('PUT', `/api/workspaces/${team.id}/sources/${bound.id}/read-as`, { readAs: 'members' }));
   await denied(await relay('info-refs'), 409, 'git_account_required');

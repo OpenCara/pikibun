@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { gitProviderNames, type GitProvider, type TokenGitProvider } from "../../../packages/shared/src/repositories";
 import { gitProviderLabel } from "./repositories";
 import { documentKindNames, type DocumentKind } from "../../../packages/shared/src/sources";
@@ -66,6 +66,12 @@ export function WorkspaceConnections({ workspaceId, admin, connections, loading,
 }) {
   const action = useAction();
   const [git, setGit] = useState<TokenGitProvider | null>(null);
+  // Replacing a Git connection keeps its host and organization; reconnecting the same key replaces it, even at the cap.
+  const [replacing, setReplacing] = useState<WorkspaceConnection | null>(null);
+  // Stable while the sheet is open, so typing isn't reset. A Git server's name is its user name; other providers' names
+  // are what the provider reported (a Bitbucket login, not the email it connects with), so those are entered again.
+  const initial = useMemo(() => replacing
+    ? { host: replacing.host, organization: replacing.organization, ...(replacing.provider === "git" ? { username: replacing.name } : {}) } : null, [replacing]);
   const [document, setDocument] = useState<DocumentKind | null>(null);
   const path = `/api/workspaces/${segment(workspaceId)}/connections`;
   const full = (connections?.length ?? 0) >= workspaceConnectionLimit;
@@ -101,12 +107,21 @@ export function WorkspaceConnections({ workspaceId, admin, connections, loading,
         : connections.map(connection => <Row key={connection.id} leading={<Icon name={connection.family === "git" ? "git-branch" : "file"} size={16} />}
           title={connectionLabel(connection)}
           hint={`${connection.name} · ${connection.sources ? `${connection.sources} source${connection.sources === 1 ? "" : "s"} read with it` : "No source reads with it yet"}`}
-          trailing={admin && <Button variant="ghost" size="sm" disabled={action.busy || connection.sources > 0}
-            title={connection.sources > 0 ? "Switch its sources to members' own accounts first" : undefined}
-            aria-label={`Remove ${connectionLabel(connection)}`} onClick={() => void remove(connection)}>Remove</Button>} />)}
+          trailing={admin && <>
+            <Button variant="ghost" size="sm" disabled={action.busy} aria-label={`Replace ${connectionLabel(connection)}`}
+              title="Connect it again with a new secret, keeping the sources that read with it"
+              onClick={() => connection.family === "git"
+                ? (setReplacing(connection), setGit(connection.provider as TokenGitProvider))
+                : setDocument(connection.provider as DocumentKind)}>Replace</Button>
+            <Button variant="ghost" size="sm" disabled={action.busy || connection.sources > 0}
+              title={connection.sources > 0 ? "Switch its sources to members' own accounts first" : undefined}
+              aria-label={`Remove ${connectionLabel(connection)}`} onClick={() => void remove(connection)}>Remove</Button>
+          </>} />)}
       {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
     </ResourceState>
-    {admin && <ConnectGitAccountSheet provider={git} close={() => setGit(null)} added={saved}
+    {admin && full && <CardBody><span className="muted small">This workspace has {workspaceConnectionLimit} connections, the most it can have. Replace one, or remove one to add another.</span></CardBody>}
+    {admin && <ConnectGitAccountSheet provider={git} close={() => { setGit(null); setReplacing(null); }} added={saved}
+      initial={initial}
       save={async body => { await api(path, { method: "POST", body: { family: "git", ...body } }); }} />}
     {admin && <ConnectSheet provider={document} close={() => setDocument(null)} connected={saved}
       save={async (provider, body) => { await api(path, { method: "POST", body: { family: "document", provider, ...body } }); }} />}

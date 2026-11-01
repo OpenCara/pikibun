@@ -19,7 +19,7 @@ import { sessionBranchPush, sessionBranchTarget } from './push/session-branch.js
 import { requireBinding } from './push/broker.js';
 import { mintPushToken, mintRepositoryReadToken, type MintedToken } from './push/mint.js';
 import { sessionApis } from './api-access.js';
-import { repositoryReadAccess, workspaceAccess } from './workspace-connections.js';
+import { sourceReadAs, workspaceAccess, workspaceGitAccess } from './workspace-connections.js';
 import { webSearchProvider } from './web-search.js';
 
 /** Owner/admin authority, re-checked inside the write (binds workspace id, user id). */
@@ -158,9 +158,18 @@ async function gitAuthority(c: AppContext, connector: ConnectorRow | null, sessi
     .bind(bindingId, original.workspace_id).first();
   if (!binding) fail(404, 'repository_not_bound', 'This repository is not bound to the session\'s workspace.');
   // Pushes are always the owner's; reads use the identity the source reads with (the owner's, or the workspace's connection).
-  const access = push ? await repositoryAccess(c.env, original.owner_id, binding.provider, binding.host, binding.full_name)
-    : await repositoryReadAccess(c.env, binding, original.owner_id);
-  return { session: original, binding, access, authorize };
+  const readAs = push ? null : await sourceReadAs(c.env, original.workspace_id, binding.id);
+  const access = readAs === 'workspace' ? await workspaceGitAccess(c.env, original.workspace_id, binding.provider, binding.host, binding.full_name)
+    : await repositoryAccess(c.env, original.owner_id, binding.provider, binding.host, binding.full_name);
+  // A read never completes with an identity the repository no longer reads with: every recheck before an effect (an
+  // upstream Git or LFS transfer, a direct grant) also compares the setting with the one this request started with.
+  const current = async () => {
+    await authorize();
+    if (readAs !== null && await sourceReadAs(c.env, original.workspace_id, binding.id) !== readAs) {
+      fail(409, 'source_read_as_changed', 'The account this repository reads with changed; retry with the current one.');
+    }
+  };
+  return { session: original, binding, access, authorize: current };
 }
 
 /**

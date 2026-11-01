@@ -6,7 +6,7 @@ import { defaultBranch, parseAdvertisement, resolveRef } from '../apps/server/sr
 import type { GitCredential } from '../apps/server/src/git/types.js';
 import { branchTip, openPullRequest, ownerGitAuthorization, pushTarget } from '../apps/server/src/push/targets.js';
 import type { RepositoryAccess } from '../apps/server/src/repositories.js';
-import { repositoryForRemote } from '../apps/runner/src/egress.js';
+import { findRepository, repositoryForRemote } from '../apps/runner/src/egress.js';
 import {
   bindingRemote, gitProviderHasForge, plainRepositoryPath, pushIdentityKindsByProvider, validRepositoryName,
   type ProviderSessionRepository,
@@ -164,11 +164,23 @@ test('plain Git server paths, remotes and push access', () => {
   // The clone URL is the path as given: ".git" is never added or taken away.
   assert.equal(bindingRemote({ provider: 'git', host, fullName: 'team/app.git' }), remote);
   assert.equal(bindingRemote({ provider: 'git', host: `${host}:8443`, fullName: 'repo' }), `https://${host}:8443/repo`);
-  // The sandbox's remotes find the binding with or without ".git"; SSH remotes of other hosts aren't rewritten.
-  const binding = { bindingId: 'b1', provider: 'git' as const, host, repositoryId: 'x', fullName: 'team/app.git', lfs: false };
-  assert.equal(repositoryForRemote([binding], `https://${host}/team/app`)?.bindingId, 'b1');
-  assert.equal(repositoryForRemote([binding], `https://${host}/team/app.git`)?.bindingId, 'b1');
-  assert.equal(repositoryForRemote([binding], `https://${host}/team/other.git`), undefined);
+  // A Git server's path is exact: `team/app` and `team/app.git` are two repositories, both bound at once.
+  const plain = { bindingId: 'plain', provider: 'git' as const, host, repositoryId: 'x', fullName: 'team/app', lfs: true };
+  const dotted = { bindingId: 'dotted', provider: 'git' as const, host, repositoryId: 'y', fullName: 'team/app.git', lfs: true };
+  assert.equal(repositoryForRemote([plain, dotted], `https://${host}/team/app`)?.bindingId, 'plain');
+  assert.equal(repositoryForRemote([plain, dotted], `https://${host}/team/app.git`)?.bindingId, 'dotted');
+  assert.equal(repositoryForRemote([dotted], `https://${host}/team/app`), undefined);
+  assert.equal(repositoryForRemote([plain], `https://${host}/team/app.git`), undefined);
+  assert.equal(repositoryForRemote([plain], `https://${host}/Team/App`), undefined);
+  assert.equal(repositoryForRemote([plain], `https://${host.toUpperCase()}/team/app/`)?.bindingId, 'plain');
+  assert.equal(repositoryForRemote([plain, dotted], `https://${host}/team/other.git`), undefined);
+  // git-lfs asks `<remote>.git/info/lfs` for a remote without ".git": that is the plain one, unless `.git` is bound too.
+  assert.equal(findRepository([plain], `${host}/team/app.git`, true)?.bindingId, 'plain');
+  assert.equal(findRepository([plain, dotted], `${host}/team/app.git`, true)?.bindingId, 'dotted');
+  assert.equal(findRepository([plain], `${host}/team/app.git`)?.bindingId, undefined);
+  // Forges keep matching without case or ".git".
+  const forge = { bindingId: 'forge', provider: 'gitlab' as const, host: 'gitlab.com', repositoryId: '1', fullName: 'Team/App', lfs: false };
+  assert.equal(repositoryForRemote([forge, plain], 'https://gitlab.com/team/app')?.bindingId, 'forge');
 });
 
 test('pushes to a plain Git server check receive-pack with the owner account, and open no pull requests', async t => {

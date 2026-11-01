@@ -22,8 +22,11 @@ CREATE TABLE workspace_connections (
   updated_at TEXT NOT NULL,
   UNIQUE (workspace_id, family, provider, host, organization)
 );
+-- Reconnecting an existing provider (an upsert on the same key) replaces it, so it never counts against the cap.
 CREATE TRIGGER workspace_connections_limit BEFORE INSERT ON workspace_connections
-WHEN (SELECT COUNT(*) FROM workspace_connections WHERE workspace_id = NEW.workspace_id) >= 20 BEGIN
+WHEN (SELECT COUNT(*) FROM workspace_connections WHERE workspace_id = NEW.workspace_id) >= 20
+  AND NOT EXISTS (SELECT 1 FROM workspace_connections WHERE workspace_id = NEW.workspace_id AND family = NEW.family
+    AND provider = NEW.provider AND host = NEW.host AND organization = NEW.organization) BEGIN
   SELECT RAISE(ABORT, 'workspace connection limit reached');
 END;
 

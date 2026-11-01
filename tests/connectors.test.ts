@@ -3643,6 +3643,18 @@ test('a source an admin sets to read as the workspace reads with the workspace\'
   const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().map(row => JSON.parse(String(row.detail_json)));
   assert.deepEqual(audit.map(item => item.readAs), ['workspace']);
 
+  // A switch while the read is in flight: what was read with the workspace's connection isn't returned.
+  const inner = globalThis.fetch;
+  let flipped = false;
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!flipped) { flipped = true; f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'members' WHERE source_id = ?").run(source.id); }
+    return inner(input, init);
+  });
+  await denied(await read(), 409, 'source_read_as_changed');
+  assert.ok(flipped);
+  f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'workspace' WHERE source_id = ?").run(source.id);
+  assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length, 1, 'The refused read is not audited as a read');
+
   // A connection in use can't be removed; switching back to members' accounts never falls back to the workspace's.
   await denied(await s.admin.request('DELETE', `${path}/${connection.id}`), 409, 'workspace_connection_in_use');
   await denied(await s.creator.request('PUT', `/api/workspaces/${s.team.id}/sources/${source.id}/read-as`, { readAs: 'members' }), 403, 'forbidden');

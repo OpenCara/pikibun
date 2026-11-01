@@ -26,7 +26,10 @@ CREATE TABLE workspace_connections (
 CREATE FUNCTION workspace_connections_limit() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('workspace_connections:' || NEW.workspace_id));
-  IF (SELECT COUNT(*) FROM workspace_connections WHERE workspace_id = NEW.workspace_id) >= 20 THEN
+  -- Reconnecting an existing provider (an upsert on the same key) replaces it, so it never counts against the cap.
+  IF (SELECT COUNT(*) FROM workspace_connections WHERE workspace_id = NEW.workspace_id) >= 20
+    AND NOT EXISTS (SELECT 1 FROM workspace_connections WHERE workspace_id = NEW.workspace_id AND family = NEW.family
+      AND provider = NEW.provider AND host = NEW.host AND organization = NEW.organization) THEN
     RAISE EXCEPTION 'workspace connection limit reached';
   END IF;
   RETURN NEW;
