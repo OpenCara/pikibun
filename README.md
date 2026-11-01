@@ -798,6 +798,22 @@ The image builds the web app and the bundled server and runs them as a non-root 
 
 The image also sets `PASSWORD_AUTH=true` and `SIGNUP=invite`: people sign in with a [username and password](#username-and-password), and with GitHub once you add its OAuth app (see [Sign-in and GitHub apps](#sign-in-and-github-apps)), and new accounts, GitHub ones too, come only through a workspace's [invite link](#invite-links-and-pending-members). So a new server's first account is the administrator `--create-admin` makes (see [Administration](#administration)), who signs in, creates a workspace and shares its invite link; or, with a GitHub OAuth app, a GitHub account that `ADMIN_USER_IDS` lists, which can always sign up. Set `PASSWORD_AUTH=false` in `.env` to sign in with GitHub only, and `SIGNUP=open` to let anyone who reaches the server sign up, or `off` to let in only the operator's accounts (see [Who can create an account](#who-can-create-an-account)).
 
+> **Upgrading from Pistead:** every name changed, with nothing that reads the old ones. Back up first. Then, for a Docker Compose deployment:
+>
+> 1. Stop it with the old files, keeping its volumes: `docker compose --profile postgres down` (without `-v`).
+> 2. Update the source, then create the new service and volumes without starting them: `docker compose --profile postgres create`. Compose names volumes after the project, the directory's name unless `COMPOSE_PROJECT_NAME` says otherwise, so `pistead-data` was `<project>_pistead-data`.
+> 3. Copy the data into the new volumes. The image's SQLite database is now `pikibun.sqlite`, so the copy renames `pistead.sqlite` and its `-wal` and `-shm` files (unless `.env` sets `DATABASE_URL` to another file):
+>    ```sh
+>    P=${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}   # the Compose project, as volume names carry it
+>    docker run --rm -v ${P}_pistead-data:/from:ro -v ${P}_pikibun-data:/to alpine sh -c \
+>      'cp -a /from/. /to/ && cd /to && for f in pistead.sqlite*; do [ -e "$f" ] && mv "$f" "pikibun${f#pistead}"; done; ls -la /to'
+>    # With the postgres profile, its cluster too. It keeps the pistead role and database, so DATABASE_URL stays as it is.
+>    docker run --rm -v ${P}_pistead-postgres:/from:ro -v ${P}_pikibun-postgres:/to alpine cp -a /from/. /to/
+>    ```
+> 4. `docker compose --profile postgres up -d`, and check the server's sessions and workspaces. Once they are there, `docker volume rm ${P}_pistead-data ${P}_pistead-postgres`.
+>
+> In `.env`, `PISTEAD_IMAGE` becomes `PIKIBUN_IMAGE` (`ghcr.io/opencara/pikibun`). Hosts pair again with `npx pikibun@latest connect`, since the connector keeps its state in `~/.local/share/pikibun/connector`. Sessions whose branch was named before the rename (`pistead/…`) no longer run: start new ones. A connected workspace database starts with empty `pikibun_*` tables, and its `pistead_*` tables stay where they are. A Postgres control plane renames its `pistead_raise()` trigger function to `pikibun_raise()` when it starts.
+
 > **Upgrading to server 0.18.0:** the image now sets `PASSWORD_AUTH=true` and `SIGNUP=invite`. Unless `.env` sets them, the sign-in page offers a username and password, and new accounts, GitHub ones too, need a workspace's invite link (or, with GitHub, a place in `ADMIN_USER_IDS`); existing accounts sign in as before. To keep the previous behavior, set `PASSWORD_AUTH=false` and `SIGNUP=open` in `.env`. An `.env` copied from 0.17.0's `.env.example` already sets both, to empty values that mean unset, so it keeps the previous behavior: remove those two lines to take the image's defaults.
 
 > **Upgrading to server 0.16.0:** its first start rebuilds the `users` table of a SQLite database (to allow password accounts), keeping every row and checking every reference to it before committing; back up the `pikibun-data` volume first, as before any upgrade. Postgres changes the table in place. Nothing else changes until you set `PASSWORD_AUTH` or `SIGNUP`: unset, sign-in and GitHub sign-up work as before.
