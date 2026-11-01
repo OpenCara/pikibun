@@ -18,7 +18,8 @@ echo "Pulling $image"
 docker pull --quiet "$image"
 
 if grep -q '^PISTEAD_IMAGE=' .env; then
-  sed -i "s|^PISTEAD_IMAGE=.*|PISTEAD_IMAGE=$image|" .env
+  # --follow-symlinks keeps a symlinked .env a symlink, editing the file it points at.
+  sed -i --follow-symlinks "s|^PISTEAD_IMAGE=.*|PISTEAD_IMAGE=$image|" .env
 else
   printf '\nPISTEAD_IMAGE=%s\n' "$image" >> .env
 fi
@@ -32,15 +33,23 @@ fi
 previous=$(docker compose ps -q pistead 2>/dev/null | xargs -r docker inspect -f '{{.Config.Image}}' 2>/dev/null || true)
 echo "Previous image: ${previous:-none}"
 
+# Every failure after the container is recreated shows its logs and the image to go back to.
+fail() {
+  echo "$1" >&2
+  echo "The pistead service's latest logs:" >&2
+  docker compose logs --tail 100 pistead >&2 || true
+  echo "To go back, deploy the previous image (${previous:-unknown}) once you know it reads the current database." >&2
+  exit 1
+}
+
 docker compose up -d --no-build pistead
 
-container=$(docker compose ps -q pistead)
+# -a: a container that already exited (crashed at start) is listed too.
+container=$(docker compose ps -a -q pistead)
+[ -n "$container" ] || fail "No pistead container after deploying $image."
 want=$(docker image inspect -f '{{.Id}}' "$image")
-have=$(docker inspect -f '{{.Image}}' "$container")
-if [ "$want" != "$have" ]; then
-  echo "The pistead container runs $have, not $image ($want)." >&2
-  exit 1
-fi
+have=$(docker inspect -f '{{.Image}}' "$container" || true)
+[ "$want" = "$have" ] || fail "The pistead container runs ${have:-no image}, not $image ($want)."
 
 echo "Waiting up to ${timeout}s for the container to become healthy"
 for _ in $(seq 1 "$timeout"); do
@@ -58,7 +67,4 @@ for _ in $(seq 1 "$timeout"); do
   sleep 1
 done
 
-echo "The pistead container is ${status:-not healthy} after deploying $image; its latest logs:" >&2
-docker compose logs --tail 100 pistead >&2 || true
-echo "To go back, deploy the previous image (${previous:-unknown}) once you know it reads the current database." >&2
-exit 1
+fail "The pistead container is ${status:-not healthy} after deploying $image."
