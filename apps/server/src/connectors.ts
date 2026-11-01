@@ -211,7 +211,7 @@ type InfoViewer = { userId: string; role?: 'owner' | 'admin'; workspaceId?: stri
 
 /**
  * Whether a host's connector runs a session directly on the host when its binding asks (SessionRecord.hostEnvironment):
- * one that takes its configuration from Pistead, on a sandboxed host. An unsandboxed host runs every session that way.
+ * one that takes its configuration from Pikibun, on a sandboxed host. An unsandboxed host runs every session that way.
  * `granted`: for a member the host's owner granted that, which needs a connector that honors such grants.
  */
 export function hostSessionsSupported(capabilities: ConnectorCapabilities, granted = false): boolean {

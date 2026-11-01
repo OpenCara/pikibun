@@ -1,9 +1,9 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 export type IconName =
   | "plus" | "settings" | "more" | "chevron-right" | "chevron-down" | "chevron-up" | "chevron-left" | "x" | "check" | "copy"
   | "folder" | "file" | "message" | "terminal" | "tool" | "send" | "panel-right" | "menu" | "info" | "alert" | "shield"
-  | "server" | "users" | "user" | "palette" | "sun" | "moon" | "monitor" | "logout" | "archive"
+  | "server" | "users" | "user" | "palette" | "sun" | "moon" | "sparkle" | "monitor" | "logout" | "archive"
   | "git-branch" | "git-pull-request" | "github" | "lock" | "globe" | "refresh" | "search" | "eye" | "trash" | "external" | "history" | "pencil" | "link" | "stop" | "clock" | "image" | "arrow-down";
 
 const paths: Record<Exclude<IconName, "github">, ReactNode> = {
@@ -36,6 +36,7 @@ const paths: Record<Exclude<IconName, "github">, ReactNode> = {
   palette: <><circle cx="13.5" cy="6.5" r=".5" /><circle cx="17.5" cy="10.5" r=".5" /><circle cx="8.5" cy="7.5" r=".5" /><circle cx="6.5" cy="12.5" r=".5" /><path d="M12 2a10 10 0 0 0 0 20 1.7 1.7 0 0 0 1.7-1.7c0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1a1.7 1.7 0 0 1 1.6-1.7H16a5.6 5.6 0 0 0 5.6-5.6C21.6 6 17.3 2 12 2Z" /></>,
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.9 4.9 1.4 1.4" /><path d="m17.7 17.7 1.4 1.4" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.3 17.7-1.4 1.4" /><path d="m19.1 4.9-1.4 1.4" /></>,
   moon: <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />,
+  sparkle: <path d="M9.9 15.5a2 2 0 0 0-1.4-1.4l-6.1-1.6a.5.5 0 0 1 0-1l6.1-1.6a2 2 0 0 0 1.4-1.4l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0Z" />,
   monitor: <><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8" /><path d="M12 17v4" /></>,
   logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></>,
   archive: <><rect x="2" y="3" width="20" height="5" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></>,
@@ -60,9 +61,51 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 
-/** The Pistead mark: a homestead roof sheltering a pi. */
+const LEAF = "M0 0C-1.6-.4-2.6-1.6-4.2-2.9-6.6-4.8-10.6-4.6-11.8-2.2-12.8-.2-11 2.6-8.2 3.2-5.8 3.7-3 1.6-1.6.6-1 .2-.5.05 0 0Z";
+const VEINS = "M-1 .05C-4-.4-7.6-.6-11.2-1.4M-5-.45-7-2.9M-5-.45-6.8 1.9M-8.2-.85-9.9-3.1M-8.2-.85-9.6 1.6";
+const LEFT_EAR = "translate(14.7 16.6) rotate(33) scale(1.15)";
+const RIGHT_EAR = "translate(17.3 16.6) scale(-1 1) rotate(33) scale(1.15)";
+
+/**
+ * The Pikibun mark: Pikibun, the maple-seed-eared creature, on its night sky (the same drawing as public/favicon.svg).
+ * Gradient ids are per instance, since a page can show several marks and SVG ids are document-wide.
+ */
 export function Logo({ size = 24 }: { size?: number }) {
-  return <svg className="logo" width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="9" fill="var(--accent)" /><g fill="none" stroke="var(--accent-foreground)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M7 15.5 16 8l9 7.5" /><path d="M10.5 17h11" /><path d="M13.75 17v7" /><path d="M18.5 17v5.5c0 1 .6 1.5 1.6 1.5" /></g></svg>;
+  const id = useId().replace(/[^\w-]/g, "");
+  const [sky, ear, body, glow] = ["sky", "ear", "body", "glow"].map(name => `${id}${name}`);
+  const shape = <>
+    <path d={LEAF} transform={LEFT_EAR} /><path d={LEAF} transform={RIGHT_EAR} />
+    <ellipse cx="11.1" cy="22.3" rx="1.45" ry=".75" transform="rotate(-25 11.1 22.3)" />
+    <ellipse cx="20.9" cy="22.3" rx="1.45" ry=".75" transform="rotate(25 20.9 22.3)" />
+    <ellipse cx="15" cy="28.5" rx=".85" ry="1.25" /><ellipse cx="17" cy="28.5" rx=".85" ry="1.25" />
+    <ellipse cx="16" cy="21.6" rx="4.9" ry="5.5" />
+  </>;
+  return <svg className="logo" width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+    <defs>
+      <radialGradient id={sky} cx="50%" cy="50%" r="72%"><stop offset="0" stopColor="#2b1454" /><stop offset="1" stopColor="#110530" /></radialGradient>
+      <linearGradient id={ear} x1="0" y1=".5" x2="1" y2=".5"><stop offset="0" stopColor="#fdf0c9" /><stop offset=".5" stopColor="#e2d2f5" /><stop offset=".85" stopColor="#bba6ee" /><stop offset="1" stopColor="#f2e2cb" /></linearGradient>
+      <radialGradient id={body} cx="50%" cy="74%" r="70%"><stop offset="0" stopColor="#fdf1d6" /><stop offset=".45" stopColor="#f4e0cd" /><stop offset="1" stopColor="#b5a3f0" /></radialGradient>
+      <filter id={glow} x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=".8" /></filter>
+    </defs>
+    <rect width="32" height="32" rx="9" fill={`url(#${sky})`} />
+    <g transform="translate(0 -1.4)">
+      <g fill="#fde9c4" opacity=".34" filter={`url(#${glow})`}>{shape}</g>
+      <g stroke="#3d1e45" strokeWidth=".5" strokeLinejoin="round">
+        <path d={LEAF} transform={LEFT_EAR} fill={`url(#${ear})`} /><path d={LEAF} transform={RIGHT_EAR} fill={`url(#${ear})`} />
+        <ellipse cx="11.1" cy="22.3" rx="1.45" ry=".75" transform="rotate(-25 11.1 22.3)" fill="#ebe0f7" />
+        <ellipse cx="20.9" cy="22.3" rx="1.45" ry=".75" transform="rotate(25 20.9 22.3)" fill="#ebe0f7" />
+        <path d="M15.1 26.8v.6M16.9 26.8v.6" fill="none" stroke="#f4e0cd" strokeWidth=".6" />
+        <ellipse cx="15" cy="28.5" rx=".85" ry="1.25" fill="#8a64bf" /><ellipse cx="17" cy="28.5" rx=".85" ry="1.25" fill="#8a64bf" />
+        <ellipse cx="16" cy="21.6" rx="4.9" ry="5.5" fill={`url(#${body})`} />
+      </g>
+      <g fill="none" stroke="#a387d8" strokeWidth=".3" strokeLinecap="round" opacity=".85">
+        <path d={VEINS} transform={LEFT_EAR} /><path d={VEINS} transform={RIGHT_EAR} />
+      </g>
+      <circle cx="14.25" cy="20.2" r=".85" fill="#171412" /><circle cx="17.75" cy="20.2" r=".85" fill="#171412" />
+      <circle cx="14.5" cy="19.92" r=".27" fill="#fff" /><circle cx="18" cy="19.92" r=".27" fill="#fff" />
+      <path d="M15.47 20.85h1.06L16 21.55Z" fill="#e0725f" />
+    </g>
+  </svg>;
 }
 
 export function GitHubMark({ size = 16 }: { size?: number }) {

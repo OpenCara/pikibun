@@ -120,7 +120,7 @@ export async function createBackup(c: AppContext, row: SessionRow, options: Crea
   }
   const conversationOnly = options.conversationOnly === true;
   if (conversationOnly && !await conversationBackupsSupported(c.env, row)) {
-    fail(409, 'connector_update_required', 'Update this session\'s host connector (npx pistead@latest connect) to back up its conversation only.');
+    fail(409, 'connector_update_required', 'Update this session\'s host connector (npx pikibun@latest connect) to back up its conversation only.');
   }
   const response = await runnerRequest(c, row, 'backup', '', conversationOnly ? { conversationOnly: true } : {});
   if (!response.headers.get('content-type')?.includes('application/json')) {

@@ -42,7 +42,7 @@ export function gitUpstreamHeaders(service: GitSmartService, input: { userAgent?
   const agent = input.userAgent;
   const protocol = input.gitProtocol;
   const headers: Record<string, string> = {
-    "User-Agent": agent && /^git\/[\x21-\x7e]{1,120}$/.test(agent) ? agent : "git/2 (pistead)",
+    "User-Agent": agent && /^git\/[\x21-\x7e]{1,120}$/.test(agent) ? agent : "git/2 (pikibun)",
     ...(protocol && /^[A-Za-z0-9=:._-]{1,256}$/.test(protocol) && (service === "info-refs" || service === "upload-pack") ? { "Git-Protocol": protocol } : {}),
   };
   if (service === "upload-pack") {
@@ -227,7 +227,7 @@ export async function lfsProviderBatch(target: LfsTarget, objects: LfsObject[], 
   try {
     response = await (target.fetch ?? fetch)(`${lfsEndpoint(target.remote)}/objects/batch`, {
       method: "POST", redirect: "manual", signal: AbortSignal.timeout(LFS_BATCH_TIMEOUT_MS),
-      headers: { ...(target.authorization ? { Authorization: target.authorization } : {}), Accept: LFS_TYPE, "Content-Type": LFS_TYPE, "User-Agent": "git-lfs/3 (pistead)" },
+      headers: { ...(target.authorization ? { Authorization: target.authorization } : {}), Accept: LFS_TYPE, "Content-Type": LFS_TYPE, "User-Agent": "git-lfs/3 (pikibun)" },
       body: JSON.stringify({ operation: "download", transfers: ["basic"], objects, ...(ref ? { ref: { name: ref } } : {}), hash_algo: "sha256" }),
     });
   } catch (error) {
@@ -268,7 +268,7 @@ export function lfsBatchResult(objects: LfsObject[], answer: Map<string, LfsProv
 async function download(target: LfsTarget, action: LfsDownloadAction): Promise<Response> {
   const { provider } = target;
   let url = downloadUrl(action.href);
-  if (!url) throw new GitTransferError(502, "invalid_lfs_response", `${provider} pointed a Git LFS download somewhere Pistead does not fetch from.`);
+  if (!url) throw new GitTransferError(502, "invalid_lfs_response", `${provider} pointed a Git LFS download somewhere Pikibun does not fetch from.`);
   let headers: Record<string, string> = { ...action.header };
   if (target.authorization && !Object.keys(headers).some(name => name.toLowerCase() === "authorization") && url.origin === new URL(target.remote).origin) {
     headers.Authorization = target.authorization;
@@ -285,7 +285,7 @@ async function download(target: LfsTarget, action: LfsDownloadAction): Promise<R
     const location = response.headers.get("location");
     let next: URL | undefined;
     try { next = location && hop < LFS_MAX_REDIRECTS ? downloadUrl(new URL(location, url).href) : undefined; } catch { next = undefined; }
-    if (!next) throw new GitTransferError(502, "lfs_unavailable", `${provider} redirected a Git LFS download somewhere Pistead does not fetch from.`);
+    if (!next) throw new GitTransferError(502, "lfs_unavailable", `${provider} redirected a Git LFS download somewhere Pikibun does not fetch from.`);
     if (next.origin !== url.origin) headers = {};
     url = next;
   }

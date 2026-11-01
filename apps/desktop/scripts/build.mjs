@@ -23,7 +23,7 @@ await Promise.all([
     entryPoints: { host: join(root, "src/renderer/host.ts"), settings: join(root, "src/renderer/settings.ts") },
     outdir: join(out, "renderer"),
   }),
-  // The connector host and the local server (Pistead on this computer), built like the CLI's dist: dependencies stay
+  // The connector host and the local server (Pikibun on this computer), built like the CLI's dist: dependencies stay
   // external, unpackaged resolved from the workspace's node_modules, packaged from the tree stage-connector.mjs installs
   // from the CLI's shrinkwrap. Code splitting keeps the server's optional drivers (Postgres, S3) out of what loads. The
   // .mjs extension makes them ES modules wherever they land.

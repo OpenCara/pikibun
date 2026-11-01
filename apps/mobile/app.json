@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "Pistead",
-    "slug": "pistead",
-    "scheme": "pistead",
+    "name": "Pikibun",
+    "slug": "pikibun",
+    "scheme": "pikibun",
     "version": "0.1.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.pistead.app",
+      "bundleIdentifier": "com.pikibun.app",
       "supportsTablet": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
@@ -19,9 +19,9 @@
       }
     },
     "android": {
-      "package": "com.pistead.app",
+      "package": "com.pikibun.app",
       "adaptiveIcon": {
-        "backgroundColor": "#c0491d",
+        "backgroundColor": "#110530",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -42,7 +42,7 @@
           "imageWidth": 160,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
-          "dark": { "backgroundColor": "#0b0b0c" }
+          "dark": { "backgroundColor": "#110530" }
         }
       ],
       "expo-font"

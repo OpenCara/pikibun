@@ -1,9 +1,9 @@
-import { stateLabels, type HostView, type PisteadBridge } from "../shared/bridge.js";
+import { stateLabels, type HostView, type PikibunBridge } from "../shared/bridge.js";
 import { element, setText } from "./dom.js";
 
-declare global { interface Window { pistead: PisteadBridge } }
+declare global { interface Window { pikibun: PikibunBridge } }
 
-const bridge = window.pistead.host;
+const bridge = window.pikibun.host;
 
 const title = element("title");
 const status = element("status");
@@ -66,7 +66,7 @@ function render(view: HostView): void {
   const note = element("models-note");
   models.replaceChildren(...(inspection?.models ?? []).map(model => item(model.name, `${model.provider}/${model.modelId}${model.thinkingLevel ? ` · starts at ${model.thinkingLevel}` : ""}`)));
   setText(note, !inspection ? "Checking Pi's models…" : inspection.modelsError ?? (inspection.models.length
-    ? "From Pi on this computer: its enabledModels setting, or every model with configured authentication. Pistead never receives your provider credentials."
+    ? "From Pi on this computer: its enabledModels setting, or every model with configured authentication. Pikibun never receives your provider credentials."
     : ""));
 
   const prerequisites = element("prerequisites");

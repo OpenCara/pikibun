@@ -33,7 +33,7 @@ export class HostProcess {
   get running(): boolean { return this.child !== undefined; }
 
   private spawn(): Promise<void> {
-    const child = utilityProcess.fork(this.options.entry, this.options.args, { serviceName: "Pistead Host", stdio: "pipe" });
+    const child = utilityProcess.fork(this.options.entry, this.options.args, { serviceName: "Pikibun Host", stdio: "pipe" });
     const ready = Promise.withResolvers<void>();
     this.child = child;
     this.stopping = false;

@@ -48,7 +48,7 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
   if (!host) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
   const capabilities = JSON.parse(host.capabilities_json) as ConnectorCapabilities;
   if (capabilities.chatOptions !== true) {
-    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pistead@latest connect) to choose model, reasoning or access.');
+    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to choose model, reasoning or access.');
   }
   const options: ChatOptions = {};
   if (input.model !== undefined) {
@@ -103,7 +103,7 @@ async function chatImages(c: AppContext, row: SessionRow, value: unknown): Promi
     .bind(row.connector_id).first();
   if (!host) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
   if ((JSON.parse(host.capabilities_json) as ConnectorCapabilities).chatImages !== true) {
-    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pistead@latest connect) to send images.');
+    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to send images.');
   }
   return parsed.images;
 }
@@ -189,7 +189,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   const capabilities = JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities;
   // Every session clones its repositories with plain Git; a connector from before that can't run one.
   if (session.connector_id && capabilities.plainGit !== true) {
-    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pistead@latest connect): sessions now clone their repositories with plain Git.');
+    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect): sessions now clone their repositories with plain Git.');
   }
   // A session may run directly on its host, without the sandbox: only the host's owner, or a member they granted that
   // in this workspace, starts one, only where the host's configuration accepts that, and only on a connector that runs
@@ -203,7 +203,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     }
     if (capabilities.unsandboxed === true) fail(400, 'host_unsandboxed', 'This host runs every session without the sandbox already.');
     if (!hostSessionsSupported(capabilities, granted)) {
-      fail(409, 'connector_update_required', 'Update the host\'s connector (npx pistead@latest connect) to run sessions directly on it.');
+      fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to run sessions directly on it.');
     }
     if (!(await connectorHostConfig(c.env, session.connector_id)).hostSessions) {
       fail(409, 'host_sessions_off', 'This host doesn\'t accept sessions that run directly on it. Turn that on under Settings → Hosts → the host → Configuration.');

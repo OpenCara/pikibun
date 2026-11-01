@@ -1,5 +1,5 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { sessionStatus } from "@pistead/client";
+import { sessionStatus } from "@pikibun/client";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View } from "react-native";
 import { pullRequestStateLabels, pullRequestStateTones } from "../../../../packages/shared/src/pull-requests";

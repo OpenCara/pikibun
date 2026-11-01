@@ -10,7 +10,7 @@ import { startLocalHost, type LocalHost } from './host.js';
 import { LocalServerError, startLocalServer, type LocalServer } from './launch.js';
 import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState } from './state.js';
 
-// The local server run by a desktop app instead of `pistead serve` in a terminal: the same server, state and host,
+// The local server run by a desktop app instead of `pikibun serve` in a terminal: the same server, state and host,
 // with requests arriving over the parent's IPC channel and status and logs going back the same way.
 
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -57,7 +57,7 @@ async function status(): Promise<void> {
 /** What would run this computer's sessions, and why it couldn't: the server runs either way. */
 async function hostCheck(testMode: boolean): Promise<{ mode: LocalInspection['hostMode']; problem?: string; models?: LocalModels }> {
   try { assertConnectorPlatform(); }
-  catch (error) { return { mode: 'unsandboxed', problem: message(error, 'This computer cannot run Pistead sessions.') }; }
+  catch (error) { return { mode: 'unsandboxed', problem: message(error, 'This computer cannot run Pikibun sessions.') }; }
   const { mode, prerequisites } = await hostIsolation();
   try {
     assertPrerequisites(prerequisites, mode === 'unsandboxed', '');
@@ -80,13 +80,13 @@ async function inspect(): Promise<LocalInspection> {
 }
 
 async function start(request: LocalStartRequest): Promise<void> {
-  if (running || starting) throw new LocalFailure('Pistead is already running on this computer.');
+  if (running || starting) throw new LocalFailure('Pikibun is already running on this computer.');
   starting = true;
   try {
     const github = request.github && { clientId: request.github.clientId.trim(), clientSecret: request.github.clientSecret.trim() };
     // Held while the server runs: nothing else creates, changes or serves this state meanwhile.
     const { state, release } = await openLocalState(stateDir, github ? { github } : {});
-    if (!state.github) { await release(); throw new LocalFailure('Add your GitHub OAuth app first: Pistead signs you in with it.'); }
+    if (!state.github) { await release(); throw new LocalFailure('Add your GitHub OAuth app first: Pikibun signs you in with it.'); }
     const testMode = request.testMode === true;
     const host = await hostCheck(testMode).catch(async (error: unknown) => { await release(); throw error; });
     const server = await startLocalServer({ stateDir, state, release, ...(staticDir ? { staticDir } : {}), ...(testMode ? { extraEnv: {
@@ -94,7 +94,7 @@ async function start(request: LocalStartRequest): Promise<void> {
       TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 24 * 3600_000).toISOString() } } : {}) });
     const current: Running = { server, hostState: 'off', stopping: false };
     running = current;
-    log('info', `Pistead is running at ${server.origin}, reachable from this computer only.`);
+    log('info', `Pikibun is running at ${server.origin}, reachable from this computer only.`);
     const unsandboxed = host.mode === 'unsandboxed';
     if (host.problem || !host.models) log('warning', `This computer can't run sessions: ${host.problem ?? 'no models.'} Pair another machine in Settings › Hosts instead.`);
     else if (unsandboxed && request.unsandboxedConsent !== true) log('warning', 'This computer runs no sessions: running them without a sandbox needs your consent.');
@@ -112,7 +112,7 @@ async function start(request: LocalStartRequest): Promise<void> {
       current.host.started.catch((error: unknown) => {
         if (current.stopping || (error instanceof Error && error.name === 'AbortError')) return;
         setHost('failed');
-        log('error', message(error, "This computer could not become Pistead's host. Check its Pi configuration and prerequisites."));
+        log('error', message(error, "This computer could not become Pikibun's host. Check its Pi configuration and prerequisites."));
       });
     }
     await status();
@@ -142,7 +142,7 @@ async function handle(request: LocalServerRequest): Promise<void> {
     }
   } catch (error) {
     emit({ type: 'result', id: request.id, ok: false, error: { message: message(error, request.type === 'stop'
-      ? 'Pistead did not stop cleanly.' : 'Pistead could not start on this computer. Check its state directory and port.') } });
+      ? 'Pikibun did not stop cleanly.' : 'Pikibun could not start on this computer. Check its state directory and port.') } });
   }
 }
 

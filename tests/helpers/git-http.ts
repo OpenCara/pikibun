@@ -20,7 +20,7 @@ export async function startGitHttpServer(projectRoot: string, options: GitHttpOp
     const url = new URL(request.url ?? "/", "http://localhost");
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH, HOME: process.env.HOME,
-      GIT_PROJECT_ROOT: projectRoot, GIT_HTTP_EXPORT_ALL: "1", REMOTE_USER: "pistead", REMOTE_ADDR: "127.0.0.1",
+      GIT_PROJECT_ROOT: projectRoot, GIT_HTTP_EXPORT_ALL: "1", REMOTE_USER: "pikibun", REMOTE_ADDR: "127.0.0.1",
       PATH_INFO: decodeURIComponent(url.pathname), QUERY_STRING: url.search.slice(1), REQUEST_METHOD: request.method ?? "GET",
       CONTENT_TYPE: request.headers["content-type"] ?? "", GATEWAY_INTERFACE: "CGI/1.1", SERVER_PROTOCOL: "HTTP/1.1",
     };

@@ -1,4 +1,4 @@
-import { usernameWithId } from "@pistead/client";
+import { usernameWithId } from "@pikibun/client";
 import * as Application from "expo-application";
 import * as Clipboard from "expo-clipboard";
 import type { ReactNode } from "react";

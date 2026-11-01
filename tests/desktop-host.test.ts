@@ -60,15 +60,15 @@ async function launch(stateDir: string) {
 
 test("the desktop host refuses malformed requests and reports what this machine would run", async () => {
   // The connector insists on a canonical, symlink-free state path (macOS's tmpdir is behind /var -> /private/var).
-  const stateDir = await realpath(await mkdtemp(join(tmpdir(), "pistead-desktop-host-")));
+  const stateDir = await realpath(await mkdtemp(join(tmpdir(), "pikibun-desktop-host-")));
   const host = await launch(stateDir);
   try {
     for (const malformed of [
       { type: "inspect", id: 1, extra: true },
       { type: "launch", id: 2 },
       { type: "start", id: 3 },
-      { type: "start", id: 4, server: "https://pistead.example", pairing: { id: "not-a-pairing-id", code: pairing.code } },
-      { type: "start", id: 5, server: "https://pistead.example", pairing: { ...pairing, code: "short" } },
+      { type: "start", id: 4, server: "https://pikibun.example", pairing: { id: "not-a-pairing-id", code: pairing.code } },
+      { type: "start", id: 5, server: "https://pikibun.example", pairing: { ...pairing, code: "short" } },
       { type: "stop", id: -1 },
     ]) {
       host.send(malformed);
@@ -99,7 +99,7 @@ test("the desktop host refuses malformed requests and reports what this machine 
 
 test("starting needs consent where unsandboxed, a pairing, and the paired server; the CLI's lease is reported as such", async t => {
   if (process.platform !== "darwin" && process.platform !== "linux") { t.skip("the connector runs on macOS and Linux"); return; }
-  const stateDir = await realpath(await mkdtemp(join(tmpdir(), "pistead-desktop-host-")));
+  const stateDir = await realpath(await mkdtemp(join(tmpdir(), "pikibun-desktop-host-")));
   const host = await launch(stateDir);
   const start = (fields: Record<string, unknown>) => host.request({ type: "start", server: "http://127.0.0.1:9", allowFaux: true, allowInsecureLoopback: true, unsandboxedConsent: true, ...fields });
   const code = async (fields: Record<string, unknown>) => {
@@ -116,14 +116,14 @@ test("starting needs consent where unsandboxed, a pairing, and the paired server
     assert.equal(await code({ pairing }), "already-paired");
     assert.equal(await code({ server: "http://127.0.0.1:10" }), "server-mismatch");
 
-    // Another connector (here: this test, as `pistead connect` would) holds the state directory's lease.
+    // Another connector (here: this test, as `pikibun connect` would) holds the state directory's lease.
     const release = await acquireRunnerLease(stateDir, () => {});
     try {
       assert.equal(await code({}), "ok");
       const failed = await host.next(event => event.type === "failed");
       assert.ok(failed.type === "failed");
       assert.equal(failed.error.code, "lease-busy");
-      assert.match(failed.error.message, /pistead connect/);
+      assert.match(failed.error.message, /pikibun connect/);
       await host.next(event => event.type === "status" && event.state === "stopped");
     } finally { await release(); }
     // Nothing in the protocol stream ever carried the pairing code back.

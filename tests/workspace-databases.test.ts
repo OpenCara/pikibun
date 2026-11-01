@@ -28,9 +28,9 @@ import { memoryStorage, testDatabase } from './helpers/control-plane.js';
 
 const runnerSecret = 'workspace-database-runner-secret-not-for-deployment';
 const password = 'owner-database-password-not-for-deployment';
-const settings = { host: 'db.example.com', port: 5432, database: 'pistead', user: 'pistead_app', password };
+const settings = { host: 'db.example.com', port: 5432, database: 'pikibun', user: 'pikibun_app', password };
 const databasePath = '/api/workspaces/workspace/database';
-// A throwaway self-signed CA certificate (CN=pistead-test-ca); only its PEM shape matters here.
+// A throwaway self-signed CA certificate (CN=pikibun-test-ca); only its PEM shape matters here.
 const testCa = `-----BEGIN CERTIFICATE-----
 MIIBWTCB/6ADAgECAhQMFylGgW/Qp9XXNeHqDtK7Xy5x5zAKBggqhkjOPQQDAjAa
 MRgwFgYDVQQDDA9waXN0ZWFkLXRlc3QtY2EwIBcNMjYxMDE1MTM1MzU2WhgPMjEy
@@ -171,8 +171,8 @@ test('only the workspace owner connects, replaces and disconnects the session da
   assert.equal(database.workspaceId, 'workspace');
   assert.equal(database.host, 'db.example.com');
   assert.equal(database.port, 5432);
-  assert.equal(database.database, 'pistead');
-  assert.equal(database.user, 'pistead_app');
+  assert.equal(database.database, 'pikibun');
+  assert.equal(database.user, 'pikibun_app');
   assert.equal(database.tls, 'verify-full');
   assert.equal(database.customCa, false);
   assert.equal(database.connectedBy, 'test:owner');
@@ -220,7 +220,7 @@ test('only the workspace owner connects, replaces and disconnects the session da
 
 test('saving validates the settings and the live connection, and never shows driver messages', async t => {
   const f = await fixture(t);
-  for (const body of [{ ...settings, connectionString: 'postgres://u:p@db.example.com/pistead' }, { ...settings, host: 'https://db.example.com' },
+  for (const body of [{ ...settings, connectionString: 'postgres://u:p@db.example.com/pikibun' }, { ...settings, host: 'https://db.example.com' },
     { ...settings, host: 'db.example.com:5432' }, { ...settings, port: 0 }, { ...settings, port: '5432' }, { ...settings, password: '' },
     { ...settings, password: 'a\u0000b' }, { ...settings, tls: 'prefer' }, { ...settings, tls: 'require', caCertificate: testCa },
     { ...settings, caCertificate: 'not a certificate' }]) {
@@ -229,15 +229,15 @@ test('saving validates the settings and the live connection, and never shows dri
     assert.equal(await code(response), 'invalid_workspace_database');
   }
   assert.equal(f.databases.targets.length, 0);
-  const driver = new Error('password authentication failed for user "pistead_app" connecting to 10.0.0.7');
+  const driver = new Error('password authentication failed for user "pikibun_app" connecting to 10.0.0.7');
   for (const [failure, status] of [['authentication_failed', 400], ['host_not_allowed', 400], ['tls_failed', 400],
-    ['pistead_database', 400], ['unreachable', 502]] as const) {
+    ['pikibun_database', 400], ['unreachable', 502]] as const) {
     f.databases.failure = new WorkspaceDatabaseError(failure, { cause: driver });
     const response = await f.request('PUT', databasePath, 'test:owner', settings);
     assert.equal(response.status, status, failure);
     const text = await response.text();
     assert.equal((JSON.parse(text) as { code: string }).code, `workspace_database_${failure}`);
-    assert.ok(!text.includes('10.0.0.7') && !text.includes('pistead_app'), 'Driver details must stay on the server');
+    assert.ok(!text.includes('10.0.0.7') && !text.includes('pikibun_app'), 'Driver details must stay on the server');
   }
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_databases').get()!.n, 0);
   f.databases.failure = null;
@@ -278,7 +278,7 @@ test('a member confirms the workspace database before each backup goes there; th
   const runner = f.runner();
   const { database } = await (await f.request('PUT', databasePath, 'test:owner', settings)).json() as { database: WorkspaceDatabase };
   const listing = await (await f.request('GET', '/api/sessions/session/backups', 'test:member')).json() as { workspaceDatabase: unknown };
-  assert.deepEqual(listing.workspaceDatabase, { id: database.id, host: 'db.example.com', port: 5432, database: 'pistead', confirm: true });
+  assert.deepEqual(listing.workspaceDatabase, { id: database.id, host: 'db.example.com', port: 5432, database: 'pikibun', confirm: true });
   for (const body of [undefined, {}, { trustedDatabaseId: 'another-database' }]) {
     const response = await f.request('POST', '/api/sessions/session/backup', 'test:member', body);
     assert.equal(response.status, 409);
@@ -317,7 +317,7 @@ test('a backup meant for server storage is not saved there once a workspace data
   const f = await fixture(t);
   f.runner(() => {
     f.sqlite.exec(`INSERT INTO workspace_databases (id,workspace_id,host,port,database_name,username,tls,ca_certificate,password_ciphertext,
-      created_by,created_at,updated_at) VALUES ('connected-meanwhile','workspace','db.example.com',5432,'pistead','pistead_app','verify-full',NULL,
+      created_by,created_at,updated_at) VALUES ('connected-meanwhile','workspace','db.example.com',5432,'pikibun','pikibun_app','verify-full',NULL,
       'ciphertext','test:owner','2026-01-01','2026-01-01')`);
   });
   const response = await f.request('POST', '/api/sessions/owner-session/backup', 'test:owner', {});
@@ -389,7 +389,7 @@ test('backups of a workspace with its own database are saved and read back there
   const { database } = await (await f.request('PUT', databasePath, 'test:owner', settings)).json() as { database: WorkspaceDatabase };
   f.runner();
   assert.deepEqual(await (await f.request('GET', '/api/sessions/session/backups', 'test:member')).json(), { backups: [], destination: 'workspace-database',
-    enabled: true, conversationOnlySupported: true, workspaceDatabase: { id: database.id, host: 'db.example.com', port: 5432, database: 'pistead', confirm: true } });
+    enabled: true, conversationOnlySupported: true, workspaceDatabase: { id: database.id, host: 'db.example.com', port: 5432, database: 'pikibun', confirm: true } });
   const created = await f.request('POST', '/api/sessions/session/backup', 'test:member', { trustedDatabaseId: database.id });
   assert.equal(created.status, 201);
   const { backup } = await created.json() as { backup: { id: string; sha256: string; size: number; location: string } };
@@ -419,7 +419,7 @@ test('backups of a workspace with its own database are saved and read back there
   assert.equal(download.status, 200);
   assert.equal(await download.text(), f.snapshot);
   assert.deepEqual(f.databases.loads, [{ id: backup.id, sessionId: 'session', size: backup.size }]);
-  // Connecting the database gives the workspace owner no access to the member's backups through Pistead, and neither
+  // Connecting the database gives the workspace owner no access to the member's backups through Pikibun, and neither
   // does managing the member's session: its backups stay its owner's.
   const ownerDownload = await f.request('GET', downloadPath, 'test:owner');
   assert.equal(ownerDownload.status, 403);
@@ -512,14 +512,14 @@ test('the workspace owner imports dumps of this workspace into its database; nob
   other.workspace.id = 'other-workspace';
   const foreign = structuredClone(dump);
   foreign.sessions[0]!.session.workspaceId = 'other-workspace';
-  for (const body of [{ format: 'pistead-backup' }, other, foreign, { ...dump, exportedAt: 'yesterday' }]) {
+  for (const body of [{ format: 'pikibun-backup' }, other, foreign, { ...dump, exportedAt: 'yesterday' }]) {
     const refused = await f.request('POST', importPath, 'test:owner', body);
     assert.equal(refused.status, 400);
     assert.equal(await code(refused), 'invalid_dump');
   }
   assert.equal(f.databases.imports.length, 2);
 
-  f.databases.failure = new WorkspaceDatabaseError('schema_mismatch', { cause: new Error('column "data" of relation "pistead_sessions" does not exist at 10.0.0.7') });
+  f.databases.failure = new WorkspaceDatabaseError('schema_mismatch', { cause: new Error('column "data" of relation "pikibun_sessions" does not exist at 10.0.0.7') });
   const failed = await f.request('POST', importPath, 'test:owner', dump);
   assert.equal(failed.status, 503);
   const failure = await failed.json() as { code: string; error: string };
@@ -534,11 +534,11 @@ test('the workspace owner imports dumps of this workspace into its database; nob
 });
 
 test('database settings are explicit fields, and hosts are checked once resolved', async () => {
-  assert.deepEqual(databaseSettings({ host: ' DB.Example.COM ', database: 'pistead', user: 'app', password: 'p w' }), {
-    host: 'db.example.com', port: 5432, database: 'pistead', user: 'app', password: 'p w', tls: 'verify-full', caCertificate: null,
+  assert.deepEqual(databaseSettings({ host: ' DB.Example.COM ', database: 'pikibun', user: 'app', password: 'p w' }), {
+    host: 'db.example.com', port: 5432, database: 'pikibun', user: 'app', password: 'p w', tls: 'verify-full', caCertificate: null,
   });
   assert.equal(databaseSettings({ host: '[2001:DB8::1]', database: 'd', user: 'u', password: 'p' }).host, '2001:db8::1');
-  for (const input of [{ connectionString: 'postgres://u:p@db.example.com/d' }, { ...settings, host: 'db.example.com/pistead' },
+  for (const input of [{ connectionString: 'postgres://u:p@db.example.com/d' }, { ...settings, host: 'db.example.com/pikibun' },
     { ...settings, host: 'fe80::1%eth0' }, { ...settings, database: 'd'.repeat(64) }, { ...settings, user: 'a\nb' }, { ...settings, port: 70000 }]) {
     assert.throws(() => databaseSettings(input), HTTPException);
   }
@@ -563,7 +563,7 @@ test('database settings are explicit fields, and hosts are checked once resolved
 });
 
 test('the Postgres provider refuses private hosts and unencrypted public connections before connecting', async () => {
-  const target: WorkspaceDatabaseTarget = { host: 'db.example.com', port: 5432, database: 'pistead', user: 'app', password: 'secret',
+  const target: WorkspaceDatabaseTarget = { host: 'db.example.com', port: 5432, database: 'pikibun', user: 'app', password: 'secret',
     tls: 'disable', caCertificate: null };
   let lookups = 0;
   const lookup = (addresses: string[]) => async () => { lookups++; return addresses; };
@@ -602,7 +602,7 @@ test('a server sending more than the response limit is cut off, and that is the 
   assert.equal(classify(new Error('Connection terminated unexpectedly'), client).failure, 'response_too_large');
   assert.equal(classify(new Error('Connection terminated unexpectedly')).failure, 'unreachable');
   // A failure of ours wrapped in another error keeps its meaning.
-  assert.equal(classify(new Error('wrapped', { cause: new WorkspaceDatabaseError('pistead_database') })).failure, 'pistead_database');
+  assert.equal(classify(new Error('wrapped', { cause: new WorkspaceDatabaseError('pikibun_database') })).failure, 'pikibun_database');
 });
 
 const postgresUrl = process.env.TEST_DATABASE_URL;
@@ -612,8 +612,8 @@ test('the Postgres provider provisions, saves and reads back snapshots in a real
 }, async t => {
   const server = new URL(postgresUrl!);
   // A database of its own: other suites reset the public schema of the shared test database.
-  const name = `pistead_workspace_test_${randomUUID().replaceAll('-', '')}`;
-  const role = `pistead_limited_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+  const name = `pikibun_workspace_test_${randomUUID().replaceAll('-', '')}`;
+  const role = `pikibun_limited_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
   const admin = new pg.Client({ connectionString: postgresUrl });
   await admin.connect();
   await admin.query(`CREATE DATABASE ${name}`);
@@ -633,8 +633,8 @@ test('the Postgres provider provisions, saves and reads back snapshots in a real
   await provider.verify(target);
   await provider.verify(target);
   const tables = await inspect.query<{ table_name: string }>(`SELECT table_name FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name LIKE 'pistead_%'`);
-  assert.deepEqual(tables.rows.map(row => row.table_name).sort(), ['pistead_audit', 'pistead_session_backups', 'pistead_sessions', 'pistead_workspaces']);
+    WHERE table_schema = 'public' AND table_name LIKE 'pikibun_%'`);
+  assert.deepEqual(tables.rows.map(row => row.table_name).sort(), ['pikibun_audit', 'pikibun_session_backups', 'pikibun_sessions', 'pikibun_workspaces']);
 
   const snapshot = new TextEncoder().encode(JSON.stringify({ format: 'pi-runner-backup-v1', note: 'héllo ✓' }));
   const save: WorkspaceBackupSave = {
@@ -653,9 +653,9 @@ test('the Postgres provider provisions, saves and reads back snapshots in a real
   assert.equal(await provider.load(target, { id: 'backup', sessionId: 'session', size: snapshot.byteLength + 1 }), null);
   assert.equal(await provider.load(target, { id: 'backup', sessionId: 'other', size: snapshot.byteLength }), null);
   assert.equal(await provider.load(target, { id: 'missing', sessionId: 'session', size: snapshot.byteLength }), null);
-  const sessions = await inspect.query('SELECT id, title, record FROM pistead_sessions');
+  const sessions = await inspect.query('SELECT id, title, record FROM pikibun_sessions');
   assert.deepEqual(sessions.rows, [{ id: 'session', title: 'Renamed', record: { id: 'session', title: 'Renamed' } }]);
-  const backups = await inspect.query("SELECT id, (convert_from(snapshot, 'UTF8')::jsonb ->> 'note') AS note FROM pistead_session_backups ORDER BY id");
+  const backups = await inspect.query("SELECT id, (convert_from(snapshot, 'UTF8')::jsonb ->> 'note') AS note FROM pikibun_session_backups ORDER BY id");
   assert.deepEqual(backups.rows, [{ id: 'backup', note: 'héllo ✓' }, { id: 'second', note: 'héllo ✓' }]);
 
   // Imports: a record or detail replaces only an older one; activity entries are added once.
@@ -683,41 +683,41 @@ test('the Postgres provider provisions, saves and reads back snapshots in a real
   stale.workspaceData = { members: [] };
   await provider.import(target, stale);
   const sessionsAfterImport = await inspect.query<{ id: string; title: string; data: unknown; data_exported_at: Date | null }>(
-    'SELECT id, title, data, data_exported_at FROM pistead_sessions ORDER BY id');
+    'SELECT id, title, data, data_exported_at FROM pikibun_sessions ORDER BY id');
   assert.deepEqual(sessionsAfterImport.rows.map(row => [row.id, row.title, row.data, row.data_exported_at?.toISOString() ?? null]), [
     ['session', 'Imported title', { grants: [{ userId: 'owner', permissions: ['read'] }] }, '2026-01-05T00:00:00.000Z'],
     ['viewed', 'Viewed', null, null],
   ]);
-  const activity = await inspect.query('SELECT id, workspace_id, session_id, actor_id, detail FROM pistead_audit ORDER BY id');
+  const activity = await inspect.query('SELECT id, workspace_id, session_id, actor_id, detail FROM pikibun_audit ORDER BY id');
   assert.deepEqual(activity.rows, [
     { id: 'audit-session', workspace_id: 'workspace', session_id: 'session', actor_id: 'owner', detail: { note: 'héllo ✓' } },
     { id: 'audit-workspace', workspace_id: 'workspace', session_id: null, actor_id: null, detail: {} },
   ]);
-  const workspaceRows = await inspect.query('SELECT name, owner_id, data FROM pistead_workspaces');
+  const workspaceRows = await inspect.query('SELECT name, owner_id, data FROM pikibun_workspaces');
   assert.deepEqual(workspaceRows.rows, [{ name: 'Workspace', owner_id: 'owner', data: { members: [{ userId: 'owner', role: 'owner' }] } }]);
   // A later save updates the record and keeps the imported details.
   await provider.save(target, { ...save, session: { ...save.session, title: 'Saved later', record: { id: 'session', title: 'Saved later' } },
     backup: { ...save.backup, id: 'third', createdAt: '2026-01-06T00:00:00.000Z' } });
-  const saved = await inspect.query<{ title: string; data: unknown }>("SELECT title, data FROM pistead_sessions WHERE id = 'session'");
+  const saved = await inspect.query<{ title: string; data: unknown }>("SELECT title, data FROM pikibun_sessions WHERE id = 'session'");
   assert.deepEqual(saved.rows, [{ title: 'Saved later', data: { grants: [{ userId: 'owner', permissions: ['read'] }] } }]);
 
   // A user that may connect but was granted nothing on the tables is refused until the owner grants what saving needs.
   await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'limited-password'`);
   const limited = { ...target, user: role, password: 'limited-password' };
   await assert.rejects(provider.verify(limited), failed('permission_denied'));
-  await inspect.query(`GRANT SELECT, INSERT, UPDATE ON pistead_workspaces, pistead_sessions, pistead_session_backups, pistead_audit TO ${role}`);
+  await inspect.query(`GRANT SELECT, INSERT, UPDATE ON pikibun_workspaces, pikibun_sessions, pikibun_session_backups, pikibun_audit TO ${role}`);
   await provider.verify(limited);
   await provider.import(limited, imported);
 
   await assert.rejects(provider.verify({ ...target, database: `${name}_missing` }), failed('database_not_found'));
   await assert.rejects(new PostgresWorkspaceDatabases({ privateHosts: false }).verify(target), failed('host_not_allowed'));
-  // Tables created beforehand must have every column Pistead writes.
-  await inspect.query('ALTER TABLE pistead_audit DROP COLUMN detail');
+  // Tables created beforehand must have every column Pikibun writes.
+  await inspect.query('ALTER TABLE pikibun_audit DROP COLUMN detail');
   await assert.rejects(provider.verify(target), failed('schema_mismatch'));
   await assert.rejects(provider.import(target, imported), failed('schema_mismatch'));
-  // A Pistead control plane's own database is never used as a workspace database.
+  // A Pikibun control plane's own database is never used as a workspace database.
   await inspect.query('CREATE TABLE workspace_databases (id TEXT); CREATE TABLE schema_migrations (name TEXT); CREATE TABLE auth_sessions (token_hash TEXT)');
-  await assert.rejects(provider.verify(target), failed('pistead_database'));
+  await assert.rejects(provider.verify(target), failed('pikibun_database'));
 });
 
 const schedulePath = `${databasePath}/automatic-backups`;

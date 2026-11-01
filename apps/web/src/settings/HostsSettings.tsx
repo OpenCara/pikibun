@@ -140,14 +140,14 @@ function PairHostSheet({ onClose, refresh }: { onClose: () => void; refresh: () 
       {expired && <Alert variant="warning" role="status" title="Pairing code expired">The code was cleared. Create a new code to try again.</Alert>}
       {pairing && <section className="stack" aria-label="One-time pairing instructions">
         <span role="status">Code ready. Expires <Timestamp value={pairing.expiresAt} /></span>
-        <Field label="Run this on your host"><CopyField value={`npx pistead@latest connect --server ${window.location.origin} --pairing-id ${pairing.id}`} label="Copy command" /></Field>
+        <Field label="Run this on your host"><CopyField value={`npx pikibun@latest connect --server ${window.location.origin} --pairing-id ${pairing.id}`} label="Copy command" /></Field>
         <Field label="Paste at the hidden prompt, not on the command line"><CopyField value={pairing.code} label="Copy code" /></Field>
         <span className="small muted">Single-use secret: don't share it. It is held only in this page's memory. Hiding it doesn't revoke it; an unused code stays valid until it expires.{sessionWorkspace && <> Once the host is online, <a href={href({ name: "new", workspaceId: sessionWorkspace.id })}>start a session</a> with one of its models.</>}</span>
       </section>}
       <Collapsible plain title="Host requirements">
         <span className="small">Linux or WSL2 (native Windows is unsupported) with Node.js 24, Pi configured there with its providers and models, and bubblewrap, Python 3, Git and flock installed.</span>
         <span className="small">No app checkout is needed; run from any folder. Session source downloads into private caches. Never paste a token into this page or a command.</span>
-        <span className="small">macOS has no sandbox: add <code>--unsafe-no-sandbox</code> to run agent work directly on your Mac as your user, with only Git required. The connector asks you to confirm, and Pistead labels the host Unsandboxed: approved commands run with access to your files, credentials and network, and no resource limits.</span>
+        <span className="small">macOS has no sandbox: add <code>--unsafe-no-sandbox</code> to run agent work directly on your Mac as your user, with only Git required. The connector asks you to confirm, and Pikibun labels the host Unsandboxed: approved commands run with access to your files, credentials and network, and no resource limits.</span>
       </Collapsible>
     </div>
   </Sheet>;
@@ -243,7 +243,7 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
       <div className="card">
         <Row title="Revoke host" hint={connector.revokedAt ? <>Revoked <Timestamp value={connector.revokedAt} /></> : "Disconnects its runtime and blocks work in every connected workspace"}
           trailing={!connector.revokedAt && <Button variant="outline" size="sm" disabled={revokeAction.busy} onClick={revoke}>{revokeAction.busy ? "Revoking..." : "Revoke"}</Button>} />
-        <Row title="Permanently remove host" hint="Remove from Pistead and invalidate access. Session history and local files are retained."
+        <Row title="Permanently remove host" hint="Remove from Pikibun and invalidate access. Session history and local files are retained."
           trailing={<Button variant="outline" size="sm" disabled={revokeAction.busy} onClick={remove}>Remove permanently</Button>} />
       </div>
       <Feedback error={revokeAction.error} notice={revokeAction.notice} />
@@ -251,8 +251,8 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
     {pairing && <PairHostSheet onClose={() => setPairing(false)} refresh={refresh} />}
     {reconnecting && <Sheet open title={`Reconnect ${connector.name}`} onClose={() => setReconnecting(false)} footer={<Button onClick={() => { refresh(); setReconnecting(false); }}>Done</Button>}>
       <div className="stack">
-        <Alert variant={connector.online ? "success" : "warning"} title={connector.online ? "Host is connected" : "Start the connection on your host"}>Pistead cannot remotely start an offline host. If you use the desktop app, open it on the host and start its connection. For a CLI host, run the command below on the original machine with its saved pairing.</Alert>
-        <Field label="Run on your host"><CopyField value={`npx pistead@latest connect${connector.capabilities.unsandboxed ? " --unsafe-no-sandbox" : ""}`} label="Copy reconnect command" /></Field>
+        <Alert variant={connector.online ? "success" : "warning"} title={connector.online ? "Host is connected" : "Start the connection on your host"}>Pikibun cannot remotely start an offline host. If you use the desktop app, open it on the host and start its connection. For a CLI host, run the command below on the original machine with its saved pairing.</Alert>
+        <Field label="Run on your host"><CopyField value={`npx pikibun@latest connect${connector.capabilities.unsandboxed ? " --unsafe-no-sandbox" : ""}`} label="Copy reconnect command" /></Field>
         <span className="small muted">Use the same OS user and any original options of the machine's own setup: --state-dir, --resources, --pi-agent-dir and --model. Everything else is this host's Configuration, here. Do not add --pairing-id or --force: the saved credentials preserve this host and its sessions. Stop any existing connector before starting another. Status refreshes every 10 seconds.</span>
         <span className="small muted">If the saved pairing is missing, pair a new host instead. A new pairing does not reconnect this host's existing sessions.</span>
         <Button variant="outline" onClick={refresh}>Refresh status</Button>

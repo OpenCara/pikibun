@@ -18,7 +18,7 @@ const tokenScopes: Record<TokenGitProvider, string> = {
 };
 
 /** What the Git accounts are for, as part of the Connected accounts section's info. */
-export const gitAccountsInfo = "Repositories you bind or pin are read with your Git accounts, and the pull requests your agents ask for are opened with them. Their tokens are encrypted on the server and never sent to other people's hosts. Where a workspace's push access uses the session owner's account, your own host receives yours in memory for each push in your sessions; Pistead resets your GitHub token when the push ends, so that copy stops working.";
+export const gitAccountsInfo = "Repositories you bind or pin are read with your Git accounts, and the pull requests your agents ask for are opened with them. Their tokens are encrypted on the server and never sent to other people's hosts. Where a workspace's push access uses the session owner's account, your own host receives yours in memory for each push in your sessions; Pikibun resets your GitHub token when the push ends, so that copy stops working.";
 
 /** Where a provider's accounts live: its fixed host, its default one, or self-hosted. */
 function providerHost(provider: TokenGitProvider): string {

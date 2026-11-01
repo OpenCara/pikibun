@@ -45,7 +45,7 @@ async function fixture(t: TestContext) {
     const cookie = start.headers.get("set-cookie")!.split(";")[0]!;
     const callback = await request("GET", `/api/auth/github/callback?${query}&state=${state}`, { headers: { Cookie: cookie } });
     assert.equal(callback.status, 302);
-    // The authentication browser gets no Pistead session cookie of its own.
+    // The authentication browser gets no Pikibun session cookie of its own.
     assert.ok(!(callback.headers.get("set-cookie") ?? "").includes("test-auth="));
     return new URL(callback.headers.get("location")!);
   }
@@ -56,7 +56,7 @@ test("a native app signs in through GitHub with PKCE and gets a bearer session t
   const f = await fixture(t);
   const challenge = await sha256(verifier);
   const callback = await f.signInThroughGitHub(challenge);
-  assert.equal(`${callback.protocol}//${callback.host}`, "pistead://auth");
+  assert.equal(`${callback.protocol}//${callback.host}`, "pikibun://auth");
   assert.equal(callback.searchParams.get("state"), appState);
   const code = callback.searchParams.get("code")!;
 

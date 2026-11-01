@@ -30,7 +30,7 @@ async function commit(work: string, name: string, content: string): Promise<stri
 }
 
 async function fixture(t: TestContext, options: { protocolV2?: boolean } = {}) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "pistead-repo-cache-")));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-repo-cache-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const upstream = join(root, "upstream.git"), work = join(root, "work");
   git(root, ["init", "-q", "--bare", "-b", "main", upstream]);
@@ -48,7 +48,7 @@ async function fixture(t: TestContext, options: { protocolV2?: boolean } = {}) {
   const target = (sessionId: string, ownerId = "test:alice", authorization = AUTH, signal?: AbortSignal): MirrorTarget => ({
     repository, ownerId, sessionId, remote: new GitRemote({ url: server.url("upstream.git"), authorization, signal }),
   });
-  const keeps = (directory: string) => git(root, [`--git-dir=${directory}`, "for-each-ref", "--format=%(refname)", "refs/pistead/sessions/"]).split("\n").filter(Boolean);
+  const keeps = (directory: string) => git(root, [`--git-dir=${directory}`, "for-each-ref", "--format=%(refname)", "refs/pikibun/sessions/"]).split("\n").filter(Boolean);
   return { root, upstream, work, commits, feature, cacheRoot, open, target, keeps, url: server.url("upstream.git") };
 }
 
@@ -279,7 +279,7 @@ test("a stale lock left by a dead process is taken over", gitAvailable, async (t
   const cache = f.open();
   const directory = cache.mirrorDirectory(repository, "test:alice");
   await mkdir(join(directory, ".."), { recursive: true, mode: 0o700 });
-  await writeFile(`${directory}.pistead.lock`, "2147483646\n", { mode: 0o600 });
+  await writeFile(`${directory}.pikibun.lock`, "2147483646\n", { mode: 0o600 });
   assert.equal((await cache.refresh(f.target("s1"))).fetched, true);
 });
 
@@ -321,7 +321,7 @@ test("a live holder's lock is waited for, and a lock without a pid is replaced o
   const cache = f.open();
   const directory = cache.mirrorDirectory(repository, "test:alice");
   await mkdir(join(directory, ".."), { recursive: true, mode: 0o700 });
-  const lock = `${directory}.pistead.lock`;
+  const lock = `${directory}.pikibun.lock`;
   // The test runner's parent process is alive and is not this process.
   await writeFile(lock, `${process.ppid}\n`, { mode: 0o600 });
   let finished = false;
@@ -342,7 +342,7 @@ function pkt(body: string | Buffer): Buffer {
 }
 
 test("a corrupt pack fails the fetch and closes the download instead of leaving it streaming", gitAvailable, async (t) => {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "pistead-repo-cache-corrupt-")));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-repo-cache-corrupt-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const id = "a".repeat(40);
   let cancelled = false;

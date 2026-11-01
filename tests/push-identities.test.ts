@@ -120,7 +120,7 @@ test('PKCS#1 and PKCS#8 keys sign verifiable RS256 JWTs; JWKS kid is the RFC 763
 test('GitHub App identities mint repository-scoped installation tokens and report missing installations', async t => {
   const f = await fixture(t);
   const { alice, workspaceId } = await f.team();
-  await f.identity({ workspaceId, provider: 'github-enterprise', host: 'git.example.com', kind: 'github-app', config: { appId: '42', slug: 'pistead' },
+  await f.identity({ workspaceId, provider: 'github-enterprise', host: 'git.example.com', kind: 'github-app', config: { appId: '42', slug: 'pikibun' },
     secret: appKey.privateKey, createdBy: alice.user.id });
   const api = 'https://git.example.com/api/v3';
   const expires = new Date(Date.now() + 3600_000).toISOString();
@@ -147,7 +147,7 @@ test('GitHub App identities mint repository-scoped installation tokens and repor
   const missing = await failure(mintPushToken(f.env, target(workspaceId, { provider: 'github-enterprise', host: 'git.example.com' })));
   assert.equal(missing.code, 'push_app_not_installed');
   assert.equal(missing.status, 409);
-  assert.match(missing.message, /https:\/\/git\.example\.com\/github-apps\/pistead\/installations\/new/);
+  assert.match(missing.message, /https:\/\/git\.example\.com\/github-apps\/pikibun\/installations\/new/);
   t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline'); });
   assert.equal(await revokePushToken(f.env, minted.revocation!), true, 'installation tokens expire on their own, so a failed revoke is not retried');
 });
@@ -160,7 +160,7 @@ test('github.com falls back to the operator GitHub App only when it is configure
   assert.deepEqual([required.status, required.code], [409, 'push_identity_required']);
   assert.match(required.message, /Settings → Workspaces/);
 
-  const f = await fixture(t, { GITHUB_APP_ID: '9', GITHUB_APP_SLUG: 'pistead-operator', GITHUB_APP_PRIVATE_KEY: appKey.privateKey });
+  const f = await fixture(t, { GITHUB_APP_ID: '9', GITHUB_APP_SLUG: 'pikibun-operator', GITHUB_APP_PRIVATE_KEY: appKey.privateKey });
   const { bob, workspaceId } = await f.team();
   const expires = new Date(Date.now() + 3600_000).toISOString();
   const calls = mockFetch(t, {
@@ -175,10 +175,10 @@ test('github.com falls back to the operator GitHub App only when it is configure
   assert.equal(decodeJwt(calls[0]!.headers.authorization!.replace(/^Bearer /, ''), appKey.publicKey).claims.iss, '9');
   const listed = await (await bob.request('GET', `/api/workspaces/${workspaceId}/push-identities`)).json() as Record<string, unknown>;
   assert.deepEqual(listed, { identities: [], oidc: null, redirectUri: `${origin}/api/push-identities/oauth/callback`,
-    githubApp: { slug: 'pistead-operator', installUrl: 'https://github.com/apps/pistead-operator/installations/new' } });
+    githubApp: { slug: 'pikibun-operator', installUrl: 'https://github.com/apps/pikibun-operator/installations/new' } });
 });
 
-test('Entra federation exchanges a Pistead assertion; Bitbucket uses client credentials; Forgejo gets a scoped JWT', async t => {
+test('Entra federation exchanges a Pikibun assertion; Bitbucket uses client credentials; Forgejo gets a scoped JWT', async t => {
   const f = await fixture(t, { OIDC_SIGNING_KEY: oidcKey.privateKey });
   const { alice, workspaceId } = await f.team();
   const tenantId = '11111111-2222-3333-4444-555555555555'; const clientId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -201,7 +201,7 @@ test('Entra federation exchanges a Pistead assertion; Bitbucket uses client cred
   const assertion = decodeJwt(form.get('client_assertion')!, oidcKey.publicKey);
   assert.equal(assertion.header.kid, (await publicJwk(oidcKey.privateKey)).kid);
   assert.deepEqual([assertion.claims.iss, assertion.claims.sub, assertion.claims.aud, Number(assertion.claims.exp) - Number(assertion.claims.iat)],
-    [origin, `pistead:workspace:${workspaceId}`, 'api://AzureADTokenExchange', 300]);
+    [origin, `pikibun:workspace:${workspaceId}`, 'api://AzureADTokenExchange', 300]);
   assert.equal(typeof assertion.claims.jti, 'string');
 
   const bitbucket = await mintPushToken(f.env, target(workspaceId, { provider: 'bitbucket', host: 'bitbucket.org', fullName: 'ACME/app', repositoryId: '{x}' }));
@@ -214,7 +214,7 @@ test('Entra federation exchanges a Pistead assertion; Bitbucket uses client cred
   assert.equal(calls.length, 2);
   const jwt = decodeJwt(forgejo.authorization!.replace(/^Bearer /, ''), oidcKey.publicKey).claims;
   assert.deepEqual([jwt.iss, jwt.sub, jwt.aud, jwt.repository, jwt.ref, jwt.session, Number(jwt.exp) - Number(jwt.iat)],
-    [origin, `pistead:workspace:${workspaceId}`, 'forgejo-push', 'team/app', 'refs/heads/main', 'session-1', 600]);
+    [origin, `pikibun:workspace:${workspaceId}`, 'forgejo-push', 'team/app', 'refs/heads/main', 'session-1', 600]);
 
   const otherScope = await failure(mintPushToken(f.env, target(workspaceId, { provider: 'bitbucket', host: 'bitbucket.org', fullName: 'other/app', repositoryId: '{x}' })));
   assert.equal(otherScope.code, 'push_identity_required');
@@ -291,7 +291,7 @@ test('OAuth refresh identities reuse a fresh access token, rotate the refresh to
 test('only workspace owners and admins manage push identities, and settings are verified live', async t => {
   const f = await fixture(t, { OIDC_SIGNING_KEY: oidcKey.privateKey });
   const { alice, bob, carol, workspaceId } = await f.team();
-  let appId = 123; let appSlug = 'pistead-bot'; let appStatus = 200;
+  let appId = 123; let appSlug = 'pikibun-bot'; let appStatus = 200;
   mockFetch(t, {
     'GET https://api.github.com/app': () => Response.json({ id: appId, slug: appSlug }, { status: appStatus }),
     'GET https://forge.example.org/api/v1/user': call => {
@@ -300,19 +300,19 @@ test('only workspace owners and admins manage push identities, and settings are 
     },
   });
   const path = `/api/workspaces/${workspaceId}/push-identities`;
-  const githubApp = { provider: 'github', kind: 'github-app', config: { appId: '123', slug: 'pistead-bot' }, secret: appKey.privateKey };
+  const githubApp = { provider: 'github', kind: 'github-app', config: { appId: '123', slug: 'pikibun-bot' }, secret: appKey.privateKey };
   assert.deepEqual(await errorCode(await bob.request('POST', path, githubApp)), { status: 403, code: 'forbidden' });
   const created = await carol.request('POST', path, githubApp);
   assert.equal(created.status, 201);
   const { identity } = await created.json() as { identity: Record<string, unknown> };
   assert.deepEqual([identity.provider, identity.host, identity.scope, identity.kind, identity.config, identity.status, identity.createdBy],
-    ['github', 'github.com', '', 'github-app', { appId: '123', slug: 'pistead-bot' }, 'ready', carol.user.id]);
+    ['github', 'github.com', '', 'github-app', { appId: '123', slug: 'pikibun-bot' }, 'ready', carol.user.id]);
 
   appId = 999;
   assert.deepEqual(await errorCode(await carol.request('POST', path, githubApp)), { status: 400, code: 'push_identity_rejected' });
   appId = 123; appSlug = 'someone-elses-app';
   assert.deepEqual(await errorCode(await carol.request('POST', path, githubApp)), { status: 400, code: 'push_identity_rejected' });
-  appSlug = 'pistead-bot'; appStatus = 401;
+  appSlug = 'pikibun-bot'; appStatus = 401;
   assert.deepEqual(await errorCode(await carol.request('POST', path, githubApp)), { status: 400, code: 'push_identity_rejected' });
   assert.deepEqual(await errorCode(await carol.request('POST', path, { ...githubApp, secret: rsa('pkcs8', 1024).privateKey })), { status: 400, code: 'invalid_private_key' });
   assert.deepEqual(await errorCode(await carol.request('POST', path, { ...githubApp, config: { appId: '123' } })), { status: 400, code: 'invalid_push_identity' });
@@ -334,7 +334,7 @@ test('only workspace owners and admins manage push identities, and settings are 
   assert.ok(!listedText.includes('PRIVATE KEY') && !listedText.includes('ciphertext'));
   const body = JSON.parse(listedText) as { identities: { id: string }[]; oidc: unknown; redirectUri: unknown; githubApp: unknown };
   assert.equal(body.identities.length, 2);
-  assert.deepEqual(body.oidc, { issuer: origin, subject: `pistead:workspace:${workspaceId}` });
+  assert.deepEqual(body.oidc, { issuer: origin, subject: `pikibun:workspace:${workspaceId}` });
   assert.equal(body.githubApp, null);
   assert.equal(body.redirectUri, `${origin}/api/push-identities/oauth/callback`);
 

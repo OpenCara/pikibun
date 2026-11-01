@@ -49,7 +49,7 @@ function hostCommandsWarning(host: Pick<ConnectorInfo, "name" | "capabilities" |
   return " On your own host, or one whose owner granted you automatic host commands, host_bash also runs OUTSIDE the sandbox without asking, with access to that host's files, credentials and network. Elsewhere it still needs approval.";
 }
 
-export const CONNECTOR_UPDATE_HINT = "Update the host's connector (npx pistead@latest connect) to choose model, reasoning and access";
+export const CONNECTOR_UPDATE_HINT = "Update the host's connector (npx pikibun@latest connect) to choose model, reasoning and access";
 
 export const modelKey = (model: { provider: string; modelId: string }) => `${model.provider}\n${model.modelId}`;
 
@@ -202,7 +202,7 @@ export function chatOptionsBody(host: ConnectorInfo | undefined, selection: Chat
 }
 
 /** Where a device remembers that its user confirmed the Auto-approve warning that names merges (see mustConfirmAutoApprove). */
-export const AUTO_APPROVE_CONFIRMED_KEY = "pistead.autoApproveConfirmed";
+export const AUTO_APPROVE_CONFIRMED_KEY = "pikibun.autoApproveConfirmed";
 
 /**
  * Whether a message going with `options` must wait for its owner to confirm Auto-approve first: one that would merge

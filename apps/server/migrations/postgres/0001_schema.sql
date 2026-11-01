@@ -5,7 +5,7 @@
 CREATE EXTENSION IF NOT EXISTS citext;
 
 -- Every immutability trigger: RAISE EXCEPTION with the SQLite RAISE(ABORT, ...) message text.
-CREATE FUNCTION pistead_raise() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION pikibun_raise() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION '%', TG_ARGV[0];
 END
@@ -113,7 +113,7 @@ CREATE TABLE models (
 );
 CREATE UNIQUE INDEX models_connector_identity ON models(workspace_id, connector_id, provider, model_id);
 CREATE TRIGGER models_identity_immutable BEFORE UPDATE OF workspace_id, provider, model_id, connector_id, connector_owner_id ON models
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('model identity is immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('model identity is immutable');
 
 CREATE TABLE agents (
   id TEXT PRIMARY KEY,
@@ -137,9 +137,9 @@ CREATE TABLE agent_versions (
 );
 CREATE INDEX agent_versions_workspace ON agent_versions(workspace_id, author_id);
 CREATE TRIGGER agent_versions_immutable_update BEFORE UPDATE ON agent_versions
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('agent versions are immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('agent versions are immutable');
 CREATE TRIGGER agent_versions_immutable_delete BEFORE DELETE ON agent_versions
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('agent versions are immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('agent versions are immutable');
 
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
@@ -159,14 +159,14 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_workspace ON sessions(workspace_id, owner_id);
 CREATE INDEX sessions_admission_owner ON sessions(owner_id, id);
 CREATE TRIGGER sessions_owner_immutable BEFORE UPDATE OF owner_id, workspace_id, agent_version_id ON sessions
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('session binding is immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('session binding is immutable');
 CREATE TRIGGER sessions_connector_pair_insert BEFORE INSERT ON sessions
   FOR EACH ROW WHEN ((NEW.connector_id IS NULL) <> (NEW.connector_owner_id IS NULL))
-  EXECUTE FUNCTION pistead_raise('session connector binding must be paired');
+  EXECUTE FUNCTION pikibun_raise('session connector binding must be paired');
 CREATE TRIGGER sessions_connector_immutable BEFORE UPDATE OF connector_id, connector_owner_id ON sessions
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('session connector binding is immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('session connector binding is immutable');
 CREATE TRIGGER sessions_repositories_immutable BEFORE UPDATE OF repositories_json ON sessions
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('session repositories are immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('session repositories are immutable');
 
 CREATE TABLE session_grants (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -239,12 +239,12 @@ CREATE INDEX restore_jobs_source ON restore_jobs(source_session_id, created_at);
 CREATE TRIGGER restore_jobs_binding_immutable
   BEFORE UPDATE OF id, request_id, owner_id, workspace_id, source_session_id, backup_id,
     target_session_id, request_title, sha256, size, binding_json, created_at ON restore_jobs
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('restore binding is immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('restore binding is immutable');
 CREATE TRIGGER restore_jobs_completed_immutable BEFORE UPDATE ON restore_jobs
   FOR EACH ROW WHEN (OLD.status = 'completed')
-  EXECUTE FUNCTION pistead_raise('completed restore receipt is immutable');
+  EXECUTE FUNCTION pikibun_raise('completed restore receipt is immutable');
 CREATE TRIGGER restore_jobs_receipt_retained BEFORE DELETE ON restore_jobs
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('restore receipts must be retained');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('restore receipts must be retained');
 
 CREATE TABLE run_admissions (
   id TEXT PRIMARY KEY CHECK (length(id) = 43),
@@ -264,7 +264,7 @@ CREATE INDEX run_admissions_global_expiry ON run_admissions(expires_at);
 CREATE INDEX run_admissions_actor_expiry ON run_admissions(actor_id, expires_at);
 CREATE INDEX run_admissions_session_expiry ON run_admissions(session_id, expires_at);
 CREATE TRIGGER run_admissions_immutable BEFORE UPDATE ON run_admissions
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('run admissions are immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('run admissions are immutable');
 
 CREATE TABLE approval_reviews (
   session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -279,9 +279,9 @@ CREATE TABLE approval_reviews (
   CONSTRAINT approval_reviews_admission_id_check CHECK ((source = 'explicit' AND admission_id IS NULL) OR (source = 'model' AND admission_id IS NOT NULL))
 );
 CREATE TRIGGER approval_reviews_immutable_update BEFORE UPDATE ON approval_reviews
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('approval reviews are immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('approval reviews are immutable');
 CREATE TRIGGER approval_reviews_immutable_delete BEFORE DELETE ON approval_reviews
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('approval reviews must be retained');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('approval reviews must be retained');
 
 -- Bindings name a provider and host; repository identities are opaque strings (GitHub ids as decimal text).
 CREATE TABLE workspace_repositories (
@@ -312,7 +312,7 @@ $$;
 CREATE TRIGGER workspace_repositories_limit BEFORE INSERT ON workspace_repositories
   FOR EACH ROW EXECUTE FUNCTION workspace_repositories_limit();
 CREATE TRIGGER workspace_repositories_immutable BEFORE UPDATE ON workspace_repositories
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('workspace repository bindings are immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('workspace repository bindings are immutable');
 
 -- Personal access tokens for Git providers other than github.com (which keeps the sign-in OAuth token).
 -- One account per user, provider, host and Azure DevOps organization; the token is vault-encrypted with the user id as AAD.

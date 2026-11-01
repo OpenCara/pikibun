@@ -8,7 +8,7 @@ import { acquireRunnerLease, RunnerLeaseBusyError } from '../../../runner/src/le
 // A local server's private state: the secrets it was set up with (generated once, never shown), the GitHub OAuth app its
 // owner registered for it, and the port it listens on. The database, backups and this machine's host live beside it.
 
-export const defaultLocalStateDir = (): string => join(homedir(), '.local', 'share', 'pistead', 'server');
+export const defaultLocalStateDir = (): string => join(homedir(), '.local', 'share', 'pikibun', 'server');
 export const DEFAULT_LOCAL_PORT = 7878;
 const STATE_FILE = 'server.json';
 const SECRET = /^[A-Za-z0-9_-]{43}$/;
@@ -96,13 +96,13 @@ async function writeState(directory: string, state: LocalState): Promise<void> {
 
 /**
  * Holds the state directory's kernel lease (flock on Linux, lockf on macOS, as the connector's runner lease): a
- * `pistead serve` and a desktop app sharing the directory never both create or change the state, nor both run its
+ * `pikibun serve` and a desktop app sharing the directory never both create or change the state, nor both run its
  * server. The kernel drops the lease when its holder exits, however it exits, so a crash leaves nothing stale behind.
  */
 async function lease(directory: string): Promise<() => Promise<void>> {
   try { return await acquireRunnerLease(directory, () => {}); }
   catch (error) {
-    if (error instanceof RunnerLeaseBusyError) throw new LocalStateError('Pistead is already running with this state directory, for example `pistead serve` in a terminal or the Pistead app. Stop it there first.');
+    if (error instanceof RunnerLeaseBusyError) throw new LocalStateError('Pikibun is already running with this state directory, for example `pikibun serve` in a terminal or the Pikibun app. Stop it there first.');
     throw new LocalStateError('The local server state could not be locked: this needs flock (Linux, util-linux) or lockf (macOS).');
   }
 }

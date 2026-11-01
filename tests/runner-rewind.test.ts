@@ -38,7 +38,7 @@ function text(content: unknown): string {
 }
 
 async function fixture(t: TestContext) {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-rewind-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-rewind-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   // "TOOL" makes a tool call and then answers; "HOLD" waits for `release`; anything else is answered with every user
   // message the model was given.

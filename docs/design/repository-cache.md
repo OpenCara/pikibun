@@ -1,7 +1,7 @@
 # Design: host repository cache
 
 Status: implemented, behind the host's **Repository cache** setting (HostConfig.repositoryCache, set by its owner in
-Pistead; connectors 0.9.0 and older use `--repo-cache`). The cache holds one Git mirror per repository, which
+Pikibun; connectors 0.9.0 and older use `--repo-cache`). The cache holds one Git mirror per repository, which
 clone sessions borrow objects from. How clone sessions use it is in [egress.md](egress.md), phase 3; this document
 covers the cache itself (`apps/runner/src/repo-cache.ts`).
 
@@ -16,9 +16,9 @@ session now clones, and sessions that pinned their repositories are read-only.
 ```
 repo-cache/<provider>/<host>/<repositoryId>.git              # bare mirror: full history, every blob, no partial-clone filter
 repo-cache/<…>.git/refs/upstream/{heads,tags}/…              # the remote's branches and tags, as last fetched
-repo-cache/<…>.git/refs/pistead/sessions/<hash of session>   # a clone session's keep ref (below)
-repo-cache/<…>.git/refs/pistead/pins/<hash of session>       # pins of sessions from before every session cloned
-repo-cache/<provider>/<host>/<repositoryId>.git.pistead.lock # holder's pid: one writer (fetch, gc) at a time
+repo-cache/<…>.git/refs/pikibun/sessions/<hash of session>   # a clone session's keep ref (below)
+repo-cache/<…>.git/refs/pikibun/pins/<hash of session>       # pins of sessions from before every session cloned
+repo-cache/<provider>/<host>/<repositoryId>.git.pikibun.lock # holder's pid: one writer (fetch, gc) at a time
 ```
 
 - **Key.** A mirror is named by the provider's stable repository id (`mirrorPath`), not the repository's name, so a
@@ -27,7 +27,7 @@ repo-cache/<provider>/<host>/<repositoryId>.git.pistead.lock # holder's pid: one
 - **Scope.** **Shared** (`host`) serves every session on the host from one cache. **Per owner** (`owner`) keeps one
   per session owner, under `repo-cache/owners/<hash of owner>/`, for owners who don't want to share objects. The
   connector reads the setting when it connects and keeps it for that connection; a switch leaves the other scope's
-  mirrors on disk until `pistead cache prune` collects them.
+  mirrors on disk until `pikibun cache prune` collects them.
 - **Privacy.** The cache root must be a private directory owned by the runner user, or nothing is written.
 
 ## Filling a mirror
@@ -79,12 +79,12 @@ network traffic goes through `GitRemote`.
 - **Keep refs.** Each refresh moves the session's keep ref to a new commit whose parents are its previous keep commit
   and the branch tips it saw (500 parents per commit, chained), so the objects its clones borrowed stay reachable
   while the ref does. `touch` moves it on without fetching, dating the session's last use.
-- **Prune.** `pistead cache prune --older-than DAYS` drops keep refs older than that and runs `git gc` with the same
+- **Prune.** `pikibun cache prune --older-than DAYS` drops keep refs older than that and runs `git gc` with the same
   cutoff, so a clone in a session idle for longer loses the objects it borrowed. Each mirror is locked while it is
   pruned, so it is safe while the connector runs.
 - **Pin refs** of sessions from before every session cloned are listed and kept, never written or pruned: a read-only
   pinned session that was checked out of the cache still borrows their objects.
-- `pistead cache list` shows each mirror's size and how many sessions and pins keep objects in it.
+- `pikibun cache list` shows each mirror's size and how many sessions and pins keep objects in it.
 
 ## Open questions
 

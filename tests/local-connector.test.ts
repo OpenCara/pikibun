@@ -530,7 +530,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   const config = fixture.runtimes[0]!.config;
   assert.equal(config.dataDir, join(fixture.dataDir, 'runner'));
   assert.equal(config.connectorId, credentials.connectorId);
-  // The host's Git credentials stay unused until its owner turns them on in Pistead.
+  // The host's Git credentials stay unused until its owner turns them on in Pikibun.
   await assert.rejects(config.hostGitCredential!('https://github.com/acme/alpha.git'), /hasn't turned on its Git credentials/);
   assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {} });
   assert.equal(config.allowFaux, false);
@@ -550,13 +550,13 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
 
 const advertisedBase = { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, fileBrowser: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true };
 
-test('a host configured in Pistead uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
+test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
   const configured = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 40_000 } };
   const fixture = await connectorFixture(t, { gpu: 'dxg', hostConfig: () => Response.json({ config: configured }), pushCredential: () => Response.json(issued) });
   await startFixture(fixture);
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
-  // It takes its configuration from Pistead and says which GPU device it could lend; Git credentials are no capability.
+  // It takes its configuration from Pikibun and says which GPU device it could lend; Git credentials are no capability.
   assert.deepEqual(JSON.parse(manifest.body).capabilities, { ...advertisedBase, gpu: 'dxg' });
   const config = fixture.runtimes[0]!.config;
   assert.deepEqual(await config.hostConfig!(), configured);
@@ -1154,7 +1154,7 @@ test('the runner is replaced only when a new connection brings another repositor
   await fixture.workerCalls.next();
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(fixture.runtimes[0]!.closed, false);
-  // The cache changed in Pistead while the host was away: the next connection asks again and opens a runner for it.
+  // The cache changed in Pikibun while the host was away: the next connection asks again and opens a runner for it.
   repositoryCache = 'owner';
   second.close();
   const third = await fixture.sockets.next();
@@ -1212,7 +1212,7 @@ test('while the runner is replaced, a request is told at once that it is restart
   t.mock.timers.tick(30_001);
   assert.equal((JSON.parse(await first.messages.next()) as ConnectorRpcResponse).status, 504);
   t.mock.timers.reset();
-  // The cache changed in Pistead: the next connection replaces the runner, which waits for that work.
+  // The cache changed in Pikibun: the next connection replaces the runner, which waits for that work.
   repositoryCache = 'owner';
   first.close();
   const second = await fixture.sockets.next();

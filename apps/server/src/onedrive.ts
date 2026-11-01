@@ -118,7 +118,7 @@ export const onedriveAdapter: DocumentAdapter = {
     }
     if (target.type === 'document') {
       const answer = await download(secret, target);
-      const text = answer.headers.get('x-pistead-truncated') ? null : docxText(answer.bytes);
+      const text = answer.headers.get('x-pikibun-truncated') ? null : docxText(answer.bytes);
       return text === null ? { ...base, note: 'This Word document is too large or unreadable.', truncated: true } : { ...base, content: text, truncated: false };
     }
     if (!textFile.types.test(target.mimeType) && !textFile.names.test(target.title)) return { ...base, note: `A binary file (${target.mimeType || 'unknown type'}) can't be read as text.`, truncated: false };

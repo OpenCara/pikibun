@@ -1,4 +1,4 @@
--- pistead: foreign-keys-off
+-- pikibun: foreign-keys-off
 -- Plain Git servers (provider 'git'): any HTTPS Git server without a forge API, connected with a user name and a password
 -- or token. Accounts, repository bindings and push access may name it. SQLite cannot change a CHECK constraint in place,
 -- so the three tables are rebuilt with the same rows and ids. The runner applies this migration with foreign keys off

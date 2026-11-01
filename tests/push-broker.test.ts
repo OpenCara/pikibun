@@ -41,7 +41,7 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   const env: Env = { DB: db, APP_ORIGIN: 'http://localhost:8787', TEST_AUTH_ENABLED: 'true',
     TEST_AUTH_SECRET: 'push-broker-test-secret-not-for-deployment', TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600000).toISOString(),
     RUNNER_SHARED_SECRET: internalSecret, VAULT_KEY: Buffer.alloc(32, 7).toString('base64url'),
-    GITHUB_APP_ID: '4242', GITHUB_APP_SLUG: 'pistead-test', GITHUB_APP_PRIVATE_KEY: privateKey,
+    GITHUB_APP_ID: '4242', GITHUB_APP_SLUG: 'pikibun-test', GITHUB_APP_PRIVATE_KEY: privateKey,
     GITHUB_CLIENT_ID: 'oauth-client', GITHUB_CLIENT_SECRET: 'oauth-secret' } as Env;
   const createdAt = new Date().toISOString();
   for (const [userId, index] of [[owner, 7], [approver, 8], [viewer, 9]] as const) {
@@ -117,7 +117,7 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
         return Response.json({ token: 'ghs_installation_token', expires_at: new Date(Date.now() + 3600000).toISOString() }, { status: 201 });
       }
       if (method === 'DELETE' && url.pathname === '/installation/token') return new Response(null, { status: 204 });
-      // Pistead's OAuth app resets (PATCH) and deletes (DELETE) the owner's sign-in token.
+      // Pikibun's OAuth app resets (PATCH) and deletes (DELETE) the owner's sign-in token.
       if (method === 'PATCH' && url.pathname === '/applications/oauth-client/token') {
         return state.resetStatus === 200 ? Response.json({ token: state.resetToken }) : Response.json({ message: 'unavailable' }, { status: state.resetStatus });
       }
@@ -850,10 +850,10 @@ test('push access with the host\'s Git credentials needs its owner\'s opt-in, th
   assert.equal(f.calls.find(call => call.method === 'POST' && call.url.endsWith('/pulls'))!.authorization, 'Bearer owner-oauth-token', 'pull requests are still opened as the owner');
 });
 
-test('a host configured in Pistead pushes with its Git credentials only while its owner has them on there, whatever it advertises', async t => {
+test('a host configured in Pikibun pushes with its Git credentials only while its owner has them on there, whatever it advertises', async t => {
   const f = await fixture(t, { host: { owner } });
   f.pushIdentity('github', 'github.com', '', 'host-credentials');
-  // Even claiming the old --git-credentials opt-in, a connector configured in Pistead follows its configuration.
+  // Even claiming the old --git-credentials opt-in, a connector configured in Pikibun follows its configuration.
   f.sqlite.prepare("UPDATE connectors SET capabilities_json = json_set(capabilities_json, '$.hostConfig', json('true'), '$.gitCredentials', json('true')) WHERE id = 'connector'").run();
   const op = f.operation({});
   const attempt = (approvalId: string) => f.post(credential, { sessionId: 'session', approvalId, actorId: owner, operation: op, admissionId: f.admit('auto') });
@@ -900,7 +900,7 @@ test('a clone session pushes its own branch through the egress relay with the pu
   f.sqlite.exec("PRAGMA defer_foreign_keys = ON; BEGIN; DROP TRIGGER sessions_repositories_immutable; DROP TRIGGER sessions_repository_mode_immutable;"
     + " UPDATE sessions SET repositories_json = '[]', repository_mode = 'clone' WHERE id = 'session'; COMMIT;");
   const forge: { method: string; url: string; authorization: string | null; body: string }[] = [];
-  const report = pkt(`\x01${pkt('unpack ok\n')}${pkt('ok refs/heads/pistead/session\n')}0000`) + '0000';
+  const report = pkt(`\x01${pkt('unpack ok\n')}${pkt('ok refs/heads/pikibun/session\n')}0000`) + '0000';
   const mocked = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
@@ -923,7 +923,7 @@ test('a clone session pushes its own branch through the egress relay with the pu
   assert.equal(refs.status, 200);
   assert.equal(refs.headers.get('content-type'), 'application/x-git-receive-pack-advertisement');
   assert.match(await refs.text(), /service=git-receive-pack/);
-  const pushed = await relay('receive-pack', command('refs/heads/pistead/session') + 'PACK-DATA');
+  const pushed = await relay('receive-pack', command('refs/heads/pikibun/session') + 'PACK-DATA');
   assert.equal(pushed.status, 200);
   assert.equal(await pushed.text(), report);
   // The workspace's push identity (here the operator's GitHub App) pushes; the host never sees its token, which is
@@ -932,20 +932,20 @@ test('a clone session pushes its own branch through the egress relay with the pu
     ['GET', 'https://github.com/owner/repo.git/info/refs?service=git-receive-pack', installation],
     ['POST', 'https://github.com/owner/repo.git/git-receive-pack', installation],
   ]);
-  assert.equal(forge[1]!.body, command('refs/heads/pistead/session') + 'PACK-DATA');
+  assert.equal(forge[1]!.body, command('refs/heads/pikibun/session') + 'PACK-DATA');
   assert.equal(revoked(), 2);
   const audit = f.audits('git.push.session_branch') as { actor_id: string; detail_json: string }[];
   assert.equal(audit.length, 1);
   assert.equal(audit[0]!.actor_id, owner);
-  assert.deepEqual(JSON.parse(audit[0]!.detail_json), { bindingId: 'binding-gh', branch: 'pistead/session', old: '0'.repeat(40), new: tip, kind: 'github-app' });
+  assert.deepEqual(JSON.parse(audit[0]!.detail_json), { bindingId: 'binding-gh', branch: 'pikibun/session', old: '0'.repeat(40), new: tip, kind: 'github-app' });
 
   // Anything but creating or moving the session branch is refused before a credential is minted.
   const mints = () => f.calls.filter(call => call.url === 'https://api.github.com/app/installations/55/access_tokens').length;
   const before = mints();
   for (const [body, status, expected] of [
     [command('refs/heads/main'), 403, 'session_branch_only'],
-    [command('refs/heads/pistead/session', '0'.repeat(40)), 403, 'session_branch_only'],
-    [command('refs/heads/pistead/session') .slice(0, -4) + pkt(`${'0'.repeat(40)} ${tip} refs/heads/pistead/session\n`) + '0000', 403, 'session_branch_only'],
+    [command('refs/heads/pikibun/session', '0'.repeat(40)), 403, 'session_branch_only'],
+    [command('refs/heads/pikibun/session') .slice(0, -4) + pkt(`${'0'.repeat(40)} ${tip} refs/heads/pikibun/session\n`) + '0000', 403, 'session_branch_only'],
     [pkt('push-cert\0report-status\n') + '0000', 400, 'invalid_push_request'],
     ['zzzz', 400, 'invalid_push_request'],
   ] as const) {
@@ -953,7 +953,7 @@ test('a clone session pushes its own branch through the egress relay with the pu
     assert.equal(refused.status, status, body);
     assert.equal(await code(refused), expected);
   }
-  assert.equal((await relay('receive-pack', command('refs/heads/pistead/session'), 'text/plain')).status, 415);
+  assert.equal((await relay('receive-pack', command('refs/heads/pikibun/session'), 'text/plain')).status, 415);
   // Git's probe before a chunked upload is answered without a credential.
   const probe = await relay('receive-pack', '0000');
   assert.equal(probe.status, 200);
@@ -976,12 +976,12 @@ test('a clone session pushes its own branch through the egress relay with the pu
   assert.equal(await code(await relay('receive-refs')), 'session_branch_unavailable');
 });
 
-test('a clone session with a branch named for its work pushes that branch, not pistead/<session-id>', async t => {
+test('a clone session with a branch named for its work pushes that branch, not pikibun/<session-id>', async t => {
   const f = await fixture(t);
   f.sqlite.exec("PRAGMA defer_foreign_keys = ON; BEGIN; DROP TRIGGER sessions_repositories_immutable; DROP TRIGGER sessions_repository_mode_immutable;"
     + " DROP TRIGGER sessions_branch_immutable;"
-    + " UPDATE sessions SET repositories_json = '[]', repository_mode = 'clone', branch = 'pistead/fix-login-e00000000000' WHERE id = 'session'; COMMIT;");
-  const report = pkt(`\x01${pkt('unpack ok\n')}${pkt('ok refs/heads/pistead/fix-login-e00000000000\n')}0000`) + '0000';
+    + " UPDATE sessions SET repositories_json = '[]', repository_mode = 'clone', branch = 'pikibun/fix-login-e00000000000' WHERE id = 'session'; COMMIT;");
+  const report = pkt(`\x01${pkt('unpack ok\n')}${pkt('ok refs/heads/pikibun/fix-login-e00000000000\n')}0000`) + '0000';
   const forge: string[] = [];
   const mocked = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
@@ -995,14 +995,14 @@ test('a clone session with a branch named for its work pushes that branch, not p
     headers: { Authorization: `Bearer ${internalSecret}`, 'Content-Type': 'application/x-git-receive-pack-request' }, body }, f.env);
   const command = (ref: string) => pkt(`${'0'.repeat(40)} ${tip} ${ref}\0report-status side-band-64k agent=git/2.43.0\n`) + '0000';
 
-  const refused = await relay(command('refs/heads/pistead/session'));
+  const refused = await relay(command('refs/heads/pikibun/session'));
   assert.equal(refused.status, 403);
   assert.equal(await code(refused), 'session_branch_only');
-  const pushed = await relay(command('refs/heads/pistead/fix-login-e00000000000') + 'PACK-DATA');
+  const pushed = await relay(command('refs/heads/pikibun/fix-login-e00000000000') + 'PACK-DATA');
   assert.equal(pushed.status, 200);
-  assert.deepEqual(forge, [command('refs/heads/pistead/fix-login-e00000000000') + 'PACK-DATA']);
+  assert.deepEqual(forge, [command('refs/heads/pikibun/fix-login-e00000000000') + 'PACK-DATA']);
   const audit = f.audits('git.push.session_branch') as { detail_json: string }[];
-  assert.equal(JSON.parse(audit.at(-1)!.detail_json).branch, 'pistead/fix-login-e00000000000');
+  assert.equal(JSON.parse(audit.at(-1)!.detail_json).branch, 'pikibun/fix-login-e00000000000');
 });
 
 test('a session that pinned its repositories is read-only: it gets no push credential', async t => {
@@ -1106,7 +1106,7 @@ test('direct Git grants: a shared host reads private repositories with a token l
 
   // A push token can't be limited to the session branch, so a shared host relays its pushes, before anything is minted.
   const push = await direct(f, { access: 'push' });
-  assert.deepEqual(push.body, { direct: false, reason: 'Pushes from a host shared with the workspace go through Pistead: a push token can\'t be limited to the session branch', cacheSeconds: 60 });
+  assert.deepEqual(push.body, { direct: false, reason: 'Pushes from a host shared with the workspace go through Pikibun: a push token can\'t be limited to the session branch', cacheSeconds: 60 });
   assert.equal(mints().length, 1);
   // LFS follows the workspace's switch, as relayed downloads do.
   assert.equal((await direct(f, { access: 'lfs' })).body.code, 'lfs_disabled');
@@ -1123,11 +1123,11 @@ test('direct Git grants: a shared host reads private repositories with a token l
   assert.equal((await direct(f, { access: 'read' })).body.direct, false);
   f.env.GIT_DIRECT = 'off';
   f.state.githubPrivate = false;
-  assert.deepEqual((await direct(f, { access: 'read' })).body, { direct: false, reason: 'Direct Git transfers are off on this Pistead server', cacheSeconds: 60 });
+  assert.deepEqual((await direct(f, { access: 'read' })).body, { direct: false, reason: 'Direct Git transfers are off on this Pikibun server', cacheSeconds: 60 });
   delete f.env.GIT_DIRECT;
 
   // Malformed requests, and sessions that lost their authority, get nothing.
-  for (const body of [{ access: 'write' }, { access: 'read', command: { old: '0'.repeat(40), new: tip, ref: 'refs/heads/pistead/session' } },
+  for (const body of [{ access: 'write' }, { access: 'read', command: { old: '0'.repeat(40), new: tip, ref: 'refs/heads/pikibun/session' } },
     { access: 'read', extra: true }, { access: 'push', command: { old: 'zz', new: tip, ref: 'refs/heads/x' } }]) {
     const refused = await direct(f, body);
     assert.deepEqual([refused.status, refused.body.code], [400, 'invalid_direct_request'], JSON.stringify(body));
@@ -1153,10 +1153,10 @@ test('direct Git grants: the owner\'s own host reads with the owner\'s account w
   assert.deepEqual(refs.body.revoke, { url: 'https://api.github.com/installation/token', authorization: 'Bearer ghs_installation_token' });
   assert.deepEqual(f.audits('git.push.session_branch'), []);
   // The push names its one command, which the control plane checks and audits before the host gets a token.
-  const command = { old: '0'.repeat(40), new: tip, ref: 'refs/heads/pistead/session' };
+  const command = { old: '0'.repeat(40), new: tip, ref: 'refs/heads/pikibun/session' };
   assert.equal((await direct(f, { access: 'push', command })).body.direct, true);
   const audit = f.audits('git.push.session_branch') as { detail_json: string }[];
-  assert.deepEqual(JSON.parse(audit[0]!.detail_json), { bindingId: 'binding-gh', branch: 'pistead/session', old: command.old, new: tip, kind: 'github-app', direct: true });
+  assert.deepEqual(JSON.parse(audit[0]!.detail_json), { bindingId: 'binding-gh', branch: 'pikibun/session', old: command.old, new: tip, kind: 'github-app', direct: true });
   const other = await direct(f, { access: 'push', command: { ...command, ref: 'refs/heads/main' } });
   assert.deepEqual([other.status, other.body.code], [403, 'session_branch_only']);
   const deleted = await direct(f, { access: 'push', command: { ...command, new: '0'.repeat(40) } });
@@ -1168,7 +1168,7 @@ test('direct Git grants: the owner\'s own host reads with the owner\'s account w
   // The owner's GitHub sign-in token would have to be reset after a push that took it off the server, and the host's own
   // Git credentials can't serve the proxy: those pushes stay relayed.
   f.pushIdentity('github', 'github.com', '', 'owner-account');
-  assert.deepEqual((await direct(f, { access: 'push' })).body, { direct: false, reason: 'This push identity pushes through Pistead', cacheSeconds: 0 });
+  assert.deepEqual((await direct(f, { access: 'push' })).body, { direct: false, reason: 'This push identity pushes through Pikibun', cacheSeconds: 0 });
   // A pinned session pushes only with git_push.
   f.sqlite.exec("BEGIN; DROP TRIGGER sessions_repository_mode_immutable; UPDATE sessions SET repository_mode = NULL WHERE id = 'session'; COMMIT;");
   assert.equal((await direct(f, { access: 'push' })).body.code, 'session_branch_unavailable');
@@ -1225,10 +1225,10 @@ test('sandboxed GitHub API reads follow SANDBOX_GITHUB_API and the session\'s au
   const f = await fixture(t, { host: { owner: approver } });
   f.env.SANDBOX_GITHUB_API = 'own-hosts';
   // A host shared with the workspace gets no token then; the grant still names the API, so the proxy says why.
-  assert.deepEqual(await apiCredential(f).then(answer => answer.body), { available: false, reason: 'This Pistead server gives GitHub API credentials only to session owners\' own hosts', cacheSeconds: 60 });
+  assert.deepEqual(await apiCredential(f).then(answer => answer.body), { available: false, reason: 'This Pikibun server gives GitHub API credentials only to session owners\' own hosts', cacheSeconds: 60 });
   f.env.SANDBOX_GITHUB_API = 'off';
   assert.equal((await networkGrant(f)).apis, undefined);
-  assert.equal((await apiCredential(f)).body.reason, 'GitHub API access from sessions is off on this Pistead server');
+  assert.equal((await apiCredential(f)).body.reason, 'GitHub API access from sessions is off on this Pikibun server');
   assert.equal(f.calls.filter(call => call.url.includes('/access_tokens')).length, 0);
   delete f.env.SANDBOX_GITHUB_API;
 
@@ -1256,7 +1256,7 @@ test('sandboxed GitHub API reads: the owner\'s own host gets the token under own
   f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,repositories_json,connector_id,connector_owner_id,repository_mode)
     SELECT 'pinned',workspace_id,owner_id,agent_version_id,title,status,created_at,repositories_json,connector_id,connector_owner_id,NULL FROM sessions WHERE id = 'session'`).run();
   assert.equal((await (await f.post('/api/internal/network', { sessionId: 'pinned' })).json() as Record<string, unknown>).apis, undefined);
-  assert.equal((await apiCredential(f, { sessionId: 'pinned' })).body.reason, 'Only sessions that clone their repositories read the GitHub API through Pistead');
+  assert.equal((await apiCredential(f, { sessionId: 'pinned' })).body.reason, 'Only sessions that clone their repositories read the GitHub API through Pikibun');
 });
 
 test('sandboxed GitHub API reads: a repository the app wasn\'t installed on is covered within a minute of installing it', async t => {

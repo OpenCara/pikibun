@@ -61,7 +61,7 @@ async function fixture(t: TestContext) {
       VALUES ('identity','workspace','github','github.com','','github-app','{"appId":"1","slug":"app"}','IDENTITY-SECRET-CIPHERTEXT','ready',
         'test:owner','2026-01-01','2026-01-01');
     INSERT INTO workspace_databases (id,workspace_id,host,port,database_name,username,tls,ca_certificate,password_ciphertext,created_by,created_at,updated_at)
-      VALUES ('database','workspace','db.example.com',5432,'pistead','pistead_app','verify-full',NULL,'DATABASE-PASSWORD-CIPHERTEXT','test:owner',
+      VALUES ('database','workspace','db.example.com',5432,'pikibun','pikibun_app','verify-full',NULL,'DATABASE-PASSWORD-CIPHERTEXT','test:owner',
         '2026-01-01','2026-01-01');
     INSERT INTO audit (id,workspace_id,session_id,actor_id,action,detail_json,created_at) VALUES
       ('audit-session','workspace','owner-private','test:owner','session.created','{"agentVersionId":"version"}','2026-01-01'),
@@ -89,12 +89,12 @@ test('a session export is its owner\'s, archived sessions included, with every r
   const f = await fixture(t);
   const response = await f.get('/api/sessions/owner-private/export', 'test:owner');
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get('content-disposition'), 'attachment; filename="pistead-session-owner-private.json"');
+  assert.equal(response.headers.get('content-disposition'), 'attachment; filename="pikibun-session-owner-private.json"');
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
   const text = await response.text();
   for (const secret of secrets) assert.ok(!text.includes(secret), `A session export must not contain ${secret}`);
   const exported = JSON.parse(text) as SessionExport;
-  assert.equal(exported.format, 'pistead-session-export-v1');
+  assert.equal(exported.format, 'pikibun-session-export-v1');
   assert.equal(exported.exportedBy, 'test:owner');
   assert.equal(exported.session.id, 'owner-private');
   assert.equal(exported.session.title, 'Owner private');
@@ -140,11 +140,11 @@ test('a workspace export covers its settings, the exporter\'s own sessions in fu
   assert.equal((await f.get('/api/workspaces/workspace/export', 'test:outsider')).status, 404);
   const response = await f.get('/api/workspaces/workspace/export', 'test:owner');
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get('content-disposition'), 'attachment; filename="pistead-workspace-workspace.json"');
+  assert.equal(response.headers.get('content-disposition'), 'attachment; filename="pikibun-workspace-workspace.json"');
   const text = await response.text();
   assertNoSecrets(text);
   const exported = JSON.parse(text) as WorkspaceExport;
-  assert.equal(exported.format, 'pistead-workspace-export-v1');
+  assert.equal(exported.format, 'pikibun-workspace-export-v1');
   assert.equal(exported.exportedBy, 'test:owner');
   assert.deepEqual(exported.workspace, { id: 'workspace', name: 'Workspace', ownerId: 'test:owner', createdAt: '2026-01-01' });
   assert.deepEqual(exported.members, [
@@ -157,7 +157,7 @@ test('a workspace export covers its settings, the exporter\'s own sessions in fu
   assert.deepEqual(exported.repositories.map(repository => repository.fullName), ['Owner/Project']);
   assert.deepEqual(exported.pushIdentities.map(identity => [identity.id, identity.config]), [['identity', { appId: '1', slug: 'app' }]]);
   assert.equal(exported.database?.host, 'db.example.com');
-  assert.equal(exported.database?.user, 'pistead_app');
+  assert.equal(exported.database?.user, 'pikibun_app');
   // Only workspace events: session events are in each session, and other workspaces' are never included.
   assert.deepEqual(exported.audit.map(event => event.id), ['audit-workspace']);
   assert.deepEqual(exported.sessions.map(session => session.session.id), ['owner-private', 'owner-shared', 'owner-restored']);

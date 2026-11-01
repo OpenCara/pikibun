@@ -55,7 +55,7 @@ function message(response: { body: string }): string {
   return (JSON.parse(response.body) as { message: string }).message;
 }
 function lfsQuery(socketPath: string, remote: string) {
-  return send(socketPath, `/__pistead/lfs?remote=${encodeURIComponent(remote)}`).then(response => JSON.parse(response.body) as { lfs: boolean });
+  return send(socketPath, `/__pikibun/lfs?remote=${encodeURIComponent(remote)}`).then(response => JSON.parse(response.body) as { lfs: boolean });
 }
 function relayedBody(request: RelayRequest): unknown {
   return JSON.parse(Buffer.from(request.body as Uint8Array).toString("utf8"));
@@ -117,7 +117,7 @@ test("Git LFS downloads go through the relay, and git-lfs is pointed back at the
   assert.equal(object.headers["content-type"], "application/octet-stream");
   assert.deepEqual([relayed[1]!.service, relayedBody(relayed[1]!)], ["lfs-object", { oid, size: 3 }]);
   assert.equal(relayed.length, 2);
-  const status = JSON.parse((await send(instance.socketPath, "/__pistead/status")).body) as { lfs: string[] };
+  const status = JSON.parse((await send(instance.socketPath, "/__pikibun/status")).body) as { lfs: string[] };
   assert.deepEqual(status.lfs, ["https://github.com/acme/app.git"]);
 });
 

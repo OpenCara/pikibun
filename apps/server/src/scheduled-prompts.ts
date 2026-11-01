@@ -100,7 +100,7 @@ async function requireAccessSupported(env: Env, row: SessionRow, access: AccessM
     .bind(row.connector_id).first();
   if (!host) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
   if ((JSON.parse(host.capabilities_json) as { chatOptions?: unknown }).chatOptions !== true) {
-    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pistead@latest connect) to schedule read-only or auto-approved prompts.');
+    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to schedule read-only or auto-approved prompts.');
   }
 }
 

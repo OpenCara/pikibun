@@ -12,7 +12,7 @@
  *   node scripts/measure-session-views.mjs [--json] [--tail N] [PATH...]
  *
  * PATH is a session.sqlite file or a directory searched for them; the default is the connector's state directory,
- * ~/.local/share/pistead/connector. Needs Node 22.13 or newer (node:sqlite), as any host's connector has.
+ * ~/.local/share/pikibun/connector. Needs Node 22.13 or newer (node:sqlite), as any host's connector has.
  * --rows FILE reads one session's rows from JSON ({ conversations: [...], entries: [...] }) instead, for tests.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -190,7 +190,7 @@ const results = [];
 if (rowsFile) {
   results.push({ name: rowsFile, ...measure(JSON.parse(readFileSync(rowsFile, "utf8"))) });
 } else {
-  const roots = args.length ? args.map(path => resolve(path)) : [join(homedir(), ".local", "share", "pistead", "connector")];
+  const roots = args.length ? args.map(path => resolve(path)) : [join(homedir(), ".local", "share", "pikibun", "connector")];
   const databases = [...new Set(roots.flatMap(root => findDatabases(root)))];
   if (!databases.length) fail(`No session.sqlite found under ${roots.join(", ")}`);
   for (const path of databases) {

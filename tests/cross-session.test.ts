@@ -14,9 +14,9 @@ import { seedAgentVersion, testDatabase } from './helpers/control-plane.js';
 
 test('a delivered message names its origin and sender, and its outcome is the answer after it in its own conversation', () => {
   const header = crossSessionHeader({ id: 'm1', kind: 'send', hops: 2 }, { id: 'origin', title: 'Fix [auth]\nnow' }, { id: 'github:1', login: 'alice' });
-  assert.equal(header, '[Pistead cross-session message xs:m1 · from session "Fix auth now" (origin) · sent by @alice through its agent · hop 2]');
+  assert.equal(header, '[Pikibun cross-session message xs:m1 · from session "Fix auth now" (origin) · sent by @alice through its agent · hop 2]');
   assert.match(crossSessionHeader({ id: 'm1-n', kind: 'notify', hops: 3 }, { id: 'target', title: 'Worker' }, { id: 'test:bob' }, { id: 'm1' }),
-    /^\[Pistead notification xs:m1-n · session "Worker" \(target\) finished message xs:m1 · for test:bob · hop 3\]$/);
+    /^\[Pikibun notification xs:m1-n · session "Worker" \(target\) finished message xs:m1 · for test:bob · hop 3\]$/);
   const entry = (id: string, role: string, text: string, conversationId = '0', extra: Partial<EntryView> = {}): EntryView => ({ id, kind: 'message', role, text, conversationId, ...extra });
   const view = {
     entries: [entry('0:1', 'user', 'earlier'), entry('0:2', 'assistant', 'earlier answer'), entry('0:3', 'user', `${header}\n\nDo it`),
@@ -203,7 +203,7 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   const delivered = worker.submitted.at(-1)!;
   assert.equal(delivered.mode, 'submit');
   assert.equal(delivered.body.requestId, `xs:${message.id}`);
-  assert.equal(delivered.body.content, `[Pistead cross-session message xs:${message.id} · from session "Coordinator" (session-a) · sent by test:xs-owner through its agent · hop 1]\n\nRun the tests`);
+  assert.equal(delivered.body.content, `[Pikibun cross-session message xs:${message.id} · from session "Coordinator" (session-a) · sent by test:xs-owner through its agent · hop 1]\n\nRun the tests`);
   assert.equal(delivered.body.options, undefined, 'approval, the default, sends no options');
   const audits = f.sqlite.prepare("SELECT action, session_id, actor_id, detail_json FROM audit WHERE action IN ('session.submit', 'session.cross_session.sent') ORDER BY rowid").all();
   assert.deepEqual(audits.map(row => [row.action, row.session_id, row.actor_id]), [['session.submit', 'session-b', ownerId], ['session.cross_session.sent', 'session-a', ownerId]]);
@@ -310,7 +310,7 @@ test('an agent stops and archives sessions as its sender may, and starts linked 
   const opening = created.body.message as CrossSessionMessage;
   assert.deepEqual([child.title, child.parentSessionId, child.visibility, child.ownerId, child.status], ['Write the docs', 'session-a', 'private', ownerId, 'ready']);
   assert.deepEqual([opening.kind, opening.targetSessionId, opening.notify], ['create', child.id, 'pending']);
-  assert.match(String(f.fake(child.id).submitted[0]!.body.content), /^\[Pistead cross-session opening message xs:\S+ · from session "Coordinator"/);
+  assert.match(String(f.fake(child.id).submitted[0]!.body.content), /^\[Pikibun cross-session opening message xs:\S+ · from session "Coordinator"/);
   // Lists show the link both ways.
   const record = (await (await f.owner.request('GET', `/api/sessions/${child.id}`)).json() as { session: SessionRecord }).session;
   assert.equal(record.parentSessionId, 'session-a');
@@ -414,7 +414,7 @@ test('a notification brings a finished message\'s outcome back to its origin, on
   assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: message.id, delivered: `${message.id}-n` }]);
   assert.equal(coordinator.submitted.length, 1);
   assert.equal(coordinator.submitted[0]!.body.requestId, `xs:${message.id}-n`);
-  assert.equal(coordinator.submitted[0]!.body.content, `[Pistead notification xs:${message.id}-n · session "Worker" (session-b) finished message xs:${message.id} · for test:xs-owner · hop 2]`
+  assert.equal(coordinator.submitted[0]!.body.content, `[Pikibun notification xs:${message.id}-n · session "Worker" (session-b) finished message xs:${message.id} · for test:xs-owner · hop 2]`
     + '\n\nIts message ended: settled.\n\nIts reply:\n\nFixed: the test waited on a timer.');
   assert.deepEqual(await runCrossSessionNotifications(f.env), [], 'once');
   const row = f.sqlite.prepare('SELECT notify_status, notify_message_id FROM session_messages WHERE id = ?').get(message.id)!;

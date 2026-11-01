@@ -111,7 +111,7 @@ export const credentialedApiHosts: readonly string[] = Object.freeze(["api.githu
 export type CredentialedApiProvider = "github";
 export interface EgressApi { host: string; provider: CredentialedApiProvider }
 /** What `GH_TOKEN` and `GITHUB_TOKEN` hold in a sandbox: the proxy puts the real credential in its place. */
-export const API_TOKEN_PLACEHOLDER = "pistead-egress-proxy-adds-the-credential";
+export const API_TOKEN_PLACEHOLDER = "pikibun-egress-proxy-adds-the-credential";
 /** Longest a proxy reuses an API credential: a revoked session or repository stops using it within this. */
 export const API_CREDENTIAL_CACHE_SECONDS = 60;
 /**

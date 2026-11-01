@@ -5,7 +5,7 @@ name: Release iOS
 # submitting a build for App Store review stays manual.
 #
 # Signing, in the `release` environment (README.md, "Releasing"): IOS_CERTIFICATE_P12 (base64 Apple Distribution .p12),
-# IOS_CERTIFICATE_PASSWORD, IOS_PROVISIONING_PROFILE (base64 App Store profile for com.pistead.app), the variable
+# IOS_CERTIFICATE_PASSWORD, IOS_PROVISIONING_PROFILE (base64 App Store profile for com.pikibun.app), the variable
 # APPLE_TEAM_ID, and for the upload APP_STORE_CONNECT_API_KEY (the .p8's contents), APP_STORE_CONNECT_API_KEY_ID and
 # APP_STORE_CONNECT_API_ISSUER_ID. Without any of them the app is archived unsigned, to check it builds, and nothing is
 # uploaded; with only some of them the job fails.
@@ -111,8 +111,8 @@ jobs:
 
           # Manual signing on the app target only: command-line build settings would reach the pods' targets too.
           ruby -rxcodeproj -e '
-            project = Xcodeproj::Project.open("apps/mobile/ios/Pistead.xcodeproj")
-            target = project.targets.find { |t| t.name == "Pistead" } or abort "No Pistead target in the generated project"
+            project = Xcodeproj::Project.open("apps/mobile/ios/Pikibun.xcodeproj")
+            target = project.targets.find { |t| t.name == "Pikibun" } or abort "No Pikibun target in the generated project"
             target.build_configurations.select { |c| c.name == "Release" }.each do |config|
               config.build_settings["CODE_SIGN_STYLE"] = "Manual"
               config.build_settings["DEVELOPMENT_TEAM"] = ENV.fetch("APPLE_TEAM_ID")
@@ -129,8 +129,8 @@ jobs:
         run: |
           signing=(CODE_SIGNING_ALLOWED=NO)
           [ "$SIGNED" = true ] && signing=()
-          xcodebuild archive -workspace Pistead.xcworkspace -scheme Pistead -configuration Release \
-            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Pistead.xcarchive" \
+          xcodebuild archive -workspace Pikibun.xcworkspace -scheme Pikibun -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Pikibun.xcarchive" \
             "${signing[@]}" -quiet
       - name: Export the IPA
         if: steps.signing.outputs.configured == 'true'
@@ -148,12 +148,12 @@ jobs:
             <key>signingStyle</key><string>manual</string>
             <key>signingCertificate</key><string>Apple Distribution</string>
             <key>provisioningProfiles</key>
-            <dict><key>com.pistead.app</key><string>$PROFILE_UUID</string></dict>
+            <dict><key>com.pikibun.app</key><string>$PROFILE_UUID</string></dict>
             <key>uploadSymbols</key><true/>
           </dict>
           </plist>
           EOF
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Pistead.xcarchive" \
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Pikibun.xcarchive" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" -quiet
           ls "$RUNNER_TEMP/export"/*.ipa
       # altool's upload still works; xcodebuild -exportArchive with destination upload would replace it.

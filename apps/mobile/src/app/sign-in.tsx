@@ -1,5 +1,5 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { errorMessage } from "@pistead/client";
+import { errorMessage } from "@pikibun/client";
 import { useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -25,7 +25,7 @@ export default function SignInScreen() {
   if (state.status === "unreachable") {
     return <SafeAreaView style={[ui.flex, { backgroundColor: palette.background }]}>
       <View style={styles.column}>
-        <Text style={[styles.title, { color: palette.text }]}>Can't reach Pistead</Text>
+        <Text style={[styles.title, { color: palette.text }]}>Can't reach Pikibun</Text>
         <Banner tone="warning" title={displayOrigin(state.origin)}>{state.error}</Banner>
         <Button variant="primary" label="Try again" disabled={action.busy} onPress={retry} />
         <Button variant="ghost" label={action.busy ? "Signing out…" : "Sign out"} disabled={action.busy} onPress={() => void action.run(signOut)} />
@@ -37,7 +37,7 @@ export default function SignInScreen() {
     <KeyboardAvoidingView style={ui.flex} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <ScrollView contentContainerStyle={styles.column} keyboardShouldPersistTaps="handled">
         <View style={styles.hero}>
-          <Text style={[styles.title, { color: palette.text }]}>Pistead</Text>
+          <Text style={[styles.title, { color: palette.text }]}>Pikibun</Text>
           <Text style={[styles.lead, { color: palette.muted }]}>Run Pi agents on your own machine, and work on them together with your team.</Text>
         </View>
         {state.status === "signedOut" && state.notice ? <Banner tone="warning">{state.notice}</Banner> : null}
@@ -46,9 +46,9 @@ export default function SignInScreen() {
           <Text style={[ui.small, { color: palette.muted }]}>Server</Text>
           {editingServer ? <>
             <TextInput testID="server-input" value={server} onChangeText={setServer} autoCapitalize="none" autoCorrect={false} keyboardType="url"
-              placeholder="https://pistead.com" placeholderTextColor={palette.muted} accessibilityLabel="Server address" style={input} />
+              placeholder="https://pikibun.com" placeholderTextColor={palette.muted} accessibilityLabel="Server address" style={input} />
             {"error" in parsed && <Text style={[ui.small, { color: palette.tones.danger.text }]}>{parsed.error}</Text>}
-            <Text style={[ui.small, { color: palette.muted }]}>For a self-hosted Pistead, enter its address.</Text>
+            <Text style={[ui.small, { color: palette.muted }]}>For a self-hosted Pikibun, enter its address.</Text>
           </> : <View style={ui.inline}>
             <Text style={[styles.serverName, { color: palette.text }]} numberOfLines={1}>{origin ? displayOrigin(origin) : server}</Text>
             <Button testID="server-change" small variant="ghost" label="Change" onPress={() => setEditingServer(true)} />

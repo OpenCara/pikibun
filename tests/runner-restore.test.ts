@@ -466,7 +466,7 @@ test("a clone session's backup stages its clones' bundles and what is pending; m
   const saved = envelope(value([clone, { ...clone, path: "lib", branch: null, branches: [], bundle: null }, { ...clone, path: "work/app/vendor/lib", bundle: null }],
     [{ path: "worktree/lib/NOTES.md", data: Buffer.from("notes").toString("base64"), mode: 0o600 }]));
   await restoreSession({ ...f.config, readBackup: async () => saved.bytes }, target, saved.descriptor, async stage => { staged = stage; });
-  const state = join(f.directory, "sessions", "target", "sandbox", "git", "pistead-clones");
+  const state = join(f.directory, "sessions", "target", "sandbox", "git", "pikibun-clones");
   assert.deepEqual(JSON.parse(await readFile(join(state, "manifest.json"), "utf8")), { version: 1, clones: [
     { ...clone, bundle: "0.bundle" }, { ...clone, path: "lib", branch: null, branches: [], bundle: null }, { ...clone, path: "work/app/vendor/lib", bundle: null },
   ] });
@@ -487,7 +487,7 @@ test("a clone session's backup stages its clones' bundles and what is pending; m
     [clone, { ...clone, bundle: null }], [{ ...clone, branches: [["main"]] }], [{ ...clone, branch: "refs/heads/main" }],
   ]) await refused(value(clones), other);
   // The pending list comes only from the clones, never as files.
-  await refused(value([clone], [{ path: "git/pistead-clones/manifest.json", data: Buffer.from("{}").toString("base64"), mode: 0o600 }]), other);
+  await refused(value([clone], [{ path: "git/pikibun-clones/manifest.json", data: Buffer.from("{}").toString("base64"), mode: 0o600 }]), other);
   // Only a clone session restores clones.
   const pinned = value([clone]);
   pinned.binding = binding("source");

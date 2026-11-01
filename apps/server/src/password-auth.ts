@@ -168,7 +168,7 @@ export function passwordAccountStatements(db: Pick<Database, 'query'>, name: str
   const created = now();
   return [
     db.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
-      VALUES (?, NULL, NULL, ?, ?, ?, '{}', 'password', ?)`).bind(userId, displayName, displayName, `${name}@users.pistead.invalid`, created),
+      VALUES (?, NULL, NULL, ?, ?, ?, '{}', 'password', ?)`).bind(userId, displayName, displayName, `${name}@users.pikibun.invalid`, created),
     db.query('INSERT INTO password_credentials (user_id, password_hash, failed_attempts, locked_until, created_at, updated_at) VALUES (?, ?, 0, NULL, ?, ?)')
       .bind(userId, hash, created, created),
   ];

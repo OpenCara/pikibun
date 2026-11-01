@@ -37,7 +37,7 @@ export function documentConnectionFor(connections: WorkspaceConnection[] | null,
 export const readAsLabels: Record<SourceReadAs, string> = { members: "Members' own accounts", workspace: "Workspace connection" };
 
 /**
- * Which identity a source reads with, on its row. Owners and admins switch it; Pistead reads the source with the
+ * Which identity a source reads with, on its row. Owners and admins switch it; Pikibun reads the source with the
  * workspace's connection before it lets that one be chosen. Members see only where it isn't their own account.
  */
 export function ReadAsControl({ workspaceId, sourceId, title, readAs, connection, admin, action, changed }: {
@@ -93,7 +93,7 @@ export function WorkspaceConnections({ workspaceId, admin, connections, loading,
   return <Section title="Connections"
     info={<div className="stack">
       <p>Service accounts this workspace reads its sources with, instead of each member's own: a GitLab or Gitea bot, a Git server's deploy user, a Notion integration, a Google service account or a Feishu/Lark app. Connect accounts made for that, never your personal one: every member's sessions read with it.</p>
-      <p>A source uses a connection only where an owner or admin sets it to, under Sources; Pistead reads the source with the connection first. Otherwise sessions read with their owner's own account, as before, and never fall back from one to the other.</p>
+      <p>A source uses a connection only where an owner or admin sets it to, under Sources; Pikibun reads the source with the connection first. Otherwise sessions read with their owner's own account, as before, and never fall back from one to the other.</p>
       <p>Connections only read. Pushes and pull requests use the session owner's account or the workspace's push access. Secrets are encrypted on the server and never sent to any host; members see only which account it is. github.com repositories, Dropbox, OneDrive and Tencent Docs read with each member's own sign-in.</p>
     </div>}
     action={admin && !full && <DropdownMenu label="Add connection" triggerVariant="outline" trigger={<><Icon name="plus" size={16} />Add connection</>} items={[

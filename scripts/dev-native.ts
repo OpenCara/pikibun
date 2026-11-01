@@ -1,5 +1,5 @@
 /**
- * A local Pistead for developing the native apps: a test-mode server on 127.0.0.1, a test user with a native app token,
+ * A local Pikibun for developing the native apps: a test-mode server on 127.0.0.1, a test user with a native app token,
  * a workspace and, unless --no-host, this machine as a host offering the deterministic fixture model (not an LLM), with
  * one session on it. --pairing also creates a pairing code for the desktop app to pair this machine itself.
  *
@@ -26,7 +26,7 @@ const origin = `http://127.0.0.1:${Number(values.port)}`;
 const secret = () => Buffer.from(randomBytes(32)).toString("base64url");
 const testSecret = secret();
 // The connector refuses state under a symlink, and macOS's temporary directory lives behind /var -> /private/var.
-const temporary = await realpath(await mkdtemp(join(tmpdir(), "pistead-dev-native-")));
+const temporary = await realpath(await mkdtemp(join(tmpdir(), "pikibun-dev-native-")));
 let server: ChildProcess | undefined;
 let stopHost = async () => {};
 
@@ -59,7 +59,7 @@ async function signIn(id: string) {
 try {
   await mkdir(join(temporary, "backups"));
   const environment: NodeJS.ProcessEnv = {
-    ...process.env, DATABASE_URL: `sqlite://${join(temporary, "pistead.sqlite")}`, STORAGE_URL: `file://${join(temporary, "backups")}`,
+    ...process.env, DATABASE_URL: `sqlite://${join(temporary, "pikibun.sqlite")}`, STORAGE_URL: `file://${join(temporary, "backups")}`,
     APP_ORIGIN: origin, HOST: "127.0.0.1", PORT: String(Number(values.port)), TRUST_PROXY: "false", RUNNER_URL: "",
     TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: testSecret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 24 * 3600_000).toISOString(),
     SESSION_SECRET: secret(), RUNNER_SHARED_SECRET: secret(), VAULT_KEY: secret(), STATIC_DIR: join(repository, "dist", "web"),
@@ -83,7 +83,7 @@ try {
     const host = createConnector({
       server: origin, dataDir: join(temporary, "connector"), pairing: { id: pairing.id, code: pairing.code },
       localModels: createFauxLocalModels("faux-1"), allowFaux: true, allowTestShell: true, allowInsecureLoopback: true,
-      // macOS has no sandbox: the fixture's approved commands run directly on this machine, as `pistead connect --unsafe-no-sandbox`.
+      // macOS has no sandbox: the fixture's approved commands run directly on this machine, as `pikibun connect --unsafe-no-sandbox`.
       unsandboxed: process.platform !== "linux", capabilities: { platform: process.platform, sandbox: false, productionShell: false },
     });
     stopHost = () => host.stop();
@@ -99,7 +99,7 @@ try {
   await mkdir(join(repository, ".local"), { recursive: true });
   await writeFile(join(repository, ".local", "dev-native.json"), `${JSON.stringify(details, null, 2)}\n`, { mode: 0o600 });
   console.log(`
-Pistead for native app development is running at ${origin}
+Pikibun for native app development is running at ${origin}
   Native app token (developer sign-in): ${native.token}
   Workspace: ${workspace.id}${session ? `\n  Session on the fixture host: ${session.id} (send "TEST_BASH echo hi" for an approval)` : ""}${desktopPairing ? `
   Desktop pairing: id ${desktopPairing.id}, code ${desktopPairing.code} (valid 10 minutes)` : ""}

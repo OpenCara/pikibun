@@ -34,10 +34,10 @@ test('host shell uses the host tools/home and session cwd without inheriting run
   t.after(() => rm(root, { recursive: true, force: true }));
   const options = { worktree: root, git: join(root, '.git'), gitConfig: join(root, 'owner.gitconfig'), gitName: 'Owner', gitEmail: 'owner@example.test', signal: new AbortController().signal };
   await writeFile(options.gitConfig, '[user]\nname = Owner\nemail = owner@example.test\n');
-  const original = process.env.PISTEAD_TEST_SECRET;
-  process.env.PISTEAD_TEST_SECRET = 'must-not-inherit';
-  t.after(() => { if (original === undefined) delete process.env.PISTEAD_TEST_SECRET; else process.env.PISTEAD_TEST_SECRET = original; });
-  const output = await runHostShell({ ...host, command: 'printf "%s\\n" "$HOME" "$PWD" "${PISTEAD_TEST_SECRET-unset}"; command -v bash; printf built > result.txt' }, options);
+  const original = process.env.PIKIBUN_TEST_SECRET;
+  process.env.PIKIBUN_TEST_SECRET = 'must-not-inherit';
+  t.after(() => { if (original === undefined) delete process.env.PIKIBUN_TEST_SECRET; else process.env.PIKIBUN_TEST_SECRET = original; });
+  const output = await runHostShell({ ...host, command: 'printf "%s\\n" "$HOME" "$PWD" "${PIKIBUN_TEST_SECRET-unset}"; command -v bash; printf built > result.txt' }, options);
   assert.ok(output.startsWith(`${homedir()}\n${root}\nunset\n`), output);
   assert.equal(await readFile(join(root, 'result.txt'), 'utf8'), 'built');
   await assert.rejects(runHostShell({ ...host, command: 'printf partial; printf bad >&2; exit 7' }, options), (error: unknown) => {

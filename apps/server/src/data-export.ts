@@ -20,8 +20,8 @@ import { publicWorkspaceDatabase, type WorkspaceDatabaseRow } from './workspace-
  * operator dumps from the database with `--dump-session` / `--dump-workspace` (main.ts).
  */
 
-export const sessionExportFormat = 'pistead-session-export-v1';
-export const workspaceExportFormat = 'pistead-workspace-export-v1';
+export const sessionExportFormat = 'pikibun-session-export-v1';
+export const workspaceExportFormat = 'pikibun-workspace-export-v1';
 
 export interface AuditEntry { id: string; actorId: string | null; action: string; detail: unknown; createdAt: string }
 
@@ -193,7 +193,7 @@ export function registerDataExports(app: Hono<WorkerEnv>): void {
     if (row.owner_id !== actor) fail(403, 'owner_required', 'Only the session owner can export it.');
     const document = await sessionExport(c.env.DB, row, actor);
     await auditStatement(c.env, actor, 'session.exported', row.workspace_id, row.id).run();
-    return attachment(document, `pistead-session-${row.id}.json`);
+    return attachment(document, `pikibun-session-${row.id}.json`);
   });
 
   // Owners and admins: the workspace's settings and activity, their own sessions in full and the records of the other
@@ -213,6 +213,6 @@ export function registerDataExports(app: Hono<WorkerEnv>): void {
     if (!document) fail(404, 'not_found', 'Workspace not found.');
     await auditStatement(c.env, actor, 'workspace.exported', workspaceId, null,
       { sessions: document.sessions.length, otherSessions: document.otherSessions.length }).run();
-    return attachment(document, `pistead-workspace-${workspaceId}.json`);
+    return attachment(document, `pikibun-workspace-${workspaceId}.json`);
   });
 }

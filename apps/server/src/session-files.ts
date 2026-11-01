@@ -60,7 +60,7 @@ export function registerSessionFiles(app: Hono<WorkerEnv>): void {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
     const path = worktreePath(c.req.query('path'));
     if (!await fileBrowserSupported(c.env, row)) {
-      fail(409, 'files_unsupported', 'This session\'s host can\'t show its files yet. Its owner can update the pistead connector there.');
+      fail(409, 'files_unsupported', 'This session\'s host can\'t show its files yet. Its owner can update the pikibun connector there.');
     }
     const result = await runnerJSON<{ files?: unknown }>(await runnerRequest(c, row, 'files', '', { path }));
     c.header('Cache-Control', 'no-store');

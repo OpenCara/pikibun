@@ -149,7 +149,7 @@ export function SharedSessionScreen({ token }: { token: string }) {
   const entries = (view?.entries ?? []).filter(entry => entry.role !== "system" || entry.text.trim());
   const lastEntryId = entries.at(-1)?.id;
   const title = session?.title;
-  useEffect(() => { document.title = title ? `${title} · Pistead` : "Shared session · Pistead"; }, [title]);
+  useEffect(() => { document.title = title ? `${title} · Pikibun` : "Shared session · Pikibun"; }, [title]);
   // Follow new entries unless the reader has scrolled up.
   useLayoutEffect(() => {
     const element = transcript.current;

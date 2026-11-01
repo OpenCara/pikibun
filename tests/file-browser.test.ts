@@ -68,7 +68,7 @@ async function exercise(browser: Browser, outside: string): Promise<void> {
 }
 
 async function directory(t: TestContext): Promise<string> {
-  const path = await realpath(await mkdtemp(join(tmpdir(), "pistead-files-")));
+  const path = await realpath(await mkdtemp(join(tmpdir(), "pikibun-files-")));
   t.after(() => rm(path, { recursive: true, force: true }));
   return path;
 }

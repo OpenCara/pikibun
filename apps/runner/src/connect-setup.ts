@@ -11,11 +11,11 @@ import { MXC_SDK_VERSION, mxcEntry, mxcInstallHint, windowsRuntimeDirectory } fr
 import { SANDBOX_EXEC, seatbeltTools } from "./seatbelt.js";
 import { windowsBuild, windowsSandboxSupport } from "./windows-sandbox.js";
 
-// Front-end-neutral connector preflight shared by `pistead connect` and the desktop host. Messages that name CLI flags
+// Front-end-neutral connector preflight shared by `pikibun connect` and the desktop host. Messages that name CLI flags
 // stay in their front end; everything here reads the same in a terminal and in an app.
 
 /** Private connector state shared by every front end, so a machine paired by one is adopted by the other. */
-export const defaultStateDir = (): string => join(homedir(), ".local", "share", "pistead", "connector");
+export const defaultStateDir = (): string => join(homedir(), ".local", "share", "pikibun", "connector");
 
 /**
  * Node.js and operating-system rules for the chosen isolation. Linux (and WSL2) runs the bubblewrap sandbox; macOS and
@@ -44,7 +44,7 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
     const build = Number(found.split(".")[0]);
     const sdk = mxcEntry(runtime);
     const result: Prerequisite[] = [{ name: "Git for Windows (git on PATH)", ok: gitForWindowsRoot() !== undefined },
-      { name: `busybox-w32, the sandbox's shell (${SANDBOX_SHELL_HINT}; or set PISTEAD_SANDBOX_SHELL)`, ok: sandboxShellPath() !== undefined },
+      { name: `busybox-w32, the sandbox's shell (${SANDBOX_SHELL_HINT}; or set PIKIBUN_SANDBOX_SHELL)`, ok: sandboxShellPath() !== undefined },
       { name: `Windows 11 24H2 or later (build 26100+, found ${found})`, ok: build >= 26100 },
       { name: `Microsoft MXC SDK ${MXC_SDK_VERSION} in ${runtime} (install: ${mxcInstallHint(runtime)})`, ok: sdk !== undefined }];
     // The update level decides whether sessions can work, and its number differs between releases (25H2 is 26200.x,
@@ -138,7 +138,7 @@ Agent work for sessions on this host runs directly as "${userInfo().username}" o
     runs here, can cause approved commands to run on this machine.
   - A session owner who turns on Auto-approve in the chat box lets their agent run
     commands and commits here immediately, with no per-command approval.
-Pistead shows this host as "Unsandboxed" to everyone who can see it.
+Pikibun shows this host as "Unsandboxed" to everyone who can see it.
 
 `;
 }

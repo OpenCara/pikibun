@@ -27,7 +27,7 @@ function mapError(error: unknown): unknown {
 const noop = (): void => {};
 
 /** A migration's first line asks for SQLite's table-rebuild procedure, with foreign keys off while it runs. */
-const REBUILDS_REFERENCED_TABLE = /^-- pistead: foreign-keys-off\r?\n/;
+const REBUILDS_REFERENCED_TABLE = /^-- pikibun: foreign-keys-off\r?\n/;
 
 export class SqliteDatabase implements Database {
   readonly provider = 'sqlite' as const;

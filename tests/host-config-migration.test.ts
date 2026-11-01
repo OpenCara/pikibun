@@ -12,7 +12,7 @@ function migrate(sqlite: DatabaseSync, files: string[]) {
   applySqliteMigrations(sqlite, directory, files);
 }
 
-test('hosts started with --git-credentials or --repo-cache keep them once configured in Pistead; others get no row', () => {
+test('hosts started with --git-credentials or --repo-cache keep them once configured in Pikibun; others get no row', () => {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
   assert.ok(migrationFiles.includes(hostConfigMigration));

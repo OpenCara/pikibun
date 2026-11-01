@@ -1,5 +1,5 @@
 {
-  "name": "@pistead/mobile",
+  "name": "@pikibun/mobile",
   "version": "0.1.0",
   "private": true,
   "main": "expo-router/entry",
@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
-    "@pistead/client": "workspace:*",
+    "@pikibun/client": "workspace:*",
     "@ronradtke/react-native-markdown-display": "^9.0.3",
     "expo": "~58.0.11",
     "expo-application": "~58.1.1",

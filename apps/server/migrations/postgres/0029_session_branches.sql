@@ -2,7 +2,7 @@
 
 -- The branches a session that runs directly on a host has checked out in its clones of the workspace's github.com
 -- repositories, as its host reports them (session-branches.ts). Such a session pushes and opens pull requests with the
--- host's own Git and credentials rather than through Pistead, so the control plane finds the pull request of each
+-- host's own Git and credentials rather than through Pikibun, so the control plane finds the pull request of each
 -- branch on GitHub with the session owner's account, and reads its state, as for pull requests a push recorded.
 -- Display state only.
 CREATE TABLE session_branches (

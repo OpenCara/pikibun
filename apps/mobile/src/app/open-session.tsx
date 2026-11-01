@@ -1,4 +1,4 @@
-import { segment } from "@pistead/client";
+import { segment } from "@pikibun/client";
 import { useState } from "react";
 import { ScrollView, StyleSheet, Text, TextInput } from "react-native";
 import type { SessionRecord } from "../../../../packages/shared/src/types";

@@ -8,7 +8,7 @@ vendors' current docs before building.
 
 Can sessions read, and with approval change, a team's documents outside Git: cloud drives (Google Drive, OneDrive /
 SharePoint, Dropbox, Box, Baidu Netdisk, Alibaba Cloud Drive), note apps (Obsidian, Notion), and online office suites
-(Tencent Docs, Feishu/Lark, Google Docs)? And how would that fit Pistead's rules?
+(Tencent Docs, Feishu/Lark, Google Docs)? And how would that fit Pikibun's rules?
 
 ## The rules any integration has to keep
 
@@ -60,10 +60,10 @@ Writes become approval kinds (`docs.write {source, path, baseRevision, content}`
 
 Copy the Git model the agent already knows:
 
-- `docs_pull {source, path?}` (or `pistead-docs pull` in the sandbox, going through the proxy at
+- `docs_pull {source, path?}` (or `pikibun-docs pull` in the sandbox, going through the proxy at
   `http://127.0.0.1:41080/docs/<source>/…`, the way `/git/…` works) downloads a bound source's files into the
   worktree. Google Docs and Notion pages are converted to Markdown; Sheets to CSV/XLSX. Each file's provider
-  revision is recorded in a manifest (`.pistead-docs.json`).
+  revision is recorded in a manifest (`.pikibun-docs.json`).
 - The agent works on them with ordinary tools.
 - `docs_push {directory}` (approval) uploads the changed files. It is **compare-and-swap** on the recorded revision,
   like fast-forward-only pushes: a file someone changed meanwhile is refused ("pull and merge first"). Candidate
@@ -116,7 +116,7 @@ write admissions; others become approval cards with their exact arguments.
      them.
    - Let a workspace with a bound source but no repository start sessions.
    - OAuth apps are configured **by the server operator**, as the GitHub OAuth app is (`GOOGLE_CLIENT_ID`, …).
-     Pistead is self-hosted, so each operator registers their own apps. Providers without OAuth configured offer
+     Pikibun is self-hosted, so each operator registers their own apps. Providers without OAuth configured offer
      token entry only, where the provider supports tokens.
 2. **First adapters, by value per effort:**
    - **Notion**: an internal integration token works like a personal access token (no OAuth app needed), and Notion

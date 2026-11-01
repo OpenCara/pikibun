@@ -55,17 +55,17 @@ test("a fetch event stream delivers each event, then reports the end of the stre
   const bytes = new TextEncoder().encode('event: view\ndata: {"t":"é"}\n\n');
   const split = bytes.indexOf(0xc3) + 1;
   const { fetch, requests } = streamingFetch([bytes.slice(0, split), bytes.slice(split)]);
-  const stream = openFetchEventStream({ fetch, url: "https://pistead.example/api/sessions/s1/events", headers: { Authorization: "Bearer token" } });
+  const stream = openFetchEventStream({ fetch, url: "https://pikibun.example/api/sessions/s1/events", headers: { Authorization: "Bearer token" } });
   const { received, ended } = record(stream);
   await ended;
   assert.deepEqual(received, ['view {"t":"é"}', "error"]);
-  assert.equal(requests[0]!.url, "https://pistead.example/api/sessions/s1/events");
+  assert.equal(requests[0]!.url, "https://pikibun.example/api/sessions/s1/events");
   assert.deepEqual(requests[0]!.init.headers, { Accept: "text/event-stream", Authorization: "Bearer token" });
 });
 
 test("a refused or failed stream reports an error", async () => {
   for (const fetch of [streamingFetch([], { status: 401 }).fetch, async () => { throw new TypeError("offline"); }]) {
-    const { received, ended } = record(openFetchEventStream({ fetch, url: "https://pistead.example/events" }));
+    const { received, ended } = record(openFetchEventStream({ fetch, url: "https://pikibun.example/events" }));
     await ended;
     assert.deepEqual(received, ["error"]);
   }
@@ -75,7 +75,7 @@ test("a closed stream stops reading and reports nothing more", async () => {
   const gate = Promise.withResolvers<void>();
   const cancelled = Promise.withResolvers<void>();
   const { fetch } = streamingFetch([new TextEncoder().encode("event: view\ndata: 1\n\n")], { gate: gate.promise, open: true, cancelled: cancelled.resolve });
-  const stream = openFetchEventStream({ fetch, url: "https://pistead.example/events" });
+  const stream = openFetchEventStream({ fetch, url: "https://pikibun.example/events" });
   const { received } = record(stream);
   stream.close();
   gate.resolve();

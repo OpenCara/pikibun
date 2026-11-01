@@ -13,11 +13,11 @@ export interface RequestOptions {
   headers?: Record<string, string>;
 }
 
-/** One JSON request to the Pistead API; `path` starts with /api/. Rejects with ApiError on an error answer. */
+/** One JSON request to the Pikibun API; `path` starts with /api/. Rejects with ApiError on an error answer. */
 export type Api = <T>(path: string, options?: RequestOptions) => Promise<T>;
 
 export interface ApiOptions {
-  /** The server origin, e.g. https://pistead.com; empty for a browser page served by that server. */
+  /** The server origin, e.g. https://pikibun.com; empty for a browser page served by that server. */
   baseUrl?: string;
   /**
    * How requests authenticate. "cookie": the browser's session cookie, with a fresh CSRF token for every change.
@@ -68,7 +68,7 @@ function plainDetail(raw: string): string {
   return text.length > DETAIL_LIMIT ? `${text.slice(0, DETAIL_LIMIT - 1)}…` : text;
 }
 
-/** The message in a JSON error answer that isn't Pistead's own shape, such as a hosting proxy's `{message}`. */
+/** The message in a JSON error answer that isn't Pikibun's own shape, such as a hosting proxy's `{message}`. */
 function foreignJsonDetail(body: unknown): string {
   if (typeof body === "string") return plainDetail(body);
   if (!body || typeof body !== "object" || Array.isArray(body)) return "";
@@ -82,7 +82,7 @@ function foreignJsonDetail(body: unknown): string {
 }
 
 /**
- * Describes an answer that didn't come from Pistead's API (its errors always carry a message): the HTTP status, what the
+ * Describes an answer that didn't come from Pikibun's API (its errors always carry a message): the HTTP status, what the
  * answering proxy said, and what that likely means, so the user sees exactly what failed instead of a bare status code.
  */
 function upstreamError(response: Response, detail: string): ApiError {
@@ -91,20 +91,20 @@ function upstreamError(response: Response, detail: string): ApiError {
   const said = detail && detail.toLowerCase() !== name.toLowerCase() && detail !== String(status) ? `: "${detail}"` : "";
   const answer = `HTTP ${status}${name ? ` ${name}` : ""}${said}`;
   if (status === 429) {
-    return new ApiError(429, "RATE_LIMITED", `Pistead is over its request limit right now (${answer}). Try again later.`);
+    return new ApiError(429, "RATE_LIMITED", `Pikibun is over its request limit right now (${answer}). Try again later.`);
   }
   if (status === 408 || status === 504 || status === 522 || status === 524) {
-    return new ApiError(status, "UPSTREAM_TIMEOUT", `The proxy in front of Pistead stopped waiting for the server (${answer}). `
+    return new ApiError(status, "UPSTREAM_TIMEOUT", `The proxy in front of Pikibun stopped waiting for the server (${answer}). `
       + "The request took too long, but the server may have accepted it and still be working on it: check the result before retrying.");
   }
   if (status === 502 || status === 503 || status === 520 || status === 521 || status === 523) {
-    return new ApiError(status, "BACKEND_UNAVAILABLE", `The proxy in front of Pistead got no valid answer from the server (${answer}). `
+    return new ApiError(status, "BACKEND_UNAVAILABLE", `The proxy in front of Pikibun got no valid answer from the server (${answer}). `
       + "The server may have restarted, crashed or taken too long while handling this request; if it changes something, check the result before retrying.");
   }
   if (response.ok) {
-    return new ApiError(status, "BACKEND_UNAVAILABLE", `The Pistead API answered with something other than JSON (${answer}). Try again later.`);
+    return new ApiError(status, "BACKEND_UNAVAILABLE", `The Pikibun API answered with something other than JSON (${answer}). Try again later.`);
   }
-  return new ApiError(status, "REQUEST_FAILED", `The request failed before reaching Pistead's API (${answer}).`);
+  return new ApiError(status, "REQUEST_FAILED", `The request failed before reaching Pikibun's API (${answer}).`);
 }
 
 async function decode(response: Response): Promise<unknown> {
@@ -120,7 +120,7 @@ async function decode(response: Response): Promise<unknown> {
     } catch (error) {
       // An abort stays an abort; a body cut off or garbled on the way is described, not thrown as a bare SyntaxError.
       if (error instanceof Error && error.name === "AbortError") throw error;
-      throw new ApiError(response.status, "BACKEND_UNAVAILABLE", `The Pistead API's answer arrived incomplete or garbled (HTTP ${response.status}). `
+      throw new ApiError(response.status, "BACKEND_UNAVAILABLE", `The Pikibun API's answer arrived incomplete or garbled (HTTP ${response.status}). `
         + "The connection may have dropped; if the request changes something, check the result before retrying.");
     }
   }
@@ -133,7 +133,7 @@ async function decode(response: Response): Promise<unknown> {
     : error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string" ? (error as { message: string }).message : undefined;
   const code = error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code
     : typeof shaped.code === "string" ? shaped.code : undefined;
-  // Pistead's own errors always name the problem; anything else came from in front of it, so say what it said.
+  // Pikibun's own errors always name the problem; anything else came from in front of it, so say what it said.
   if (!message) throw upstreamError(response, foreignJsonDetail(body));
   throw new ApiError(response.status, code ?? "REQUEST_FAILED", message);
 }
@@ -169,7 +169,7 @@ export function createApi(options: ApiOptions): Api {
 
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
-  if (error instanceof TypeError) return "Could not reach Pistead. Check your connection and try again.";
+  if (error instanceof TypeError) return "Could not reach Pikibun. Check your connection and try again.";
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
 

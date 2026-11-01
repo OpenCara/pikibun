@@ -330,9 +330,9 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
       requireOwnHost(target, row.kind);
       const minted = { kind: row.kind, identityId: row.id, authorization: ownerGitAuthorization(target.owner), expiresAt: expiresAt(undefined, 3600) };
       if (target.owner.provider !== 'github' || target.relay) return minted;
-      // The GitHub sign-in token is reset after the push, which needs Pistead's OAuth app.
+      // The GitHub sign-in token is reset after the push, which needs Pikibun's OAuth app.
       if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
-        fail(409, 'owner_token_reset_unavailable', 'Pushes with the session owner\'s GitHub account need Pistead\'s GitHub sign-in app to reset the token afterwards, and it is not configured.');
+        fail(409, 'owner_token_reset_unavailable', 'Pushes with the session owner\'s GitHub account need Pikibun\'s GitHub sign-in app to reset the token afterwards, and it is not configured.');
       }
       const { userId, token, ciphertext } = target.owner.github;
       return { ...minted, revocation: { kind: 'github-owner', userId, token, ciphertext } };
@@ -347,12 +347,12 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
         FROM connectors c LEFT JOIN connector_configs cfg ON cfg.connector_id = c.id WHERE c.id = ? AND c.owner_id = ?`)
         .bind(target.connectorId, target.ownerId).first();
       const capabilities = JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities;
-      // A connector configured in Pistead offers them once its owner turned them on there; an older one, once started with
+      // A connector configured in Pikibun offers them once its owner turned them on there; an older one, once started with
       // --git-credentials.
       const offered = capabilities.hostConfig ? Number(host?.git_credentials ?? 0) === 1 : capabilities.gitCredentials === true;
       if (!offered) {
         fail(409, 'host_git_credentials_disabled', `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use the host's Git credentials, which this host doesn't offer. ` +
-          'Its owner can turn them on in Pistead (Settings → Hosts → the host → Configuration), with a current connector (npx pistead@latest connect).');
+          'Its owner can turn them on in Pikibun (Settings → Hosts → the host → Configuration), with a current connector (npx pikibun@latest connect).');
       }
       return { kind: row.kind, identityId: row.id, authorization: null, expiresAt: expiresAt(undefined, 3600) };
     }

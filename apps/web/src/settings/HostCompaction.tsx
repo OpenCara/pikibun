@@ -125,7 +125,7 @@ export function HostCompactionSection({ connector, refresh }: { connector: Conne
         {others.map(modelRow)}
       </Collapsible>}
       {connector.capabilities.hostConfig && !connector.capabilities.compactionConfig && <Row title="Update the host's connector"
-        hint="This host's connector predates compaction settings in Pistead and follows its Pi settings alone until it is updated (npx pistead@latest connect). What you save here applies then." />}
+        hint="This host's connector predates compaction settings in Pikibun and follows its Pi settings alone until it is updated (npx pikibun@latest connect). What you save here applies then." />}
       {(changed || action.error || action.notice) && <CardBody>
         <div className="stack">
           <Feedback {...action} />

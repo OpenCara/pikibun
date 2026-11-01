@@ -1,6 +1,8 @@
-# Pistead
+<p align="center"><img src="docs/images/pikibun.webp" alt="Pikibun, a round cream and lavender creature with maple-seed ears, floating on a night sky" width="240"></p>
 
-Run [Pi](https://github.com/earendil-works/pi) coding agents on your own machines and work on them together with your team. Pistead is a self-hosted control plane: a web app (with iPhone, iPad and Mac apps), a Node.js server, and the `pistead` connector that each host runs to offer its local Pi to a workspace.
+# Pikibun
+
+Run [Pi](https://github.com/earendil-works/pi) coding agents on your own machines and work on them together with your team. Pikibun is a self-hosted control plane: a web app (with iPhone, iPad and Mac apps), a Node.js server, and the `pikibun` connector that each host runs to offer its local Pi to a workspace.
 
 Two things set it apart:
 
@@ -22,7 +24,7 @@ And around them:
 
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
-- [Using Pistead](#using-pistead)
+- [Using Pikibun](#using-pikibun)
   - [Signing in and your profile](#signing-in-and-your-profile)
   - [Workspaces and members](#workspaces-and-members)
   - [Repositories and Git accounts](#repositories-and-git-accounts)
@@ -38,7 +40,7 @@ And around them:
   - [Packing archived sessions](#packing-archived-sessions)
   - [Moving a session to another host](#moving-a-session-to-another-host)
   - [iPhone, iPad and Mac apps](#iphone-ipad-and-mac-apps)
-- [Running Pistead on your own computer](#running-pistead-on-your-own-computer)
+- [Running Pikibun on your own computer](#running-pikibun-on-your-own-computer)
 - [Running the server](#running-the-server)
 - [Development](#development)
 - [Layout](#layout)
@@ -46,7 +48,7 @@ And around them:
 ## How it works
 
 ```text
- web app, iPhone/iPad and Mac apps ──HTTPS──▶ Pistead server ◀──outbound WebSocket── pistead connector + Pi
+ web app, iPhone/iPad and Mac apps ──HTTPS──▶ Pikibun server ◀──outbound WebSocket── pikibun connector + Pi
                                               (control plane)                        (a member's host)
 ```
 
@@ -58,7 +60,7 @@ And around them:
 | Concept | What it is |
 |---|---|
 | Workspace | A team's shared home: members, repositories, push access and sessions. Each member is its owner, an admin, a collaborator, a member or a viewer. |
-| Host | A machine running the `pistead` connector (or the Mac app) next to Pi. It belongs to the member who paired it, not to a workspace: they can use it in every workspace they belong to, and it stays private to them until they share it with one. |
+| Host | A machine running the `pikibun` connector (or the Mac app) next to Pi. It belongs to the member who paired it, not to a workspace: they can use it in every workspace they belong to, and it stays private to them until they share it with one. |
 | Model | A Pi model a host offers. Its credentials never leave the host. |
 | Agent | The Pi agent that works in a session, on the model it started from, with every tool its host supports. Each session has its own. |
 | Session | One agent conversation on one host, in its own worktree where the agent clones the workspace's repositories. It always runs as its owner. |
@@ -68,7 +70,7 @@ And around them:
 
 ## Quick start
 
-Just for yourself, on one computer? `npx pistead@latest serve` runs all of it there, with no server to deploy: see [Running Pistead on your own computer](#running-pistead-on-your-own-computer). For a team:
+Just for yourself, on one computer? `npx pikibun@latest serve` runs all of it there, with no server to deploy: see [Running Pikibun on your own computer](#running-pikibun-on-your-own-computer). For a team:
 
 1. **Run the server** with Docker and create its first administrator with `--create-admin`: the image signs people in with a [username and password](#username-and-password), and with GitHub once you add a GitHub OAuth app, and takes new accounts only through invite links. See [Running the server](#running-the-server).
 2. **Sign in** with **Continue with GitHub** or your username and password, then choose **New workspace** and name it.
@@ -76,7 +78,7 @@ Just for yourself, on one computer? `npx pistead@latest serve` runs all of it th
 4. **Pair a host**: on a Linux or WSL2 machine with Node.js 24, Pi configured with at least one model, and `bubblewrap`, Python 3, Git and `flock` installed, open **Settings → Hosts → Pair a host**, name the host and **Create pairing code** (a host isn't paired into a workspace: it is yours, in each of your workspaces). Run the command it shows on the host and type the code at the hidden prompt:
 
    ```sh
-   npx pistead@latest connect --server https://pistead.example.com --pairing-id PAIRING_ID
+   npx pikibun@latest connect --server https://pikibun.example.com --pairing-id PAIRING_ID
    ```
 
 5. **Start a session**: select the workspace in the sidebar, choose your host in **Host**, describe the task and press Enter.
@@ -84,11 +86,11 @@ Just for yourself, on one computer? `npx pistead@latest serve` runs all of it th
 
 To bring in teammates, share the workspace's invite link (**Settings → Workspaces → Members → Invite link**) and accept them under **Pending members** once they've signed in from it; where the server takes new accounts only through invitations (`SIGNUP=invite`, as the Docker image does; see [Who can create an account](#who-can-create-an-account)), that is how they get one. Or they sign in once and send you their **User ID** from **Settings → Profile**, and you add them under **Settings → Workspaces → Members → Add member**. To let them run sessions on your machine, share your host with the workspace under **Settings → Hosts →** your host **→ Sharing**. Each workspace page shows a **Setup** checklist (**Add a source**, **Pair a host**, **Start a session**) until all three are done.
 
-## Using Pistead
+## Using Pikibun
 
 ### Signing in and your profile
 
-Pistead signs people in with GitHub, and asks GitHub for the `read:user user:email repo workflow` scopes. That token is kept encrypted on the server and used to read your repositories, open your pull requests and act on GitHub for your sessions; it reaches a host only when a push uses your own account. A browser sign-in (the Mac app's too) lasts 7 days, an iPhone or iPad app sign-in 30 days. Where the operator allows it, people can also sign in with a [username and password](#username-and-password).
+Pikibun signs people in with GitHub, and asks GitHub for the `read:user user:email repo workflow` scopes. That token is kept encrypted on the server and used to read your repositories, open your pull requests and act on GitHub for your sessions; it reaches a host only when a push uses your own account. A browser sign-in (the Mac app's too) lasts 7 days, an iPhone or iPad app sign-in 30 days. Where the operator allows it, people can also sign in with a [username and password](#username-and-password).
 
 #### Who can create an account
 
@@ -107,7 +109,7 @@ Where the operator sets `PASSWORD_AUTH=true`, as the [Docker image](#docker) doe
 - The username (3 to 39 letters, digits, `-` and `_`, not case-sensitive) makes your user ID, `password:<username>`, so teammates can add you to a workspace by it before you ever sign in. It can't be changed later.
 - Passwords are at least 12 characters, other than the username. The server keeps only a salted scrypt hash. After five wrong passwords in a row the account refuses sign-ins for 30 seconds, doubling with each further miss up to 15 minutes; a correct sign-in resets the count.
 - **Settings → Profile → Password** changes it, which signs out every other browser signed in as you. There is no reset by email: someone who forgets theirs asks the server's operator for a new one (`--reset-password`, see [Administration](#administration)).
-- A password account holds no GitHub token, so it can't bind or clone **github.com** repositories (not even ones a teammate bound: a session reads repositories with its owner's own access), push with its own GitHub account, or use the GitHub tools. It works with every other Git provider, GitHub Enterprise Server included, through personal access tokens under **Git accounts**. Its Git author email starts as `<username>@users.pistead.invalid`; set your own under **Identity**.
+- A password account holds no GitHub token, so it can't bind or clone **github.com** repositories (not even ones a teammate bound: a session reads repositories with its owner's own access), push with its own GitHub account, or use the GitHub tools. It works with every other Git provider, GitHub Enterprise Server included, through personal access tokens under **Git accounts**. Its Git author email starts as `<username>@users.pikibun.invalid`; set your own under **Identity**.
 - The iPhone and iPad app still signs in with GitHub only; the Mac app shows the server's sign-in page, password included.
 - Turning `PASSWORD_AUTH` off signs every password account out at once and refuses their sign-ins; turning it on again lets them back in.
 
@@ -165,7 +167,7 @@ Everything that acts as the session's owner, or takes their work out of the sess
 
 Owners and admins can share one link to the workspace with anyone: **Members → Invite link → Create link**, then copy it. Whoever opens it signs in (if they haven't yet) and chooses **Ask to join**, which makes them a **pending member**. A pending member is not a member: they can't see or do anything in the workspace, and it doesn't appear in their sidebar. They show under **Members → Pending members**, where an owner or admin picks a role and chooses **Accept**, or **Decline**. Admins accept people with the roles below their own; only the owner can accept someone as an admin.
 
-- The link opens only for people signed in to this Pistead server, and shows them the workspace's name and nothing else. It never admits anyone by itself, so accept only people you recognize.
+- The link opens only for people signed in to this Pikibun server, and shows them the workspace's name and nothing else. It never admits anyone by itself, so accept only people you recognize.
 - The link's token is in the URL's fragment, so opening it sends the token to neither the server's access logs nor a proxy's; the server keeps it only hashed and encrypted.
 - **Replace link** issues a new link and stops the old one at once; **Turn off link** stops it. People already waiting stay pending until someone decides.
 - A pending member can withdraw their request from the link's page, or under **Settings → Profile → Your requests to join**, which keeps working after the link is turned off or replaced. Adding someone with **Add member** also settles their pending request.
@@ -177,7 +179,7 @@ Workspace admins manage only their workspace; the server's administrators are co
 
 Sessions work on their workspace's **sources**: the Git repositories bound to it, which agents clone, and [documents](#document-sources) (Notion, Google Drive, Dropbox, OneDrive and SharePoint, Feishu/Lark, Tencent Docs), which agents read. Every session in the workspace gets every source, and reads each with its owner's own accounts. Until a workspace has a source, nobody can share a host with it or start a session in it.
 
-Connect the accounts that can read your repositories under **Settings → Profile → Connected accounts** (**Connect** on the provider's row). Pistead verifies each token with its provider and keeps it encrypted on the server; tokens never go to other people's hosts.
+Connect the accounts that can read your repositories under **Settings → Profile → Connected accounts** (**Connect** on the provider's row). Pikibun verifies each token with its provider and keeps it encrypted on the server; tokens never go to other people's hosts.
 
 | Provider | How to connect | Token scopes |
 |---|---|---|
@@ -189,14 +191,14 @@ Connect the accounts that can read your repositories under **Settings → Profil
 | Gitea / Forgejo | Personal access token and host | `read:repository` and `read:user`; opening pull requests or pushing with your account needs `write:repository` |
 | Git server (HTTPS) | Host, user name, and password or access token | Read access to the repositories; pushing with your account needs write access |
 
-A **Git server (HTTPS)** is any server that serves Git's smart HTTP over HTTPS without a forge API: `git http-backend`, cgit, Gerrit, or a forge whose API you don't use. Pistead has nothing to verify the account against when you connect it, so it checks the password or token when you add a repository, and on every read after that. Such a server lists no repositories: in **Add repository**, enter the repository's `https://` clone URL (or its path on the server) and **Look up**. Agents clone, fetch and push its repositories like any other, and Pistead checks push access with Git's own `git-receive-pack` advertisement; there are no pull requests, so `git_push` with `pull_request` is refused before anything is pushed. Push access uses the session owner's account or the host's Git credentials. Only HTTPS works: SSH remotes reach only github.com, gitlab.com and bitbucket.org, which are rewritten to HTTPS. A host's connector must be new enough to accept these repositories; older ones keep working with the workspace's other repositories and don't see these until they're updated.
+A **Git server (HTTPS)** is any server that serves Git's smart HTTP over HTTPS without a forge API: `git http-backend`, cgit, Gerrit, or a forge whose API you don't use. Pikibun has nothing to verify the account against when you connect it, so it checks the password or token when you add a repository, and on every read after that. Such a server lists no repositories: in **Add repository**, enter the repository's `https://` clone URL (or its path on the server) and **Look up**. Agents clone, fetch and push its repositories like any other, and Pikibun checks push access with Git's own `git-receive-pack` advertisement; there are no pull requests, so `git_push` with `pull_request` is refused before anything is pushed. Push access uses the session owner's account or the host's Git credentials. Only HTTPS works: SSH remotes reach only github.com, gitlab.com and bitbucket.org, which are rewritten to HTTPS. A host's connector must be new enough to accept these repositories; older ones keep working with the workspace's other repositories and don't see these until they're updated.
 
-Owners and admins bind a repository under **Settings → Workspaces →** the workspace **→ Sources → Add repository**: choose an **Account**, a repository the account can access (the first 3,000 are listed; for a Git server, its clone URL) and, optionally, a **Branch, tag or commit** (the default branch otherwise), then **Bind repository**. To change a ref, remove the repository and bind it again. Each repository row also has **Allow agent pushes to the default branch** (see [Commits, pushes and pull requests](#commits-pushes-and-pull-requests)). and **Git LFS**, off by default: sessions then check out the repository's LFS files as pointer files, as plain Git does. Turned on, sandboxed sessions download LFS files' content when they clone the repository, through the host's egress proxy and with the session owner's access, on hosts that have `git-lfs` installed (Pistead uses the host's own). The host downloads them from the provider itself where Pistead gives it a credential for the repository (see [Network access](#network-access)), else Pistead relays them; either way the provider's download links and the tokens that come with them never reach the sandbox. Sessions never upload LFS objects, so commits that add or change LFS-tracked files shouldn't be pushed from a session. Unsandboxed hosts use their own Git and `git-lfs` configuration, whatever the setting.
+Owners and admins bind a repository under **Settings → Workspaces →** the workspace **→ Sources → Add repository**: choose an **Account**, a repository the account can access (the first 3,000 are listed; for a Git server, its clone URL) and, optionally, a **Branch, tag or commit** (the default branch otherwise), then **Bind repository**. To change a ref, remove the repository and bind it again. Each repository row also has **Allow agent pushes to the default branch** (see [Commits, pushes and pull requests](#commits-pushes-and-pull-requests)). and **Git LFS**, off by default: sessions then check out the repository's LFS files as pointer files, as plain Git does. Turned on, sandboxed sessions download LFS files' content when they clone the repository, through the host's egress proxy and with the session owner's access, on hosts that have `git-lfs` installed (Pikibun uses the host's own). The host downloads them from the provider itself where Pikibun gives it a credential for the repository (see [Network access](#network-access)), else Pikibun relays them; either way the provider's download links and the tokens that come with them never reach the sandbox. Sessions never upload LFS objects, so commits that add or change LFS-tracked files shouldn't be pushed from a session. Unsandboxed hosts use their own Git and `git-lfs` configuration, whatever the setting.
 
 Sessions **clone on demand**: every new session starts with an empty worktree and pins nothing.
 
 - On a sandboxed host, the agent clones the repositories it needs with plain Git (`git clone https://github.com/acme/app`), and fetches, switches and creates branches as usual. Git reaches the workspace's repositories through the session's [egress proxy](#network-access), which reads them with the **session owner's own** account; the account never reaches the host.
-- The agent commits with Git and pushes its work to the session's own branch, named for its work (`pistead/<title-slug>-<short id>`, for example `pistead/add-dark-mode-1a2b3c4d5e6f`), with plain `git push`, without approval. Other branches, and pull requests, go through `git_push` (see [Commits, pushes and pull requests](#commits-pushes-and-pull-requests)).
+- The agent commits with Git and pushes its work to the session's own branch, named for its work (`pikibun/<title-slug>-<short id>`, for example `pikibun/add-dark-mode-1a2b3c4d5e6f`), with plain `git push`, without approval. Other branches, and pull requests, go through `git_push` (see [Commits, pushes and pull requests](#commits-pushes-and-pull-requests)).
 - On a host its owner runs [without the sandbox](#running-without-the-sandbox), the agent clones, commits and pushes with the host's own Git, network and credentials (its Git credential helpers, such as `gh auth setup-git`), each command with approval. Such a session can't be backed up once it has a clone in its worktree.
 - Cloning needs shell commands: an agent without `bash` (a session started from a model has it), or another member's session on a host without [resource limits](#the-sandbox) whose owner hasn't [granted them host commands](#host-admins-and-host-command-grants), works in an empty worktree, and the session says so.
 - Removing a repository from the workspace stops new reads and pushes of it at once, in running sessions too.
@@ -208,7 +210,7 @@ Sessions started before this change pinned their repositories to exact commits. 
 
 A workspace's sources can also be documents: Notion pages and databases, and folders and files in Google Drive, Dropbox, OneDrive and SharePoint, Feishu/Lark and Tencent Docs. Agents read them, and what is under them, as context (specs, notes, runbooks, task lists). They don't write to them.
 
-Each member connects their own accounts under **Settings → Profile → Connected accounts**, by **signing in** to the provider or, for some, by pasting a secret. Pistead keeps what it gets encrypted on the server, renews sign-ins there, and never sends any of it to a host. A connection reads only what its account can, and sessions read only what lies under the workspace's sources:
+Each member connects their own accounts under **Settings → Profile → Connected accounts**, by **signing in** to the provider or, for some, by pasting a secret. Pikibun keeps what it gets encrypted on the server, renews sign-ins there, and never sends any of it to a host. A connection reads only what its account can, and sessions read only what lies under the workspace's sources:
 
 | Provider | Sign in | Or paste | What a session reads |
 |---|---|---|---|
@@ -219,7 +221,7 @@ Each member connects their own accounts under **Settings → Profile → Connect
 | Feishu / Lark | — | A custom app's **App ID** and **App Secret** (Feishu or Lark), with read access to Drive, Docs and Wiki, added to what it may read | Docx documents as text, folders as their files, wiki pages as their text and the pages under them |
 | Tencent Docs | Where the server has a Tencent Docs app (see below) | — | Documents as text, through an export; folders as their files. Sheets and other kinds are listed, not read |
 
-- **Add a source**: owners and admins choose **Settings → Workspaces →** the workspace **→ Sources → Documents → Add document source**, pick the provider and paste the item's link. Pistead checks it with their own connection. A workspace has at most 20 document sources.
+- **Add a source**: owners and admins choose **Settings → Workspaces →** the workspace **→ Sources → Documents → Add document source**, pick the provider and paste the item's link. Pikibun checks it with their own connection. A workspace has at most 20 document sources.
 - **In a session**, the agent reads them with `source_read`, with the **session owner's** connection of that kind, during a message sent with write access. Items outside the bound one are refused, even where the owner's connection can read them, and long content is cut at 96 KiB. A session owner without a connection of that kind gets a refusal that says so.
 - Removing a source stops reads of it at once, in running sessions too. Every read is recorded in the audit log (`source.read`).
 
@@ -233,21 +235,21 @@ Documents are written by other people: the agent is told to treat them as inform
 | Notion | `notion` | `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET` | A Notion public integration with **Read content** |
 | Dropbox | `dropbox` | `DROPBOX_CLIENT_ID`, `DROPBOX_CLIENT_SECRET` (the app key and secret) | A scoped app with `account_info.read`, `files.metadata.read`, `files.content.read` and `sharing.read` |
 | OneDrive and SharePoint | `onedrive` | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, optionally `MICROSOFT_TENANT` (`common` by default; your tenant's id or domain to admit only its accounts) | A Microsoft Entra app registration (web) with delegated `User.Read`, `Files.Read.All`, `Sites.Read.All` and `offline_access` |
-| Tencent Docs | `tencent-docs` | `TENCENT_DOCS_CLIENT_ID`, `TENCENT_DOCS_CLIENT_SECRET` | An application on the Tencent Docs open platform. **Preview**: Pistead's Tencent Docs support was written without access to its API or documentation; check it with a test account before members rely on it |
+| Tencent Docs | `tencent-docs` | `TENCENT_DOCS_CLIENT_ID`, `TENCENT_DOCS_CLIENT_SECRET` | An application on the Tencent Docs open platform. **Preview**: Pikibun's Tencent Docs support was written without access to its API or documentation; check it with a test account before members rely on it |
 
 #### Workspace connections
 
 By default every session reads the workspace's sources with its **owner's own** accounts, so nobody's agent reads what they couldn't. Where a workspace would rather read some sources with a service account, its owners and admins connect one under **Settings → Workspaces →** the workspace **→ Connections** (**Add connection**): a GitHub Enterprise, GitLab, Bitbucket, Azure DevOps or Gitea/Forgejo bot's token, a Git server's deploy user, a Notion integration, a Google service account or a Feishu/Lark app. Connect accounts made for that, never your personal one.
 
-- A source uses it only where an owner or admin sets **Reads with** on its row to **Workspace connection** (or picks the connection when adding it). Pistead reads the source with the connection first and refuses one that can't. There is no fallback either way: a source set to the workspace fails without its connection, and one set to members fails for an owner without an account.
+- A source uses it only where an owner or admin sets **Reads with** on its row to **Workspace connection** (or picks the connection when adding it). Pikibun reads the source with the connection first and refuses one that can't. There is no fallback either way: a source set to the workspace fails without its connection, and one set to members fails for an owner without an account.
 - Connections only read: cloning and fetching (LFS too) and `source_read`. Pushes and pull requests still use the session owner's account or the workspace's push access, and the owner's write access is checked with their own account.
-- The secret is encrypted on the server and never leaves it, not even to the session owner's own host: those reads are always relayed through Pistead. Members see which connections the workspace has and which account each is, never the secret.
+- The secret is encrypted on the server and never leaves it, not even to the session owner's own host: those reads are always relayed through Pikibun. Members see which connections the workspace has and which account each is, never the secret.
 - A connection that sources still read with can't be removed; switch them back first.
 - github.com repositories, Dropbox, OneDrive and Tencent Docs read with each member's own sign-in. See [the design](docs/design/workspace-connections.md).
 
 ### Hosts
 
-A host is a machine where you run the `pistead` connector next to [Pi](https://github.com/earendil-works/pi). Sessions on it use the models and credentials configured in Pi there (by default in `~/.pi/agent`); provider credentials, Pi history and personal extensions are never uploaded.
+A host is a machine where you run the `pikibun` connector next to [Pi](https://github.com/earendil-works/pi). Sessions on it use the models and credentials configured in Pi there (by default in `~/.pi/agent`); provider credentials, Pi history and personal extensions are never uploaded.
 
 **Requirements:** Linux or WSL2 with Node.js 24 or newer, Pi configured with the providers and models to offer, and `bubblewrap`, Python 3, Git and `flock` (util-linux) for the sandbox. On Windows, run the connector inside WSL2 for that sandbox. macOS and native Windows can also try their own [experimental sandboxes](#experimental-sandboxes-on-macos-and-windows), and macOS, native Windows or Linux without bubblewrap can run [without the sandbox](#running-without-the-sandbox).
 
@@ -257,24 +259,24 @@ A host is a machine where you run the `pistead` connector next to [Pi](https://g
 2. On the host, run the command shown under **Run this on your host**:
 
    ```sh
-   npx pistead@latest connect --server https://pistead.example.com --pairing-id PAIRING_ID
+   npx pikibun@latest connect --server https://pikibun.example.com --pairing-id PAIRING_ID
    ```
 
 3. Paste the code at the hidden prompt. It is never accepted as an argument, works once and expires after 10 minutes.
 
-Each person can hold at most five unexpired pairing codes and 20 active hosts. The connector saves its token in `~/.local/share/pistead/connector` (`--state-dir` chooses another directory), so later runs need no arguments:
+Each person can hold at most five unexpired pairing codes and 20 active hosts. The connector saves its token in `~/.local/share/pikibun/connector` (`--state-dir` chooses another directory), so later runs need no arguments:
 
 ```sh
-npx pistead@latest connect
+npx pikibun@latest connect
 ```
 
 Keep it running, for example in `tmux` or under your service manager: it reconnects by itself after network failures, without interrupting the sessions at work on the host, and sessions on the host work only while it runs. When it starts again, sessions that were at work when it stopped carry on without waiting for someone to open them. Restart it after changing Pi's configuration, and run it with `@latest` to update it; newer features need a newer connector, and the web app says when a host's is too old.
 
 To pair a machine again (after revoking its host, or to move it to another server), create a new code and add `--force` to its command. The saved token is replaced only once the new code is accepted; the old host stays in **Settings → Hosts**, offline, until you revoke it, and its sessions don't move. Use a separate `--state-dir` to run a second connection on the same machine.
 
-An offline host's page in **Settings → Hosts** has **Reconnect**, which shows the command to restart its saved connection on that machine (Pistead can't start it remotely), or **Pair again** once it's revoked. **Remove permanently** (owner only) takes a host off the list for good: it revokes its credentials, stops sharing it, and marks its models unavailable. Its sessions and their history stay, but can't run again, and nothing on the machine is deleted; pair it as a new host to use it again.
+An offline host's page in **Settings → Hosts** has **Reconnect**, which shows the command to restart its saved connection on that machine (Pikibun can't start it remotely), or **Pair again** once it's revoked. **Remove permanently** (owner only) takes a host off the list for good: it revokes its credentials, stops sharing it, and marks its models unavailable. Its sessions and their history stay, but can't run again, and nothing on the machine is deleted; pair it as a new host to use it again.
 
-> **Upgrading to connector 0.8.0:** it keeps its state in `~/.local/share/pistead/connector` instead of `~/.local/share/opencara/connector`, without moving anything. To keep a pairing made by an older connector, run `npx pistead@latest connect --state-dir ~/.local/share/opencara/connector`, or pair the machine again.
+> **Upgrading to connector 0.8.0:** it keeps its state in `~/.local/share/pikibun/connector` instead of `~/.local/share/opencara/connector`, without moving anything. To keep a pairing made by an older connector, run `npx pikibun@latest connect --state-dir ~/.local/share/opencara/connector`, or pair the machine again.
 
 #### Models
 
@@ -292,7 +294,7 @@ Sessions on a host also follow two more of its Pi settings:
 
 - **Compaction**: `compaction` (`enabled`, `reserveTokens`, `keepRecentTokens`) decides when a long conversation is summarized, and `compaction.modelOverrides` sets the token values per exact `provider/modelId`, so a session that switches between a small-window and a large-window model compacts in time for each. Pi's defaults apply where these are unset, with one exception: a reasoning model keeps a tenth of its context window, between 16K and 64K tokens, as `reserveTokens` instead of Pi's 16K. Pi summarizes at the conversation's reasoning level within 80% of `reserveTokens`, so at 16K a model thinking at a high level can spend the whole budget thinking, and once the context is past the threshold every message fails the same compaction. Set `reserveTokens` (overall or for the model) to use another value.
 
-  The host's owner and its admins can also set these token counts in Pistead, without touching the machine: under **Settings → Hosts →** the host **→ Compaction**, enter **Reserve** and **Keep recent** tokens for all models, or for single models under **Per model**. Each count set there replaces the one in the host's `settings.json`; an empty one keeps it. Sessions pick up a change within a minute, from their next message, without restarting the connector. This needs a connector from this release or later.
+  The host's owner and its admins can also set these token counts in Pikibun, without touching the machine: under **Settings → Hosts →** the host **→ Compaction**, enter **Reserve** and **Keep recent** tokens for all models, or for single models under **Per model**. Each count set there replaces the one in the host's `settings.json`; an empty one keeps it. Sessions pick up a change within a minute, from their next message, without restarting the connector. This needs a connector from this release or later.
 - **Provider attribution**: with Pi's `enableInstallTelemetry` set to `false` (or `PI_TELEMETRY=0`), sessions' model requests carry no attribution headers to pi, as Pi's own don't.
 
 The connector reads these when it starts; restart it after changing them.
@@ -350,7 +352,7 @@ Such a session runs like one on an [unsandboxed host](#running-without-the-sandb
 
 #### The sandbox
 
-With bubblewrap, every session runs in its own sandbox: no direct network (see [Network access](#network-access)), read-only system directories, and only the session's own worktree writable. Commands in it stop after the host's [command time limit](#host-configuration), 30 seconds unless its owner or an admin sets a longer one. Git there runs without hooks, stored credentials or SSH: an approved push gets a credential for that push alone (see [Commits, pushes and pull requests](#commits-pushes-and-pull-requests)), and GitHub actions go through Pistead.
+With bubblewrap, every session runs in its own sandbox: no direct network (see [Network access](#network-access)), read-only system directories, and only the session's own worktree writable. Commands in it stop after the host's [command time limit](#host-configuration), 30 seconds unless its owner or an admin sets a longer one. Git there runs without hooks, stored credentials or SSH: an approved push gets a credential for that push alone (see [Commits, pushes and pull requests](#commits-pushes-and-pull-requests)), and GitHub actions go through Pikibun.
 
 Shell commands (`bash`) also need resource limits. A connector started with `--resources PATH` (an operator-provisioned cgroup v2 configuration: CPU, memory, process and disk limits, described in [`apps/runner/src/resources.ts`](apps/runner/src/resources.ts)) runs them in every session. Without it, the host's owner can let commands run without limits in their own sessions, through a [permission request](#permission-requests). So can a member they [granted host commands](#host-admins-and-host-command-grants) there, in their own sessions, since that grant already lets them run any command on the host itself. Their commands still run in the sandbox, as the session's owner, but are decided like host commands: only by the host's owner or a member granted host commands, either with approve permission on the session. Under the session owner's **Auto-approve** they run without asking only with **Auto-approve host commands**, and once the grant ends, the next command is refused. In every other member's session on that host, `bash` is refused.
 
@@ -358,9 +360,9 @@ Shell commands (`bash`) also need resource limits. A connector started with `--r
 
 A sandbox's only way out is its session's **egress proxy**, which the connector runs on the host. Shell commands find it through `HTTPS_PROXY` (`http://127.0.0.1:41080` in the Linux sandbox; in the [experimental macOS and Windows sandboxes](#experimental-sandboxes-on-macos-and-windows), the session's own loopback port and credentials); file tools, commits and every other sandboxed step have no network at all.
 
-- **Git reads of the workspace's repositories always work.** Git in the sandbox sends `https://` remotes, and SSH remotes of github.com, gitlab.com and bitbucket.org, to the proxy, so `git clone https://github.com/acme/app` or `git fetch` work as usual. For each request the proxy asks Pistead, which checks the session and the **session owner's own access** to the repository; the sandbox never holds a credential. On a host with a [repository cache](#repository-cache-preview), clones borrow the host's copy, so only what it lacks is fetched.
-- **In a session that clones on demand, pushes of the session's own branch work too:** `git push origin HEAD:$PISTEAD_SESSION_BRANCH` (the branch, such as `pistead/add-dark-mode-1a2b3c4d5e6f`, is in `$PISTEAD_SESSION_BRANCH`). They are pushed with the workspace's [push identity](#push-access). A push of any other branch is rejected, as a Git host rejects one, and goes through `git_push` instead (see [Commits, pushes and pull requests](#commits-pushes-and-pull-requests)). Pinned sessions push only with `git_push`.
-- **Where Git's data goes.** So that clones, fetches and pushes don't all go through the server, the host's proxy fetches from the Git host itself when Pistead gives it a credential for that repository; otherwise Pistead relays the request with a credential that never leaves the server:
+- **Git reads of the workspace's repositories always work.** Git in the sandbox sends `https://` remotes, and SSH remotes of github.com, gitlab.com and bitbucket.org, to the proxy, so `git clone https://github.com/acme/app` or `git fetch` work as usual. For each request the proxy asks Pikibun, which checks the session and the **session owner's own access** to the repository; the sandbox never holds a credential. On a host with a [repository cache](#repository-cache-preview), clones borrow the host's copy, so only what it lacks is fetched.
+- **In a session that clones on demand, pushes of the session's own branch work too:** `git push origin HEAD:$PIKIBUN_SESSION_BRANCH` (the branch, such as `pikibun/add-dark-mode-1a2b3c4d5e6f`, is in `$PIKIBUN_SESSION_BRANCH`). They are pushed with the workspace's [push identity](#push-access). A push of any other branch is rejected, as a Git host rejects one, and goes through `git_push` instead (see [Commits, pushes and pull requests](#commits-pushes-and-pull-requests)). Pinned sessions push only with `git_push`.
+- **Where Git's data goes.** So that clones, fetches and pushes don't all go through the server, the host's proxy fetches from the Git host itself when Pikibun gives it a credential for that repository; otherwise Pikibun relays the request with a credential that never leaves the server:
 
   | Request | Any host | The session owner's own host |
   |---|---|---|
@@ -368,8 +370,8 @@ A sandbox's only way out is its session's **egress proxy**, which the connector 
   | Read a private repository, or download its LFS files | Direct, with a token that can only read that repository, where a GitHub App serves it (the workspace's under **Push access**, or the server's for github.com); relayed otherwise | Direct, with that token or else the owner's own account (also on the server's own runner) |
   | Push the session branch | Relayed: a push token can't be limited to one branch | Direct, with the workspace's push identity, except the owner's GitHub sign-in account and the host's Git credentials, which stay relayed |
 
-  Pistead checks the session's authority for each grant, as for a relayed request, and a host reuses a read grant for a minute at most. A host that can't reach the Git host itself falls back to the relay. The server's operator chooses with `GIT_DIRECT` (see [Configuration](#configuration)): `own-hosts` gives tokens only to session owners' own hosts, and `off` relays everything.
-- **In a session that clones on demand, `gh` and other GitHub API clients read the workspace's github.com repositories**, whatever the workspace's network access: `gh run view --log-failed`, `gh pr view`, `gh api repos/acme/app/actions/runs`. The sandbox holds no GitHub credential: `GH_TOKEN` and `GITHUB_TOKEN` hold a placeholder, and the session's proxy answers HTTPS to `api.github.com` itself and adds the credential there. That is a token of a GitHub App (the workspace's under **Push access**, or the server's on github.com), which needs to be installed on the repositories. It can only read the workspace's github.com repositories that the session owner can read, and only what `gh` reads: code, issues, pull requests, Actions runs and logs, checks, statuses, deployments, discussions and Pages. It is never the owner's own sign-in token. Pistead checks the session for each token, as for Git, and the proxy reuses one for a minute at most.
+  Pikibun checks the session's authority for each grant, as for a relayed request, and a host reuses a read grant for a minute at most. A host that can't reach the Git host itself falls back to the relay. The server's operator chooses with `GIT_DIRECT` (see [Configuration](#configuration)): `own-hosts` gives tokens only to session owners' own hosts, and `off` relays everything.
+- **In a session that clones on demand, `gh` and other GitHub API clients read the workspace's github.com repositories**, whatever the workspace's network access: `gh run view --log-failed`, `gh pr view`, `gh api repos/acme/app/actions/runs`. The sandbox holds no GitHub credential: `GH_TOKEN` and `GITHUB_TOKEN` hold a placeholder, and the session's proxy answers HTTPS to `api.github.com` itself and adds the credential there. That is a token of a GitHub App (the workspace's under **Push access**, or the server's on github.com), which needs to be installed on the repositories. It can only read the workspace's github.com repositories that the session owner can read, and only what `gh` reads: code, issues, pull requests, Actions runs and logs, checks, statuses, deployments, discussions and Pages. It is never the owner's own sign-in token. Pikibun checks the session for each token, as for Git, and the proxy reuses one for a minute at most.
   - **Only reads.** The proxy refuses every other method and GraphQL mutations; comments, issues, merges and pushes go through `github_comment`, `github_issue`, `github_merge` and `git_push`, with their approvals. The token couldn't make them anyway.
   - **Other repositories** are read without a credential, and only where the workspace's network access allows `api.github.com`. So is a request that carries a token of its own instead of the placeholder.
   - **Downloads** that GitHub redirects to its storage (Actions logs and artifacts, release assets, archives) are fetched by the proxy, without the credential.
@@ -394,18 +396,18 @@ A sandbox's only way out is its session's **egress proxy**, which the connector 
 
   Whatever the agent puts in a URL or a query reaches that host or the provider, so a workspace whose network access is **Open** lets a misled agent send what it read elsewhere without asking anyone, as approved or auto-approved shell commands already could. What the tools return is untrusted input, and the agent is told so with each result.
 
-`curl -s "$PISTEAD_EGRESS_STATUS"` in a session shows its current access, the workspace's repositories, the APIs its proxy answers itself and its recent decisions, with `(direct …)` on the Git requests the host made itself and each GitHub API request with the credential it was made with. A session on a connector that predates the proxy keeps having no network; update the connector to use it.
+`curl -s "$PIKIBUN_EGRESS_STATUS"` in a session shows its current access, the workspace's repositories, the APIs its proxy answers itself and its recent decisions, with `(direct …)` on the Git requests the host made itself and each GitHub API request with the credential it was made with. A session on a connector that predates the proxy keeps having no network; update the connector to use it.
 
 #### Experimental sandboxes on macOS and Windows
 
 macOS and native Windows can run sessions in their own operating system's sandbox instead of bubblewrap. Both are **experimental and not yet verified on real machines**: report what breaks. The design and what still has to be checked are in [docs/design/windows-sandbox.md](docs/design/windows-sandbox.md).
 
 ```sh
-npx pistead@latest connect --experimental-sandbox
+npx pikibun@latest connect --experimental-sandbox
 ```
 
 - **macOS** (Seatbelt, macOS 15 or later, with the developer tools: `xcode-select --install`): every step runs under `sandbox-exec` with a profile that denies everything by default. A session sees its own files, the system's read-only runtime, the developer tools and Homebrew, and nothing of your home folder or other sessions. Its only network is its egress proxy, on a loopback port that wants the session's credentials, so tests that start a local server can't reach it, and Go and Swift programs can't verify HTTPS (they check certificates only through a macOS service that would fetch on the host's own network, outside the proxy; curl, Git, Node and Python work). macOS has no hard memory or process limits for a group of processes, so, as on a Linux host without `--resources`, shell commands run only in the host owner's own sessions, once they allow it.
-- **Windows** (Windows 11 24H2 or later with the October 2026 update, which the connector checks by running one container, [Git for Windows](https://git-scm.com/download/win), and Microsoft's [MXC SDK](https://github.com/microsoft/mxc), which the connector tells you how to install: `npm install --prefix <state dir>\mxc @microsoft/mxc-sdk@1.0.1`): every step runs in an OS process container that may write only the session's files and reach only its egress proxy, inside a job object that limits its memory, processes and CPU (`--memory-limit`, `--process-limit`, `--cpu-limit`). Commands run in [busybox-w32](https://frippery.org/busybox/)'s shell, because Git for Windows' bash can't start in the container: save `busybox64.exe` as `%LOCALAPPDATA%\Programs\busybox\busybox.exe`, or name it in `PISTEAD_SANDBOX_SHELL`. Pistead refuses to run where MXC would fall back to its AppContainer modes, which change the permissions of your folders. Backups and moves of clone sessions don't work here yet.
+- **Windows** (Windows 11 24H2 or later with the October 2026 update, which the connector checks by running one container, [Git for Windows](https://git-scm.com/download/win), and Microsoft's [MXC SDK](https://github.com/microsoft/mxc), which the connector tells you how to install: `npm install --prefix <state dir>\mxc @microsoft/mxc-sdk@1.0.1`): every step runs in an OS process container that may write only the session's files and reach only its egress proxy, inside a job object that limits its memory, processes and CPU (`--memory-limit`, `--process-limit`, `--cpu-limit`). Commands run in [busybox-w32](https://frippery.org/busybox/)'s shell, because Git for Windows' bash can't start in the container: save `busybox64.exe` as `%LOCALAPPDATA%\Programs\busybox\busybox.exe`, or name it in `PIKIBUN_SANDBOX_SHELL`. Pikibun refuses to run where MXC would fall back to its AppContainer modes, which change the permissions of your folders. Backups and moves of clone sessions don't work here yet.
 
 Neither keeps a [repository cache](#repository-cache-preview) or lends the GPU yet.
 
@@ -414,7 +416,7 @@ Neither keeps a [repository cache](#repository-cache-preview) or lends the GPU y
 On macOS, native Windows, or Linux without bubblewrap, you can opt out of isolation. This needs only Git (on macOS, `xcode-select --install` or `brew install git`; on Windows, [Git for Windows](https://git-scm.com/download/win), whose bash runs the commands):
 
 ```sh
-npx pistead@latest connect --unsafe-no-sandbox
+npx pikibun@latest connect --unsafe-no-sandbox
 ```
 
 The connector prints the risks and asks you to type `unsandboxed` before it starts:
@@ -424,27 +426,27 @@ The connector prints the risks and asks you to type `unsandboxed` before it star
 - Commands use this machine's network directly: the workspace's [network access](#network-access) doesn't apply.
 - Anyone you share the host with, and anyone with approve permission on a session that runs on it, can cause approved commands to run on your machine.
 
-Pistead labels such a host **Unsandboxed** to everyone who can see it.
+Pikibun labels such a host **Unsandboxed** to everyone who can see it.
 
 #### Repository cache (preview)
 
 By default each session downloads its clones itself. With **Repository cache** set to **Shared** (one cache for every session on the host) or **Per owner** (a separate cache for each session owner) in the host's [configuration](#host-configuration), the connector keeps a full clone of each repository on the host and lets sessions' clones borrow from it. Only the host's owner changes it, and it applies when the connector next connects. (Connectors 0.9.0 and older take `--repo-cache` and `--repo-cache-scope owner` instead.)
 
-- The host fills its copies itself, straight from GitHub (or the repository's Git host), with the credentials Git on the host would use: its credential helpers, such as `gh auth setup-git`. Without one for the Git host it reads anonymously, which only public repositories allow. Nothing is downloaded through Pistead for the cache, so it is as fast as the host's own network.
-- A session borrows from a copy only once Pistead confirms, with the session owner's own account, that they can read the repository, again every 10 minutes and each time the session is reopened. The host downloads only the branches and tags that account lists, and only after that. A session's copies are there from its first command on, empty until a clone fills them.
-- `git clone` of a workspace repository asks for the host's copy and borrows its objects (`--reference-if-able`) instead of downloading and storing them again; only what the copy lacks comes through Pistead. The first clone of a repository waits while the host downloads it, however long that takes, and says so; the download goes on if the command stops, so a clone stopped by the command time limit can just be run again. A copy filled before is brought up to date first, but a clone waits at most 10 seconds for that, then borrows it as it is. If the host can't fill a copy at all (no credential that can read the repository, say, or a listing of it that fails the same way every time), the clone says why and goes ahead without it. A copy that isn't available just now (Pistead can't confirm access, or the host's download keeps breaking off) is asked for again, and then the clone stops, to be run again, rather than downloading the repository without it. Clones with `--reference`, `--shared` or `--dissociate` are left alone.
+- The host fills its copies itself, straight from GitHub (or the repository's Git host), with the credentials Git on the host would use: its credential helpers, such as `gh auth setup-git`. Without one for the Git host it reads anonymously, which only public repositories allow. Nothing is downloaded through Pikibun for the cache, so it is as fast as the host's own network.
+- A session borrows from a copy only once Pikibun confirms, with the session owner's own account, that they can read the repository, again every 10 minutes and each time the session is reopened. The host downloads only the branches and tags that account lists, and only after that. A session's copies are there from its first command on, empty until a clone fills them.
+- `git clone` of a workspace repository asks for the host's copy and borrows its objects (`--reference-if-able`) instead of downloading and storing them again; only what the copy lacks comes through Pikibun. The first clone of a repository waits while the host downloads it, however long that takes, and says so; the download goes on if the command stops, so a clone stopped by the command time limit can just be run again. A copy filled before is brought up to date first, but a clone waits at most 10 seconds for that, then borrows it as it is. If the host can't fill a copy at all (no credential that can read the repository, say, or a listing of it that fails the same way every time), the clone says why and goes ahead without it. A copy that isn't available just now (Pikibun can't confirm access, or the host's download keeps breaking off) is asked for again, and then the clone stops, to be run again, rather than downloading the repository without it. Clones with `--reference`, `--shared` or `--dissociate` are left alone.
 - Fetches into the cache that break off are tried again; what a broken-off fetch left behind is removed.
 - Inside the sandbox the cache is read-only.
-- `npx pistead@latest cache list` shows each cached repository, its size and how many sessions keep objects in it. `npx pistead@latest cache prune --older-than 30` forgets sessions idle for longer than that many days and collects what nothing reaches any more; a clone in such a session loses the objects it borrowed. Both take `--state-dir`.
+- `npx pikibun@latest cache list` shows each cached repository, its size and how many sessions keep objects in it. `npx pikibun@latest cache prune --older-than 30` forgets sessions idle for longer than that many days and collects what nothing reaches any more; a clone in such a session loses the objects it borrowed. Both take `--state-dir`.
 
 #### Connector options
 
 | Option | Effect |
 |---|---|
-| `--server ORIGIN` | The Pistead server's origin; needed for the first pairing |
+| `--server ORIGIN` | The Pikibun server's origin; needed for the first pairing |
 | `--pairing-id ID` | The pairing ID from **Pair a host**; the code is asked for at a hidden prompt |
 | `--force` | With `--pairing-id`, replace this machine's saved pairing |
-| `--state-dir PATH` | Connector state (default `~/.local/share/pistead/connector`) |
+| `--state-dir PATH` | Connector state (default `~/.local/share/pikibun/connector`) |
 | `--pi-agent-dir PATH` | Pi's configuration and auth directory (default: Pi's own) |
 | `--model PROVIDER/MODEL` | Offer this model (repeatable) instead of `enabledModels` |
 | `--resources PATH` | Operator-provisioned resource limits that let `bash` run in every session |
@@ -452,7 +454,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 | `--allow-insecure-loopback` | Allow an `http://` server on localhost (development) |
 | `--help` | Show all options |
 
-Everything else is the host's [configuration](#host-configuration), set in Pistead: its command time limit, GPU, Git credentials and repository cache. `--git-credentials`, `--repo-cache` and `--repo-cache-scope` are still accepted, so existing service units keep starting, but ignored.
+Everything else is the host's [configuration](#host-configuration), set in Pikibun: its command time limit, GPU, Git credentials and repository cache. `--git-credentials`, `--repo-cache` and `--repo-cache-scope` are still accepted, so existing service units keep starting, but ignored.
 
 The Mac app's **This Mac** runs the same connector; see [iPhone, iPad and Mac apps](#iphone-ipad-and-mac-apps). [`packages/cli/README.md`](packages/cli/README.md) is the connector's own guide.
 
@@ -511,7 +513,7 @@ Shared messages and side asks share one queue: up to 64 waiting or running, with
 
 Paste images, such as screenshots, into the composer, or pick them with its image button (on a phone, from the photo library or camera): into a new session's first message, a shared message or a side ask. They show as thumbnails above the text; **×** removes one. A message carries up to 4 images, and can be images alone. The browser scales each image to at most 1568 pixels on its longest edge and compresses it until the message fits what the host takes in one request; the host decodes and prepares each image again, and the model gets them after the message's text. The images stay on the host: the transcript notes each one as `[image image/png]`.
 
-Images need a connector that supports them on the session's host (update it with `npx pistead@latest connect`) and a model that accepts images; otherwise the composer or the send says why.
+Images need a connector that supports them on the session's host (update it with `npx pikibun@latest connect`) and a model that accepts images; otherwise the composer or the send says why.
 
 #### Stopping the agent
 
@@ -527,7 +529,7 @@ Each message has actions beside who sent it: hover over it, or tab to it, in the
 - **Go back** (the history icon, needs write permission): takes the shared conversation back, for everyone, to just before one of the messages people sent, or to just after one of the agent's final replies. Everything after that point leaves the conversation, and the next message continues from there, with the model seeing only what is left. Going back to before a message puts that message's text in your chat box, if it's empty, so you can edit it and send it again. Only the conversation goes back: the worktree, its clones, commits and anything pushed stay as they are, so ask the agent to undo those if you need to. Stop the session's work first: going back waits until nothing runs or is queued. The host keeps the conversation it went back from, in its backups too, but it no longer shows.
 - **Fork** (the branch icon, the session's owner only): starts a new session of yours from the shared conversation up to the same points, on the same host, with the model and reasoning level the conversation uses now (or the model the session started on, once the host no longer offers that one or it's disabled) and the same visibility, titled **Fork: …**, and opens it; a fork from before a message puts that message in the new session's chat box. The session you forked from stays as it is. The host copies the conversation into the new session itself, so it never passes through the server. Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again, and only what was pushed is there. If the fork fails, the new session is archived.
 
-There are no such points inside one of the agent's turns, where a tool call would lose its result, so a reply that goes on to call tools offers only **Copy** (tool call and tool result rows show their text when expanded). A host whose connector predates these actions offers only **Copy** too: update it with `npx pistead@latest connect`.
+There are no such points inside one of the agent's turns, where a tool call would lose its result, so a reply that goes on to call tools offers only **Copy** (tool call and tool result rows show their text when expanded). A host whose connector predates these actions offers only **Copy** too: update it with `npx pikibun@latest connect`.
 
 #### Chat options
 
@@ -617,7 +619,7 @@ sequenceDiagram
     actor Bob as Bob (session owner)
     actor Carol as Carol (session admin)
     actor Dan as Dan (session member)
-    participant P as Pistead
+    participant P as Pikibun
     participant H as Alice's host (Pi + subscription)
 
     Alice->>P: Share host with workspace
@@ -656,7 +658,7 @@ The owner can share a session by link (**Details → People → Create link**). 
 
 #### Transcript size
 
-A session's transcript comes from its host, which always sends Pistead the whole conversation, compressed. Two settings make what reaches each viewer smaller. Both change only what Pistead shows, so they work with every connector version:
+A session's transcript comes from its host, which always sends Pikibun the whole conversation, compressed. Two settings make what reaches each viewer smaller. Both change only what Pikibun shows, so they work with every connector version:
 
 - **Full tool output** (**Details → Transcript**, the session's owner, or the workspace's owner or an admin; `PATCH /api/sessions/:id` with `{"toolOutput": "brief"}` or `"full"`) is on by default. A workspace's owners and admins choose what new sessions there start with (**Settings → Workspaces →** the workspace **→ Transcripts → Full tool output**; `PUT /api/workspaces/:id/transcripts` with `{"toolOutput": "brief"}` or `"full"`); changing it leaves existing sessions as they are, and a session moved to another host or restored from a backup keeps its source's. Turned off, each tool result shows only its first line (up to 200 characters), on its row in the transcript. Long tool calls, such as a file the agent writes, are cut to their first 200 characters. Tool output is most of a typical transcript, so long sessions then load roughly half as much. It applies to everyone viewing the session, its share link included. A shortened row says how many lines and characters the full output has; the host keeps all of it, and the agent still sees all of it. Secrets are hidden before anything is shortened.
 - **Latest messages first** (**Settings → Workspaces →** the workspace **→ Transcripts**, owners and admins; `PUT /api/workspaces/:id/transcripts` with `{"paging": true}`; either setting may be sent alone, and one left out keeps its value) is off by default. Turned on, a session opens with only the newest 50 entries of each conversation. Earlier ones load 50 at a time as you scroll up, or with **Show earlier messages** at the top (`GET /api/sessions/:id/entries?conversation=…&before=…&limit=…`, up to 200). Entries you've already seen stay in place while new ones arrive. Your browser's find on the page only searches what has loaded. Share links aren't paged: they show the whole shared conversation.
@@ -665,24 +667,24 @@ Open sessions pick up either change within a few seconds.
 
 #### Hidden secrets
 
-Everything Pistead shows people (transcripts, approvals and their output, in every session view and share link) has values that look like secrets replaced by `[redacted]`, for everyone including the session's owner. That covers well-known token formats, private keys, the values of password-, secret-, token- and key-named settings, and credentials in URLs, Authorization headers, `curl -u` and `.netrc`. The agent and the host still see the real values, and an approved operation runs with them. In shell commands only single words are ever hidden, so an approver always sees what a command does, and an approval that holds a hidden value says so. Detection is pattern-based, so other sensitive text can still show; backups keep the real transcript.
+Everything Pikibun shows people (transcripts, approvals and their output, in every session view and share link) has values that look like secrets replaced by `[redacted]`, for everyone including the session's owner. That covers well-known token formats, private keys, the values of password-, secret-, token- and key-named settings, and credentials in URLs, Authorization headers, `curl -u` and `.netrc`. The agent and the host still see the real values, and an approved operation runs with them. In shell commands only single words are ever hidden, so an approver always sees what a command does, and an approval that holds a hidden value says so. Detection is pattern-based, so other sensitive text can still show; backups keep the real transcript.
 
 ### Commits, pushes and pull requests
 
 Agents commit with Git itself, as the session owner's Git identity, and push committed work to a branch:
 
-- The agent pushes the session's own branch (`pistead/<title-slug>-<short id>`) with plain `git push`, without approval: Pistead checks, as for `git_push`, that the session owner may push to the repository, and pushes with the workspace's push identity (its own Git credentials on the host can't serve here). For any other branch, `git_push {directory, branch}` pushes a clone's checked-out commit as it is to the workspace repository the clone's `origin` names; if the branch moved, the agent fetches and merges or rebases first. To open a pull request from the session branch, the agent calls `git_push` with that branch and a pull request.
-- To tag a release, the agent checks out a commit that is already on a branch (main, say) and calls `git_push {directory, branch, tag}`. That creates the lightweight tag `refs/tags/<tag>` at the commit and moves no branch. Before pushing, Pistead confirms against the remote that the branch reaches the commit, and that the tag doesn't exist yet. Tags are never moved or replaced, a tag push opens no pull request, and the default-branch setting below doesn't apply because no branch moves. Plain `git push` of a tag is refused, like any ref other than the session branch.
+- The agent pushes the session's own branch (`pikibun/<title-slug>-<short id>`) with plain `git push`, without approval: Pikibun checks, as for `git_push`, that the session owner may push to the repository, and pushes with the workspace's push identity (its own Git credentials on the host can't serve here). For any other branch, `git_push {directory, branch}` pushes a clone's checked-out commit as it is to the workspace repository the clone's `origin` names; if the branch moved, the agent fetches and merges or rebases first. To open a pull request from the session branch, the agent calls `git_push` with that branch and a pull request.
+- To tag a release, the agent checks out a commit that is already on a branch (main, say) and calls `git_push {directory, branch, tag}`. That creates the lightweight tag `refs/tags/<tag>` at the commit and moves no branch. Before pushing, Pikibun confirms against the remote that the branch reaches the commit, and that the tag doesn't exist yet. Tags are never moved or replaced, a tag push opens no pull request, and the default-branch setting below doesn't apply because no branch moves. Plain `git push` of a tag is refused, like any ref other than the session branch.
 - The approval shows the repository, the clone's directory if any, the branch, the tag if any and the exact commit.
 - Pushes are fast-forward only and never forced; a branch that moved elsewhere is refused.
-- The agent can also ask for a pull request, which Pistead opens as the session owner with their connected account. Session lists and the session header then show the session's newest pull request with its state: **Draft**, **Open**, **CI failed** (a check run or commit status of its head failed), **Changes requested** (a reviewer's latest review asks for changes), **Merged** or **Closed**. Pistead reads the state in the background with the session owner's GitHub account, about every two minutes (every 30 minutes for archived sessions), and stops once the pull request is merged or closed. Only github.com pull requests show a state so far.
-- Sessions that run directly on a host push and open pull requests with the host's own Git and credentials (`gh pr create`, say), so Pistead doesn't see those pull requests open. Instead, once the agent stops, the host reports which branches the session's clones of the workspace's github.com repositories have checked out (not their default branch). Pistead then looks up each branch's newest pull request opened since the session started, in the repository itself rather than a fork, with the session owner's GitHub account, and shows it and its state in the same way. A pull request found this way stays with the session after its clone switches away from the branch.
-- Before each push, Pistead checks with the session owner's own account that they may push to the repository and, where the Git host reports it, to that branch; GitHub protected branches are refused. For a tag, it checks that they may push to the repository (on Azure DevOps, that they may create that tag); tag rules on the Git host (GitHub rulesets, GitLab and Gitea protected tags) apply to the push identity's push, and its bypass list too. Owners and admins can forbid pushes to a repository's default branch by clearing **Allow agent pushes to the default branch**.
+- The agent can also ask for a pull request, which Pikibun opens as the session owner with their connected account. Session lists and the session header then show the session's newest pull request with its state: **Draft**, **Open**, **CI failed** (a check run or commit status of its head failed), **Changes requested** (a reviewer's latest review asks for changes), **Merged** or **Closed**. Pikibun reads the state in the background with the session owner's GitHub account, about every two minutes (every 30 minutes for archived sessions), and stops once the pull request is merged or closed. Only github.com pull requests show a state so far.
+- Sessions that run directly on a host push and open pull requests with the host's own Git and credentials (`gh pr create`, say), so Pikibun doesn't see those pull requests open. Instead, once the agent stops, the host reports which branches the session's clones of the workspace's github.com repositories have checked out (not their default branch). Pikibun then looks up each branch's newest pull request opened since the session started, in the repository itself rather than a fork, with the session owner's GitHub account, and shows it and its state in the same way. A pull request found this way stays with the session after its clone switches away from the branch.
+- Before each push, Pikibun checks with the session owner's own account that they may push to the repository and, where the Git host reports it, to that branch; GitHub protected branches are refused. For a tag, it checks that they may push to the repository (on Azure DevOps, that they may create that tag); tag rules on the Git host (GitHub rulesets, GitLab and Gitea protected tags) apply to the push identity's push, and its bypass list too. Owners and admins can forbid pushes to a repository's default branch by clearing **Allow agent pushes to the default branch**.
 - The connector holds the push credential in memory only and talks to the Git host directly; the sandbox never sees it.
 
 #### Push access
 
-Owners and admins set up how agents push, per provider, under **Settings → Workspaces → Push access** (**Add identity**). Usually that's an app or bot that Pistead mints a short-lived token from:
+Owners and admins set up how agents push, per provider, under **Settings → Workspaces → Push access** (**Add identity**). Usually that's an app or bot that Pikibun mints a short-lived token from:
 
 | Provider | Push identity | Token |
 |---|---|---|
@@ -690,22 +692,22 @@ Owners and admins set up how agents push, per provider, under **Settings → Wor
 | GitHub Enterprise Server | **GitHub App** registered on your server | 1 hour, this repository only, revoked after the push |
 | GitLab | **OAuth app authorized by a bot account** (`write_repository read_user`) | Up to 2 hours, the bot's projects |
 | Bitbucket Cloud | **Bitbucket OAuth consumer** with Repositories: Write | 1–2 hours, the Bitbucket workspace's repositories |
-| Azure DevOps | **Entra workload identity federation**: an app whose federated credential trusts Pistead, its service principal added to the organization | About 1 hour, what the service principal is granted |
-| Forgejo v16 or newer | **Forgejo authorized integration**: a Generic JWT integration that trusts Pistead | 10 minutes, what the integration allows |
+| Azure DevOps | **Entra workload identity federation**: an app whose federated credential trusts Pikibun, its service principal added to the organization | About 1 hour, what the service principal is granted |
+| Forgejo v16 or newer | **Forgejo authorized integration**: a Generic JWT integration that trusts Pikibun | 10 minutes, what the integration allows |
 | Gitea 1.23 or newer | **OAuth app authorized by a bot account** (`write:repository read:user`) | Up to 1 hour, the bot's repositories |
 
-OAuth app identities show a **Redirect URI** to register and need **Authorize** (signed in as the bot) before they're **Ready**; Entra and Forgejo identities need the operator's `OIDC_SIGNING_KEY`. Secrets are write-only. Except for GitHub, a minted token reaches everything its identity can until it expires, and the host running the session receives it: give each bot, consumer, service principal or integration access to the workspace's repositories only (a Forgejo integration can also require the `repository` and `ref` claims Pistead adds).
+OAuth app identities show a **Redirect URI** to register and need **Authorize** (signed in as the bot) before they're **Ready**; Entra and Forgejo identities need the operator's `OIDC_SIGNING_KEY`. Secrets are write-only. Except for GitHub, a minted token reaches everything its identity can until it expires, and the host running the session receives it: give each bot, consumer, service principal or integration access to the workspace's repositories only (a Forgejo integration can also require the `repository` and `ref` claims Pikibun adds).
 
 Instead of an app or bot, an identity can be one of these. Both push only from sessions on the session owner's own hosts, so nobody's credentials reach anyone else's machine; elsewhere the push is refused:
 
-- **Session owner's account**: the account the owner connected (their GitHub sign-in, or a token under **Git accounts** with write scopes). Their own host receives that token for each push; Pistead resets a GitHub token when the push ends, but tokens of other providers stay valid.
-- **Host's Git credentials** (connector 0.6.0 or newer): the connector reads the HTTPS credentials Git on the host would use, through its credential helpers (for example after `gh auth setup-git`, or from the macOS keychain or Git Credential Manager), without prompting. The host's owner turns on **Git credentials** in its [configuration](#host-configuration) (connectors 0.9.0 and older: `npx pistead@latest connect --git-credentials`).
+- **Session owner's account**: the account the owner connected (their GitHub sign-in, or a token under **Git accounts** with write scopes). Their own host receives that token for each push; Pikibun resets a GitHub token when the push ends, but tokens of other providers stay valid.
+- **Host's Git credentials** (connector 0.6.0 or newer): the connector reads the HTTPS credentials Git on the host would use, through its credential helpers (for example after `gh auth setup-git`, or from the macOS keychain or Git Credential Manager), without prompting. The host's owner turns on **Git credentials** in its [configuration](#host-configuration) (connectors 0.9.0 and older: `npx pikibun@latest connect --git-credentials`).
 
 Pull requests are opened as the session owner with their connected account either way. [`packages/cli/README.md`](packages/cli/README.md#pushing-commits) has the full details of each identity.
 
 ### GitHub issues and pull requests
 
-The sandbox has no network, so agents read and act on GitHub through Pistead instead, as the session owner and with their GitHub sign-in, which stays on the server (connector 0.7.0 or newer; github.com only):
+The sandbox has no network, so agents read and act on GitHub through Pikibun instead, as the session owner and with their GitHub sign-in, which stays on the server (connector 0.7.0 or newer; github.com only):
 
 - `github_read` reads an issue or pull request of one of the workspace's github.com repositories: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments with file, line and diff hunk, and checks. It needs no approval, runs only during a shared message (until an hour after it was sent), and each read is recorded in the session's activity. Treat what it returns as untrusted input.
 - `github_comment` posts a comment once it's approved.
@@ -758,27 +760,27 @@ While both hosts are connected, a session's owner can move it to a model on anot
 ### iPhone, iPad and Mac apps
 
 - **iPhone and iPad** ([`apps/mobile`](apps/mobile/README.md), Expo): your sessions grouped by workspace with their status; a session opens live with its transcript, queue, pending approvals to decide, and the chat box for shared messages and side asks; new sessions start from the app. It isn't on the App Store or TestFlight yet: build it from source as a development build.
-- **macOS** ([`apps/desktop`](apps/desktop/README.md), Electron): Pistead in its own window, plus **This Mac**, which runs the `pistead` connector on the Mac without a terminal. Pair it with a pairing ID and code from **Settings → Hosts**. It shares the command-line connector's state, so a Mac paired with `pistead connect` is adopted as is, and only one of the two can run at a time. macOS has no sandbox, so starting the host asks for the same consent as `--unsafe-no-sandbox`. **Settings → Pistead on this computer** runs Pistead itself on the Mac instead of using a server (see [Running Pistead on your own computer](#running-pistead-on-your-own-computer)).
+- **macOS** ([`apps/desktop`](apps/desktop/README.md), Electron): Pikibun in its own window, plus **This Mac**, which runs the `pikibun` connector on the Mac without a terminal. Pair it with a pairing ID and code from **Settings → Hosts**. It shares the command-line connector's state, so a Mac paired with `pikibun connect` is adopted as is, and only one of the two can run at a time. macOS has no sandbox, so starting the host asks for the same consent as `--unsafe-no-sandbox`. **Settings → Pikibun on this computer** runs Pikibun itself on the Mac instead of using a server (see [Running Pikibun on your own computer](#running-pikibun-on-your-own-computer)).
 
 The iPhone and iPad app signs in with GitHub through the server's GitHub OAuth app; nothing else needs configuring. It doesn't offer username and password sign-in yet. Each of its sign-ins lasts 30 days and appears under **Settings → Profile → Signed-in apps**, where you can sign it out. The Mac app shows the server's own sign-in page, so it signs in as a browser does: with GitHub or, where the server allows it, a username and password, for 7 days. Neither app opens invite links (the Mac app sends links to your default browser): where `SIGNUP=invite`, a new person creates their account through the link in a browser, then signs in on the app.
 
-## Running Pistead on your own computer
+## Running Pikibun on your own computer
 
-For one person, Pistead can run entirely on their own computer: the server, the web app and the computer itself as the host that runs the sessions. Nothing is deployed and no account at a Pistead service is needed; it is the same server, so everything in [Using Pistead](#using-pistead) works, for its one user.
+For one person, Pikibun can run entirely on their own computer: the server, the web app and the computer itself as the host that runs the sessions. Nothing is deployed and no account at a Pikibun service is needed; it is the same server, so everything in [Using Pikibun](#using-pikibun) works, for its one user.
 
 ```sh
-npx pistead@latest serve
+npx pikibun@latest serve
 ```
 
-Or, in the Mac app, **Settings → Pistead on this computer → Run on This Computer**: the app runs the same server with the same data, and its Pistead window shows it while it runs.
+Or, in the Mac app, **Settings → Pikibun on this computer → Run on This Computer**: the app runs the same server with the same data, and its Pikibun window shows it while it runs.
 
-- **Sign-in** is with GitHub, through a GitHub OAuth app of your own, registered once at <https://github.com/settings/applications/new> with the homepage `http://127.0.0.1` and the callback URL `http://127.0.0.1/api/auth/github/callback` (GitHub accepts it on any port of 127.0.0.1). The first `pistead serve` asks for its client ID and, at a hidden prompt, its secret (or takes `--github-client-id` with the secret in `PISTEAD_GITHUB_CLIENT_SECRET`); the app has fields for them.
+- **Sign-in** is with GitHub, through a GitHub OAuth app of your own, registered once at <https://github.com/settings/applications/new> with the homepage `http://127.0.0.1` and the callback URL `http://127.0.0.1/api/auth/github/callback` (GitHub accepts it on any port of 127.0.0.1). The first `pikibun serve` asks for its client ID and, at a hidden prompt, its secret (or takes `--github-client-id` with the secret in `PIKIBUN_GITHUB_CLIENT_SECRET`); the app has fields for them.
 - **One owner.** The first run prints a sign-in link (the app opens it in its window). The GitHub account that signs in through it becomes the owner, and from then on the only account that can sign in: any other is refused before its GitHub token is stored. Keep the link private until you have used it.
 - **This computer only.** It listens on `http://127.0.0.1:7878` (`--port` changes it), so nothing else on the network reaches it.
-- **This computer is the host.** Once the owner has signed in, the computer pairs itself with the server, with no code to copy, and appears under **Settings → Hosts**. It runs sessions as `pistead connect` would: in the bubblewrap sandbox on Linux with its prerequisites, otherwise only with `--unsafe-no-sandbox` (the app asks for the same consent). `--no-host` serves without it.
-- **Its data** (the SQLite database, session backups, the secrets it was set up with, and this computer's pairing) is in `~/.local/share/pistead/server` (`--state-dir` chooses another), private to your user. It is separate from `pistead connect`'s, so a computer connected to a team's server stays connected. One Pistead at a time runs from it: `pistead serve` and the Mac app share it, and whichever starts second says the other is running.
+- **This computer is the host.** Once the owner has signed in, the computer pairs itself with the server, with no code to copy, and appears under **Settings → Hosts**. It runs sessions as `pikibun connect` would: in the bubblewrap sandbox on Linux with its prerequisites, otherwise only with `--unsafe-no-sandbox` (the app asks for the same consent). `--no-host` serves without it.
+- **Its data** (the SQLite database, session backups, the secrets it was set up with, and this computer's pairing) is in `~/.local/share/pikibun/server` (`--state-dir` chooses another), private to your user. It is separate from `pikibun connect`'s, so a computer connected to a team's server stays connected. One Pikibun at a time runs from it: `pikibun serve` and the Mac app share it, and whichever starts second says the other is running.
 
-Run `npx pistead serve --help` for every option. The server is the one [Running the server](#running-the-server) describes, started with `LOCAL_MODE` (see [Configuration](#configuration)).
+Run `npx pikibun serve --help` for every option. The server is the one [Running the server](#running-the-server) describes, started with `LOCAL_MODE` (see [Configuration](#configuration)).
 
 ## Running the server
 
@@ -789,20 +791,20 @@ cp apps/server/.env.example .env
 # In .env set APP_ORIGIN (the public https:// origin), SESSION_SECRET (openssl rand -base64 48),
 # VAULT_KEY (head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=') and ADMIN_USER_IDS=password:admin, then:
 docker compose up -d
-docker compose exec pistead node dist/server/main.js --create-admin admin   # asks for its password
+docker compose exec pikibun node dist/server/main.js --create-admin admin   # asks for its password
 ```
 
-The image builds the web app and the bundled server and runs them as a non-root user. The server listens on port 8787 and keeps its SQLite database in the `pistead-data` volume; it stores no session backups unless you set `STORAGE_URL` (see [Database and backup storage](#database-and-backup-storage)). The image sets `WORKSPACE_DATABASES=true`, so workspace owners can keep their sessions' backups in a Postgres database of their own (see [Workspace session databases](#workspace-session-databases)); set `WORKSPACE_DATABASES=false` in `.env` to turn that off. `GET /api/health` reports which providers are configured, and the image's health check uses it. Migrations run automatically at start-up: to upgrade, update the source and run `docker compose up -d --build`.
+The image builds the web app and the bundled server and runs them as a non-root user. The server listens on port 8787 and keeps its SQLite database in the `pikibun-data` volume; it stores no session backups unless you set `STORAGE_URL` (see [Database and backup storage](#database-and-backup-storage)). The image sets `WORKSPACE_DATABASES=true`, so workspace owners can keep their sessions' backups in a Postgres database of their own (see [Workspace session databases](#workspace-session-databases)); set `WORKSPACE_DATABASES=false` in `.env` to turn that off. `GET /api/health` reports which providers are configured, and the image's health check uses it. Migrations run automatically at start-up: to upgrade, update the source and run `docker compose up -d --build`.
 
 The image also sets `PASSWORD_AUTH=true` and `SIGNUP=invite`: people sign in with a [username and password](#username-and-password), and with GitHub once you add its OAuth app (see [Sign-in and GitHub apps](#sign-in-and-github-apps)), and new accounts, GitHub ones too, come only through a workspace's [invite link](#invite-links-and-pending-members). So a new server's first account is the administrator `--create-admin` makes (see [Administration](#administration)), who signs in, creates a workspace and shares its invite link; or, with a GitHub OAuth app, a GitHub account that `ADMIN_USER_IDS` lists, which can always sign up. Set `PASSWORD_AUTH=false` in `.env` to sign in with GitHub only, and `SIGNUP=open` to let anyone who reaches the server sign up, or `off` to let in only the operator's accounts (see [Who can create an account](#who-can-create-an-account)).
 
 > **Upgrading to server 0.18.0:** the image now sets `PASSWORD_AUTH=true` and `SIGNUP=invite`. Unless `.env` sets them, the sign-in page offers a username and password, and new accounts, GitHub ones too, need a workspace's invite link (or, with GitHub, a place in `ADMIN_USER_IDS`); existing accounts sign in as before. To keep the previous behavior, set `PASSWORD_AUTH=false` and `SIGNUP=open` in `.env`. An `.env` copied from 0.17.0's `.env.example` already sets both, to empty values that mean unset, so it keeps the previous behavior: remove those two lines to take the image's defaults.
 
-> **Upgrading to server 0.16.0:** its first start rebuilds the `users` table of a SQLite database (to allow password accounts), keeping every row and checking every reference to it before committing; back up the `pistead-data` volume first, as before any upgrade. Postgres changes the table in place. Nothing else changes until you set `PASSWORD_AUTH` or `SIGNUP`: unset, sign-in and GitHub sign-up work as before.
+> **Upgrading to server 0.16.0:** its first start rebuilds the `users` table of a SQLite database (to allow password accounts), keeping every row and checking every reference to it before committing; back up the `pikibun-data` volume first, as before any upgrade. Postgres changes the table in place. Nothing else changes until you set `PASSWORD_AUTH` or `SIGNUP`: unset, sign-in and GitHub sign-up work as before.
 
-Each server release (`server-v*` tag) is published as `ghcr.io/opencara/pistead` (`latest`, `X.Y` and `X.Y.Z`, for linux/amd64 and linux/arm64); to use it instead of building, set `PISTEAD_IMAGE=ghcr.io/opencara/pistead:latest` in `.env` and start it with `docker compose up -d --no-build`. A release can also deploy itself to your server (see [Releasing](#development), `deploy-server.yml`).
+Each server release (`server-v*` tag) is published as `ghcr.io/opencara/pikibun` (`latest`, `X.Y` and `X.Y.Z`, for linux/amd64 and linux/arm64); to use it instead of building, set `PIKIBUN_IMAGE=ghcr.io/opencara/pikibun:latest` in `.env` and start it with `docker compose up -d --no-build`. A release can also deploy itself to your server (see [Releasing](#development), `deploy-server.yml`).
 
-Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load balancer); the app serves plain HTTP. If the proxy sets `X-Forwarded-Proto`/`X-Forwarded-Host`, set `TRUST_PROXY=true`. The proxy must pass WebSocket upgrades on `/api/connectors/socket`, accept request bodies of 32 MiB for dump imports, and route `/.well-known/` to Pistead if you use `OIDC_SIGNING_KEY`. The server gzips its responses and session event streams itself, and compresses the connector WebSocket for connectors that offer it, so the proxy needs no compression of its own.
+Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load balancer); the app serves plain HTTP. If the proxy sets `X-Forwarded-Proto`/`X-Forwarded-Host`, set `TRUST_PROXY=true`. The proxy must pass WebSocket upgrades on `/api/connectors/socket`, accept request bodies of 32 MiB for dump imports, and route `/.well-known/` to Pikibun if you use `OIDC_SIGNING_KEY`. The server gzips its responses and session event streams itself, and compresses the connector WebSocket for connectors that offer it, so the proxy needs no compression of its own.
 
 ### Sign-in and GitHub apps
 
@@ -810,7 +812,7 @@ Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load
 - **Username and password sign-in** is on with `PASSWORD_AUTH=true`, as in the Docker image (see [Username and password](#username-and-password)), next to GitHub or instead of it. Create the first administrator with `--create-admin` (see [Administration](#administration)). With neither, the sign-in page says GitHub sign-in isn't configured.
 - **Who can create an account** is `SIGNUP`'s choice (see [Who can create an account](#who-can-create-an-account)). Unset, anyone with a GitHub account can sign up, as before; on a server the internet can reach, `SIGNUP=invite`, the Docker image's default, limits new accounts to people holding a workspace's invite link.
 - **github.com pushes** can use an operator GitHub App with Repository contents read & write: set `GITHUB_APP_ID`, `GITHUB_APP_SLUG` and `GITHUB_APP_PRIVATE_KEY`. Without it, each workspace adds its own GitHub App under **Push access**. Either app also gives hosts read-only tokens for single repositories, so that sessions' clones of private repositories don't go through the server.
-- **Azure DevOps and Forgejo push identities** trust Pistead as an OIDC issuer at `APP_ORIGIN` (`/.well-known/openid-configuration`, `/.well-known/jwks.json`): set `OIDC_SIGNING_KEY` to an RSA key (`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072`).
+- **Azure DevOps and Forgejo push identities** trust Pikibun as an OIDC issuer at `APP_ORIGIN` (`/.well-known/openid-configuration`, `/.well-known/jwks.json`): set `OIDC_SIGNING_KEY` to an RSA key (`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072`).
 
 ### Configuration
 
@@ -824,7 +826,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `HOST`, `PORT` | `0.0.0.0` (`127.0.0.1` with `LOCAL_MODE`), `8787` | Listening address |
 | `TRUST_PROXY` | `false` | Honor `X-Forwarded-Proto`/`X-Forwarded-Host` from a trusted proxy |
 | `STATIC_DIR` | `dist/web` | Built web app |
-| `DATABASE_URL` | `sqlite:///data/pistead.sqlite` | Control-plane database |
+| `DATABASE_URL` | `sqlite:///data/pikibun.sqlite` | Control-plane database |
 | `DATABASE_WAIT_SECONDS` | `60` | How long start-up retries an unreachable database |
 | `STORAGE_URL` | none | Session backup storage; none means no backups |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | AWS SDK chain | S3 credentials; the `AWS_*` names also work |
@@ -833,7 +835,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | none | GitHub OAuth app for sign-in |
 | `GOOGLE_CLIENT_ID`/`_SECRET`, `NOTION_CLIENT_ID`/`_SECRET`, `DROPBOX_CLIENT_ID`/`_SECRET`, `MICROSOFT_CLIENT_ID`/`_SECRET` (and `MICROSOFT_TENANT`), `TENCENT_DOCS_CLIENT_ID`/`_SECRET` | none | OAuth apps that let members connect [document sources](#document-sources) by signing in |
 | `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY` | none | Operator GitHub App for github.com pushes (PEM as one line with `\n` escapes) |
-| `OIDC_SIGNING_KEY` | none | RSA private key (PKCS#8 PEM) for Pistead's OIDC issuer |
+| `OIDC_SIGNING_KEY` | none | RSA private key (PKCS#8 PEM) for Pikibun's OIDC issuer |
 | `GIT_DIRECT` | `on` | Where sessions' Git data goes (see [Network access](#network-access)): `on` lets hosts fetch from Git hosts themselves with credentials limited to a repository, `own-hosts` gives credentials only to session owners' own hosts, `off` relays every Git request through the server |
 | `SANDBOX_GITHUB_API` | `on` | Whether sessions' `gh` and other GitHub API clients read the workspace's github.com repositories (see [Network access](#network-access)): `on` gives every host running a session a read-only GitHub App token for them, which its egress proxy adds, `own-hosts` only session owners' own hosts, `off` none |
 | `WEB_SEARCH` | `off` | The search provider of the agent's `web_search` tool (see [Network access](#network-access)): `brave` ([Brave Search API](https://brave.com/search/api/)), `tavily` ([Tavily](https://tavily.com)) or `searxng` (a [SearXNG](https://docs.searxng.org) instance with its JSON output turned on); `off` offers no search. Workspaces still turn web search on themselves |
@@ -843,7 +845,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `TEST_AUTH_ENABLED`, `TEST_AUTH_SECRET`, `TEST_AUTH_EXPIRES_AT` | off | Local test mode, for development only |
 | `PASSWORD_AUTH` | off (`true` in the Docker image) | `true` offers sign-in with a username and password (see [Username and password](#username-and-password)); not with `LOCAL_MODE` |
 | `SIGNUP` | GitHub `open`, passwords `invite` (`invite` in the Docker image) | Who can create an account, with GitHub and with a password: `open` (anyone who reaches the server), `invite` (only through a workspace's invite link) or `off` (only the operator's: `ADMIN_USER_IDS` and `--create-admin`); see [Who can create an account](#who-can-create-an-account). Not for `LOCAL_MODE`, which admits only its owner |
-| `LOCAL_MODE`, `LOCAL_CLAIM_SECRET` | off | A server for one person on their own computer, as `pistead serve` runs it: plain HTTP on loopback only, and only the GitHub account that signs in through `/api/auth/local/claim?token=LOCAL_CLAIM_SECRET` first (a base64url 32-byte value) can sign in |
+| `LOCAL_MODE`, `LOCAL_CLAIM_SECRET` | off | A server for one person on their own computer, as `pikibun serve` runs it: plain HTTP on loopback only, and only the GitHub account that signs in through `/api/auth/local/claim?token=LOCAL_CLAIM_SECRET` first (a base64url 32-byte value) can sign in |
 
 ### Administration
 
@@ -852,7 +854,7 @@ The server's administrators see every account, workspace and host under **Settin
 ```sh
 # ADMIN_USER_IDS=password:admin and PASSWORD_AUTH=true (the Docker image sets it), in the server's environment
 node dist/server/main.js --create-admin admin
-docker compose exec pistead node dist/server/main.js --create-admin admin   # under Docker
+docker compose exec pikibun node dist/server/main.js --create-admin admin   # under Docker
 ```
 
 That needs no sign-in first and no restart afterwards, and a fresh server with `SIGNUP=invite` (as the Docker image has it) or `off` starts this way (or with a GitHub administrator, who can always sign up): the administrator signs in, creates a workspace and shares its invite link. `--reset-password USERNAME` sets a new password for any password account the same way, clears its failed sign-ins and signs it out everywhere. Both are recorded in the audit table, with no actor. The role comes only from this setting: nobody can grant it in the app, and it gives no access inside workspaces or sessions.
@@ -869,8 +871,8 @@ Every provider is chosen by a URL:
 
 | Setting | Default | Alternatives |
 |---|---|---|
-| `DATABASE_URL` | `sqlite:///data/pistead.sqlite` | `postgres://user:password@host:5432/db` (TLS via `?sslmode=require`; `docker compose --profile postgres up -d` starts one) |
-| `STORAGE_URL` (session backups) | none: backups are off | `file:///data/backups` (a directory on the server; under Docker, the `pistead-data` volume), or `s3://bucket/prefix?endpoint=https://minio.example.com&region=us-east-1` with `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (or the `AWS_*` names); omit `endpoint` for AWS |
+| `DATABASE_URL` | `sqlite:///data/pikibun.sqlite` | `postgres://user:password@host:5432/db` (TLS via `?sslmode=require`; `docker compose --profile postgres up -d` starts one) |
+| `STORAGE_URL` (session backups) | none: backups are off | `file:///data/backups` (a directory on the server; under Docker, the `pikibun-data` volume), or `s3://bucket/prefix?endpoint=https://minio.example.com&region=us-east-1` with `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (or the `AWS_*` names); omit `endpoint` for AWS |
 
 Migrations run automatically at start-up on whichever database is configured; `pnpm db:migrate` (or `node dist/server/main.js --migrate-only`) applies them without starting the server. Switching providers later means starting with an empty database: there is no data migration between SQLite and Postgres.
 
@@ -880,7 +882,7 @@ Without `STORAGE_URL` the server keeps no session backups, and session owners ca
 
 With `WORKSPACE_DATABASES=true`, a workspace owner can connect a Postgres database of their own under **Settings → Workspaces → Session database → Connect database**. Session backups of that workspace are then saved there instead of in `STORAGE_URL`, and downloads and restores read them back from it:
 
-- Pistead creates `pistead_workspaces`, `pistead_sessions` (each session's record in a `record` JSONB column), `pistead_session_backups` (the exact backup bytes; `convert_from(snapshot, 'UTF8')::jsonb` reads one) and `pistead_audit` (activity) when they are missing, in the first schema of the user's `search_path`. Tables created beforehand are used as they are, so the connecting user needs only `SELECT`, `INSERT` and `UPDATE` on them; they need the columns defined in [`apps/server/src/workspace-databases/postgres.ts`](apps/server/src/workspace-databases/postgres.ts).
+- Pikibun creates `pikibun_workspaces`, `pikibun_sessions` (each session's record in a `record` JSONB column), `pikibun_session_backups` (the exact backup bytes; `convert_from(snapshot, 'UTF8')::jsonb` reads one) and `pikibun_audit` (activity) when they are missing, in the first schema of the user's `search_path`. Tables created beforehand are used as they are, so the connecting user needs only `SELECT`, `INSERT` and `UPDATE` on them; they need the columns defined in [`apps/server/src/workspace-databases/postgres.ts`](apps/server/src/workspace-databases/postgres.ts).
 - The control plane keeps each backup's SHA-256 and size, so a snapshot changed in that database is refused on download and restore.
 - Only the owner connects, replaces or disconnects it; the password is vault-encrypted and write-only. Whoever can read that database can read the sessions saved there, including their owners' personal environment values, so other members confirm the database before each of their backups is saved there. Pointing the connection at another database asks them again; new credentials for the same one don't. A database is named by its host, port and database name: where that host name resolves is up to whoever controls it, normally the owner.
 - Connections use TLS that verifies the server certificate (against the public roots, or a CA certificate the owner pastes), or TLS without verification if the owner chooses it. Hosts must resolve to public addresses; `WORKSPACE_DATABASE_PRIVATE_HOSTS=true` also allows private networks, and unencrypted connections to them.
@@ -902,7 +904,7 @@ Operators can dump straight from the database, with every session of a workspace
 ```sh
 node dist/server/main.js --dump-workspace WORKSPACE_ID > workspace.json
 node dist/server/main.js --dump-session SESSION_ID > session.json
-docker compose exec -T pistead node dist/server/main.js --dump-workspace WORKSPACE_ID > workspace.json
+docker compose exec -T pikibun node dist/server/main.js --dump-workspace WORKSPACE_ID > workspace.json
 pnpm -s db:dump --dump-workspace WORKSPACE_ID > workspace.json   # from source
 ```
 
@@ -910,7 +912,7 @@ Like start-up, a dump applies pending migrations first.
 
 A workspace's owner can import a session or workspace export of that workspace into its session database under **Settings → Workspaces → Session database → Import dump** (up to 32 MiB), or with `POST /api/workspaces/:id/database/import`. This keeps the history of sessions saved before the database was connected, and adds what backups don't carry:
 
-- `pistead_sessions.data`: each fully exported session's grants, approvals, pushes, backup list and restores; `pistead_workspaces.data`: the workspace's members, models, agents, repositories, push access and database connection; `pistead_audit`: every activity entry.
+- `pikibun_sessions.data`: each fully exported session's grants, approvals, pushes, backup list and restores; `pikibun_workspaces.data`: the workspace's members, models, agents, repositories, push access and database connection; `pikibun_audit`: every activity entry.
 - A session's record and details replace older ones only (by export or save time), and activity entries are added once, so importing a dump again, or an older one, changes nothing. Each import is one transaction.
 - The dump must be of that workspace; it is checked before anything is written. Only the workspace database changes; the workspace's activity records the import.
 
@@ -918,7 +920,7 @@ Operators import dumps of up to 256 MiB from the command line, with the server's
 
 ```sh
 node dist/server/main.js --import-dump workspace.json
-docker compose exec -T pistead node dist/server/main.js --import-dump - < workspace.json
+docker compose exec -T pikibun node dist/server/main.js --import-dump - < workspace.json
 pnpm -s db:import workspace.json   # from source
 ```
 
@@ -942,33 +944,33 @@ await fetch("/api/auth/test", { method: "POST", headers: { Authorization: "Beare
 ```
 
 - `pnpm typecheck` (also typechecks the apps), `pnpm test` (set `TEST_DATABASE_URL=postgres://…` to also run the provider suite against Postgres), `pnpm build` (web), `pnpm build:server` (bundled server in `dist/server`), `pnpm build:cli` (the connector package).
-- `pnpm connect …` runs the connector from source, with the same options as `pistead connect`; add `--allow-insecure-loopback` to pair with a local `http://` server.
+- `pnpm connect …` runs the connector from source, with the same options as `pikibun connect`; add `--allow-insecure-loopback` to pair with a local `http://` server.
 - `pnpm test:connected` runs the end-to-end suite against a real server and connector (Linux with bubblewrap).
 - `pnpm dev:native [--port 8787] [--no-host] [--pairing]` runs a local test-mode server for developing the apps: a test user with an app token, a workspace and, unless `--no-host`, this machine as a host offering the deterministic fixture model (not an LLM) with one session. `--pairing` adds a pairing code for the desktop app. It writes what the apps need to `.local/dev-native.json`; Ctrl-C stops it and deletes its data.
 - Releasing: each part has its own release line and version, started by pushing its tag on a commit in `main` (e.g. `git tag server-v1.4.0 && git push origin server-v1.4.0`). A suffix such as `-beta.1` makes a prerelease. Nothing needs committing first: each workflow checks the tag is on `main`, runs CI and sets the tag's version in the package it builds (`scripts/set-release-version.mjs`), so the committed versions need not match.
 
   | Tag | Workflow | Publishes |
   | --- | --- | --- |
-  | `cli-v1.2.3` | `release.yml` | `pistead` on npm, with provenance; a prerelease goes to the `next` dist-tag |
-  | `server-v1.2.3` | `release-server.yml` | The server image (web app and backend) to `ghcr.io/opencara/pistead`, then deploys a release (not a prerelease) to the deployment server once the image is pushed; no GitHub release |
+  | `cli-v1.2.3` | `release.yml` | `pikibun` on npm, with provenance; a prerelease goes to the `next` dist-tag |
+  | `server-v1.2.3` | `release-server.yml` | The server image (web app and backend) to `ghcr.io/opencara/pikibun`, then deploys a release (not a prerelease) to the deployment server once the image is pushed; no GitHub release |
   | `desktop-v1.2.3` | `release-desktop.yml` | The desktop app on a GitHub release: macOS (arm64 DMG and zip) today, Windows and Linux from the same tag later |
   | `ios-v1.2.3` | `release-ios.yml` | The iOS app to TestFlight |
 
-  Only the desktop line creates a GitHub release, the one GitHub marks latest, with notes since the line's previous tag. The desktop app bundles the connector from `packages/cli` at its tagged commit, so when a connector change matters to it, release `cli-v` and then `desktop-v`. npm needs either a trusted publisher on npmjs.com for `OpenCara/pistead`, workflow `release.yml` (keep that file name), environment `release`, or an `NPM_TOKEN` repository secret.
-- Deploying the server: once a `server-v` release's image is on GHCR, `deploy-server.yml` connects to the deployment server over SSH and runs [`scripts/deploy-server.sh`](scripts/deploy-server.sh) there. It pulls the image by digest, writes it to `PISTEAD_IMAGE` in the deploy directory's `.env`, recreates the `pistead` service with `docker compose up -d --no-build` and waits for the container to report healthy, then checks `DEPLOY_URL`'s `/api/health`. Prereleases are not deployed; **Actions → Deploy server → Run workflow** deploys any published version, to redeploy or go back to one. A failed deploy is not rolled back by itself: migrations ran when the new container started, so go back only to a version that reads the migrated database. Configure it in the `production` environment, and add required reviewers there to approve each deploy; without the settings nothing is deployed:
-  - Variables `DEPLOY_HOST`, `DEPLOY_USER` (in the `docker` group), and optionally `DEPLOY_PORT` (22), `DEPLOY_PATH` (the directory with `docker-compose.yml` and `.env`, `pistead` from the user's home by default) and `DEPLOY_URL` (the public origin).
+  Only the desktop line creates a GitHub release, the one GitHub marks latest, with notes since the line's previous tag. The desktop app bundles the connector from `packages/cli` at its tagged commit, so when a connector change matters to it, release `cli-v` and then `desktop-v`. npm needs either a trusted publisher on npmjs.com for `OpenCara/pikibun`, workflow `release.yml` (keep that file name), environment `release`, or an `NPM_TOKEN` repository secret.
+- Deploying the server: once a `server-v` release's image is on GHCR, `deploy-server.yml` connects to the deployment server over SSH and runs [`scripts/deploy-server.sh`](scripts/deploy-server.sh) there. It pulls the image by digest, writes it to `PIKIBUN_IMAGE` in the deploy directory's `.env`, recreates the `pikibun` service with `docker compose up -d --no-build` and waits for the container to report healthy, then checks `DEPLOY_URL`'s `/api/health`. Prereleases are not deployed; **Actions → Deploy server → Run workflow** deploys any published version, to redeploy or go back to one. A failed deploy is not rolled back by itself: migrations ran when the new container started, so go back only to a version that reads the migrated database. Configure it in the `production` environment, and add required reviewers there to approve each deploy; without the settings nothing is deployed:
+  - Variables `DEPLOY_HOST`, `DEPLOY_USER` (in the `docker` group), and optionally `DEPLOY_PORT` (22), `DEPLOY_PATH` (the directory with `docker-compose.yml` and `.env`, `pikibun` from the user's home by default) and `DEPLOY_URL` (the public origin).
   - Secrets `DEPLOY_SSH_KEY` (a private key in that user's `authorized_keys`, ideally for deploys only) and `DEPLOY_SSH_KNOWN_HOSTS` (the server's host keys, `ssh-keyscan -p PORT HOST`, checked against the server's own fingerprints).
-  - The server's `docker-compose.yml` runs `image: ${PISTEAD_IMAGE:-pistead}`, as this repository's does, and the user can pull from `ghcr.io/opencara/pistead` (public, or after `docker login ghcr.io`).
+  - The server's `docker-compose.yml` runs `image: ${PIKIBUN_IMAGE:-pikibun}`, as this repository's does, and the user can pull from `ghcr.io/opencara/pikibun` (public, or after `docker login ghcr.io`).
 - Apple signing for the `desktop-v` and `ios-v` releases: the secrets and variables below live in the `release` environment. Without them, the macOS app is released ad-hoc signed (Gatekeeper blocks it on other Macs until it's opened with right-click › Open), and the iOS job only checks that the app archives.
   - An App Store Connect API key (Users and Access › Integrations; the App Manager role is enough), shared by both apps: `APP_STORE_CONNECT_API_KEY` (the `.p8` file's contents), `APP_STORE_CONNECT_API_KEY_ID` and `APP_STORE_CONNECT_API_ISSUER_ID`.
   - macOS, signed with Developer ID and notarized: `MAC_CERTIFICATE_P12` (a **Developer ID Application** certificate and its key, exported as `.p12`, base64: `base64 -i cert.p12`), `MAC_CERTIFICATE_PASSWORD`, and the variable `MAC_SIGNING_IDENTITY`, the certificate's name without its `Developer ID Application:` prefix (e.g. `OpenCara (TEAMID)`).
-  - iOS, uploaded to TestFlight: an app record for the bundle ID `com.pistead.app` in App Store Connect, `IOS_CERTIFICATE_P12` (an **Apple Distribution** certificate as base64 `.p12`), `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE` (an App Store provisioning profile for `com.pistead.app`, base64) and the variable `APPLE_TEAM_ID`. Its version is the tag's without a prerelease suffix, and its build number is the run's (`run number.attempt`). Every `ios-v` tag goes to TestFlight; submitting a build for App Store review stays manual.
+  - iOS, uploaded to TestFlight: an app record for the bundle ID `com.pikibun.app` in App Store Connect, `IOS_CERTIFICATE_P12` (an **Apple Distribution** certificate as base64 `.p12`), `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE` (an App Store provisioning profile for `com.pikibun.app`, base64) and the variable `APPLE_TEAM_ID`. Its version is the tag's without a prerelease suffix, and its build number is the run's (`run number.attempt`). Every `ios-v` tag goes to TestFlight; submitting a build for App Store review stays manual.
 
 ## Layout
 
-- `apps/server`: the control plane (Hono on Node); `src/local` runs it on one person's own computer (`pistead serve` and the desktop app). `src/db` holds the database providers and the SQLite→Postgres dialect translation; `src/storage` the backup storage providers; `src/workspace-databases` the owner-connected session databases; `src/git` the Git providers and accounts; `src/push` push identities and credentials; `src/data-export.ts` the session and workspace exports; `src/admin.ts` the server administration API; `src/auth.ts` GitHub and session sign-in and `src/password-auth.ts` password accounts, with `src/password-accounts-cli.ts` for `--create-admin` and `--reset-password`; `src/connector-hub.ts` the WebSocket relay to connected hosts.
+- `apps/server`: the control plane (Hono on Node); `src/local` runs it on one person's own computer (`pikibun serve` and the desktop app). `src/db` holds the database providers and the SQLite→Postgres dialect translation; `src/storage` the backup storage providers; `src/workspace-databases` the owner-connected session databases; `src/git` the Git providers and accounts; `src/push` push identities and credentials; `src/data-export.ts` the session and workspace exports; `src/admin.ts` the server administration API; `src/auth.ts` GitHub and session sign-in and `src/password-auth.ts` password accounts, with `src/password-accounts-cli.ts` for `--create-admin` and `--reset-password`; `src/connector-hub.ts` the WebSocket relay to connected hosts.
 - `apps/web`: the React UI.
 - `apps/mobile`: the iPhone and iPad app (Expo; Android later). `apps/desktop`: the macOS app (Electron; Linux and Windows later).
-- `apps/runner`: the connector runtime that runs on each host, published as the `pistead` CLI from `packages/cli` (with the server, for `pistead serve`) and bundled into the desktop app.
+- `apps/runner`: the connector runtime that runs on each host, published as the `pikibun` CLI from `packages/cli` (with the server, for `pikibun serve`) and bundled into the desktop app.
 - `packages/shared`: types and policy shared by all of the above. `packages/client`: the API client, live session updates and chat-option rules shared by the web and the apps.
 - `docs/design`: design notes, such as the [repository cache](docs/design/repository-cache.md).

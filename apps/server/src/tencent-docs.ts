@@ -100,7 +100,7 @@ async function documentText(secret: string, id: string): Promise<{ content?: str
       if (url.protocol !== 'https:' || !/(^|\.)(qq\.com|myqcloud\.com|gtimg\.com)$/.test(url.hostname)) fail(502, 'invalid_source_response', 'Tencent Docs returned an unexpected download link.');
       const file = await upstream('Tencent Docs', url.href, {}, exportLimit);
       if (file.status !== 200) fail(502, 'source_unavailable', 'Tencent Docs could not download the export. Try again later.');
-      const text = file.headers.get('x-pistead-truncated') ? null : docxText(file.bytes);
+      const text = file.headers.get('x-pikibun-truncated') ? null : docxText(file.bytes);
       return text === null ? { note: 'This document is too large or its export unreadable.', truncated: true } : { content: text, truncated: false };
     }
     await new Promise(resolve => setTimeout(resolve, 1000));

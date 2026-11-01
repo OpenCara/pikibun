@@ -302,7 +302,7 @@ function snapshot(request) {
   visit(HOME, "home", [".gitconfig"]);
   add(OWNER_CONFIG, "owner.gitconfig");
   visit(WORK, "worktree", [".git"]);
-  visit(GITDIR, "git", ["pistead-push", "pistead-clones"]);
+  visit(GITDIR, "git", ["pikibun-push", "pikibun-clones"]);
   return files;
 }
 

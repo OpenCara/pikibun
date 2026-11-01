@@ -1,4 +1,4 @@
-import { repositoryProgressText, repositoryProgressValue, segment } from "@pistead/client";
+import { repositoryProgressText, repositoryProgressValue, segment } from "@pikibun/client";
 import { useEffect, useRef } from "react";
 import { ActivityIndicator, Animated, Easing, StyleSheet, Text, View } from "react-native";
 import type { RepositoryPreparationView } from "../../../../packages/shared/src/types";

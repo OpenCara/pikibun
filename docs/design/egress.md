@@ -29,8 +29,8 @@ The rules this keeps from today:
 3. **Host cache.** A bare mirror per repository on the host, filled by the host and mounted read-only into sandboxes
    authorized for it; sessions borrow its objects through `objects/info/alternates` (a `git` shim adds
    `--reference-if-able` to clones of bound repositories). Keep refs per live session, prune with a grace period,
-   `pistead cache add` / `pistead cache prune`. Sparse checkout and partial clone served from the mirror.
-4. **Pushes and durability.** Pushes to the session branch (`pistead/<title-slug>-<short id>`) go through the proxy without
+   `pikibun cache add` / `pikibun cache prune`. Sparse checkout and partial clone served from the mirror.
+4. **Pushes and durability.** Pushes to the session branch (`pikibun/<title-slug>-<short id>`) go through the proxy without
    approval; pushes elsewhere need approval. Pull requests, comments and merges keep the broker. Backups and moves
    keep each clone's local work (branches, unpushed commits, uncommitted changes) as a Git bundle and clone the rest
    again. (The first plan pushed a WIP commit to the session branch instead; see below for why it doesn't.)
@@ -43,14 +43,14 @@ The rules this keeps from today:
 ### In the sandbox
 
 Every `bwrap` invocation already unshares the network namespace, leaving only loopback. For shell commands
-(`bash` requests only), the runner bind-mounts the session's proxy socket read-only at `/run/pistead/egress.sock`,
+(`bash` requests only), the runner bind-mounts the session's proxy socket read-only at `/run/pikibun/egress.sock`,
 and the sandbox helper relays the loopback port `127.0.0.1:41080` to it byte for byte. Commands get:
 
 - `HTTPS_PROXY` / `HTTP_PROXY` (both cases) pointing at the loopback port, `NO_PROXY` for loopback, and
   `NODE_USE_ENV_PROXY=1`;
 - `GIT_CONFIG_COUNT` entries rewriting `https://` remotes, and SSH remotes of github.com, gitlab.com and
   bitbucket.org, to `http://127.0.0.1:41080/git/<host>/<path>`;
-- `PISTEAD_EGRESS_STATUS`, the proxy's status endpoint;
+- `PIKIBUN_EGRESS_STATUS`, the proxy's status endpoint;
 - the host's trusted certificates (`trust-store.ts`), bound read-only at `/etc/ssl/certs/ca-certificates.crt` and named
   by `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE` and `NODE_EXTRA_CA_CERTS`. The sandbox has
   no `/etc`, so without them only clients with a store of their own (Node) could verify a tunnel's host (#63). The
@@ -76,7 +76,7 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
   (no loopback, private, CGNAT, link-local, multicast or documentation ranges, IPv4-mapped included); the
   connection goes to a checked address, so DNS can't be swapped in between. The proxy never looks inside tunnels.
   Other ports and plain-HTTP proxying are refused.
-- **`/__pistead/status`** shows the policy, the relayed repositories and the last 50 decisions (the proxy keeps
+- **`/__pikibun/status`** shows the policy, the relayed repositories and the last 50 decisions (the proxy keeps
   200 in memory).
 
 ### The control plane (`apps/server/src/network.ts`)
@@ -161,7 +161,7 @@ which pinned sessions were checked out of until phase 5. Clone sessions borrow f
   pack goes through the relay for the cache. Refreshes are serialized per repository with a lock, report progress, and
   try again after a failure another attempt may get past.
 - **Waited for by the clone.** Clone sessions' shell commands get a `git` shim first on `PATH`. For `git clone` of a
-  URL, it asks the proxy's `/__pistead/mirror?remote=…`, which maps the URL to a workspace repository, confirms the
+  URL, it asks the proxy's `/__pikibun/mirror?remote=…`, which maps the URL to a workspace repository, confirms the
   owner's access, makes its mirror ready (`RepositoryCache.ready`) and answers its path in the sandbox, streaming the
   fill's progress until then (one JSON object per line, with a heartbeat); the shim then adds `--reference-if-able`.
   A mirror's first fill is waited for however long it takes, and the shim says so on stderr: the clone never downloads
@@ -183,11 +183,11 @@ which pinned sessions were checked out of until phase 5. Clone sessions borrow f
   a timeout or rate limit), or the grant dropping the repository, unmounts it for the rest of the open; a timeout, a
   rate limit or an outage only leaves it out of that step. Mounts are fixed when a step starts: a mirror the command's
   step couldn't mount fails its clone with a message to run it again, rather than cloning without it.
-- **Kept and pruned.** Each refresh moves the session's keep ref (`refs/pistead/sessions/<hash>`) to a new commit whose
+- **Kept and pruned.** Each refresh moves the session's keep ref (`refs/pikibun/sessions/<hash>`) to a new commit whose
   parents are its previous keep commit and the branch tips it saw (500 per commit, chained), so the objects its clones
-  borrowed stay reachable; each confirmation moves it on too (`touch`), dating its last use. `pistead cache prune
+  borrowed stay reachable; each confirmation moves it on too (`touch`), dating its last use. `pikibun cache prune
   --older-than DAYS` drops keep refs older than that and runs `git gc` with the same cutoff; pins are never dropped.
-  `pistead cache list` shows sizes and how many sessions and pins each mirror keeps.
+  `pikibun cache list` shows sizes and how many sessions and pins each mirror keeps.
 - **Older control planes.** A grant without provider repository ids still works; its repositories just get no mirror.
 
 ### Not in phase 3
@@ -198,14 +198,14 @@ which pinned sessions were checked out of until phase 5. Clone sessions borrow f
 
 ## Phase 4: pushing the session branch
 
-A clone session's own branch is named for its work when the session is created: `pistead/<title-slug>-<short id>`
-(`sessionBranchName`), for example `pistead/add-dark-mode-toggle-1a2b3c4d5e6f` for a session titled "Add dark mode toggle".
+A clone session's own branch is named for its work when the session is created: `pikibun/<title-slug>-<short id>`
+(`sessionBranchName`), for example `pikibun/add-dark-mode-toggle-1a2b3c4d5e6f` for a session titled "Add dark mode toggle".
 The slug comes from the title, which the apps take from the first prompt; the first 12 hex digits of the session id (48 random bits) keep
 sessions with the same title apart (the column is unique too). It is stored in `sessions.branch`, is immutable (renaming
 the session doesn't move it) and reaches the host in the runner binding (`session.branch`). A restored or moved
 session gets a branch of its own, never its source's. Sessions from before named branches, and those started on a
-connector that doesn't advertise `sessionBranches`, keep `pistead/<session-id>` (`sessionBranch`). The branch is given
-to shell commands as `PISTEAD_SESSION_BRANCH`. The agent pushes it with plain Git, without approval; every other branch still goes through
+connector that doesn't advertise `sessionBranches`, keep `pikibun/<session-id>` (`sessionBranch`). The branch is given
+to shell commands as `PIKIBUN_SESSION_BRANCH`. The agent pushes it with plain Git, without approval; every other branch still goes through
 `git_push` and its approval, and so do pull requests (the agent calls `git_push` with the session branch once it has
 pushed it). Pinned sessions push only with `git_push`.
 
@@ -256,7 +256,7 @@ clones that borrow from the host's mirror.
   backup lists them as `clones` (`CloneBackup`); restorations still pending are carried as they were.
 - **Restoring it** (`restore.ts`). Only into a clone session. Each clone is checked (path, branch names, commits, bundle
   header, no duplicate paths); clones may nest, and a pending clone may share its path with files. Its bundle and the
-  list of pending clones are staged in the worktree's `.git/pistead-clones`, which shell commands see read-only.
+  list of pending clones are staged in the worktree's `.git/pikibun-clones`, which shell commands see read-only.
 - **Opening the restored session.** Pending clones are cloned again in the background, as a cache host prepares pinned
   repositories, and runs wait for it. For each (`clone-restore`, with the proxy socket and the mirrors): its origin must
   be one of the workspace's repositories; where the host keeps a cache, the mirror is made ready (with the host's own Git
@@ -295,7 +295,7 @@ audited as `repository.lfs.updated`; the setting is in `WorkspaceRepository.lfs`
   with a message saying LFS is off for the repository.
 - **In the sandbox.** Where the host has `git-lfs` (`/usr/bin` or `/usr/local/bin`, seen through the read-only `/usr`
   mount), clone sessions get the `git` shim even without a repository cache. Before `git clone` of a URL it asks the
-  proxy's `/__pistead/lfs?remote=…`, and for a repository with LFS on adds `-c filter.lfs.{process,smudge,clean}` and
+  proxy's `/__pikibun/lfs?remote=…`, and for a repository with LFS on adds `-c filter.lfs.{process,smudge,clean}` and
   `filter.lfs.required` to the clone, so the setting lands in that clone's own `.git/config` (the session's global
   config is read-only). The agent is told which repositories have LFS on, and how to turn the filters on in a clone
   made otherwise.
@@ -438,7 +438,7 @@ proxy adds the credential, the way the Git relay does, for a short list of hosts
   GitHub's error shape, pointing at the approved tools. A `/repos/{owner}/{name}` path takes the credential that covers
   that repository; GraphQL, the token of the installation whose account the query's `owner` variable names; anything
   else, the first. A repository no credential covers, or a request carrying a credential of its own, goes on without
-  Pistead's credential only where the network policy allows the host. The proxy makes the request itself, at the API's
+  Pikibun's credential only where the network policy allows the host. The proxy makes the request itself, at the API's
   public addresses only and connected to exactly the addresses checked, and streams the answer back. GitHub's redirects
   to its download hosts (`codeload.github.com`, `*.githubusercontent.com`, `*.blob.core.windows.net`) are followed
   without the credential, so `gh run view --log` works with network access off; other redirects reach the client. Every

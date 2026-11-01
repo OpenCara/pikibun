@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="580" viewBox="0 0 960 580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <title>How a team collaborates with Pistead</title>
+  <title>How a team collaborates with Pikibun</title>
   <desc>Alice shares her machine, where Pi is signed in to a model provider, with the workspace. Bob starts a session on it that runs as Bob. Carol can write and approve, Dan can send side asks, Erin can read, and a client follows a read-only share link.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -26,7 +26,7 @@
   <text x="145" y="204" text-anchor="middle" font-size="12" fill="#7d4e00">this machine</text>
 
   <rect x="40" y="228" width="210" height="44" rx="8" fill="#ffffff" stroke="#d0d7de"/>
-  <text x="145" y="255" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">pistead connector</text>
+  <text x="145" y="255" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">pikibun connector</text>
 
   <rect x="40" y="286" width="210" height="80" rx="8" fill="#ffffff" stroke="#d0d7de" stroke-dasharray="5 4"/>
   <text x="145" y="312" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2328">Sandbox per session</text>
@@ -40,7 +40,7 @@
 
   <!-- Workspace / session -->
   <rect x="340" y="56" width="300" height="460" rx="12" fill="#f6f8fa" stroke="#d0d7de"/>
-  <text x="490" y="86" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">Pistead · workspace acme</text>
+  <text x="490" y="86" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2328">Pikibun · workspace acme</text>
 
   <rect x="358" y="102" width="264" height="312" rx="10" fill="#ffffff" stroke="#0969da" stroke-width="1.5"/>
   <text x="374" y="126" font-size="14" font-weight="700" fill="#1f2328">Session: Fix login redirect</text>

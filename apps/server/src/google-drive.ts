@@ -144,7 +144,7 @@ async function content(secret: string, item: DriveFile): Promise<{ content?: str
   if (answer.status !== 200) fail(502, 'source_unavailable', 'Google Drive could not download the file. Try again later.');
   if (word) {
     // A Word file uploaded to Drive (not a Google Doc): its paragraphs.
-    const text = answer.headers.get('x-pistead-truncated') ? null : docxText(answer.bytes);
+    const text = answer.headers.get('x-pikibun-truncated') ? null : docxText(answer.bytes);
     return text === null ? { note: 'This Word document is too large or unreadable.', truncated: true } : { content: text, truncated: false };
   }
   const body = textBody(answer);

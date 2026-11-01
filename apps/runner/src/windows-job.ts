@@ -11,7 +11,7 @@ import type { WindowsJobLimits } from "./sandbox-backend.js";
  * Unsandboxed commands on Windows run in a job too (hostJob), without limits, so a time limit or cancel ends what they
  * started in the background: `taskkill /T` can't find those once the process that started them has exited.
  *
- * The Win32 calls go through koffi: Pistead's own (an optional dependency, installed on Windows), else the copy MXC's SDK
+ * The Win32 calls go through koffi: Pikibun's own (an optional dependency, installed on Windows), else the copy MXC's SDK
  * depends on, loaded from where the SDK is installed.
  */
 const JobObjectExtendedLimitInformation = 9;
@@ -54,21 +54,21 @@ function load(runtime?: string): Kernel32 {
   if (process.platform !== "win32") throw new Error("Job objects exist only on Windows");
   const koffi = loadKoffi(runtime);
   const library = koffi.load("kernel32.dll");
-  const IO_COUNTERS = koffi.struct("PISTEAD_IO_COUNTERS", {
+  const IO_COUNTERS = koffi.struct("PIKIBUN_IO_COUNTERS", {
     ReadOperationCount: "uint64", WriteOperationCount: "uint64", OtherOperationCount: "uint64",
     ReadTransferCount: "uint64", WriteTransferCount: "uint64", OtherTransferCount: "uint64",
   });
-  const BASIC = koffi.struct("PISTEAD_JOBOBJECT_BASIC_LIMIT_INFORMATION", {
+  const BASIC = koffi.struct("PIKIBUN_JOBOBJECT_BASIC_LIMIT_INFORMATION", {
     PerProcessUserTimeLimit: "int64", PerJobUserTimeLimit: "int64", LimitFlags: "uint32",
     MinimumWorkingSetSize: "size_t", MaximumWorkingSetSize: "size_t", ActiveProcessLimit: "uint32",
     Affinity: "uintptr_t", PriorityClass: "uint32", SchedulingClass: "uint32",
   });
-  const EXTENDED = koffi.struct("PISTEAD_JOBOBJECT_EXTENDED_LIMIT_INFORMATION", {
+  const EXTENDED = koffi.struct("PIKIBUN_JOBOBJECT_EXTENDED_LIMIT_INFORMATION", {
     BasicLimitInformation: BASIC, IoInfo: IO_COUNTERS, ProcessMemoryLimit: "size_t", JobMemoryLimit: "size_t",
     PeakProcessMemoryUsed: "size_t", PeakJobMemoryUsed: "size_t",
   });
   // ControlFlags, then a union whose CpuRate member is a DWORD.
-  const CPU = koffi.struct("PISTEAD_JOBOBJECT_CPU_RATE_CONTROL_INFORMATION", { ControlFlags: "uint32", CpuRate: "uint32" });
+  const CPU = koffi.struct("PIKIBUN_JOBOBJECT_CPU_RATE_CONTROL_INFORMATION", { ControlFlags: "uint32", CpuRate: "uint32" });
   kernel32 = {
     CreateJobObjectW: library.func("void * __stdcall CreateJobObjectW(void *attributes, void *name)"),
     SetExtendedLimits: library.func("SetInformationJobObject", "bool", ["void *", "int", koffi.pointer(EXTENDED), "uint32"]),

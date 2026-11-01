@@ -19,13 +19,13 @@ const controlResponseBytes = 1024 * 1024;
 const importChunk = 500;
 
 /**
- * Pistead's tables in a workspace database, created when missing (in the first schema of the user's search_path); tables
+ * Pikibun's tables in a workspace database, created when missing (in the first schema of the user's search_path); tables
  * created beforehand need these columns. Snapshots keep the exact backup bytes, canonical JSON:
  * `convert_from(snapshot, 'UTF8')::jsonb` reads one. `data` holds what an imported dump adds: a workspace's settings, or a
  * session's grants, approvals, pushes, backups and restores, as of `data_exported_at`.
  */
 const tables: readonly { name: string; columns: readonly string[]; create: string }[] = [
-  { name: 'pistead_workspaces', columns: ['id', 'name', 'owner_id', 'saved_at', 'data', 'data_exported_at'], create: `CREATE TABLE pistead_workspaces (
+  { name: 'pikibun_workspaces', columns: ['id', 'name', 'owner_id', 'saved_at', 'data', 'data_exported_at'], create: `CREATE TABLE pikibun_workspaces (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     owner_id TEXT NOT NULL,
@@ -33,8 +33,8 @@ const tables: readonly { name: string; columns: readonly string[]; create: strin
     data JSONB,
     data_exported_at TIMESTAMPTZ
   )` },
-  { name: 'pistead_sessions', columns: ['id', 'workspace_id', 'owner_id', 'title', 'status', 'visibility', 'created_at', 'record', 'saved_at',
-    'data', 'data_exported_at'], create: `CREATE TABLE pistead_sessions (
+  { name: 'pikibun_sessions', columns: ['id', 'workspace_id', 'owner_id', 'title', 'status', 'visibility', 'created_at', 'record', 'saved_at',
+    'data', 'data_exported_at'], create: `CREATE TABLE pikibun_sessions (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
     owner_id TEXT NOT NULL,
@@ -47,8 +47,8 @@ const tables: readonly { name: string; columns: readonly string[]; create: strin
     data JSONB,
     data_exported_at TIMESTAMPTZ
   )` },
-  { name: 'pistead_session_backups', columns: ['id', 'session_id', 'workspace_id', 'owner_id', 'format', 'sha256', 'size', 'snapshot', 'created_at'],
-    create: `CREATE TABLE pistead_session_backups (
+  { name: 'pikibun_session_backups', columns: ['id', 'session_id', 'workspace_id', 'owner_id', 'format', 'sha256', 'size', 'snapshot', 'created_at'],
+    create: `CREATE TABLE pikibun_session_backups (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     workspace_id TEXT NOT NULL,
@@ -59,8 +59,8 @@ const tables: readonly { name: string; columns: readonly string[]; create: strin
     snapshot BYTEA NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
   );
-  CREATE INDEX pistead_session_backups_session ON pistead_session_backups (session_id, created_at)` },
-  { name: 'pistead_audit', columns: ['id', 'workspace_id', 'session_id', 'actor_id', 'action', 'detail', 'created_at'], create: `CREATE TABLE pistead_audit (
+  CREATE INDEX pikibun_session_backups_session ON pikibun_session_backups (session_id, created_at)` },
+  { name: 'pikibun_audit', columns: ['id', 'workspace_id', 'session_id', 'actor_id', 'action', 'detail', 'created_at'], create: `CREATE TABLE pikibun_audit (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
     session_id TEXT,
@@ -69,10 +69,10 @@ const tables: readonly { name: string; columns: readonly string[]; create: strin
     detail JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
   );
-  CREATE INDEX pistead_audit_session ON pistead_audit (session_id, created_at);
-  CREATE INDEX pistead_audit_workspace ON pistead_audit (workspace_id, created_at)` },
+  CREATE INDEX pikibun_audit_session ON pikibun_audit (session_id, created_at);
+  CREATE INDEX pikibun_audit_workspace ON pikibun_audit (workspace_id, created_at)` },
 ];
-/** Tables only a Pistead control plane has: such a database is never used as a workspace database. */
+/** Tables only a Pikibun control plane has: such a database is never used as a workspace database. */
 const controlPlaneTables = ['workspace_databases', 'schema_migrations', 'auth_sessions'];
 
 /** pg's per-client Connection, which is not part of its typings. */
@@ -186,7 +186,7 @@ async function visibleTables(client: pg.Client, names: readonly string[]): Promi
   return present;
 }
 
-/** Tables an owner created beforehand must have every column Pistead writes. */
+/** Tables an owner created beforehand must have every column Pikibun writes. */
 function requireColumns(present: Map<string, Set<string>>): void {
   for (const table of tables) {
     const columns = present.get(table.name);
@@ -195,17 +195,17 @@ function requireColumns(present: Map<string, Set<string>>): void {
 }
 
 /**
- * Refuses a Pistead control plane's own database, then creates whichever of Pistead's tables are missing. Existing tables
+ * Refuses a Pikibun control plane's own database, then creates whichever of Pikibun's tables are missing. Existing tables
  * are left alone, so an owner can create them beforehand and grant the connecting user only what saving needs.
  */
 async function provision(client: pg.Client): Promise<void> {
   const present = await visibleTables(client, [...controlPlaneTables, ...tables.map(table => table.name)]);
-  if (controlPlaneTables.every(name => present.has(name))) throw new WorkspaceDatabaseError('pistead_database');
+  if (controlPlaneTables.every(name => present.has(name))) throw new WorkspaceDatabaseError('pikibun_database');
   requireColumns(present);
   if (tables.every(table => present.has(table.name))) return;
   await transaction(client, async () => {
     // Concurrent first saves serialize here instead of racing on CREATE TABLE.
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('pistead.workspace-database'))");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('pikibun.workspace-database'))");
     const current = await visibleTables(client, tables.map(table => table.name));
     requireColumns(current);
     for (const table of tables) if (!current.has(table.name)) await client.query(table.create);
@@ -242,7 +242,7 @@ export class PostgresWorkspaceDatabases implements WorkspaceDatabaseProvider {
     // Every setting is explicit, so nothing falls back to the server's PG* environment, a .pgpass file or a unix socket.
     const client = new Client({
       host: resolved.address, port: target.port, database: target.database, user: target.user, password: target.password, ssl,
-      application_name: 'pistead', connectionTimeoutMillis: connectTimeoutMs, query_timeout: queryTimeoutMs,
+      application_name: 'pikibun', connectionTimeoutMillis: connectTimeoutMs, query_timeout: queryTimeoutMs,
       statement_timeout: queryTimeoutMs, keepAlive: false,
     });
     // pg also reports a lost connection as an 'error' event; the operation in flight rejects on its own.
@@ -262,12 +262,12 @@ export class PostgresWorkspaceDatabases implements WorkspaceDatabaseProvider {
     try {
       await provision(client);
       const { rows } = await client.query<{ allowed: unknown }>(`SELECT
-        has_table_privilege('pistead_workspaces', 'SELECT') AND has_table_privilege('pistead_workspaces', 'INSERT')
-          AND has_table_privilege('pistead_workspaces', 'UPDATE')
-        AND has_table_privilege('pistead_sessions', 'SELECT') AND has_table_privilege('pistead_sessions', 'INSERT')
-          AND has_table_privilege('pistead_sessions', 'UPDATE')
-        AND has_table_privilege('pistead_session_backups', 'SELECT') AND has_table_privilege('pistead_session_backups', 'INSERT')
-        AND has_table_privilege('pistead_audit', 'SELECT') AND has_table_privilege('pistead_audit', 'INSERT')
+        has_table_privilege('pikibun_workspaces', 'SELECT') AND has_table_privilege('pikibun_workspaces', 'INSERT')
+          AND has_table_privilege('pikibun_workspaces', 'UPDATE')
+        AND has_table_privilege('pikibun_sessions', 'SELECT') AND has_table_privilege('pikibun_sessions', 'INSERT')
+          AND has_table_privilege('pikibun_sessions', 'UPDATE')
+        AND has_table_privilege('pikibun_session_backups', 'SELECT') AND has_table_privilege('pikibun_session_backups', 'INSERT')
+        AND has_table_privilege('pikibun_audit', 'SELECT') AND has_table_privilege('pikibun_audit', 'INSERT')
         AS allowed`);
       if (rows[0]?.allowed !== true) throw new WorkspaceDatabaseError('permission_denied');
     } catch (error) {
@@ -284,18 +284,18 @@ export class PostgresWorkspaceDatabases implements WorkspaceDatabaseProvider {
       await provision(client);
       await transaction(client, async () => {
         // Records are as of their save or export: a newer one is never replaced by an older one.
-        await client.query(`INSERT INTO pistead_workspaces (id, name, owner_id, saved_at) VALUES ($1, $2, $3, $4)
+        await client.query(`INSERT INTO pikibun_workspaces (id, name, owner_id, saved_at) VALUES ($1, $2, $3, $4)
           ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, owner_id = EXCLUDED.owner_id, saved_at = EXCLUDED.saved_at
-            WHERE pistead_workspaces.saved_at <= EXCLUDED.saved_at`,
+            WHERE pikibun_workspaces.saved_at <= EXCLUDED.saved_at`,
         [workspace.id, workspace.name, workspace.ownerId, backup.createdAt]);
-        await client.query(`INSERT INTO pistead_sessions (id, workspace_id, owner_id, title, status, visibility, created_at, record, saved_at)
+        await client.query(`INSERT INTO pikibun_sessions (id, workspace_id, owner_id, title, status, visibility, created_at, record, saved_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
           ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, status = EXCLUDED.status, visibility = EXCLUDED.visibility,
             record = EXCLUDED.record, saved_at = EXCLUDED.saved_at
-            WHERE pistead_sessions.saved_at <= EXCLUDED.saved_at`,
+            WHERE pikibun_sessions.saved_at <= EXCLUDED.saved_at`,
         [session.id, session.workspaceId, session.ownerId, session.title, session.status, session.visibility, session.createdAt,
           JSON.stringify(session.record), backup.createdAt]);
-        await client.query(`INSERT INTO pistead_session_backups (id, session_id, workspace_id, owner_id, format, sha256, size, snapshot, created_at)
+        await client.query(`INSERT INTO pikibun_session_backups (id, session_id, workspace_id, owner_id, format, sha256, size, snapshot, created_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [backup.id, session.id, session.workspaceId, session.ownerId, backup.format, backup.sha256, backup.size,
           Buffer.from(save.snapshot.buffer, save.snapshot.byteOffset, save.snapshot.byteLength), backup.createdAt]);
@@ -311,7 +311,7 @@ export class PostgresWorkspaceDatabases implements WorkspaceDatabaseProvider {
     // A bytea arrives as hex text, two characters per byte, so the snapshot may take twice its size on the wire.
     const client = await this.connect(target, backup.size * 2 + controlResponseBytes);
     try {
-      const { rows } = await client.query<{ snapshot: unknown }>(`SELECT snapshot FROM pistead_session_backups
+      const { rows } = await client.query<{ snapshot: unknown }>(`SELECT snapshot FROM pikibun_session_backups
         WHERE id = $1 AND session_id = $2 AND octet_length(snapshot) = $3`, [backup.id, backup.sessionId, backup.size]);
       const snapshot = rows[0]?.snapshot;
       if (snapshot === undefined) return null;
@@ -333,33 +333,33 @@ export class PostgresWorkspaceDatabases implements WorkspaceDatabaseProvider {
       await provision(client);
       await transaction(client, async () => {
         // The workspace's name and owner come from the control plane now; its settings from the dump, as of its export.
-        await client.query(`INSERT INTO pistead_workspaces (id, name, owner_id, saved_at) VALUES ($1, $2, $3, $4)
+        await client.query(`INSERT INTO pikibun_workspaces (id, name, owner_id, saved_at) VALUES ($1, $2, $3, $4)
           ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, owner_id = EXCLUDED.owner_id, saved_at = EXCLUDED.saved_at
-            WHERE pistead_workspaces.saved_at <= EXCLUDED.saved_at`,
+            WHERE pikibun_workspaces.saved_at <= EXCLUDED.saved_at`,
         [workspace.id, workspace.name, workspace.ownerId, new Date().toISOString()]);
         if (data.workspaceData) {
-          await client.query(`UPDATE pistead_workspaces SET data = $2::jsonb, data_exported_at = $3
+          await client.query(`UPDATE pikibun_workspaces SET data = $2::jsonb, data_exported_at = $3
             WHERE id = $1 AND (data_exported_at IS NULL OR data_exported_at <= $3)`, [workspace.id, JSON.stringify(data.workspaceData), exportedAt]);
         }
         // Records and details as of the export replace older ones only; activity entries never change, so they are added once.
         for (const sessions of chunks(data.sessions, importChunk)) {
-          await client.query(`INSERT INTO pistead_sessions (id, workspace_id, owner_id, title, status, visibility, created_at, record, saved_at)
+          await client.query(`INSERT INTO pikibun_sessions (id, workspace_id, owner_id, title, status, visibility, created_at, record, saved_at)
             SELECT s.id, $1, s.owner_id, s.title, s.status, s.visibility, s.created_at, s.record, $2
             FROM jsonb_to_recordset($3::jsonb) AS s(id text, owner_id text, title text, status text, visibility text, created_at timestamptz, record jsonb)
             ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, status = EXCLUDED.status, visibility = EXCLUDED.visibility,
               record = EXCLUDED.record, saved_at = EXCLUDED.saved_at
-              WHERE pistead_sessions.saved_at <= EXCLUDED.saved_at`,
+              WHERE pikibun_sessions.saved_at <= EXCLUDED.saved_at`,
           [workspace.id, exportedAt, JSON.stringify(sessions.map(session => ({ id: session.id, owner_id: session.ownerId, title: session.title,
             status: session.status, visibility: session.visibility, created_at: session.createdAt, record: session.record })))]);
           const details = sessions.flatMap(session => session.data === null ? [] : [{ id: session.id, data: session.data }]);
           if (details.length) {
-            await client.query(`UPDATE pistead_sessions AS s SET data = d.data, data_exported_at = $2
+            await client.query(`UPDATE pikibun_sessions AS s SET data = d.data, data_exported_at = $2
               FROM jsonb_to_recordset($1::jsonb) AS d(id text, data jsonb)
               WHERE s.id = d.id AND (s.data_exported_at IS NULL OR s.data_exported_at <= $2)`, [JSON.stringify(details), exportedAt]);
           }
         }
         for (const entries of chunks(data.audit, importChunk)) {
-          await client.query(`INSERT INTO pistead_audit (id, workspace_id, session_id, actor_id, action, detail, created_at)
+          await client.query(`INSERT INTO pikibun_audit (id, workspace_id, session_id, actor_id, action, detail, created_at)
             SELECT a.id, $1, a.session_id, a.actor_id, a.action, a.detail, a.created_at
             FROM jsonb_to_recordset($2::jsonb) AS a(id text, session_id text, actor_id text, action text, detail jsonb, created_at timestamptz)
             ON CONFLICT (id) DO NOTHING`,

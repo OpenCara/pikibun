@@ -268,7 +268,7 @@ function RepositoryPicker({ open, workspace, accounts, repositories, disabled, r
       </div>
       {workspaceConnection && <p className="muted small">Sessions read this repository with the workspace's connection ({account?.login}), not their owner's account. Pushes still use the session owner's account or the workspace's push access</p>}
       {listed ? <p className="muted small">Only repositories this {providerName} account can access are listed. Sessions read them with their owner's own account for the same provider. Never paste a token or clone URL</p>
-        : <p className="muted small">A Git server lists no repositories: enter the one to add. Pistead reads it with this {workspaceConnection ? "connection" : "account"} to check it{workspaceConnection ? "" : ", and sessions read it with their owner's own account for the same server"}. Never paste a token</p>}
+        : <p className="muted small">A Git server lists no repositories: enter the one to add. Pikibun reads it with this {workspaceConnection ? "connection" : "account"} to check it{workspaceConnection ? "" : ", and sessions read it with their owner's own account for the same server"}. Never paste a token</p>}
       {!listed && account && <>
         <Field label="Clone URL or path" hint={`The repository's https:// clone URL on ${account.host}, or its path there, such as team/project.git`}>
           <span className="lookup-row">
@@ -376,7 +376,7 @@ function InviteLink({ workspace }: { workspace: Workspace }) {
     }, replace ? "Invite link replaced. The old link no longer works." : "Invite link turned off.");
   }
   return <Section title="Invite link" info={<div className="stack">
-    <p>Share this link with anyone. When someone signed in to this Pistead server opens it, they can ask to join, and appear under <strong>Pending members</strong>.</p>
+    <p>Share this link with anyone. When someone signed in to this Pikibun server opens it, they can ask to join, and appear under <strong>Pending members</strong>.</p>
     <p>A pending member can't see or do anything in the workspace until an owner or admin accepts them with a role. Anyone with the link can ask, so only accept people you recognize.</p>
   </div>} action={link
     ? <DropdownMenu label="Invite link actions" items={[

@@ -270,7 +270,7 @@
     --syntax-title: #8250df; --syntax-type: #953800; --syntax-attr: #0550ae; --syntax-tag: #116329; --syntax-meta: #57606a;
     --syntax-addition: #116329; --syntax-addition-bg: #dafbe1; --syntax-deletion: #82071e; --syntax-deletion-bg: #ffebe9;
   }
-  [data-theme="dark"] .code-view {
+  [data-theme="dark"] .code-view, [data-theme="pikibun"] .code-view {
     --syntax-comment: #8b949e; --syntax-keyword: #ff7b72; --syntax-string: #a5d6ff; --syntax-number: #79c0ff;
     --syntax-title: #d2a8ff; --syntax-type: #ffa657; --syntax-attr: #79c0ff; --syntax-tag: #7ee787; --syntax-meta: #8b949e;
     --syntax-addition: #aff5b4; --syntax-addition-bg: #033a16; --syntax-deletion: #ffdcd7; --syntax-deletion-bg: #67060c;

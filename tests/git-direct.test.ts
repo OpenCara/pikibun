@@ -66,7 +66,7 @@ test("a direct read goes to the forge with the granted credential, and one grant
   assert.ok(refs);
   assert.equal(await refs.text(), "advertisement");
   assert.equal(refs.headers.get("content-type"), "application/x-git-upload-pack-advertisement");
-  assert.equal(refs.headers.get("x-pistead-transport"), "direct repository-token");
+  assert.equal(refs.headers.get("x-pikibun-transport"), "direct repository-token");
   const pack = await direct.forward({ bindingId: "binding-app", service: "upload-pack", contentType: "application/x-git-upload-pack-request",
     body: new Uint8Array(Buffer.from("0000")) });
   assert.equal(await pack!.text(), "PACK");
@@ -123,7 +123,7 @@ test("a direct push streams its pack to the forge, asks for each request, and re
   const { direct, asked } = directGit(async () => pushGrant(), upstream.fetch);
   const refs = await direct.forward({ bindingId: "binding-app", service: "receive-refs", userAgent: "git/2.43.0" });
   assert.equal(await refs!.text(), "refs");
-  const command = { old: "0".repeat(40), new: tip, ref: "refs/heads/pistead/session" };
+  const command = { old: "0".repeat(40), new: tip, ref: "refs/heads/pikibun/session" };
   const pack = new Blob(["0000PACK-DATA"]).stream();
   const pushed = await direct.forward({ bindingId: "binding-app", service: "receive-pack", contentType: "application/x-git-receive-pack-request", body: pack, command });
   assert.equal(await pushed!.text(), "report");
@@ -223,7 +223,7 @@ async function proxyWithDirect(t: TestContext, grant: (request: Omit<GitDirectRe
     grant: async (): Promise<EgressGrant> => ({ policy: { mode: "off", domains: [], packageRegistries: true }, repositories: [repository] }),
     // As a session does: the forge directly where granted, else the relay.
     relay: async request => (await direct.forward(request)) ?? (relayed.push(request), new Response("relayed", { headers: { "content-type": "application/x-git-upload-pack-advertisement" } })),
-    sessionBranch: "pistead/session",
+    sessionBranch: "pikibun/session",
   });
   await instance.start();
   t.after(async () => { await instance.close(); await rm(directory, { recursive: true, force: true }); });
@@ -239,14 +239,14 @@ test("the egress proxy serves the sandbox from the forge directly where granted,
   assert.deepEqual([refs.status, refs.body], [200, "advertisement"]);
   assert.equal(relayed.length, 0);
   // A push's one command, read by the proxy, goes with its grant request, for the control plane's checks and audit.
-  const command = pkt(`${"0".repeat(40)} ${tip} refs/heads/pistead/session\0report-status\n`) + "0000";
+  const command = pkt(`${"0".repeat(40)} ${tip} refs/heads/pikibun/session\0report-status\n`) + "0000";
   const pushed = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack",
     { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body: `${command}PACK` });
   assert.deepEqual([pushed.status, pushed.body], [200, "report"]);
-  assert.deepEqual(asked.at(-1), { bindingId: "binding-app", access: "push", command: { old: "0".repeat(40), new: tip, ref: "refs/heads/pistead/session" } });
+  assert.deepEqual(asked.at(-1), { bindingId: "binding-app", access: "push", command: { old: "0".repeat(40), new: tip, ref: "refs/heads/pikibun/session" } });
   assert.equal(upstream.calls.at(-1)!.body, `${command}PACK`);
-  const status = JSON.parse((await get(instance.socketPath, "/__pistead/status")).body) as { recent: { reason?: string }[]; gitRemotes: string };
-  assert.deepEqual(status.recent.map(entry => entry.reason), ["info-refs (direct repository-token)", "push pistead/session (direct push-identity)"]);
+  const status = JSON.parse((await get(instance.socketPath, "/__pikibun/status")).body) as { recent: { reason?: string }[]; gitRemotes: string };
+  assert.deepEqual(status.recent.map(entry => entry.reason), ["info-refs (direct repository-token)", "push pikibun/session (direct push-identity)"]);
   assert.match(status.gitRemotes, /fetches them from the forge itself/);
   // The sandbox never sees how the answer was carried.
   const raw = await new Promise<string>((resolve, reject) => {
@@ -257,5 +257,5 @@ test("the egress proxy serves the sandbox from the forge directly where granted,
     request.on("error", reject);
     request.end();
   });
-  assert.doesNotMatch(raw, /x-pistead-transport|direct/);
+  assert.doesNotMatch(raw, /x-pikibun-transport|direct/);
 });

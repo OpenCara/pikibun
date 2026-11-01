@@ -14,7 +14,7 @@ export interface Settings {
    */
   resumeHost?: { unsandboxedConsent: boolean };
   /**
-   * Present while the owner wants Pistead running on this computer (local-server.ts): the Pistead window then shows it
+   * Present while the owner wants Pikibun running on this computer (local-server.ts): the Pikibun window then shows it
    * instead of `server`, and it starts again at launch with the unsandboxed consent given at its start.
    */
   localServer?: { unsandboxedConsent: boolean };
@@ -26,7 +26,7 @@ const isBounds = (value: unknown): value is Bounds => isRecord(value)
 
 /**
  * Unknown or invalid fields fall back to defaults: a damaged file never stops the app from opening. A `gitCredentials`
- * left by older versions is dropped: the host's owner turns Git credentials on in Pistead now.
+ * left by older versions is dropped: the host's owner turns Git credentials on in Pikibun now.
  */
 export function parseSettings(value: unknown): Settings {
   const source = isRecord(value) ? value : {};

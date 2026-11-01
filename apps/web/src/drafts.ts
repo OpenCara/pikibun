@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
  * another session (or reloading) and back finds it where it was left. Also how a first message that could not be sent
  * from the new-session screen reaches its session's chat box.
  */
-const key = (sessionId: string) => `pistead.draft.${sessionId}`;
+const key = (sessionId: string) => `pikibun.draft.${sessionId}`;
 
 /** Chat boxes open in this tab, told when a draft of theirs was sent and forgotten. */
 const listeners = new Map<string, Set<(sent: string) => void>>();

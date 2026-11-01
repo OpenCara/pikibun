@@ -143,7 +143,7 @@ function PushIdentitySheet({ path, oidc, redirectUri, initial, close, saved }: {
       <CopyField label="Subject" value={oidc.subject} />
       {audience && <CopyField label="Audience" value={audience} />}
     </div>
-    : <Alert variant="warning" title="OIDC issuer unavailable">The operator has not configured Pistead's OIDC signing key, so this identity cannot be used yet.</Alert>;
+    : <Alert variant="warning" title="OIDC issuer unavailable">The operator has not configured Pikibun's OIDC signing key, so this identity cannot be used yet.</Alert>;
   return <Sheet open title={existing ? "Replace push identity" : "Add push identity"} onClose={dismiss} footer={created ? <>
     <Button disabled={action.busy} onClick={close}>Later</Button>
     <Button variant="default" disabled={action.busy} onClick={() => authorize(created)}>Authorize</Button>
@@ -152,7 +152,7 @@ function PushIdentitySheet({ path, oidc, redirectUri, initial, close, saved }: {
     <Button variant="default" type="submit" form="push-identity-form" disabled={!ready || action.busy}>{action.busy ? "Verifying..." : "Save"}</Button>
   </>}>
     {created
-      ? <div className="stack"><p>Saved. Sign in to {gitProviderLabel(created.provider, created.host)} as the bot account, then authorize the OAuth app so Pistead can mint push tokens.</p><Feedback error={action.error} /></div>
+      ? <div className="stack"><p>Saved. Sign in to {gitProviderLabel(created.provider, created.host)} as the bot account, then authorize the OAuth app so Pikibun can mint push tokens.</p><Feedback error={action.error} /></div>
       : <form id="push-identity-form" className="stack" onSubmit={save}>
         <Field label="Provider" hint={existing ? "Saving replaces the identity for the same provider, host and scope" : undefined}>
           <select className="select" value={provider} disabled={Boolean(existing)} onChange={event => chooseProvider(event.target.value as GitProvider)}>
@@ -191,7 +191,7 @@ function PushIdentitySheet({ path, oidc, redirectUri, initial, close, saved }: {
           <p className="muted small">Register an OAuth application on the instance ({provider === "gitlab" ? "scopes write_repository and read_user" : "scopes write:repository and read:user, Gitea 1.23 or later"}) with this redirect URI. After saving, sign in as a dedicated bot account with push access and authorize it.</p>
           {redirectUri
             ? <CopyField label="Redirect URI" value={redirectUri} />
-            : <Alert variant="warning" title="Redirect URI unavailable">The operator has not configured Pistead's application origin, so this identity cannot be authorized yet.</Alert>}
+            : <Alert variant="warning" title="Redirect URI unavailable">The operator has not configured Pikibun's application origin, so this identity cannot be authorized yet.</Alert>}
           {text("clientId", "Client ID")}
           <Field label="Client secret" hint="Write-only"><input className="input" type="password" required value={secret} onChange={event => setSecret(event.target.value)} autoComplete="new-password" /></Field>
         </>}
@@ -200,7 +200,7 @@ function PushIdentitySheet({ path, oidc, redirectUri, initial, close, saved }: {
           {issuerBlock("")}
           {text("audience", "Audience")}
         </>}
-        {kind === "owner-account" && <p className="muted small">Agents push as the session owner, with {ownerAccount[provider]} (Settings → Profile → Connected accounts). Only sessions on the owner's own hosts push this way: the token is sent to that host for each push and held only in its memory. {provider === "github" ? "Pistead resets it when the push ends, so the host's copy stops working while the owner stays connected." : "It stays valid after the push: these tokens can't be reset."}</p>}
+        {kind === "owner-account" && <p className="muted small">Agents push as the session owner, with {ownerAccount[provider]} (Settings → Profile → Connected accounts). Only sessions on the owner's own hosts push this way: the token is sent to that host for each push and held only in its memory. {provider === "github" ? "Pikibun resets it when the push ends, so the host's copy stops working while the owner stays connected." : "It stays valid after the push: these tokens can't be reset."}</p>}
         {kind === "host-credentials" && <p className="muted small">Agents push with the Git credentials set up on the host running the session, read through its Git credential helpers (for example gh auth setup-git, the macOS keychain or Git Credential Manager). Only the host's owner pushes this way, in sessions on their own host, once they turn on Git credentials in its configuration (Settings → Hosts).</p>}
         <Feedback error={action.error} />
       </form>}

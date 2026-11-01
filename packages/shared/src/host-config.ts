@@ -1,5 +1,5 @@
 /**
- * How a host runs its sessions. Its owner sets this in Pistead (Settings → Hosts → the host → Configuration), and so do
+ * How a host runs its sessions. Its owner sets this in Pikibun (Settings → Hosts → the host → Configuration), and so do
  * its admins, except for the settings that decide whose Git credentials the host uses (`ownerOnlyHostConfig`). The
  * connector reads it from the control plane instead of taking connect options; a connector that predates this (no
  * `hostConfig` capability) keeps its options.
@@ -25,7 +25,7 @@ export interface CompactionTokens {
 }
 
 /**
- * When a long conversation is summarized, as the host's owner and admins set it in Pistead: for every model, and for
+ * When a long conversation is summarized, as the host's owner and admins set it in Pikibun: for every model, and for
  * models by exact `provider/modelId`. Each count it sets replaces the one in Pi's settings.json on the host; the counts
  * it leaves out keep that file's, or the defaults (see the runner's hostCompaction).
  */

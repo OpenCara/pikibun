@@ -28,13 +28,13 @@ const skipLink = <a href="#main-content" className="btn secondary sm skip-link" 
 
 function title(route: Route): string {
   switch (route.name) {
-    case "home": return "Pistead";
-    case "sessions": return "Sessions · Pistead";
-    case "new": return "New session · Pistead";
-    case "session": return "Session · Pistead";
-    case "settings": return "Settings · Pistead";
-    case "shared": return "Shared session · Pistead";
-    case "join": return "Join workspace · Pistead";
+    case "home": return "Pikibun";
+    case "sessions": return "Sessions · Pikibun";
+    case "new": return "New session · Pikibun";
+    case "session": return "Session · Pikibun";
+    case "settings": return "Settings · Pikibun";
+    case "shared": return "Shared session · Pikibun";
+    case "join": return "Join workspace · Pikibun";
   }
 }
 
@@ -54,7 +54,7 @@ function SignIn({ error, retry, inviteToken }: { error: string; retry: () => voi
   const methods = [...(!githubUnconfigured && !local ? [health.data?.githubSignup ?? "open"] : []), ...(password ? [health.data?.passwordSignup ?? "off"] : [])];
   const signupHint = invited || !health.data || methods.includes("open") ? ""
     : methods.includes("invite") ? "New here? Open the invite link a workspace owner or admin shared with you to create an account."
-    : "This Pistead doesn't take new accounts. If you have one, sign in.";
+    : "This Pikibun doesn't take new accounts. If you have one, sign in.";
   /** GitHub's sign-in from an invite link carries the link's token in a request body, never in a URL. */
   async function continueWithGitHub(event: MouseEvent) {
     if (inviteToken === undefined) return;
@@ -75,14 +75,14 @@ function SignIn({ error, retry, inviteToken }: { error: string; retry: () => voi
   return <div className="welcome">{skipLink}
     <main id="main-content" className="welcome-inner" tabIndex={-1}>
       <Logo size={40} />
-      <h1>Pistead</h1>
+      <h1>Pikibun</h1>
       <p>Run Pi agents on your own machine, and work on them together with your team.</p>
       {invited && <Alert variant="info" title="You're invited to a workspace" role="status">Sign in to ask to join it. An owner or admin accepts you before you can see anything in it.</Alert>}
       {problem && <Alert variant="error" title="Sign-in problem">{problem}</Alert>}
       {unconfigured && (local
-        ? <Alert variant="warning" title="GitHub sign-in is not set up">This Pistead runs on this computer and needs a GitHub OAuth app of yours to sign you in. Add one where you started it: run <code>pistead serve</code> again in a terminal, which shows how, or use the Pistead app's Settings.</Alert>
+        ? <Alert variant="warning" title="GitHub sign-in is not set up">This Pikibun runs on this computer and needs a GitHub OAuth app of yours to sign you in. Add one where you started it: run <code>pikibun serve</code> again in a terminal, which shows how, or use the Pikibun app's Settings.</Alert>
         : <Alert variant="warning" title="GitHub sign-in is not configured">The operator needs to configure the GitHub OAuth app, its callback URL and the server's GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and VAULT_KEY settings.</Alert>)}
-      {!unconfigured && local && !local.claimed && <Alert variant="info" title="Set up this Pistead" role="status">This Pistead runs on this computer and has no owner yet. Sign in with the link <code>pistead serve</code> printed when it started, or from the Pistead app, which opens it for you: your GitHub account becomes its owner, and the only one that can sign in.</Alert>}
+      {!unconfigured && local && !local.claimed && <Alert variant="info" title="Set up this Pikibun" role="status">This Pikibun runs on this computer and has no owner yet. Sign in with the link <code>pikibun serve</code> printed when it started, or from the Pikibun app, which opens it for you: your GitHub account becomes its owner, and the only one that can sign in.</Alert>}
       <div className="actions">
         {password && <PasswordSignIn signedIn={retry} signup={health.data?.passwordSignup ?? "off"} inviteToken={inviteToken} />}
         {password && !githubUnconfigured && <div className="sign-in-divider" role="separator">or</div>}
@@ -105,7 +105,7 @@ function Home() {
   return <div className="welcome">
     <div className="welcome-inner">
       <Logo size={40} />
-      <h1>Welcome to Pistead</h1>
+      <h1>Welcome to Pikibun</h1>
       <p>Create a workspace for your team, add a repository and pair a host to start your first session.</p>
       <div className="actions"><Button variant="default" size="lg" onClick={() => setCreating(true)}>New workspace</Button></div>
       <p className="welcome-footnote">Joining a team? Open the invite link an owner or admin shared, or ask them to add you with your User ID from Settings.</p>
@@ -136,7 +136,7 @@ function Shell() {
   return <NavigationProvider value={{ open: () => setSidebarOpen(true), expanded: sidebarOpen }}><div className={`app${sidebarOpen ? " sidebar-open" : ""}${ownHeader ? " own-header" : ""}`}>{skipLink}
     <header className="mobile-header">
       <button type="button" className="btn ghost sm icon-only" aria-label="Open navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}><Icon name="menu" /></button>
-      <span className="screen-title">Pistead</span>
+      <span className="screen-title">Pikibun</span>
     </header>
     <Sidebar route={route} onNavigate={() => setSidebarOpen(false)} />
     <div className="scrim" onClick={() => setSidebarOpen(false)} aria-hidden="true" />

@@ -43,9 +43,9 @@ const explanations: Record<WorkspaceDatabaseFailure, string> = {
   tls_failed: 'The encrypted connection to the database failed. Check its certificate, the TLS mode and the CA certificate.',
   authentication_failed: 'The database rejected the user name or password.',
   database_not_found: 'The database does not exist on that server.',
-  permission_denied: "The database user can't create or write Pistead's tables (pistead_workspaces, pistead_sessions and pistead_session_backups).",
-  pistead_database: "This is a Pistead server's own database. Connect a separate database.",
-  schema_mismatch: "Pistead's tables in the database lack columns this server needs. Compare them with the definitions in the README.",
+  permission_denied: "The database user can't create or write Pikibun's tables (pikibun_workspaces, pikibun_sessions and pikibun_session_backups).",
+  pikibun_database: "This is a Pikibun server's own database. Connect a separate database.",
+  schema_mismatch: "Pikibun's tables in the database lack columns this server needs. Compare them with the definitions in the README.",
   response_too_large: 'The database sent more data than expected.',
   unavailable: 'The database could not complete the request.',
 };

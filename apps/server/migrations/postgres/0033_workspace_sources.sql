@@ -45,7 +45,7 @@ $$;
 CREATE TRIGGER workspace_sources_git_binding BEFORE INSERT ON workspace_sources
   FOR EACH ROW EXECUTE FUNCTION workspace_sources_git_binding();
 CREATE TRIGGER workspace_sources_immutable BEFORE UPDATE ON workspace_sources
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('workspace sources are immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('workspace sources are immutable');
 
 -- Connected accounts of kinds other than Git (Git accounts are git_credentials and the GitHub sign-in): one per user and
 -- provider. The secret (a Notion integration secret, a Google service account key, a Feishu/Lark app's id and secret)
@@ -101,9 +101,9 @@ $$;
 CREATE TRIGGER document_sources_limit BEFORE INSERT ON document_sources
   FOR EACH ROW EXECUTE FUNCTION document_sources_limit();
 CREATE TRIGGER document_sources_immutable BEFORE UPDATE ON document_sources
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('workspace sources are immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('workspace sources are immutable');
 
--- A member's sign-in to a source provider under way: the state Pistead sent and its PKCE verifier, for one user and
+-- A member's sign-in to a source provider under way: the state Pikibun sent and its PKCE verifier, for one user and
 -- provider, until the provider redirects back (at most 10 minutes). The browser carries the state in a cookie too.
 CREATE TABLE source_oauth_states (
   state_hash TEXT PRIMARY KEY NOT NULL,

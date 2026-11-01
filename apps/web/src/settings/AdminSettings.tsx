@@ -51,7 +51,7 @@ export function AdminSettings() {
   const shownWorkspaces = (workspaces.data?.items ?? []).filter(item => matches(query, item.name, item.ownerName, item.ownerGithubLogin, item.ownerId, item.id));
   const shownHosts = (hosts.data?.items ?? []).filter(host => matches(query, host.name, host.ownerName, host.ownerGithubLogin, host.ownerId, host.id));
   return <>
-    <Section title="Overview" info="Totals for this whole Pistead server. You administer it because its operator lists your user ID in ADMIN_USER_IDS. Administration shows who uses the server and what they run it on, never what they work on: no session titles, prompts, repositories or credentials.">
+    <Section title="Overview" info="Totals for this whole Pikibun server. You administer it because its operator lists your user ID in ADMIN_USER_IDS. Administration shows who uses the server and what they run it on, never what they work on: no session titles, prompts, repositories or credentials.">
       <ResourceState {...overview} retry={overview.refresh}>
         {totals && <>
           <Row title="Accounts" trailing={<>{totals.users.toLocaleString()}{totals.suspendedUsers > 0 && <StatusBadge tone="danger">{totals.suspendedUsers.toLocaleString()} suspended</StatusBadge>}</>} />

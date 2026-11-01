@@ -12,7 +12,7 @@ const migrationFiles = readdirSync(directory).filter(name => name.endsWith(".sql
 
 /** A database migrated up to (not including) the password migration, through the server's own runner. */
 async function before(t: TestContext) {
-  const root = mkdtempSync(join(tmpdir(), "pistead-password-migration-"));
+  const root = mkdtempSync(join(tmpdir(), "pikibun-password-migration-"));
   const migrations = join(root, "migrations");
   const path = join(root, "control-plane.sqlite");
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -61,7 +61,7 @@ test("a foreign-keys-off migration that leaves a broken reference rolls back, an
   const { db, migrations } = await before(t);
   db.handle.exec(`INSERT INTO users (id, display_name, git_name, git_email, auth_kind, created_at) VALUES ('test:t', 'T', 'T', 't@example.test', 'test', '2026-01-02');
     INSERT INTO auth_sessions (token_hash, user_id, csrf_token, expires_at, created_at, client) VALUES ('h', 'test:t', 'c', 1, '2026-01-01', 'browser');`);
-  writeFileSync(join(migrations, "9999_broken.sql"), "-- pistead: foreign-keys-off\nDELETE FROM users;\n");
+  writeFileSync(join(migrations, "9999_broken.sql"), "-- pikibun: foreign-keys-off\nDELETE FROM users;\n");
   await assert.rejects(db.migrate(), /references/);
   assert.equal(db.handle.prepare("SELECT COUNT(*) AS n FROM users").get()!.n, 1);
   assert.equal(db.handle.prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE name = '9999_broken.sql'").get()!.n, 0);

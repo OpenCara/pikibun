@@ -1,7 +1,7 @@
 import {
   accessUnavailable, activeStatuses, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting, initialSelection, isHostCommand,
   messageCut, modelUnavailable, mustConfirmAutoApprove, preparingRepositories, resendText, rewindable, segment, type ChatSelection,
-} from "@pistead/client";
+} from "@pikibun/client";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
 import { Stack } from "expo-router";

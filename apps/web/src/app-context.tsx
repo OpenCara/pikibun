@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { SessionActivity, SessionRecord, UserProfile, Workspace } from "../../../packages/shared/src/types";
 import { useResource } from "./ui";
 
-const WORKSPACE_KEY = "pistead.workspace";
+const WORKSPACE_KEY = "pikibun.workspace";
 
 /** The activity in the live view of the session on screen. */
 export interface LiveActivity {

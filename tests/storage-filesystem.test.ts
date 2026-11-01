@@ -7,7 +7,7 @@ import { FilesystemStorage } from "../apps/server/src/storage/filesystem.js";
 import { openStorage } from "../apps/server/src/storage/index.js";
 
 async function fixture(t: TestContext) {
-  const root = await mkdtemp(join(tmpdir(), "pistead-storage-"));
+  const root = await mkdtemp(join(tmpdir(), "pikibun-storage-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return { root, storage: new FilesystemStorage(root) };
 }
@@ -46,7 +46,7 @@ test("missing objects read as null and never leave temporary files behind", asyn
 
 test("path traversal and malformed keys are rejected before touching the filesystem", async t => {
   const { root, storage } = await fixture(t);
-  const outside = join(root, "..", `pistead-escape-${process.pid}`);
+  const outside = join(root, "..", `pikibun-escape-${process.pid}`);
   for (const key of ["../escape", "a/../../escape", "/etc/passwd", "a//b", "", "a/", "a b", "a\\b", "a/./b", "x.meta.json", "a/b.meta.json"]) {
     await assert.rejects(storage.put(key, new Uint8Array(1), { contentType: "text/plain", custom: {} }), /Invalid object key/, key);
     await assert.rejects(storage.get(key), /Invalid object key/, key);
@@ -56,7 +56,7 @@ test("path traversal and malformed keys are rejected before touching the filesys
 });
 
 test("openStorage builds a filesystem store from a file:// URL", async t => {
-  const root = await mkdtemp(join(tmpdir(), "pistead-storage-url-"));
+  const root = await mkdtemp(join(tmpdir(), "pikibun-storage-url-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const storage = openStorage(`file://${root}`, {});
   assert.equal(storage.provider, "filesystem");

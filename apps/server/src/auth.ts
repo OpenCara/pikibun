@@ -20,13 +20,13 @@ const STATE_TTL = 10 * 60 * 1000;
 const NATIVE_CODE_TTL = 2 * 60 * 1000;
 const OPAQUE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const CALLBACK_PATH = '/api/auth/github/callback';
-/** Where the server hands a native sign-in back to the app (the apps register the `pistead` URL scheme). */
-const NATIVE_CALLBACK = 'pistead://auth';
+/** Where the server hands a native sign-in back to the app (the apps register the `pikibun` URL scheme). */
+const NATIVE_CALLBACK = 'pikibun://auth';
 /** A PKCE verifier (RFC 7636: 43-128 unreserved characters; the apps use base64url) or an app's opaque state. */
 const VERIFIER = /^[A-Za-z0-9_-]{43,128}$/;
 const APP_STATE = /^[A-Za-z0-9_-]{16,128}$/;
 const PROFILE_FIELDS: Record<string, true> = { displayName: true, gitName: true, gitEmail: true, env: true };
-export const SUSPENDED = 'This account is suspended. Ask the administrator of this Pistead server to restore it.';
+export const SUSPENDED = 'This account is suspended. Ask the administrator of this Pikibun server to restore it.';
 
 function cookies(env: Env) {
   const secure = new URL(appOrigin(env)).protocol === 'https:';
@@ -237,7 +237,7 @@ async function githubJson(url: string, init: RequestInit): Promise<unknown> {
 }
 
 /**
- * Resets a GitHub sign-in token through Pistead's OAuth app: the token stops working at once, and the replacement GitHub
+ * Resets a GitHub sign-in token through Pikibun's OAuth app: the token stops working at once, and the replacement GitHub
  * issues with the same scopes takes its place in the vault while the vault still holds it (`ciphertext`), so the owner
  * stays connected. Returns false only when the reset could not be completed and should be retried.
  */
@@ -248,7 +248,7 @@ export async function resetGitHubToken(env: Env, userId: string, token: string, 
   const request = (method: 'PATCH' | 'DELETE', accessToken: string) => githubRequest(`https://api.github.com/applications/${encodeURIComponent(clientId)}/token`, {
     method, body: JSON.stringify({ access_token: accessToken }),
     headers: { Accept: 'application/vnd.github+json', Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`, 'Content-Type': 'application/json',
-      'User-Agent': 'pistead', 'X-GitHub-Api-Version': '2022-11-28' },
+      'User-Agent': 'pikibun', 'X-GitHub-Api-Version': '2022-11-28' },
   });
   let replacement: string;
   try {
@@ -336,7 +336,7 @@ async function githubSignup(c: AppContext, githubId: string, inviteTokenHash: st
     'SELECT workspace_id FROM workspace_invite_links WHERE token_hash = ?').bind(inviteTokenHash).first());
   const mode = signupMode(c.env, 'github');
   if (!isInstanceAdmin(c.env, `github:${githubId}`)) {
-    if (mode === 'off') throw new SignupRefusal('signup_closed', 'This Pistead doesn\'t take new accounts. Ask its operator to add you.');
+    if (mode === 'off') throw new SignupRefusal('signup_closed', 'This Pikibun doesn\'t take new accounts. Ask its operator to add you.');
     if (mode === 'invite' && !invite) {
       throw new SignupRefusal('invite_required', inviteTokenHash !== null ? 'That invite link was turned off or replaced. Ask for the current one.'
         : native ? 'New accounts need an invite link. Open the link a workspace owner or admin shared in a browser to create your account, then sign in here.'
@@ -348,7 +348,7 @@ async function githubSignup(c: AppContext, githubId: string, inviteTokenHash: st
 
 /**
  * A native app's sign-in, opened in the system's authentication browser: `challenge` is base64url(SHA-256) of the
- * app's PKCE verifier and `state` the app's own nonce, both returned to `pistead://auth` after GitHub.
+ * app's PKCE verifier and `state` the app's own nonce, both returned to `pikibun://auth` after GitHub.
  */
 function nativeStart(c: AppContext) {
   const challenges = c.req.queries('challenge');
@@ -383,7 +383,7 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
     fail(502, 'github_error', 'GitHub authentication could not be completed.');
   }
   const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${exchange.access_token}`,
-    'User-Agent': 'pistead', 'X-GitHub-Api-Version': '2022-11-28' };
+    'User-Agent': 'pikibun', 'X-GitHub-Api-Version': '2022-11-28' };
   const identity = await githubJson('https://api.github.com/user', { headers });
   const emails = await githubJson('https://api.github.com/user/emails?per_page=100', { headers });
   if (!record(identity) || typeof identity.id !== 'number' || !Number.isSafeInteger(identity.id) || identity.id <= 0 ||
@@ -457,12 +457,12 @@ export async function localOwner(env: Env): Promise<{ id: string; github_id: str
 async function admitLocalOwner(c: AppContext, githubId: string): Promise<void> {
   const owner = await localOwner(c.env);
   if (owner) {
-    if (owner.github_id !== githubId) fail(403, 'local_server_owner_only', 'This Pistead runs on its owner\'s computer, and only the GitHub account that set it up can sign in.');
+    if (owner.github_id !== githubId) fail(403, 'local_server_owner_only', 'This Pikibun runs on its owner\'s computer, and only the GitHub account that set it up can sign in.');
     return;
   }
   const claim = getCookie(c, cookies(c.env).claim);
   if (!claim || !OPAQUE_TOKEN.test(claim) || !constantTimeEqual(claim, c.env.LOCAL_CLAIM_SECRET!)) {
-    fail(403, 'local_server_unclaimed', 'Nobody has set up this Pistead yet. Sign in with the link it printed when it started (or from the Pistead app), which makes your GitHub account its owner.');
+    fail(403, 'local_server_unclaimed', 'Nobody has set up this Pikibun yet. Sign in with the link it printed when it started (or from the Pikibun app), which makes your GitHub account its owner.');
   }
 }
 
@@ -477,7 +477,7 @@ async function settleLocalClaim(env: Env, userId: string): Promise<void> {
   await dbResult(env.DB.query(`DELETE FROM users WHERE id = ? AND auth_kind = 'github'
     AND NOT EXISTS (SELECT 1 FROM github_tokens WHERE user_id = ?) AND NOT EXISTS (SELECT 1 FROM auth_sessions WHERE user_id = ?)`)
     .bind(userId, userId, userId).run());
-  fail(403, 'local_server_owner_only', 'This Pistead runs on its owner\'s computer, and only the GitHub account that set it up can sign in.');
+  fail(403, 'local_server_owner_only', 'This Pikibun runs on its owner\'s computer, and only the GitHub account that set it up can sign in.');
 }
 
 /**
@@ -488,7 +488,7 @@ async function localClaim(c: AppContext) {
   if (!localMode(c.env)) fail(404, 'not_found', 'Not found.');
   const tokens = c.req.queries('token');
   const token = tokens?.length === 1 ? tokens[0] : undefined;
-  if (!token || !OPAQUE_TOKEN.test(token) || !constantTimeEqual(token, c.env.LOCAL_CLAIM_SECRET!)) fail(403, 'invalid_claim', 'This sign-in link is not valid for this Pistead.');
+  if (!token || !OPAQUE_TOKEN.test(token) || !constantTimeEqual(token, c.env.LOCAL_CLAIM_SECRET!)) fail(403, 'invalid_claim', 'This sign-in link is not valid for this Pikibun.');
   const config = cookies(c.env);
   setCookie(c, config.claim, token, { ...config.options, maxAge: STATE_TTL / 1000, expires: new Date(Date.now() + STATE_TTL) });
   return githubStart(c);

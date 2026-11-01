@@ -120,8 +120,8 @@ async function providerJson(provider: WebSearchProvider, url: string, init: Requ
   }
   let value: unknown;
   try { value = await boundedJson(response, RESPONSE_BYTES); }
-  catch { fail(502, 'web_search_failed', `The search provider (${provider}) sent an answer Pistead could not read.`); }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) fail(502, 'web_search_failed', `The search provider (${provider}) sent an answer Pistead could not read.`);
+  catch { fail(502, 'web_search_failed', `The search provider (${provider}) sent an answer Pikibun could not read.`); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail(502, 'web_search_failed', `The search provider (${provider}) sent an answer Pikibun could not read.`);
   return value as Record<string, unknown>;
 }
 
@@ -185,7 +185,7 @@ export async function webSearch(c: AppContext, connectorId: string | null): Prom
   };
   await authorize();
   const provider = webSearchProvider(c.env);
-  if (!provider) fail(503, 'web_search_unconfigured', 'This Pistead server has no web search provider: its operator sets one with WEB_SEARCH.');
+  if (!provider) fail(503, 'web_search_unconfigured', 'This Pikibun server has no web search provider: its operator sets one with WEB_SEARCH.');
   const results = await provider.search(query, count);
   const row = await authorize();
   await auditStatement(c.env, actorId, 'web.search', row.workspace_id, sessionId, { provider: provider.name, query, results: results.length }).run();

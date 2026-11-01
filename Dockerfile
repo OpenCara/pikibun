@@ -41,7 +41,7 @@ EXPOSE 8787
 # OAuth app is set), and new accounts, GitHub's too, come only through a workspace's invite link, so a server the
 # internet reaches takes nobody uninvited; the first administrator comes from --create-admin. Set PASSWORD_AUTH=false,
 # or SIGNUP to open or off, to change that.
-ENV HOST=0.0.0.0 PORT=8787 DATABASE_URL=sqlite:///data/pistead.sqlite WORKSPACE_DATABASES=true \
+ENV HOST=0.0.0.0 PORT=8787 DATABASE_URL=sqlite:///data/pikibun.sqlite WORKSPACE_DATABASES=true \
   PASSWORD_AUTH=true SIGNUP=invite
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + process.env.PORT + '/api/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"

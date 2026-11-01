@@ -19,7 +19,7 @@ import { usernameWithId } from "../../../packages/client/src/usernames";
 import "./new-session.css";
 
 /** The model the last session started on: `model:<workspace model id>`. */
-const LAST_START_KEY = "pistead.lastStart";
+const LAST_START_KEY = "pikibun.lastStart";
 const TITLE_LIMIT = 80;
 
 type Visibility = "workspace" | "private";

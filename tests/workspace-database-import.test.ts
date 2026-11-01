@@ -18,7 +18,7 @@ function sessionRecord(id: string, extra: Record<string, unknown> = {}) {
 }
 
 function sessionDump(extra: Record<string, unknown> = {}) {
-  return { format: 'pistead-session-export-v1', exportedAt: '2026-02-01T10:00:00.000Z', exportedBy: 'test:owner',
+  return { format: 'pikibun-session-export-v1', exportedAt: '2026-02-01T10:00:00.000Z', exportedBy: 'test:owner',
     session: { ...sessionRecord('one'), archivedStatus: null }, grants: [{ userId: 'test:member', permissions: ['read'], createdAt: '2026-01-01' }],
     toolGrants: [], backups: [{ id: 'backup', size: 10, sha256: 's'.repeat(43), createdAt: '2026-01-02', location: 'server' }], restores: [],
     approvals: [{ approvalId: 'approval', requestedBy: 'test:owner', source: 'explicit', operation: { kind: 'bash', command: 'ls' }, createdAt: '2026-01-01' }],
@@ -28,7 +28,7 @@ function sessionDump(extra: Record<string, unknown> = {}) {
 
 function workspaceDump(extra: Record<string, unknown> = {}) {
   const full = sessionDump();
-  return { format: 'pistead-workspace-export-v1', exportedAt: '2026-02-01T10:00:00.000Z', exportedBy: null,
+  return { format: 'pikibun-workspace-export-v1', exportedAt: '2026-02-01T10:00:00.000Z', exportedBy: null,
     workspace: { id: 'workspace', name: 'Workspace', ownerId: 'test:owner', createdAt: '2026-01-01' },
     members: [{ userId: 'test:owner', displayName: 'Owner', githubLogin: null, role: 'owner', createdAt: '2026-01-01' }], models: [], agents: [],
     repositories: [], pushIdentities: [], database: { id: 'database', host: 'db.example.com' },
@@ -70,7 +70,7 @@ test('a workspace dump brings its settings, full sessions, viewed records and wo
 });
 
 test('dumps are checked before anything is written', () => {
-  assert.throws(() => importFromDump({ format: 'pi-runner-backup-v1' }, workspace), refused(/not a Pistead dump/));
+  assert.throws(() => importFromDump({ format: 'pi-runner-backup-v1' }, workspace), refused(/not a Pikibun dump/));
   assert.throws(() => importFromDump([], workspace), refused(/not an object/));
   assert.throws(() => importFromDump(workspaceDump({ workspace: { id: 'other' } }), workspace), refused(/another workspace/));
   assert.throws(() => importFromDump(sessionDump({ session: sessionRecord('one', { workspaceId: 'other' }) }), workspace), refused(/another workspace/));
@@ -136,7 +136,7 @@ async function fixture(t: TestContext) {
   `);
   const env = { DB: db, APP_ORIGIN: 'http://localhost:8787', VAULT_KEY: vaultKey } as Env;
   sqlite.prepare(`INSERT INTO workspace_databases (id,workspace_id,host,port,database_name,username,tls,ca_certificate,password_ciphertext,created_by,created_at,updated_at)
-    VALUES ('database','workspace','db.example.com',5432,'pistead','pistead_app','verify-full',NULL,?,'test:owner','2026-01-01','2026-01-01')`)
+    VALUES ('database','workspace','db.example.com',5432,'pikibun','pikibun_app','verify-full',NULL,?,'test:owner','2026-01-01','2026-01-01')`)
     .run(await encryptToken(env, databaseSecretContext('database'), password));
   const imports: { target: WorkspaceDatabaseTarget; data: WorkspaceImport }[] = [];
   const provider: WorkspaceDatabaseProvider = {
@@ -167,7 +167,7 @@ test('the operator imports a dump into the database of the workspace it names', 
   assert.equal(database.id, 'database');
   assert.deepEqual(summary, { format: 'workspace', exportedAt: dump!.exportedAt, sessions: 2, sessionDetails: 2, auditEntries: 2, workspaceSettings: true });
   assert.equal(f.imports.length, 1);
-  assert.deepEqual({ ...f.imports[0]!.target }, { host: 'db.example.com', port: 5432, database: 'pistead', user: 'pistead_app', password,
+  assert.deepEqual({ ...f.imports[0]!.target }, { host: 'db.example.com', port: 5432, database: 'pikibun', user: 'pikibun_app', password,
     tls: 'verify-full', caCertificate: null });
   const audit = f.sqlite.prepare("SELECT actor_id, workspace_id FROM audit WHERE action = 'workspace.database.imported'").get()!;
   assert.deepEqual({ ...audit }, { actor_id: null, workspace_id: 'workspace' });
@@ -178,6 +178,6 @@ test('the operator imports a dump into the database of the workspace it names', 
   await assert.rejects(importDumpFromCommandLine(f.db, { VAULT_KEY: vaultKey }, missing, f.provider), refused(/not on this server/));
   await assert.rejects(importDumpFromCommandLine(f.db, { VAULT_KEY: vaultKey }, dump), refused(/turned off/));
   await assert.rejects(importDumpFromCommandLine(f.db, { VAULT_KEY: Buffer.alloc(32, 6).toString('base64url') }, dump, f.provider), refused(/VAULT_KEY/));
-  await assert.rejects(importDumpFromCommandLine(f.db, { VAULT_KEY: vaultKey }, { format: 'unknown' }, f.provider), refused(/not a Pistead dump/));
+  await assert.rejects(importDumpFromCommandLine(f.db, { VAULT_KEY: vaultKey }, { format: 'unknown' }, f.provider), refused(/not a Pikibun dump/));
   assert.equal(f.imports.length, 1);
 });

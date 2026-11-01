@@ -62,7 +62,7 @@ test('Dropbox, OneDrive and Tencent Docs items are named by their links, paths o
   for (const value of ['https://docs.qq.com.evil.example/doc/DQ2xhbGVuZGFy', 'https://docs.qq.com/unknown/DQ2xhbGVuZGFy', 'file:x']) assert.equal(tencentDocsItem(value), null, value);
 });
 
-test('a token response becomes what Pistead stores: expiry from now, and refreshes keep the refresh token', () => {
+test('a token response becomes what Pikibun stores: expiry from now, and refreshes keep the refresh token', () => {
   const first = oauthSecret({ access_token: 'a1', refresh_token: 'r1', expires_in: 3600, user_id: 'open-1' });
   assert.equal(first.accessToken, 'a1'); assert.equal(first.refreshToken, 'r1'); assert.equal(first.openId, 'open-1');
   assert.ok(Math.abs(first.expiresAt! - (Date.now() + 3600_000)) < 5000);

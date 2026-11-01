@@ -13,7 +13,7 @@ export {
 } from "../../../packages/client/src/chat-options";
 
 /** The model and reasoning last chatted with, in this browser; new chats start from them. */
-const LAST_CHAT_KEY = "pistead.lastChat";
+const LAST_CHAT_KEY = "pikibun.lastChat";
 
 export function readChatPreference(): ChatPreference | undefined {
   try { return parseChatPreference(localStorage.getItem(LAST_CHAT_KEY)); } catch { return undefined; }

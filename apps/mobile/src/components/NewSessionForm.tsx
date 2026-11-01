@@ -1,4 +1,4 @@
-import { chatOptionsBody, mustConfirmAutoApprove, preferredSelection, segment, type ChatSelection } from "@pistead/client";
+import { chatOptionsBody, mustConfirmAutoApprove, preferredSelection, segment, type ChatSelection } from "@pikibun/client";
 import * as Crypto from "expo-crypto";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";

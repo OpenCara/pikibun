@@ -27,7 +27,7 @@ function flag(processEnv: NodeJS.ProcessEnv, name: string): boolean {
   return value === 'true';
 }
 
-export const defaultDatabaseUrl = 'sqlite:///data/pistead.sqlite';
+export const defaultDatabaseUrl = 'sqlite:///data/pikibun.sqlite';
 const stringVars = [
   'APP_ORIGIN', 'RUNNER_URL', 'RUNNER_EVENT_TRANSPORT', 'RUNNER_SHARED_SECRET', 'SESSION_SECRET', 'VAULT_KEY',
   'GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET', 'TEST_AUTH_ENABLED', 'TEST_AUTH_SECRET', 'TEST_AUTH_EXPIRES_AT',
@@ -55,7 +55,7 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     const origin = new URL(env.APP_ORIGIN);
     if (origin.origin !== env.APP_ORIGIN) throw new Error();
   } catch {
-    throw new ConfigurationError('APP_ORIGIN must be an origin such as https://pistead.example.com (no path, credentials or trailing slash).');
+    throw new ConfigurationError('APP_ORIGIN must be an origin such as https://pikibun.example.com (no path, credentials or trailing slash).');
   }
   if (!env.SESSION_SECRET) throw new ConfigurationError('SESSION_SECRET is required: set it to a random string of at least 32 characters.');
   if (env.SESSION_SECRET.length < 32) throw new ConfigurationError('SESSION_SECRET must be at least 32 characters long.');

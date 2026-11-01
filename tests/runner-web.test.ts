@@ -43,7 +43,7 @@ async function idle(session: RunnerSession): Promise<void> {
 }
 
 test("agents read web pages within the workspace's network access, and search the web through the control plane", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-web-session-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-web-session-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const policy: NetworkPolicy = { mode: "allowlist", domains: ["docs.example.com"], packageRegistries: false };
   const fetched: UpstreamRequest[] = [];
@@ -54,7 +54,7 @@ test("agents read web pages within the workspace's network access, and search th
     fauxAssistantMessage([fauxToolCall("web_fetch", { url: "https://docs.example.com/guide", max_length: 1000 })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("web_fetch", { url: "https://docs.example.com/guide", offset: 1000, max_length: 1000 })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("web_fetch", { url: "https://elsewhere.example.net/" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("web_search", { query: "pistead  network access", count: 2 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("web_search", { query: "pikibun  network access", count: 2 })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("web_search", { query: "refused" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Done."),
   ]);
@@ -73,7 +73,7 @@ test("agents read web pages within the workspace's network access, and search th
     webSearch: async (request): Promise<WebSearchResult> => {
       searches.push(request);
       if (request.query === "refused") throw new RunnerError(403, "Web search is off in this workspace");
-      return { query: request.query, provider: "brave", results: [{ title: "Pistead", url: "https://github.com/OpenCara/pistead", snippet: "Self-hosted Pi" }] };
+      return { query: request.query, provider: "brave", results: [{ title: "Pikibun", url: "https://github.com/OpenCara/pikibun", snippet: "Self-hosted Pi" }] };
     },
   });
   await service.initialize();
@@ -101,13 +101,13 @@ test("agents read web pages within the workspace's network access, and search th
   assert.match(results[3]!, /Self-hosted Pi/);
   assert.match(results[4]!, /Web search is off in this workspace/);
   assert.deepEqual(searches.map(({ callId: _callId, ...request }) => request), [
-    { sessionId: id, actorId: "test:alice", admissionId, query: "pistead network access", count: 2 },
+    { sessionId: id, actorId: "test:alice", admissionId, query: "pikibun network access", count: 2 },
     { sessionId: id, actorId: "test:alice", admissionId, query: "refused" },
   ]);
 });
 
 test("the web tools need a shared message: side asks don't get them", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-web-ask-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-web-ask-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([

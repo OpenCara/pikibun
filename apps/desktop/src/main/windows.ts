@@ -5,11 +5,11 @@ import { navigationDecision, windowOpenDecision } from "./origin.js";
 import { APP_HOST, APP_SCHEME } from "./requests.js";
 import type { Bounds, SettingsStore } from "./settings.js";
 
-// Two kinds of windows. The Pistead window shows the remote server with no preload and no Node, in its own persistent
+// Two kinds of windows. The Pikibun window shows the remote server with no preload and no Node, in its own persistent
 // session. Local windows (This Mac, Settings) show pages bundled with the app, served by the app's own scheme in the
 // default session, with a preload exposing only the typed bridge.
 
-export const REMOTE_PARTITION = "persist:pistead";
+export const REMOTE_PARTITION = "persist:pikibun";
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const LOCAL_FILES: Record<string, string> = {
   "/host.html": "text/html; charset=utf-8",
@@ -100,10 +100,10 @@ function editContextMenu(window: BrowserWindow): void {
   });
 }
 
-/** `server` is the origin the window shows: the configured server, or Pistead on this computer while it runs. */
+/** `server` is the origin the window shows: the configured server, or Pikibun on this computer while it runs. */
 export function createMainWindow(settings: SettingsStore, icon: string | undefined, server: () => string, start = server()): BrowserWindow {
   const window = new BrowserWindow({
-    width: 1280, height: 860, minWidth: 420, minHeight: 480, title: "Pistead", show: false,
+    width: 1280, height: 860, minWidth: 420, minHeight: 480, title: "Pikibun", show: false,
     ...(icon ? { icon } : {}),
     ...visibleBounds(settings.get().windowBounds),
     webPreferences: { partition: REMOTE_PARTITION, contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, spellcheck: true },
@@ -132,10 +132,10 @@ export function createMainWindow(settings: SettingsStore, icon: string | undefin
 
 function offlinePage(server: string): string {
   const escaped = server.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
-  const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Pistead</title>`
+  const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Pikibun</title>`
     + `<style>body{font:15px -apple-system,system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;background:#f6f5f1;color:#1d1f1d}`
     + `@media(prefers-color-scheme:dark){body{background:#111311;color:#e8e6e1}}main{max-width:28rem;padding:2rem;text-align:center}a{color:#c0491d}</style>`
-    + `<main><h1>Pistead can't reach the server</h1><p>${escaped} did not answer. Check your connection, or change the server in Pistead's Settings.</p><p><a href="${escaped}/">Try again</a></p></main>`;
+    + `<main><h1>Pikibun can't reach the server</h1><p>${escaped} did not answer. Check your connection, or change the server in Pikibun's Settings.</p><p><a href="${escaped}/">Try again</a></p></main>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 

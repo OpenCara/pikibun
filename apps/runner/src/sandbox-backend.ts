@@ -27,9 +27,9 @@ export const DEFAULT_WINDOWS_LIMITS: Readonly<WindowsJobLimits> = Object.freeze(
 /** The MXC SDK version the Windows backend is written against; others may change the request contract. */
 export const MXC_SDK_VERSION = "1.0.1";
 
-/** Where the connector looks for MXC: PISTEAD_MXC_RUNTIME, else a directory beside its state. */
+/** Where the connector looks for MXC: PIKIBUN_MXC_RUNTIME, else a directory beside its state. */
 export function windowsRuntimeDirectory(stateDir: string): string {
-  return process.env.PISTEAD_MXC_RUNTIME || join(stateDir, "mxc");
+  return process.env.PIKIBUN_MXC_RUNTIME || join(stateDir, "mxc");
 }
 
 /** The installed SDK's entry point in `runtime`, or undefined. */

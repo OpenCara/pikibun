@@ -17,7 +17,7 @@ const claimSecret = "c".repeat(43);
 const origin = "http://127.0.0.1:7878";
 
 async function directory(t: TestContext): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), "pistead-local-"));
+  const path = await mkdtemp(join(tmpdir(), "pikibun-local-"));
   t.after(() => rm(path, { recursive: true, force: true }));
   return path;
 }
@@ -90,7 +90,7 @@ test("LOCAL_MODE listens on loopback only and needs its claim secret", async () 
   };
   await refused({ LOCAL_MODE: "true" }, /LOCAL_CLAIM_SECRET/);
   await refused({ LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, HOST: "0.0.0.0" }, /loopback only/);
-  await refused({ LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, APP_ORIGIN: "https://pistead.example.com" }, /on this machine/);
+  await refused({ LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, APP_ORIGIN: "https://pikibun.example.com" }, /on this machine/);
   await refused({ LOCAL_MODE: "yes" }, /"true" or "false"/);
   const config = await loadConfig({ ...base, LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret });
   assert.equal(config.host, "127.0.0.1");
@@ -210,17 +210,17 @@ test("a relative state directory still names its database and backups correctly"
   await writeFile(join(web, "index.html"), "<!doctype html>");
   const server = await startLocalServer({ stateDir: "server", state, staticDir: web });
   await server.close();
-  assert.ok((await stat(join(parent, "server", "pistead.sqlite"))).isFile());
+  assert.ok((await stat(join(parent, "server", "pikibun.sqlite"))).isFile());
   assert.ok((await stat(join(parent, "server", "backups"))).isDirectory());
 });
 
-test("pistead serve's server pairs this computer as its owner's host once claimed, and reuses that pairing", async t => {
+test("pikibun serve's server pairs this computer as its owner's host once claimed, and reuses that pairing", async t => {
   const stateDir = join(await directory(t), "server");
   const state = await loadLocalState(stateDir, { port: await freePort() });
   const web = await directory(t);
-  await writeFile(join(web, "index.html"), "<!doctype html><title>Pistead</title>");
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
   await mkdir(join(web, "assets"));
-  // Test mode lets the host offer the fixture model; everything else is the local server as `pistead serve` runs it.
+  // Test mode lets the host offer the fixture model; everything else is the local server as `pikibun serve` runs it.
   const testMode = { TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: "t".repeat(43), TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString() };
   const hostOptions = {
     localModels: createFauxLocalModels("faux-1"), allowFaux: true, unsandboxed: true, pollMs: 50,
@@ -230,7 +230,7 @@ test("pistead serve's server pairs this computer as its owner's host once claime
   const server = await startLocalServer({ stateDir, state, staticDir: web, extraEnv: testMode });
   t.after(() => server.close());
   assert.equal(server.origin, `http://127.0.0.1:${state.port}`);
-  assert.match(await (await fetch(server.origin)).text(), /<title>Pistead<\/title>/);
+  assert.match(await (await fetch(server.origin)).text(), /<title>Pikibun<\/title>/);
   assert.equal(await server.claimUrl(), `${server.origin}/api/auth/local/claim?token=${state.claimSecret}`);
 
   let waiting = false;

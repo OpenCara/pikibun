@@ -180,10 +180,10 @@ export function crossSessionHeader(message: { id: string; kind: CrossSessionMess
   origin: { id: string; title: string }, actor: { id: string; login?: string | null }, replyTo?: { id: string }): string {
   const by = actor.login ? `@${actor.login}` : actor.id;
   if (message.kind === "notify") {
-    return `[Pistead notification xs:${message.id} · session "${oneLine(origin.title)}" (${origin.id}) finished message xs:${replyTo?.id ?? "?"} · for ${by} · hop ${message.hops}]`;
+    return `[Pikibun notification xs:${message.id} · session "${oneLine(origin.title)}" (${origin.id}) finished message xs:${replyTo?.id ?? "?"} · for ${by} · hop ${message.hops}]`;
   }
   const what = message.kind === "ask" ? "side ask" : message.kind === "create" ? "opening message" : "message";
-  return `[Pistead cross-session ${what} xs:${message.id} · from session "${oneLine(origin.title)}" (${origin.id}) · sent by ${by} through its agent · hop ${message.hops}]`;
+  return `[Pikibun cross-session ${what} xs:${message.id} · from session "${oneLine(origin.title)}" (${origin.id}) · sent by ${by} through its agent · hop ${message.hops}]`;
 }
 
 const doneStatuses = new Set(["settled", "interrupted", "stopped", "images lost"]);

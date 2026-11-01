@@ -85,7 +85,7 @@ export function testMode(env: Env): boolean {
     !!env.TEST_AUTH_SECRET && env.TEST_AUTH_SECRET.length >= 32 && Number.isFinite(expiry) && expiry > Date.now();
 }
 /**
- * A local server (`pistead serve`, or the desktop app's server on this computer): it listens on loopback only and admits
+ * A local server (`pikibun serve`, or the desktop app's server on this computer): it listens on loopback only and admits
  * one GitHub account, the one that claimed it with the secret the launcher printed or opened (see local/claim.ts).
  */
 export function localMode(env: Env): boolean {

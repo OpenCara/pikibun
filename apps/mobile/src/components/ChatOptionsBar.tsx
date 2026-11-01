@@ -1,7 +1,7 @@
 import {
   accessLabels, autoApproveMerges, autoApproveWarning, CONNECTOR_UPDATE_HINT, effectiveLevel, findModel, levelLabels, modelKey, offeredLevels, selectModel,
   type ChatSelection,
-} from "@pistead/client";
+} from "@pikibun/client";
 import { useCallback, useState } from "react";
 import { Text } from "react-native";
 import type { ConnectorInfo } from "../../../../packages/shared/src/connector";

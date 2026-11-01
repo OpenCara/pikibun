@@ -1,4 +1,4 @@
-export const DEFAULT_ORIGIN = "https://pistead.com";
+export const DEFAULT_ORIGIN = "https://pikibun.com";
 
 /** Hosts a development build may reach over plain HTTP: a server running on this Mac (the simulator shares its network). */
 const localHosts = ["localhost", "127.0.0.1"];
@@ -9,7 +9,7 @@ const localHosts = ["localhost", "127.0.0.1"];
  */
 export function parseOrigin(input: string): { origin: string } | { error: string } {
   let text = input.trim().replace(/\/+$/, "");
-  if (!text) return { error: "Enter the server address, e.g. https://pistead.com." };
+  if (!text) return { error: "Enter the server address, e.g. https://pikibun.com." };
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) text = `https://${text}`;
   const match = /^(https?):\/\/(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(:\d{1,5})?$/i.exec(text);
   if (!match) return { error: "Enter only the server address (scheme and host), without a path." };

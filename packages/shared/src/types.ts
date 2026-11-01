@@ -121,8 +121,8 @@ export interface SessionRecord {
    */
   repositoryMode?: "clone";
   /**
-   * A clone session's own branch, named for its work when it was created (`pistead/<title-slug>-<short id>`; see
-   * sessionBranchName). Absent: `pistead/<session-id>`, for sessions from before named branches or on older connectors.
+   * A clone session's own branch, named for its work when it was created (`pikibun/<title-slug>-<short id>`; see
+   * sessionBranchName). Absent: `pikibun/<session-id>`, for sessions from before named branches or on older connectors.
    */
   branch?: string;
   /**
