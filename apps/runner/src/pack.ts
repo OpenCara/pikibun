@@ -135,7 +135,14 @@ export function packRefusal(error: unknown): unknown {
   if (/too many files|too many entries|nesting limit/.test(message)) return new RunnerError(422, "This session has too many files to pack: a pack holds at most 10,000 files outside its clones");
   if (/exceeds size limit|byte output limit/.test(message)) return new RunnerError(422, "This session's files are too large to pack: a pack holds at most 24 MiB");
   if (/too many clones|too many branches/.test(message)) return new RunnerError(422, "This session has too many clones or branches to pack");
-  if (/borrows objects from the host cache/.test(message)) return new RunnerError(422, "One of this session's clones borrows from the host's repository cache, which it can't read now, so it can't be packed");
+  if (/has stashed changes/.test(message)) {
+    return new RunnerError(422, "One of this session's clones has stashed changes (git stash), which a pack can't keep. Unarchive it to apply or drop them, or leave it unpacked");
+  }
+  if (/refs other than branches and tags/.test(message)) return new RunnerError(422, "One of this session's clones has refs other than branches and tags, which a pack can't keep");
+  if (/has tags on commits/.test(message)) return new RunnerError(422, "One of this session's clones has tags on commits its origin doesn't have, which a pack can't keep. Push them first, or leave it unpacked");
+  if (/borrows objects from the host cache/.test(message)) {
+    return new RunnerError(422, "One of this session's clones borrows from the host's repository cache, which an archived session can't read, so it can't be packed yet");
+  }
   if (/the clone .* could not be backed up|can't be backed up/.test(message)) return new RunnerError(422, "One of this session's clones can't be packed");
   return error;
 }

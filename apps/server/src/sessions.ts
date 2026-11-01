@@ -29,7 +29,7 @@ import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL,
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
-import { packSession, unpackSession } from './session-packing.js';
+import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 
 /**
  * Per-message model, reasoning and access. The model must be one the session's own host offers: one it advertises that its
@@ -596,6 +596,8 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
       RETURNING *`).bind(row.id, row.owner_id, row.policy_version, actorId).first();
     if (!restored) fail(409, 'policy_changed', 'Session status or permissions changed; reload and retry.');
     await auditStatement(c.env, actorId, 'session.unarchived', row.workspace_id, row.id, { status: restored.status }).run();
+    // Unpacked while archived, without network: it opens again to clone its repositories.
+    if (access.row.packed_at) await reopenUnpacked(c, restored);
     return c.json({ session: sessionRecord(restored, access.permissions) });
   });
   app.get('/api/sessions/:id/view', async c => {

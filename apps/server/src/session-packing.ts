@@ -63,6 +63,20 @@ export async function packSession(c: AppContext, sessionId: string): Promise<Ses
 }
 
 /**
+ * After its owner unarchived a session whose files the host unpacked: the host opens it again, now that it may reach
+ * the network, so its clones are cloned again before its work resumes. While archived it had no network, so the open
+ * that followed unpacking couldn't. Best effort: a session that doesn't restart now does when it next opens.
+ */
+export async function reopenUnpacked(c: AppContext, row: SessionRow): Promise<void> {
+  if (row.status !== 'ready') return;
+  try {
+    const response = await runnerRequest(c, row, 'restart', '', {});
+    await response.body?.cancel();
+    invalidateSessionView(c, row.id);
+  } catch { /* It restarts when it next opens. */ }
+}
+
+/**
  * Before an archived session whose files may be packed is unarchived: its owner unarchives it, and its host unpacks
  * them first. The session as it is then, still archived.
  */

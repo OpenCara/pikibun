@@ -169,6 +169,69 @@ test("the home's package caches a pack leaves out stay in step with the sandbox 
   assert.deepEqual([...declared.matchAll(/'([^']+)'/g)].map(match => match[1]), [...PACK_SKIPPED_HOME]);
 });
 
+test("a clone a pack can't keep in full is refused: stashes, other refs, tags its origin lacks, an unreadable cache", { skip: spawnSync("git", ["--version"]).status !== 0 }, async t => {
+  const { HELPER } = await import("../apps/runner/src/sandbox.js");
+  const root = await directory(t);
+  const home = join(root, "home"), work = join(root, "work"), app = join(work, "app");
+  await mkdir(home);
+  await mkdir(join(work, ".git"), { recursive: true });
+  const env = { HOME: home, SANDBOX_WORKTREE: work, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Alice", GIT_AUTHOR_EMAIL: "alice@example.test", GIT_COMMITTER_NAME: "Alice", GIT_COMMITTER_EMAIL: "alice@example.test" };
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  git(root, "init", "-q", "--bare", "-b", "main", "origin.git");
+  git(root, "clone", "-q", join(root, "origin.git"), app);
+  await writeFile(join(app, "a.txt"), "one");
+  git(app, "add", ".");
+  git(app, "commit", "-qm", "one");
+  git(app, "push", "-q", "origin", "main");
+  // The helper's own backup, as the sandbox runs it, without the namespace: a pack's and a backup's.
+  const program = HELPER.replace(/\ntry:\n    main\(\)[\s\S]*$/, "\n") + `
+for pack in (False, True):
+    try:
+        clone_backup(pack)
+        print('ok')
+    except ValueError as error:
+        print(error)
+`;
+  const backups = () => {
+    const result = spawnSync("/usr/bin/python3", ["-I", "-c", program], { env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const [backup, pack] = result.stdout.trim().split("\n");
+    assert.equal(backup, "ok", "a backup keeps what it can, as before");
+    return pack;
+  };
+  assert.equal(backups(), "ok");
+  git(app, "tag", "pushed");
+  assert.equal(backups(), "ok", "its origin's tags come back with the clone");
+  await writeFile(join(app, "b.txt"), "two");
+  git(app, "add", ".");
+  git(app, "commit", "-qm", "two");
+  assert.equal(backups(), "ok", "unpushed commits on branches are in the bundle");
+  git(app, "tag", "local");
+  assert.match(backups()!, /has tags on commits its origin doesn't have/);
+  git(app, "tag", "-d", "local");
+  await writeFile(join(app, "a.txt"), "changed");
+  git(app, "stash", "-q");
+  assert.match(backups()!, /has stashed changes/);
+  git(app, "stash", "drop", "-q");
+  git(app, "update-ref", "refs/notes/commits", "HEAD");
+  assert.match(backups()!, /refs other than branches and tags/);
+  git(app, "update-ref", "-d", "refs/notes/commits");
+  await mkdir(join(app, ".git", "objects", "info"), { recursive: true });
+  await writeFile(join(app, ".git", "objects", "info", "alternates"), "/repository-mirrors/github/github.com/7.git/objects\n");
+  assert.match(backups()!, /borrows objects from the host cache/);
+  await rm(join(app, ".git", "objects", "info", "alternates"));
+  assert.equal(backups(), "ok");
+  for (const message of ["the clone app has stashed changes, which a pack can't keep", "the clone app has refs other than branches and tags, which a pack can't keep",
+    "the clone app has tags on commits its origin doesn't have, which a pack can't keep", "the clone app borrows objects from the host cache that this session can't read now"]) {
+    const error = packRefusal(new Error(`Sandbox process failed (exit 1): sandbox: ${message}`));
+    assert.ok(error instanceof RunnerError && error.status === 422 && /^[\w .,:'()-]{1,300}$/.test(error.message), message);
+  }
+});
+
 // Packing and unpacking a live session run in the Linux sandbox, so they need bubblewrap with working user namespaces.
 const isolation = process.platform !== "linux" ? "Linux only"
   : spawnSync("/usr/bin/bwrap", ["--unshare-all", "--unshare-user", "--die-with-parent", "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
@@ -220,9 +283,11 @@ test("an archived session's files pack into one file, its conversation stays rea
 
   // Only its owner packs it.
   await assert.rejects(runner.pack(id, await ticket(id, "pack", "test:bob")), refusedWith(403, /owner/));
-  const result = await runner.pack(id, await ticket(id, "pack"));
+  // Two packs at once: the second waits for the first, then finds the session packed.
+  const [result, again] = await Promise.all([runner.pack(id, await ticket(id, "pack")), runner.pack(id, await ticket(id, "pack"))]);
   assert.equal(result.packed, true);
   assert.ok(result.bytes! > 0 && result.files! >= 3);
+  assert.deepEqual(again, { packed: true });
   assert.ok(asked.some(request => request.archived === true && request.permission === "manage"), "authorized as an action on an archived session");
   assert.equal(await exists(sandbox), false);
   assert.equal(await exists(join(root, "sessions", id, PACK_FILE)), true);

@@ -23,6 +23,8 @@ function immutable<T>(value: T): T {
 
 export class RunnerService {
   private readonly sessions = new Map<string, Promise<RunnerSession>>();
+  /** Packs and unpacks under way, by session: one at a time for each (see serialized). */
+  private readonly packing = new Map<string, Promise<unknown>>();
   private closed = false;
   readonly dataDir: string;
   constructor(readonly config: RunnerConfig) {
@@ -109,6 +111,23 @@ export class RunnerService {
    * already packed changes nothing, so a retry after an unclear outcome is safe.
    */
   async pack(id: string, ticket: RunnerTicket): Promise<{ packed: true } & Partial<PackSummary>> {
+    return this.serialized(id, () => this.packNow(id, ticket));
+  }
+
+  /**
+   * Runs `work`, a pack or unpack of session `id`, after those already asked for it, claimed before anything awaits:
+   * two of them never hold the same session, so one is always done, the session reopened, before the next looks at it.
+   */
+  private serialized<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.packing.get(id) ?? Promise.resolve();
+    const next = previous.then(work, work);
+    const settled = next.then(() => undefined, () => undefined);
+    this.packing.set(id, settled);
+    void settled.then(() => { if (this.packing.get(id) === settled) this.packing.delete(id); });
+    return next;
+  }
+
+  private async packNow(id: string, ticket: RunnerTicket): Promise<{ packed: true } & Partial<PackSummary>> {
     const session = await this.get(id);
     if (ticket.actorId !== session.binding.owner.id) throw new RunnerError(403, "Only the session's owner can pack its files");
     if (session.packed) {
@@ -131,6 +150,10 @@ export class RunnerService {
    * packed is left as it is, so a retry is safe.
    */
   async unpack(id: string, ticket: RunnerTicket): Promise<{ unpacked: boolean }> {
+    return this.serialized(id, () => this.unpackNow(id, ticket));
+  }
+
+  private async unpackNow(id: string, ticket: RunnerTicket): Promise<{ unpacked: boolean }> {
     const session = await this.get(id);
     if (ticket.actorId !== session.binding.owner.id) throw new RunnerError(403, "Only the session's owner can unpack its files");
     await session.authorize(ticket.actorId, "manage", ticket.policyVersion, false, false, true);

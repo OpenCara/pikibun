@@ -2269,6 +2269,7 @@ test('owners pack an archived session\'s files on its host, and unarchiving unpa
     assert.equal(envelope.request.ticket.actorId, s.owner.user.id);
     if (action === 'pack') return packReply();
     if (action === 'unpack') return unpackReply();
+    if (action === 'restart') return Response.json({ ok: true, sessionId: s.session.id });
     return Response.json({ error: 'Unexpected test relay request' }, { status: 503 });
   });
   const packedAt = () => (f.sqlite.prepare('SELECT packed_at FROM sessions WHERE id = ?').get(s.session.id) as { packed_at: string | null }).packed_at;
@@ -2303,7 +2304,8 @@ test('owners pack an archived session\'s files on its host, and unarchiving unpa
   const restored = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/unarchive`));
   assert.equal(restored.session.status, 'ready');
   assert.equal(restored.session.packed, undefined);
-  assert.deepEqual(actions, ['pack', 'unpack']);
+  // Unpacked while archived, without network: once unarchived, its host opens it again to clone its repositories.
+  assert.deepEqual(actions, ['pack', 'unpack', 'restart']);
   assert.equal(requests[1]!.request.path, `/v1/sessions/${s.session.id}/unpack`);
   assert.equal(packedAt(), null);
   const recorded = (f.sqlite.prepare('SELECT action FROM audit WHERE session_id = ? ORDER BY created_at, rowid').all(s.session.id) as { action: string }[]).map(row => row.action);
@@ -2328,7 +2330,11 @@ test('owners pack an archived session\'s files on its host, and unarchiving unpa
   unpackReply = () => Response.json({ unpacked: false });
   assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/unarchive`))).session.status, 'ready');
   assert.equal(packedAt(), null);
-  assert.deepEqual(actions, ['pack', 'unpack', 'pack', 'pack', 'unpack', 'unpack']);
+  assert.deepEqual(actions, ['pack', 'unpack', 'restart', 'pack', 'pack', 'unpack', 'unpack', 'restart']);
+  // A session that was never packed is unarchived as before, without asking its host.
+  await json(await s.owner.request('POST', `${path}/archive`));
+  await json(await s.owner.request('POST', `${path}/unarchive`));
+  assert.equal(actions.length, 8);
 });
 
 test('the host\'s authorization callback admits packing and unpacking an archived session, and nothing else of it', async t => {

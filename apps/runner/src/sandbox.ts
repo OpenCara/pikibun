@@ -292,7 +292,8 @@ type Request =
   | { kind: "clone-head"; path: string }
   | { kind: "clone-push-prepare"; path: string; commit: string; old: string | null; tips: string[] }
   | { kind: "clone-push-pack"; path: string; commit: string; exclude: string[] }
-  | { kind: "clone-backup" | "clone-pending" }
+  | { kind: "clone-backup"; pack?: true }
+  | { kind: "clone-pending" }
   | { kind: "clone-restore"; path: string; url: string; reference: string | null };
 
 /** Push transfers: a pack streamed after the request line, or stdout handed over uncapped. */
@@ -893,9 +894,31 @@ def clone_git_checked(directory, arguments, data=b'', extra=None, reason='the cl
     return output.decode('utf-8', 'replace').strip()
 
 
-def clone_backup_one(path, nested, budget):
+def clone_pack_check(path, directory, reason):
+    # A pack replaces the clone with its backup, so what a backup doesn't carry would be lost for good: refused instead.
+    # Its backup carries its branches and working tree; a restore clones its origin again, tags included.
+    alternates = os.path.join(directory, '.git', 'objects', 'info', 'alternates')
+    if os.path.lexists(alternates):
+        with open(alternates, 'rb') as stream:
+            borrowed = [line.strip() for line in stream.read(65536).splitlines() if line.strip()]
+        if not all(os.path.isdir(line) for line in borrowed):
+            raise ValueError('the clone ' + path + ' borrows objects from the host cache that this session can\'t read now')
+    for name in clone_git_checked(directory, ['for-each-ref', '--format=%(refname)'], reason=reason).splitlines():
+        if name == 'refs/stash':
+            raise ValueError('the clone ' + path + ' has stashed changes, which a pack can\'t keep')
+        if not name.startswith(('refs/heads/', 'refs/remotes/', 'refs/tags/', 'refs/pistead/')):
+            raise ValueError('the clone ' + path + ' has refs other than branches and tags, which a pack can\'t keep')
+    # Tags its origin may not have: tags on commits it doesn't have (or on something other than a commit) certainly not.
+    code, output = clone_git(directory, ['rev-list', '--count', '--tags', '--not', '--remotes=origin'])
+    if code or output.strip() not in (b'', b'0'):
+        raise ValueError('the clone ' + path + ' has tags on commits its origin doesn\'t have, which a pack can\'t keep')
+
+
+def clone_backup_one(path, nested, budget, pack=False):
     directory = os.path.join(WORK, *path.split('/'))
     reason = 'the clone ' + path + ' could not be backed up'
+    if pack:
+        clone_pack_check(path, directory, reason)
     code, output = clone_git(directory, ['config', '--get', 'remote.origin.url'])
     origin = output.decode('utf-8', 'replace').strip()[:2048] if not code else None
     code, output = clone_git(directory, ['symbolic-ref', '-q', 'HEAD'])
@@ -982,13 +1005,13 @@ def clone_backup_one(path, nested, budget):
             'bundle': base64.b64encode(bundle).decode('ascii') if bundle is not None else None}
 
 
-def clone_backup():
+def clone_backup(pack=False):
     paths = find_clones()
     budget = MAX_CLONE_BUNDLES
     clones = []
     for path in paths:
         nested = [other[len(path) + 1:] for other in paths if other.startswith(path + '/')]
-        clone = clone_backup_one(path, nested, budget)
+        clone = clone_backup_one(path, nested, budget, pack)
         if clone['bundle'] is not None:
             budget -= len(clone['bundle']) * 3 // 4
         clones.append(clone)
@@ -1197,7 +1220,11 @@ def main():
         clone_push_pack(request)
         return
     if kind == 'clone-backup':
-        print(json.dumps(clone_backup(), ensure_ascii=True))
+        # A pack's backup replaces the clones (pack.ts), so whatever it can't carry is refused (clone_pack_check).
+        pack = request.get('pack', False)
+        if not isinstance(pack, bool):
+            raise ValueError('invalid clone backup request')
+        print(json.dumps(clone_backup(pack), ensure_ascii=True))
         return
     if kind == 'clone-pending':
         print(json.dumps(clone_pending(), ensure_ascii=True))
@@ -1662,8 +1689,9 @@ export class Sandbox implements IsolatedWorkspace {
    * tree, and a bundle of what its origin doesn't have. Restorations still pending are carried over as they are.
    * `found` are the clones in the worktree, which the snapshot leaves out.
    */
-  async cloneBackup(authorize: SandboxAuthorize): Promise<{ clones: CloneBackup[]; found: string[] }> {
-    const value = JSON.parse(await this.#operation({ kind: "clone-backup" }, false, authorize)) as { clones: CloneBackup[]; found: string[] };
+  async cloneBackup(authorize: SandboxAuthorize, { pack = false }: { pack?: boolean } = {}): Promise<{ clones: CloneBackup[]; found: string[] }> {
+    // `pack`: the backup will replace the clones (pack.ts), so the sandbox refuses clones with what it can't carry.
+    const value = JSON.parse(await this.#operation({ kind: "clone-backup", ...(pack ? { pack: true as const } : {}) }, false, authorize)) as { clones: CloneBackup[]; found: string[] };
     if (!Array.isArray(value?.clones) || !Array.isArray(value.found) || !value.found.every(path => validCloneDirectory(path))) throw new Error("Invalid sandbox clone response");
     return value;
   }
