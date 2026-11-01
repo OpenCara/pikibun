@@ -78,6 +78,13 @@ export const MIRROR_ROOT = "/repository-mirrors";
 const SHIM_DIRECTORY = "/opt/pistead/bin";
 /** The host's trusted certificates in the session's private root, mounted read-only at CA_BUNDLE for shell commands. */
 export const CA_BUNDLE_FILE = "ca-certificates.crt";
+/**
+ * What a pack of a session's files (pack.ts) leaves out of its home, relative to it: package managers' caches, downloaded
+ * again when needed, and temporary files. The sandbox helper's PACK_SKIPPED_HOME mirrors it.
+ */
+export const PACK_SKIPPED_HOME: readonly string[] = Object.freeze([".tmp", ".cache", ".npm", ".pnpm-store", ".yarn", ".bun", ".local/share/pnpm",
+  ".cargo/registry", ".cargo/git", "go/pkg/mod", ".m2/repository", ".gradle/caches", ".nuget/packages"]);
+
 /** The steps that may run Git in an agent's clone, and so need the mirrors a clone borrows from. */
 const MIRROR_KINDS: ReadonlySet<Request["kind"]> = new Set(["bash", "clone-head", "clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"]);
 
@@ -280,7 +287,7 @@ type Request =
   | { kind: "initialize" }
   | { kind: "read" | "read-content" | "list" | "browse"; path: string }
   | { kind: "write"; path: string; content: string }
-  | { kind: "snapshot"; clones?: string[] }
+  | { kind: "snapshot"; clones?: string[]; skipCaches?: true }
   | { kind: "bash"; command: string }
   | { kind: "clone-head"; path: string }
   | { kind: "clone-push-prepare"; path: string; commit: string; old: string | null; tips: string[] }
@@ -633,13 +640,24 @@ def run(argv, data=None):
         sys.exit(child.returncode if child.returncode > 0 else 128 - child.returncode)
 
 
+# Mirrors PACK_SKIPPED_HOME in sandbox.ts: what a pack of the session's files leaves out of its home, all of it downloaded
+# again when needed (package managers' caches) or temporary.
+PACK_SKIPPED_HOME = ('.tmp', '.cache', '.npm', '.pnpm-store', '.yarn', '.bun', '.local/share/pnpm', '.cargo/registry',
+                     '.cargo/git', 'go/pkg/mod', '.m2/repository', '.gradle/caches', '.nuget/packages')
+
+
 def snapshot(request):
     files, total = [], 0
     # Clones are backed up as bundles (clone-backup), never as files.
     clones = request.get('clones', [])
     if not isinstance(clones, list) or not all(clone_path(path) for path in clones):
         raise ValueError('invalid snapshot request')
+    skip_caches = request.get('skipCaches', False)
+    if not isinstance(skip_caches, bool):
+        raise ValueError('invalid snapshot request')
     skipped = {'worktree/' + path for path in clones}
+    if skip_caches:
+        skipped |= {'home/' + path for path in PACK_SKIPPED_HOME}
 
     def add(parent, name, archive_path):
         nonlocal total
@@ -1633,8 +1651,10 @@ export class Sandbox implements IsolatedWorkspace {
   }
 
   /** The session's files, leaving out `clones` (worktree paths), which a backup keeps as bundles (cloneBackup). */
-  async snapshot(authorize: SandboxAuthorize, clones: readonly string[] = []): Promise<SnapshotFile[]> {
-    return JSON.parse(await this.#operation({ kind: "snapshot", ...(clones.length ? { clones: [...clones] } : {}) }, true, authorize)) as SnapshotFile[];
+  /** `skipCaches`: leave out the home's package caches and temporary files (PACK_SKIPPED_HOME), as a pack does. */
+  async snapshot(authorize: SandboxAuthorize, clones: readonly string[] = [], { skipCaches = false }: { skipCaches?: boolean } = {}): Promise<SnapshotFile[]> {
+    return JSON.parse(await this.#operation({ kind: "snapshot", ...(clones.length ? { clones: [...clones] } : {}), ...(skipCaches ? { skipCaches: true as const } : {}) },
+      true, authorize)) as SnapshotFile[];
   }
 
   /**

@@ -30,7 +30,7 @@ export function permissionFor(action: RunnerAction): Permission {
   if (action === "submit" || action === "operations" || action === "create" || action === "stop" || action === "files" || action === "revert" || action === "fork") return "write";
   if (action === "ask") return "ask";
   if (action === "approve") return "approve";
-  if (action === "restart" || action === "backup" || action === "restore") return "manage";
+  if (action === "restart" || action === "backup" || action === "restore" || action === "pack" || action === "unpack") return "manage";
   return "read";
 }
 export async function verifyRunnerTicket(token: string, secret: string, action: RunnerAction, sessionId: string, body: string, now = Date.now()): Promise<RunnerTicket> {

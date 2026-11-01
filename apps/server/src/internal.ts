@@ -58,7 +58,11 @@ export async function authorizeSession(c: AppContext, connectorId: string | null
     if (access) await requireCallbackScope(c, access.row, connectorId);
     if (input.host !== undefined && input.host !== true) fail(400, 'invalid_authorization', 'Invalid authorization request.');
     if (input.hostSessions !== undefined && (input.hostSessions !== true || input.host !== true)) fail(400, 'invalid_authorization', 'Invalid authorization request.');
-    const allowed = !!access && access.row.owner_id === ownerId && access.row.status !== 'archived' && hasPermission(access.permissions, input.permission as Permission);
+    if (input.archived !== undefined && (input.archived !== true || input.host !== undefined || input.permission !== 'manage')) fail(400, 'invalid_authorization', 'Invalid authorization request.');
+    // An archived session admits nothing from its host but packing and unpacking its files, which ask as `archived` and are
+    // admitted only while it is archived (see requireArchivedAction).
+    const archived = access?.row.status === 'archived';
+    const allowed = !!access && access.row.owner_id === ownerId && archived === (input.archived === true) && hasPermission(access.permissions, input.permission as Permission);
     const result: AuthorizationResult = { allowed, policyVersion: access?.row.policy_version ?? 0, ownerId: access?.row.owner_id ?? '' };
     // The host's owner holds every level; to the runner, that is `auto`.
     const host = allowed && input.host === true ? await hostAuthority(c.env, access!.row, actorId) : undefined;

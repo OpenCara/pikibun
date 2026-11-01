@@ -4,12 +4,12 @@ import { requireNoMigration, requireUnfrozen, sessionAccess } from './db.js';
 import { mayRequestAction } from './host-access.js';
 import type { AppContext, SessionRow } from './types.js';
 import { fail, id, testMode } from './http.js';
-import { connectorRequest, type ConnectionPin } from './connector-transport.js';
+import { connectorRequest, ownerActions, requireArchivedAction, type ConnectionPin } from './connector-transport.js';
 
 const actionPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write',
-  revert: 'write', fork: 'write',
+  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage',
 };
 
 export async function runnerRequest(c: AppContext, row: SessionRow, action: RunnerAction, suffix = '', body?: unknown, pin?: ConnectionPin): Promise<Response> {
@@ -30,11 +30,12 @@ export async function requireRunnerAccess(c: AppContext, actorId: string, row: S
   if (!access || access.row.owner_id !== row.owner_id || !await mayRequestAction(c.env, access, actorId, action, actionPermissions[action])) {
     fail(403, 'permission_revoked', 'Session access is no longer authorized.');
   }
-  if (access.row.status === 'archived' && action !== 'view' && action !== 'events') fail(409, 'session_archived', 'Session is archived.');
+  requireArchivedAction(access.row, action);
   // A session that pinned its repositories stays readable only.
   // A read-only session still opens (create, restart) to show its history and files, and can be stopped; nothing new runs in it.
-  if (!['view', 'events', 'create', 'restart', 'stop', 'files'].includes(action)) requireUnfrozen(access.row);
-  if (['create', 'restart', 'restore', 'backup', 'fork'].includes(action) && actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
+  // Its files were never packed (it can't be), but unpacking stays possible whatever happens.
+  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'unpack'].includes(action)) requireUnfrozen(access.row);
+  if (ownerActions.includes(action) && actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
   if (action !== 'restore' && await c.env.DB.query("SELECT 1 FROM restore_jobs WHERE target_session_id = ? AND status <> 'completed'").bind(row.id).first()) {
     fail(409, 'restore_pending', 'Session restoration is not complete.');
   }
@@ -59,7 +60,7 @@ async function actorRequest(c: AppContext, actorId: string, row: SessionRow, act
     submit: `/v1/sessions/${row.id}/submit`, ask: `/v1/sessions/${row.id}/ask`, operations: `/v1/sessions/${row.id}/operations`,
     approve: `/v1/sessions/${row.id}/approvals/${encodeURIComponent(suffix)}`, backup: `/v1/sessions/${row.id}/backup`, restart: `/v1/sessions/${row.id}/restart`,
     restore: `/v1/sessions/${row.id}/restore`, stop: `/v1/sessions/${row.id}/stop`, files: `/v1/sessions/${row.id}/files`,
-    revert: `/v1/sessions/${row.id}/revert`, fork: `/v1/sessions/${row.id}/fork`,
+    revert: `/v1/sessions/${row.id}/revert`, fork: `/v1/sessions/${row.id}/fork`, pack: `/v1/sessions/${row.id}/pack`, unpack: `/v1/sessions/${row.id}/unpack`,
   };
   const serialized = body === undefined ? '' : JSON.stringify(body);
   const issuedAt = Math.floor(Date.now() / 1000);
@@ -74,7 +75,7 @@ async function actorRequest(c: AppContext, actorId: string, row: SessionRow, act
       headers: { Authorization: `Bearer ${authorization}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : serialized,
       redirect: 'manual',
-      ...(action === 'events' ? {} : { signal: AbortSignal.timeout(action === 'backup' || action === 'restore' ? 90000 : 30000) }),
+      ...(action === 'events' ? {} : { signal: AbortSignal.timeout(['backup', 'restore', 'pack', 'unpack'].includes(action) ? 90000 : 30000) }),
     });
   } catch {
     fail(503, 'runner_unavailable', 'The external runner is unavailable. An accepted operation may still be running; inspect the session before retrying.');

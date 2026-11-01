@@ -124,6 +124,8 @@ export interface SessionRow {
   visibility?: 'private' | 'workspace';
   /** The status before archiving, restored on unarchive. */
   archived_status?: 'provisioning' | 'ready' | 'error' | null;
+  /** When the owner packed the session's files on its host (apps/runner/src/pack.ts); NULL or absent while they aren't. */
+  packed_at?: string | null;
   /** What its agent is doing, as its host last reported it; display state only, never part of the runner binding. */
   activity?: SessionActivity | null;
   /** When its next scheduled prompt runs (scheduled-prompts.ts); display state only, never part of the runner binding. */

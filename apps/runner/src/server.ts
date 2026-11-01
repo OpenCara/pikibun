@@ -11,6 +11,7 @@ import { ViewRevisions } from "../../../packages/shared/src/view-patch.js";
 import { assertId, permissionFor, RunnerError, stableJson, validateBinding, verifyRunnerTicket } from "./protocol.js";
 import { RunnerSession, WORK_MARKER, type RunnerConfig } from "./session.js";
 import { restoreSession } from "./restore.js";
+import { PACK_FILE, readPack, settlePack, unpackSandbox, writePack, type PackSummary } from "./pack.js";
 
 function immutable<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -58,23 +59,90 @@ export class RunnerService {
       if (session.failed) await session.recover();
       return session;
     }
-    const opening = (async () => {
-      const directory = join(this.dataDir, "sessions", id);
-      let binding: RunnerBinding;
-      try { binding = this.binding(JSON.parse(await readFile(join(directory, "binding.json"), "utf8")), id); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new RunnerError(404, "Session not found"); throw error; }
-      if (await realpath(directory) !== directory) throw new RunnerError(403, "Invalid session storage");
-      const session = new RunnerSession(immutable(binding), directory, this.config);
-      try { await session.open(); }
-      catch (error) {
+    const opening = this.openSession(id);
+    this.sessions.set(id, opening);
+    try { return await opening; } catch (error) { if (this.sessions.get(id) === opening) this.sessions.delete(id); throw error; }
+  }
+
+  private async openSession(id: string): Promise<RunnerSession> {
+    const directory = join(this.dataDir, "sessions", id);
+    let binding: RunnerBinding;
+    try { binding = this.binding(JSON.parse(await readFile(join(directory, "binding.json"), "utf8")), id); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new RunnerError(404, "Session not found"); throw error; }
+    if (await realpath(directory) !== directory) throw new RunnerError(403, "Invalid session storage");
+    // A pack or unpack that a crash cut off is finished or undone before anything opens the session.
+    await settlePack(directory);
+    const session = new RunnerSession(immutable(binding), directory, this.config);
+    try { await session.open(); }
+    catch (error) {
+      await session.close().catch(() => {});
+      await session.sandbox.close().catch(() => {});
+      throw error;
+    }
+    return session;
+  }
+
+  /**
+   * Runs `work` on `session` once requests already admitted to it are done, then closes it, sandbox included, and opens
+   * it again: requests that come meanwhile wait for the session as it opens then. `work`'s result or error is returned.
+   */
+  private async transition<T>(session: RunnerSession, work: () => Promise<T>): Promise<T> {
+    const id = session.binding.session.id;
+    const done = (async (): Promise<{ value: T } | { error: unknown }> => {
+      try { return { value: await work() }; }
+      catch (error) { return { error }; }
+      finally {
         await session.close().catch(() => {});
         await session.sandbox.close().catch(() => {});
-        throw error;
       }
-      return session;
     })();
-    this.sessions.set(id, opening);
-    try { return await opening; } catch (error) { this.sessions.delete(id); throw error; }
+    const reopened = done.then(() => this.openSession(id));
+    this.sessions.set(id, reopened);
+    reopened.catch(() => { if (this.sessions.get(id) === reopened) this.sessions.delete(id); });
+    const outcome = await done;
+    if ("error" in outcome) throw outcome.error;
+    return outcome.value;
+  }
+
+  /**
+   * Packs the files of the archived session `id` (pack.ts) for its owner, who asked through `ticket`. Packing a session
+   * already packed changes nothing, so a retry after an unclear outcome is safe.
+   */
+  async pack(id: string, ticket: RunnerTicket): Promise<{ packed: true } & Partial<PackSummary>> {
+    const session = await this.get(id);
+    if (ticket.actorId !== session.binding.owner.id) throw new RunnerError(403, "Only the session's owner can pack its files");
+    if (session.packed) {
+      await session.authorize(ticket.actorId, "manage", ticket.policyVersion, false, false, true);
+      return { packed: true };
+    }
+    // Refused before the session closes, when it can be: a refusal leaves it as it was.
+    await session.requirePackable(ticket.actorId, ticket.policyVersion);
+    await session.consumeTicket(ticket);
+    return this.transition(session, async () => {
+      const { bytes, files, clones } = await session.packContent(ticket);
+      await session.sandbox.close();
+      await writePack(session.directory, bytes);
+      return { packed: true as const, files, clones, bytes: bytes.byteLength };
+    });
+  }
+
+  /**
+   * Brings back the packed files of the archived session `id` before its owner unarchives it. A session that isn't
+   * packed is left as it is, so a retry is safe.
+   */
+  async unpack(id: string, ticket: RunnerTicket): Promise<{ unpacked: boolean }> {
+    const session = await this.get(id);
+    if (ticket.actorId !== session.binding.owner.id) throw new RunnerError(403, "Only the session's owner can unpack its files");
+    await session.authorize(ticket.actorId, "manage", ticket.policyVersion, false, false, true);
+    if (!session.packed) return { unpacked: false };
+    await session.consumeTicket(ticket);
+    return this.transition(session, async () => {
+      // Checked before anything is written: a damaged pack stays, and the session stays packed.
+      const files = await readPack(session.directory, session.binding);
+      await session.sandbox.close();
+      await unpackSandbox(session.directory, session.binding, files);
+      return { unpacked: true };
+    });
   }
 
   /**
@@ -90,7 +158,9 @@ export class RunnerService {
       if (this.closed) return;
       try { assertId(name); } catch { continue; }
       const marked = await lstat(join(this.dataDir, "sessions", name, WORK_MARKER)).then(stat => stat.isFile(), () => false);
-      if (marked) await this.get(name).catch(() => {});
+      // A packed session has no work to go on with.
+      const packed = await lstat(join(this.dataDir, "sessions", name, PACK_FILE)).then(stat => stat.isFile(), () => false);
+      if (marked && !packed) await this.get(name).catch(() => {});
     }
   }
 
@@ -191,7 +261,9 @@ export class RunnerService {
   async close(): Promise<void> {
     this.closed = true;
     for (const pending of this.sessions.values()) {
-      const session = await pending;
+      // A session that failed to open again after packing or unpacking holds nothing to close.
+      const session = await pending.catch(() => undefined);
+      if (!session) continue;
       await session.close();
       await session.sandbox.close();
     }
@@ -230,7 +302,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     const approval = /^approvals\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(route);
     // view/<revision>: what changed since a view this caller already holds.
     const since = /^view\/([0-9a-f]{32})$/.exec(route)?.[1];
-    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", operations: "operations", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork" };
+    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", operations: "operations", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack" };
     const action = approval ? "approve" : since ? "view" : actions[route];
     if (!action) throw new RunnerError(404, "Unknown runner endpoint");
     if (c.req.method !== (action === "view" || action === "events" ? "GET" : "POST")) throw new RunnerError(405, "Method not allowed");
@@ -243,8 +315,18 @@ export function createRunnerApp(service: RunnerService): Hono {
       const binding = await service.restore(input, ticket);
       return c.json({ session: binding.session, restore: { id: input.restore.id, sha256: input.restore.sha256, targetSessionId: id } }, 201);
     }
+    // Packing and unpacking act on an archived session, which the control plane authorizes for nothing else; both check
+    // that themselves, and take an empty body.
+    if (action === "pack" || action === "unpack") {
+      if (body && stableJson(JSON.parse(body)) !== "{}") throw new RunnerError(400, `Invalid ${action} request`);
+      const session = await service.get(id);
+      if (ticket.ownerId !== session.binding.owner.id) throw new RunnerError(403, "Ticket owner mismatch");
+      return c.json(action === "pack" ? await service.pack(id, ticket) : await service.unpack(id, ticket));
+    }
     const session = await service.get(id);
     if (ticket.ownerId !== session.binding.owner.id) throw new RunnerError(403, "Ticket owner mismatch");
+    // A session whose files are packed only shows its conversation until it is unpacked.
+    if (session.packed && action !== "view" && action !== "events") throw new RunnerError(409, "This session's files are packed. Unarchive it to use them");
     // A decision needs approve permission, but the host's owner decides a host command with any access to the session:
     // decide() checks which one the card's operation needs.
     await session.authorize(ticket.actorId, action === "approve" ? "read" : permissionFor(action), ticket.policyVersion);

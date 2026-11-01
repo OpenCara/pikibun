@@ -77,14 +77,16 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
     ...(row.next_scheduled_at ? { nextScheduledAt: row.next_scheduled_at } : {}),
     ...(row.tool_output === 'brief' ? { toolOutput: 'brief' as const } : {}),
     ...(row.parent_session_id ? { parentSessionId: row.parent_session_id } : {}),
+    ...(row.packed_at ? { packed: true as const } : {}),
     ...(pullRequest ? { pullRequest } : {}) };
 }
-export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId'> {
+export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed'> {
   // Visibility is live control-plane policy, activity and the pull request are what the host and pushes report, tool
-  // output is how the control plane shows the transcript, the next scheduled prompt is the owner's schedule, and the
-  // parent session is how the control plane links sessions, so none of them is part of the immutable runner binding.
+  // output is how the control plane shows the transcript, the next scheduled prompt is the owner's schedule, the parent
+  // session is how the control plane links sessions, and whether its files are packed is the host's state, so none of
+  // them is part of the immutable runner binding.
   const { visibility: _visibility, permissions: _permissions, activity: _activity, frozen: _frozen, pullRequest: _pullRequest,
-    toolOutput: _toolOutput, nextScheduledAt: _nextScheduledAt, parentSessionId: _parentSessionId, ...record } = sessionRecord(row);
+    toolOutput: _toolOutput, nextScheduledAt: _nextScheduledAt, parentSessionId: _parentSessionId, packed: _packed, ...record } = sessionRecord(row);
   return record;
 }
 export async function requireMember(env: Env, workspaceId: string, userId: string, roles?: readonly WorkspaceRole[]): Promise<MemberRow> {

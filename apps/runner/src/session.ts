@@ -37,6 +37,7 @@ import { mirrorPath, type MirrorRepository, type RepositoryCache } from "./repo-
 import type { RepositoryPreparationItem, RepositoryPreparationView } from "../../../packages/shared/src/types.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
+import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { applyEdits } from "./edits.js";
 import { compactionFailure, configuredCompaction, hostCompaction } from "./compaction.js";
 import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
@@ -382,6 +383,11 @@ export class RunnerSession {
    */
   readonly #frozen: boolean;
   /**
+   * The session's files are packed (pack.ts), as of this open: it opens without its sandbox, to show its conversation,
+   * and nothing runs in it until RunnerService.unpack brings its files back.
+   */
+  #packed = false;
+  /**
    * The session runs directly on the host's own environment, with no sandbox: every session of an unsandboxed host, or
    * one started that way on a host that accepts it (`#hostSession`).
    */
@@ -657,11 +663,13 @@ export class RunnerSession {
 
   /**
    * `host`: also ask for the actor's authority over host commands on this host (`hostCommands`); `hostSessions`, also
-   * whether they may run their own sessions directly on it.
+   * whether they may run their own sessions directly on it. `archived`: the request acts on the session because it is
+   * archived, as packing and unpacking its files do; the control plane then allows it only while the session is archived,
+   * and refuses every other request of an archived one.
    */
-  async authorize(actorId: string, permission: Permission, expectedPolicyVersion?: number, host = false, hostSessions = false): Promise<AuthorizationResult> {
+  async authorize(actorId: string, permission: Permission, expectedPolicyVersion?: number, host = false, hostSessions = false, archived = false): Promise<AuthorizationResult> {
     const body: AuthorizationRequest = { sessionId: this.binding.session.id, ownerId: this.binding.owner.id, actorId, permission,
-      ...(host ? { host: true } : {}), ...(host && hostSessions ? { hostSessions: true } : {}) };
+      ...(host ? { host: true } : {}), ...(host && hostSessions ? { hostSessions: true } : {}), ...(archived ? { archived: true } : {}) };
     let result: AuthorizationResult;
     try {
       if (this.config.authorize) result = await this.config.authorize(body);
@@ -895,8 +903,14 @@ export class RunnerSession {
     return instructions;
   }
 
+  /** The session's files are packed: only its view, and unpacking it, are served (see createRunnerApp). */
+  get packed(): boolean { return this.#packed; }
+
   async open(): Promise<void> {
-    await this.#egress?.start();
+    // RunnerService settled the directory (settlePack) before this session opened it.
+    this.#packed = await isPacked(this.directory);
+    // A packed session runs nothing, so it has no proxy to listen.
+    if (!this.#packed) await this.#egress?.start();
     try { await this.openHarness(); }
     catch (error) {
       // A session that didn't open leaves nothing listening.
@@ -906,8 +920,11 @@ export class RunnerSession {
   }
 
   private async openHarness(): Promise<void> {
-    await this.initializeRepositories();
-    if (this.#clone && !this.#egress) {
+    // A packed session has no sandbox to prepare, and no clones to restore until it is unpacked.
+    if (!this.#packed) await this.initializeRepositories();
+    if (this.#packed) {
+      // Its view and instructions need nothing of the sandbox.
+    } else if (this.#clone && !this.#egress) {
       const grant = await this.requestGrant().catch(() => null);
       this.#branchRepositories = grant?.repositories ?? [];
       this.#cloneRepositories = this.#branchRepositories.map(repository => bindingRemote(repository));
@@ -991,7 +1008,8 @@ export class RunnerSession {
     // Recovered and queued work waits for repositories prepared in the background: their preparation resumes it once
     // they are ready, and a failure leaves it all suspended, harness included, until the session restarts. Nothing
     // resumes in a read-only session.
-    if (this.#repositories.status === "ready" && !this.#frozen) await this.resumeWork();
+    // A packed session was idle when it was packed, and stays so until it is unpacked and opened again.
+    if (this.#repositories.status === "ready" && !this.#frozen && !this.#packed) await this.resumeWork();
     // A read-only session never runs what it had queued or at work when it became read-only: that ends here, as a stop
     // would, so it doesn't stay busy forever.
     if (this.#frozen) {
@@ -2737,6 +2755,43 @@ export class RunnerSession {
         return { format: "pi-runner-backup-v1", binding: this.binding, manifest: state, sqlite, files, ...(clones.length ? { clones } : {}),
           createdAt: new Date().toISOString() };
       } finally { await this.open(); }
+    });
+  }
+
+  /**
+   * Refuses to pack this session (RunnerService.pack) when it can't be: `actorId` must manage it while it is archived,
+   * it must run in the Linux sandbox, without per-session volumes, and be idle with its repositories ready.
+   */
+  async requirePackable(actorId: string, policyVersion: number): Promise<void> {
+    await this.authorize(actorId, "manage", policyVersion, false, false, true);
+    if (this.#packed) throw new RunnerError(409, "This session's files are already packed");
+    if (this.#onHost) throw new RunnerError(422, "This session runs without the sandbox, so its files can't be packed");
+    if (!(this.sandbox instanceof Sandbox)) throw new RunnerError(422, "Only sessions in the Linux sandbox can be packed");
+    if (this.config.resources) throw new RunnerError(422, "This host keeps each session on its own volume, so packing would free nothing");
+    this.requireUnfrozen();
+    const state = await this.metadata();
+    if (Object.values(state.runs).some(holdsQueue)
+      || Object.values(state.approvals).some(approval => approval.status === "executing")) throw new RunnerError(409, "Packing requires an idle session including queued work");
+    this.requireRepositoriesReady();
+  }
+
+  /**
+   * The pack of this session's files (pack.ts), for RunnerService.pack, which then writes it: its clones as bundles of
+   * their local work and its other files, without its home's package caches. The session is closed first, and left so;
+   * a refusal says why in words the control plane shows.
+   */
+  async packContent(ticket: RunnerTicket): Promise<{ bytes: Buffer; files: number; clones: number }> {
+    this.assertTicket(ticket);
+    return this.exclusive(async () => {
+      await this.requirePackable(ticket.actorId, ticket.policyVersion);
+      await this.close();
+      const sandbox = this.sandbox as Sandbox;
+      const authorize = async () => { await this.authorize(ticket.actorId, "manage", ticket.policyVersion, false, false, true); };
+      try {
+        const { clones, found } = this.#clone ? await sandbox.cloneBackup(authorize) : { clones: [], found: [] };
+        const files = await sandbox.snapshot(authorize, found, { skipCaches: true });
+        return { bytes: packBytes(this.binding, { files, ...(clones.length ? { clones } : {}) }), files: files.length, clones: clones.length };
+      } catch (error) { throw packRefusal(error); }
     });
   }
 

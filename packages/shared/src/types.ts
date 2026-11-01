@@ -137,6 +137,11 @@ export interface SessionRecord {
   /** The session whose agent started this one with the sessions tool, as the same person; absent for every other session. */
   parentSessionId?: string;
   /**
+   * The archived session's files are packed on its host to save its disk (POST /api/sessions/:id/pack): its conversation
+   * stays, and unarchiving it, which only its owner does then, unpacks them. Absent: they aren't.
+   */
+  packed?: true;
+  /**
    * "brief": everyone viewing the session (share links included) sees each tool result as its first line and long tool
    * calls cut short, to keep transcripts small. Absent: full tool output. It starts as its workspace sets for new sessions; only the owner changes it.
    */
@@ -216,7 +221,7 @@ export interface RunnerBinding {
   model: ModelDefinition;
 }
 export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "operations" | "approve" | "backup" | "restart" | "restore" | "stop" | "files"
-  | "revert" | "fork";
+  | "revert" | "fork" | "pack" | "unpack";
 
 /** How far the session file browser reads: entries listed per directory, and bytes of a file previewed. */
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
@@ -264,6 +269,12 @@ export interface AuthorizationRequest {
    * (`hostSessions`). Asked only by connectors that honor such grants, so older ones never receive the field.
    */
   hostSessions?: boolean;
+  /**
+   * The request acts on the session because it is archived: packing or unpacking its files (POST /api/sessions/:id/pack,
+   * and unarchiving a packed one). The control plane then allows it only while the session is archived, as it allows no
+   * other request of an archived session.
+   */
+  archived?: boolean;
 }
 /**
  * What a member may do with host_bash on a host: `approve` decides each host command; `auto` also runs the host

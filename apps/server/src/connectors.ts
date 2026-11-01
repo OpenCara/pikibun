@@ -59,7 +59,7 @@ export function parseManifest(input: Record<string, unknown>, env: Env): { model
   const value = input.capabilities;
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(400, 'invalid_manifest', 'Capabilities are required.');
   const cap = value as Record<string, unknown>;
-  onlyFields(cap, ['platform', 'sandbox', 'productionShell', 'unsandboxed', 'chatOptions', 'chatImages', 'gitProviders', 'gitServers', 'gitPush', 'gitCredentials', 'github', 'githubIssues', 'sources', 'schedules', 'crossSessions', 'repositoryCache', 'hostMigration', 'plainGit', 'cloneBackups', 'sessionBranches', 'conversationBackups', 'hostConfig', 'compactionConfig', 'gpu']);
+  onlyFields(cap, ['platform', 'sandbox', 'productionShell', 'unsandboxed', 'chatOptions', 'chatImages', 'gitProviders', 'gitServers', 'gitPush', 'gitCredentials', 'github', 'githubIssues', 'sources', 'schedules', 'crossSessions', 'repositoryCache', 'hostMigration', 'plainGit', 'cloneBackups', 'sessionBranches', 'conversationBackups', 'sessionPacking', 'hostConfig', 'compactionConfig', 'gpu']);
   const platform = text(cap.platform, 'platform', 40);
   if (!/^[a-zA-Z0-9._-]+$/.test(platform) || typeof cap.sandbox !== 'boolean' || typeof cap.productionShell !== 'boolean' || (cap.productionShell && !cap.sandbox)
     || (cap.unsandboxed !== undefined && typeof cap.unsandboxed !== 'boolean') || (cap.unsandboxed && cap.sandbox)
@@ -79,6 +79,8 @@ export function parseManifest(input: Record<string, unknown>, env: Env): { model
     || (cap.cloneBackups !== undefined && typeof cap.cloneBackups !== 'boolean') || (cap.cloneBackups && (!cap.plainGit || cap.unsandboxed))
     || (cap.sessionBranches !== undefined && typeof cap.sessionBranches !== 'boolean') || (cap.sessionBranches && !cap.plainGit)
     || (cap.conversationBackups !== undefined && typeof cap.conversationBackups !== 'boolean')
+    // Only sandboxed sessions are packed.
+    || (cap.sessionPacking !== undefined && typeof cap.sessionPacking !== 'boolean') || (cap.sessionPacking && cap.unsandboxed)
     || (cap.hostConfig !== undefined && typeof cap.hostConfig !== 'boolean')
     || (cap.compactionConfig !== undefined && typeof cap.compactionConfig !== 'boolean') || (cap.compactionConfig && !cap.hostConfig)
     // Unsandboxed commands already run on the host itself; a GPU is lent only to sandboxed ones.
@@ -88,6 +90,7 @@ export function parseManifest(input: Record<string, unknown>, env: Env): { model
     ...(cap.github ? { github: true } : {}), ...(cap.githubIssues ? { githubIssues: true } : {}), ...(cap.sources ? { sources: true } : {}), ...(cap.schedules ? { schedules: true } : {}), ...(cap.crossSessions ? { crossSessions: true } : {}), ...(cap.repositoryCache ? { repositoryCache: true } : {}),
     ...(cap.hostMigration ? { hostMigration: true } : {}), ...(cap.plainGit ? { plainGit: true } : {}), ...(cap.cloneBackups ? { cloneBackups: true } : {}),
     ...(cap.sessionBranches ? { sessionBranches: true } : {}), ...(cap.conversationBackups ? { conversationBackups: true } : {}),
+    ...(cap.sessionPacking ? { sessionPacking: true } : {}),
     ...(cap.hostConfig ? { hostConfig: true } : {}), ...(cap.compactionConfig ? { compactionConfig: true } : {}), ...(cap.gpu ? { gpu: cap.gpu as GpuKind } : {}) } };
 }
 

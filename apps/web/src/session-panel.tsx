@@ -44,6 +44,8 @@ export interface SessionActions {
   rename: (title: string) => Promise<boolean>;
   archive: () => void;
   unarchive: () => void;
+  /** Packs an archived session's files on its host, for its owner; unarchiving unpacks them. */
+  pack: () => void;
 }
 
 /**
@@ -135,11 +137,24 @@ export function useSessionActions({ session, user, manages, backupBlocked, onCha
     void action.run(async () => {
       await api(`/api/sessions/${segment(session.id)}/unarchive`, { method: "POST" });
       onChange();
-    }, "Session unarchived");
+    }, session.packed ? "Session unarchived, its files unpacked" : "Session unarchived");
+  }
+  async function pack() {
+    if (!session || !isOwner || action.busy || session.status !== "archived" || session.packed) return;
+    const confirmed = await confirmDialog({
+      title: "Pack this session's files?",
+      message: "Its files on the host become one compressed file, to save the host's disk. Package caches and temporary files in its home folder are left out, and so are the files its clones' .gitignore ignores, such as node_modules: install them again when you need them. Clones keep their branches and uncommitted changes, and are cloned again when the session is unarchived, which unpacks the rest. The conversation stays as it is.",
+      confirmLabel: "Pack files",
+    });
+    if (!confirmed) return;
+    await action.run(async () => {
+      await api(`/api/sessions/${segment(session.id)}/pack`, { method: "POST" });
+      onChange();
+    }, "Session files packed");
   }
   return { action, backup, backups, backupsOff, backupsPending, backupBlocked, changeVisibility: () => void changeVisibility(),
     createBackup: options => void createBackup(options), conversationOnlyOff, rename,
-    archive: () => void archive(), unarchive };
+    archive: () => void archive(), unarchive, pack: () => void pack() };
 }
 
 const approvalTone: Record<ApprovalRecord["status"], Tone> = {
