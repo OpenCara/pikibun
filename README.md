@@ -234,6 +234,16 @@ Documents are written by other people: the agent is told to treat them as inform
 | OneDrive and SharePoint | `onedrive` | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, optionally `MICROSOFT_TENANT` (`common` by default; your tenant's id or domain to admit only its accounts) | A Microsoft Entra app registration (web) with delegated `User.Read`, `Files.Read.All`, `Sites.Read.All` and `offline_access` |
 | Tencent Docs | `tencent-docs` | `TENCENT_DOCS_CLIENT_ID`, `TENCENT_DOCS_CLIENT_SECRET` | An application on the Tencent Docs open platform. **Preview**: Pistead's Tencent Docs support was written without access to its API or documentation; check it with a test account before members rely on it |
 
+#### Workspace connections
+
+By default every session reads the workspace's sources with its **owner's own** accounts, so nobody's agent reads what they couldn't. Where a workspace would rather read some sources with a service account, its owners and admins connect one under **Settings → Workspaces →** the workspace **→ Connections** (**Add connection**): a GitHub Enterprise, GitLab, Bitbucket, Azure DevOps or Gitea/Forgejo bot's token, a Git server's deploy user, a Notion integration, a Google service account or a Feishu/Lark app. Connect accounts made for that, never your personal one.
+
+- A source uses it only where an owner or admin sets **Reads with** on its row to **Workspace connection** (or picks the connection when adding it). Pistead reads the source with the connection first and refuses one that can't. There is no fallback either way: a source set to the workspace fails without its connection, and one set to members fails for an owner without an account.
+- Connections only read: cloning and fetching (LFS too) and `source_read`. Pushes and pull requests still use the session owner's account or the workspace's push access, and the owner's write access is checked with their own account.
+- The secret is encrypted on the server and never leaves it, not even to the session owner's own host: those reads are always relayed through Pistead. Members see which connections the workspace has and which account each is, never the secret.
+- A connection that sources still read with can't be removed; switch them back first.
+- github.com repositories, Dropbox, OneDrive and Tencent Docs read with each member's own sign-in. See [the design](docs/design/workspace-connections.md).
+
 ### Hosts
 
 A host is a machine where you run the `pistead` connector next to [Pi](https://github.com/earendil-works/pi). Sessions on it use the models and credentials configured in Pi there (by default in `~/.pi/agent`); provider credentials, Pi history and personal extensions are never uploaded.

@@ -9,11 +9,15 @@ import { githubRepositories, validRepositoryRef } from '../repositories.js';
 import { gitProviderAdapters, plainRepositoryId } from './providers.js';
 import type { GitCredential } from './types.js';
 
-/** A decrypted token account plus the exact ciphertext it was read from, for authority rechecks. */
+/**
+ * A decrypted token account plus the exact ciphertext it was read from, for authority rechecks: a member's own account
+ * (`userId`), or with `workspaceId` the workspace connection it is (and then `userId` is empty).
+ */
 export interface LoadedCredential {
   credential: GitCredential;
   ciphertext: string;
   userId: string;
+  workspaceId?: string;
 }
 
 const accountLimit = 20;
@@ -70,6 +74,12 @@ export async function loadCredential(env: Env, userId: string, provider: TokenGi
 }
 
 export async function recheckCredential(env: Env, access: LoadedCredential): Promise<void> {
+  if (access.workspaceId !== undefined) {
+    const current = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM workspace_connections WHERE id = ? AND workspace_id = ?')
+      .bind(access.credential.id, access.workspaceId).first();
+    if (current?.ciphertext !== access.ciphertext) fail(403, 'workspace_connection_changed', 'The workspace connection changed; retry with the current one.');
+    return;
+  }
   const row = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM git_credentials WHERE id = ? AND user_id = ?')
     .bind(access.credential.id, access.userId).first();
   if (row?.ciphertext !== access.ciphertext) fail(403, 'git_access_changed', 'Git account access changed; retry with the current connection.');
@@ -89,7 +99,7 @@ function publicAccount(row: Pick<GitCredentialRow, 'id' | 'provider' | 'host' | 
   return { id: row.id, provider: row.provider, host: row.host, organization: row.organization, login: row.login, createdAt: row.created_at };
 }
 
-function accountInput(input: Record<string, unknown>) {
+export function accountInput(input: Record<string, unknown>) {
   if (Object.keys(input).some(key => !['provider', 'host', 'organization', 'username', 'token'].includes(key))) {
     fail(400, 'invalid_git_account', 'Only provider, host, organization, username and token are accepted.');
   }

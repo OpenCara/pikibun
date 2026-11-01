@@ -84,8 +84,12 @@ export function GitAccountsGroup() {
   </div>;
 }
 
-/** Connects a token account for one provider, chosen by its row. */
-function ConnectGitAccountSheet({ provider, close, added }: { provider: TokenGitProvider | null; close: () => void; added: () => void }) {
+/**
+ * Connects a token account for one provider, chosen by its row: the member's own, or with `save` another holder's (a
+ * workspace's connection), which gets the same verified body.
+ */
+export function ConnectGitAccountSheet({ provider, close, added, save }: { provider: TokenGitProvider | null; close: () => void; added: () => void;
+  save?: (body: Record<string, unknown>) => Promise<void> }) {
   const [host, setHost] = useState("");
   const [organization, setOrganization] = useState("");
   const [username, setUsername] = useState("");
@@ -116,7 +120,8 @@ function ConnectGitAccountSheet({ provider, close, added }: { provider: TokenGit
     };
     void action.run(async () => {
       try {
-        await api<{ account: GitAccount }>("/api/git/accounts", { method: "POST", body });
+        if (save) await save(body);
+        else await api<{ account: GitAccount }>("/api/git/accounts", { method: "POST", body });
       } finally {
         setToken("");
       }
@@ -125,12 +130,15 @@ function ConnectGitAccountSheet({ provider, close, added }: { provider: TokenGit
     });
   }
   const ready = Boolean(provider && token && (fixedHost || host.trim()) && (provider !== "azure-devops" || organization.trim()) && (provider !== "git" || username.trim()));
-  return <Sheet open={provider !== null} title={`Connect ${provider ? gitProviderNames[provider] : "Git"}`} onClose={dismiss} footer={<>
+  // With `save`, the account is the workspace's: a service account that only reads.
+  const forWorkspace = Boolean(save);
+  return <Sheet open={provider !== null} title={`Connect ${provider ? gitProviderNames[provider] : "Git"}${forWorkspace ? " for the workspace" : ""}`} onClose={dismiss} footer={<>
     <Button disabled={action.busy} onClick={dismiss}>Cancel</Button>
     <Button variant="default" type="submit" form="git-account-form" disabled={!ready || action.busy}>{action.busy ? "Verifying..." : "Connect"}</Button>
   </>}>
     <form id="git-account-form" className="stack" onSubmit={submit}>
       {provider && <>
+        {forWorkspace && <p className="muted small">Use a service account made for this, such as a bot or a deploy user, never your own: every member's sessions read with it. It only reads; pushes keep using each session owner's account or the workspace's push access.</p>}
         {provider === "git" && <p className="muted small">Any Git server that serves smart HTTP over HTTPS (git http-backend, cgit, Gerrit, a forge without its API). There is no repository list and agents can't open pull requests; you add each repository by its clone URL. SSH isn't supported.</p>}
         {!fixedHost && <Field label="Host" hint={provider === "git" ? "The host name in the server's https:// clone URLs, with its port if it has one, for example git.example.com" : "HTTPS host name of the instance, without https://, for example git.example.com"}>
           <input className="input" required value={host} onChange={event => setHost(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} maxLength={253} placeholder="git.example.com" />
@@ -141,10 +149,12 @@ function ConnectGitAccountSheet({ provider, close, added }: { provider: TokenGit
         {provider === "bitbucket" && <Field label="Username or email" hint="Your Atlassian account email when using an API token (required for agent pushes); leave blank for a workspace or repository access token, which can browse but not push">
           <input className="input" value={username} onChange={event => setUsername(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} maxLength={254} />
         </Field>}
-        {provider === "git" && <Field label="User name" hint="The user name you clone with over HTTPS">
+        {provider === "git" && <Field label="User name" hint={forWorkspace ? "The service account's user name over HTTPS" : "The user name you clone with over HTTPS"}>
           <input className="input" required value={username} onChange={event => setUsername(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} maxLength={254} />
         </Field>}
-        <Field label={provider === "git" ? "Password or token" : "Token"} hint={provider === "git"
+        <Field label={provider === "git" ? "Password or token" : "Token"} hint={forWorkspace
+          ? `Read access to the repositories it will read is enough. ${provider === "git" ? "Encrypted on the server and checked when a repository reads with it" : `Verified with ${gitProviderNames[provider]}, then encrypted on the server`}`
+          : provider === "git"
           ? `Needs ${tokenScopes.git}. Encrypted on the server and checked when you add a repository: a Git server has no account to verify it against`
           : `Scopes: ${tokenScopes[provider]}. Verified with ${gitProviderNames[provider]}, then encrypted on the server`}>
           <input className="input" required type="password" value={token} onChange={event => setToken(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} />

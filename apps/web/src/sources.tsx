@@ -7,6 +7,8 @@ import { api, segment } from "./api";
 import { href } from "./router";
 import { Icon } from "./icons";
 import { GitAccountsGroup, gitAccountsInfo } from "./settings/GitAccounts";
+import { ReadAsControl, documentConnectionFor } from "./workspace-connections";
+import { workspaceDocumentProviders, type SourceReadAs, type WorkspaceConnection } from "../../../packages/shared/src/workspace-connections";
 import { Alert, Button, CardBody, Combobox, Feedback, Field, LinkButton, ResourceState, Row, Section, Sheet, StatusBadge, confirmDialog, useAction, useResource } from "./ui";
 
 /** The caller's connected accounts other than Git: one per document provider. */
@@ -102,7 +104,9 @@ export function ConnectedAccountsSection() {
   </Section>;
 }
 
-function ConnectSheet({ provider, close, connected }: { provider: DocumentKind | null; close: () => void; connected: () => void }) {
+/** Connects a document provider with a pasted secret: the member's own account, or with `save` a workspace's connection. */
+export function ConnectSheet({ provider, close, connected, save }: { provider: DocumentKind | null; close: () => void; connected: () => void;
+  save?: (provider: DocumentKind, body: Record<string, unknown>) => Promise<void> }) {
   const [secret, setSecret] = useState("");
   const [appId, setAppId] = useState("");
   const [domain, setDomain] = useState<FeishuDomain>("feishu");
@@ -119,7 +123,10 @@ function ConnectSheet({ provider, close, connected }: { provider: DocumentKind |
     if (!provider || !ready || action.busy) return;
     const body = provider === "notion" ? { token: secret.trim() } : provider === "google-drive" ? { key: secret } : { appId: appId.trim(), appSecret: secret.trim(), domain };
     void action.run(async () => {
-      try { await api(`/api/source-accounts/${provider}`, { method: "PUT", body }); }
+      try {
+        if (save) await save(provider, body);
+        else await api(`/api/source-accounts/${provider}`, { method: "PUT", body });
+      }
       finally { setSecret(""); }
       reset();
       connected();
@@ -127,12 +134,13 @@ function ConnectSheet({ provider, close, connected }: { provider: DocumentKind |
     });
   }
   const name = provider ? documentKindNames[provider] : "";
-  return <Sheet open={provider !== null} title={`Connect ${name}`} onClose={dismiss} footer={<>
+  return <Sheet open={provider !== null} title={`Connect ${name}${save ? " for the workspace" : ""}`} onClose={dismiss} footer={<>
     <Button disabled={action.busy} onClick={dismiss}>Cancel</Button>
     <Button variant="default" type="submit" form="source-account-form" disabled={!ready || action.busy}>{action.busy ? "Verifying..." : "Connect"}</Button>
   </>}>
     <form id="source-account-form" className="stack" onSubmit={submit}>
       {provider && <p className="muted small">{setup[provider]} Pistead verifies it with {name}, then encrypts it on the server.</p>}
+      {provider && save && <p className="muted small">This is the workspace's connection: every member's sessions read the sources set to it with it. Share with it only what the workspace should read.</p>}
       {provider === "notion" && <Field label="Internal integration secret">
         <input className="input" required type="password" value={secret} onChange={event => setSecret(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} placeholder="ntn_…" />
       </Field>}
@@ -157,13 +165,17 @@ function ConnectSheet({ provider, close, connected }: { provider: DocumentKind |
 }
 
 /** The document part of a workspace's Sources: its Notion, Google Drive and Feishu/Lark items, which owners and admins add and remove. */
-export function DocumentSources({ workspaceId, workspaceName, admin, sources, loading, error, refresh, changed }: {
+export function DocumentSources({ workspaceId, workspaceName, admin, sources, loading, error, refresh, changed, connections }: {
   workspaceId: string; workspaceName: string; admin: boolean; sources: WorkspaceDocumentSource[] | null; loading: boolean; error: string; refresh: () => void; changed: () => void;
+  connections: WorkspaceConnection[] | null;
 }) {
   const action = useAction();
   const accounts = useSourceAccounts(admin);
   const [adding, setAdding] = useState(false);
-  const connected = documentKinds.filter(kind => accounts.accounts?.some(account => account.provider === kind));
+  const own = documentKinds.filter(kind => accounts.accounts?.some(account => account.provider === kind));
+  const workspaceKinds = documentKinds.filter(kind => documentConnectionFor(connections, kind));
+  // Kinds an admin can add: those their own account checks, and those the workspace's connection does.
+  const connected = documentKinds.filter(kind => own.includes(kind) || workspaceKinds.includes(kind));
   const full = (sources?.length ?? 0) >= sourceLimits.documents;
   async function remove(source: WorkspaceDocumentSource) {
     if (action.busy || !admin) return;
@@ -189,13 +201,18 @@ export function DocumentSources({ workspaceId, workspaceName, admin, sources, lo
           ? <CardBody><span className="muted">No documents yet. Sessions read a bound Notion page or a folder or document in Google Drive, Dropbox, OneDrive, Feishu/Lark or Tencent Docs, and what is under it, with their owner's own connection</span></CardBody>
           : sources.map(source => <Row key={source.id} leading={<Icon name="file" size={16} />} title={source.title}
             hint={<>{documentKindNames[source.kind]} · {itemLabels[source.itemType]} · <a href={source.url} target="_blank" rel="noreferrer">Open</a></>}
-            trailing={admin && <Button variant="outline" size="sm" disabled={action.busy} aria-label={`Remove ${source.title}`} onClick={() => void remove(source)}>Remove</Button>} />)}
+            trailing={<>
+              {workspaceDocumentProviders.includes(source.kind) && <ReadAsControl workspaceId={workspaceId} sourceId={source.id} title={source.title} readAs={source.readAs}
+                connection={documentConnectionFor(connections, source.kind)} admin={admin} action={action} changed={changed} />}
+              {admin && <Button variant="outline" size="sm" disabled={action.busy} aria-label={`Remove ${source.title}`} onClick={() => void remove(source)}>Remove</Button>}
+            </>} />)}
         {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
       </ResourceState>
     </div>
-    {admin && accounts.accounts && !connected.length && <Alert variant="info" title="Connect an account to add documents" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "profile" })}>Open profile</LinkButton>}>Pistead checks each item you add with your own connection to its provider, in Settings → Profile → Connected accounts.</Alert>}
+    {admin && accounts.accounts && !connected.length && <Alert variant="info" title="Connect an account to add documents" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "profile" })}>Open profile</LinkButton>}>Pistead checks each item you add with your own connection to its provider, in Settings → Profile → Connected accounts, or with the workspace's connection under Connections.</Alert>}
     {admin && full && <Alert variant="info" title="Document source limit reached">A workspace has at most {sourceLimits.documents} document sources. Remove one to add another.</Alert>}
-    {admin && connected.length > 0 && <AddSourceSheet open={adding} kinds={connected} workspaceId={workspaceId} close={() => setAdding(false)} added={() => { refresh(); changed(); }} />}
+    {admin && connected.length > 0 && <AddSourceSheet open={adding} kinds={connected} own={own} workspaceKinds={workspaceKinds} workspaceId={workspaceId}
+      close={() => setAdding(false)} added={() => { refresh(); changed(); }} />}
   </div>;
 }
 
@@ -208,11 +225,16 @@ const linkHints: Record<DocumentKind, string> = {
   "tencent-docs": "A Tencent Docs folder or document link (docs.qq.com/…)",
 };
 
-function AddSourceSheet({ open, kinds, workspaceId, close, added }: { open: boolean; kinds: DocumentKind[]; workspaceId: string; close: () => void; added: () => void }) {
+function AddSourceSheet({ open, kinds, own, workspaceKinds, workspaceId, close, added }: { open: boolean; kinds: DocumentKind[]; own: DocumentKind[];
+  workspaceKinds: DocumentKind[]; workspaceId: string; close: () => void; added: () => void }) {
   const [kind, setKind] = useState<DocumentKind | "">("");
   const [target, setTarget] = useState("");
+  const [choice, setChoice] = useState<SourceReadAs | "">("");
   const action = useAction();
   const chosen = kind || (kinds.length === 1 ? kinds[0]! : "");
+  // Which identity it reads with: what the admin picks where both are possible, else the only one.
+  const choices: SourceReadAs[] = chosen ? [...(own.includes(chosen) ? ["members" as const] : []), ...(workspaceKinds.includes(chosen) ? ["workspace" as const] : [])] : [];
+  const readAs: SourceReadAs = choice && choices.includes(choice) ? choice : choices[0] ?? "members";
   function dismiss() {
     if (action.busy) return;
     setTarget(""); setKind("");
@@ -222,8 +244,8 @@ function AddSourceSheet({ open, kinds, workspaceId, close, added }: { open: bool
     event.preventDefault();
     if (!chosen || !target.trim() || action.busy) return;
     void action.run(async () => {
-      await api(`/api/workspaces/${segment(workspaceId)}/sources`, { method: "POST", body: { kind: chosen, target: target.trim() } });
-      setTarget(""); setKind("");
+      await api(`/api/workspaces/${segment(workspaceId)}/sources`, { method: "POST", body: { kind: chosen, target: target.trim(), readAs } });
+      setTarget(""); setKind(""); setChoice("");
       added();
       close();
     });
@@ -237,7 +259,13 @@ function AddSourceSheet({ open, kinds, workspaceId, close, added }: { open: bool
         <Combobox<DocumentKind> label="Provider" placeholder="Choose a provider" value={chosen} disabled={action.busy}
           options={kinds.map(item => ({ value: item, label: documentKindNames[item] }))} onChange={setKind} />
       </div>
-      {chosen && <Field label="Link" hint={`${linkHints[chosen]}. Each session reads it with its owner's own connection`}>
+      {choices.length > 1 && <div className="field"><span className="field-label">Reads with</span>
+        <Combobox<SourceReadAs> label="Reads with" value={readAs} disabled={action.busy} onChange={setChoice} options={[
+          { value: "members", label: "Members' own accounts", hint: "Each session reads with its owner's own account; yours checks the link" },
+          { value: "workspace", label: "Workspace connection", hint: "Every session reads with the workspace's connection, which checks the link" },
+        ]} />
+      </div>}
+      {chosen && <Field label="Link" hint={`${linkHints[chosen]}. ${readAs === "workspace" ? "Every session reads it with the workspace's connection" : "Each session reads it with its owner's own connection"}`}>
         <input className="input" required value={target} onChange={event => setTarget(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} placeholder="https://…" />
       </Field>}
       <Feedback error={action.error} />

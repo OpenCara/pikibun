@@ -10,6 +10,8 @@ import { NewWorkspaceSheet } from "../NewWorkspaceSheet";
 import { gitAccountLabel, gitProviderLabel, RepositoryClonePolicy, useGitAccounts, useWorkspaceRepositories } from "../repositories";
 import { href } from "../router";
 import { DocumentSources, useWorkspaceSources } from "../sources";
+import { ReadAsControl, WorkspaceConnections, connectionLabel, gitConnectionFor, useWorkspaceConnections } from "../workspace-connections";
+import type { WorkspaceConnection } from "../../../../packages/shared/src/workspace-connections";
 import { Alert, Button, CardBody, Combobox, CopyField, DropdownMenu, EmptyState, Feedback, Field, IdentityBadge, LinkButton, PageLoading, RelativeTime, ResourceState, Row, Section, Sheet, StatusBadge, StatusDot, confirmDialog, useAction, useResource } from "../ui";
 import type { WorkspaceInviteLink, WorkspaceJoinRequest } from "../../../../packages/shared/src/invites";
 import { memberPerson, userIdFromInput, username, usernameWithId, type WorkspaceMember } from "../../../../packages/client/src/usernames";
@@ -70,13 +72,18 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
   const admin = role === "owner" || role === "admin";
   const repositories = useWorkspaceRepositories(workspace.id);
   const sources = useWorkspaceSources(workspace.id);
+  const connections = useWorkspaceConnections(workspace.id);
+  // A source's read setting changes what the connections list counts, and the reverse.
+  const sourcesChanged = () => { repositories.refresh(); sources.refresh(); connections.refresh(); };
   return <>
     <Section title="General">
       <Row title="Name" trailing={<span>{workspace.name}</span>} />
       <Row title="Your role" trailing={<StatusBadge tone={admin ? "success" : "neutral"}>{roleLabel[role]}</StatusBadge>} />
     </Section>
     {canCreateSessions(role) && <Setup user={user} workspace={workspace} admin={admin} sourceCount={repositories.sourceCount} />}
-    <Repositories workspace={workspace} admin={admin} {...repositories} documents={<DocumentSources workspaceId={workspace.id} workspaceName={workspace.name} admin={admin} {...sources} changed={repositories.refresh} />} />
+    <Repositories workspace={workspace} admin={admin} {...repositories} connections={connections.connections} changed={sourcesChanged}
+      documents={<DocumentSources workspaceId={workspace.id} workspaceName={workspace.name} admin={admin} {...sources} connections={connections.connections} changed={sourcesChanged} />} />
+    <WorkspaceConnections workspaceId={workspace.id} admin={admin} {...connections} changed={sourcesChanged} />
     <PushAccess workspace={workspace} admin={admin} />
     <NetworkAccess workspace={workspace} admin={admin} />
     <TranscriptSettings workspace={workspace} admin={admin} />
@@ -113,7 +120,8 @@ function Setup({ user, workspace, admin, sourceCount }: { user: UserProfile; wor
 }
 
 /** The workspace's sources: its Git repositories, then `documents`, its Notion, Google Drive and Feishu/Lark items. */
-function Repositories({ workspace, admin, repositories, sourceCount, loading, error, refresh, documents }: { workspace: Workspace; admin: boolean; repositories: WorkspaceRepository[] | null; sourceCount: number | null; loading: boolean; error: string; refresh: () => void; documents: ReactNode }) {
+function Repositories({ workspace, admin, repositories, sourceCount, loading, error, refresh, documents, connections, changed }: { workspace: Workspace; admin: boolean; repositories: WorkspaceRepository[] | null; sourceCount: number | null; loading: boolean; error: string; refresh: () => void; documents: ReactNode;
+  connections: WorkspaceConnection[] | null; changed: () => void }) {
   const action = useAction();
   const accounts = useGitAccounts(admin);
   const [picking, setPicking] = useState(false);
@@ -147,7 +155,8 @@ function Repositories({ workspace, admin, repositories, sourceCount, loading, er
       refresh();
     }, enabled ? "Git LFS turned on. New clones download LFS files." : "Git LFS turned off. Clones check out LFS pointer files.");
   }
-  const canAdd = admin && Boolean(accounts.accounts?.length) && !full;
+  const gitConnections = connections?.filter(item => item.family === "git") ?? [];
+  const canAdd = admin && Boolean(accounts.accounts?.length || gitConnections.length) && !full;
   return <Section bare title="Sources" info={<div className="stack">
     <p>What this workspace's sessions work on: Git repositories, which agents clone, and documents (Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark, Tencent Docs), which agents read. Every session in the workspace gets every source, and reads each with its owner's own accounts.</p>
     {!admin && <p>Only workspace owners and admins can add or remove sources.</p>}
@@ -164,6 +173,8 @@ function Repositories({ workspace, admin, repositories, sourceCount, loading, er
             : repositories.map(repository => <Row key={repository.id} title={repository.fullName} hint={<>{gitProviderLabel(repository.provider, repository.host)} · <code>{repository.ref}</code></>} trailing={<>
               <label className="inline small"><input type="checkbox" className="checkbox" checked={!repository.forbidDefaultBranchPush} disabled={!admin || action.busy} onChange={event => setPushPolicy(repository, event.target.checked)} />Allow agent pushes to the default branch</label>
               <label className="inline small" title="Sessions download this repository's Git LFS files instead of checking out pointer files"><input type="checkbox" className="checkbox" checked={repository.lfs} disabled={!admin || action.busy} onChange={event => setLfs(repository, event.target.checked)} />Git LFS</label>
+              {repository.provider !== "github" && <ReadAsControl workspaceId={workspace.id} sourceId={repository.id} title={repository.fullName} readAs={repository.readAs}
+                connection={gitConnectionFor(connections, repository)} admin={admin} action={action} changed={changed} />}
               <StatusBadge>{repository.private ? "Private" : "Public"}</StatusBadge>
               {admin && <Button variant="outline" size="sm" disabled={action.busy} aria-label={`Remove ${repository.fullName}`} onClick={() => void remove(repository)}>Remove</Button>}
             </>} />)}
@@ -171,12 +182,19 @@ function Repositories({ workspace, admin, repositories, sourceCount, loading, er
         </ResourceState>
       </div>
       {admin && accounts.error && <Alert variant="error" title="Unable to load Git accounts" actions={<Button variant="outline" size="sm" onClick={accounts.refresh}>Try again</Button>}>{accounts.error}</Alert>}
-      {admin && accounts.accounts && !accounts.accounts.length && <Alert variant="warning" title="No Git accounts connected" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "profile" })}>Open profile</LinkButton>}>Connect GitHub or add a Git account in Settings → Profile before choosing repositories.</Alert>}
+      {admin && accounts.accounts && !accounts.accounts.length && !gitConnections.length && <Alert variant="warning" title="No Git accounts connected" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "profile" })}>Open profile</LinkButton>}>Connect GitHub or add a Git account in Settings → Profile before choosing repositories.</Alert>}
       {admin && Boolean(accounts.accounts?.length) && full && <Alert variant="info" title="Repository limit reached">The workspace has reached its {repositoryLimits.repositories}-repository limit. Remove a binding to choose another.</Alert>}
     </div>
     {documents}
-    {canAdd && <RepositoryPicker open={picking} workspace={workspace} accounts={accounts.accounts ?? []} repositories={repositories ?? []} disabled={loading || Boolean(error) || action.busy} refresh={refresh} close={() => setPicking(false)} />}
+    {canAdd && <RepositoryPicker open={picking} workspace={workspace} accounts={[...(accounts.accounts ?? []), ...gitConnections.map(connectionAccount)]} repositories={repositories ?? []} disabled={loading || Boolean(error) || action.busy} refresh={refresh} close={() => setPicking(false)} />}
   </Section>;
+}
+
+/** A workspace Git connection as a picker account: its id is prefixed, and what it binds reads as the workspace. */
+const workspaceAccountPrefix = "workspace:";
+function connectionAccount(connection: WorkspaceConnection): GitAccount {
+  return { id: `${workspaceAccountPrefix}${connection.id}`, provider: connection.provider as GitAccount["provider"], host: connection.host,
+    organization: connection.organization, login: connection.name, createdAt: connection.createdAt };
 }
 
 function RepositoryPicker({ open, workspace, accounts, repositories, disabled, refresh, close }: { open: boolean; workspace: Workspace; accounts: GitAccount[]; repositories: WorkspaceRepository[]; disabled: boolean; refresh: () => void; close: () => void }) {
@@ -187,10 +205,14 @@ function RepositoryPicker({ open, workspace, accounts, repositories, disabled, r
   const account = accounts.find(item => item.id === accountId) ?? accounts[0];
   // A plain Git server lists nothing: its repository is looked up by the clone URL or path typed here.
   const listed = account ? gitProviderHasForge(account.provider) : true;
+  const workspaceConnection = account?.id.startsWith(workspaceAccountPrefix) ?? false;
+  const repositoriesPath = account ? (workspaceConnection
+    ? `/api/workspaces/${segment(workspace.id)}/connections/${segment(account.id.slice(workspaceAccountPrefix.length))}/repositories`
+    : `/api/git/accounts/${segment(account.id)}/repositories`) : null;
   const [path, setPath] = useState("");
   const [found, setFound] = useState<ProviderRepository | null>(null);
   const lookup = useAction();
-  const resource = useResource<ProviderRepositoryList>(open && account && listed ? `/api/git/accounts/${segment(account.id)}/repositories` : null);
+  const resource = useResource<ProviderRepositoryList>(open && repositoriesPath && listed ? repositoriesPath : null);
   const action = useAction();
   const selected = listed ? resource.data?.repositories.find(repository => repository.id === selectedId) : found ?? undefined;
   const alreadyBound = (repository: ProviderRepository) => repositories.some(binding => binding.provider === account?.provider && binding.host === account.host
@@ -204,7 +226,7 @@ function RepositoryPicker({ open, workspace, accounts, repositories, disabled, r
     setFound(null);
     setRef("");
     void lookup.run(async () => {
-      const result = await api<ProviderRepositoryList>(`/api/git/accounts/${segment(account.id)}/repositories?path=${encodeURIComponent(path.trim())}`);
+      const result = await api<ProviderRepositoryList>(`${repositoriesPath}?path=${encodeURIComponent(path.trim())}`);
       setFound(result.repositories[0] ?? null);
     });
   }
@@ -220,7 +242,8 @@ function RepositoryPicker({ open, workspace, accounts, repositories, disabled, r
     event.preventDefault();
     if (blocked || !selected || !account) return;
     void action.run(async () => {
-      await api(`/api/workspaces/${segment(workspace.id)}/repositories`, { method: "POST", body: { provider: account.provider, host: account.host, repositoryId: selected.id, fullName: selected.fullName, ...(ref.trim() ? { ref: ref.trim() } : {}) } });
+      await api(`/api/workspaces/${segment(workspace.id)}/repositories`, { method: "POST", body: { provider: account.provider, host: account.host, repositoryId: selected.id, fullName: selected.fullName, ...(ref.trim() ? { ref: ref.trim() } : {}),
+        ...(workspaceConnection ? { readAs: "workspace" } : {}) } });
       refresh();
       setSelectedId("");
       setRef("");
@@ -239,13 +262,16 @@ function RepositoryPicker({ open, workspace, accounts, repositories, disabled, r
     <form id="repository-picker-form" className="stack" onSubmit={add}>
       <div className="field"><span className="field-label">Account</span>
         <Combobox<string> label="Account" placeholder="Choose an account" value={account?.id ?? ""} disabled={disabled || action.busy}
-          options={accounts.map(item => ({ value: item.id, label: gitAccountLabel(item), hint: item.login }))} onChange={chooseAccount} />
+          options={accounts.map(item => item.id.startsWith(workspaceAccountPrefix)
+            ? { value: item.id, label: `Workspace · ${connectionLabel({ family: "git", provider: item.provider as WorkspaceConnection["provider"], host: item.host, organization: item.organization })}`, hint: item.login }
+            : { value: item.id, label: gitAccountLabel(item), hint: item.login })} onChange={chooseAccount} />
       </div>
+      {workspaceConnection && <p className="muted small">Sessions read this repository with the workspace's connection ({account?.login}), not their owner's account. Pushes still use the session owner's account or the workspace's push access</p>}
       {listed ? <p className="muted small">Only repositories this {providerName} account can access are listed. Sessions read them with their owner's own account for the same provider. Never paste a token or clone URL</p>
-        : <p className="muted small">A Git server lists no repositories: enter the one to add. Pistead reads it with this account to check it, and sessions read it with their owner's own account for the same server. Never paste a token</p>}
+        : <p className="muted small">A Git server lists no repositories: enter the one to add. Pistead reads it with this {workspaceConnection ? "connection" : "account"} to check it{workspaceConnection ? "" : ", and sessions read it with their owner's own account for the same server"}. Never paste a token</p>}
       {!listed && account && <>
         <Field label="Clone URL or path" hint={`The repository's https:// clone URL on ${account.host}, or its path there, such as team/project.git`}>
-          <span className="inline">
+          <span className="lookup-row">
             <input className="input" value={path} onChange={event => { setPath(event.target.value); setFound(null); }} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); find(); } }}
               disabled={disabled || action.busy || lookup.busy} autoComplete="off" spellCheck={false} maxLength={600} placeholder={`https://${account.host}/team/project.git`} />
             <Button variant="outline" size="sm" disabled={disabled || action.busy || lookup.busy || !path.trim()} onClick={find}>{lookup.busy ? "Checking..." : "Look up"}</Button>

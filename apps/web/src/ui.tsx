@@ -206,14 +206,16 @@ export interface MenuItem {
 }
 
 /** Trigger-anchored menu for a small fixed set of actions (kebab menus). */
-export function DropdownMenu({ label, icon = "more", items, align = "end", side = "below", trigger }: { label: string; icon?: IconName; items: (MenuItem | "separator")[]; align?: "start" | "end"; side?: "below" | "above"; trigger?: ReactNode }) {
+export function DropdownMenu({ label, icon = "more", items, align = "end", side = "below", trigger, triggerVariant = "ghost" }: { label: string; icon?: IconName; items: (MenuItem | "separator")[]; align?: "start" | "end"; side?: "below" | "above"; trigger?: ReactNode;
+  /** How a custom `trigger` looks: ghost (the default), or outline like a section's other add buttons. */
+  triggerVariant?: "ghost" | "outline" }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
   const ref = useDismiss(open, close);
   const id = useId();
   return <div className="menu-anchor" ref={ref}>
     {trigger
-      ? <button type="button" className="btn ghost sm" aria-haspopup="menu" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>{trigger}</button>
+      ? <button type="button" className={`btn ${triggerVariant} sm`} aria-haspopup="menu" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>{trigger}</button>
       : <Button variant="ghost" size="xs" icon={icon} aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} aria-controls={id} onClick={event => { event.stopPropagation(); setOpen(value => !value); }} />}
     {open && <Popover anchor={ref} side={side} align={align} role="menu" id={id} className="menu-scroll">
       {items.map((item, index) => item === "separator"

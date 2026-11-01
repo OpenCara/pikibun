@@ -10,6 +10,7 @@ import {
   type LoadedCredential,
 } from './git/accounts.js';
 import { collectRepositories, gitProviderAdapters, listBytes, listPageSize } from './git/providers.js';
+import { workspaceGitAccess } from './workspace-connections.js';
 
 export interface GitHubAccess { token: string; ciphertext: string; userId: string; githubId: string }
 /** The acting user's credential for one provider/host: the sign-in OAuth token for github.com, a token account otherwise. */
@@ -53,15 +54,16 @@ function bindingRepositoryId(provider: GitProvider, value: unknown): string {
   return value;
 }
 /** A binding with the settings that live beside it (bindings are immutable): its push policy and Git LFS switch. */
-export type RepositorySettingsRow = RepositoryRow & { forbid_default_branch?: number | null; lfs_enabled?: number | null };
+export type RepositorySettingsRow = RepositoryRow & { forbid_default_branch?: number | null; lfs_enabled?: number | null; read_as?: string | null };
 /** Selects `r.*` with its settings; callers add their WHERE and ORDER BY on `r`. */
-export const repositorySettingsSelect = `SELECT r.*, p.forbid_default_branch, l.enabled AS lfs_enabled FROM workspace_repositories r
+export const repositorySettingsSelect = `SELECT r.*, p.forbid_default_branch, l.enabled AS lfs_enabled, s.read_as FROM workspace_repositories r
   LEFT JOIN repository_push_policies p ON p.binding_id = r.id AND p.workspace_id = r.workspace_id
-  LEFT JOIN repository_lfs_settings l ON l.binding_id = r.id AND l.workspace_id = r.workspace_id`;
+  LEFT JOIN repository_lfs_settings l ON l.binding_id = r.id AND l.workspace_id = r.workspace_id
+  LEFT JOIN source_read_settings s ON s.source_id = r.id AND s.workspace_id = r.workspace_id`;
 export function publicRepository(row: RepositorySettingsRow): WorkspaceRepository {
   return { id: row.id, workspaceId: row.workspace_id, provider: row.provider, host: row.host, repositoryId: row.repository_id,
     fullName: row.full_name, ref: row.ref, private: !!row.private, createdAt: row.created_at, forbidDefaultBranchPush: row.forbid_default_branch === 1,
-    lfs: row.lfs_enabled === 1 };
+    lfs: row.lfs_enabled === 1, readAs: row.read_as === 'workspace' ? 'workspace' : 'members' };
 }
 export async function workspaceRepositories(env: Env, workspaceId: string): Promise<WorkspaceRepository[]> {
   const rows = await env.DB.query<RepositorySettingsRow>(`${repositorySettingsSelect} WHERE r.workspace_id = ? ORDER BY r.id`)
@@ -230,12 +232,16 @@ export function registerRepositories(app: Hono<WorkerEnv>): void {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
     const input = await jsonObject(c, 4096);
-    if (Object.keys(input).some(key => !['provider', 'host', 'repositoryId', 'fullName', 'ref'].includes(key))) fail(400, 'invalid_repository', 'Only repository provider, host, identity and ref may be configured.');
+    if (Object.keys(input).some(key => !['provider', 'host', 'repositoryId', 'fullName', 'ref', 'readAs'].includes(key))) fail(400, 'invalid_repository', 'Only repository provider, host, identity, ref and readAs may be configured.');
+    if (input.readAs !== undefined && input.readAs !== 'members' && input.readAs !== 'workspace') fail(400, 'invalid_read_as', 'Set readAs to members or workspace.');
+    // A repository members read with their own accounts is checked with the admin's own; one the workspace reads, with its connection.
+    const readsAsWorkspace = input.readAs === 'workspace';
     if (!(gitProviders as readonly unknown[]).includes(input.provider)) fail(400, 'invalid_repository', 'Choose a supported Git provider.');
     const provider = input.provider as GitProvider;
     const host = gitHost(provider, input.host);
     const expected = { repositoryId: bindingRepositoryId(provider, input.repositoryId), fullName: repositoryName(provider, input.fullName) };
-    const access = await repositoryAccess(c.env, actor, provider, host, expected.fullName);
+    const access = readsAsWorkspace ? await workspaceGitAccess(c.env, workspaceId, provider, host, expected.fullName)
+      : await repositoryAccess(c.env, actor, provider, host, expected.fullName);
     const metadata = await verifyRepository(access, expected);
     const ref = input.ref === undefined ? metadata.defaultBranch : repositoryRef(input.ref);
     const existing = await workspaceRepositories(c.env, workspaceId);
@@ -251,19 +257,28 @@ export function registerRepositories(app: Hono<WorkerEnv>): void {
       ? { sql: `EXISTS (SELECT 1 FROM github_tokens t JOIN users u ON u.id = t.user_id
           WHERE t.user_id = ? AND t.ciphertext = ? AND u.auth_kind = 'github' AND u.github_id = ?)`,
         values: [actor, access.github.ciphertext, access.github.githubId] }
+      : access.account.workspaceId !== undefined
+      ? { sql: 'EXISTS (SELECT 1 FROM workspace_connections WHERE id = ? AND workspace_id = ? AND ciphertext = ?)',
+        values: [access.account.credential.id, workspaceId, access.account.ciphertext] }
       : { sql: `EXISTS (SELECT 1 FROM git_credentials g JOIN users u ON u.id = g.user_id
           WHERE g.id = ? AND g.user_id = ? AND g.ciphertext = ? AND (u.auth_kind IN ('github', 'password') OR (? = 1 AND u.auth_kind = 'test')))`,
         values: [access.account.credential.id, actor, access.account.ciphertext, testMode(c.env) ? 1 : 0] };
-    const inserted = await c.env.DB.query(`INSERT INTO workspace_repositories (id,workspace_id,provider,host,repository_id,full_name,ref,private,created_at)
+    const results = await c.env.DB.batch([
+      c.env.DB.query(`INSERT INTO workspace_repositories (id,workspace_id,provider,host,repository_id,full_name,ref,private,created_at)
       SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))
       AND ${authority.sql}
       AND (SELECT COUNT(*) FROM workspace_repositories WHERE workspace_id = ?) < 5
       AND NOT EXISTS (SELECT 1 FROM workspace_repositories WHERE workspace_id = ? AND provider = ? AND host = ?
         AND (repository_id = ? OR full_name = ? COLLATE NOCASE)) RETURNING id`)
-      .bind(row.id, workspaceId, row.provider, row.host, row.repository_id, row.full_name, row.ref, row.private, row.created_at, workspaceId, actor,
-        ...authority.values, workspaceId, workspaceId, row.provider, row.host, row.repository_id, row.full_name).first();
-    if (!inserted) fail(409, 'repository_binding_conflict', 'Repository already configured, limit reached, or workspace authority changed.');
-    return c.json({ repository: publicRepository(row) }, 201);
+        .bind(row.id, workspaceId, row.provider, row.host, row.repository_id, row.full_name, row.ref, row.private, row.created_at, workspaceId, actor,
+          ...authority.values, workspaceId, workspaceId, row.provider, row.host, row.repository_id, row.full_name),
+      // In the same write: a repository never reads, even once, with an identity other than the one it was added with.
+      c.env.DB.query(`INSERT INTO source_read_settings (source_id, workspace_id, read_as, updated_by, updated_at)
+        SELECT ?, ?, 'workspace', ?, ? WHERE ? = 1 AND EXISTS (SELECT 1 FROM workspace_sources WHERE id = ?)`)
+        .bind(row.id, workspaceId, actor, row.created_at, readsAsWorkspace ? 1 : 0, row.id),
+    ]);
+    if (!results[0]!.results[0]) fail(409, 'repository_binding_conflict', 'Repository already configured, limit reached, or workspace authority changed.');
+    return c.json({ repository: publicRepository({ ...row, read_as: readsAsWorkspace ? 'workspace' : null }) }, 201);
   });
   // Whether sandboxed sessions may download the repository's Git LFS objects. Changes reach running sessions with their
   // next grant (within a minute), and the relay checks the setting again on every LFS request.

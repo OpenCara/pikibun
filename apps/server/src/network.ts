@@ -19,6 +19,7 @@ import { sessionBranchPush, sessionBranchTarget } from './push/session-branch.js
 import { requireBinding } from './push/broker.js';
 import { mintPushToken, mintRepositoryReadToken, type MintedToken } from './push/mint.js';
 import { sessionApis } from './api-access.js';
+import { repositoryReadAccess, workspaceAccess } from './workspace-connections.js';
 import { webSearchProvider } from './web-search.js';
 
 /** Owner/admin authority, re-checked inside the write (binds workspace id, user id). */
@@ -156,7 +157,9 @@ async function gitAuthority(c: AppContext, connector: ConnectorRow | null, sessi
   const binding = await c.env.DB.query<RepositoryRow>('SELECT * FROM workspace_repositories WHERE id = ? AND workspace_id = ?')
     .bind(bindingId, original.workspace_id).first();
   if (!binding) fail(404, 'repository_not_bound', 'This repository is not bound to the session\'s workspace.');
-  const access = await repositoryAccess(c.env, original.owner_id, binding.provider, binding.host, binding.full_name);
+  // Pushes are always the owner's; reads use the identity the source reads with (the owner's, or the workspace's connection).
+  const access = push ? await repositoryAccess(c.env, original.owner_id, binding.provider, binding.host, binding.full_name)
+    : await repositoryReadAccess(c.env, binding, original.owner_id);
   return { session: original, binding, access, authorize };
 }
 
@@ -192,7 +195,7 @@ export async function gitRelay(c: AppContext, connector: ConnectorRow | null): P
   let upstream: { body: ReadableStream<Uint8Array>; contentType: string };
   try {
     upstream = await fetchGit({ remote, service: read, authorization: ownerGitAuthorization(access), headers, body,
-      provider: gitProviderNames[binding.provider], fullName: binding.full_name, identity: 'owner' });
+      provider: gitProviderNames[binding.provider], fullName: binding.full_name, identity: workspaceAccess(access) ? 'workspace' : 'owner' });
   } catch (error) { failTransfer(error); }
   return new Response(upstream.body, { headers: { 'Content-Type': upstream.contentType, 'Cache-Control': 'private, no-store' } });
 }
@@ -299,6 +302,8 @@ export async function gitDirect(c: AppContext, connector: ConnectorRow | null): 
         cacheSeconds: GIT_DIRECT_CACHE_SECONDS });
     }
   }
+  // A workspace connection never leaves the control plane, not even for the owner's own host: its reads are relayed.
+  if (workspaceAccess(access)) return relay(`${binding.full_name} reads with the workspace's connection, which Pistead relays`);
   if (trusted) return grant({ remote, authorization: ownerGitAuthorization(access), kind: 'owner-account', expiresAt: expires(3600), cacheSeconds: GIT_DIRECT_CACHE_SECONDS });
   return relay(`No credential limited to reading ${binding.full_name} is available for a host shared with the workspace`);
 }

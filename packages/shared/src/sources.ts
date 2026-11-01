@@ -1,3 +1,4 @@
+import type { SourceReadAs } from "./workspace-connections.js";
 /**
  * Workspace sources: what a workspace's sessions work on (docs/design/external-sources.md). A Git repository is one kind,
  * kept in workspace_repositories with everything only Git has. Document sources (a Notion page, a Google Drive folder,
@@ -72,6 +73,8 @@ export interface WorkspaceDocumentSource {
   title: string;
   url: string;
   createdAt: string;
+  /** Which identity sessions read it with: each session owner's own account, or the workspace's connection. */
+  readAs: SourceReadAs;
 }
 export interface WorkspaceSourceList {
   /** Sources other than Git repositories; those are listed by /repositories. */

@@ -1,4 +1,5 @@
 import type { PushIdentityKind } from "./types.js";
+import type { SourceReadAs } from "./workspace-connections.js";
 
 /**
  * Git hosting providers for workspace repositories. GitHub (github.com) uses the sign-in OAuth token; every other
@@ -143,6 +144,8 @@ export interface WorkspaceRepository {
    * account; off by default, when clones check out LFS pointer files. Uploads are never relayed.
    */
   lfs: boolean;
+  /** Which identity sessions read it with: each session owner's own account, or the workspace's connection. */
+  readAs: SourceReadAs;
 }
 
 /** A workspace's repositories, as one member lists them. */
