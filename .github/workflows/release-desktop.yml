@@ -1,7 +1,7 @@
 name: Release desktop
 # Pushing a desktop-v1.2.3 tag (desktop-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then builds the
 # desktop app (apps/desktop) at the tag's version and attaches it to the tag's GitHub release, which is marked latest
-# unless it is a prerelease. Every platform is built from the same tag: macOS (arm64 DMG and zip) and Windows (x64 NSIS
+# unless it is a prerelease. Every platform is built from the same tag: macOS (arm64 DMG) and Windows (x64 NSIS
 # installer). Linux, declared in electron-builder.yml, becomes one more job uploading a desktop-<platform> artifact,
 # listed in github-release's needs.
 #
@@ -98,9 +98,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-macos
-          path: |
-            apps/desktop/dist/release/*.dmg
-            apps/desktop/dist/release/*.zip
+          path: apps/desktop/dist/release/*.dmg
           if-no-files-found: error
 
   windows:

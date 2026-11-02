@@ -1014,7 +1014,7 @@ await fetch("/api/auth/test", { method: "POST", headers: { Authorization: "Beare
   | --- | --- | --- |
   | `cli-v1.2.3` | `release.yml` | `pikibun` on npm, with provenance; a prerelease goes to the `next` dist-tag |
   | `server-v1.2.3` | `release-server.yml` | The server image (web app and backend) to `ghcr.io/opencara/pikibun`, then deploys a release (not a prerelease) to the deployment server once the image is pushed; no GitHub release |
-  | `desktop-v1.2.3` | `release-desktop.yml` | The desktop app on a GitHub release: macOS (arm64 DMG and zip) and Windows (x64 installer); Linux from the same tag later |
+  | `desktop-v1.2.3` | `release-desktop.yml` | The desktop app on a GitHub release: macOS (arm64 DMG) and Windows (x64 installer); Linux from the same tag later |
   | `ios-v1.2.3` | `release-ios.yml` | The iOS app to TestFlight |
 
   Only the desktop line creates a GitHub release, the one GitHub marks latest, with notes since the line's previous tag. The desktop app bundles the connector from `packages/cli` at its tagged commit, so when a connector change matters to it, release `cli-v` and then `desktop-v`. npm needs either a trusted publisher on npmjs.com for `OpenCara/pikibun`, workflow `release.yml` (keep that file name), environment `release`, or an `NPM_TOKEN` repository secret.

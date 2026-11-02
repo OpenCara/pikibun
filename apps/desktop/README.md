@@ -108,7 +108,7 @@ pnpm --filter @pikibun/desktop dist
 
 This builds the app, stages the connector and the local server into `dist/connector` (with the web app from the
 repository's `dist/web`: run `pnpm build` first) with its production dependencies installed by `npm ci`
-from `packages/cli/npm-shrinkwrap.json` (the registry must be reachable), and writes an arm64 DMG and zip to
+from `packages/cli/npm-shrinkwrap.json` (the registry must be reachable), and writes an arm64 DMG to
 `dist/release`. The connector is copied to `Pikibun.app/Contents/Resources/connector`, outside the asar.
 
 On Windows, `pnpm --filter @pikibun/desktop dist:win` does the same and writes an x64 NSIS installer,
@@ -141,7 +141,7 @@ blocks them elsewhere (right-click › Open, or `xattr -dr com.apple.quarantine 
 The desktop release workflow (`.github/workflows/release-desktop.yml`, started by a `desktop-v1.2.3` tag) does all of
 this without editing `electron-builder.yml`: once `MAC_CERTIFICATE_P12` and the notarization key are configured (the
 root README, "Releasing", lists them), it overrides the identity, hardened runtime and notarization on the command
-line. It then attaches the DMG and zip to the tag's GitHub release, and without those secrets it releases the ad-hoc
+line. It then attaches the DMG to the tag's GitHub release, and without those secrets it releases the ad-hoc
 signed build. A Windows job builds the x64 installer from the same tag and attaches it to the same release: signed when
 `WIN_CERTIFICATE_P12` (a base64 code-signing .p12) and `WIN_CERTIFICATE_PASSWORD` are set in the `release`
 environment, otherwise unsigned, so SmartScreen asks before its first launch (**More info → Run anyway**). The Linux

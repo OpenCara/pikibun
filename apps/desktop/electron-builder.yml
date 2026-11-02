@@ -35,8 +35,6 @@ mac:
   target:
     - target: dmg
       arch: [arm64]
-    - target: zip
-      arch: [arm64]
   # No signing identity: builds are ad-hoc signed, which Apple silicon requires to launch them at all. The hardened
   # runtime comes with Developer ID signing and notarization, which README.md describes.
   identity: "-"
