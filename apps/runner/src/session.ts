@@ -49,7 +49,7 @@ import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import { documentKindNames, validSourceItem, type GrantSource, type SourceReadRequest, type SourceReadView } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig } from "../../../packages/shared/src/host-config.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
-import { decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
+import { requesterAutoApproves, decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
 import { WEB_CONTENT_NOTICE, webLimits, webSearchCount, webSearchQuery, type WebSearchRequest, type WebSearchResult } from "../../../packages/shared/src/web.js";
 import type { NetworkPolicy } from "../../../packages/shared/src/network.js";
 import type { ApiUpstream } from "./api-access.js";
@@ -675,11 +675,13 @@ export class RunnerSession {
    * `host`: also ask for the actor's authority over host commands on this host (`hostCommands`); `hostSessions`, also
    * whether they may run their own sessions directly on it. `archived`: the request acts on the session because it is
    * archived, as packing and unpacking its files do; the control plane then allows it only while the session is archived,
-   * and refuses every other request of an archived one.
+   * and refuses every other request of an archived one. `autoApprove`: also ask whether the session's owner auto-approves
+   * the actor's requests (`autoApprove`), which only the control plane knows.
    */
-  async authorize(actorId: string, permission: Permission, expectedPolicyVersion?: number, host = false, hostSessions = false, archived = false): Promise<AuthorizationResult> {
+  async authorize(actorId: string, permission: Permission, expectedPolicyVersion?: number, host = false, hostSessions = false, archived = false, autoApprove = false): Promise<AuthorizationResult> {
     const body: AuthorizationRequest = { sessionId: this.binding.session.id, ownerId: this.binding.owner.id, actorId, permission,
-      ...(host ? { host: true } : {}), ...(host && hostSessions ? { hostSessions: true } : {}), ...(archived ? { archived: true } : {}) };
+      ...(host ? { host: true } : {}), ...(host && hostSessions ? { hostSessions: true } : {}), ...(archived ? { archived: true } : {}),
+      ...(autoApprove ? { autoApprove: true } : {}) };
     let result: AuthorizationResult;
     try {
       if (this.config.authorize) result = await this.config.authorize(body);
@@ -2291,6 +2293,13 @@ export class RunnerSession {
         // commands on this host.
         && (!decidedAsHostCommand(operation, this.hostCommandSession(), consent.unbounded === true)
           || await this.hostCommandLevel(this.binding.owner.id, "write") === "auto");
+      // Another member's sandboxed command, push, or GitHub comment or issue (requesterAutoApproves) runs without asking
+      // while the session's owner auto-approves their requests, as the control plane reports it now; its brokers check
+      // that again, with the message's admission, before a push or GitHub effect.
+      if (!automatic && run.initiatedBy !== this.binding.owner.id && admissionId !== undefined
+        && requesterAutoApproves(operation, this.hostCommandSession(), consent.unbounded === true)) {
+        automatic = (await this.authorize(actorId, "write", undefined, false, false, false, true)).autoApprove === true;
+      }
     }
     const id = toolTaskId ? `tool-${toolTaskId}` : randomUUID();
     const approval: StoredApproval = { id, sessionId: this.binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)), createdAt: new Date().toISOString(),
@@ -2353,7 +2362,12 @@ export class RunnerSession {
         this.requireShellCapability(operation, approval.unbounded === true);
         await this.requireHostEnvironment(true);
         if (approval.unbounded === true && grantedShell(this.hostCommandSession())) await this.requireShellGrant(true);
-        await this.authorize(actorId, "write");
+        // Another member's command runs only while the session's owner still auto-approves their requests.
+        if (actorId !== this.binding.owner.id) {
+          if ((await this.authorize(actorId, "write", undefined, false, false, false, true)).autoApprove !== true) {
+            throw new RunnerError(403, "The session owner no longer auto-approves this member's requests: commands need approval. Nothing ran.");
+          }
+        } else await this.authorize(actorId, "write");
       }, { allowTestShell: this.binding.model.provider === "faux" && this.config.allowFaux && this.config.allowTestShell === true, unbounded: approval.unbounded === true,
         ...await this.commandOptions(), signal });
       status = "executed";

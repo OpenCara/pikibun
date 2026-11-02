@@ -20,7 +20,8 @@ import { Markdown } from "./markdown";
 import { PeopleProvider, Username, useWorkspacePeople } from "./people";
 import { PullRequestLink } from "./pull-request";
 import { RepositoryPreparationCard } from "./repository-preparation";
-import { decidedAsHostCommand, decidesHostCommand, hostCommandWaiting, isHostCommand } from "../../../packages/client/src/host-commands";
+import { decidedAsHostCommand, decidesHostCommand, hostCommandWaiting, isHostCommand, offersAlwaysApprove } from "../../../packages/client/src/host-commands";
+import { username } from "../../../packages/client/src/usernames";
 import { preparingRepositories } from "../../../packages/client/src/repository-progress";
 import { NavigationButton } from "./navigation";
 import { navigate } from "./router";
@@ -284,15 +285,19 @@ function SessionPane({ id }: { id: string }) {
     return canApprove && (!ownerOnly || isOwner);
   }
 
-  /** `scope` answers a permission request: allow the one call, or the same need for the rest of the session. */
-  async function decide(approval: ApprovalRecord, decision: "approve" | "deny", scope?: "call" | "session") {
+  /**
+   * `scope` answers a permission request: allow the one call, or the same need for the rest of the session. `always`
+   * approves another member's card and auto-approves their requests from now on (offersAlwaysApprove).
+   */
+  async function decide(approval: ApprovalRecord, decision: "approve" | "deny", scope?: "call" | "session", always = false) {
     if (!decides(approval) || approvalAction.busy || !approval.reviewHash || approval.status !== "pending") return;
     // The card is the prompt: it shows the exact operation, who it runs as, its resource limits and any unsandboxed-host warning, so a click decides at once.
     const notice = approval.operation.kind === "permission"
       ? decision === "deny" ? "Not allowed" : scope === "session" ? "Allowed for the rest of the session" : "Allowed for this call"
+      : always ? `Approved. ${username(people.person(approval.requestedBy))}'s requests here now run without asking; stop it under Details › People.`
       : decision === "approve" ? "Approval decision recorded" : "Operation denied";
     await approvalAction.run(async () => {
-      await api(`/api/sessions/${segment(id)}/approvals/${segment(approval.id)}`, { method: "POST", body: { decision, reviewHash: approval.reviewHash, ...(scope ? { scope } : {}) } });
+      await api(`/api/sessions/${segment(id)}/approvals/${segment(approval.id)}`, { method: "POST", body: { decision, reviewHash: approval.reviewHash, ...(scope ? { scope } : {}), ...(always ? { alwaysApprove: true } : {}) } });
       live.refresh();
       audit.refresh();
     }, notice);
@@ -356,6 +361,9 @@ function SessionPane({ id }: { id: string }) {
                   <Button variant="outline" size="sm" disabled={disabled} onClick={() => void decide(approval, "deny")}>Deny</Button>
                 </div> : <div className="inline">
                   <Button variant="default" size="sm" disabled={disabled} onClick={() => void decide(approval, "approve")}>Approve</Button>
+                  {offersAlwaysApprove(approval, session, host, user.id) && <Button variant="outline" size="sm" disabled={disabled} onClick={() => void decide(approval, "approve", undefined, true)}
+                    title={`Approves this and runs ${username(people.person(approval.requestedBy))}'s later commands, pushes, and GitHub comments and issues in this session without asking, as you. Merges, host commands and new permissions still ask. Stop it any time under Details › People.`}>
+                    Always approve {username(people.person(approval.requestedBy))}</Button>}
                   <Button variant="outline" size="sm" disabled={disabled} onClick={() => void decide(approval, "deny")}>Deny</Button>
                   <span className="muted small">Runs as {hostCommand ? "the host OS user (outside the sandbox)" : view.owner.displayName} · each approval covers one exact operation and its arguments</span>
                 </div>}

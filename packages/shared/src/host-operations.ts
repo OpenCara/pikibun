@@ -43,6 +43,18 @@ export function decidedAsHostCommand(operation: { kind: string }, session: HostC
   return operation.kind === "bash" && (session.hostEnvironment === true || (unbounded && grantedShell(session)));
 }
 
+/**
+ * Whether `operation` runs without asking when the session's owner auto-approves the requests of the member whose message
+ * asked for it (see SessionRecord.autoApprovedRequesters): a sandboxed command with the host's limits, a push, or a GitHub
+ * comment or issue. A merge, a host command, every command of a session that runs on its host and a command without the
+ * host's limits still ask, as does anything the session doesn't allow yet (a permission request). The control plane,
+ * the host and the apps all decide by this one rule.
+ */
+export function requesterAutoApproves(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
+  if (operation.kind === "bash") return !unbounded && !decidedAsHostCommand(operation, session, unbounded);
+  return operation.kind === "git.push" || operation.kind === "github.comment" || operation.kind === "github.issue";
+}
+
 export function validRepinRef(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 255
     && !/[\s\x00-\x1f\x7f\\~^:?*\[]/.test(value) && !/[\uD800-\uDFFF]/u.test(value)

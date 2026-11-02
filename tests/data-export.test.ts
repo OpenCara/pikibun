@@ -41,6 +41,7 @@ async function fixture(t: TestContext) {
     INSERT INTO session_grants VALUES ('owner-private','test:admin','["read"]','2026-01-01'),
       ('member-granted','test:owner','["read","ask"]','2026-01-06');
     INSERT INTO session_tool_grants VALUES ('owner-private','bash','','approval-1','test:owner','2026-01-01');
+    INSERT INTO session_auto_approved_requesters VALUES ('owner-private','test:admin','approval-1','test:owner','2026-01-01','2026-01-02');
     INSERT INTO backups (id,session_id,owner_id,object_key,sha256,size,created_at) VALUES ('backup-server','owner-private','test:owner','OBJECT-KEY-SERVER','${'s'.repeat(43)}',10,'2026-01-02'),
       ('backup-database','owner-private','test:owner','OBJECT-KEY-DATABASE','${'t'.repeat(43)}',20,'2026-01-03');
     INSERT INTO workspace_database_backups VALUES ('backup-database','workspace','2026-01-03');
@@ -101,6 +102,7 @@ test('a session export is its owner\'s, archived sessions included, with every r
   assert.equal(exported.session.archivedStatus, null);
   assert.deepEqual(exported.grants, [{ userId: 'test:admin', permissions: ['read'], createdAt: '2026-01-01' }]);
   assert.deepEqual(exported.toolGrants, [{ tool: 'bash', callId: '', approvalId: 'approval-1', grantedBy: 'test:owner', createdAt: '2026-01-01' }]);
+  assert.deepEqual(exported.autoApprovedRequesters, [{ userId: 'test:admin', approvalId: 'approval-1', grantedBy: 'test:owner', createdAt: '2026-01-01', revokedAt: '2026-01-02' }]);
   assert.deepEqual(exported.backups.map(backup => [backup.id, backup.location, backup.size]),
     [['backup-server', 'server', 10], ['backup-database', 'workspace-database', 20]]);
   assert.deepEqual(exported.restores, [{ id: 'restore', sourceSessionId: 'owner-private', backupId: 'backup-server',
@@ -147,6 +149,7 @@ test('a workspace export covers its settings, the exporter\'s own sessions in fu
   assert.equal(exported.format, 'pikibun-workspace-export-v1');
   assert.equal(exported.exportedBy, 'test:owner');
   assert.deepEqual(exported.workspace, { id: 'workspace', name: 'Workspace', ownerId: 'test:owner', createdAt: '2026-01-01' });
+  assert.deepEqual(exported.approvalSettings, { requesterAutoApprove: false });
   assert.deepEqual(exported.members, [
     { userId: 'test:owner', displayName: 'Owner', githubLogin: null, role: 'owner', createdAt: '2026-01-01' },
     { userId: 'test:admin', displayName: 'Admin', githubLogin: null, role: 'admin', createdAt: '2026-01-02' },

@@ -1,5 +1,6 @@
 import type { ConnectorInfo } from "../../shared/src/connector";
-import type { Operation, SessionRecord } from "../../shared/src/types";
+import type { ApprovalRecord, Operation, SessionRecord } from "../../shared/src/types";
+import { requesterAutoApproves } from "../../shared/src/host-operations";
 
 /**
  * Whether an operation runs outside the sandbox, on the session's host, as a host command: `host_bash`, or any command
@@ -16,6 +17,20 @@ export function isHostCommand(operation: Pick<Operation, "kind">, session: Pick<
  * the host's owner, which still runs in the sandbox, as that owner. The rule the control plane and the host decide by.
  */
 export { decidedAsHostCommand } from "../../shared/src/host-operations";
+export { requesterAutoApproves };
+
+/**
+ * Whether `userId` can choose "Always approve" on `approval`: they own the session, the card is another member's, of an
+ * operation that member's requests may run without asking (requesterAutoApproves), the workspace lets owners choose that
+ * (SessionRecord.requesterAutoApprove), and the session's host runs such requests (requesterAutoApprove), or isn't in
+ * the viewer's host listing to say. The control plane checks all of it again.
+ */
+export function offersAlwaysApprove(approval: Pick<ApprovalRecord, "operation" | "requestedBy" | "unbounded">,
+  session: Pick<SessionRecord, "ownerId" | "connectorOwnerId" | "hostEnvironment" | "requesterAutoApprove">,
+  host: Pick<ConnectorInfo, "capabilities"> | undefined, userId: string): boolean {
+  return session.ownerId === userId && approval.requestedBy !== session.ownerId && session.requesterAutoApprove === true
+    && (host === undefined || host.capabilities.requesterAutoApprove === true) && requesterAutoApproves(approval.operation, session, approval.unbounded === true);
+}
 
 /**
  * Whether `userId` holds host command authority in the session, as the control plane checks it before a host command is

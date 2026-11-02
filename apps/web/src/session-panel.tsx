@@ -478,6 +478,14 @@ function PeopleSection({ session, user, workspaceRole, actions, changed }: { ses
   const [member, setMember] = useState("");
   const [selected, setSelected] = useState<SessionRole | null>(null);
   const target = userIdFromInput(member, people.list);
+  /** The owner stops auto-approving `requester`'s requests (chosen with Always approve on one of their cards). */
+  async function stopAutoApprove(requester: string) {
+    if (form.busy) return;
+    await form.run(async () => {
+      await api(`${base}/auto-approved-requesters/${segment(requester)}`, { method: "DELETE" });
+      changed();
+    }, `${usernameWithId(people.person(requester))}'s requests ask again.`);
+  }
   const targetName = usernameWithId(people.person(target));
   const ownerSelected = target === session.ownerId;
   const existing = grants.data?.grants.find(grant => grant.userId === target);
@@ -579,6 +587,14 @@ function PeopleSection({ session, user, workspaceRole, actions, changed }: { ses
     />}
     {isOwner && link && <CardBody><Field label="Share link" hint={<>Created <RelativeTime value={link.createdAt} /></>}><CopyField value={link.url} label="Copy share link" /></Field></CardBody>}
     {isOwner && sharing.linkError && <CardBody><Feedback error={sharing.linkError} /></CardBody>}
+    {(session.autoApprovedRequesters ?? []).map(requester => <Row key={requester}
+      leading={<Icon name="check" size={16} />}
+      title={<>Always approves <Username id={requester} you /></>}
+      hint={session.requesterAutoApprove
+        ? `Their commands, pushes, and GitHub comments and issues here run without asking, as the owner. Merges, host commands and new permissions still ask${isOwner ? "" : ". Only the owner can stop it"}`
+        : "Paused: the workspace no longer lets owners auto-approve other members' requests, so they ask again. It applies again if that's turned back on"}
+      trailing={isOwner && <Button variant="outline" size="sm" disabled={form.busy} onClick={() => void stopAutoApprove(requester)}>Stop</Button>}
+    />)}
     {canManage && !archived ? <Collapsible title="Session roles" hint={grants.data ? `${grants.data.grants.length} ${grants.data.grants.length === 1 ? "person" : "people"} with access` : undefined} leading={<Icon name="users" size={16} />} trailing={<Button variant="ghost" size="xs" icon="refresh" aria-label="Refresh session roles" title="Refresh session roles" disabled={grants.loading} onClick={event => { event.preventDefault(); grants.refresh(); }} />}>
       <ResourceState {...grants} retry={grants.refresh}>
         {grants.data && <form onSubmit={saveGrant}>

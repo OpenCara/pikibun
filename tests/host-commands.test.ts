@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decidedAsHostCommand, decidesHostCommand, decidesHostCommands, hostCommandWaiting, isHostCommand } from "../packages/client/src/host-commands.js";
+import { decidedAsHostCommand, decidesHostCommand, decidesHostCommands, hostCommandWaiting, isHostCommand, offersAlwaysApprove, requesterAutoApproves } from "../packages/client/src/host-commands.js";
+import type { ConnectorInfo } from "../packages/shared/src/connector.js";
+import type { Operation } from "../packages/shared/src/types.js";
 import { decidedAsHostCommand as sharedRule, grantedShell, type HostCommandSession } from "../packages/shared/src/host-operations.js";
 import { hostCommandSession } from "../apps/server/src/host-access.js";
 
@@ -111,4 +113,31 @@ test("a host command's card says whether approve access is needed of the host's 
   for (const [operation, host] of [[{ kind: "host.bash" }, { capabilities: {} }], [{ kind: "host.bash" }, undefined], [{ kind: "bash" }, current]] as const) {
     assert.equal(hostCommandWaiting(operation, host), "Waiting for the host's owner or a member granted host commands, either with approve access to this session");
   }
+});
+
+test("another member's requests run without asking only for sandboxed commands, pushes, comments and issues, offered to the owner alone", () => {
+  const sandboxed = { ownerId: "alice", connectorOwnerId: "bob" };
+  const push = { kind: "git.push" as const, directory: "app", branch: "feature" };
+  assert.equal(requesterAutoApproves({ kind: "bash" }, sandboxed), true);
+  assert.equal(requesterAutoApproves(push, sandboxed), true);
+  assert.equal(requesterAutoApproves({ kind: "github.comment" }, sandboxed), true);
+  assert.equal(requesterAutoApproves({ kind: "github.issue" }, sandboxed), true);
+  // Merges, host commands, commands of a session on its host and commands without the host's limits always ask.
+  assert.equal(requesterAutoApproves({ kind: "github.merge" }, sandboxed), false);
+  assert.equal(requesterAutoApproves({ kind: "host.bash" }, sandboxed), false);
+  assert.equal(requesterAutoApproves({ kind: "bash" }, { ...sandboxed, hostEnvironment: true }), false);
+  assert.equal(requesterAutoApproves({ kind: "bash" }, sandboxed, true), false);
+  assert.equal(requesterAutoApproves({ kind: "permission" }, sandboxed), false);
+
+  const session = { ...sandboxed, requesterAutoApprove: true as const };
+  const card = { operation: { kind: "bash", command: "npm test" } as Operation, requestedBy: "carol" };
+  const host = { capabilities: { requesterAutoApprove: true } } as unknown as ConnectorInfo;
+  assert.equal(offersAlwaysApprove(card, session, host, "alice"), true);
+  // Only the owner, on someone else's card, while the workspace allows it and the host would honor it.
+  assert.equal(offersAlwaysApprove(card, session, host, "carol"), false);
+  assert.equal(offersAlwaysApprove({ ...card, requestedBy: "alice" }, session, host, "alice"), false);
+  assert.equal(offersAlwaysApprove(card, sandboxed, host, "alice"), false);
+  assert.equal(offersAlwaysApprove(card, session, { capabilities: {} } as unknown as ConnectorInfo, "alice"), false);
+  // A host missing from the viewer's listing can't say; the control plane decides.
+  assert.equal(offersAlwaysApprove(card, session, undefined, "alice"), true);
 });
