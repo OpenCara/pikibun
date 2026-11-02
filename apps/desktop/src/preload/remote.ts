@@ -30,6 +30,7 @@ const bridge: DesktopBridge = {
     stop: () => ipcRenderer.invoke(channels.localStop),
   },
   openWindow: which => ipcRenderer.invoke(channels.openWindow, which),
+  openUpdate: () => ipcRenderer.invoke(channels.openUpdate),
 };
 
 contextBridge.exposeInMainWorld("pikibunDesktop", bridge);

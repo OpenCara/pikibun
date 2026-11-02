@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
 import type { HostState } from "../../../runner/src/desktop-protocol.js";
 import { stateLabels } from "../shared/bridge.js";
+import type { AvailableUpdate } from "./updates.js";
 
 /** A server the app can open: each connection's, and Pikibun on this computer while it runs. */
 export interface ServerEntry { label: string; open(): void }
@@ -21,6 +22,18 @@ export interface MenuActions {
   openDesktopSettings(): void;
   servers(): ServerEntry[];
   hosts(): HostEntry[];
+  /** A newer desktop release, once a check has found one. */
+  update(): AvailableUpdate | undefined;
+  /** Opens its release page in the browser. */
+  openUpdate(): void;
+  /** Checks GitHub now and says what it found. */
+  checkForUpdates(): void;
+}
+
+/** "Update to Pikibun 1.2.3…" while a newer release is out, else "Check for Updates…". */
+export function updateItem(actions: Pick<MenuActions, "update" | "openUpdate" | "checkForUpdates">): MenuItemConstructorOptions {
+  const update = actions.update();
+  return update ? { label: `Update to ${app.name} ${update.version}…`, click: actions.openUpdate } : { label: "Check for Updates…", click: actions.checkForUpdates };
 }
 
 const host = (origin: string) => URL.parse(origin)?.host ?? origin;
@@ -37,7 +50,7 @@ export function installAppMenu(actions: MenuActions): void {
   const servers = actions.servers();
   const template: MenuItemConstructorOptions[] = [
     ...(mac ? [{ role: "appMenu" as const, submenu: [
-      { role: "about" as const }, { type: "separator" as const }, ...appItems, { type: "separator" as const },
+      { role: "about" as const }, updateItem(actions), { type: "separator" as const }, ...appItems, { type: "separator" as const },
       { role: "services" as const }, { type: "separator" as const },
       { role: "hide" as const }, { role: "hideOthers" as const }, { role: "unhide" as const }, { type: "separator" as const }, { role: "quit" as const },
     ] }] : []),
@@ -45,7 +58,7 @@ export function installAppMenu(actions: MenuActions): void {
       { label: "Open Pikibun", accelerator: "CommandOrControl+N", click: actions.openMain },
       { label: "New Window", accelerator: "CommandOrControl+Shift+N", click: actions.newWindow },
       ...(servers.length > 1 ? [{ label: "Open Server", submenu: servers.map(server => ({ label: server.label, click: server.open })) }] : []),
-      ...(mac ? [] : [{ type: "separator" as const }, ...appItems]),
+      ...(mac ? [] : [{ type: "separator" as const }, ...appItems, updateItem(actions)]),
       { type: "separator" }, mac ? { role: "close" } : { role: "quit" },
     ] },
     { role: "editMenu" },
@@ -93,7 +106,8 @@ export class HostTray {
       : hosts.map(entry => ({ label: `${host(entry.server)} — ${entry.error && entry.state === "stopped" ? "Stopped (error)" : stateLabels[entry.state]}`,
         submenu: [control(entry, "Host")] }));
     const servers = this.actions.servers();
-    this.tray.setToolTip(`Pikibun — ${status}`);
+    const update = this.actions.update();
+    this.tray.setToolTip(`Pikibun — ${status}${update ? ` (${update.version} available)` : ""}`);
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: status, enabled: false },
       { type: "separator" },
@@ -102,6 +116,7 @@ export class HostTray {
       { label: `${this.actions.hostTitle}…`, click: this.actions.openHost },
       ...controls,
       { type: "separator" },
+      ...(update ? [updateItem(this.actions)] : []),
       { label: `Quit ${app.name}`, role: "quit" },
     ]));
   }

@@ -1,3 +1,4 @@
+import type { AvailableUpdate } from "../main/updates.js";
 import type { HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome } from "./bridge.js";
 
 // What the desktop app offers the web app it shows, as `window.pikibunDesktop`: the app's settings, inside the server's
@@ -7,7 +8,7 @@ import type { HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome } 
 // administrators' passwords) are never entered here: the app's own Settings window takes them. Types only, so the web
 // app's bundle imports nothing from the desktop app.
 
-export type { HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome };
+export type { AvailableUpdate, HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome };
 
 export const remoteChannels = {
   view: "desktop:view",
@@ -25,6 +26,7 @@ export const remoteChannels = {
   localStart: "desktop:local-start",
   localStop: "desktop:local-stop",
   openWindow: "desktop:open-window",
+  openUpdate: "desktop:open-update",
 } as const;
 
 export interface DesktopView {
@@ -40,6 +42,10 @@ export interface DesktopView {
   hosts: HostsView;
   /** Pikibun on this computer; its activity log only on its own pages. */
   local: LocalView;
+  /** The app's version; absent from apps older than update checks. */
+  version?: string;
+  /** A newer desktop release on GitHub, once a check has found one. */
+  update?: AvailableUpdate;
 }
 
 /** Starting Pikibun on this computer from the web page: with the saved GitHub OAuth apps only. */
@@ -73,4 +79,6 @@ export interface DesktopBridge {
   };
   /** The app's own windows: This Mac, or Settings (where secrets are entered). */
   openWindow(which: "host" | "settings"): Promise<Outcome>;
+  /** Opens the newer release's page (DesktopView.update) in the browser. Absent from apps older than update checks. */
+  openUpdate?(): Promise<Outcome>;
 }

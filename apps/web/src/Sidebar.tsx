@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { SessionRecord, Workspace } from "../../../packages/shared/src/types";
 import { useApp } from "./app-context";
+import { useDesktop } from "./desktop";
 import { Icon, Logo } from "./icons";
 import { NewWorkspaceSheet } from "./NewWorkspaceSheet";
 import { PullRequestTag } from "./pull-request";
@@ -76,6 +77,9 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate: () =>
       return next;
     });
   }
+  const desktop = useDesktop();
+  const update = desktop.view?.update;
+  const openUpdate = desktop.bridge?.openUpdate;
   const newSessionHref = currentWorkspace && canCreateSessions(currentWorkspace.role) ? href({ name: "new", workspaceId: currentWorkspace.id }) : undefined;
   return <aside className="sidebar" aria-label="Workspaces and sessions">
     <div className="sidebar-top">
@@ -99,6 +103,11 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate: () =>
       {sessionsLoading && workspaces.length > 0 && <div style={{ padding: 8 }}><Loading>Loading sessions...</Loading></div>}
       {!workspacesLoading && workspaces.length > 0 && <button type="button" className="nav-item" style={{ marginTop: 12 }} onClick={() => setCreating(true)}><Icon name="plus" size={14} /><span className="label">New workspace</span></button>}
     </nav>
+    {update && openUpdate && <div className="sidebar-update">
+      <button type="button" className="btn default sm block" onClick={() => void openUpdate()} title={`Pikibun ${update.version} is available: open its download page`}>
+        <Icon name="sparkle" size={14} />Update to {update.version}
+      </button>
+    </div>}
     <div className="sidebar-footer">
       <a className="nav-item host-chip" href={href({ name: "settings", section: "profile" })} onClick={onNavigate} title={user.displayName}>
         <IdentityBadge name={user.displayName} id={user.id} />

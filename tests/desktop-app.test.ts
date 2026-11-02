@@ -279,7 +279,7 @@ test("a server's Settings page sees the app's settings, but only its own activit
   const connection = (id: string, server: string, primary = false) => ({ id, primary, server, state: "connected" as const, inspecting: false, logs: log, command: "" });
   const hosts = { title: "This Mac", fixtureModels: false, connections: [connection("default", "https://pikibun.com", true), connection("0123456789ab", "https://team.example")] };
   const local = { enabled: true, mode: "local" as const, status: { state: "running" as const, origin: "http://127.0.0.1:7878", host: "connected" as const, claimUrl: `http://127.0.0.1:7878/api/auth/local/claim?token=${"c".repeat(43)}` }, logs: log };
-  const base = { title: "This Mac", primaryServer: "https://pikibun.com", defaultServer: "https://pikibun.com", hosts, local };
+  const base = { title: "This Mac", primaryServer: "https://pikibun.com", defaultServer: "https://pikibun.com", hosts, local, version: "1.0.0" };
   const team = remoteView({ ...base, origin: "https://team.example" });
   assert.equal(team.connectionHere, "0123456789ab");
   assert.deepEqual(team.hosts.connections.map(entry => entry.logs.length), [0, 1]);
@@ -303,4 +303,70 @@ test("a server's Settings page sees the app's settings, but only its own activit
   assert.equal(parseRemoteLocalStart({ mode: "shared", shared }).ok, true);
   assert.match((parseRemoteLocalStart({ mode: "local", github: secret }) as { error: string }).error, /own Settings window/);
   assert.match((parseRemoteLocalStart({ mode: "shared", shared: { ...shared, github: secret } }) as { error: string }).error, /own Settings window/);
+});
+
+test("a newer desktop release on GitHub is offered: never another release line, a draft, or a prerelease to a release", async () => {
+  const { compareVersions, newerRelease, UpdateChecker } = await import("../apps/desktop/src/main/updates.js");
+  const ordered = ["0.9.9", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.2.0", "1.10.0", "2.0.0"];
+  for (let index = 1; index < ordered.length; index++) {
+    assert.equal(compareVersions(ordered[index - 1]!, ordered[index]!), -1, `${ordered[index - 1]} < ${ordered[index]}`);
+    assert.equal(compareVersions(ordered[index]!, ordered[index - 1]!), 1);
+  }
+  assert.equal(compareVersions("1.2.3", "1.2.3"), 0);
+  assert.equal(compareVersions("1.2", "1.2.3"), undefined);
+  for (const valid of ["0.0.0", "1.2.3-0", "1.2.3-x-y.0a", "1.2.3-beta.1"]) assert.equal(compareVersions(valid, valid), 0, valid);
+  for (const malformed of ["01.2.3", "1.02.3", "1.2.03", "1.2.3-alpha..1", "1.2.3-01", "1.2.3-", "1.2.3-beta.1.", "1x2.3", "1.2.3+build"]) {
+    assert.equal(compareVersions(malformed, "1.0.0"), undefined, malformed);
+  }
+
+  const release = (tag: string, extra: Record<string, unknown> = {}) => ({ tag_name: tag, draft: false, prerelease: tag.includes("-", 10), html_url: "https://evil.example/", ...extra });
+  const releases = [release("server-v9.0.0"), release("cli-v9.0.0"), release("v9.0.0"), release("desktop-v1.3.0", { draft: true }), release("desktop-v1.4.0-beta.1"),
+    release("desktop-v1.2.0"), release("desktop-v1.1.0"), release("desktop-v1.2.0x"), { tag_name: "desktop-v5.0.0" }, null, "desktop-v6.0.0"];
+  assert.deepEqual(newerRelease(releases, "1.1.0"), { version: "1.2.0", url: "https://github.com/OpenCara/pikibun/releases/tag/desktop-v1.2.0" });
+  assert.equal(newerRelease(releases, "1.2.0"), undefined);
+  assert.equal(newerRelease(releases, "1.3.5"), undefined);
+  // A prerelease of the app is offered later prereleases, and the release they lead to.
+  assert.equal(newerRelease(releases, "1.4.0-alpha.1")?.version, "1.4.0-beta.1");
+  assert.equal(newerRelease([...releases, release("desktop-v1.4.0")], "1.4.0-beta.1")?.version, "1.4.0");
+  assert.equal(newerRelease({ message: "API rate limit exceeded" }, "1.0.0"), undefined);
+  assert.equal(newerRelease(releases, "not a version"), undefined);
+  // A prerelease by its version, even without GitHub's flag, never reaches a release; malformed tags never count.
+  assert.equal(newerRelease([release("desktop-v1.5.0-beta.1", { prerelease: false }), release("desktop-v1.2.0")], "1.1.0")?.version, "1.2.0");
+  assert.equal(newerRelease([release("desktop-v1.5.0-beta.1", { prerelease: false })], "1.5.0-alpha")?.version, "1.5.0-beta.1");
+  assert.equal(newerRelease([release("desktop-v01.5.0"), release("desktop-v1.5.0-alpha..1", { prerelease: false })], "1.0.0"), undefined);
+
+  let answer: unknown = [release("desktop-v1.0.0")];
+  let fail = false;
+  const changes: (string | undefined)[] = [];
+  const checker = new UpdateChecker({
+    current: "1.0.0", onChange: update => changes.push(update?.version),
+    fetch: async (url, init) => { assert.equal(init.headers["User-Agent"], "Pikibun-Desktop"); assert.match(url, /^https:\/\/api\.github\.com\/repos\/OpenCara\/pikibun\/releases/); if (fail) throw new Error("offline"); return { ok: true, json: async () => answer }; },
+  });
+  // A getter TypeScript would narrow after the first assertion.
+  const available = () => checker.available;
+  assert.equal(await checker.check(), true);
+  assert.equal(available(), undefined);
+  answer = [release("desktop-v1.0.1"), release("desktop-v1.0.0")];
+  assert.equal(await checker.check(), true);
+  assert.equal(available()?.version, "1.0.1");
+  // A failed check, or an answer that isn't a release list, keeps what the last one found.
+  fail = true;
+  assert.equal(await checker.check(), false);
+  fail = false;
+  answer = { message: "API rate limit exceeded" };
+  assert.equal(await checker.check(), false);
+  assert.equal(available()?.version, "1.0.1");
+  assert.deepEqual(changes, ["1.0.1"]);
+});
+
+test("a server's page learns the app's version and a newer release, which only the app opens", async () => {
+  const { remoteView } = await import("../apps/desktop/src/main/remote-view.js");
+  const hosts = { title: "This Mac", fixtureModels: false, connections: [] };
+  const local = { enabled: false, mode: "local" as const, status: { state: "stopped" as const, host: "stopped" as const }, logs: [] };
+  const base = { title: "This Mac", origin: "https://pikibun.com", primaryServer: "https://pikibun.com", defaultServer: "https://pikibun.com", hosts, local, version: "1.0.0" };
+  const current = remoteView(base);
+  assert.equal(current.version, "1.0.0");
+  assert.equal("update" in current, false);
+  const update = { version: "1.1.0", url: "https://github.com/OpenCara/pikibun/releases/tag/desktop-v1.1.0" };
+  assert.deepEqual(remoteView({ ...base, update }).update, update);
 });
