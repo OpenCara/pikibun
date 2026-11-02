@@ -122,11 +122,15 @@ test("a Windows host's sandbox changes only while it is stopped, and native Wind
   assert.equal(controller.view().inspection?.unsupported, unsupported);
   assert.deepEqual(await controller.start({ replacePairing: false }), { ok: false, error: unsupported });
 
-  // A host elsewhere offers no choice.
-  const mac = new HostController({ id: "default", settings, fixtureModels: false, command: () => "", confirmUnsandboxed: async () => false });
-  assert.equal(mac.view().windows, undefined);
-  assert.match((await mac.setSandbox({ sandbox: "native" }) as { error: string }).error, /Only Windows/);
-  assert.match(mac.sandboxRefusal() ?? "", /Only Windows/);
+  // Neither a Mac's choice nor a host elsewhere (Linux, whose sandbox is bubblewrap) applies here.
+  assert.match((await controller.setSandbox({ sandbox: "seatbelt" }) as { error: string }).error, /macOS's: this computer runs Windows/);
+  assert.deepEqual(settings.connection("default")?.windows, { sandbox: "wsl2", distro: "Ubuntu" });
+  assert.equal(settings.connection("default")?.mac, undefined);
+  const linux = new HostController({ id: "default", settings, fixtureModels: false, command: () => "", confirmUnsandboxed: async () => false });
+  assert.equal(linux.view().windows, undefined);
+  assert.equal(linux.view().mac, undefined);
+  assert.match((await linux.setSandbox({ sandbox: "native" }) as { error: string }).error, /Only Windows and macOS/);
+  assert.match(linux.sandboxRefusal() ?? "", /Only Windows and macOS/);
 });
 
 test("the same host in a terminal: WSL2's in its distribution, native Windows' with its whole state path, which cmd and PowerShell take as is", () => {

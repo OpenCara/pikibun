@@ -9,7 +9,13 @@ export interface Bounds { x: number; y: number; width: number; height: number }
 export interface ModelChoice { provider: string; modelId: string }
 
 /** Where a Windows host's sessions run (bridge.ts SandboxChoice): WSL2, in a distribution or WSL's default, or natively. */
-export type SandboxChoice = { sandbox: "wsl2"; distro?: string } | { sandbox: "native" };
+export type WindowsSandboxChoice = { sandbox: "wsl2"; distro?: string } | { sandbox: "native" };
+/** A Mac host's sandbox (bridge.ts SandboxChoice): macOS's own Seatbelt sandbox, experimental, or none. */
+export type MacSandboxChoice = { sandbox: "seatbelt" } | { sandbox: "none" };
+export type SandboxChoice = WindowsSandboxChoice | MacSandboxChoice;
+
+export const isWindowsChoice = (choice: SandboxChoice): choice is WindowsSandboxChoice => choice.sandbox === "wsl2" || choice.sandbox === "native";
+export const isMacChoice = (choice: SandboxChoice): choice is MacSandboxChoice => choice.sandbox === "seatbelt" || choice.sandbox === "none";
 
 /**
  * A Pikibun server this computer connects to: its window, and the connector (`pikibun connect`) that makes this computer
@@ -31,7 +37,12 @@ export interface ConnectionSettings {
    * Windows only: where this host's sessions run; absent, WSL2 in WSL's default distribution. Each choice has its own
    * connector state, and so its own pairing: WSL2's is inside the distribution, native Windows' in the user's profile.
    */
-  windows?: SandboxChoice;
+  windows?: WindowsSandboxChoice;
+  /**
+   * macOS only: whether this host's sessions run in macOS's own sandbox (experimental); absent, none, after the owner's
+   * consent at each start, as before Macs had the choice. Both use the same connector state and pairing.
+   */
+  mac?: MacSandboxChoice;
 }
 
 export interface Settings {
@@ -63,7 +74,7 @@ export const isModelChoice = (value: unknown): value is ModelChoice => isRecord(
 
 export function parseSandboxChoice(value: unknown): SandboxChoice | undefined {
   if (!isRecord(value)) return undefined;
-  if (value.sandbox === "native" && Object.keys(value).length === 1) return { sandbox: "native" };
+  if ((value.sandbox === "native" || value.sandbox === "seatbelt" || value.sandbox === "none") && Object.keys(value).length === 1) return { sandbox: value.sandbox };
   if (value.sandbox !== "wsl2" || !Object.keys(value).every(key => key === "sandbox" || key === "distro")) return undefined;
   if (value.distro === undefined) return { sandbox: "wsl2" };
   return typeof value.distro === "string" && WSL_DISTRO.test(value.distro) ? { sandbox: "wsl2", distro: value.distro } : undefined;
@@ -82,7 +93,9 @@ function parseConnection(value: unknown): ConnectionSettings | undefined {
     connection.models = value.models.map(model => ({ provider: model.provider, modelId: model.modelId }));
   }
   const windows = parseSandboxChoice(value.windows);
-  if (windows) connection.windows = windows;
+  if (windows && isWindowsChoice(windows)) connection.windows = windows;
+  const mac = parseSandboxChoice(value.mac);
+  if (mac && isMacChoice(mac)) connection.mac = mac;
   return connection;
 }
 

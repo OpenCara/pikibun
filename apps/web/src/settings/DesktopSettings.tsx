@@ -37,10 +37,42 @@ function isolation(view: HostView): string {
 }
 
 /**
- * Windows: where a host's sessions run, WSL2 (in which distribution) or native Windows. The app asks the owner before
+ * Where a host's sessions run. Windows: WSL2 (in which distribution) or native Windows. The app asks the owner before
  * it changes, and only while the host is stopped. Absent from apps that predate the choice.
  */
 function SandboxField({ connection, view, bridge }: { connection: HostView; view: DesktopView; bridge: DesktopBridge }) {
+  return connection.mac ? <MacSandboxField connection={connection} bridge={bridge} /> : <WindowsSandboxField connection={connection} view={view} bridge={bridge} />;
+}
+
+/**
+ * macOS: whether a host's sessions run in macOS's own sandbox (experimental) or without one. The app asks the owner
+ * before it changes, and only while the host is stopped. Absent from apps that predate the choice.
+ */
+function MacSandboxField({ connection, bridge }: { connection: HostView; bridge: DesktopBridge }) {
+  const action = useAction();
+  const choice = connection.mac;
+  const setSandbox = bridge.host.setSandbox;
+  if (!choice || !setSandbox) return null;
+  const stopped = connection.state === "stopped";
+  const change = (sandbox: "seatbelt" | "none") => {
+    if (!stopped || action.busy || sandbox === choice.sandbox) return;
+    void action.run(() => check(setSandbox(connection.id, { sandbox })));
+  };
+  return <Field label="Sandbox" hint={choice.sandbox === "seatbelt"
+    ? "Sessions run in macOS's own Seatbelt sandbox, which is experimental (macOS 15 or later with the developer tools: xcode-select --install), or without one, after your consent, while it isn't ready. Each session sees only its own files and reaches the network only through its egress proxy. macOS can't limit a session's memory or processes, so shell commands run only in your own sessions on this host."
+    : "Sessions run directly as you on this Mac, after your consent in the app at each start: approved commands can read and change anything you can. Choose macOS sandbox to isolate them."}>
+    <div className="stack">
+      <fieldset className="stack" disabled={action.busy || !stopped}>
+        <SegmentedControl label="Sandbox" value={choice.sandbox} onChange={change}
+          options={[{ value: "none", label: "None", hint: "Unsandboxed, after your consent" }, { value: "seatbelt", label: "macOS sandbox", hint: "Seatbelt (experimental)" }]} />
+      </fieldset>
+      {!stopped && <span className="small muted">Stop the host to change where its sessions run.</span>}
+      <Feedback {...action} />
+    </div>
+  </Field>;
+}
+
+function WindowsSandboxField({ connection, view, bridge }: { connection: HostView; view: DesktopView; bridge: DesktopBridge }) {
   const action = useAction();
   const choice = connection.windows;
   const setSandbox = bridge.host.setSandbox;

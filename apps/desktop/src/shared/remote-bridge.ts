@@ -78,8 +78,9 @@ export interface DesktopBridge {
     open(id: string): Promise<Outcome>;
     setModels(id: string, models: ModelChoice[] | null): Promise<Outcome>;
     /**
-     * Windows only: where the host's sessions run (WSL2 or native Windows), from its next start; the app asks the owner
-     * first. Absent from apps that predate it.
+     * Where the host's sessions run, from its next start: on Windows WSL2 or native Windows, on macOS macOS's own sandbox
+     * or none. The app asks the owner first, and refuses a choice of another platform's kind. Absent from apps that
+     * predate it; apps that predate the Mac's choice show no `mac` in their view.
      */
     setSandbox?(id: string, choice: SandboxChoice): Promise<Outcome>;
   };

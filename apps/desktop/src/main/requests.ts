@@ -127,7 +127,10 @@ export function parseModels(value: unknown): Parsed<ModelChoice[] | null> {
   return { ok: true, value: [...unique.values()] };
 }
 
-/** Where a Windows host's sessions run, as a page chose it: WSL2 (in a named distribution, or WSL's default) or native. */
+/**
+ * Where a host's sessions run, as a page chose it: on Windows WSL2 (in a named distribution, or WSL's default) or native,
+ * on macOS Seatbelt or none. Which of them suits this computer is the host's to check (HostController.setSandbox).
+ */
 export function parseSandbox(value: unknown): Parsed<SandboxChoice> {
   const choice = parseSandboxChoice(value);
   return choice ? { ok: true, value: choice } : { ok: false, error: "Invalid request." };

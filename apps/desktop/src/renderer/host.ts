@@ -1,4 +1,4 @@
-import { stateLabels, type HostsView, type HostView, type ModelChoice, type Outcome, type PikibunBridge } from "../shared/bridge.js";
+import { stateLabels, type HostsView, type HostView, type ModelChoice, type Outcome, type PikibunBridge, type SandboxChoice } from "../shared/bridge.js";
 import { element, setText } from "./dom.js";
 
 declare global { interface Window { pikibun: PikibunBridge } }
@@ -64,14 +64,42 @@ function isolationText(view: HostView): string {
   return "…";
 }
 
-/** Windows: where the host's sessions run, WSL2 (in which distribution) or native Windows. */
+const sandboxOptions = {
+  windows: [["wsl2", "WSL2 (bubblewrap)"], ["native", "Native Windows (experimental)"]],
+  mac: [["none", "None (unsandboxed, after your consent)"], ["seatbelt", "macOS sandbox (experimental)"]],
+} as const;
+
+/** The Sandbox select's options, of this computer's kind; replaced only when the kind changes. */
+function setSandboxOptions(kind: keyof typeof sandboxOptions): void {
+  if (sandboxSelect.dataset.kind === kind) return;
+  sandboxSelect.dataset.kind = kind;
+  sandboxSelect.replaceChildren(...sandboxOptions[kind].map(([value, text]) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    return option;
+  }));
+}
+
+const macSandboxNote = {
+  seatbelt: "Sessions run in macOS's own Seatbelt sandbox (experimental: macOS 15 or later with the developer tools, xcode-select --install; Prerequisites below lists what is missing), or, while it isn't ready, without one after your consent. Each session sees only its own files and reaches the network only through its egress proxy. macOS can't limit a session's memory or processes, so shell commands run only in your own sessions on this host.",
+  none: "Sessions run directly as you on this Mac, after your consent at each start: approved commands can read and change anything you can. Choose macOS sandbox to isolate them instead.",
+} as const;
+
+/** Windows: where the host's sessions run, WSL2 (in which distribution) or native Windows. macOS: its sandbox or none. */
 function renderSandbox(view: HostsView, connection: HostView): void {
-  const choice = connection.windows;
+  const choice = connection.windows ?? connection.mac;
   element("sandbox-row").hidden = !choice;
   if (!choice) return;
   const stopped = connection.state === "stopped";
+  setSandboxOptions(connection.windows ? "windows" : "mac");
   if (document.activeElement !== sandboxSelect) sandboxSelect.value = choice.sandbox;
   sandboxSelect.disabled = busy || !stopped;
+  if (choice.sandbox === "seatbelt" || choice.sandbox === "none") {
+    element("distro-row").hidden = true;
+    setText(element("sandbox-note"), macSandboxNote[choice.sandbox]);
+    return;
+  }
   const distros = view.wsl?.distros ?? [];
   element("distro-row").hidden = choice.sandbox !== "wsl2";
   const fallback = distros.find(distro => distro.default && distro.version === 2) ?? distros.find(distro => distro.version === 2);
@@ -283,7 +311,9 @@ modelsSave.addEventListener("click", () => {
 modelsPi.addEventListener("click", () => { void act(() => bridge.setModels(id(), null)).then(() => { modelDraft = undefined; }); });
 openAtLogin.addEventListener("change", () => { void act(() => bridge.setOpenAtLogin(openAtLogin.checked)); });
 const chooseSandbox = () => {
-  const choice = sandboxSelect.value === "native" ? { sandbox: "native" as const } : { sandbox: "wsl2" as const, ...(distroSelect.value ? { distro: distroSelect.value } : {}) };
+  const value = sandboxSelect.value;
+  const choice: SandboxChoice = value === "native" || value === "seatbelt" || value === "none" ? { sandbox: value }
+    : { sandbox: "wsl2", ...(distroSelect.value ? { distro: distroSelect.value } : {}) };
   void act(() => bridge.setSandbox(id(), choice));
 };
 sandboxSelect.addEventListener("change", chooseSandbox);

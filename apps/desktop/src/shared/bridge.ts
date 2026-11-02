@@ -42,11 +42,23 @@ export interface ModelChoice { provider: string; modelId: string }
  */
 export type WindowsSandbox = "wsl2" | "native";
 
-export interface SandboxChoice {
+export interface WindowsSandboxChoice {
   sandbox: WindowsSandbox;
   /** WSL2 only: the distribution, else WSL's default WSL2 one. */
   distro?: string;
 }
+
+/**
+ * Whether a Mac host's sessions run in macOS's own Seatbelt sandbox (experimental, as
+ * `pikibun connect --experimental-sandbox`, else unsandboxed with consent while it isn't ready), or without one, with
+ * consent (as `--unsafe-no-sandbox`). Each server's host has its own choice; both share its pairing.
+ */
+export type MacSandbox = "seatbelt" | "none";
+
+export interface MacSandboxChoice { sandbox: MacSandbox }
+
+/** A host's sandbox, of its platform's kind: Windows' on Windows, the Mac's on macOS. */
+export type SandboxChoice = WindowsSandboxChoice | MacSandboxChoice;
 
 export interface WslDistro { name: string; version: number; default: boolean }
 
@@ -67,7 +79,9 @@ export interface HostView {
    */
   running?: { server: string; unsandboxed: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string };
   /** Windows only: where this host's sessions run, WSL2 or native Windows. */
-  windows?: SandboxChoice;
+  windows?: WindowsSandboxChoice;
+  /** macOS only: whether this host's sessions run in macOS's own sandbox. Absent from apps that predate it. */
+  mac?: MacSandboxChoice;
   inspection?: HostInspection;
   inspecting: boolean;
   /** The latest failure, cleared by the next start. */
@@ -139,7 +153,7 @@ export interface PikibunBridge {
     open(id: string): Promise<Outcome>;
     /** The models to offer, or null for Pi's own choice. */
     setModels(id: string, models: ModelChoice[] | null): Promise<Outcome>;
-    /** Windows only: where the host's sessions run, from its next start; refused while it runs. */
+    /** Windows and macOS: where the host's sessions run, from its next start; refused while it runs. */
     setSandbox(id: string, choice: SandboxChoice): Promise<Outcome>;
     setOpenAtLogin(enabled: boolean): Promise<Outcome>;
     onUpdate(listener: (view: HostsView) => void): () => void;

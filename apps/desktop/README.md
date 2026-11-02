@@ -44,10 +44,16 @@ for later. On Windows, each server's host runs its sessions in WSL2 or natively:
   `pikibun connect --state-dir` command that runs the same connection from a terminal. Removing a server stops its host
   and leaves its state directory alone. Pairing codes travel only over the IPC channel: never argv, environment, files
   or logs.
-- macOS has no isolated sandbox, so starting the host asks for consent in a native dialog showing the CLI's own
-  `--unsafe-no-sandbox` warning. Linux uses the bubblewrap sandbox when its prerequisites are installed and asks the
-  same consent otherwise. Windows runs each host in WSL2's bubblewrap sandbox or natively, as its owner chooses
-  ([Windows](#windows)).
+- On macOS each server's host chooses its **Sandbox** (This Mac, or Settings › This Mac in the web app, which asks in a
+  native dialog first), only while it is stopped, from its next start: **None**, the default, where starting the host
+  asks for consent in a native dialog showing the CLI's own `--unsafe-no-sandbox` warning; or **macOS sandbox
+  (experimental)**, where the host asks the connector for macOS's own Seatbelt sandbox (the desktop host's
+  `experimentalSandbox` request, as `pikibun connect --experimental-sandbox`), and, while its prerequisites are missing
+  (macOS 15 or later, the developer tools), offers the same consent naming what is missing. Both use the same connector
+  state and pairing. In the sandbox, as the CLI's, shell commands run only in the host owner's own sessions, since
+  macOS can't limit a group of processes' memory or count. Linux uses the bubblewrap sandbox when its prerequisites are
+  installed and asks the same consent otherwise. Windows runs each host in WSL2's bubblewrap sandbox or natively, as
+  its owner chooses ([Windows](#windows)).
 - Pikibun on this computer runs the local server (`dist/host/desktop-server.mjs`, bundled from
   `apps/server/src/local/desktop.ts`) in a second utility process, with `pikibun serve`'s state
   (`~/.local/share/pikibun/server`), so the two share their data; a kernel lease on that directory (flock or lockf, as

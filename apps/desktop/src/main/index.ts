@@ -15,7 +15,7 @@ import { HostTray, installAppMenu, type MenuActions } from "./menu.js";
 import { DEFAULT_SERVER, parseServerOrigin } from "./origin.js";
 import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseSandbox, parseStartInput, parseString, parseUpload } from "./requests.js";
 import { remoteView } from "./remote-view.js";
-import { PRIMARY_CONNECTION, SettingsStore, type SandboxChoice } from "./settings.js";
+import { PRIMARY_CONNECTION, SettingsStore, type ConnectionSettings, type SandboxChoice } from "./settings.js";
 import { UpdateChecker } from "./updates.js";
 import { utilityHost } from "./utility-host.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
@@ -46,8 +46,12 @@ const smokeDirectory = process.env.PIKIBUN_DESKTOP_SMOKE || undefined;
  */
 const connectionsDirectory = stateDir ? join(dirname(stateDir), "connections") : join(homedir(), ".local", "share", "pikibun", "connections");
 const connectorStateDir = (id: string): string | undefined => id === PRIMARY_CONNECTION ? stateDir : join(connectionsDirectory, id);
-/** A connection's sandbox on Windows, WSL2 unless the owner chose native Windows; undefined elsewhere. */
-const sandboxOf = (choice: SandboxChoice | undefined): SandboxChoice | undefined => windowsHost ? choice ?? { sandbox: "wsl2" } : undefined;
+/**
+ * A connection's sandbox: on Windows WSL2 unless the owner chose native Windows; on macOS none unless they chose macOS's
+ * own (experimental) sandbox, as Macs ran before they had the choice; undefined elsewhere.
+ */
+const sandboxOf = (connection: Readonly<ConnectionSettings> | undefined): SandboxChoice | undefined =>
+  windowsHost ? connection?.windows ?? { sandbox: "wsl2" } : mac ? connection?.mac ?? { sandbox: "none" } : undefined;
 const connectCommandFor = (id: string, server: string, sandbox: SandboxChoice | undefined) => connectCommand({
   server, sandbox, stateDir: connectorStateDir(id), wslStateDir: wslStateDir(id, id === PRIMARY_CONNECTION), home: homedir(), windows: windowsHost,
 });
@@ -132,17 +136,19 @@ function main(): void {
   let publish = () => {};
   const createHost = (id: string): Host => {
     const directory = connectorStateDir(id);
-    const sandbox = () => sandboxOf(settings.connection(id)?.windows);
+    const sandbox = () => sandboxOf(settings.connection(id));
     const controller = new HostController({
       id, settings, fixtureModels, command: server => connectCommandFor(id, server, sandbox()),
-      ...(windowsHost ? { sandbox } : {}),
+      ...(windowsHost || mac ? { sandbox } : {}),
       confirmUnsandboxed: (warning, server, missing) => confirm(hostWindow, {
         type: "warning", buttons: ["Cancel", "Run Unsandboxed"], defaultId: 0, cancelId: 0, noLink: true,
         title: "Run without a sandbox?",
         message: missing.length
           ? `${mac ? "This Mac" : "This computer"}'s sandbox isn't ready. Run ${hostLabel(server)}'s agent work directly on it?`
-          : `${mac ? "This Mac" : "This computer"} has no isolated sandbox. Run ${hostLabel(server)}'s agent work directly on it?`,
-        detail: `${missing.length ? `The sandbox needs: ${missing.join("; ")}.\n\n` : ""}${warning.trim()}`,
+          : mac ? `This Mac runs ${hostLabel(server)}'s host without a sandbox. Run its agent work directly on this Mac?`
+          : `This computer has no isolated sandbox. Run ${hostLabel(server)}'s agent work directly on it?`,
+        detail: `${missing.length ? `The sandbox needs: ${missing.join("; ")}.\n\n` : ""}${warning.trim()}${mac && !missing.length
+          ? `\n\nTo isolate it instead, stop here and choose "macOS sandbox (experimental)" under Sandbox in ${hostTitle}.` : ""}`,
       }),
     });
     /** A utility process here, or, for a Windows host in WSL2, the host inside the chosen distribution. */
@@ -467,22 +473,24 @@ function main(): void {
     const models = parseModels(call.models);
     return models.ok ? target.controller.setModels(models.value) : models;
   })(payload));
-  // Where a Windows host's sessions run: the page's choice, once the owner agrees in a native dialog.
+  // Where a Windows or Mac host's sessions run: the page's choice, once the owner agrees in a native dialog.
   handleRemote(remoteChannels.hostSandbox, (origin, window, payload) => forConnection(["choice"], async (target, call) => {
-    const choice = parseSandbox(call.choice);
-    if (!choice.ok) return choice;
-    const refusal = target.controller.sandboxRefusal();
+    const parsed = parseSandbox(call.choice);
+    if (!parsed.ok) return parsed;
+    const choice = parsed.value;
+    const refusal = target.controller.sandboxChoiceRefusal(choice);
     if (refusal) return { ok: false as const, error: refusal };
-    const current = target.controller.view().windows;
-    if (current?.sandbox === choice.value.sandbox && (choice.value.sandbox !== "wsl2" || current.distro === choice.value.distro)) return { ok: true as const };
-    const where = choice.value.sandbox === "native" ? "natively on Windows" : `in WSL2${choice.value.distro ? ` (${choice.value.distro})` : ""}`;
-    if (!await ask(window, origin, `Run ${hostLabel(target.controller.server)}'s sessions ${where}?`,
-      choice.value.sandbox === "native"
-        ? "From the host's next start, sessions run in Windows' own sandbox, which is experimental, or without one if it isn't ready, after your consent. Native Windows has its own pairing."
-        : "From the host's next start, sessions run in WSL2's bubblewrap sandbox, with WSL2's Pi configuration and its own pairing.", "Change")) {
-      return { ok: false as const, error: "Not changed." };
-    }
-    return target.controller.setSandbox(choice.value);
+    if (target.controller.sameSandbox(choice)) return { ok: true as const };
+    const server = hostLabel(target.controller.server);
+    const [question, detail] = choice.sandbox === "native"
+      ? [`Run ${server}'s sessions natively on Windows?`, "From the host's next start, sessions run in Windows' own sandbox, which is experimental, or without one if it isn't ready, after your consent. Native Windows has its own pairing."]
+      : choice.sandbox === "wsl2"
+      ? [`Run ${server}'s sessions in WSL2${choice.distro ? ` (${choice.distro})` : ""}?`, "From the host's next start, sessions run in WSL2's bubblewrap sandbox, with WSL2's Pi configuration and its own pairing."]
+      : choice.sandbox === "seatbelt"
+      ? [`Run ${server}'s sessions in macOS's own sandbox?`, "From the host's next start, sessions run in macOS's Seatbelt sandbox, which is experimental, or without one if it isn't ready, after your consent. Shell commands then run only in your own sessions on this host."]
+      : [`Run ${server}'s sessions without a sandbox?`, "From the host's next start, agent work runs directly as you on this Mac, after your consent at each start."];
+    if (!await ask(window, origin, question, detail, "Change")) return { ok: false as const, error: "Not changed." };
+    return target.controller.setSandbox(choice);
   })(payload));
   // A page pairs only the connection to its own server, with a pairing it just made for its signed-in user.
   handleRemote(remoteChannels.hostPairHere, async (origin, window, payload): Promise<Outcome> => {
