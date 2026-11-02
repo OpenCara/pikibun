@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
-import { AssistantEntry, createRegistry, defineExtension, Harness, MemoryStorage, ToolResultEntry, type ToolExecutionResult } from "@earendil-works/pi-durable";
-import { buildExtension, resolveSettings, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
-import { loadExtensions } from "../apps/runner/src/extensions/load.js";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createRegistry, defineExtension, Harness, MemoryStorage, ToolResultEntry, type ToolExecutionResult } from "@earendil-works/pi-durable";
+import { addedPrompt, ExtensionPrompts, SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
+import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
-import { hostExtensionApplies, parseHostExtensionsConfig, parseHostExtensionSummaries } from "../packages/shared/src/host-extensions.js";
+import { extensionAvailability, extensionPackageKey, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
+  sessionExtensions, type ExtensionSettings, type InstalledExtension } from "../packages/shared/src/host-extensions.js";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -20,154 +22,139 @@ async function directory(t: test.TestContext): Promise<string> {
   return path;
 }
 
-/** A store whose sources are the given local modules, by file name. */
-async function storeWith(t: test.TestContext, modules: Record<string, string>): Promise<ExtensionStore> {
+/** A store whose npm "installs" copy a package from `packages`, by name. */
+async function storeWith(t: test.TestContext, packages: Record<string, Record<string, string>> = {}): Promise<{ store: ExtensionStore; root: string }> {
   const root = await directory(t);
-  const store = new ExtensionStore(join(root, "state", "extensions"), async () => { throw new Error("no npm in tests"); });
-  for (const [name, source] of Object.entries(modules)) {
-    const file = join(root, name);
-    await writeFile(file, source);
-    await store.add(parseExtensionSource(file));
-  }
-  return store;
+  const store = new ExtensionStore(join(root, "state", "extensions"), async (args, cwd) => {
+    const spec = args.at(-1)!;
+    const name = spec.slice(0, spec.lastIndexOf("@"));
+    const files = packages[name];
+    if (!files) throw new Error(`no package ${name}`);
+    for (const [file, text] of Object.entries(files)) {
+      await mkdir(join(cwd, "node_modules", name, file, ".."), { recursive: true });
+      await writeFile(join(cwd, "node_modules", name, file), text);
+    }
+    const manifest = JSON.parse(await readFile(join(cwd, "package.json"), "utf8"));
+    manifest.dependencies[name] = spec.slice(spec.lastIndexOf("@") + 1);
+    await writeFile(join(cwd, "package.json"), JSON.stringify(manifest));
+  });
+  return { store, root };
 }
 
-test("sources are pinned: exact npm versions, full Git commits over https, or local paths", async t => {
-  assert.deepEqual(parseExtensionSource("npm:@acme/search@1.2.3"), { kind: "npm", package: "@acme/search", version: "1.2.3" });
-  assert.throws(() => parseExtensionSource("npm:@acme/search@^1.2.3"), /exact version/);
-  assert.throws(() => parseExtensionSource("npm:@acme/search"), /exact version/);
-  assert.throws(() => parseExtensionSource("npm:@acme/search@latest"), /exact version/);
+test("sources are pinned and normalized; a workspace uses one version of each package", () => {
+  assert.equal(normalizeExtensionSource("npm:@acme/search@1.2.3"), "npm:@acme/search@1.2.3");
   const commit = "0123456789abcdef0123456789abcdef01234567";
-  assert.deepEqual(parseExtensionSource(`git:github.com/acme/search@${commit}`), { kind: "git", url: "https://github.com/acme/search", commit });
-  assert.throws(() => parseExtensionSource("git:github.com/acme/search@main"), /full commit/);
-  assert.throws(() => parseExtensionSource(`git:https://user:token@github.com/acme/search@${commit}`), /without credentials/);
-  const root = await directory(t);
-  await writeFile(join(root, "local.js"), "export default () => {};");
-  assert.deepEqual(parseExtensionSource("./local.js", root), { kind: "local", path: join(root, "local.js") });
-  assert.throws(() => parseExtensionSource("./missing.js", root), /No such file/);
+  assert.equal(normalizeExtensionSource(`git:github.com/acme/search.git@${commit}`), `git:https://github.com/acme/search@${commit}`);
+  assert.equal(extensionPackageKey(`git:https://github.com/acme/search@${commit}`), "git:https://github.com/acme/search");
+  for (const bad of ["npm:@acme/search@^1.2.3", "npm:@acme/search", "npm:@acme/search@latest", "git:github.com/acme/search@main",
+    `git:https://user:token@github.com/acme/search@${commit}`, "http://example.com/x", "./local.ts"]) {
+    assert.throws(() => normalizeExtensionSource(bad), /./, bad);
+  }
+  assert.deepEqual(parseWorkspaceExtensions([{ source: "npm:a@1.0.0" }]), [{ source: "npm:a@1.0.0", enabled: true, tools: "approval", settings: {} }]);
+  assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0" }, { source: "npm:a@2.0.0" }]), /one version/);
+  assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0", settings: { key: { nested: true } } }]), /true, false or text/);
+  assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0", secret: "x" }]), /Invalid extension/);
 });
 
-test("the connector loads each extension once and advertises what it offers", async t => {
-  const store = await storeWith(t, {
-    "search.mjs": `export default function (pi) {
-      pi.describe("Searches the team's index.");
-      pi.settings(pi.Type.Object({ endpoint: pi.Type.String({ default: "https://search.example.com" }) }));
-      pi.registerTool({ name: "team_search", description: "Search the index.", parameters: pi.Type.Object({ query: pi.Type.String() }),
-        execute: async args => "found " + args.query });
-      pi.on("before_agent_start", () => "Use team_search for internal questions.");
-      pi.on("tool_call", () => undefined);
-    }`,
-    "clash.mjs": `export default function (pi) { pi.registerTool({ name: "bash", description: "x", parameters: {}, execute: async () => "" }); }`,
-    "repeat.mjs": `export default function (pi) { pi.registerTool({ name: "team_search", description: "x", parameters: { type: "object" }, execute: async () => "" }); }`,
-    "unknown.mjs": `export default function (pi) { pi.on("session_start", () => {}); }`,
-    "nofactory.mjs": `export const tool = 1;`,
-    "late.mjs": `export default function (pi) { setTimeout(() => pi.registerTool({}), 0); }`,
+test("a session runs with the workspace's enabled extensions its host has at that version, and its owner's dev extensions", () => {
+  const installed: InstalledExtension[] = [
+    { source: "npm:a@1.0.0", dev: false, modules: [] }, { source: "npm:b@2.0.0", dev: false, modules: [] },
+    { source: "npm:broken@1.0.0", dev: false, modules: [], error: "no" }, { source: "local:/home/alice/dev.ts", dev: true, modules: [] },
+  ];
+  const workspace = parseWorkspaceExtensions([{ source: "npm:a@1.0.0" }, { source: "npm:b@1.0.0" }, { source: "npm:c@1.0.0" },
+    { source: "npm:broken@1.0.0" }]);
+  assert.deepEqual(workspace.map(item => extensionAvailability(item.source, installed).status), ["installed", "other-version", "missing", "installed"]);
+  const owner = sessionExtensions(workspace, installed, { ownerId: "alice", connectorOwnerId: "alice" });
+  assert.deepEqual(owner.map(item => [item.source, item.dev]), [["npm:a@1.0.0", false], ["local:/home/alice/dev.ts", true]]);
+  const member = sessionExtensions(workspace, installed, { ownerId: "bob", connectorOwnerId: "alice" });
+  assert.deepEqual(member.map(item => item.source), ["npm:a@1.0.0"], "dev extensions run only in the host owner's own sessions");
+  const disabled = sessionExtensions([{ ...workspace[0]!, enabled: false }], installed, { ownerId: "bob", connectorOwnerId: "alice" });
+  assert.deepEqual(disabled, []);
+});
+
+test("Pi extensions load through Pi's own loader, and the host reports what each offers, does nothing with, or ignores", async t => {
+  const { store, root } = await storeWith(t, {
+    "pi-search": {
+      "package.json": JSON.stringify({ name: "pi-search", version: "1.0.0", description: "Searches.", pi: { extensions: ["./src/index.ts"] } }),
+      "src/index.ts": `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        import { Type } from "typebox";
+        export default function (pi: ExtensionAPI) {
+          pi.registerFlag("endpoint", { description: "Where to search", type: "string", default: "https://search.example.com" });
+          pi.registerTool({ name: "team_search", label: "Search", description: "Search the index.", parameters: Type.Object({ query: Type.String() }),
+            async execute(_id, params) { return { content: [{ type: "text", text: "found " + params.query }], details: undefined }; } });
+          pi.registerTool({ name: "bash", label: "Bash", description: "Mine.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+          pi.registerCommand("search", { description: "x", handler: async () => {} });
+          pi.registerProvider("proxy", { baseUrl: "https://proxy.example.com", api: "openai-completions", apiKey: "x", models: [] });
+          pi.on("tool_call", () => undefined);
+          pi.on("input", () => undefined);
+        }`,
+    },
+    "not-an-extension": { "package.json": JSON.stringify({ name: "not-an-extension", version: "1.0.0" }), "index.js": "module.exports = () => {};" },
   });
-  const loaded = await loadExtensions(store);
-  const byName = Object.fromEntries(loaded.map(item => [item.summary.name, item.summary]));
-  assert.deepEqual(byName.search, {
-    name: "search", source: `local:${store.location((await store.list())[0]!)}`, description: "Searches the team's index.",
-    tools: [{ name: "team_search", description: "Search the index." }], events: ["before_agent_start", "tool_call"],
-    settingsSchema: { type: "object", properties: { endpoint: { type: "string", default: "https://search.example.com" } }, required: ["endpoint"] },
-  });
-  assert.match(byName.clash!.error!, /one of Pikibun's own tools/);
-  assert.match(byName.repeat!.error!, /Another extension has a tool named team_search/);
-  assert.match(byName.unknown!.error!, /no "session_start" event/);
-  assert.match(byName.nofactory!.error!, /default export must be a function/);
-  assert.equal(byName.late!.error, undefined, "registering late is ignored, never thrown from a timer");
-  assert.deepEqual(byName.late!.tools, []);
-  assert.ok(loaded.filter(item => item.summary.error).every(item => !item.factory), "a failed extension never runs");
-  // What the control plane accepts is what the connector advertises.
-  assert.deepEqual(parseHostExtensionSummaries(loaded.map(item => item.summary)), loaded.map(item => item.summary));
+  await store.add(parseExtensionSource("npm:pi-search@1.0.0"));
+  await store.add(parseExtensionSource("npm:not-an-extension@1.0.0"));
+  await writeFile(join(root, "dev.ts"), `export default function (pi) { pi.on("session_start", () => {}); }`);
+  await store.add(parseExtensionSource(join(root, "dev.ts")));
+  await writeFile(join(root, "broken.ts"), `export default function (pi) { throw new Error("broken on purpose"); }`);
+  await store.add(parseExtensionSource(join(root, "broken.ts")));
+  const loaded = await loadInstalled(store);
+  const [search, notExtension, dev, broken] = loaded.map(item => item.summary);
+  assert.deepEqual(search, { source: "npm:pi-search@1.0.0", dev: false, name: "pi-search", version: "1.0.0", description: "Searches.", modules: [{
+    path: "src/index.ts", tools: [{ name: "team_search", description: "Search the index." }], events: ["tool_call"],
+    flags: [{ name: "endpoint", type: "string", description: "Where to search", default: "https://search.example.com" }],
+    noops: ["/search"], ignored: ["tool bash (one of Pikibun's own)", "input event", "provider proxy"],
+  }] });
+  assert.match(notExtension!.error!, /isn't a Pi extension package/);
+  assert.equal(dev!.dev, true);
+  assert.deepEqual(dev!.modules[0]!.events, ["session_start"]);
+  assert.match(broken!.modules[0]!.error!, /broken on purpose/);
+  // What the control plane accepts is what the connector reports.
+  const report = { installed: loaded.map(item => item.summary), remoteInstalls: true };
+  assert.deepEqual(parseHostExtensionsReport(report), report);
+  // Versions sit side by side; removing names one.
+  await assert.rejects(store.add(parseExtensionSource("npm:missing@1.0.0")), /no package missing/);
+  assert.equal((await store.list()).length, 4, "a failed install leaves nothing behind");
+  await store.remove("pi-search");
+  assert.deepEqual((await store.list()).map(item => item.source), ["npm:not-an-extension@1.0.0", `local:${join(root, "dev.ts")}`, `local:${join(root, "broken.ts")}`]);
 });
 
-test("a package names its extensions in package.json, or keeps them in extensions/", async t => {
-  const root = await directory(t);
-  const store = new ExtensionStore(join(root, "state"), async () => { throw new Error("no npm"); });
-  const declared = join(root, "declared");
-  await mkdir(join(declared, "src"), { recursive: true });
-  await writeFile(join(declared, "package.json"), JSON.stringify({ name: "@acme/declared", version: "2.0.0", pikibun: { extensions: ["./src/main.mjs"] } }));
-  await writeFile(join(declared, "src", "main.mjs"), "export default pi => pi.describe('declared');");
-  const folder = join(root, "folder");
-  await mkdir(join(folder, "extensions", "beta"), { recursive: true });
-  await writeFile(join(folder, "package.json"), JSON.stringify({ name: "folder", version: "0.1.0" }));
-  await writeFile(join(folder, "extensions", "alpha.mjs"), "export default pi => pi.describe('alpha');");
-  await writeFile(join(folder, "extensions", "beta", "index.mjs"), "export default pi => pi.describe('beta');");
-  await store.add(parseExtensionSource(declared));
-  await store.add(parseExtensionSource(folder));
-  const loaded = await loadExtensions(store);
-  assert.deepEqual(loaded.map(item => [item.summary.name, item.summary.version, item.summary.description, item.summary.error]), [
-    ["@acme/declared", "2.0.0", "declared", undefined],
-    ["folder/alpha", "0.1.0", "alpha", undefined],
-    ["folder/beta", "0.1.0", "beta", undefined],
-  ]);
-  await assert.rejects(store.add(parseExtensionSource(folder)), /already installed/);
-  await store.remove(folder);
-  assert.deepEqual((await store.list()).map(item => item.path), [declared]);
+test("system prompt changes become the text they add", () => {
+  assert.equal(addedPrompt("Base.", "Base.\n\nExtra."), "Extra.");
+  assert.equal(addedPrompt("A\nB", "A\nInserted\nB"), "Inserted");
+  assert.equal(addedPrompt("Same", "Same"), "");
 });
 
-test("settings: an extension's defaults fill in, and settings that don't match its schema stop it", () => {
-  const schema = { type: "object", properties: { endpoint: { type: "string", default: "https://a.example" }, limit: { type: "number" } } } as never;
-  assert.deepEqual(resolveSettings("x", schema, {}), { endpoint: "https://a.example" });
-  assert.deepEqual(resolveSettings("x", schema, { endpoint: "https://b.example", limit: 3 }), { endpoint: "https://b.example", limit: 3 });
-  assert.throws(() => resolveSettings("x", schema, { limit: "many" }), /don't match/);
-  assert.deepEqual(parseHostExtensionsConfig({ search: { enabled: true, settings: { a: 1 } } }),
-    { search: { enabled: true, scope: "owner", tools: "approval", settings: { a: 1 } } });
-  assert.throws(() => parseHostExtensionsConfig({ search: { enabled: true, secret: "x" } }), /Invalid extension setting/);
-  assert.throws(() => parseHostExtensionsConfig({ "Bad Name": {} }), /Invalid extension name/);
-});
-
-test("scope: the owner's sessions, sessions on the host, or every session", () => {
-  const owner = { ownerId: "alice", connectorOwnerId: "alice", onHost: false };
-  const member = { ownerId: "bob", connectorOwnerId: "alice", onHost: false };
-  const onHost = { ownerId: "bob", connectorOwnerId: "alice", onHost: true };
-  const set = (scope: "owner" | "host" | "all", enabled = true) => ({ enabled, scope, tools: "approval" as const, settings: {} });
-  assert.deepEqual([owner, member, onHost].map(session => hostExtensionApplies(set("owner"), session)), [true, false, false]);
-  assert.deepEqual([owner, member, onHost].map(session => hostExtensionApplies(set("host"), session)), [false, false, true]);
-  assert.deepEqual([owner, member, onHost].map(session => hostExtensionApplies(set("all"), session)), [true, true, true]);
-  assert.equal(hostExtensionApplies(set("all", false), owner), false);
-  assert.equal(hostExtensionApplies(undefined, owner), false, "an extension without a setting is off");
-});
-
-test("in a session, an extension's tool, prompt and hooks run while it applies", async t => {
-  const store = await storeWith(t, {
-    "shout.mjs": `export default function (pi) {
-      const settings = pi.settings(pi.Type.Object({ suffix: pi.Type.String({ default: "!" }) }));
-      pi.registerTool({ name: "shout", description: "Shout text.", parameters: pi.Type.Object({ text: pi.Type.String() }),
-        execute: async (args, ctx) => args.text.toUpperCase() + settings().suffix + " in " + ctx.session.id });
-      pi.on("before_agent_start", ctx => "Shout for " + ctx.session.owner.id + ".");
-      pi.on("tool_call", call => call.name === "shout" && call.arguments.text === "forbidden" ? { block: "Not that." } : undefined);
-      pi.on("tool_result", (call, result) => ({ content: [{ type: "text", text: result.content[0].text + " (checked)" }] }));
-    }`,
-  });
-  const [loaded] = await loadExtensions(store);
-  assert.equal(loaded!.summary.error, undefined);
-  let active = true;
+/** A session's extensions on a faux model that calls `tool` with the user's text, then answers with the tool's result. */
+async function session(t: test.TestContext, source: string, root: string, options: { tool: string; settings?: ExtensionSettings; active?: () => boolean }) {
+  const store = new ExtensionStore(join(root, "state"));
+  await store.add(parseExtensionSource(source));
+  const loaded = await loadInstalled(store);
+  assert.equal(loaded[0]!.summary.error, undefined);
   const ran: string[] = [];
+  const warnings: string[] = [];
+  const runtime = await ModelRuntime.create({ authPath: join(root, "auth.json"), modelsPath: join(root, "models.json"), refreshOnCreate: false, allowModelNetwork: false } as never);
   const host: ExtensionHost = {
-    session: { id: "session-1", workspaceId: "workspace", owner: { id: "alice" }, onHost: false, directory: "/tmp/session-1" },
-    state: async () => ({ active, settings: { suffix: "?!" } }),
-    runTool: async (call, execute) => { ran.push(`${call.extension}/${call.tool} ${JSON.stringify(call.arguments)}`); return execute(call.signal); },
-    hookTimeoutMs: 1000,
-    warn: () => {},
+    directory: root, modelRegistry: new ModelRegistry(runtime), model: () => undefined,
+    state: async () => ({ active: options.active?.() ?? true, settings: options.settings ?? {} }),
+    runTool: async (call, execute): Promise<ToolExecutionResult> => { ran.push(`${call.tool} ${JSON.stringify(call.arguments)}`); return execute(call.signal); },
+    hookTimeoutMs: 2000, warn: (_source, message) => { warnings.push(message); },
   };
-  const built = await buildExtension(loaded!, host);
-  assert.ok(built);
+  const extensions = await SessionExtensions.open(loaded, host);
+  t.after(() => extensions.shutdown());
   const prompts: string[] = [];
   const faux = fauxProvider({ models: [{ id: "faux-1", name: "faux" }] });
   const respond: FauxResponseFactory = async request => {
     faux.appendResponses([respond]);
-    // The system prompt is the sections its system messages show, each a patch of the ones before (null removes one).
     const shown = new Map<string, string>();
     for (const message of request.messages) {
       if (message.role !== "system" || !("sections" in message) || !message.sections) continue;
       for (const [key, value] of Object.entries(message.sections as Record<string, string | null>)) value === null ? shown.delete(key) : shown.set(key, value);
     }
     prompts.push([...shown.values()].join("\n"));
-    const last = request.messages.at(-1);
+    const last = request.messages.findLast(message => message.role !== "system");
     if (last?.role === "toolResult") return fauxAssistantMessage(`done: ${last.content.map(part => part.type === "text" ? part.text : "").join("")}`);
     const text = last?.role === "user" ? (typeof last.content === "string" ? last.content : "") : "";
-    return fauxAssistantMessage(fauxToolCall("shout", { text }), { stopReason: "toolUse" });
+    return fauxAssistantMessage(fauxToolCall(options.tool, { text }), { stopReason: "toolUse" });
   };
   faux.setResponses([respond]);
   const models = createModels();
@@ -175,63 +162,71 @@ test("in a session, an extension's tool, prompt and hooks run while it applies",
   const registry = createRegistry();
   const workspace = defineExtension({ name: "workspace-tools", tools: [] });
   registry.install(workspace);
-  registry.install(built.extension);
+  for (const extension of extensions.extensions) registry.install(extension.extension);
   const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
   t.after(() => harness.close(context));
-  const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" }, extensions: [workspace, built.extension], tools: built.tools } });
+  const root_ = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" },
+    extensions: [workspace, ...extensions.extensions.map(item => item.extension)], tools: extensions.extensions.flatMap(item => item.tools) } });
+  await extensions.sessionStart();
   const answer = async (content: string) => {
-    const settled = await (await root.submit({ type: "input", content }, context)).wait(context);
+    // As Session.applyOptions does when a message starts.
+    const added = await extensions.beforeAgentStart(content, undefined);
+    await root_.commit(async tx => { (await tx.doc(ExtensionPrompts, root_.id)).prompts = added; }, context);
+    const settled = await (await root_.submit({ type: "input", content }, context)).wait(context);
     assert.equal(settled.status, "done");
-    const entries = (await root.context(context)).entries;
-    const results = entries.filter(entry => entry.kind === ToolResultEntry.kind);
-    return { last: entries.findLast(entry => entry.kind === AssistantEntry.kind), result: results.at(-1) };
+    return (await root_.context(context)).entries.filter(entry => entry.kind === ToolResultEntry.kind).at(-1);
   };
-  const first = await answer("hello");
-  assert.match(JSON.stringify(first.result), /HELLO\?! in session-1 \(checked\)/);
-  assert.match(prompts.at(-1)!, /<host_extension name="shout">\nShout for alice\.\n<\/host_extension>/);
-  assert.deepEqual(ran, ['shout/shout {"text":"hello"}']);
-  const blocked = await answer("forbidden");
-  assert.match(JSON.stringify(blocked.result), /Not that\./);
-  assert.equal(ran.length, 1, "a blocked call never reaches the session's gate");
+  return { answer, ran, warnings, prompts };
+}
+
+test("in a session, a Pi extension's tool, flags, prompt and hooks run while it applies", async t => {
+  const root = await directory(t);
+  await writeFile(join(root, "shout.ts"), `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+    import { Type } from "typebox";
+    export default function (pi: ExtensionAPI) {
+      pi.registerFlag("suffix", { type: "string", default: "!" });
+      let starts = 0;
+      pi.on("session_start", () => { starts++; });
+      pi.registerTool({ name: "shout", label: "Shout", description: "Shout text.", parameters: Type.Object({ text: Type.String() }),
+        async execute(id, params, signal, onUpdate, ctx) {
+          const ui = await ctx.ui.confirm("Really?", "Shout?");
+          return { content: [{ type: "text", text: params.text.toUpperCase() + pi.getFlag("suffix") + " starts=" + starts + " ui=" + ui + " hasUI=" + ctx.hasUI }], details: undefined };
+        } });
+      pi.on("before_agent_start", (event) => ({ systemPrompt: event.systemPrompt + "\\n\\nShout about: " + event.prompt }));
+      pi.on("tool_call", (event) => {
+        if (event.toolName === "shout" && event.input.text === "forbidden") return { block: true, reason: "Not that." };
+        if (event.toolName === "shout" && event.input.text === "quiet") event.input.text = "loud";
+      });
+      pi.on("tool_result", (event) => ({ content: [{ type: "text", text: event.content[0].text + " (checked)" }] }));
+      pi.registerCommand("shout", { description: "x", handler: async (_args, ctx) => { ctx.ui.notify("hi"); } });
+    }`);
+  let active = true;
+  const s = await session(t, join(root, "shout.ts"), root, { tool: "shout", settings: { suffix: "?!" }, active: () => active });
+  const first = await s.answer("hello");
+  assert.match(JSON.stringify(first), /HELLO\?! starts=1 ui=false hasUI=false \(checked\)/, "flags come from the workspace's settings; the UI is print mode's");
+  assert.match(s.prompts.at(-1)!, /<extension source="local:[^"]+shout\.ts">\nShout about: hello\n<\/extension>/);
+  assert.deepEqual(s.ran, ['shout {"text":"hello"}']);
+  assert.match(JSON.stringify(await s.answer("forbidden")), /Not that\./);
+  assert.equal(s.ran.length, 1, "a blocked call never reaches the session's gate");
+  assert.match(JSON.stringify(await s.answer("quiet")), /LOUD/, "a tool_call handler changes the call's input");
+  assert.deepEqual(s.ran.at(-1), 'shout {"text":"loud"}');
   active = false;
-  const off = await answer("again");
-  assert.match(JSON.stringify(off.result), /turned off for this session/);
-  assert.doesNotMatch(prompts.at(-1)!, /host_extension/, "its prompt leaves with it");
-  assert.equal(ran.length, 1);
+  assert.match(JSON.stringify(await s.answer("again")), /no longer applies/);
+  assert.doesNotMatch(s.prompts.at(-1)!, /<extension/, "its prompt leaves with it");
+  assert.equal(s.ran.length, 2);
 });
 
-test("a hook that fails is skipped, except a tool_call guard, which blocks the call", async t => {
-  const store = await storeWith(t, {
-    "broken.mjs": `export default function (pi) {
-      pi.registerTool({ name: "noop", description: "Nothing.", parameters: pi.Type.Object({}), execute: async () => "ok" });
+test("an extension's handler that fails is skipped, except a tool_call guard, which blocks the call", async t => {
+  const root = await directory(t);
+  await writeFile(join(root, "broken.ts"), `import { Type } from "typebox";
+    export default function (pi) {
+      pi.registerTool({ name: "noop", label: "Noop", description: "Nothing.", parameters: Type.Object({ text: Type.String() }),
+        async execute() { return { content: [{ type: "text", text: "ok" }], details: undefined }; } });
       pi.on("before_agent_start", () => { throw new Error("prompt broke"); });
       pi.on("tool_call", () => { throw new Error("guard broke"); });
-    }`,
-  });
-  const [loaded] = await loadExtensions(store);
-  const warnings: string[] = [];
-  const built = (await buildExtension(loaded!, {
-    session: { id: "s", workspaceId: "w", owner: { id: "alice" }, onHost: false, directory: "/tmp/s" },
-    state: async () => ({ active: true, settings: {} }),
-    runTool: async (_call, execute): Promise<ToolExecutionResult> => execute(new AbortController().signal),
-    hookTimeoutMs: 1000,
-    warn: (name, message) => { warnings.push(`${name}: ${message}`); },
-  }))!;
-  const faux = fauxProvider({ models: [{ id: "faux-1", name: "faux" }] });
-  const respond: FauxResponseFactory = async request => {
-    faux.appendResponses([respond]);
-    return request.messages.at(-1)?.role === "toolResult" ? fauxAssistantMessage("done") : fauxAssistantMessage(fauxToolCall("noop", {}), { stopReason: "toolUse" });
-  };
-  faux.setResponses([respond]);
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const registry = createRegistry();
-  registry.install(built.extension);
-  const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
-  t.after(() => harness.close(context));
-  const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" }, extensions: [built.extension], tools: built.tools } });
-  assert.equal((await (await root.submit({ type: "input", content: "go" }, context)).wait(context)).status, "done");
-  const result = (await root.context(context)).entries.findLast(entry => entry.kind === ToolResultEntry.kind);
-  assert.match(JSON.stringify(result), /guard broke/);
-  assert.deepEqual(warnings, ["broken: before_agent_start: prompt broke", "broken: before_agent_start: prompt broke"]);
+    }`);
+  const s = await session(t, join(root, "broken.ts"), root, { tool: "noop" });
+  assert.match(JSON.stringify(await s.answer("go")), /guard broke/);
+  assert.deepEqual(s.ran, []);
+  assert.ok(s.warnings.some(warning => /prompt broke/.test(warning)));
 });

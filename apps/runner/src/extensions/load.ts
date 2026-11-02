@@ -1,206 +1,182 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
-import { Type, type TSchema } from "@earendil-works/pi-ai";
-import { HOST_EXTENSION_NAME, HOST_EXTENSION_TOOL_NAME, hostExtensionEvents, hostExtensionLimits, isJsonValue, type HostExtensionEvent,
-  type HostExtensionSummary, type JsonObject } from "../../../../packages/shared/src/host-extensions.js";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { glob } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { createExtensionRuntime, type Extension as PiExtension, type ExtensionRuntime, type LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
+import type { EventBus } from "@earendil-works/pi-coding-agent";
+import { extensionLimits, type ExtensionModuleSummary, type InstalledExtension } from "../../../../packages/shared/src/host-extensions.js";
 import { toolNames } from "../../../../packages/shared/src/types.js";
-import type { ExtensionHandlers, ExtensionTool, PikibunExtensionAPI, PikibunExtensionFactory } from "./api.js";
 import type { ExtensionStore, InstalledSource } from "./store.js";
 
 /*
- * Loads the host's installed extensions once, when the connector starts: each module's default export is a factory
- * (PikibunExtensionAPI). Running it once with a recording API tells what the extension offers, which the connector
- * advertises; each session runs it again for its own registrations (adapter.ts). An extension that fails to load is
- * advertised with its error and never runs.
+ * Loads Pi extensions through pi-coding-agent's own loader (docs/design/host-extensions.md): TypeScript, `pi` manifests and
+ * the modules Pi provides its extensions (pi-coding-agent, pi-ai, pi-tui, typebox) work as they do in Pi. The connector
+ * loads every installed source once to report what it offers; each session loads the ones it runs with again, so their
+ * module state is the session's own (adapter.ts).
  */
 
-const ENTRY = /\.(?:m?js|ts|mts)$/;
-const FACTORY_TIMEOUT_MS = 10_000;
+/** Pi events Pikibun runs (adapter.ts). Others an extension handles are reported as ignored. */
+export const supportedEvents = new Set(["session_start", "session_shutdown", "before_agent_start", "agent_start", "agent_end", "agent_settled",
+  "turn_start", "turn_end", "message_end", "tool_call", "tool_result", "tool_execution_start", "tool_execution_end", "context",
+  "context_with_system", "agent_before_settle", "session_before_compact"]);
 
-/** What one run of a factory registered. */
-export interface Registrations {
-  description?: string;
-  settingsSchema?: TSchema;
-  tools: ExtensionTool[];
-  handlers: { [Event in HostExtensionEvent]?: ExtensionHandlers[Event][] };
+interface PiLoader {
+  loadExtensions(paths: string[], cwd: string, eventBus?: EventBus, runtime?: ExtensionRuntime): Promise<LoadExtensionsResult>;
 }
 
-export interface LoadedExtension {
-  summary: HostExtensionSummary;
-  /** Absent for one that failed to load. */
-  factory?: PikibunExtensionFactory;
+let internals: Promise<PiLoader> | undefined;
+/**
+ * pi-coding-agent's `loadExtensions`, which loads the given files only. Its exported `discoverAndLoadExtensions` also
+ * loads `<cwd>/.pi/extensions`, which in a session's worktree would be the repository's code, so it is never used.
+ */
+export function piLoader(): Promise<PiLoader> {
+  internals ??= import(new URL("./core/extensions/loader.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href) as Promise<PiLoader>;
+  return internals;
 }
 
-/** Runs `factory` with an API that records what it registers. Throws what the extension did wrong. */
-export async function register(name: string, factory: PikibunExtensionFactory, settings: () => unknown = () => ({}),
-  warn: (message: string) => void = message => { process.stderr.write(`Host extension ${name}: ${message}\n`); }): Promise<Registrations> {
-  const registrations: Registrations = { tools: [], handlers: {} };
-  let open = true;
-  // Late registrations are ignored rather than thrown: a throw from a timer would stop the connector.
-  const late = () => {
-    if (open) return false;
-    warn("registered something after its factory returned; it was ignored. Register everything while the factory runs.");
-    return true;
-  };
-  const api: PikibunExtensionAPI = {
-    name,
-    Type,
-    describe(description) {
-      if (late()) return;
-      if (typeof description !== "string") throw new Error("describe() takes a string");
-      registrations.description = description.slice(0, hostExtensionLimits.description);
-    },
-    settings(schema) {
-      if (late()) return settings as never;
-      if (registrations.settingsSchema) throw new Error("settings() is called once");
-      if (!schema || typeof schema !== "object" || (schema as { type?: unknown }).type !== "object") throw new Error("settings() takes an object schema, such as pi.Type.Object({...})");
-      registrations.settingsSchema = schema;
-      return settings as never;
-    },
-    registerTool(tool) {
-      if (late()) return;
-      if (!tool || typeof tool !== "object" || typeof tool.name !== "string" || !HOST_EXTENSION_TOOL_NAME.test(tool.name)) {
-        throw new Error(`Tool names are letters, digits, _ and -, starting with a letter: ${String(tool?.name)}`);
-      }
-      if ((toolNames as readonly string[]).includes(tool.name)) throw new Error(`${tool.name} is one of Pikibun's own tools`);
-      if (registrations.tools.some(other => other.name === tool.name)) throw new Error(`${tool.name} is registered twice`);
-      if (typeof tool.description !== "string" || !tool.description.trim()) throw new Error(`${tool.name} needs a description`);
-      if (!tool.parameters || typeof tool.parameters !== "object") throw new Error(`${tool.name} needs parameters, such as pi.Type.Object({})`);
-      if (typeof tool.execute !== "function") throw new Error(`${tool.name} needs execute()`);
-      if (tool.replay !== undefined && tool.replay !== "safe" && tool.replay !== "unsafe") throw new Error(`${tool.name}: replay is safe or unsafe`);
-      if (tool.executionMode !== undefined && tool.executionMode !== "parallel" && tool.executionMode !== "sequential") throw new Error(`${tool.name}: executionMode is parallel or sequential`);
-      if (registrations.tools.length >= hostExtensionLimits.toolsPerExtension) throw new Error(`An extension registers at most ${hostExtensionLimits.toolsPerExtension} tools`);
-      registrations.tools.push(tool as unknown as ExtensionTool);
-    },
-    on(event, handler) {
-      if (late()) return;
-      if (!hostExtensionEvents.includes(event)) {
-        throw new Error(`Pikibun has no "${String(event)}" event; it offers ${hostExtensionEvents.join(", ")}`);
-      }
-      if (typeof handler !== "function") throw new Error(`The ${event} handler must be a function`);
-      ((registrations.handlers[event] ??= []) as unknown[]).push(handler);
-    },
-  };
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      Promise.resolve().then(() => factory(api)),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`The factory didn't return within ${FACTORY_TIMEOUT_MS / 1000} seconds`)), FACTORY_TIMEOUT_MS); }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-    open = false;
-  }
-  return registrations;
-}
+const ENTRY = /\.(?:ts|js|mts|mjs)$/;
+const isFile = (path: string) => stat(path).then(found => found.isFile(), () => false);
+const isDirectory = (path: string) => stat(path).then(found => found.isDirectory(), () => false);
 
-/** What `registrations` offer, as the connector advertises them. */
-export function summarize(name: string, source: string, version: string | undefined, registrations: Registrations): HostExtensionSummary {
-  let settingsSchema: JsonObject | undefined;
-  if (registrations.settingsSchema) {
-    // TypeBox marks its schemas with symbols, which JSON leaves out; what's left is JSON Schema.
-    const schema: unknown = JSON.parse(JSON.stringify(registrations.settingsSchema));
-    if (!isJsonValue(schema) || new TextEncoder().encode(JSON.stringify(schema)).length > hostExtensionLimits.schemaBytes) {
-      throw new Error(`The settings schema is over ${hostExtensionLimits.schemaBytes / 1024} KB`);
-    }
-    settingsSchema = schema as JsonObject;
-  }
-  return {
-    name, source, ...(version ? { version } : {}), ...(registrations.description ? { description: registrations.description } : {}),
-    tools: registrations.tools.map(tool => ({ name: tool.name, description: tool.description.slice(0, hostExtensionLimits.toolDescription) })),
-    events: hostExtensionEvents.filter(event => registrations.handlers[event]?.length),
-    ...(settingsSchema ? { settingsSchema } : {}),
-  };
-}
-
-interface Entry { name: string; file: string; source: string; version?: string }
-
-/** The extension modules of an installed source, with their names. */
-async function entries(store: ExtensionStore, installed: InstalledSource): Promise<Entry[]> {
-  const location = store.location(installed);
-  const info = await stat(location);
-  if (info.isFile()) {
-    if (!ENTRY.test(location)) throw new Error(`${location} is not a .js, .mjs or .ts file`);
-    return [{ name: entryName(basename(location, extname(location))), file: location, source: installed.source }];
-  }
-  let manifest: { name?: unknown; version?: unknown; pikibun?: { extensions?: unknown } } = {};
-  try { manifest = JSON.parse(await readFile(join(location, "package.json"), "utf8")); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Its package.json can't be read`); }
-  const packageName = typeof manifest.name === "string" ? manifest.name : entryName(basename(location));
-  const version = typeof manifest.version === "string" ? manifest.version : undefined;
-  let files: string[];
-  if (manifest.pikibun?.extensions !== undefined) {
-    const declared = manifest.pikibun.extensions;
-    if (!Array.isArray(declared) || !declared.length || declared.some(item => typeof item !== "string")) throw new Error(`"pikibun.extensions" in its package.json lists module paths`);
-    files = (declared as string[]).map(file => resolve(location, file));
-    if (files.some(file => relative(location, file).startsWith("..") || !ENTRY.test(file))) throw new Error(`"pikibun.extensions" names modules inside the package: .js, .mjs or .ts files`);
-  } else if (installed.package) {
-    // An npm or Git package says it is one, so a package that isn't (its default export some other function) never runs.
-    throw new Error(`${packageName} isn't a Pikibun extension package: its package.json has no "pikibun": { "extensions": [...] }`);
-  } else if (await stat(join(location, "extensions")).then(found => found.isDirectory(), () => false)) {
-    files = [];
-    for (const item of (await readdir(join(location, "extensions"), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (item.isFile() && ENTRY.test(item.name) && !item.name.endsWith(".d.ts")) files.push(join(location, "extensions", item.name));
-      else if (item.isDirectory()) {
-        for (const index of ["index.js", "index.mjs", "index.ts"]) {
-          if (await stat(join(location, "extensions", item.name, index)).then(found => found.isFile(), () => false)) { files.push(join(location, "extensions", item.name, index)); break; }
-        }
+/** The extension modules of a package directory, as Pi finds them: its `pi.extensions`, its `extensions/` directory, or its index. */
+async function packageEntries(directory: string, requireManifest: boolean): Promise<{ files: string[]; name?: string; version?: string; description?: string }> {
+  let manifest: { name?: unknown; version?: unknown; description?: unknown; keywords?: unknown; pi?: { extensions?: unknown } } = {};
+  try { manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8")); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Its package.json can't be read"); }
+  const about = { ...(typeof manifest.name === "string" ? { name: manifest.name } : {}), ...(typeof manifest.version === "string" ? { version: manifest.version } : {}),
+    ...(typeof manifest.description === "string" ? { description: manifest.description.slice(0, extensionLimits.text) } : {}) };
+  const files: string[] = [];
+  const declared = manifest.pi?.extensions;
+  if (declared !== undefined) {
+    if (!Array.isArray(declared) || declared.some(item => typeof item !== "string")) throw new Error(`"pi.extensions" in its package.json lists module paths`);
+    const excluded = new Set<string>();
+    for (const pattern of declared as string[]) {
+      const negated = pattern.startsWith("!");
+      const matches: string[] = [];
+      if (/[*?[{]/.test(pattern)) for await (const match of glob(negated ? pattern.slice(1) : pattern, { cwd: directory })) matches.push(match);
+      else matches.push(negated ? pattern.slice(1) : pattern);
+      for (const match of matches) {
+        const file = resolve(directory, match);
+        if (relative(directory, file).startsWith("..") || isAbsolute(relative(directory, file))) throw new Error(`"pi.extensions" names ${pattern}, outside the package`);
+        if (negated) excluded.add(file);
+        else if (await isDirectory(file)) files.push(...(await directoryEntries(file)));
+        else if (await isFile(file)) files.push(file);
       }
     }
-  } else {
-    files = [];
-    for (const index of ["index.js", "index.mjs", "index.ts"]) {
-      if (await stat(join(location, index)).then(found => found.isFile(), () => false)) { files.push(join(location, index)); break; }
+    return { files: files.filter(file => !excluded.has(file)), ...about };
+  }
+  if (await isDirectory(join(directory, "extensions"))) return { files: await directoryEntries(join(directory, "extensions")), ...about };
+  if (requireManifest) throw new Error(`${about.name ?? basename(directory)} isn't a Pi extension package: its package.json has no "pi": { "extensions": [...] } and it has no extensions/ directory`);
+  for (const index of ["index.ts", "index.js"]) if (await isFile(join(directory, index))) return { files: [join(directory, index)], ...about };
+  return { files, ...about };
+}
+
+/** Pi's discovery in a directory: its .ts/.js files, and subdirectories with an index. */
+async function directoryEntries(directory: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const item of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (item.isFile() && ENTRY.test(item.name) && !item.name.endsWith(".d.ts")) files.push(join(directory, item.name));
+    else if (item.isDirectory()) {
+      for (const index of ["index.ts", "index.js"]) {
+        if (await isFile(join(directory, item.name, index))) { files.push(join(directory, item.name, index)); break; }
+      }
     }
   }
-  if (!files.length) throw new Error(`No extension modules: list them under "pikibun": { "extensions": [...] } in its package.json, put them in extensions/, or add index.js`);
-  return files.map(file => ({
-    name: files.length === 1 ? packageName : `${packageName}/${entryName(basename(file).replace(ENTRY, "") === "index" ? basename(join(file, "..")) : basename(file).replace(ENTRY, ""))}`,
-    file, source: installed.source, ...(version ? { version } : {}),
-  }));
+  return files;
 }
 
-function entryName(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9._~-]+/g, "-").replace(/^[^a-z0-9]+/, "") || "extension";
+/** An installed source and its extension modules. */
+export interface LoadedSource {
+  installed: InstalledSource;
+  /** Where its paths in the summary are relative to. */
+  root: string;
+  files: string[];
+  summary: InstalledExtension;
 }
 
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, hostExtensionLimits.error);
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, extensionLimits.text);
 
 /**
- * Loads every installed extension: its module, and one run of its factory to record what it offers. Names and tool
- * names must be unique on the host; a later extension that repeats one fails to load.
+ * What one source's Pi extensions offer Pikibun, from what loading them registered. A tool named like one of Pikibun's
+ * own, or like one an earlier source offers (`taken`), is ignored.
  */
-export async function loadExtensions(store: ExtensionStore, importModule: (file: string) => Promise<unknown> = file => import(pathToFileURL(file).href)): Promise<LoadedExtension[]> {
-  const loaded: LoadedExtension[] = [];
-  const failed = (name: string, source: string, error: unknown) => loaded.push({ summary: { name, source, tools: [], events: [], error: message(error) } });
+export function summarizeModules(root: string, files: string[], result: LoadExtensionsResult, taken: Set<string>): ExtensionModuleSummary[] {
+  const modules: ExtensionModuleSummary[] = [];
+  const providers = [...result.runtime.pendingProviderRegistrations.map(item => ({ path: item.extensionPath, name: item.name })),
+    ...result.runtime.pendingNativeProviderRegistrations.map(item => ({ path: item.extensionPath, name: item.provider.id }))];
+  const models = result.runtime.pendingVirtualModelRegistrations;
+  const servers = result.runtime.mcpServers.list() as { name: string; extensionPath?: string }[];
+  for (const file of files.slice(0, extensionLimits.modulesPerSource)) {
+    const path = relative(root, file) || basename(file);
+    const extension: PiExtension | undefined = result.extensions.find(item => item.path === file || item.resolvedPath === file);
+    const error = result.errors.find(item => item.path === file || resolve(item.path) === file)?.error;
+    if (!extension) {
+      modules.push({ path, tools: [], events: [], flags: [], noops: [], ignored: [], error: message(error ?? "It didn't load") });
+      continue;
+    }
+    const tools: ExtensionModuleSummary["tools"] = [];
+    const ignored: string[] = [];
+    for (const [name, tool] of extension.tools) {
+      if ((toolNames as readonly string[]).includes(name)) { ignored.push(`tool ${name} (one of Pikibun's own)`); continue; }
+      if (taken.has(name)) { ignored.push(`tool ${name} (another extension's)`); continue; }
+      if (tools.length >= extensionLimits.toolsPerModule) { ignored.push(`tool ${name} (too many tools)`); continue; }
+      taken.add(name);
+      tools.push({ name, description: String(tool.definition.description ?? "").slice(0, extensionLimits.toolDescription) });
+    }
+    const events = [...extension.handlers.keys()];
+    ignored.push(...events.filter(event => !supportedEvents.has(event)).map(event => `${event} event`));
+    ignored.push(...providers.filter(item => item.path === file).map(item => `provider ${item.name}`));
+    ignored.push(...models.filter(item => item.extensionPath === file).map(item => `model ${item.definition.provider}/${item.definition.id}`));
+    ignored.push(...servers.filter(item => item.extensionPath === file).map(item => `MCP server ${item.name}`));
+    const noops = [...[...extension.commands.keys()].map(name => `/${name}`), ...[...extension.shortcuts.keys()].map(key => `shortcut ${key}`),
+      ...(extension.messageRenderers.size || extension.entryRenderers?.size || extension.toolRenderers?.length || extension.markdownTransformer ? ["renderers"] : [])];
+    const flags = [...extension.flags.values()].slice(0, extensionLimits.flagsPerModule).map(flag => ({ name: flag.name, type: flag.type,
+      ...(flag.description ? { description: flag.description.slice(0, extensionLimits.text) } : {}), ...(flag.default !== undefined ? { default: flag.default } : {}) }));
+    modules.push({ path, tools, events: events.filter(event => supportedEvents.has(event)), flags,
+      noops: noops.slice(0, 256).map(item => item.slice(0, 128)), ignored: ignored.slice(0, 256).map(item => item.slice(0, 128)) });
+  }
+  return modules;
+}
+
+/**
+ * Loads every installed source to learn what it offers, with `cwd` an empty directory: each module's factory runs, as
+ * Pi runs it when it starts.
+ */
+export async function loadInstalled(store: ExtensionStore): Promise<LoadedSource[]> {
+  const loaded: LoadedSource[] = [];
   let installed: InstalledSource[];
   try { installed = await store.list(); }
-  catch (error) { return [{ summary: { name: "extensions", source: `local:${store.directory}`, tools: [], events: [], error: message(error) } }]; }
-  const tools = new Set<string>();
-  for (const source of installed) {
-    let found: Entry[];
-    try { found = await entries(store, source); }
-    catch (error) { failed(entryName(source.package ?? basename(source.path ?? source.source)), source.source, error); continue; }
-    for (const entry of found) {
-      if (loaded.length >= hostExtensionLimits.extensions) break;
-      if (!HOST_EXTENSION_NAME.test(entry.name) || entry.name.length > hostExtensionLimits.name) { failed(entryName(entry.name), entry.source, new Error("Invalid extension name")); continue; }
-      if (loaded.some(other => other.summary.name === entry.name)) { failed(`${entry.name}-${loaded.length}`, entry.source, new Error(`Another extension is named ${entry.name}`)); continue; }
+  catch (error) {
+    process.stderr.write(`Host extensions: ${message(error)}\n`);
+    return [];
+  }
+  const { loadExtensions } = await piLoader();
+  const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
+  const taken = new Set<string>();
+  try {
+    for (const source of installed) {
+      const dev = source.source.startsWith("local:");
+      const location = store.location(source);
+      const root = (await isDirectory(location)) ? location : join(location, "..");
+      const summary: InstalledExtension = { source: source.source, dev, modules: [] };
+      let files: string[] = [];
       try {
-        if (entry.file.includes(`${sep}node_modules${sep}`) && /\.m?ts$/.test(entry.file)) {
-          throw new Error("Node.js runs TypeScript only outside node_modules: publish the extension as JavaScript, or install it from a local path");
-        }
-        const module = await importModule(entry.file) as { default?: unknown };
-        if (typeof module.default !== "function") throw new Error("Its module's default export must be a function taking the PikibunExtensionAPI");
-        const factory = module.default as PikibunExtensionFactory;
-        const registrations = await register(entry.name, factory);
-        const repeated = registrations.tools.find(tool => tools.has(tool.name));
-        if (repeated) throw new Error(`Another extension has a tool named ${repeated.name}`);
-        const summary = summarize(entry.name, entry.source, entry.version, registrations);
-        for (const tool of registrations.tools) tools.add(tool.name);
-        loaded.push({ summary, factory });
-      } catch (error) { failed(entry.name, entry.source, error); }
+        if (await isDirectory(location)) {
+          const entries = await packageEntries(location, !dev);
+          files = entries.files;
+          Object.assign(summary, entries.name ? { name: entries.name } : {}, entries.version ? { version: entries.version } : {}, entries.description ? { description: entries.description } : {});
+          if (!files.length) throw new Error("It has no extension modules");
+        } else if (await isFile(location) && ENTRY.test(location)) files = [location];
+        else throw new Error(`${location} is not an extension file or package`);
+        const result = await loadExtensions(files, cwd, undefined, createExtensionRuntime());
+        summary.modules = summarizeModules(root, files, result, taken);
+      } catch (error) {
+        summary.error = message(error);
+      }
+      loaded.push({ installed: source, root, files, summary });
     }
+  } finally {
+    await rm(cwd, { recursive: true, force: true }).catch(() => {});
   }
   return loaded;
 }

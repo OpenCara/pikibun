@@ -1,168 +1,253 @@
 /**
- * Host extensions (docs/design/host-extensions.md): code the host's owner installed on the host (`pikibun extensions
- * add`), which the connector loads into its sessions' agents. The connector advertises what it loaded
- * (HostExtensionSummary); the host's owner and admins turn each one on or off and set its settings in Pikibun
- * (HostExtensionSetting), and the connector reads those with the host's configuration (HostConfig.extensions).
+ * Extensions (docs/design/host-extensions.md): Pi extensions a workspace chooses for its sessions, pinned to exact
+ * versions, which each host installs. A session runs with the workspace's enabled extensions its host has at that exact
+ * version, and, in its host owner's own sessions, the host's dev extensions (installed from a local path).
  */
-
-/** Which sessions on the host an enabled extension joins. */
-export const hostExtensionScopes = ["owner", "host", "all"] as const;
-/**
- * - `owner`: sessions the host's owner started.
- * - `host`: sessions that run directly on the host (Sessions on the host, or an unsandboxed host).
- * - `all`: every session on the host.
- */
-export type HostExtensionScope = (typeof hostExtensionScopes)[number];
-
-/**
- * How an extension's tool calls run: each decided like a host command (`approval`), or at once (`automatic`). Either way
- * they run in the connector, outside the sandbox.
- */
-export const hostExtensionToolModes = ["approval", "automatic"] as const;
-export type HostExtensionToolMode = (typeof hostExtensionToolModes)[number];
-
-/** The agent events an extension can handle (PikibunExtensionAPI.on). */
-export const hostExtensionEvents = ["before_agent_start", "context", "tool_call", "tool_result", "turn_end", "message_end",
-  "agent_before_settle", "session_before_compact"] as const;
-export type HostExtensionEvent = (typeof hostExtensionEvents)[number];
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-export type JsonObject = { [key: string]: JsonValue };
 
-export interface HostExtensionTool {
-  name: string;
-  description: string;
+/** How an extension's tool calls run: each decided like a host command, or at once (also needs the host owner's leave). */
+export const extensionToolModes = ["approval", "automatic"] as const;
+export type ExtensionToolMode = (typeof extensionToolModes)[number];
+
+/** A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`. */
+export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string };
+
+export const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+export const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
+const COMMIT = /^[0-9a-f]{40}$/;
+
+export class ExtensionSourceError extends Error {}
+
+/** Parses `npm:<name>@<version>` or `git:<url>@<commit>` (an https URL, `https://` optional); anything else is refused. */
+export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
+  if (typeof spec !== "string" || spec.length > 512) throw new ExtensionSourceError("Invalid extension source");
+  if (spec.startsWith("npm:")) {
+    const rest = spec.slice(4);
+    const at = rest.lastIndexOf("@");
+    const name = at > 0 ? rest.slice(0, at) : rest;
+    const version = at > 0 ? rest.slice(at + 1) : "";
+    if (!PACKAGE_NAME.test(name) || name.length > 214) throw new ExtensionSourceError(`Invalid npm package name: ${name}`);
+    if (!EXACT_VERSION.test(version)) throw new ExtensionSourceError(`Pin an exact version, such as npm:${name}@1.2.3: ranges and tags could load different code later.`);
+    return { kind: "npm", package: name, version };
+  }
+  if (spec.startsWith("git:")) {
+    const rest = spec.slice(4);
+    const at = rest.lastIndexOf("@");
+    const url = at > 0 ? rest.slice(0, at) : rest;
+    const commit = at > 0 ? rest.slice(at + 1) : "";
+    let parsed: URL;
+    try { parsed = new URL(url.startsWith("https://") ? url : `https://${url}`); }
+    catch { throw new ExtensionSourceError(`Invalid Git URL: ${url}`); }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.port) {
+      throw new ExtensionSourceError("Git extensions install from an https:// URL without credentials.");
+    }
+    if (!COMMIT.test(commit)) throw new ExtensionSourceError(`Pin a full commit, such as git:${url}@<40-character commit>: branches and tags could load different code later.`);
+    return { kind: "git", url: parsed.href.replace(/\/$/, "").replace(/\.git$/, ""), commit };
+  }
+  throw new ExtensionSourceError("An extension source is npm:<package>@<version> or git:<https URL>@<commit>.");
 }
 
-/** One extension as the connector loaded it, advertised to the control plane. */
-export interface HostExtensionSummary {
-  /** Unique on the host: the package's name, or the file's for a local file, with `/<entry>` for a package's further entries. */
+export function extensionSourceString(spec: ExtensionSourceSpec): string {
+  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : `git:${spec.url}@${spec.commit}`;
+}
+
+/** The normalized form of `spec`, or an error. */
+export function normalizeExtensionSource(spec: string): string {
+  return extensionSourceString(parseExtensionSourceSpec(spec));
+}
+
+/** What stays the same across versions of one extension: `npm:<name>` or `git:<url>`. A workspace has one version of each. */
+export function extensionPackageKey(source: string): string {
+  const spec = parseExtensionSourceSpec(source);
+  return spec.kind === "npm" ? `npm:${spec.package}` : `git:${spec.url}`;
+}
+
+/** A Pi flag an extension registers: one of its settings. */
+export interface ExtensionFlag {
   name: string;
-  /** Where it was installed from: `npm:<name>@<version>`, `git:<url>@<commit>` or `local:<path>`. */
-  source: string;
-  version?: string;
+  type: "boolean" | "string";
   description?: string;
-  tools: HostExtensionTool[];
-  /** The events it handles, in `hostExtensionEvents` order. */
-  events: HostExtensionEvent[];
-  /** JSON Schema of its settings (PikibunExtensionAPI.settings), when it takes any. */
-  settingsSchema?: JsonObject;
-  /** Why it didn't load; such an extension has no tools or events and never runs. */
+  default?: boolean | string;
+}
+
+/** One extension module (a factory) of an installed source, as the connector loaded it. */
+export interface ExtensionModuleSummary {
+  /** Its file, relative to the package (or the local path's base name). */
+  path: string;
+  tools: { name: string; description: string }[];
+  /** Pi events it handles that Pikibun runs. */
+  events: string[];
+  flags: ExtensionFlag[];
+  /** What it registers that does nothing here, as in Pi's print mode: commands, shortcuts, renderers, UI. */
+  noops: string[];
+  /** What it registers that Pikibun doesn't run: providers, MCP servers, events without a counterpart. */
+  ignored: string[];
   error?: string;
 }
 
-/** How the host's owner and admins set one extension. */
-export interface HostExtensionSetting {
-  enabled: boolean;
-  scope: HostExtensionScope;
-  tools: HostExtensionToolMode;
-  /** Plain JSON, never secrets: the extension reads those on the host. */
-  settings: JsonObject;
+/** One source installed on a host, with what it holds. */
+export interface InstalledExtension {
+  /** Normalized npm or Git source; for a dev extension, `local:<path>`. */
+  source: string;
+  /** Installed from a local path: runs only in the host owner's own sessions. */
+  dev: boolean;
+  name?: string;
+  version?: string;
+  description?: string;
+  modules: ExtensionModuleSummary[];
+  /** Why none of it loads. */
+  error?: string;
 }
 
-export type HostExtensionsConfig = Record<string, HostExtensionSetting>;
+/** What a connector reports of its extensions. */
+export interface HostExtensionsReport {
+  installed: InstalledExtension[];
+  /** The connector installs and removes extensions when its owner asks in Pikibun (not `--no-remote-installs`). */
+  remoteInstalls: boolean;
+}
 
-export const hostExtensionLimits = Object.freeze({
-  extensions: 32,
-  toolsPerExtension: 32,
-  name: 128,
-  source: 512,
-  description: 1024,
+/** Flag values, by flag name. */
+export type ExtensionSettings = Record<string, boolean | string>;
+
+/** An extension a workspace uses, as its owners and admins set it. */
+export interface WorkspaceExtension {
+  /** Normalized npm or Git source. */
+  source: string;
+  enabled: boolean;
+  tools: ExtensionToolMode;
+  settings: ExtensionSettings;
+}
+
+export const extensionLimits = Object.freeze({
+  /** Sources a workspace uses, and a host installs. */
+  workspace: 32,
+  installed: 64,
+  modulesPerSource: 16,
+  toolsPerModule: 64,
+  flagsPerModule: 64,
+  text: 1024,
   toolDescription: 4096,
-  /** Each extension's settings schema and settings, as JSON. */
-  schemaBytes: 16 * 1024,
   settingsBytes: 16 * 1024,
-  error: 1024,
+  /** A reported list, as JSON. */
+  reportBytes: 512 * 1024,
 });
-
-export const defaultHostExtensionSetting: Readonly<HostExtensionSetting> = Object.freeze({ enabled: false, scope: "owner", tools: "approval", settings: Object.freeze({}) });
-
-/** An extension's name: a package name (`pkg`, `@scope/pkg`), optionally with `/<entry>`, or a file's base name. */
-export const HOST_EXTENSION_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*(?:\/[a-z0-9][a-z0-9._~-]*)?$/;
-/** A tool name as providers accept it. */
-export const HOST_EXTENSION_TOOL_NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value)
   && Object.getPrototypeOf(value) === Object.prototype;
-
-const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
-
-/** Whether `value` is plain JSON: no functions, symbols, undefined, non-finite numbers or class instances. */
-export function isJsonValue(value: unknown, depth = 0): value is JsonValue {
-  if (depth > 32) return false;
-  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(item => isJsonValue(item, depth + 1));
-  return isPlainObject(value) && Object.values(value).every(item => isJsonValue(item, depth + 1));
-}
-
-/** One extension's setting; anything invalid is refused. */
-export function parseHostExtensionSetting(value: unknown): HostExtensionSetting {
-  if (!isPlainObject(value)) throw new Error("Invalid extension setting");
-  const keys = Object.keys(value);
-  if (keys.some(key => !Object.hasOwn(defaultHostExtensionSetting, key))) throw new Error("Invalid extension setting");
-  const { enabled = false, scope = "owner", tools = "approval", settings = {} } = value;
-  if (typeof enabled !== "boolean") throw new Error("Invalid extension setting");
-  if (!hostExtensionScopes.includes(scope as HostExtensionScope)) throw new Error("An extension's scope is owner, host or all");
-  if (!hostExtensionToolModes.includes(tools as HostExtensionToolMode)) throw new Error("An extension's tools run with approval or automatically");
-  if (!isPlainObject(settings) || !isJsonValue(settings)) throw new Error("An extension's settings are a JSON object");
-  if (jsonBytes(settings) > hostExtensionLimits.settingsBytes) throw new Error(`An extension's settings are at most ${hostExtensionLimits.settingsBytes / 1024} KB`);
-  return { enabled, scope: scope as HostExtensionScope, tools: tools as HostExtensionToolMode, settings };
-}
-
-/** The settings of a host's extensions, by name. */
-export function parseHostExtensionsConfig(value: unknown): HostExtensionsConfig {
-  if (!isPlainObject(value)) throw new Error("Invalid extensions setting");
-  const names = Object.keys(value);
-  if (names.length > hostExtensionLimits.extensions * 4) throw new Error("Too many extension settings");
-  if (names.some(name => name.length > hostExtensionLimits.name || !HOST_EXTENSION_NAME.test(name))) throw new Error("Invalid extension name");
-  return Object.fromEntries(names.sort().map(name => [name, parseHostExtensionSetting(value[name])]));
-}
-
 const text = (value: unknown, limit: number): value is string => typeof value === "string" && value.length <= limit && !value.includes("\0");
+const strings = (value: unknown, limit: number, max = 256): value is string[] => Array.isArray(value) && value.length <= max && value.every(item => text(item, limit));
+const FLAG = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const TOOL = /^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,127}$/;
 
-/** One advertised extension, as the control plane accepts it. */
-export function parseHostExtensionSummary(value: unknown): HostExtensionSummary {
-  if (!isPlainObject(value)) throw new Error("Invalid extension");
-  const allowed = ["name", "source", "version", "description", "tools", "events", "settingsSchema", "error"];
-  if (Object.keys(value).some(key => !allowed.includes(key))) throw new Error("Invalid extension");
-  const { name, source, version, description, tools, events, settingsSchema, error } = value;
-  if (!text(name, hostExtensionLimits.name) || !HOST_EXTENSION_NAME.test(name)) throw new Error("Invalid extension name");
-  if (!text(source, hostExtensionLimits.source) || !source) throw new Error("Invalid extension source");
-  if (version !== undefined && !text(version, 128)) throw new Error("Invalid extension version");
-  if (description !== undefined && !text(description, hostExtensionLimits.description)) throw new Error("Invalid extension description");
-  if (error !== undefined && !text(error, hostExtensionLimits.error)) throw new Error("Invalid extension error");
-  if (!Array.isArray(tools) || tools.length > hostExtensionLimits.toolsPerExtension) throw new Error("Invalid extension tools");
-  const parsedTools = tools.map(tool => {
-    if (!isPlainObject(tool) || Object.keys(tool).sort().join() !== "description,name"
-      || !text(tool.name, 64) || !HOST_EXTENSION_TOOL_NAME.test(tool.name) || !text(tool.description, hostExtensionLimits.toolDescription)) throw new Error("Invalid extension tool");
-    return { name: tool.name, description: tool.description };
-  });
-  if (new Set(parsedTools.map(tool => tool.name)).size !== parsedTools.length) throw new Error("Invalid extension tools");
-  if (!Array.isArray(events) || events.some(event => !hostExtensionEvents.includes(event)) || new Set(events).size !== events.length) throw new Error("Invalid extension events");
-  if (settingsSchema !== undefined && (!isPlainObject(settingsSchema) || !isJsonValue(settingsSchema) || jsonBytes(settingsSchema) > hostExtensionLimits.schemaBytes)) {
-    throw new Error("Invalid extension settings schema");
-  }
-  return { name, source, ...(version !== undefined ? { version } : {}), ...(description !== undefined ? { description } : {}), tools: parsedTools,
-    events: hostExtensionEvents.filter(event => events.includes(event)), ...(settingsSchema !== undefined ? { settingsSchema: settingsSchema as JsonObject } : {}),
-    ...(error !== undefined ? { error } : {}) };
+function only(value: Record<string, unknown>, keys: string[], what: string): void {
+  if (Object.keys(value).some(key => !keys.includes(key))) throw new Error(`Invalid ${what}`);
 }
 
-/** The advertised list: at most `hostExtensionLimits.extensions`, names and tool names unique across the host. */
-export function parseHostExtensionSummaries(value: unknown): HostExtensionSummary[] {
-  if (!Array.isArray(value) || value.length > hostExtensionLimits.extensions) throw new Error("Invalid extensions");
-  const extensions = value.map(parseHostExtensionSummary);
-  if (new Set(extensions.map(extension => extension.name)).size !== extensions.length) throw new Error("Extension names repeat");
-  const tools = extensions.flatMap(extension => extension.tools.map(tool => tool.name));
-  if (new Set(tools).size !== tools.length) throw new Error("Extension tool names repeat");
+/** A workspace's settings of one extension: flag values, booleans or strings, 16 KB at most. */
+export function parseExtensionSettings(value: unknown): ExtensionSettings {
+  if (!isPlainObject(value)) throw new Error("An extension's settings are an object of flag values");
+  const names = Object.keys(value);
+  if (names.some(name => !FLAG.test(name))) throw new Error("Invalid setting name");
+  if (Object.values(value).some(item => typeof item !== "boolean" && !text(item, 4096))) throw new Error("A setting is true, false or text");
+  if (new TextEncoder().encode(JSON.stringify(value)).length > extensionLimits.settingsBytes) throw new Error(`An extension's settings are at most ${extensionLimits.settingsBytes / 1024} KB`);
+  return Object.fromEntries(names.sort().map(name => [name, value[name] as boolean | string]));
+}
+
+export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
+  if (!isPlainObject(value)) throw new Error("Invalid extension");
+  only(value, ["source", "enabled", "tools", "settings"], "extension");
+  if (typeof value.source !== "string") throw new Error("Invalid extension source");
+  const source = normalizeExtensionSource(value.source);
+  const enabled = value.enabled ?? true;
+  const tools = value.tools ?? "approval";
+  if (typeof enabled !== "boolean") throw new Error("Invalid extension setting");
+  if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("An extension's tools run with approval or automatically");
+  return { source, enabled, tools: tools as ExtensionToolMode, settings: parseExtensionSettings(value.settings ?? {}) };
+}
+
+/** A workspace's extensions: one version per package. */
+export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {
+  if (!Array.isArray(value) || value.length > extensionLimits.workspace) throw new Error("Invalid extensions");
+  const extensions = value.map(parseWorkspaceExtension);
+  const keys = extensions.map(extension => extensionPackageKey(extension.source));
+  if (new Set(keys).size !== keys.length) throw new Error("A workspace uses one version of each extension");
   return extensions;
 }
 
-/** Whether an extension set so joins a session: enabled, and the session within its scope. */
-export function hostExtensionApplies(setting: HostExtensionSetting | undefined,
-  session: { ownerId: string; connectorOwnerId?: string | null; onHost: boolean }): boolean {
-  if (!setting?.enabled) return false;
-  if (setting.scope === "all") return true;
-  if (setting.scope === "host") return session.onHost;
-  return !!session.connectorOwnerId && session.ownerId === session.connectorOwnerId;
+function parseModule(value: unknown): ExtensionModuleSummary {
+  if (!isPlainObject(value)) throw new Error("Invalid extension module");
+  only(value, ["path", "tools", "events", "flags", "noops", "ignored", "error"], "extension module");
+  if (!text(value.path, 512) || !value.path) throw new Error("Invalid extension module");
+  if (!Array.isArray(value.tools) || value.tools.length > extensionLimits.toolsPerModule) throw new Error("Invalid extension tools");
+  const tools = value.tools.map(tool => {
+    if (!isPlainObject(tool) || Object.keys(tool).sort().join() !== "description,name" || !text(tool.name, 128) || !TOOL.test(tool.name)
+      || !text(tool.description, extensionLimits.toolDescription)) throw new Error("Invalid extension tool");
+    return { name: tool.name, description: tool.description };
+  });
+  if (!Array.isArray(value.flags) || value.flags.length > extensionLimits.flagsPerModule) throw new Error("Invalid extension flags");
+  const flags = value.flags.map(flag => {
+    if (!isPlainObject(flag)) throw new Error("Invalid extension flag");
+    only(flag, ["name", "type", "description", "default"], "extension flag");
+    if (!text(flag.name, 128) || !FLAG.test(flag.name) || (flag.type !== "boolean" && flag.type !== "string")
+      || (flag.description !== undefined && !text(flag.description, extensionLimits.text))
+      || (flag.default !== undefined && typeof flag.default !== flag.type) || (typeof flag.default === "string" && !text(flag.default, 4096))) throw new Error("Invalid extension flag");
+    return { name: flag.name, type: flag.type, ...(flag.description !== undefined ? { description: flag.description as string } : {}),
+      ...(flag.default !== undefined ? { default: flag.default as boolean | string } : {}) } satisfies ExtensionFlag;
+  });
+  for (const key of ["events", "noops", "ignored"] as const) if (!strings(value[key], 128)) throw new Error("Invalid extension module");
+  if (value.error !== undefined && !text(value.error, extensionLimits.text)) throw new Error("Invalid extension error");
+  return { path: value.path, tools, events: value.events as string[], flags, noops: value.noops as string[], ignored: value.ignored as string[],
+    ...(value.error !== undefined ? { error: value.error as string } : {}) };
+}
+
+function parseInstalled(value: unknown): InstalledExtension {
+  if (!isPlainObject(value)) throw new Error("Invalid installed extension");
+  only(value, ["source", "dev", "name", "version", "description", "modules", "error"], "installed extension");
+  if (typeof value.dev !== "boolean" || typeof value.source !== "string") throw new Error("Invalid installed extension");
+  const source = value.dev ? (text(value.source, 1024) && value.source.startsWith("local:") ? value.source : undefined) : normalizeExtensionSource(value.source);
+  if (!source) throw new Error("Invalid dev extension source");
+  for (const key of ["name", "version", "description", "error"] as const) {
+    if (value[key] !== undefined && !text(value[key], extensionLimits.text)) throw new Error("Invalid installed extension");
+  }
+  if (!Array.isArray(value.modules) || value.modules.length > extensionLimits.modulesPerSource) throw new Error("Invalid extension modules");
+  return { source, dev: value.dev, ...(value.name !== undefined ? { name: value.name as string } : {}), ...(value.version !== undefined ? { version: value.version as string } : {}),
+    ...(value.description !== undefined ? { description: value.description as string } : {}), modules: value.modules.map(parseModule),
+    ...(value.error !== undefined ? { error: value.error as string } : {}) };
+}
+
+/** A connector's report, as the control plane accepts it. */
+export function parseHostExtensionsReport(value: unknown): HostExtensionsReport {
+  if (!isPlainObject(value)) throw new Error("Invalid extensions report");
+  only(value, ["installed", "remoteInstalls"], "extensions report");
+  if (typeof value.remoteInstalls !== "boolean" || !Array.isArray(value.installed) || value.installed.length > extensionLimits.installed) throw new Error("Invalid extensions report");
+  const installed = value.installed.map(parseInstalled);
+  if (new Set(installed.map(item => item.source)).size !== installed.length) throw new Error("An extension is reported twice");
+  return { installed, remoteInstalls: value.remoteInstalls };
+}
+
+/** How a workspace's extension stands on one host: installed at its version, at another, or missing. */
+export type ExtensionAvailability = { status: "installed" } | { status: "other-version"; installed: string } | { status: "missing" };
+
+export function extensionAvailability(source: string, installed: readonly InstalledExtension[]): ExtensionAvailability {
+  if (installed.some(item => !item.dev && item.source === source)) return { status: "installed" };
+  const key = extensionPackageKey(source);
+  const other = installed.find(item => !item.dev && extensionPackageKey(item.source) === key);
+  return other ? { status: "other-version", installed: other.source } : { status: "missing" };
+}
+
+/**
+ * The extensions a session runs with: the workspace's enabled ones its host has at that exact version and that loaded,
+ * then, in the host owner's own sessions, the host's dev extensions.
+ */
+export function sessionExtensions(workspace: readonly WorkspaceExtension[], installed: readonly InstalledExtension[],
+  session: { ownerId: string; connectorOwnerId?: string | null }): { source: string; dev: boolean; workspace?: WorkspaceExtension }[] {
+  const chosen: { source: string; dev: boolean; workspace?: WorkspaceExtension }[] = [];
+  for (const extension of workspace) {
+    if (extension.enabled && installed.some(item => !item.dev && item.source === extension.source && !item.error)) chosen.push({ source: extension.source, dev: false, workspace: extension });
+  }
+  if (session.connectorOwnerId && session.ownerId === session.connectorOwnerId) {
+    for (const item of installed) if (item.dev && !item.error) chosen.push({ source: item.source, dev: true });
+  }
+  return chosen;
 }

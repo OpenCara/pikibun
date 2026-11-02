@@ -1,152 +1,138 @@
-# Host extensions
+# Extensions
 
-Pi on a workstation is extended with extensions: TypeScript modules that add tools, react to the agent's events and
-change its prompt. Sessions in Pikibun run on `@earendil-works/pi-durable`, not on `pi-coding-agent`, so none of those
-load: the runner installs one pi-durable extension of its own (`workspace-tools`, see `Session.buildTools`).
+Pi on a workstation is extended with extensions: modules that add tools, react to the agent's events and change its
+prompt. Sessions in Pikibun run on `@earendil-works/pi-durable`, not on `pi-coding-agent`'s agent session, so none of
+those load today: the runner installs one pi-durable extension of its own (`workspace-tools`, see `Session.buildTools`).
 
-A **host extension** is code the host's owner installed on the host, written against `PikibunExtensionAPI` (modelled on
-Pi's `ExtensionAPI`), which the connector loads and installs into its sessions' pi-durable registry. The host's owner and
-admins turn each one on and configure it from the host's page in Pikibun (**Settings → Hosts → the host → Extensions**),
-as they enable its models.
+With this design a **workspace** chooses Pi extensions for its sessions, each pinned to an exact version, and each
+**host** installs them, from Pikibun or from its command line. A session runs with exactly the workspace's extensions
+its host has.
 
 ## Decisions
 
-1. **Installs only from the host.** Only `pikibun extensions add` on the machine installs code. The control plane turns an
-   installed extension on or off and sets its settings; it never sends code or names a package to install, so neither a
-   compromised server nor a host admin can make a host run code its owner didn't put there.
-2. **In the connector process.** Extensions load into the connector, as Pi loads them into its own process. They run as
-   the host's OS user, outside the sandbox, with its files, credentials and network; a buggy one can slow or crash the
-   connector. Isolation (a worker or child process) is later work.
-3. **Only the new API.** Pi's extensions don't load as they are: an extension's default export takes a
-   `PikibunExtensionAPI`. Porting a Pi extension that uses only what the API offers is mostly renaming.
-4. **Owner turns on, admins can turn off.** Turning an extension on, choosing which sessions get it and letting its tools
-   run without approval are the owner's; admins can turn one off and change its settings.
+1. **Pi's extensions, as they are.** Extensions load through `pi-coding-agent`'s own loader (TypeScript, `pi` manifests,
+   its bundled modules), in a session context like Pi's print mode (`hasUI: false`). Pikibun maps what pi-durable can do
+   and turns UI, commands and the rest into no-ops. There is no Pikibun-specific API to port to.
+2. **The workspace decides.** Its owners and admins add extensions (npm `name@version` or a Git commit), turn them on or
+   off, and set their settings. Sessions run with the workspace's enabled extensions that their host has at that exact
+   version, and no others.
+3. **Hosts install, the host owner clicks.** Only the host's owner installs, updates or removes an extension on the host:
+   from its page in Pikibun, where extensions a workspace uses but the host lacks show an **Install** button, or with
+   `pikibun extensions` on the machine. Every install is pinned, runs no npm scripts, and is audited.
+4. **In the connector process.** Extensions run in the connector, as the host's OS user, outside the sandbox, with its
+   files, credentials and network. A buggy one can slow or crash the connector. Isolation is later work.
+5. **Approval by default.** An extension tool call is decided like `host_bash`, by the host's owner or a member granted
+   host commands. It runs without approval only where the workspace set the extension's tools to automatic **and** the
+   host's owner lets workspaces do that on their host (off by default).
+6. **Dev mode.** An extension installed from a local path on the host isn't something a workspace can name: it runs only
+   in the host owner's own sessions on that host, in every workspace, marked as a dev extension.
+7. **Missing means without.** A session on a host that lacks one of the workspace's enabled extensions, or has another
+   version, starts without it and says so. (A per-extension **Required** switch could block it later.)
+8. **Settings per workspace.** An extension's settings are its Pi flags (`registerFlag`); the workspace sets their values.
+   Secrets never go there: the extension reads them on the host (its environment, files, or Pi's `auth.json`), which the
+   host's owner sets up.
 
-## Rules
+## Compatibility
 
-1. **Off until turned on.** A newly found extension is listed, disabled.
-2. **Decided like a host command.** An extension tool call is an operation decided like `host_bash`: by the host's owner
-   or a member granted host commands, unless the owner set the extension's tools to run automatically. Under the session
-   owner's Auto-approve it runs without asking only where a host command would.
-3. **No secrets in Pikibun.** Settings are plain JSON, visible to the host's owner and admins and recorded in the audit
-   log. Keys and tokens stay on the host (its environment, files, or Pi's `auth.json`), where the extension reads them.
-4. **Visible to everyone in the session.** A session lists the host extensions it runs with, as it shows **Runs on the
-   host**, and a member starting a session on someone else's host sees them before **I trust …'s host**.
+Pikibun runs each extension's factory with `pi-coding-agent`'s loader once per session, so module state and closures are
+the session's own, then maps what it registered:
 
-## Writing one
+| Pi | In Pikibun |
+|---|---|
+| `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), behind the approval of rule 5. `onUpdate` is ignored |
+| `before_agent_start` | Run once per message with its prompt; a returned `systemPrompt` (appended to the empty base it gets) and `message` become a prompt section |
+| `context` | `GenerationHooks.beforeRequest` |
+| `tool_call` | `ToolHooks.beforeTool`: `block`/`reason`, and changes made to `event.input` |
+| `tool_result` | `ToolHooks.afterTool`: `content`, `isError`, `details` |
+| `turn_start`, `turn_end` | Before each model request, `GenerationHooks.afterTools` (results ignored) |
+| `message_end` | `GenerationHooks.afterResponse` (replacing the message is ignored) |
+| `tool_execution_start`, `tool_execution_end` | Around each tool call |
+| `agent_start`, `agent_end`, `agent_settled` | When a message starts and ends |
+| `agent_before_settle` | `GenerationHooks.onYield`: `continue` sends one more turn |
+| `session_before_compact` | `CompactionHooks.beforeCompact`: `cancel`, or `compaction.summary` |
+| `session_start`, `session_shutdown` | When the session opens and closes |
+| `registerFlag`, `getFlag` | The extension's settings, set by the workspace |
+| `exec` | Runs on the host, in the session's worktree |
+| `ctx.cwd`, `ctx.signal`, `ctx.model` | The session's worktree on the host, the call's signal, the session's model |
+| `ctx.ui.*`, `registerCommand`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage`, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
+| `registerProvider`, `registerMcpServer`, `registerVirtualModel`, `input`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 
-An extension is a module whose default export is a factory, as in Pi:
+`ctx.pikibun` adds the session (id, workspace, owner, whether it runs on the host). The host's page shows, per
+extension, which of its registrations work, are no-ops or are ignored, so a workspace can tell what it gets.
 
-```typescript
-import type { PikibunExtensionAPI } from "pikibun/extension";
+Extensions written directly against pi-durable (`defineExtension`) are libraries without a plugin contract (their own
+options and lifecycle); the useful ones (`tool-search`, `codemode`, auto-compact) get small wrappers in Pikibun later.
 
-export default function (pi: PikibunExtensionAPI) {
-  pi.describe("Searches the team's internal index.");
-  const settings = pi.settings(pi.Type.Object({ endpoint: pi.Type.String({ default: "https://search.example.com" }) }));
+## Installing
 
-  pi.registerTool({
-    name: "team_search",
-    description: "Search the team's internal index.",
-    parameters: pi.Type.Object({ query: pi.Type.String() }),
-    replay: "safe",
-    async execute(args, ctx) {
-      const response = await fetch(`${settings().endpoint}/q?${new URLSearchParams({ q: args.query })}`,
-        { headers: { Authorization: `Bearer ${process.env.TEAM_SEARCH_TOKEN}` }, signal: ctx.signal });
-      return await response.text();
-    },
-  });
-
-  pi.on("before_agent_start", ctx => `Session ${ctx.session.id} belongs to ${ctx.session.owner.id}.`);
-  pi.on("tool_call", call => call.name === "bash" && /rm -rf \//.test(String(call.arguments.command)) ? { block: "Not here." } : undefined);
-}
-```
-
-`PikibunExtensionAPI` (`apps/runner/src/extensions/api.ts`) keeps Pi's names where pi-durable has the same thing:
-
-| `PikibunExtensionAPI` | pi-durable | Pi |
-|---|---|---|
-| `registerTool({ name, description, parameters, execute, replay?, executionMode? })` | `defineTool` | `registerTool` |
-| `on("before_agent_start", ctx => text)` | `section` | `before_agent_start` (system prompt) |
-| `on("context", messages => messages)` | `GenerationHooks.beforeRequest` | `context` |
-| `on("tool_call", call => { block } \| { arguments })` | `ToolHooks.beforeTool` | `tool_call` |
-| `on("tool_result", (call, result) => result)` | `ToolHooks.afterTool` | `tool_result` |
-| `on("turn_end", …)` | `GenerationHooks.afterTools` | `turn_end` |
-| `on("message_end", …)` | `GenerationHooks.afterResponse` | `message_end` |
-| `on("agent_before_settle", answer => { continue })` | `GenerationHooks.onYield` | `agent_before_settle` |
-| `on("session_before_compact", …)` | `CompactionHooks.beforeCompact` | `session_before_compact` |
-| `settings(schema)`, `describe(text)`, `Type` | the host's extension settings | flags |
-
-Not offered: `ctx.ui`, `registerCommand`, shortcuts, flags, renderers, `sendUserMessage`, `appendEntry`, session
-lifecycle events (`session_start`, `session_shutdown`, `agent_start`, …), `input` and provider-request hooks,
-`registerProvider` (models come from the host's Pi, see `local-pi.ts`) and `registerMcpServer`.
-
-- The factory runs once when the connector starts, to learn what the extension offers, then once per session: closures
-  and module state outside the factory are shared by every session on the host. Register everything while it runs;
-  later registrations are ignored. Don't start processes or timers in it.
-- A tool's `ctx` carries the call's `signal`, `output()` for streaming, the settings, and a read-only view of the session:
-  its id, workspace, owner, whether it runs on the host, and its worktree's path on the host. Not Pikibun's credentials,
-  the egress proxy, or other sessions.
-- Hooks may run again on recovery (pi-durable runs `beforeRequest` before every attempt), and have a time limit. One that
-  throws or times out is skipped and logged on the host, except `tool_call`, where a throw blocks the call (pi-durable's
-  rule), so a broken guard never lets through what it would have stopped.
-
-## Installing one
+On the host, or from its page (owner only):
 
 ```sh
-npx pikibun@latest extensions add npm:@acme/pikibun-search@1.2.0      # an exact version
-npx pikibun@latest extensions add git:github.com/acme/search@<commit>  # a full commit, over https
-npx pikibun@latest extensions add ./team-search.ts                      # a file or directory, loaded in place
-npx pikibun@latest extensions list                                      # loads them and shows what each offers
-npx pikibun@latest extensions remove @acme/pikibun-search
+npx pikibun@latest extensions add npm:@ollama/pi-web-search@0.0.5
+npx pikibun@latest extensions add git:github.com/acme/search@<40-character commit>
+npx pikibun@latest extensions add ./my-extension.ts          # dev mode: the host owner's own sessions only
+npx pikibun@latest extensions list
+npx pikibun@latest extensions remove @ollama/pi-web-search@0.0.5
 ```
 
-Installs live in the connector's state directory (`<state-dir>/extensions`: a private npm project, and `sources.json`
-listing every source in order). npm runs no install scripts unless `--allow-scripts`, and fetches no Git dependencies of
-the extension's own. An npm or Git package says it is an extension (`"pikibun": { "extensions": ["./dist/index.js"] }` in
-its `package.json`), so no other package's default export ever runs; a local directory may instead keep its modules in
-`extensions/` or have an `index.js`. Node.js strips TypeScript only outside `node_modules`, so a published extension ships
-JavaScript; local ones can be TypeScript. Restart the connector after adding or removing one.
+Each source installs into its own directory, `<state-dir>/extensions/packages/<digest>/`, so two versions can sit side by
+side and a new one loads without restarting the connector (Node caches modules by path). npm runs no install scripts,
+installs no peer dependencies (the loader provides `pi-coding-agent`, `pi-ai`, `pi-tui` and `typebox`, as Pi does), and
+fetches no Git dependencies of the extension's own; `package-lock.json` keeps the integrity of what was installed.
 
-## Configuring one
+From Pikibun, the host's owner's **Install** goes `POST /api/connectors/:id/extensions` → the connector, which installs,
+reloads the extensions it reports and answers with the outcome. `pikibun connect --no-remote-installs` refuses them.
+The connector already takes the control plane's word on who approved a host command, so an install the host's owner
+starts in Pikibun asks for the same trust; it is recorded in the audit log.
 
-The connector advertises what it loaded (HostExtensionSummary, `packages/shared/src/host-extensions.ts`): per extension
-its name, source and version, description, tools, events, and settings schema (JSON Schema), or why it didn't load.
+## Where things show
 
-| Setting | Values | Changed by |
-|---|---|---|
-| `enabled` | on / off | Owner turns on; owner and admins turn off |
-| `scope` | `owner` (the host owner's sessions), `host` (sessions running on the host), `all` | Owner |
-| `tools` | `approval` (decided as host commands) or `automatic` | Owner |
-| `settings` | JSON valid against the advertised schema, 16 KB at most | Owner and admins |
+- **Workspace → Extensions** (owners and admins edit, members read): the workspace's extensions, each with its source,
+  **Enabled**, **Tools** (approval, automatic) and settings; per host shared with the workspace, whether it has each one
+  (installed, missing, other version).
+- **Host → Configuration → Extensions**: what the host has installed and what each offers or ignores; the owner's
+  **Install**, **Update**, **Remove**; **Let workspaces run extension tools without approval** (owner only). Per workspace
+  the host is shared with, extensions it uses that the host lacks, with **Install** or **Update** for the owner.
+- **Session**: the extensions it runs with, dev ones marked, and the workspace's enabled ones its host lacks.
+- **Approval card** `extension.tool`: the extension, tool and exact arguments, decided like a host command.
 
-`POST /api/connectors/self/extensions` takes the advertised list when the connector connects and answers with the
-settings; the connector asks again at most every 30 seconds, so a change reaches running sessions from their next
-request, without a restart. An older control plane answers 404 there, and its hosts run no extensions.
+## Data and routes
+
+- `workspace_extensions`: workspace, source (normalized `npm:<name>@<version>` or `git:<url>@<commit>`), package key
+  (`npm:<name>` or `git:<url>`, unique per workspace), enabled, tools mode, settings JSON, who changed it and when.
+- `connectors.extensions_json`: what the connector last reported (installed sources and their loaded extensions).
+- `connector_configs.extension_tools_automatic`: the host owner's switch.
+- Connector → control plane: `POST /api/connectors/self/extensions` reports what is installed (on connect and after each
+  change); `POST /api/connectors/self/extensions/workspace` returns one workspace's enabled extensions, asked at most
+  every 30 seconds per workspace, so changes reach running sessions from their next message.
+- Apps → control plane: `GET`/`PUT`/`DELETE /api/workspaces/:id/extensions…` (owners and admins write),
+  `POST`/`DELETE /api/connectors/:id/extensions` (host owner), the host config switch.
+- Control plane → connector: install and remove, as host operations over its connection.
 
 ## In the runner
 
-- `extensions/store.ts` installs; `extensions/load.ts` loads each module and records what its factory registers;
-  `extensions/adapter.ts` builds a factory into a pi-durable `Extension` (`host:<name>`) for one session.
-- Each session installs the built extensions into its registry next to `workspace-tools`. Each message selects the ones
-  that apply (`configure({ extensions, tools })` in `applyOptions`); every tool, section and hook also checks before it
-  runs, so turning one off stops its next use.
-- An extension tool's call goes through `ExtensionHost.runTool`: refused in a Read-only message, else an
-  `extension.tool` card (`{ kind, extension, tool, arguments, digest }`) decided like `host.bash` unless the extension's
-  tools are automatic. The call's intent is committed before it runs; one interrupted mid-way is not replayed unless the
-  tool says `replay: "safe"`. Tools stop at the host's command time limit.
+- `extensions/store.ts` installs; `extensions/load.ts` loads sources through `discoverAndLoadExtensions` and summarizes
+  them; `extensions/adapter.ts` builds one session's pi-durable extension per source.
+- A session loads the extensions that apply when it opens and installs them next to `workspace-tools`. Each message
+  selects the ones that apply now (`configure({ extensions, tools })` in `applyOptions`) and runs `before_agent_start`;
+  every tool and hook also checks before it runs, so turning one off stops its next use.
+- An extension tool's call is refused in a Read-only message, otherwise an `extension.tool` card
+  (`{ kind, extension, tool, arguments, digest }`) unless its tools run automatically. Its intent is committed before it
+  runs; one interrupted mid-way isn't replayed. It stops at the host's command time limit.
+- A hook that throws or times out is skipped and logged on the host, except `tool_call`, where it blocks the call.
 
 ## Status
 
 | Part | State |
 |---|---|
-| API, loader, adapter, `pikibun extensions` | Done (`apps/runner/src/extensions/`, `extensions-cli.ts`, `tests/host-extensions.test.ts`) |
-| Session integration, `extension.tool` approval cards | Next |
-| Control plane: storage, routes, owner/admin rules, audit | Next |
-| Host page **Extensions** section, session list, approval card in web and mobile | Next |
-| `pikibun/extension` types for authors in the published package | Next |
+| Install store, loader and adapter through Pi's loader, `pikibun extensions` | In progress |
+| Sessions: selection, `before_agent_start`, lifecycle events, `extension.tool` cards | Next |
+| Control plane: tables, routes, owner/admin rules, connector reports, remote installs, audit | Next |
+| Web and mobile: workspace and host sections, install buttons, session list, approval card | Next |
 
 ## Later
 
-- Extensions in a worker thread or child process, with a narrower API.
-- MCP servers as tools; `registerProvider` feeding the host's model list.
-- Asking the session owner (a permission card) instead of refusing extension tools in Read-only messages.
+- Isolation in a worker or child process.
+- `registerMcpServer` as tools, `registerProvider` feeding the host's models.
+- `ctx.ui.confirm`/`select` as cards; asking the session owner instead of refusing tools in Read-only messages.
+- Wrappers for pi-durable's `tool-search` and `codemode`.
