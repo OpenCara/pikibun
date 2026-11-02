@@ -18,6 +18,7 @@ import { registerConnectorCredentials, registerConnectors } from './connectors.j
 import { registerHostAccess } from './host-access.js';
 import { registerHostConfig } from './host-config.js';
 import { registerHostModels } from './host-models.js';
+import { registerConnectorExtensions, registerExtensions } from './extensions.js';
 import { registerRestoreRoutes } from './restore-routes.js';
 import { registerHostMigrations } from './host-migrations.js';
 import { registerRepositories } from './repositories.js';
@@ -80,6 +81,7 @@ registerAuth(app);
 registerPasswordAuth(app);
 registerInternal(app);
 registerConnectorCredentials(app);
+registerConnectorExtensions(app);
 registerOidc(app);
 // Share links are their own read-only credential: anyone who has one can view without signing in.
 registerSharedSessions(app);
@@ -96,6 +98,7 @@ registerConnectors(app);
 registerHostAccess(app);
 registerHostConfig(app);
 registerHostModels(app);
+registerExtensions(app);
 registerSessions(app);
 registerSessionLinks(app);
 registerBackups(app);

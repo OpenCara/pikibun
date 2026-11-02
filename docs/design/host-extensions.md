@@ -109,15 +109,21 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 
 - `workspace_extensions`: workspace, source (normalized `npm:<name>@<version>` or `git:<url>@<commit>`), package key
   (`npm:<name>` or `git:<url>`, unique per workspace), enabled, tools mode, settings JSON, who changed it and when.
-- `connectors.extensions_json`: what the connector last reported (installed sources and their loaded extensions).
-- `connector_configs.extension_tools_automatic`: the host owner's switch.
+- `connector_extensions`: what the connector last reported (installed sources and their loaded extensions). Its dev
+  extensions (their paths are the owner's files) are shown to the host's owner only.
+- `connector_extension_settings.automatic_tools`: the host owner's switch.
 - `connector_extension_requests`: the host owner's install and remove requests, with their outcome once reported.
 - Connector → control plane: `POST /api/connectors/self/extensions` (ExtensionsSync: the report and request results;
   the answer lists pending requests), on connect and every 30 seconds; `POST /api/connectors/self/extensions/workspace`
   (WorkspaceExtensionsAnswer: one workspace's extensions and the host owner's switch), asked at most every 30 seconds
   per workspace, so changes reach running sessions from their next message.
-- Apps → control plane: `GET`/`PUT`/`DELETE /api/workspaces/:id/extensions…` (owners and admins write),
-  `POST`/`DELETE /api/connectors/:id/extensions` (host owner), the host config switch.
+- Apps → control plane: `GET /api/workspaces/:id/extensions` (members: the list and where each host stands),
+  `PUT` (an extension, by package: a new version keeps its place) and `DELETE ?source=` (owners and admins);
+  `GET /api/connectors/:id/extensions` (the host's owner and admins: its report, requests, and its workspaces'
+  extensions it lacks), `POST /api/connectors/:id/extensions/requests` (`{ action, source }`, owner only) and
+  `PATCH /api/connectors/:id/extensions` (`{ automaticTools }`, owner only).
+- An `extension.tool` card is reviewed against the session: an enabled extension of its workspace, or a dev extension
+  in its host owner's own session.
 
 ## In the runner
 
@@ -137,7 +143,7 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 |---|---|
 | Install store, loader and adapter through Pi's loader, `pikibun extensions` | Done |
 | Sessions: selection, `before_agent_start`, lifecycle events, `extension.tool` cards; connector sync and installs | Done (`session.ts`, `extensions/host.ts`, `connector.ts`) |
-| Control plane: tables, routes, owner/admin rules, connector reports, remote installs, audit | Next |
+| Control plane: tables, routes, owner/admin rules, connector reports, remote installs, audit | Done (`apps/server/src/extensions.ts`, migrations `0046`/`0039`) |
 | Web and mobile: workspace and host sections, install buttons, session list, approval card | Next |
 
 ## Later

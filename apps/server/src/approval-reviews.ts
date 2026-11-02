@@ -1,4 +1,5 @@
 import type { ApprovalRecord, Operation, ToolName } from '../../../packages/shared/src/types.js';
+import { sessionExtensionSources } from './extensions.js';
 import { constantTimeEqual, sha256 } from '../../../packages/shared/src/crypto.js';
 import type { AppContext, Env, SessionRow } from './types.js';
 import { fail, identifier, now, text, userIdentifier } from './http.js';
@@ -53,11 +54,12 @@ function ownerAuto(row: SessionRow, admission: AdmissionAccess | undefined): boo
 async function sessionTools(env: Env, row: SessionRow): Promise<(operation: Operation, approvalId: string, admission?: AdmissionAccess) => boolean> {
   const agentTools = await toolsFor(env, row);
   const grants = await env.DB.query<{ tool: string; call_id: string }>('SELECT tool, call_id FROM session_tool_grants WHERE session_id = ?').bind(row.id).all();
+  const extensions = await sessionExtensionSources(env, row);
   return (operation, approvalId, admission) => {
     if (operation.kind === 'permission') return permissionCall(approvalId) !== undefined;
-    // An extension's tool comes from the session's extensions, which its host runs as its workspace chose them, never
-    // from the pinned agent; each card is its own call's.
-    if (operation.kind === 'extension.tool') return approvalId.startsWith('tool-');
+    // An extension's tool comes from the session's extensions, never from the pinned agent: an enabled one of its
+    // workspace, or its host owner's dev extension in their own session. Each card is its own call's.
+    if (operation.kind === 'extension.tool') return approvalId.startsWith('tool-') && extensions(operation.source);
     const tool = operationTools[operation.kind];
     const call = approvalId.startsWith('tool-') ? approvalId.slice('tool-'.length) : undefined;
     // Host commands never take a session grant: each one is allowed for its own call.

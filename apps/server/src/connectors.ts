@@ -549,6 +549,9 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
       c.env.DB.query('DELETE FROM connector_host_grants WHERE connector_id = ?').bind(row.id),
       c.env.DB.query('DELETE FROM connector_admins WHERE connector_id = ?').bind(row.id),
       c.env.DB.query('DELETE FROM connector_disabled_models WHERE connector_id = ?').bind(row.id),
+      c.env.DB.query('DELETE FROM connector_extensions WHERE connector_id = ?').bind(row.id),
+      c.env.DB.query('DELETE FROM connector_extension_settings WHERE connector_id = ?').bind(row.id),
+      c.env.DB.query('DELETE FROM connector_extension_requests WHERE connector_id = ?').bind(row.id),
       c.env.DB.query('UPDATE models SET available = 0 WHERE connector_id = ?').bind(row.id),
       c.env.DB.query('UPDATE sessions SET policy_version = policy_version + 1 WHERE connector_id = ?').bind(row.id),
     ]);
