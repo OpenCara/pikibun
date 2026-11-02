@@ -3070,6 +3070,39 @@ test('a session owner auto-approves another member\'s requests from one of their
   assert.deepEqual(audit, ['workspace.approvals.updated', 'session.requester_auto_approve.started', 'workspace.approvals.updated', 'workspace.approvals.updated', 'session.requester_auto_approve.stopped']);
 });
 
+test('another member\'s extension tool call that ran automatically shows in the session view, checked once against the workspace and the host owner\'s leave', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const owner = s.creator.user.id; const member = s.admin.user.id;
+  const path = `/api/sessions/${s.session.id}`;
+  const admissionId = autoAdmission(f, s.session.id, member, 'approval');
+  const operation: Operation = { kind: 'extension.tool', source: 'npm:shout@1.0.0', tool: 'shout', arguments: '{"text":"hi"}', digest: 'a'.repeat(64) };
+  const ran = (id: string, admission: string | null = admissionId): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: member, decidedBy: owner,
+    automatic: true, ...(admission ? { admissionId: admission } : {}), status: 'executed', result: 'HI!', createdAt: new Date().toISOString(), operation });
+  let approvals: ApprovalRecord[] = [];
+  rpcHub(f, s.connector, envelope => {
+    assert.equal(envelope.request.ticket.action, 'view');
+    return Response.json({ view: { sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
+      entries: [], approvals, conversations: [], busy: false } });
+  });
+  const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
+  // The workspace doesn't run it automatically (yet): the view still loads, and the record is shown unreviewed.
+  approvals = [ran('tool-early')];
+  assert.equal((await present()).get('tool-early')!.reviewHash, undefined);
+  // The workspace runs its tools automatically and the host's owner allows that: reviewed, and kept so.
+  await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'npm:shout@1.0.0', tools: 'automatic' }));
+  await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }));
+  approvals = [ran('tool-ran')];
+  const presented = (await present()).get('tool-ran')!;
+  assert.deepEqual([presented.automatic, presented.status, typeof presented.reviewHash], [true, 'executed', 'string']);
+  await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: false }));
+  assert.equal(typeof (await present()).get('tool-ran')!.reviewHash, 'string', 'a setting changed later doesn\'t undo what it allowed');
+  // Without the member's own message, a host can't claim it.
+  approvals = [ran('tool-forged', null)];
+  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
+  approvals = [ran('tool-borrowed', autoAdmission(f, s.session.id, owner))];
+  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
+});
+
 test('automatic GitHub merges need an Auto-approve admission marked to merge, and runtimes cannot claim otherwise', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_merge']);
   const calls = mergeFetch(t, () => Response.json({ merged: true, sha: mergedSha }));

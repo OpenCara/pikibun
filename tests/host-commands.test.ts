@@ -152,3 +152,12 @@ test("an extension's tool call is decided as a host command, by the host's owner
   assert.equal(decidesHostCommand(call, session, undefined, "github:1", false), true, "the host's owner, without approve permission");
   assert.equal(decidesHostCommand(call, session, undefined, "github:2", true), false, "the session's owner, without host command authority");
 });
+
+test("an extension tool card takes exactly its keys, in any order", async () => {
+  const { validExtensionToolOperation } = await import("../packages/shared/src/host-operations.js");
+  const card = { kind: "extension.tool", source: "npm:a@1.0.0", tool: "shout", arguments: "{}", digest: "a".repeat(64) };
+  assert.equal(validExtensionToolOperation(card), true);
+  assert.equal(validExtensionToolOperation({ digest: card.digest, arguments: "{}", tool: "shout", source: card.source, kind: card.kind }), true);
+  assert.equal(validExtensionToolOperation({ ...card, extra: 1 }), false);
+  assert.equal(validExtensionToolOperation({ ...card, digest: "short" }), false);
+});

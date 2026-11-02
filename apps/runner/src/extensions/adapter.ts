@@ -77,31 +77,38 @@ export function addedPrompt(base: string, final: string): string {
 }
 
 /**
- * A session's extensions: one Pi ExtensionRunner and one pi-durable Extension per source, opened as the session first
- * runs with each. A tool named like one the session already has (Pikibun's own, or an earlier extension's) is left out.
+ * A session's extensions: one Pi ExtensionRunner per source, opened as the session first runs with it, and the pi-durable
+ * Extension each message selects. A tool named like one the session already has (Pikibun's own, or one of an extension
+ * earlier in the selection) is left out of that selection only, so a later selection (another version, say) gets it.
  */
 export class SessionExtensions {
-  readonly extensions: SessionExtension[] = [];
-  readonly #taken: Set<string>;
+  readonly #opened: OpenedSource[] = [];
+  readonly #reserved: ReadonlySet<string>;
+  #selected: SessionExtension[] = [];
+  readonly #warned = new Set<string>();
   #started = false;
 
-  /** `taken`: the session's own tool names. */
-  constructor(private readonly host: ExtensionHost, taken: Iterable<string> = []) {
-    this.#taken = new Set(taken);
+  /** `reserved`: the session's own tool names. */
+  constructor(private readonly host: ExtensionHost, reserved: Iterable<string> = []) {
+    this.#reserved = new Set(reserved);
   }
 
-  get(source: string): SessionExtension | undefined { return this.extensions.find(item => item.source === source); }
+  /** Every source the session opened. */
+  get extensions(): readonly { source: string; dev: boolean; runner: ExtensionRunner }[] { return this.#opened; }
+
+  /** `source` as the last selection has it: its Extension and the tools it kept. */
+  get(source: string): SessionExtension | undefined { return this.#selected.find(item => item.source === source); }
 
   /**
-   * Opens those of `sources` the session hasn't opened yet, in order, and returns them; once the session started, each
-   * gets `session_start`. A source that fails is left out, and logged.
+   * Opens those of `sources` the session hasn't opened yet; once the session started, each gets `session_start`. A
+   * source that fails is left out, and logged.
    */
-  async ensure(sources: readonly LoadedSource[]): Promise<SessionExtension[]> {
+  async ensure(sources: readonly LoadedSource[]): Promise<void> {
     const { loadExtensions } = await piLoader();
-    const opened: SessionExtension[] = [];
+    const opened: OpenedSource[] = [];
     for (const loaded of sources) {
       const source = loaded.summary.source;
-      if (this.get(source) || loaded.summary.error) continue;
+      if (this.#opened.some(item => item.source === source) || loaded.summary.error) continue;
       try {
         const runtime = createExtensionRuntime();
         const result = await loadExtensions(loaded.files, this.host.directory, createEventBus(), runtime);
@@ -110,24 +117,54 @@ export class SessionExtensions {
           this.host.modelRegistry ?? (undefined as never));
         runner.bindCore(noActions(runner, message => this.host.warn(source, message)), contextActions(this.host));
         runner.onError(error => this.host.warn(source, `${error.event}: ${error.error}`));
-        const allowed = new Set<string>();
-        for (const name of loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name))) {
-          if (this.#taken.has(name)) { this.host.warn(source, `tool ${name} is left out: the session already has a tool named so`); continue; }
-          allowed.add(name);
-          this.#taken.add(name);
-        }
-        const extension = build(source, loaded.summary.dev, runner, allowed, this.host);
-        this.extensions.push(extension);
+        const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
+        const extension = build(source, loaded.summary.dev, runner, offered, this.host);
+        this.#opened.push(extension);
         opened.push(extension);
       } catch (error) {
         this.host.warn(source, `didn't load: ${describe(error)}`);
       }
     }
     if (this.#started) for (const extension of opened) await this.one(extension, "session_start", runner => runner.emit({ type: "session_start", reason: "startup" }));
-    return opened;
   }
 
-  private async one(extension: SessionExtension, event: string, work: (runner: ExtensionRunner, source: string) => Promise<unknown>): Promise<void> {
+  /**
+   * The Extensions for a message that runs with `sources`, in that order, of those the session opened: each keeps the
+   * tools no earlier one (nor the session itself) has. `created` are those made now, for the registry.
+   */
+  select(sources: readonly string[]): { selected: SessionExtension[]; created: Extension[] } {
+    const taken = new Set(this.#reserved);
+    const selected: SessionExtension[] = [];
+    const created: Extension[] = [];
+    for (const source of sources) {
+      const opened = this.#opened.find(item => item.source === source);
+      if (!opened) continue;
+      const tools = opened.tools.filter(tool => {
+        if (!taken.has(tool.name)) return true;
+        const warning = `${source} ${tool.name}`;
+        if (!this.#warned.has(warning)) {
+          this.#warned.add(warning);
+          this.host.warn(source, `tool ${tool.name} is left out: an earlier extension or the session has a tool named so`);
+        }
+        return false;
+      });
+      for (const tool of tools) taken.add(tool.name);
+      const key = tools.map(tool => tool.name).sort().join("\n");
+      let extension = opened.variants.get(key);
+      if (!extension) {
+        // The whole source keeps its plain name; one that lost tools to a clash is another Extension, named for what it kept.
+        const name = tools.length === opened.tools.length ? extensionKey(source) : `${extensionKey(source)}-${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
+        extension = defineExtension({ name, tools, sections: opened.sections, hooks: opened.hooks });
+        opened.variants.set(key, extension);
+        created.push(extension);
+      }
+      selected.push({ source, dev: opened.dev, extension, tools, runner: opened.runner });
+    }
+    this.#selected = selected;
+    return { selected, created };
+  }
+
+  private async one(extension: { source: string; runner: ExtensionRunner }, event: string, work: (runner: ExtensionRunner, source: string) => Promise<unknown>): Promise<void> {
     if (!(await applyState(this.host, extension.source, extension.runner))) return;
     try { await withTimeout(() => work(extension.runner, extension.source), this.host.hookTimeoutMs, `${event}`); }
     catch (error) { this.host.warn(extension.source, `${event}: ${describe(error)}`); }
@@ -135,7 +172,7 @@ export class SessionExtensions {
 
   /** Runs `event` on every source that applies; one that fails or times out is logged. */
   private async each(event: string, work: (runner: ExtensionRunner, source: string) => Promise<unknown>): Promise<void> {
-    for (const extension of this.extensions) await this.one(extension, event, work);
+    for (const extension of this.#opened) await this.one(extension, event, work);
   }
 
   sessionStart(): Promise<void> {
@@ -171,7 +208,7 @@ export class SessionExtensions {
   /** When the session closes: `session_shutdown`, then the runners stop. */
   async shutdown(): Promise<void> {
     await this.each("session_shutdown", runner => runner.emit({ type: "session_shutdown", reason: "quit" }));
-    for (const extension of this.extensions) {
+    for (const extension of this.#opened) {
       try { extension.runner.shutdown(); } catch { /* Already stopped. */ }
     }
   }
@@ -215,7 +252,19 @@ function toResult(result: AgentToolResult<unknown>): ToolExecutionResult {
   return { output: content, ...(result?.details !== undefined && isJsonValue(result.details) ? { details: result.details } : {}) };
 }
 
-function build(source: string, dev: boolean, runner: ExtensionRunner, allowed: Set<string>, host: ExtensionHost): SessionExtension {
+/** One source a session opened: its runner, and every tool, section and hook it offers Pikibun. */
+interface OpenedSource {
+  source: string;
+  dev: boolean;
+  runner: ExtensionRunner;
+  tools: ToolRegistration[];
+  sections: ReturnType<typeof section>[];
+  hooks: HookRegistration[];
+  /** Its pi-durable Extensions, by the tools a selection kept of it (see SessionExtensions.select). */
+  variants: Map<string, Extension>;
+}
+
+function build(source: string, dev: boolean, runner: ExtensionRunner, offered: Set<string>, host: ExtensionHost): OpenedSource {
   const key = extensionKey(source);
   const active = () => applyState(host, source, runner);
   const timed = <T>(event: string, work: () => Promise<T>) => withTimeout(work, host.hookTimeoutMs, `${source}'s ${event} handlers`);
@@ -223,7 +272,7 @@ function build(source: string, dev: boolean, runner: ExtensionRunner, allowed: S
     try { if (await active()) await timed(event, work); }
     catch (error) { host.warn(source, `${event}: ${describe(error)}`); }
   };
-  const tools = runner.getAllRegisteredTools().filter(tool => allowed.has(tool.definition.name)).map(({ definition }) => defineTool({
+  const tools = runner.getAllRegisteredTools().filter(tool => offered.has(tool.definition.name)).map(({ definition }) => defineTool({
     name: definition.name, description: definition.description, parameters: definition.parameters,
     ...(definition.executionMode ? { executionMode: definition.executionMode } : {}),
     ...(definition.prepareArguments ? { prepareArguments: definition.prepareArguments } : {}),
@@ -326,5 +375,5 @@ function build(source: string, dev: boolean, runner: ExtensionRunner, allowed: S
     if (!text || !(await host.state(source)).active) return undefined;
     return `<extension source="${source.replaceAll("\"", "'")}">\n${text}\n</extension>`;
   }, { tag: false })] : [];
-  return { source, dev, extension: defineExtension({ name: key, tools, sections, hooks }), tools, runner };
+  return { source, dev, runner, tools, sections, hooks, variants: new Map() };
 }

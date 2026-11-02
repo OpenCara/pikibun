@@ -1424,8 +1424,11 @@ export class RunnerSession {
     const { chosen } = await this.extensionChoice();
     const installed = config.installed();
     const loaded = chosen.flatMap(item => installed.filter(candidate => candidate.summary.source === item.source));
-    for (const opened of await host.ensure(loaded)) this.#registry?.install(opened.extension);
-    return chosen.flatMap(item => host.get(item.source) ?? []);
+    await host.ensure(loaded);
+    // Tool name clashes are settled among the extensions this message runs with, in the workspace's order.
+    const { selected, created } = host.select(chosen.map(item => item.source));
+    for (const extension of created) this.#registry?.install(extension);
+    return selected;
   }
 
   /** What the session gives its extensions: its worktree, their state and settings, and the gate of their tool calls. */

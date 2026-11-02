@@ -79,7 +79,8 @@ export function validHostOperation(value: unknown): value is HostCommandOperatio
 export function validExtensionToolOperation(value: unknown): value is ExtensionToolOperation {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const op = value as Record<string, unknown>;
-  return op.kind === "extension.tool" && Object.keys(op).join() === "kind,source,tool,arguments,digest"
+  // Exactly these keys, in any order, as validHostOperation takes them; both sides then build the canonical order.
+  return op.kind === "extension.tool" && Object.keys(op).sort().join() === "arguments,digest,kind,source,tool"
     && typeof op.source === "string" && op.source.length > 0 && op.source.length <= 1024 && !op.source.includes("\0")
     && typeof op.tool === "string" && /^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,127}$/.test(op.tool)
     && typeof op.arguments === "string" && op.arguments.length <= EXTENSION_ARGUMENTS_SHOWN + 1 && !op.arguments.includes("\0")

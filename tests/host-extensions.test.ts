@@ -170,11 +170,12 @@ async function session(t: test.TestContext, source: string, root: string, option
   const registry = createRegistry();
   const workspace = defineExtension({ name: "workspace-tools", tools: [] });
   registry.install(workspace);
-  for (const extension of extensions.extensions) registry.install(extension.extension);
+  const { selected, created } = extensions.select(loaded.map(item => item.summary.source));
+  for (const extension of created) registry.install(extension);
   const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
   t.after(() => harness.close(context));
   const root_ = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" },
-    extensions: [workspace, ...extensions.extensions.map(item => item.extension)], tools: extensions.extensions.flatMap(item => item.tools) } });
+    extensions: [workspace, ...selected.map(item => item.extension)], tools: selected.flatMap(item => item.tools) } });
   await extensions.sessionStart();
   const answer = async (content: string) => {
     // As Session.applyOptions does when a message starts.
@@ -360,9 +361,52 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   // A version the host doesn't have: the session runs without it, and says so.
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0" }]), automaticTools: true };
   assert.deepEqual((await session.view()).extensions, { running: [], missing: ["npm:shout@2.0.0"] });
+  // Once the host has that version too, the open session runs it, tools and all, in place of the first.
+  installed.push({ ...dev!, summary: { ...dev!.summary, source: "npm:shout@2.0.0", dev: false } });
+  answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0", tools: "automatic" }]), automaticTools: true };
+  await send("upgraded", "approval");
+  await idle();
+  const upgraded = (await session.view()).approvals.at(-1)!;
+  assert.deepEqual([upgraded.operation.kind === "extension.tool" && upgraded.operation.source, upgraded.status, upgraded.result], ["npm:shout@2.0.0", "executed", "UPGRADED!"]);
   // Turned off: its tool is no longer offered.
   answer = { extensions: [], automaticTools: true };
   await send("gone", "approval");
   await idle();
   assert.doesNotMatch((await results()).at(-1)!, /GONE!/);
+});
+
+test("tool name clashes are settled per selection: another version of an extension gets its tools in an open session", async t => {
+  const root = await directory(t);
+  const module = (version: string) => `import { Type } from "typebox";
+    export default function (pi) {
+      pi.registerTool({ name: "shout", label: "Shout", description: "Shout ${version}.", parameters: Type.Object({}),
+        async execute() { return { content: [{ type: "text", text: "${version}" }], details: undefined }; } });
+      pi.registerTool({ name: "bash", label: "Bash", description: "Mine.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+    }`;
+  await writeFile(join(root, "v1.ts"), module("v1"));
+  await writeFile(join(root, "v2.ts"), module("v2"));
+  const store = new ExtensionStore(join(root, "state"));
+  await store.add(parseExtensionSource(join(root, "v1.ts")));
+  await store.add(parseExtensionSource(join(root, "v2.ts")));
+  const loaded = await loadInstalled(store);
+  const [one, two] = loaded.map(item => item.summary.source);
+  const warnings: string[] = [];
+  const runtime = await ModelRuntime.create({ authPath: join(root, "auth.json"), modelsPath: join(root, "models.json"), refreshOnCreate: false, allowModelNetwork: false } as never);
+  const extensions = new SessionExtensions({ directory: root, modelRegistry: new ModelRegistry(runtime), model: () => undefined, state: async () => ({ active: true, settings: {} }),
+    runTool: async (call, execute) => execute(call.signal), hookTimeoutMs: 1000, warn: (_source, message) => { warnings.push(message); } }, ["bash"]);
+  t.after(() => extensions.shutdown());
+  await extensions.ensure(loaded);
+  const names = (selection: ReturnType<SessionExtensions["select"]>) => selection.selected.map(item => [item.source, item.tools.map(tool => tool.name)]);
+  const first = extensions.select([one!]);
+  assert.deepEqual(names(first), [[one, ["shout"]]], "Pikibun's own bash stays reserved");
+  // Both at once: the first keeps shout, the second runs without it, as another Extension.
+  const both = extensions.select([one!, two!]);
+  assert.deepEqual(names(both), [[one, ["shout"]], [two, []]]);
+  assert.notEqual(both.selected[1]!.extension.name, first.selected[0]!.extension.name);
+  // The workspace moves to the second version: it gets shout, though the first had it before in this session.
+  const upgraded = extensions.select([two!]);
+  assert.deepEqual(names(upgraded), [[two, ["shout"]]]);
+  assert.deepEqual(upgraded.created.map(item => item.name), [upgraded.selected[0]!.extension.name], "its whole Extension is new to the registry");
+  assert.deepEqual(extensions.select([two!]).created, [], "and made once");
+  assert.ok(warnings.some(message => /tool shout is left out/.test(message)));
 });

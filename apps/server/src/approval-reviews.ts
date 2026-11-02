@@ -1,5 +1,5 @@
 import type { ApprovalRecord, Operation, ToolName } from '../../../packages/shared/src/types.js';
-import { sessionExtensionSources } from './extensions.js';
+import { automaticExtensionSources, sessionExtensionSources } from './extensions.js';
 import { constantTimeEqual, sha256 } from '../../../packages/shared/src/crypto.js';
 import type { AppContext, Env, SessionRow } from './types.js';
 import { fail, identifier, now, text, userIdentifier } from './http.js';
@@ -155,10 +155,12 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
     // merges only from the owner's Auto-approve message (merges only when its admission is marked `auto_merge`), or a
     // comment or issue from such a member's message, checked below with the message's admission. A host command runs
     // automatically only where the control plane told the host its owner may (see hostCommandAuthority); a grant or
-    // choice can lapse later, so the records it left are not judged by today's grants.
+    // choice can lapse later, so the records it left are not judged by today's grants. Another member's extension tool
+    // call runs automatically where its workspace and its host's owner let it (checked below, when it is first reviewed).
     if (raw.automatic !== undefined) {
+      const memberMay = operation.kind === 'extension.tool' || requesterAutoApproves(operation, hostCommandSession(row), raw.unbounded === true);
       if (raw.automatic !== true || explicit || approval.decidedBy !== row.owner_id || approval.status === 'pending' || operation.kind === 'permission'
-        || (requestedBy !== row.owner_id && (!requesterAutoApproves(operation, hostCommandSession(row), raw.unbounded === true) || raw.admissionId === undefined))) {
+        || (requestedBy !== row.owner_id && (!memberMay || raw.admissionId === undefined))) {
         fail(502, 'invalid_runner_response', 'The runtime returned an invalid automatic approval.');
       }
       approval.automatic = true;
@@ -198,16 +200,25 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       WHERE session_id = ? AND id IN (SELECT value FROM json_each(?))`).bind(row.id, JSON.stringify(admissionIds)).all();
     for (const admission of result) admissions.set(admission.id, admission);
   }
-  // Another member's automatic operations need the owner to have chosen to auto-approve their requests, and their own
-  // message's admission.
+  // Another member's automatic operations need their own message's admission, and the owner to have chosen to
+  // auto-approve their requests; or, for an extension's tool call, the workspace to run that extension's tools
+  // automatically where its host's owner allows it, as it does when the call is first reviewed (a setting can change
+  // later, so the records it left are not judged by today's).
   const members = normalized.filter(item => item.approval.automatic && item.approval.requestedBy !== row.owner_id);
-  const chosen = await everAutoApproved(c.env.DB, row.id, members.map(item => item.approval.requestedBy));
+  const chosen = await everAutoApproved(c.env.DB, row.id, members.filter(item => item.approval.operation.kind !== 'extension.tool').map(item => item.approval.requestedBy));
+  const unconfirmed = new Set<string>();
+  const automaticSources = members.some(item => item.approval.operation.kind === 'extension.tool' && !stored.has(item.approval.id))
+    ? await automaticExtensionSources(c.env, row) : new Set<string>();
   for (const { approval, admissionId } of members) {
     const reviewed = stored.get(approval.id)?.admission_id ?? admissionId;
     const admission = reviewed ? admissions.get(reviewed) : undefined;
-    if (!chosen.has(approval.requestedBy) || !admission || admission.actor_id !== approval.requestedBy || admission.mode !== 'write' || admission.session_id !== row.id) {
+    const operation = approval.operation;
+    if ((operation.kind !== 'extension.tool' && !chosen.has(approval.requestedBy))
+      || !admission || admission.actor_id !== approval.requestedBy || admission.mode !== 'write' || admission.session_id !== row.id) {
       fail(502, 'invalid_runner_response', 'The runtime returned an invalid automatic approval.');
     }
+    // One whose leave can't be confirmed (the setting changed since it ran, say) shows unreviewed, as unavailable.
+    if (operation.kind === 'extension.tool' && !stored.has(approval.id) && !automaticSources.has(operation.source)) unconfirmed.add(approval.id);
   }
   for (const { approval, admissionId } of normalized) {
     const kind = approval.operation.kind;
@@ -235,6 +246,7 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       continue;
     }
     const admission = admissionId ? admissions.get(admissionId) : undefined;
+    if (unconfirmed.has(approval.id)) continue;
     if (!allows(approval.operation, approval.id, explicit ? undefined : admission)) continue;
     if (!explicit && !activeAdmission(admission, row, approval.requestedBy)) continue;
     candidates.push({ session_id: row.id, approval_id: approval.id, requested_by: explicit?.requestedBy ?? admission!.actor_id,

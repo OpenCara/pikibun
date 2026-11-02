@@ -109,7 +109,9 @@ export function validateBinding(value: unknown, id: string, allowNativeModels = 
   return JSON.parse(JSON.stringify(b));
 }
 export function validateOperation(value: unknown): Operation {
-  if (validHostOperation(value) || validExtensionToolOperation(value)) return value;
+  if (validHostOperation(value)) return value;
+  // In canonical key order, whatever order it came in, so approvals compare equal on both sides.
+  if (validExtensionToolOperation(value)) return { kind: value.kind, source: value.source, tool: value.tool, arguments: value.arguments, digest: value.digest };
   if (!value || typeof value !== "object") throw new RunnerError(400, "Invalid operation");
   const op = value as Operation;
   const text = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !v.includes("\0");

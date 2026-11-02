@@ -66,6 +66,15 @@ export async function sessionExtensionSources(env: Env, row: { workspace_id: str
 }
 
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
+/**
+ * The extensions whose tool calls the session's host may run without approval for anyone's message: enabled ones its
+ * workspace runs automatically, while its host's owner lets workspaces do that there. Empty without a host.
+ */
+export async function automaticExtensionSources(env: Env, row: { workspace_id: string; connector_id?: string | null }): Promise<Set<string>> {
+  if (!row.connector_id || !await automaticTools(env, row.connector_id)) return new Set();
+  return new Set((await workspaceExtensions(env, row.workspace_id)).filter(item => item.enabled && item.tools === 'automatic').map(item => item.source));
+}
+
 export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
   // The connector's sync: what it has installed and how its last requests went; the answer lists those still to do.
   app.post('/api/connectors/self/extensions', async c => {
