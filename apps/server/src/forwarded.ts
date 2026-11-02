@@ -43,7 +43,7 @@ export function trustForwardedHeaders(
     let forwarded: Request;
     // createAdaptorServer defaults to node:http, so the incoming message is always HTTP/1.
     try { forwarded = forwardedRequest(request, bindings.incoming as IncomingMessage); } catch (error) {
-      console.error('pistead: could not rebuild a forwarded request:', error instanceof Error ? error.message : error);
+      console.error('pikibun: could not rebuild a forwarded request:', error instanceof Error ? error.message : error);
       return Response.json({ error: 'Invalid request.', code: 'invalid_request' }, { status: 400 });
     }
     return fetch(forwarded);

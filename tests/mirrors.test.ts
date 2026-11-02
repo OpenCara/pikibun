@@ -81,7 +81,7 @@ test("a mirror is filled with the host's own credential, keeps each session's br
   assert.equal(git(["--git-dir", first.directory, "rev-parse", "refs/upstream/heads/main"], u.directory), head);
   assert.ok(u.fetched.some(path => path.endsWith("/info/refs")) && u.fetched.some(path => path.endsWith("/git-upload-pack")));
   assert.deepEqual(u.relayed, [], "nothing of the fill goes through the relay");
-  const keep = git(["--git-dir", first.directory, "for-each-ref", "--format=%(refname)", "refs/pistead/sessions/"], u.directory).split("\n");
+  const keep = git(["--git-dir", first.directory, "for-each-ref", "--format=%(refname)", "refs/pikibun/sessions/"], u.directory).split("\n");
   assert.equal(keep.length, 1);
   assert.equal(git(["--git-dir", first.directory, "rev-parse", `${keep[0]}^1`], u.directory), head);
   // A later refresh keeps what the session saw before: the new keep commit's first parent is the previous one.
@@ -130,7 +130,7 @@ test("the proxy's mirror endpoint serves only workspace repositories, and only w
     return proxy;
   };
   const get = (socketPath: string, remote: string) => new Promise<{ status: number; type: string | undefined; body: string }>((resolve, reject) => {
-    const request = httpRequest({ socketPath, path: `/__pistead/mirror?remote=${encodeURIComponent(remote)}` }, response => {
+    const request = httpRequest({ socketPath, path: `/__pikibun/mirror?remote=${encodeURIComponent(remote)}` }, response => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk: Buffer) => chunks.push(chunk));
       response.on("end", () => resolve({ status: response.statusCode!, type: response.headers["content-type"], body: Buffer.concat(chunks).toString() }));
@@ -156,9 +156,9 @@ test("the proxy's mirror endpoint serves only workspace repositories, and only w
   assert.equal(lines(failed.body).at(-1)?.retry, undefined, "final: the clone goes ahead without the cache");
   // A failure another attempt may get past says so: the clone asks again.
   const { RunnerError } = await import("../apps/runner/src/protocol.js");
-  const busy = await start("busy", async () => { throw new RunnerError(503, "Pistead could not confirm right now that this session's owner can read acme/app"); });
+  const busy = await start("busy", async () => { throw new RunnerError(503, "Pikibun could not confirm right now that this session's owner can read acme/app"); });
   assert.deepEqual(lines((await get(busy.socketPath, "https://github.com/acme/app.git")).body).at(-1),
-    { error: "Pistead could not confirm right now that this session's owner can read acme/app", retry: true });
+    { error: "Pikibun could not confirm right now that this session's owner can read acme/app", retry: true });
   const filling = new EgressProxy({ socketPath: join(directory, "filling.sock"), grant: async () => grant, relay: async () => assert.fail("no relay"),
     mirror: async (_value, onProgress) => {
       onProgress({ phase: "connecting", percent: null, done: null, total: null, bytes: 0 });
@@ -292,7 +292,7 @@ test("a clone session lists every workspace repository's mirror, creating missin
   assert.deepEqual(await removed.mirrorMounts(), []);
 });
 
-test("pistead cache lists and prunes a state directory's cache", async t => {
+test("pikibun cache lists and prunes a state directory's cache", async t => {
   const u = await upstream(t);
   const { cacheMain } = await import("../apps/runner/src/cache-cli.js");
   const state = join(u.directory, "state");
@@ -409,7 +409,7 @@ test("a session's first clone waits for the host to fill its mirror, with the ho
   // A filled mirror is borrowed straight away: no wait to tell of.
   u.slow(0);
   const again = await shell(session, "git clone -q https://github.com/acme/app.git copy");
-  assert.doesNotMatch(again, /pistead:/);
+  assert.doesNotMatch(again, /pikibun:/);
   assert.equal((await session.sandbox.readFile("copy/.git/objects/info/alternates", allow)).trim(), "/repository-mirrors/github/github.com/1701.git/objects");
 });
 
@@ -424,7 +424,7 @@ test("a clone asks again after a failure that may pass, and stops to be run agai
   const proxy = new EgressProxy({ socketPath: join(u.directory, "proxy.sock"), grant: async () => grant, relay: u.relay,
     mirror: async () => {
       asked++;
-      if (unavailable-- > 0) throw new RunnerError(503, "Pistead could not confirm right now that this session's owner can read acme/app");
+      if (unavailable-- > 0) throw new RunnerError(503, "Pikibun could not confirm right now that this session's owner can read acme/app");
       return target;
     } });
   await proxy.start();
@@ -443,7 +443,7 @@ test("a clone asks again after a failure that may pass, and stops to be run agai
   unavailable = Infinity;
   u.relayed.length = 0;
   await assert.rejects(shell("git clone -q https://github.com/acme/app.git again"), (error: { stderr?: string }) =>
-    /is not available right now \(Pistead could not confirm right now that this session's owner can read acme\/app\); run the clone again/.test(error.stderr ?? ""));
+    /is not available right now \(Pikibun could not confirm right now that this session's owner can read acme\/app\); run the clone again/.test(error.stderr ?? ""));
   assert.equal(asked, 5);
   assert.deepEqual(u.relayed, []);
   await assert.rejects(sandbox.readFile("again/README.md", authorize));

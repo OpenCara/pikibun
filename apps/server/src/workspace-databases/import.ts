@@ -126,12 +126,12 @@ function auditEntry(value: unknown, sessionId: string | null): ImportedAuditEntr
   };
 }
 
-/** Which workspace a dump belongs to; a DumpImportError when it is not a Pistead dump. */
+/** Which workspace a dump belongs to; a DumpImportError when it is not a Pikibun dump. */
 export function dumpWorkspaceId(document: unknown): string {
   const dump = object(document, 'contents');
   if (dump.format === workspaceExportFormat) return identifier(object(dump.workspace, 'workspace').id, 'workspace id');
   if (dump.format === sessionExportFormat) return identifier(object(dump.session, 'session').workspaceId, 'session workspace');
-  return invalid(`This is not a Pistead dump: its format is neither ${sessionExportFormat} nor ${workspaceExportFormat}.`);
+  return invalid(`This is not a Pikibun dump: its format is neither ${sessionExportFormat} nor ${workspaceExportFormat}.`);
 }
 
 /** Checks a dump and shapes it for `workspace`'s database. */

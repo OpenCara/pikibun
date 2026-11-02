@@ -22,7 +22,7 @@ test('well-known tokens are hidden, keeping the prefix that says what they were'
     ['sk_live_abcdef0123456789', 'sk_live_[redacted]'],
     ['https://hooks.slack.com/services/T0000/B0000/abcdefghijklmnop', 'https://hooks.slack.com/services/[redacted]'],
     ['eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U', REDACTED],
-    [`open https://pistead.example.com/#/shared/${'Ab_-'.repeat(10)}xyz`, 'open https://pistead.example.com/#/shared/[redacted]'],
+    [`open https://pikibun.example.com/#/shared/${'Ab_-'.repeat(10)}xyz`, 'open https://pikibun.example.com/#/shared/[redacted]'],
   ];
   for (const [text, shown] of cases) assert.equal(redactSecrets(text), shown, text);
 });

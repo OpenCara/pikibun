@@ -3,8 +3,8 @@ import type { LocalInspection, LocalServerEvent, LocalServerRequest, LocalStatus
 import type { LocalView, LogLine, Outcome } from "../shared/bridge.js";
 import type { SettingsStore } from "./settings.js";
 
-// Pistead on this computer: the local server (`pistead serve`'s, see apps/server/src/local/desktop.ts) in an Electron
-// utility process, started when the owner turns it on in Settings and again at launch while it stays on. The Pistead
+// Pikibun on this computer: the local server (`pikibun serve`'s, see apps/server/src/local/desktop.ts) in an Electron
+// utility process, started when the owner turns it on in Settings and again at launch while it stays on. The Pikibun
 // window shows it instead of the configured server while it runs.
 
 type Request = LocalServerRequest extends infer R ? R extends LocalServerRequest ? Omit<R, "id"> : never : never;
@@ -46,7 +46,7 @@ export class LocalServerController {
 
   private changed(): void { for (const listener of this.listeners) listener(); }
 
-  /** The local server's origin while it runs; the Pistead window shows it instead of the configured server. */
+  /** The local server's origin while it runs; the Pikibun window shows it instead of the configured server. */
   get origin(): string | undefined { return this.status.state === "running" ? this.status.origin : undefined; }
   get claimUrl(): string | undefined { return this.status.state === "running" ? this.status.claimUrl : undefined; }
   get running(): boolean { return this.child !== undefined && this.status.state !== "stopped"; }
@@ -65,7 +65,7 @@ export class LocalServerController {
   }
 
   private spawn(): Promise<void> {
-    const child = utilityProcess.fork(this.options.entry, this.options.args, { serviceName: "Pistead Server", stdio: "pipe" });
+    const child = utilityProcess.fork(this.options.entry, this.options.args, { serviceName: "Pikibun Server", stdio: "pipe" });
     const ready = Promise.withResolvers<void>();
     this.child = child;
     this.stopping = false;
@@ -104,7 +104,7 @@ export class LocalServerController {
       const wasRunning = this.status.state !== "stopped";
       this.status = { state: "stopped", host: "off" };
       if (!this.stopping && wasRunning) {
-        this.error = `Pistead on this computer stopped unexpectedly (code ${code}). Start it again in Settings.`;
+        this.error = `Pikibun on this computer stopped unexpectedly (code ${code}). Start it again in Settings.`;
         this.log("error", this.error);
       }
       this.changed();
@@ -137,7 +137,7 @@ export class LocalServerController {
    * owner's last start instead of asking.
    */
   async start(github?: { clientId: string; clientSecret: string }, resume?: { unsandboxedConsent: boolean }): Promise<Outcome> {
-    if (this.status.state !== "stopped") return { ok: false, error: "Pistead is already running on this computer." };
+    if (this.status.state !== "stopped") return { ok: false, error: "Pikibun is already running on this computer." };
     const inspection = await this.inspect();
     if (!inspection) return this.refuse(this.error ?? "This computer could not be inspected.");
     if (!github && !inspection.githubClientId) return this.refuse("Add your GitHub OAuth app's client ID and secret first.");
@@ -160,7 +160,7 @@ export class LocalServerController {
     return { ok: false, error };
   }
 
-  /** The owner's stop: the Pistead window goes back to the configured server, and the next launch leaves it off. */
+  /** The owner's stop: the Pikibun window goes back to the configured server, and the next launch leaves it off. */
   async stop(): Promise<Outcome> {
     this.options.settings.update({ localServer: undefined });
     if (!this.child || this.status.state === "stopped") { this.changed(); return { ok: true }; }

@@ -20,7 +20,7 @@ const MAX_PASTE_BYTES = 32 * 1024 * 1024;
  * server, which checks it on every message.
  */
 export function imagesUnavailable(host: ConnectorInfo | undefined): string | undefined {
-  return host && !host.capabilities.chatImages ? "Update the host's connector (npx pistead@latest connect) to send images." : undefined;
+  return host && !host.capabilities.chatImages ? "Update the host's connector (npx pikibun@latest connect) to send images." : undefined;
 }
 
 /** The images a paste carries, from the clipboard's items where the browser lists them there, else its files. */

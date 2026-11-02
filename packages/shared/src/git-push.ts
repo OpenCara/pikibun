@@ -1,9 +1,9 @@
 /**
  * The branch a clone session pushes to without approval, through its host's egress proxy: the one named when it was
- * created (see sessionBranchName), or `pistead/<session-id>` for a session from before that or on an older connector.
+ * created (see sessionBranchName), or `pikibun/<session-id>` for a session from before that or on an older connector.
  */
 export function sessionBranch(session: { id: string; branch?: string | null }): string {
-  return session.branch || `pistead/${session.id}`;
+  return session.branch || `pikibun/${session.id}`;
 }
 
 /** How many characters of the title a session branch keeps, before its short id. */
@@ -13,7 +13,7 @@ export const SESSION_BRANCH_SLUG_LIMIT = 48;
  * sessions sharing a slug (untitled ones are all `session`) practically never collide on the unique sessions.branch.
  */
 export const SESSION_BRANCH_ID_DIGITS = 12;
-const SESSION_BRANCH = new RegExp(`^pistead/[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{${SESSION_BRANCH_ID_DIGITS}}$`);
+const SESSION_BRANCH = new RegExp(`^pikibun/[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{${SESSION_BRANCH_ID_DIGITS}}$`);
 
 /** The session id's part of its branch: its first SESSION_BRANCH_ID_DIGITS hex digits. */
 function sessionBranchId(sessionId: string): string {
@@ -21,9 +21,9 @@ function sessionBranchId(sessionId: string): string {
 }
 
 /**
- * A new session's branch, named for what it works on: `pistead/<title-slug>-<first 12 hex of its id>`, for example
- * `pistead/add-dark-mode-toggle-1a2b3c4d5e6f`. The short id keeps branches of sessions with the same title apart. A
- * title with nothing to slug (or the default "Untitled session") gives `pistead/session-<short id>`. Fixed at creation:
+ * A new session's branch, named for what it works on: `pikibun/<title-slug>-<first 12 hex of its id>`, for example
+ * `pikibun/add-dark-mode-toggle-1a2b3c4d5e6f`. The short id keeps branches of sessions with the same title apart. A
+ * title with nothing to slug (or the default "Untitled session") gives `pikibun/session-<short id>`. Fixed at creation:
  * renaming the session doesn't move its branch.
  */
 export function sessionBranchName(title: string, sessionId: string): string {
@@ -36,12 +36,12 @@ export function sessionBranchName(title: string, sessionId: string): string {
     slug = (boundary >= SESSION_BRANCH_SLUG_LIMIT / 2 ? cut.slice(0, boundary) : cut.slice(0, SESSION_BRANCH_SLUG_LIMIT)).replace(/-+$/, "");
   }
   if (!slug || slug === "untitled-session") slug = "session";
-  return `pistead/${slug}-${sessionBranchId(sessionId)}`;
+  return `pikibun/${slug}-${sessionBranchId(sessionId)}`;
 }
 
 /** Whether `branch` is a branch sessionBranchName could have named, for the session with this id. */
 export function validSessionBranch(branch: unknown, sessionId: string): branch is string {
-  return typeof branch === "string" && branch.length <= "pistead/".length + SESSION_BRANCH_SLUG_LIMIT + 1 + SESSION_BRANCH_ID_DIGITS
+  return typeof branch === "string" && branch.length <= "pikibun/".length + SESSION_BRANCH_SLUG_LIMIT + 1 + SESSION_BRANCH_ID_DIGITS
     && SESSION_BRANCH.test(branch) && branch.endsWith(`-${sessionBranchId(sessionId)}`);
 }
 

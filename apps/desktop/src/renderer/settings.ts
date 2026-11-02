@@ -1,9 +1,9 @@
-import type { LocalView, PisteadBridge, SettingsView } from "../shared/bridge.js";
+import type { LocalView, PikibunBridge, SettingsView } from "../shared/bridge.js";
 import { element, setText } from "./dom.js";
 
-declare global { interface Window { pistead: PisteadBridge } }
+declare global { interface Window { pikibun: PikibunBridge } }
 
-const bridge = window.pistead.settings;
+const bridge = window.pikibun.settings;
 const form = element<HTMLFormElement>("server-form");
 const server = element<HTMLInputElement>("server");
 const message = element("message");
@@ -48,7 +48,7 @@ function render(view: SettingsView): void {
   local.stop.disabled = busy || status.state === "stopping";
   for (const input of [local.clientId, local.clientSecret]) input.disabled = running;
   if (error) show(local.message, error, "error");
-  else if (status.state === "running" && status.claimUrl) show(local.message, "Running. The Pistead window opened its sign-in: the GitHub account you sign in with becomes its owner, and the only one that can sign in.", "saved");
+  else if (status.state === "running" && status.claimUrl) show(local.message, "Running. The Pikibun window opened its sign-in: the GitHub account you sign in with becomes its owner, and the only one that can sign in.", "saved");
   else local.message.hidden = true;
   const logs = view.local.logs.slice(-30);
   local.logs.hidden = logs.length === 0;
@@ -70,7 +70,7 @@ async function save(origin: string): Promise<void> {
   const view = await bridge.view();
   server.value = view.server;
   show(message, view.local.status.state === "running"
-    ? "Saved. The Pistead window opens this server once you stop Pistead on this computer." : "Saved. The Pistead window now opens this server.", "saved");
+    ? "Saved. The Pikibun window opens this server once you stop Pikibun on this computer." : "Saved. The Pikibun window now opens this server.", "saved");
 }
 
 async function run(action: () => Promise<{ ok: true } | { ok: false; error: string }>): Promise<void> {

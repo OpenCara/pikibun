@@ -496,7 +496,7 @@ test('claim and manifest updates reject malformed metadata and secret-bearing fi
   const named = { ...manifest.capabilities, sessionBranches: true };
   await json(await self(f, connector, 'manifest', { ...manifest, capabilities: named }));
   assert.equal(JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(connector.connectorId)!.capabilities_json)).sessionBranches, true);
-  // Connectors configured in Pistead say so, and which GPU device they can lend.
+  // Connectors configured in Pikibun say so, and which GPU device they can lend.
   const configured = { ...manifest.capabilities, hostConfig: true, gpu: 'dxg' };
   await json(await self(f, connector, 'manifest', { ...manifest, capabilities: configured }));
   assert.deepEqual(JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(connector.connectorId)!.capabilities_json)), configured);
@@ -3504,7 +3504,7 @@ test('web searches need the requester\'s live write admission, the web_search to
   f.env.WEB_SEARCH = 'brave'; f.env.WEB_SEARCH_API_KEY = 'brave-key';
   const owner = s.session.ownerId;
   const search = (admissionId: string, body: Record<string, unknown> = {}) => self(f, s.connector, 'web/search', {
-    sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', query: 'pistead egress proxy', ...body,
+    sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', query: 'pikibun egress proxy', ...body,
   });
   for (const admissionId of [token(), admit(f, s.session.id, owner, { expiresAt: Math.floor(Date.now() / 1000) - 1 }), admit(f, s.session.id, owner, { mode: 'ask' })]) {
     await denied(await search(admissionId), 403, 'web_search_not_admitted');
@@ -3519,7 +3519,7 @@ test('web searches need the requester\'s live write admission, the web_search to
   grant.run(s.session.id, 'web_search', 'call-1', 'permission-call-1', owner, new Date().toISOString());
   f.sqlite.prepare(`INSERT INTO approval_reviews (session_id,approval_id,requested_by,source,admission_id,operation_json,review_hash,created_at)
     VALUES (?,?,?,?,?,?,?,?)`).run(s.session.id, 'permission-call-1', owner, 'model', admissionId,
-    JSON.stringify({ kind: 'permission', tool: 'web_search', target: 'pistead egress proxy', needs: ['tool'] }), token(), new Date().toISOString());
+    JSON.stringify({ kind: 'permission', tool: 'web_search', target: 'pikibun egress proxy', needs: ['tool'] }), token(), new Date().toISOString());
   await denied(await search(admissionId, { query: 'something else' }), 403, 'tool_not_allowed');
   // Allowed, but the workspace hasn't turned web search on.
   await denied(await search(admissionId), 403, 'web_search_off');
@@ -3539,10 +3539,10 @@ test('a web search goes to the operator\'s provider with its key, and returns pl
   const owner = s.session.ownerId;
   const admissionId = admit(f, s.session.id, owner);
   const search = (body: Record<string, unknown> = {}) => self(f, s.connector, 'web/search', {
-    sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', query: 'pistead  egress\nproxy', ...body,
+    sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', query: 'pikibun  egress\nproxy', ...body,
   });
   let answer = () => Response.json({ web: { results: [
-    { title: 'Pistead <strong>egress</strong> &amp; proxy', url: 'https://github.com/OpenCara/pistead#network-access', description: 'The <strong>proxy</strong> &#39;answers&#39;', age: '2 days ago' },
+    { title: 'Pikibun <strong>egress</strong> &amp; proxy', url: 'https://github.com/OpenCara/pikibun#network-access', description: 'The <strong>proxy</strong> &#39;answers&#39;', age: '2 days ago' },
     { title: 'Not a page', url: 'javascript:alert(1)', description: 'dropped' },
     { title: '', url: 'https://example.com/untitled', description: 'd'.repeat(2000) },
   ] } });
@@ -3551,18 +3551,18 @@ test('a web search goes to the operator\'s provider with its key, and returns pl
   f.env.WEB_SEARCH = 'brave'; f.env.WEB_SEARCH_API_KEY = 'brave-key';
   const result = await json<{ query: string; provider: string; results: { title: string; url: string; snippet: string; published?: string }[] }>(await search({ count: 3 }));
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.url, 'https://api.search.brave.com/res/v1/web/search?q=pistead+egress+proxy&count=3');
+  assert.equal(calls[0]!.url, 'https://api.search.brave.com/res/v1/web/search?q=pikibun+egress+proxy&count=3');
   assert.equal(new Headers(calls[0]!.init?.headers).get('x-subscription-token'), 'brave-key');
   assert.equal(calls[0]!.init?.redirect, 'error');
-  assert.equal(result.query, 'pistead egress proxy');
+  assert.equal(result.query, 'pikibun egress proxy');
   assert.equal(result.provider, 'brave');
-  assert.deepEqual(result.results.slice(0, 1), [{ title: 'Pistead egress & proxy', url: 'https://github.com/OpenCara/pistead#network-access', snippet: 'The proxy \'answers\'', published: '2 days ago' }]);
+  assert.deepEqual(result.results.slice(0, 1), [{ title: 'Pikibun egress & proxy', url: 'https://github.com/OpenCara/pikibun#network-access', snippet: 'The proxy \'answers\'', published: '2 days ago' }]);
   assert.equal(result.results.length, 2);
   assert.equal(result.results[1]!.title, 'https://example.com/untitled');
   assert.equal(result.results[1]!.snippet.length, 1000);
   assert.ok(!JSON.stringify(result).includes('brave-key'));
   const audits = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'web.search'").all().map(row => JSON.parse(String(row.detail_json)));
-  assert.deepEqual(audits, [{ provider: 'brave', query: 'pistead egress proxy', results: 2 }]);
+  assert.deepEqual(audits, [{ provider: 'brave', query: 'pikibun egress proxy', results: 2 }]);
 
   // Tavily and SearXNG answer in their own shapes.
   f.env.WEB_SEARCH = 'tavily'; f.env.WEB_SEARCH_API_KEY = 'tavily-key';
@@ -3570,11 +3570,11 @@ test('a web search goes to the operator\'s provider with its key, and returns pl
   assert.deepEqual((await json<{ results: unknown[] }>(await search())).results, [{ title: 'T', url: 'https://t.example/', snippet: 'tavily snippet', published: '2026-10-01' }]);
   assert.equal(calls.at(-1)!.url, 'https://api.tavily.com/search');
   assert.equal(new Headers(calls.at(-1)!.init?.headers).get('authorization'), 'Bearer tavily-key');
-  assert.deepEqual(JSON.parse(String(calls.at(-1)!.init?.body)), { query: 'pistead egress proxy', max_results: 8, search_depth: 'basic' });
+  assert.deepEqual(JSON.parse(String(calls.at(-1)!.init?.body)), { query: 'pikibun egress proxy', max_results: 8, search_depth: 'basic' });
   f.env.WEB_SEARCH = 'searxng'; delete f.env.WEB_SEARCH_API_KEY; f.env.WEB_SEARCH_URL = 'https://search.example.org/';
   answer = () => Response.json({ results: [{ title: 'S', url: 'https://s.example/', content: 'searx snippet' }] });
   assert.deepEqual((await json<{ results: unknown[] }>(await search())).results, [{ title: 'S', url: 'https://s.example/', snippet: 'searx snippet' }]);
-  assert.equal(calls.at(-1)!.url, 'https://search.example.org/search?q=pistead+egress+proxy&format=json');
+  assert.equal(calls.at(-1)!.url, 'https://search.example.org/search?q=pikibun+egress+proxy&format=json');
 
   // The provider's refusals come back as such, with nothing of its answer.
   answer = () => new Response('slow down', { status: 429 });
@@ -3598,7 +3598,7 @@ function notionFake(t: TestContext, tokens: Record<string, string>) {
     last_edited_time: '2026-10-01T00:00:00.000Z', parent, properties: { Name: { type: 'title', title: [{ plain_text: title }] } } });
   const text = (content: string, annotations: Record<string, boolean> = {}) => [{ plain_text: content, annotations, href: null }];
   const routes: Record<string, () => Response> = {
-    'GET /users/me': () => Response.json({ object: 'user', id: 'bot', type: 'bot', name: 'Pistead', bot: { workspace_name: 'Acme' } }),
+    'GET /users/me': () => Response.json({ object: 'user', id: 'bot', type: 'bot', name: 'Pikibun', bot: { workspace_name: 'Acme' } }),
     [`GET /pages/${ids.root}`]: () => Response.json(page(ids.root, 'Specs', { type: 'workspace', workspace: true })),
     [`GET /pages/${ids.child}`]: () => Response.json(page(ids.child, 'Design', { type: 'page_id', page_id: ids.root })),
     [`GET /blocks/${ids.block}`]: () => Response.json({ object: 'block', id: ids.block, type: 'toggle', parent: { type: 'page_id', page_id: ids.child } }),
@@ -3844,7 +3844,7 @@ function dropboxFake(t: TestContext) {
       if (form.get('grant_type') === 'refresh_token' && issued.has(form.get('refresh_token')!)) {
         const token = `sl.access-${++serial}`;
         access.add(token);
-        // Dropbox doesn't repeat the refresh token: Pistead keeps the one it has.
+        // Dropbox doesn't repeat the refresh token: Pikibun keeps the one it has.
         return Response.json({ access_token: token, expires_in: 14400, token_type: 'bearer' });
       }
       return Response.json({ error: 'invalid_grant' }, { status: 400 });

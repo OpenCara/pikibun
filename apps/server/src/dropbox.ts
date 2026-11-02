@@ -59,7 +59,7 @@ function url(item: Entry): string {
 async function metadata(secret: string, item: { path: string } | { url: string }): Promise<Entry> {
   const found = entry('url' in item ? await rpc(secret, '/sharing/get_shared_link_metadata', { url: item.url }) : await rpc(secret, '/files/get_metadata', { path: item.path }));
   // A shared link to something outside the member's Dropbox has no path, so nothing can be under it.
-  if (!found.path) fail(409, 'source_not_in_account', 'Add this shared item to your Dropbox first; Pistead reads Dropbox items by their place in your account.');
+  if (!found.path) fail(409, 'source_not_in_account', 'Add this shared item to your Dropbox first; Pikibun reads Dropbox items by their place in your account.');
   return found;
 }
 
@@ -101,7 +101,7 @@ export const dropboxAdapter: DocumentAdapter = {
     if (!isDocx && !textFile.names.test(target.title)) return { ...base, note: 'A binary file can\'t be read as text.', truncated: false };
     const answer = await content(secret, '/files/download', { path: target.id });
     if (isDocx) {
-      const text = answer.headers.get('x-pistead-truncated') ? null : docxText(answer.bytes);
+      const text = answer.headers.get('x-pikibun-truncated') ? null : docxText(answer.bytes);
       return text === null ? { ...base, note: 'This Word document is too large or unreadable.', truncated: true } : { ...base, type: 'document', content: text, truncated: false };
     }
     const body = textBody(answer);

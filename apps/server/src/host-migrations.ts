@@ -92,7 +92,7 @@ async function startMigration(c: AppContext, input: { sourceId: string; requestI
   if (!host) fail(409, 'connector_unavailable', 'The target host is no longer available.');
   const capabilities = JSON.parse(host.capabilities_json) as ConnectorCapabilities;
   if (capabilities.hostMigration !== true) {
-    fail(409, 'connector_update_required', 'Update the target host\'s connector (npx pistead@latest connect, on Linux) to move sessions to it.');
+    fail(409, 'connector_update_required', 'Update the target host\'s connector (npx pikibun@latest connect, on Linux) to move sessions to it.');
   }
   // A clone session has no pins to carry: its successor needs a host where the agent can clone again, and that restores
   // its clones' local work from the snapshot.

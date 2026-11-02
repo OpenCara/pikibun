@@ -253,14 +253,14 @@ export async function gitDirect(c: AppContext, connector: ConnectorRow | null): 
   const grant = (value: Omit<Extract<GitDirectGrant, { direct: true }>, 'direct'>) => c.json({ direct: true, ...value } satisfies GitDirectGrant, 200, noStore);
   const { session, binding, access, authorize } = await gitAuthority(c, connector, sessionId, bindingId, kind === 'push');
   const mode = gitDirectMode(c.env);
-  if (mode === 'off') return relay('Direct Git transfers are off on this Pistead server');
+  if (mode === 'off') return relay('Direct Git transfers are off on this Pikibun server');
   // The session owner's own host, or the control plane's own runner (which the operator runs, as they run this server).
   const ownHost = connector !== null && connector.owner_id === session.owner_id && session.connector_owner_id === session.owner_id;
   const trusted = connector === null || ownHost;
   const expires = (seconds: number) => new Date((Math.floor(Date.now() / 1000) + seconds) * 1000).toISOString();
 
   if (kind === 'push') {
-    if (!trusted) return relay('Pushes from a host shared with the workspace go through Pistead: a push token can\'t be limited to the session branch');
+    if (!trusted) return relay('Pushes from a host shared with the workspace go through Pikibun: a push token can\'t be limited to the session branch');
     const { branch, pin, target } = await sessionBranchTarget(c, session, binding, access);
     if (command) {
       const refusal = sessionBranchRefusal([command], branch);
@@ -281,7 +281,7 @@ export async function gitDirect(c: AppContext, connector: ConnectorRow | null): 
     if (minted.authorization === null || minted.revocation?.kind === 'github-owner') {
       // The host's own Git credentials can't serve the proxy, and an owner's GitHub sign-in token that left the server
       // would have to be reset after the push: the control plane pushes with those itself.
-      return relay('This push identity pushes through Pistead', 0);
+      return relay('This push identity pushes through Pikibun', 0);
     }
     const revoke = minted.revocation?.kind === 'github-installation'
       ? { url: `${minted.revocation.apiBase}/installation/token`, authorization: `Bearer ${minted.revocation.token}` } : undefined;
@@ -312,7 +312,7 @@ export async function gitDirect(c: AppContext, connector: ConnectorRow | null): 
     }
   }
   // A workspace connection never leaves the control plane, not even for the owner's own host: its reads are relayed.
-  if (workspaceAccess(access)) return relay(`${binding.full_name} reads with the workspace's connection, which Pistead relays`);
+  if (workspaceAccess(access)) return relay(`${binding.full_name} reads with the workspace's connection, which Pikibun relays`);
   if (trusted) return grant({ remote, authorization: ownerGitAuthorization(access), kind: 'owner-account', expiresAt: expires(3600), cacheSeconds: GIT_DIRECT_CACHE_SECONDS });
   return relay(`No credential limited to reading ${binding.full_name} is available for a host shared with the workspace`);
 }

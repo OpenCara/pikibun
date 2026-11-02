@@ -4,9 +4,9 @@ import { defaultStateDir } from "./connect-setup.js";
 import { ConnectorSetupError } from "./protocol.js";
 import { RepositoryCache } from "./repo-cache.js";
 
-const HELP = `Usage: pistead cache <command> [options]
+const HELP = `Usage: pikibun cache <command> [options]
 
-The repository cache of a connector whose host keeps one (Settings > Hosts > the host > Configuration in Pistead):
+The repository cache of a connector whose host keeps one (Settings > Hosts > the host > Configuration in Pikibun):
 one Git mirror per repository, which clone sessions borrow objects from.
 
 Commands:
@@ -16,7 +16,7 @@ Commands:
                           any more. A clone in a session idle for longer loses the objects it borrowed
 
 Options:
-  --state-dir PATH        Connector state (default ~/.local/share/pistead/connector)
+  --state-dir PATH        Connector state (default ~/.local/share/pikibun/connector)
   --older-than DAYS       For prune: how long a clone session may be idle (default 30)
   --help                  Show this help
 
@@ -29,7 +29,7 @@ export async function cacheMain(args: string[]): Promise<void> {
   } });
   const [command, ...extra] = positionals;
   if (values.help || command === undefined) { process.stdout.write(HELP); return; }
-  if (extra.length || !["list", "prune"].includes(command)) throw new ConnectorSetupError(`Unknown cache command: ${[command, ...extra].join(" ")}. Run "pistead cache --help".`);
+  if (extra.length || !["list", "prune"].includes(command)) throw new ConnectorSetupError(`Unknown cache command: ${[command, ...extra].join(" ")}. Run "pikibun cache --help".`);
   const root = join(resolve(values["state-dir"] ?? defaultStateDir()), "repo-cache");
   const cache = new RepositoryCache({ root });
   if (command === "list") {

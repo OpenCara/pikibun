@@ -157,13 +157,13 @@ test("a proxy for sandboxes that share the host's network listens on loopback on
   assert.ok(!existsSync(join(directory, "unused.sock")), "no socket: the sandbox reaches the proxy only on its port");
   const endpoint = proxy.endpoint as EgressEndpoint;
   assert.ok(endpoint && endpoint.port > 0);
-  const basic = (token: string) => `Basic ${Buffer.from(`pistead:${token}`).toString("base64")}`;
+  const basic = (token: string) => `Basic ${Buffer.from(`pikibun:${token}`).toString("base64")}`;
 
-  const anonymous = await call(endpoint.port, { path: "/__pistead/status" });
+  const anonymous = await call(endpoint.port, { path: "/__pikibun/status" });
   assert.equal(anonymous.status, 401);
   assert.match(String(anonymous.headers["www-authenticate"]), /Basic/);
-  assert.equal((await call(endpoint.port, { path: "/__pistead/status", headers: { Authorization: basic("wrong") } })).status, 401);
-  const status = await call(endpoint.port, { path: "/__pistead/status", headers: { Authorization: basic("session-token") } });
+  assert.equal((await call(endpoint.port, { path: "/__pikibun/status", headers: { Authorization: basic("wrong") } })).status, 401);
+  const status = await call(endpoint.port, { path: "/__pikibun/status", headers: { Authorization: basic("session-token") } });
   assert.equal(status.status, 200);
   assert.match(JSON.parse(status.body).gitRemotes, new RegExp(`127\\.0\\.0\\.1:${endpoint.port}/git/`));
 
@@ -172,11 +172,11 @@ test("a proxy for sandboxes that share the host's network listens on loopback on
   // With the token the request reaches the policy, which refuses: this workspace's network is off.
   assert.equal((await call(endpoint.port, { method: "CONNECT", path: "example.com:443", headers: { "Proxy-Authorization": basic("session-token") } })).status, 403);
 
-  const environment = egressEnvironment("pistead/work-1", endpoint, "/session/ca.crt");
-  assert.equal(environment.HTTPS_PROXY, `http://pistead:session-token@127.0.0.1:${endpoint.port}`);
-  assert.equal(environment.GIT_CONFIG_KEY_0, `url.http://pistead:session-token@127.0.0.1:${endpoint.port}/git/.insteadOf`);
+  const environment = egressEnvironment("pikibun/work-1", endpoint, "/session/ca.crt");
+  assert.equal(environment.HTTPS_PROXY, `http://pikibun:session-token@127.0.0.1:${endpoint.port}`);
+  assert.equal(environment.GIT_CONFIG_KEY_0, `url.http://pikibun:session-token@127.0.0.1:${endpoint.port}/git/.insteadOf`);
   assert.equal(environment.SSL_CERT_FILE, "/session/ca.crt");
-  assert.equal(environment.PISTEAD_SESSION_BRANCH, "pistead/work-1");
+  assert.equal(environment.PIKIBUN_SESSION_BRANCH, "pikibun/work-1");
 });
 
 const layout: HelperLayout = { root: "/s", home: "/s/home", worktree: "/s/worktree", git: "/s/git", ownerConfig: "/s/owner.gitconfig", bin: "/s/bin", caBundle: "/s/ca.crt" };
@@ -224,7 +224,7 @@ test("a workspace opens again over its own read-only files, and a step that shou
   assert.equal(await again.readFile("kept.txt", allow), "kept");
   const context = { readOnly: false, gitWritable: false, deadlineMs: 1000 };
   assert.equal(egressPort({ ...context, egress: false, environment: {} }), undefined);
-  assert.equal(egressPort({ ...context, egress: true, environment: { HTTPS_PROXY: "http://pistead:t@127.0.0.1:41234" } }), 41234);
+  assert.equal(egressPort({ ...context, egress: true, environment: { HTTPS_PROXY: "http://pikibun:t@127.0.0.1:41234" } }), 41234);
   assert.throws(() => egressPort({ ...context, egress: true, environment: {} }), /egress proxy endpoint is missing/);
   assert.throws(() => egressPort({ ...context, egress: true, environment: { HTTPS_PROXY: "http://127.0.0.1:41234" } }), /egress proxy endpoint is missing/);
 });
@@ -263,7 +263,7 @@ test("the Node helper gives commands the session's own proxy URL back, after MXC
   const directory = await realpath(await mkdtemp(join(tmpdir(), "node-helper-proxy-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await writeFile(join(directory, "helper.mjs"), NODE_HELPER);
-  const own = "http://pistead:session-token@127.0.0.1:41234";
+  const own = "http://pikibun:session-token@127.0.0.1:41234";
   const run = (extra: Record<string, string>) => spawnSync(process.execPath, [join(directory, "helper.mjs")], {
     input: JSON.stringify({ kind: "bash", command: "echo \"$HTTPS_PROXY $https_proxy $HTTP_PROXY $http_proxy ${SANDBOX_EGRESS_PROXY:-unset} [$NO_PROXY] [$no_proxy] ${SANDBOX_EGRESS_NO_PROXY:-unset}\"" }) + "\n",
     encoding: "utf8", cwd: directory,

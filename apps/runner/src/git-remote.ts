@@ -236,7 +236,7 @@ export class GitRemote {
     this.authorization = options.authorization;
     this.fetcher = options.fetch ?? fetch;
     this.signal = options.signal;
-    this.agent = (options.userAgent ?? "pistead").replace(/[^\x21-\x7e]/g, "");
+    this.agent = (options.userAgent ?? "pikibun").replace(/[^\x21-\x7e]/g, "");
   }
 
   private async request(path: string, init: { method: string; headers: Record<string, string>; body?: ReadableStream<Uint8Array> }, contentType: string): Promise<Response> {

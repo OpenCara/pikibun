@@ -1,4 +1,4 @@
-import { AUTO_APPROVE_CONFIRMED_KEY, chatPreference, parseChatPreference, type ChatPreference, type ChatSelection } from "@pistead/client";
+import { AUTO_APPROVE_CONFIRMED_KEY, chatPreference, parseChatPreference, type ChatPreference, type ChatSelection } from "@pikibun/client";
 import * as SecureStore from "expo-secure-store";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ConnectorInfo } from "../../../../packages/shared/src/connector";
@@ -6,7 +6,7 @@ import type { SessionActivity, SessionRecord, Workspace } from "../../../../pack
 import { useResource } from "./resource";
 
 /** The model and reasoning last chatted with on this device; new chats start from them. */
-const LAST_CHAT_KEY = "pistead.lastChat";
+const LAST_CHAT_KEY = "pikibun.lastChat";
 
 /** What the open session's live view says its agent is doing; fresher than the list's last fetch. */
 export interface LiveActivity {

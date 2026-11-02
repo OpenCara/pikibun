@@ -8,7 +8,7 @@ import type { LocalServer } from './launch.js';
 
 // This computer as the local server's host: once the owner has claimed the server, the connector pairs itself with a code
 // the server makes for them (no code to copy), and later starts reuse that pairing. Its state is the local server's own
-// (`<state>/connector`), so a pairing of this machine with another server through `pistead connect` is left alone.
+// (`<state>/connector`), so a pairing of this machine with another server through `pikibun connect` is left alone.
 
 export type LocalHostOptions = Pick<ConnectorOptions, 'localModels' | 'unsandboxed' | 'resources' | 'allowFaux' | 'allowTestShell' | 'onStatus' | 'onWarning' | 'capabilities'
   | 'acquireLease' | 'runtimeFactory'>;

@@ -473,7 +473,7 @@ function plainFailure(failure: AdvertisementFailure): never {
     case 'redirected': return fail(409, 'git_repository_redirected',
       'The Git server redirected the request. Use the repository\'s exact clone URL, the one `git clone` takes.');
     case 'not-smart': return fail(422, 'git_smart_http_required',
-      'This Git server only speaks Git\'s dumb HTTP protocol. Pistead needs smart HTTP, as git http-backend and Git forges serve it.');
+      'This Git server only speaks Git\'s dumb HTTP protocol. Pikibun needs smart HTTP, as git http-backend and Git forges serve it.');
     case 'invalid': return invalidResponse('git');
     case 'unavailable': return providerUnavailable('git');
   }

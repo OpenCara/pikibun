@@ -50,7 +50,7 @@ async function pendingApproval(session: RunnerSession) {
 }
 
 test("agents read GitHub pull requests through the broker and merges always wait for a human, failing definitely only on GitHub's refusal", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-github-session-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-github-session-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const reads: GitHubReadRequest[] = [];
   const merges: GitHubMergeRequest[] = [];
@@ -132,7 +132,7 @@ test("agents read GitHub pull requests through the broker and merges always wait
 });
 
 test("agents open GitHub issues through the broker, always after a human approves the exact title and body", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-github-issue-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-github-issue-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const issues: GitHubIssueRequest[] = [];
   let open = async (): Promise<GitHubIssueResult> => ({ number: 63, url: "https://github.com/acme/alpha/issues/63" });
@@ -202,7 +202,7 @@ test("agents open GitHub issues through the broker, always after a human approve
 });
 
 test("allowing github_issue for the rest of the session still leaves every issue to a human", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-github-issue-grant-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-github-issue-grant-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const issues: GitHubIssueRequest[] = [];
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
@@ -241,7 +241,7 @@ test("allowing github_issue for the rest of the session still leaves every issue
 
 test("host_bash auto-approves only on the session owner's own host; shared hosts require their owner's exact decision", hostMode, async t => {
   for (const hostOwner of ["test:alice", "test:bob"]) await t.test(hostOwner, async t => {
-    const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-host-command-")));
+    const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-command-")));
     const faux = fauxProvider({ models: [{ id: "faux-1" }] });
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("host_bash", { command: "printf host-command-marker", timeout_seconds: 10 })], { stopReason: "toolUse" }),
@@ -290,7 +290,7 @@ test("host_bash auto-approves only on the session owner's own host; shared hosts
 });
 
 test("the host's owner decides a host command with read access to someone else's session; anything else still needs approve permission", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-host-owner-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-owner-")));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("github_comment", { repository: "acme/alpha", issue: 7, body: "Looks good." })], { stopReason: "toolUse" }),
@@ -351,7 +351,7 @@ test("the host's owner decides a host command with read access to someone else's
 });
 
 test("host commands outside the agent are allowed one call at a time, never for the session", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-host-permission-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-permission-")));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("host_bash", { command: "printf first", timeout_seconds: 10 })], { stopReason: "toolUse" }),
@@ -396,7 +396,7 @@ test("host commands outside the agent are allowed one call at a time, never for 
 
 test("on someone else's host, a member granted host commands decides their own, or auto-approves them, as the control plane reports", hostMode, async t => {
   for (const level of ["approve", "auto"] as const) await t.test(level, async t => {
-    const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-host-grant-")));
+    const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-grant-")));
     const faux = fauxProvider({ models: [{ id: "faux-1" }] });
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("host_bash", { command: "printf granted-marker", timeout_seconds: 10 })], { stopReason: "toolUse" }),
@@ -448,7 +448,7 @@ test("on someone else's host, a member granted host commands decides their own, 
 });
 
 test("the owner's Auto-approve posts comments, opens issues and merges at once with its admission, merging in a message marked autoMerge", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-github-auto-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-github-auto-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const comments: unknown[] = []; const issues: GitHubIssueRequest[] = []; const merges: GitHubMergeRequest[] = [];
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });

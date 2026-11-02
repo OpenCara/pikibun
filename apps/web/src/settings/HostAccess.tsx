@@ -179,9 +179,9 @@ export function HostCommandGrantsSection({ connector, refresh }: { connector: Co
       </>} /> : <Row title="Grant access" hint="Share the host with a workspace first" />)}
     </div>
     {owner && grants.some(item => item.hostSessions) && !accepting && <Row title="Sessions on the host are off" hint="Grants that include sessions on the host apply only while Configuration → Sessions on the host is on." />}
-    {outdatedSessions && <Row title="Update the host's connector" hint="This host's connector runs only your own sessions on the host: until it is updated (npx pistead@latest connect), members you granted that get the sandbox." />}
-    {!outdatedSessions && grants.length > 0 && unlimited && connector.capabilities.hostGrants && !connector.capabilities.unboundedShellGrants && <Row title="Update the host's connector" hint="This host has no resource limits, and its connector refuses every command of other members' sandboxed sessions: until it is updated (npx pistead@latest connect), the members you granted host commands can't run commands, or clone, in their own." />}
-    {!connector.capabilities.hostGrants && <Row title="Update the host's connector" hint="This host's connector predates grants: until it is updated (npx pistead@latest connect), only the owner decides its host commands." />}
+    {outdatedSessions && <Row title="Update the host's connector" hint="This host's connector runs only your own sessions on the host: until it is updated (npx pikibun@latest connect), members you granted that get the sandbox." />}
+    {!outdatedSessions && grants.length > 0 && unlimited && connector.capabilities.hostGrants && !connector.capabilities.unboundedShellGrants && <Row title="Update the host's connector" hint="This host has no resource limits, and its connector refuses every command of other members' sandboxed sessions: until it is updated (npx pikibun@latest connect), the members you granted host commands can't run commands, or clone, in their own." />}
+    {!connector.capabilities.hostGrants && <Row title="Update the host's connector" hint="This host's connector predates grants: until it is updated (npx pikibun@latest connect), only the owner decides its host commands." />}
     <Feedback error={action.error} notice={action.notice} />
   </Section>;
 }

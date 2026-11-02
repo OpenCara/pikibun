@@ -114,7 +114,7 @@ test('only the administrators ADMIN_USER_IDS lists reach the admin API, and thei
 });
 
 test('the server refuses to start with an ADMIN_USER_IDS entry that is not a GitHub user ID, or a test identity in test mode', async () => {
-  const base = { APP_ORIGIN: 'https://pistead.example.com', SESSION_SECRET: 's'.repeat(32), VAULT_KEY: Buffer.alloc(32, 7).toString('base64url'),
+  const base = { APP_ORIGIN: 'https://pikibun.example.com', SESSION_SECRET: 's'.repeat(32), VAULT_KEY: Buffer.alloc(32, 7).toString('base64url'),
     DATABASE_URL: 'sqlite::memory:' };
   for (const value of ['octocat', 'github:1,', 'github:01', 'test:operator']) {
     await assert.rejects(loadConfig({ ...base, ADMIN_USER_IDS: value }), ConfigurationError, value);

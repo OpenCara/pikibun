@@ -62,9 +62,9 @@ test("a request forwarded over https reaches the app at its https URL, on Node 2
       assert.equal(plain.status, 200);
       assert.deepEqual(await plain.json(), { url: `${server.origin}/api/health?a=1`, method: "GET", header: "plain", body: null });
 
-      const proxied = await fetch(`${server.origin}/api/health?a=1`, { headers: { "x-forwarded-proto": "https", "x-forwarded-host": "pistead.example", "x-test": "proxied" } });
+      const proxied = await fetch(`${server.origin}/api/health?a=1`, { headers: { "x-forwarded-proto": "https", "x-forwarded-host": "pikibun.example", "x-test": "proxied" } });
       assert.equal(proxied.status, 200);
-      assert.deepEqual(await proxied.json(), { url: "https://pistead.example/api/health?a=1", method: "GET", header: "proxied", body: null });
+      assert.deepEqual(await proxied.json(), { url: "https://pikibun.example/api/health?a=1", method: "GET", header: "proxied", body: null });
 
       const posted = await fetch(`${server.origin}/api/things`, { method: "POST", body: "payload ".repeat(10_000), headers: { "x-forwarded-proto": "https, http", "x-test": "posted" } });
       assert.equal(posted.status, 200);

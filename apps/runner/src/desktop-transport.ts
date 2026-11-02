@@ -22,7 +22,7 @@ export function parentTransport<Event>(): Transport<Event> {
     return { send: event => port.postMessage(event), onMessage: listener => port.on("message", event => listener(event.data)), onClose: () => {} };
   }
   const send = process.send?.bind(process);
-  if (!send) throw new Error("This process must be started by the Pistead app");
+  if (!send) throw new Error("This process must be started by the Pikibun app");
   return {
     send: event => { if (process.connected) send(event); },
     onMessage: listener => process.on("message", listener),

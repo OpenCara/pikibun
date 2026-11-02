@@ -33,9 +33,9 @@ CREATE UNIQUE INDEX host_migrations_pending_source ON host_migrations(source_ses
 CREATE TRIGGER host_migrations_binding_immutable
   BEFORE UPDATE OF id, request_id, owner_id, workspace_id, source_session_id, source_connector_id, target_session_id,
     target_connector_id, target_model_id, request_title, sha256, size, binding_json, created_at ON host_migrations
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('host migration binding is immutable');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('host migration binding is immutable');
 CREATE TRIGGER host_migrations_settled_immutable BEFORE UPDATE ON host_migrations
   FOR EACH ROW WHEN (OLD.status <> 'pending')
-  EXECUTE FUNCTION pistead_raise('settled host migration receipt is immutable');
+  EXECUTE FUNCTION pikibun_raise('settled host migration receipt is immutable');
 CREATE TRIGGER host_migrations_receipt_retained BEFORE DELETE ON host_migrations
-  FOR EACH ROW EXECUTE FUNCTION pistead_raise('host migration receipts must be retained');
+  FOR EACH ROW EXECUTE FUNCTION pikibun_raise('host migration receipts must be retained');

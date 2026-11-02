@@ -7,7 +7,7 @@ import { href } from "./router";
 import { Alert, Button, CardBody, Feedback, LinkButton, PageLoading, RelativeTime, Row, Section, confirmDialog, useAction, useResource } from "./ui";
 
 /** Where a sign-in started from an invite link keeps its token: GitHub's callback returns to the app's root without the fragment. */
-const pendingInviteKey = "pistead.pendingInvite";
+const pendingInviteKey = "pikibun.pendingInvite";
 
 /** Remember an invite token across sign-in. Session storage keeps it to this tab and drops it with the tab. */
 export function rememberInvite(token: string): void {
@@ -111,7 +111,7 @@ export function JoinWorkspaceScreen({ token }: { token: string }) {
         ? <>
           <h1>Join a workspace</h1>
           <Alert variant="error" title="Invite link not available" actions={<Button size="sm" onClick={refresh}>Try again</Button>}>{error}</Alert>
-          <div className="actions"><LinkButton href={href({ name: "home" })}>Go to Pistead</LinkButton></div>
+          <div className="actions"><LinkButton href={href({ name: "home" })}>Go to Pikibun</LinkButton></div>
           {/* A request outlives a link that was turned off or replaced, so its requester can still withdraw it here. */}
           <OwnJoinRequests />
         </>

@@ -20,7 +20,7 @@ import type { InterceptionAuthority } from "./interception-ca.js";
 /** Where sandboxed commands reach the proxy: a loopback port the sandbox helper relays to this session's socket. */
 export const EGRESS_PORT = 41080;
 /** The proxy socket's path inside the sandbox. */
-export const EGRESS_SOCKET = "/run/pistead/egress.sock";
+export const EGRESS_SOCKET = "/run/pikibun/egress.sock";
 /** Git remotes are rewritten to this base (`url.<base>.insteadOf`), followed by the host and path of the original URL. */
 export const EGRESS_GIT_BASE = `http://127.0.0.1:${EGRESS_PORT}/git/`;
 /** SSH remotes of these hosts are rewritten too; other hosts' SSH remotes fail, as the sandbox has no SSH. */
@@ -54,7 +54,7 @@ export interface RelayRequest {
   command?: PushCommand;
 }
 /** How the answer reached the proxy, when the host made the request at the forge itself (git-direct.ts). */
-export const TRANSPORT_HEADER = "x-pistead-transport";
+export const TRANSPORT_HEADER = "x-pikibun-transport";
 /** One decision of the proxy, or of the agent's web_fetch tool (`fetch`), which reaches what the proxy's tunnels reach. */
 export interface EgressEntry { at: string; kind: "git" | "connect" | "http" | "api" | "fetch"; target: string; outcome: "allowed" | "refused"; reason?: string }
 /** How far a mirror's fill is, as a clone waiting for it hears: Git's numbers only (see RepositoryCacheProgress). */
@@ -119,21 +119,21 @@ export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpo
     NODE_USE_ENV_PROXY: "1",
     // The host's trusted certificates, mounted read-only at CA_BUNDLE, for HTTPS through the proxy's tunnels.
     ...Object.fromEntries(CA_BUNDLE_VARIABLES.map(name => [name, caBundle])),
-    PISTEAD_EGRESS_STATUS: `${proxy}/__pistead/status`,
+    PIKIBUN_EGRESS_STATUS: `${proxy}/__pikibun/status`,
     // gh and GitHub's SDKs send this to api.github.com, where the proxy puts the session's own credential in its place.
     GH_TOKEN: API_TOKEN_PLACEHOLDER, GITHUB_TOKEN: API_TOKEN_PLACEHOLDER,
-    ...(sessionBranch ? { PISTEAD_SESSION_BRANCH: sessionBranch } : {}),
+    ...(sessionBranch ? { PIKIBUN_SESSION_BRANCH: sessionBranch } : {}),
     ...config,
   };
 }
 
 /**
  * Where a sandbox that shares the host's network reaches its session's proxy: a loopback port and the session's token,
- * which clients send as Basic credentials (`pistead:<token>`), named in the proxy URL so curl, Git, Node and Python
+ * which clients send as Basic credentials (`pikibun:<token>`), named in the proxy URL so curl, Git, Node and Python
  * send them as they are.
  */
 export interface EgressEndpoint { port: number; token: string }
-export const EGRESS_USER = "pistead";
+export const EGRESS_USER = "pikibun";
 export function endpointUrl(endpoint: EgressEndpoint): string {
   return `http://${EGRESS_USER}:${endpoint.token}@127.0.0.1:${endpoint.port}`;
 }
@@ -150,7 +150,7 @@ export function egressAuthorized(header: string | undefined, token: string): boo
 let directory: string | undefined;
 /** Unix socket paths are limited to about 100 bytes, so sockets live in one short private directory per process. */
 export function egressSocketPath(sessionId: string, dataDir: string): string {
-  directory ??= mkdtempSync(join(tmpdir().length < 40 ? tmpdir() : "/tmp", "pistead-egress-"));
+  directory ??= mkdtempSync(join(tmpdir().length < 40 ? tmpdir() : "/tmp", "pikibun-egress-"));
   return join(directory, `${createHash("sha256").update(`${dataDir}\0${sessionId}`).digest("hex").slice(0, 24)}.sock`);
 }
 
@@ -310,7 +310,7 @@ function refuse(response: ServerResponse, status: number, message: string): void
  *   (git-direct.ts) with a credential limited as the control plane decides;
  * - opens HTTPS tunnels (CONNECT, port 443) to hosts the workspace's network policy allows, never to private,
  *   loopback or link-local addresses, without looking inside them;
- * - refuses everything else with a reason, and answers `/__pistead/status` with the policy and recent decisions.
+ * - refuses everything else with a reason, and answers `/__pikibun/status` with the policy and recent decisions.
  */
 export class EgressProxy {
   readonly socketPath: string;
@@ -383,7 +383,7 @@ export class EgressProxy {
       if (token !== undefined && !egressAuthorized(request.headers.authorization ?? request.headers["proxy-authorization"], token)) {
         // Absolute-form (proxy) requests ask for proxy credentials; Git asks for the /git/ endpoint's like a forge's.
         const proxied = /^[a-z]+:/i.test(request.url ?? "");
-        response.writeHead(proxied ? 407 : 401, { [proxied ? "Proxy-Authenticate" : "WWW-Authenticate"]: 'Basic realm="Pistead egress"',
+        response.writeHead(proxied ? 407 : 401, { [proxied ? "Proxy-Authenticate" : "WWW-Authenticate"]: 'Basic realm="Pikibun egress"',
           "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", Connection: "close" });
         response.end("This session's egress proxy needs its credentials, which are in HTTPS_PROXY\n");
         return;
@@ -393,7 +393,7 @@ export class EgressProxy {
     server.on("connect", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       if (token !== undefined && !egressAuthorized(request.headers["proxy-authorization"], token)) {
         socket.on("error", () => socket.destroy());
-        socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Pistead egress\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Pikibun egress\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         return;
       }
       void this.#tunnel(request, socket, head);
@@ -559,13 +559,13 @@ export class EgressProxy {
       const port = this.#port ?? EGRESS_PORT;
       if (/^[a-z]+:/i.test(request.url ?? "") && url.host !== `127.0.0.1:${port}` && url.host !== `localhost:${port}`) {
         this.#record({ kind: "http", target: `${url.protocol}//${url.host}`.slice(0, 300), outcome: "refused", reason: "plain HTTP" });
-        return refuse(response, 403, "Plain HTTP is not allowed through the Pistead egress proxy; use HTTPS");
+        return refuse(response, 403, "Plain HTTP is not allowed through the Pikibun egress proxy; use HTTPS");
       }
-      if (url.pathname === "/__pistead/status" && request.method === "GET") return await this.#status(response);
-      if (url.pathname === "/__pistead/mirror" && request.method === "GET") return await this.#mirror(response, url.searchParams.get("remote") ?? "");
-      if (url.pathname === "/__pistead/lfs" && request.method === "GET") return await this.#lfsEnabled(response, url.searchParams.get("remote") ?? "");
+      if (url.pathname === "/__pikibun/status" && request.method === "GET") return await this.#status(response);
+      if (url.pathname === "/__pikibun/mirror" && request.method === "GET") return await this.#mirror(response, url.searchParams.get("remote") ?? "");
+      if (url.pathname === "/__pikibun/lfs" && request.method === "GET") return await this.#lfsEnabled(response, url.searchParams.get("remote") ?? "");
       if (url.pathname.startsWith("/git/")) return await this.#git(request, response, url);
-      return refuse(response, 404, "Unknown Pistead egress endpoint");
+      return refuse(response, 404, "Unknown Pikibun egress endpoint");
     } catch (error) {
       refuse(response, error instanceof RunnerError ? error.status : 502, error instanceof RunnerError ? error.message : "The request could not be completed");
     }
@@ -588,7 +588,7 @@ export class EgressProxy {
       lfs: grant?.repositories.filter(repository => repository.lfs).map(repository => bindingRemote(repository)) ?? [],
       gitRemotes: `https:// remotes go through ${this.#port === undefined ? EGRESS_GIT_BASE : `http://127.0.0.1:${this.#port}/git/`}<host>/<path>; the workspace's repositories are read with the session owner's access`
         + (this.#options.sessionBranch ? `, and this session's branch ${this.#options.sessionBranch} is pushed with the workspace's push identity` : "")
-        + ". The host fetches them from the forge itself when Pistead grants it a credential (\"direct\" in recent), else Pistead relays them",
+        + ". The host fetches them from the forge itself when Pikibun grants it a credential (\"direct\" in recent), else Pikibun relays them",
       sessionBranch: this.#options.sessionBranch ?? null,
       recent: this.#log.slice(-50),
     }, null, 2)}\n`);
@@ -728,7 +728,7 @@ export class EgressProxy {
     if (!repository.lfs) {
       return deny(403, `Git LFS is off for ${repository.fullName} in this workspace; a workspace owner or admin can turn it on in the workspace's repository settings`);
     }
-    if (lfs.kind === "other") return deny(403, "Only Git LFS downloads go through the Pistead egress proxy; uploads and locks are not supported in sessions");
+    if (lfs.kind === "other") return deny(403, "Only Git LFS downloads go through the Pikibun egress proxy; uploads and locks are not supported in sessions");
     if (lfs.kind === "object") {
       if (request.method !== "GET") return deny(405, "Git LFS downloads use GET");
       const size = Number(url.searchParams.get("size"));
@@ -744,7 +744,7 @@ export class EgressProxy {
     } catch (error) {
       return deny(error instanceof RunnerError ? error.status : 400, error instanceof RunnerError ? error.message : "Invalid Git LFS batch request");
     }
-    if (input.operation !== "download") return deny(403, "Git LFS uploads are not supported in Pistead sessions; only downloads go through the egress proxy");
+    if (input.operation !== "download") return deny(403, "Git LFS uploads are not supported in Pikibun sessions; only downloads go through the egress proxy");
     if (input.transfers !== undefined && (!Array.isArray(input.transfers) || !input.transfers.includes("basic"))) {
       return deny(422, "Only the basic Git LFS transfer is supported");
     }

@@ -8,21 +8,21 @@ let cached: SigningKey | null = null;
 
 async function signingKey(env: Env, missingStatus: 404 | 503): Promise<SigningKey> {
   const pem = env.OIDC_SIGNING_KEY;
-  if (!pem) fail(missingStatus, 'oidc_unavailable', 'Pistead OIDC federation is not configured.');
+  if (!pem) fail(missingStatus, 'oidc_unavailable', 'Pikibun OIDC federation is not configured.');
   if (cached?.pem === pem) return cached;
   let loaded: SigningKey;
   try { loaded = { pem, key: await importRsaPrivateKey(pem), jwk: await publicJwk(pem) }; }
-  catch { fail(503, 'oidc_unavailable', 'Pistead OIDC signing is not configured correctly.'); }
+  catch { fail(503, 'oidc_unavailable', 'Pikibun OIDC signing is not configured correctly.'); }
   cached = loaded;
   return loaded;
 }
 
 /** Federation subject naming a workspace; identity providers trust it per workspace. */
 export function workspaceSubject(workspaceId: string): string {
-  return `pistead:workspace:${workspaceId}`;
+  return `pikibun:workspace:${workspaceId}`;
 }
 
-/** A short-lived RS256 assertion from Pistead's OIDC issuer. Standard claims always win over `claims`. */
+/** A short-lived RS256 assertion from Pikibun's OIDC issuer. Standard claims always win over `claims`. */
 export async function issuerAssertion(env: Env, input: { subject: string; audience: string; ttlSeconds: number; claims?: Record<string, string> }): Promise<string> {
   const { key, jwk } = await signingKey(env, 503);
   const issuedAt = Math.floor(Date.now() / 1000);

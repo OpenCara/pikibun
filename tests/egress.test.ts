@@ -71,21 +71,21 @@ function tunnel(socketPath: string, target: string): Promise<{ status: number; s
 
 test("session branches are named for the session's work, with a short id", () => {
   const id = "1A2B3C4D-5e6f-4000-8000-000000000000";
-  assert.equal(sessionBranchName("Add dark mode toggle to settings", id), "pistead/add-dark-mode-toggle-to-settings-1a2b3c4d5e6f");
-  assert.equal(sessionBranchName("  Fix: crash on `pistead connect` (#42)!  ", id), "pistead/fix-crash-on-pistead-connect-42-1a2b3c4d5e6f");
-  assert.equal(sessionBranchName("Résumé café naïve", id), "pistead/resume-cafe-naive-1a2b3c4d5e6f");
+  assert.equal(sessionBranchName("Add dark mode toggle to settings", id), "pikibun/add-dark-mode-toggle-to-settings-1a2b3c4d5e6f");
+  assert.equal(sessionBranchName("  Fix: crash on `pikibun connect` (#42)!  ", id), "pikibun/fix-crash-on-pikibun-connect-42-1a2b3c4d5e6f");
+  assert.equal(sessionBranchName("Résumé café naïve", id), "pikibun/resume-cafe-naive-1a2b3c4d5e6f");
   // Nothing to slug, or the default title: a generic name, still unique.
-  for (const title of ["", "修复登录", "!!!", "Untitled session"]) assert.equal(sessionBranchName(title, id), "pistead/session-1a2b3c4d5e6f");
+  for (const title of ["", "修复登录", "!!!", "Untitled session"]) assert.equal(sessionBranchName(title, id), "pikibun/session-1a2b3c4d5e6f");
   // Long titles are cut at a word boundary.
   const long = sessionBranchName("Refactor the egress proxy so that pushes of the session branch stream without buffering", id);
-  assert.equal(long, "pistead/refactor-the-egress-proxy-so-that-pushes-of-the-1a2b3c4d5e6f");
-  assert.equal(sessionBranchName("x".repeat(100), id), `pistead/${"x".repeat(48)}-1a2b3c4d5e6f`);
+  assert.equal(long, "pikibun/refactor-the-egress-proxy-so-that-pushes-of-the-1a2b3c4d5e6f");
+  assert.equal(sessionBranchName("x".repeat(100), id), `pikibun/${"x".repeat(48)}-1a2b3c4d5e6f`);
   for (const title of ["Add dark mode", "", "x".repeat(100), long, "a -- b"]) assert.ok(validSessionBranch(sessionBranchName(title, id), id), title);
-  assert.ok(!validSessionBranch("pistead/add-dark-mode-1a2b3c4d5e6f", "ffffffff-0000-4000-8000-000000000000"));
-  // Sessions without a named branch keep pistead/<session-id>.
-  assert.equal(sessionBranch({ id: "s1" }), "pistead/s1");
-  assert.equal(sessionBranch({ id: "s1", branch: null }), "pistead/s1");
-  assert.equal(sessionBranch({ id: "s1", branch: "pistead/add-dark-mode-1a2b3c4d5e6f" }), "pistead/add-dark-mode-1a2b3c4d5e6f");
+  assert.ok(!validSessionBranch("pikibun/add-dark-mode-1a2b3c4d5e6f", "ffffffff-0000-4000-8000-000000000000"));
+  // Sessions without a named branch keep pikibun/<session-id>.
+  assert.equal(sessionBranch({ id: "s1" }), "pikibun/s1");
+  assert.equal(sessionBranch({ id: "s1", branch: null }), "pikibun/s1");
+  assert.equal(sessionBranch({ id: "s1", branch: "pikibun/add-dark-mode-1a2b3c4d5e6f" }), "pikibun/add-dark-mode-1a2b3c4d5e6f");
 });
 
 test("public addresses exclude the host, its networks and metadata services", () => {
@@ -164,7 +164,7 @@ test("Git reads of workspace repositories go to the relay; pushes and other repo
   assert.equal(other.status, 403);
   assert.match(other.body, /not one of this workspace's repositories/);
   assert.equal(relayed.length, 2);
-  const status = JSON.parse((await get(instance.socketPath, "/__pistead/status")).body) as { network: unknown; repositories: string[]; recent: { outcome: string }[] };
+  const status = JSON.parse((await get(instance.socketPath, "/__pikibun/status")).body) as { network: unknown; repositories: string[]; recent: { outcome: string }[] };
   assert.deepEqual(status.repositories, ["https://github.com/acme/app.git"]);
   assert.deepEqual(status.recent.map(entry => entry.outcome), ["allowed", "allowed", "refused", "refused"]);
 });
@@ -174,9 +174,9 @@ function pkt(text: string): string { return (Buffer.byteLength(text, "latin1") +
 const zero = "0".repeat(40), tip = "c".repeat(40);
 
 test("push requests are parsed up to their first flush, and only the session branch passes", async () => {
-  const commands = pkt(`shallow ${tip}\n`) + pkt(`${zero} ${tip} refs/heads/pistead/s1\0report-status side-band-64k\n`) + "0000";
+  const commands = pkt(`shallow ${tip}\n`) + pkt(`${zero} ${tip} refs/heads/pikibun/s1\0report-status side-band-64k\n`) + "0000";
   const parsed = parsePushCommands(new TextEncoder().encode(commands + "PACK"))!;
-  assert.deepEqual(parsed.commands, [{ old: zero, new: tip, ref: "refs/heads/pistead/s1" }]);
+  assert.deepEqual(parsed.commands, [{ old: zero, new: tip, ref: "refs/heads/pikibun/s1" }]);
   assert.deepEqual(parsed.capabilities, ["report-status", "side-band-64k"]);
   assert.equal(parsed.end, commands.length);
   assert.equal(parsePushCommands(new TextEncoder().encode(commands.slice(0, 30))), undefined);
@@ -189,12 +189,12 @@ test("push requests are parsed up to their first flush, and only the session bra
   assert.equal(read.commands.length, 1);
   assert.equal(await new Response(read.body).text(), commands + "PACK-DATA");
 
-  assert.equal(sessionBranchRefusal(parsed.commands, "pistead/s1"), undefined);
-  assert.match(sessionBranchRefusal([{ old: zero, new: tip, ref: "refs/heads/main" }], "pistead/s1")!, /not main; use the git_push tool/);
-  assert.match(sessionBranchRefusal([{ old: zero, new: tip, ref: "refs/tags/v1.0.0" }], "pistead/s1")!, /^Tags can't be pushed without approval, not v1\.0\.0; use the git_push tool with a tag/);
-  assert.match(sessionBranchRefusal([...parsed.commands, { old: zero, new: tip, ref: "refs/tags/v1.0.0" }], "pistead/s1")!, /^Tags can't be pushed/);
-  assert.match(sessionBranchRefusal([{ old: tip, new: zero, ref: "refs/heads/pistead/s1" }], "pistead/s1")!, /can't be deleted/);
-  assert.match(sessionBranchRefusal([...parsed.commands, ...parsed.commands], "pistead/s1")!, /once per push/);
+  assert.equal(sessionBranchRefusal(parsed.commands, "pikibun/s1"), undefined);
+  assert.match(sessionBranchRefusal([{ old: zero, new: tip, ref: "refs/heads/main" }], "pikibun/s1")!, /not main; use the git_push tool/);
+  assert.match(sessionBranchRefusal([{ old: zero, new: tip, ref: "refs/tags/v1.0.0" }], "pikibun/s1")!, /^Tags can't be pushed without approval, not v1\.0\.0; use the git_push tool with a tag/);
+  assert.match(sessionBranchRefusal([...parsed.commands, { old: zero, new: tip, ref: "refs/tags/v1.0.0" }], "pikibun/s1")!, /^Tags can't be pushed/);
+  assert.match(sessionBranchRefusal([{ old: tip, new: zero, ref: "refs/heads/pikibun/s1" }], "pikibun/s1")!, /can't be deleted/);
+  assert.match(sessionBranchRefusal([...parsed.commands, ...parsed.commands], "pikibun/s1")!, /once per push/);
 
   // A refusal reads like a forge's: one "ng" per command, on band 1 when the client multiplexes.
   const plain = new TextDecoder().decode(pushRejection([{ old: zero, new: tip, ref: "refs/heads/main" }], ["report-status"], "Not this branch"));
@@ -206,7 +206,7 @@ test("push requests are parsed up to their first flush, and only the session bra
 
 test("a clone session's proxy relays pushes of its own branch, streaming the pack, and rejects others like a forge", async t => {
   const packs: string[] = [];
-  const { instance, relayed } = await proxy(t, { sessionBranch: "pistead/s1", relay: async request => {
+  const { instance, relayed } = await proxy(t, { sessionBranch: "pikibun/s1", relay: async request => {
     if (request.service === "receive-refs") return new Response("refs", { headers: { "content-type": "application/x-git-receive-pack-advertisement" } });
     assert.ok(request.body instanceof ReadableStream);
     packs.push(await new Response(request.body).text());
@@ -216,7 +216,7 @@ test("a clone session's proxy relays pushes of its own branch, streaming the pac
   assert.equal(refs.status, 200);
   assert.equal(refs.headers["content-type"], "application/x-git-receive-pack-advertisement");
   const headers = { "content-type": "application/x-git-receive-pack-request" };
-  const branch = pkt(`${zero} ${tip} refs/heads/pistead/s1\0report-status side-band-64k\n`) + "0000";
+  const branch = pkt(`${zero} ${tip} refs/heads/pikibun/s1\0report-status side-band-64k\n`) + "0000";
   const pushed = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: branch + "PACK-DATA" });
   assert.equal(pushed.status, 200);
   assert.equal(pushed.body, "report");
@@ -226,7 +226,7 @@ test("a clone session's proxy relays pushes of its own branch, streaming the pac
   const main = pkt(`${zero} ${tip} refs/heads/main\0report-status side-band-64k\n`) + "0000";
   const rejected = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: main + "PACK-DATA" });
   assert.equal(rejected.status, 200);
-  assert.match(rejected.body, /ng refs\/heads\/main Only this session's branch pistead\/s1 can be pushed without approval, not main/);
+  assert.match(rejected.body, /ng refs\/heads\/main Only this session's branch pikibun\/s1 can be pushed without approval, not main/);
   // Git's probe before a chunked upload is answered here; neither reaches the control plane.
   const probe = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: "0000" });
   assert.equal(probe.status, 200);
@@ -235,11 +235,11 @@ test("a clone session's proxy relays pushes of its own branch, streaming the pac
   const bare = pkt(`${zero} ${tip} refs/heads/main\0side-band-64k\n`) + "0000";
   const plain = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: bare + "P".repeat(200_000) });
   assert.equal(plain.status, 403);
-  assert.match(plain.body, /Only this session's branch pistead\/s1/);
+  assert.match(plain.body, /Only this session's branch pikibun\/s1/);
   assert.equal(relayed.length, 2);
-  const status = JSON.parse((await get(instance.socketPath, "/__pistead/status")).body) as { sessionBranch: string; gitRemotes: string };
-  assert.equal(status.sessionBranch, "pistead/s1");
-  assert.match(status.gitRemotes, /pistead\/s1 is pushed/);
+  const status = JSON.parse((await get(instance.socketPath, "/__pikibun/status")).body) as { sessionBranch: string; gitRemotes: string };
+  assert.equal(status.sessionBranch, "pikibun/s1");
+  assert.match(status.gitRemotes, /pikibun\/s1 is pushed/);
   const other = await get(instance.socketPath, "/git/github.com/acme/other.git/info/refs?service=git-receive-pack");
   assert.equal(other.status, 403);
   assert.match(other.body, /pushes go only to them/);
@@ -465,11 +465,11 @@ test("a clone's commit is pushed as it is, fast-forward only", { skip: !sandboxe
 test("closing the proxy lets a push under way finish before its connection goes", async t => {
   let release!: () => void;
   const answered = new Promise<void>(resolve => { release = resolve; });
-  const { instance } = await proxy(t, { sessionBranch: "pistead/s1", relay: async request => {
+  const { instance } = await proxy(t, { sessionBranch: "pikibun/s1", relay: async request => {
     if (request.service === "receive-pack") { await new Response(request.body as ReadableStream).arrayBuffer(); await answered; }
     return new Response("report", { headers: { "content-type": "application/x-git-receive-pack-result" } });
   } });
-  const body = pkt(`${zero} ${tip} refs/heads/pistead/s1\0report-status\n`) + "0000PACK";
+  const body = pkt(`${zero} ${tip} refs/heads/pikibun/s1\0report-status\n`) + "0000PACK";
   const pushed = get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body });
   await new Promise(resolve => setTimeout(resolve, 50));
   // However long the forge takes to answer.
@@ -507,27 +507,27 @@ test("a sandboxed git push of the session branch goes through the proxy; other b
   // The control plane's relay, here straight to git http-backend: reads and pushes alike.
   const paths: Record<string, string> = { "info-refs": "info/refs?service=git-upload-pack", "upload-pack": "git-upload-pack",
     "receive-refs": "info/refs?service=git-receive-pack", "receive-pack": "git-receive-pack" };
-  const { instance, relayed } = await proxy(t, { sessionBranch: "pistead/branch-push", relay: async request => fetch(`${server.url("acme/app.git")}/${paths[request.service]}`, {
+  const { instance, relayed } = await proxy(t, { sessionBranch: "pikibun/branch-push", relay: async request => fetch(`${server.url("acme/app.git")}/${paths[request.service]}`, {
     method: request.service.endsWith("refs") ? "GET" : "POST", body: request.service.endsWith("refs") ? undefined : request.body,
     headers: { ...(request.contentType ? { "content-type": request.contentType } : {}), ...(request.gitProtocol ? { "git-protocol": request.gitProtocol } : {}) },
     ...(request.body instanceof ReadableStream ? { duplex: "half" } : {}),
   } as RequestInit) });
-  const sandbox = new Sandbox(binding("branch-push"), join(directory, "session"), undefined, { egressSocket: instance.socketPath, sessionBranch: "pistead/branch-push" });
+  const sandbox = new Sandbox(binding("branch-push"), join(directory, "session"), undefined, { egressSocket: instance.socketPath, sessionBranch: "pikibun/branch-push" });
   t.after(() => sandbox.close());
   await sandbox.initialize();
   const shell = (command: string) => sandbox.execute({ kind: "bash", command }, false, async () => {}, { allowTestShell: true });
   await shell("git clone -q https://github.com/acme/app.git app && cd app && echo change > change.txt && git add change.txt && git commit -q -m 'Add a change'"
-    + ' && git push -q origin "HEAD:$PISTEAD_SESSION_BRANCH"');
-  assert.equal(git(["show", "refs/heads/pistead/branch-push:change.txt"], bare), "change");
+    + ' && git push -q origin "HEAD:$PIKIBUN_SESSION_BRANCH"');
+  assert.equal(git(["show", "refs/heads/pikibun/branch-push:change.txt"], bare), "change");
   assert.ok(relayed.some(request => request.service === "receive-pack"));
   // Moving it again is a plain fast-forward push too.
-  await shell("cd app && echo more >> change.txt && git commit -q -am 'More' && git push -q origin HEAD:pistead/branch-push");
-  assert.equal(git(["show", "refs/heads/pistead/branch-push:change.txt"], bare), "change\nmore");
+  await shell("cd app && echo more >> change.txt && git commit -q -am 'More' && git push -q origin HEAD:pikibun/branch-push");
+  assert.equal(git(["show", "refs/heads/pikibun/branch-push:change.txt"], bare), "change\nmore");
   // A pack larger than Git's post buffer streams in chunks, after Git's probe.
-  await shell("cd app && head -c 3000000 /dev/urandom > large.bin && git add large.bin && git commit -q -m 'Large' && git push -q origin HEAD:pistead/branch-push");
-  assert.equal(git(["cat-file", "-s", "refs/heads/pistead/branch-push:large.bin"], bare), "3000000");
+  await shell("cd app && head -c 3000000 /dev/urandom > large.bin && git add large.bin && git commit -q -m 'Large' && git push -q origin HEAD:pikibun/branch-push");
+  assert.equal(git(["cat-file", "-s", "refs/heads/pikibun/branch-push:large.bin"], bare), "3000000");
   // Any other branch is rejected the way a forge rejects it, naming the session branch.
-  await assert.rejects(shell("cd app && git push origin HEAD:main"), /remote rejected.*Only this session's branch pistead\/branch-push can be pushed without approval/);
+  await assert.rejects(shell("cd app && git push origin HEAD:main"), /remote rejected.*Only this session's branch pikibun\/branch-push can be pushed without approval/);
   assert.equal(git(["rev-parse", "refs/heads/main"], bare), git(["rev-parse", "main"], work));
 });
 
@@ -596,7 +596,7 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   assert.ok(files.some(file => file.path === "worktree/notes.txt"));
   assert.ok(!files.some(file => file.path.startsWith("worktree/app/") || file.path.startsWith("worktree/libs/app/")));
   // The clone itself is untouched.
-  await shell(source, "cd app && git status --porcelain > ../status.txt && git for-each-ref --format='%(refname)' refs/pistead > ../refs.txt");
+  await shell(source, "cd app && git status --porcelain > ../status.txt && git for-each-ref --format='%(refname)' refs/pikibun > ../refs.txt");
   assert.equal(await source.readFile("status.txt", authorize), " M README.md\n?? untracked.txt\n?? vendor/\n");
   assert.equal(await source.readFile("refs.txt", authorize), "");
   git(["branch", "-q", "-D", "topic"], bare);
@@ -605,7 +605,7 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   const target = new Sandbox(binding("backup-target"), join(directory, "target"), undefined, { egressSocket: instance.socketPath });
   t.after(() => target.close());
   await target.initialize();
-  const state = join(directory, "target", "git", "pistead-clones");
+  const state = join(directory, "target", "git", "pikibun-clones");
   await mkdir(state, { recursive: true, mode: 0o700 });
   const pending = clones.map((clone, index) => {
     const { bundle, ...rest } = clone;
@@ -619,7 +619,7 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   await target.cloneRestore("app/vendor/app", url, null, authorize);
   assert.deepEqual(await target.clonePending(authorize), [{ path: "libs/app", origin: "git@github.com:acme/app.git" }]);
   await shell(target, "cd app && git status --porcelain > ../status.txt && git rev-parse --abbrev-ref HEAD > ../branch.txt && git log --format=%s -1 > ../log.txt"
-    + " && git for-each-ref --format='%(refname)' refs/heads refs/pistead > ../refs.txt && git log --format=%s -1 fix+retry > ../topic.txt");
+    + " && git for-each-ref --format='%(refname)' refs/heads refs/pikibun > ../refs.txt && git log --format=%s -1 fix+retry > ../topic.txt");
   assert.equal(await target.readFile("status.txt", authorize), " M README.md\n?? untracked.txt\n?? vendor/\n");
   assert.equal(await target.readFile("branch.txt", authorize), "feature\n");
   assert.equal(await target.readFile("log.txt", authorize), "Local commit\n");
@@ -642,17 +642,17 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   assert.equal(again.clones[2]!.bundle, null);
   assert.ok((await target.snapshot(authorize, again.found)).some(file => file.path === "worktree/libs/app"));
   // Once the path is free it restores, past what an interrupted attempt left, keeping the clone's own origin.
-  await shell(target, "rm libs/app && mkdir -p libs/.app.pistead-restore/.git && echo stale > libs/.app.pistead-restore/stale");
+  await shell(target, "rm libs/app && mkdir -p libs/.app.pikibun-restore/.git && echo stale > libs/.app.pikibun-restore/stale");
   await target.cloneRestore("libs/app", url, null, authorize);
   assert.deepEqual(await target.clonePending(authorize), []);
-  assert.match(await shell(target, "cd libs/app && git config --get remote.origin.url && git status --porcelain && ls -a .. | grep -c pistead-restore || true"),
+  assert.match(await shell(target, "cd libs/app && git config --get remote.origin.url && git status --porcelain && ls -a .. | grep -c pikibun-restore || true"),
     /^git@github\.com:acme\/app\.git\n0\n$/);
   // A restoration that finished but whose entry the runner stopped before dropping is recognised, not refused.
   await writeFile(join(state, "manifest.json"), JSON.stringify({ version: 1, clones: [pending[2]] }));
-  await writeFile(join(directory, "target", "worktree", "libs", "app", ".git", "pistead-restored"), `${clones[2]!.worktree}\n`);
+  await writeFile(join(directory, "target", "worktree", "libs", "app", ".git", "pikibun-restored"), `${clones[2]!.worktree}\n`);
   await target.cloneRestore("libs/app", url, null, authorize);
   assert.deepEqual(await target.clonePending(authorize), []);
-  await assert.rejects(lstat(join(directory, "target", "worktree", "libs", "app", ".git", "pistead-restored")), { code: "ENOENT" });
+  await assert.rejects(lstat(join(directory, "target", "worktree", "libs", "app", ".git", "pikibun-restored")), { code: "ENOENT" });
 });
 
 test("a backup keeps local changes to LFS-tracked files as their content, not as pointers to objects it doesn't carry", { skip: !sandboxed }, async t => {
@@ -701,7 +701,7 @@ test("a backup keeps local changes to LFS-tracked files as their content, not as
   const target = new Sandbox(binding("lfs-backup-target"), join(directory, "target"), undefined, { egressSocket: instance.socketPath });
   t.after(() => target.close());
   await target.initialize();
-  const state = join(directory, "target", "git", "pistead-clones");
+  const state = join(directory, "target", "git", "pikibun-clones");
   await mkdir(state, { recursive: true, mode: 0o700 });
   await writeFile(join(state, "0.bundle"), Buffer.from(clones[0]!.bundle!, "base64"));
   await writeFile(join(state, "manifest.json"), JSON.stringify({ version: 1, clones: [{ ...clones[0]!, bundle: "0.bundle" }] }));
@@ -765,5 +765,5 @@ test("a client that drops while its tunnel is being set up doesn't take the prox
   await new Promise(resolve => setTimeout(resolve, 50));
   pending.resolve(grant());
   await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal((await get(instance.socketPath, "/__pistead/status")).status, 200);
+  assert.equal((await get(instance.socketPath, "/__pikibun/status")).status, 200);
 });

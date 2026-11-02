@@ -46,7 +46,7 @@ async function pendingApproval(session: RunnerSession) {
 }
 
 test("the agent schedules prompts from the chat for the session owner, never adding access its message lacked", async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-schedule-tool-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-schedule-tool-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests: ScheduleToolRequest[] = [];
   const schedule = { id: "schedule-1", name: "Check the build", cron: "0 9 * * 1-5", timeZone: "Europe/Berlin", access: "approval", enabled: true } as SessionSchedule;

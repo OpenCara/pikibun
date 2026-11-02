@@ -1,4 +1,4 @@
-import { ApiError, createApi, errorMessage, type Api, type RequestOptions } from "@pistead/client";
+import { ApiError, createApi, errorMessage, type Api, type RequestOptions } from "@pikibun/client";
 import * as Device from "expo-device";
 import * as Linking from "expo-linking";
 import * as SecureStore from "expo-secure-store";
@@ -15,12 +15,12 @@ const signInRefusals: Record<string, string> = {
   too_many_pending: "The workspace that invited you has too many people waiting to join. Ask an owner or admin.",
 };
 
-const TOKEN_KEY = "pistead.token";
-const EXPIRES_KEY = "pistead.tokenExpires";
+const TOKEN_KEY = "pikibun.token";
+const EXPIRES_KEY = "pikibun.tokenExpires";
 /** The server is a preference, not a credential: it stays after sign-out so signing in again goes to the same place. */
-const ORIGIN_KEY = "pistead.origin";
-/** The server redirects here after GitHub (see the native sign-in API); the app registers the `pistead` scheme. */
-const CALLBACK_URL = "pistead://auth";
+const ORIGIN_KEY = "pikibun.origin";
+/** The server redirects here after GitHub (see the native sign-in API); the app registers the `pikibun` scheme. */
+const CALLBACK_URL = "pikibun://auth";
 
 export type AuthState =
   | { status: "loading" }

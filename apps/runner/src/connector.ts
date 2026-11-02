@@ -198,7 +198,7 @@ function capabilities(value?: ConnectorCapabilities, mode: { unsandboxed?: boole
     || (result.productionShell && !result.sandbox)) throw new Error("Invalid connector capabilities");
   // The owner's consent, not caller-supplied metadata, decides whether isolation is disclosed as absent. Every connector
   // of this version applies per-message choices, gives the model a message's pasted images, pushes, and reads, merges
-  // and opens issues on GitHub through the control plane, and takes its configuration from Pistead (`hostConfig`), where
+  // and opens issues on GitHub through the control plane, and takes its configuration from Pikibun (`hostConfig`), where
   // its owner decides whether pushes may use this host's Git credentials, compaction token counts included
   // (`compactionConfig`). It says whether this connection keeps a repository cache, and which GPU device sandboxed
   // commands could get. Every session clones its repositories with plain Git: in the sandbox through its egress proxy
@@ -301,7 +301,7 @@ export interface ConnectorOptions {
   sandboxBackend?: SandboxBackendConfig;
   /**
    * The GPU device this host can lend sandboxed commands, where its configuration turns that on; detected on the host
-   * unless given (null for none). Everything else the host's owner and admins configure in Pistead (HostConfig): the
+   * unless given (null for none). Everything else the host's owner and admins configure in Pikibun (HostConfig): the
    * command time limit, the GPU, whether pushes may use this host's Git credentials, and its repository cache.
    */
   gpu?: GpuKind | null;
@@ -365,7 +365,7 @@ export class LocalConnector {
   /** Runtime requests still executing, including those already answered as timed out: the runtime closes after them. */
   private readonly executing = new Set<Promise<void>>();
   /**
-   * How the host runs its sessions, as its owner and admins set it in Pistead: asked for at every connection, and again
+   * How the host runs its sessions, as its owner and admins set it in Pikibun: asked for at every connection, and again
    * within a minute of each change for every command and push. Without an answer (a control plane that predates it), the
    * defaults.
    */
@@ -704,9 +704,9 @@ export class LocalConnector {
         ]).parse(await this.brokerCallback(await this.connection(), "/api/connectors/self/git/push/credential", payload));
       },
       hostConfig: () => hostConfig.current(),
-      // Only while the host's owner has them on in Pistead; the control plane checks that too before it names them.
+      // Only while the host's owner has them on in Pikibun; the control plane checks that too before it names them.
       hostGitCredential: async (remote: string, signal?: AbortSignal) => {
-        if (!(await hostConfig.current()).gitCredentials) throw new HostCredentialError("This host's owner hasn't turned on its Git credentials in Pistead (Settings → Hosts → the host → Configuration)");
+        if (!(await hostConfig.current()).gitCredentials) throw new HostCredentialError("This host's owner hasn't turned on its Git credentials in Pikibun (Settings → Hosts → the host → Configuration)");
         return hostGitAuthorization(remote, { signal });
       },
       pushComplete: async request => {

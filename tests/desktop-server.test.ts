@@ -63,14 +63,14 @@ async function launch(stateDir: string, staticDir: string) {
 }
 
 test("the desktop app's local server refuses malformed requests, needs a GitHub OAuth app, then serves on loopback", async t => {
-  const parent = await realpath(await mkdtemp(join(tmpdir(), "pistead-desktop-server-")));
+  const parent = await realpath(await mkdtemp(join(tmpdir(), "pikibun-desktop-server-")));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const stateDir = join(parent, "server");
   await loadLocalState(stateDir, { port: await freePort() });
   // The built web app, which tests run without.
   const web = join(parent, "web");
   await mkdir(join(web, "assets"), { recursive: true });
-  await writeFile(join(web, "index.html"), "<!doctype html><title>Pistead</title>");
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
   const server = await launch(stateDir, web);
   t.after(() => server.close());
 
@@ -88,7 +88,7 @@ test("the desktop app's local server refuses malformed requests, needs a GitHub 
 
   const unconfigured = await server.request({ type: "start", testMode: true });
   assert.deepEqual(unconfigured, { type: "result", id: unconfigured.type === "result" ? unconfigured.id : 0, ok: false,
-    error: { message: "Add your GitHub OAuth app first: Pistead signs you in with it." } });
+    error: { message: "Add your GitHub OAuth app first: Pikibun signs you in with it." } });
 
   // The GitHub app is saved with the state, and the secret never comes back.
   const count = server.events.length;
@@ -103,10 +103,10 @@ test("the desktop app's local server refuses malformed requests, needs a GitHub 
   assert.ok(!JSON.stringify(server.events).includes("0123456789abcdef0123456789abcdef01234567"));
   const health = await (await fetch(`${running.origin}/api/health`)).json() as { githubConfigured: boolean; localServer: { claimed: boolean } };
   assert.deepEqual([health.githubConfigured, health.localServer], [true, { claimed: false }]);
-  assert.match(await (await fetch(running.origin!)).text(), /<title>Pistead<\/title>/);
+  assert.match(await (await fetch(running.origin!)).text(), /<title>Pikibun<\/title>/);
 
   const again = await server.request({ type: "start" });
-  assert.equal(again.type === "result" && !again.ok && again.error.message, "Pistead is already running on this computer.");
+  assert.equal(again.type === "result" && !again.ok && again.error.message, "Pikibun is already running on this computer.");
 
   const before = server.events.length;
   const stopped = await server.request({ type: "stop" });

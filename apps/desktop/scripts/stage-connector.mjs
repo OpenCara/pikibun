@@ -1,7 +1,7 @@
 // Stages the connector host and the local server for packaging into dist/connector, which electron-builder copies to
 // Resources/connector: the app's build of both (dist/host, see build.mjs), the web app the local server serves (the
 // repository's dist/web, from `pnpm build`), plus their production dependencies, installed exactly as pinned by
-// packages/cli/npm-shrinkwrap.json (the same tree `npx pistead` installs). Needs the npm registry.
+// packages/cli/npm-shrinkwrap.json (the same tree `npx pikibun` installs). Needs the npm registry.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";

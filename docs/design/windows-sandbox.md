@@ -1,6 +1,6 @@
 # Design: a native Windows 11 sandbox for the connector
 
-Status: experimental implementation behind `pistead connect --experimental-sandbox` (macOS and native Windows), and
+Status: experimental implementation behind `pikibun connect --experimental-sandbox` (macOS and native Windows), and
 native Windows without a sandbox (`--unsafe-no-sandbox`); not yet run on either platform. See
 [Implementation](#implementation-experimental) for what exists and what the first runs must check. The cross-platform
 decision is in [Choosing](#choosing-across-windows-linux-and-macos-from-the-requirements-alone). Native Windows is refused today
@@ -27,7 +27,7 @@ What exists, in `apps/runner/src`:
 |---|---|---|
 | One interface for every backend | `workspace.ts` | `SessionWorkspace` (every backend), `IsolatedWorkspace` (clone, backup and push steps that run inside the boundary) |
 | A workspace for helper-per-step backends | `helper-workspace.ts` | Same checks, queueing, limits and output caps as `Sandbox`. The session's Git directory is `root/git`, with a runner-written `gitdir:` file at `worktree/.git` that steps can't change |
-| Loopback egress with a token | `egress.ts` (`tcp`, `endpoint`, `egressEnvironment(branch, endpoint, caBundle)`) | An ephemeral `127.0.0.1` port. Requests need `pistead:<token>` as Basic credentials (401 for the proxy's own endpoints, 407 for proxying); `HTTPS_PROXY` and the Git rewrites carry them |
+| Loopback egress with a token | `egress.ts` (`tcp`, `endpoint`, `egressEnvironment(branch, endpoint, caBundle)`) | An ephemeral `127.0.0.1` port. Requests need `pikibun:<token>` as Basic credentials (401 for the proxy's own endpoints, 407 for proxying); `HTTPS_PROXY` and the Git rewrites carry them |
 | macOS | `seatbelt.ts` | `sandbox-exec` with a generated, deny-by-default profile, with paths passed as `-D` parameters; the Linux Python helper, told where things are (`SANDBOX_GITDIR`, `SANDBOX_GIT`, `SANDBOX_BASH`, `SANDBOX_OWNER_CONFIG`) |
 | Windows | `windows-sandbox.ts`, `windows-job.ts`, `node-helper.ts` | A per-step Node runner in a job object (koffi) loads MXC, refuses any tier but `base-container`, and runs the Node helper in the container |
 | Native Windows without a sandbox | `platform.ts`, `lease.ts`, `host-workspace.ts`, `host-shell.ts`, `file-browser.ts`, `connector.ts` | A named-pipe lease, Git for Windows' bash, `taskkill /T`, no POSIX mode checks |
@@ -160,7 +160,7 @@ backend has to keep every one of them, or say clearly which it drops.
 |---|---|
 | Nothing of the host is visible except an allowlist | `--unshare-all`, read-only `/usr` `/lib` `/lib64`, empty `/etc` apart from the CA bundle |
 | Only the session's worktree and home are writable; `.git` is writable only for Git steps | fd-pinned `--bind-fd` / `--ro-bind-fd`, `--remount-ro /` |
-| No direct network; the only way out is the session's egress proxy | network namespace; the proxy's Unix socket bind-mounted at `/run/pistead/egress.sock`, relayed to `127.0.0.1:41080` inside |
+| No direct network; the only way out is the session's egress proxy | network namespace; the proxy's Unix socket bind-mounted at `/run/pikibun/egress.sock`, relayed to `127.0.0.1:41080` inside |
 | **Sessions are isolated from each other and from the host user** (members share hosts) | one namespace set per command, with mounts limited to that session |
 | No privileges; the process tree dies with the runner; commands are killable | `--cap-drop ALL`, `--disable-userns`, `--die-with-parent`, `--new-session`, process-group kill |
 | CPU, memory, process and disk limits | operator-provisioned cgroup v2 subtree, plus an ext4 or tmpfs volume per sandbox root |
@@ -168,12 +168,12 @@ backend has to keep every one of them, or say clearly which it drops.
 | Git without hooks, stored credentials or SSH; host CA bundle | `.gitconfig` pinned read-only; `SSL_CERT_FILE` and similar variables |
 | Optional GPU render node | `gpuMounts` (`/dev/dxg` or DRM render nodes) |
 
-The fourth row matters most here. Pistead hosts are shared between workspace members, so one container per host
+The fourth row matters most here. Pikibun hosts are shared between workspace members, so one container per host
 isn't enough: it has to be one boundary **per session**.
 
 ## Windows primitives
 
-| Primitive | What it gives | Gaps for Pistead |
+| Primitive | What it gives | Gaps for Pikibun |
 |---|---|---|
 | **Restricted token** (`CreateRestrictedToken`, `WRITE_RESTRICTED`, `DISABLE_MAX_PRIVILEGE`) | Writes allowed only where a restricting SID has an ACE. Chromium and Codex's "legacy" backend use it | `WRITE_RESTRICTED` limits writes only, so reads still run as the real user (`~/.ssh`, browser profiles). No network control |
 | **Low integrity level** | No write-up | Read-up is still allowed. Not a confinement boundary on its own |
@@ -223,7 +223,7 @@ lines of Rust across its Windows crates, tests included), and is now moving to t
 - Known limitations it documents: per-user tool installs are unreachable; schannel revocation checks fail behind the
   fence; the proxy token is visible on the runner's command line; DNS through `Dnscache` isn't fenced.
 - One account serves every session, so it doesn't separate concurrent sessions. That's fine for a single-user CLI,
-  but not for Pistead's shared hosts.
+  but not for Pikibun's shared hosts.
 
 ### Microsoft MXC
 
@@ -233,14 +233,14 @@ lines of Rust across its Windows crates, tests included), and is now moving to t
 - **The Windows ProcessContainer has tiers.** `base-container` is PSEC (OS-enforced). `appcontainer-bfs` and
   `appcontainer-dacl` are fallbacks that mutate host ACLs and need `wxc-host-prep` admin steps.
   `probe()` / `getAvailableBackends()` report the tier, and `fallback.allowDaclMutation: false` refuses Tier 3.
-- **Its networking "Model 2: proxy-only egress (recommended)" is Pistead's egress design:** egress deny by default,
+- **Its networking "Model 2: proxy-only egress (recommended)" is Pikibun's egress design:** egress deny by default,
   per-container WFP that permits only the configured loopback proxy endpoint, with `HTTP(S)_PROXY` set to it. An
   identity-less loopback proxy (an unpackaged Node process, like our connector) needs `hostLoopback: "allow"`
   together with the proxy endpoint. Builds .9550+ report `identitylessLoopbackProxy`.
-- It applies no CPU, memory or process limits to ProcessContainer. It only assigns a kill-on-close job, so Pistead
+- It applies no CPU, memory or process limits to ProcessContainer. It only assigns a kill-on-close job, so Pikibun
   would have to add its own limits.
 
-## What changes for Pistead on Windows
+## What changes for Pikibun on Windows
 
 1. **Egress transport.** Bind-mounting a Unix socket doesn't exist on Windows, and with no network namespace the
    sandbox shares the host's loopback. A fixed `127.0.0.1:41080` therefore can't serve several sessions. Each session
@@ -333,7 +333,7 @@ executor `wxc-exec.exe`, the admin-only `wxc-host-prep.exe`, and Linux and macOS
 | Gap | Consequence | Cover |
 |---|---|---|
 | The typed API drops `fallback`: `prepareOneShotRequest` builds the native request without it, so `allowDaclMutation` stays at its default `true` | On a host without usable PSEC, MXC may fall back to AppContainer and **rewrite host folder ACLs** instead of failing | Call `probe(request)` before each spawn and refuse unless `isolationTier === "base-container"` with no warnings. This leaves a small window if the host changes between probe and spawn. To close it, use `wxc-exec.exe` with a JSON file that sets `fallback.allowDaclMutation: false`, or ask upstream to expose `fallback` in V1 |
-| `MxcProcess` has no PID and no job handle | Pistead can't set per-session memory, CPU or process limits on the container, and its egress proxy can't recognize the session's processes | Run each sandbox step in a **per-command Node runner** (`node runner.js`, mxc-sdk loaded there, not in the connector). The connector creates a job with `JOB_MEMORY`, `ACTIVE_PROCESS`, a CPU hard cap and kill-on-close, assigns the runner to it through koffi (`CreateJobObjectW`, `SetInformationJobObject`, `AssignProcessToJobObject`), and only then sends the request on stdin, as the cgroup supervisor gates its child today. MXC's own kill-on-close job nests inside ours. The proxy checks a connecting peer with `GetExtendedTcpTable` and `IsProcessInJob(peer, sessionJob)` |
+| `MxcProcess` has no PID and no job handle | Pikibun can't set per-session memory, CPU or process limits on the container, and its egress proxy can't recognize the session's processes | Run each sandbox step in a **per-command Node runner** (`node runner.js`, mxc-sdk loaded there, not in the connector). The connector creates a job with `JOB_MEMORY`, `ACTIVE_PROCESS`, a CPU hard cap and kill-on-close, assigns the runner to it through koffi (`CreateJobObjectW`, `SetInformationJobObject`, `AssignProcessToJobObject`), and only then sends the request on stdin, as the cgroup supervisor gates its child today. MXC's own kill-on-close job nests inside ours. The proxy checks a connecting peer with `GetExtendedTcpTable` and `IsProcessInJob(peer, sessionJob)` |
 | FFI runs in the calling process | A native crash or hang would take the whole connector down with it | The per-command runner above isolates that too |
 | The package carries Linux, macOS, WSLC, Windows Sandbox and test binaries | A 108 MB install on every platform | Install it only on win32: as an optional dependency fetched on first native-Windows connect, or bundled into a Windows-only connector build |
 | No disk quota | Same as before | Same as before |
@@ -352,10 +352,10 @@ The same SDK and request shape also drive `bubblewrap` (the Linux default; `lxc`
 options) and `seatbelt` on macOS 15 and later. The `process` intent resolves to `processcontainer`, `bubblewrap` or
 `seatbelt` by platform. The npm package ships `libmxc_ffi.so` / `.dylib` for them.
 
-**Linux: keep Pistead's own bubblewrap sandbox.** MXC's backend is looser than ours in the places that matter, and it
+**Linux: keep Pikibun's own bubblewrap sandbox.** MXC's backend is looser than ours in the places that matter, and it
 needs more on the host:
 
-| | Pistead `sandbox.ts` | MXC bubblewrap |
+| | Pikibun `sandbox.ts` | MXC bubblewrap |
 |---|---|---|
 | `/etc` | empty except the CA bundle | all of `/etc` read-only |
 | Mounts | fd-pinned `--bind-fd`, so a swapped symlink can't redirect them | path-based binds |
@@ -366,7 +366,7 @@ needs more on the host:
 Adopting it would mean giving up isolation and adding host dependencies, for no gain. The one thing it could offer is
 a shared request format across platforms, and the runner's own `Request` protocol already serves that purpose.
 
-**macOS: a real option where Pistead has no sandbox today.** macOS hosts now run only `--unsafe-no-sandbox`.
+**macOS: a real option where Pikibun has no sandbox today.** macOS hosts now run only `--unsafe-no-sandbox`.
 Seatbelt (`sandbox_init` with a generated profile, the framework under the App Sandbox; no root, no install, macOS
 15+) gives:
 
@@ -375,7 +375,7 @@ Seatbelt (`sandbox_init` with a generated profile, the framework under the App S
   client that ignores `HTTPS_PROXY` can't get out;
 - UI, clipboard and input-injection lockdown.
 
-The caveats for Pistead:
+The caveats for Pikibun:
 
 - `localhost:<port>` also matches the host's non-loopback addresses on that port, and every session shares the host's
   network stack. So it needs the same per-session proxy port as Windows, and the same peer check. macOS has no job
@@ -393,7 +393,7 @@ both.
 
 ## Choosing across Windows, Linux and macOS, from the requirements alone
 
-This evaluation deliberately ignores what Pistead already has (`sandbox.ts`, the docs). It scores every option only
+This evaluation deliberately ignores what Pikibun already has (`sandbox.ts`, the docs). It scores every option only
 against what a session sandbox has to do.
 
 ### Requirements

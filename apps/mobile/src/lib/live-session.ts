@@ -1,4 +1,4 @@
-import { openFetchEventStream, startLiveSession, type StreamStatus } from "@pistead/client";
+import { openFetchEventStream, startLiveSession, type StreamStatus } from "@pikibun/client";
 import { fetch as streamingFetch } from "expo/fetch";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";

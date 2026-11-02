@@ -27,7 +27,7 @@ function binding(id: string, repositories: SessionRepository[] = []): RunnerBind
 }
 
 async function hostWorkspace(t: TestContext, repositories: SessionRepository[] = []): Promise<{ workspace: HostWorkspace; outside: string }> {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-host-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-")));
   const workspace = new HostWorkspace(binding("host-session", repositories), join(directory, "session"));
   t.after(async () => { await workspace.close(); await rm(directory, { recursive: true, force: true }); });
   await workspace.initialize();
@@ -35,7 +35,7 @@ async function hostWorkspace(t: TestContext, repositories: SessionRepository[] =
 }
 
 test("the Linux sandbox never falls back to host execution on other platforms", { skip: process.platform === "linux" }, () => {
-  assert.throws(() => new Sandbox(binding("implicit"), join(tmpdir(), "pistead-implicit")), /requires Linux/);
+  assert.throws(() => new Sandbox(binding("implicit"), join(tmpdir(), "pikibun-implicit")), /requires Linux/);
 });
 
 test("a host workspace is not isolated, so the sandbox's clone steps are refused rather than run on the host", hostMode, async t => {
@@ -61,9 +61,9 @@ test("unsandboxed file tools stay inside the session worktree", hostMode, async 
 
 test("approved unsandboxed commands run in the worktree without the connector environment", hostMode, async t => {
   const { workspace } = await hostWorkspace(t);
-  process.env.PISTEAD_CONNECTOR_SECRET = "must-not-leak";
-  t.after(() => { delete process.env.PISTEAD_CONNECTOR_SECRET; });
-  const output = await workspace.execute({ kind: "bash", command: `${printWorkingDirectory}; echo "\${PISTEAD_CONNECTOR_SECRET:-unset} $APP_TEAM"` }, false, authorize);
+  process.env.PIKIBUN_CONNECTOR_SECRET = "must-not-leak";
+  t.after(() => { delete process.env.PIKIBUN_CONNECTOR_SECRET; });
+  const output = await workspace.execute({ kind: "bash", command: `${printWorkingDirectory}; echo "\${PIKIBUN_CONNECTOR_SECRET:-unset} $APP_TEAM"` }, false, authorize);
   assert.equal(output, `${workspace.worktree}\nunset core\n`);
   await assert.rejects(workspace.execute({ kind: "bash", command: "true" }, true, authorize), /read-only/);
   await assert.rejects(workspace.execute({ kind: "bash", command: "exit 3" }, false, authorize), /exit 3/);
@@ -77,7 +77,7 @@ test("approved unsandboxed commands run in the worktree without the connector en
 });
 
 test("an unsandboxed clone session's Git uses the host user's own credential helpers, and no other session's does", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-host-credentials-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-credentials-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   // The host user's own Git config, in their real HOME (with a quote in its path, to check the helper's quoting).
   const home = join(directory, "host user's home");
@@ -104,7 +104,7 @@ test("an unsandboxed clone session's Git uses the host user's own credential hel
 });
 
 test("a host clone session reads the branches its clones have checked out, as Git leaves them", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-host-branches-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-branches-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const clone = binding("host-branches");
   clone.session.repositoryMode = "clone";
@@ -158,7 +158,7 @@ test("a cancelled or timed-out host command ends what it started in the backgrou
 
 test("an unsandboxed command runs as written: quoting, lines, an empty stdin and its exit status", hostMode, async t => {
   const { workspace } = await hostWorkspace(t);
-  const command = "x='a  \"b\" \\c'\nprintf '%s|' \"$x\" \"${__pistead_command-unset}\"\nif read -r line; then echo \"stdin: $line\"; else echo 'stdin: empty'; fi";
+  const command = "x='a  \"b\" \\c'\nprintf '%s|' \"$x\" \"${__pikibun_command-unset}\"\nif read -r line; then echo \"stdin: $line\"; else echo 'stdin: empty'; fi";
   assert.equal(await workspace.execute({ kind: "bash", command }, false, authorize), "a  \"b\" \\c|unset|stdin: empty\n");
   await assert.rejects(workspace.execute({ kind: "bash", command: "echo partial; exit 7" }, false, authorize), /exit 7/);
   const controller = new AbortController();

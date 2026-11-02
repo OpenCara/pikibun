@@ -69,7 +69,7 @@ export function ConnectedAccountsSection() {
   }
   return <Section bare title="Connected accounts"
     info={<div className="stack">
-      <p>Sessions you own work on the workspaces' sources with your own accounts here, through Pistead.</p>
+      <p>Sessions you own work on the workspaces' sources with your own accounts here, through Pikibun.</p>
       <p>{gitAccountsInfo}</p>
       <p>Documents are read with your own connections: sign in to a provider, or for Notion, Google Drive and Feishu/Lark paste a secret. Their tokens and secrets are encrypted on the server, refreshed there, and never sent to any host, yours included. Each provider lets its connection read only what you share with it, and sessions read only what lies under the workspace's sources.</p>
       <p>Connecting an account doesn't change how you sign in; viewing a session, sharing a host or publishing an agent never grants access to your accounts.</p>
@@ -139,7 +139,7 @@ export function ConnectSheet({ provider, close, connected, save }: { provider: D
     <Button variant="default" type="submit" form="source-account-form" disabled={!ready || action.busy}>{action.busy ? "Verifying..." : "Connect"}</Button>
   </>}>
     <form id="source-account-form" className="stack" onSubmit={submit}>
-      {provider && <p className="muted small">{setup[provider]} Pistead verifies it with {name}, then encrypts it on the server.</p>}
+      {provider && <p className="muted small">{setup[provider]} Pikibun verifies it with {name}, then encrypts it on the server.</p>}
       {provider && save && <p className="muted small">This is the workspace's connection: every member's sessions read the sources set to it with it. Share with it only what the workspace should read.</p>}
       {provider === "notion" && <Field label="Internal integration secret">
         <input className="input" required type="password" value={secret} onChange={event => setSecret(event.target.value)} disabled={action.busy} autoComplete="off" spellCheck={false} placeholder="ntn_…" />
@@ -209,7 +209,7 @@ export function DocumentSources({ workspaceId, workspaceName, admin, sources, lo
         {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
       </ResourceState>
     </div>
-    {admin && accounts.accounts && !connected.length && <Alert variant="info" title="Connect an account to add documents" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "profile" })}>Open profile</LinkButton>}>Pistead checks each item you add with your own connection to its provider, in Settings → Profile → Connected accounts, or with the workspace's connection under Connections.</Alert>}
+    {admin && accounts.accounts && !connected.length && <Alert variant="info" title="Connect an account to add documents" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "profile" })}>Open profile</LinkButton>}>Pikibun checks each item you add with your own connection to its provider, in Settings → Profile → Connected accounts, or with the workspace's connection under Connections.</Alert>}
     {admin && full && <Alert variant="info" title="Document source limit reached">A workspace has at most {sourceLimits.documents} document sources. Remove one to add another.</Alert>}
     {admin && connected.length > 0 && <AddSourceSheet open={adding} kinds={connected} own={own} workspaceKinds={workspaceKinds} workspaceId={workspaceId}
       close={() => setAdding(false)} added={() => { refresh(); changed(); }} />}

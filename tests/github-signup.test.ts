@@ -169,7 +169,7 @@ test("an app can't create a GitHub account where SIGNUP=invite, and is told to u
   const callback = await f.request("GET", `/api/auth/github/callback?code=github-code&state=${state}`,
     { headers: { Cookie: f.cookieOf(start, "test-oauth-state")! } });
   const location = new URL(callback.headers.get("location")!);
-  assert.equal(`${location.protocol}//${location.host}`, "pistead://auth");
+  assert.equal(`${location.protocol}//${location.host}`, "pikibun://auth");
   assert.equal(location.searchParams.get("error"), "invite_required");
   assert.deepEqual(f.users(), []);
 });

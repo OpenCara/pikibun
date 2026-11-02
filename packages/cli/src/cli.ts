@@ -3,18 +3,18 @@ import { cacheMain } from "../../../apps/runner/src/cache-cli.js";
 import { ConnectorSetupError } from "../../../apps/runner/src/protocol.js";
 import packageJson from "../package.json" with { type: "json" };
 
-const USAGE = `Usage: pistead <command> [options]
+const USAGE = `Usage: pikibun <command> [options]
 
 Commands:
-  connect     Connect this Linux or WSL2 Pi host to a Pistead workspace
-  serve       Run Pistead on this computer, for yourself, with it as the host
+  connect     Connect this Linux or WSL2 Pi host to a Pikibun workspace
+  serve       Run Pikibun on this computer, for yourself, with it as the host
   cache       List or prune this host's repository cache
 
 Options:
   --help      Show this help
   --version   Show the installed version
 
-Run "pistead connect --help" or "pistead serve --help" for their options.
+Run "pikibun connect --help" or "pikibun serve --help" for their options.
 `;
 
 const [command, ...args] = process.argv.slice(2);
@@ -26,7 +26,7 @@ if (run) {
     // Only connector-authored preflight text is printed: SDK/HTTP errors can contain auth/config detail.
     process.stderr.write(error instanceof ConnectorSetupError
       ? `${error.message}\n`
-      : command === "serve" ? "Pistead failed. Check --help, the state directory's permissions, the port, local Pi configuration and sandbox prerequisites.\n"
+      : command === "serve" ? "Pikibun failed. Check --help, the state directory's permissions, the port, local Pi configuration and sandbox prerequisites.\n"
       : "Connector failed. Check --help, private state permissions, pairing, local Pi configuration and sandbox prerequisites.\n");
     process.exitCode = 1;
   });

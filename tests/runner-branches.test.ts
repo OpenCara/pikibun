@@ -39,7 +39,7 @@ async function idle(session: RunnerSession): Promise<void> {
 }
 
 test("a clone session on the host reports its clones' branches of the workspace's GitHub repositories once the agent stops", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-branches-session-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-branches-session-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([fauxAssistantMessage("Opened a pull request."), fauxAssistantMessage("Nothing changed.")]);

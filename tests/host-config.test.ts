@@ -175,7 +175,7 @@ test("a new connection asks again and learns whether the control plane answered;
 });
 
 test("a GPU is lent as its render device only: WSL's /dev/dxg, or DRM render nodes with their sysfs device", async t => {
-  const root = await mkdtemp(join(tmpdir(), "pistead-gpu-"));
+  const root = await mkdtemp(join(tmpdir(), "pikibun-gpu-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const base = realpathSync(root);
   assert.equal(gpuMounts(root), undefined, "no device, nothing to lend");
@@ -207,7 +207,7 @@ test("a GPU is lent as its render device only: WSL's /dev/dxg, or DRM render nod
 });
 
 test("a sandboxed command lent the GPU finds its render node, the node's sysfs device and the /sys/dev/char link that names it", { skip: !sandboxed }, async t => {
-  const base = realpathSync(await mkdtemp(join(tmpdir(), "pistead-gpu-sandbox-")));
+  const base = realpathSync(await mkdtemp(join(tmpdir(), "pikibun-gpu-sandbox-")));
   t.after(() => rm(base, { recursive: true, force: true }));
   await standInGpu(join(base, "host"));
   const sandbox = new Sandbox(fauxBinding("gpu-sandbox"), join(base, "session"), undefined, { gpuRoot: join(base, "host") });
@@ -227,8 +227,8 @@ test("a sandboxed command lent the GPU finds its render node, the node's sysfs d
   assert.deepEqual(await shell("if [ ! -e /sys/dev/char ] && [ ! -e /sys/devices ] && [ ! -e /dev/dri ]; then echo none; fi", false), ["none"]);
 });
 
-test("connect options that moved to Pistead are named, and ignored, rather than refused", () => {
+test("connect options that moved to Pikibun are named, and ignored, rather than refused", () => {
   assert.equal(movedOptionsNotice([]), "");
-  assert.match(movedOptionsNotice(["git-credentials"]), /^--git-credentials is ignored: the host's owner sets it in Pistead now \(Settings > Hosts > this host > Configuration\)/);
-  assert.match(movedOptionsNotice(["repo-cache", "repo-cache-scope"]), /^--repo-cache, --repo-cache-scope are ignored: the host's owner sets them in Pistead now/);
+  assert.match(movedOptionsNotice(["git-credentials"]), /^--git-credentials is ignored: the host's owner sets it in Pikibun now \(Settings > Hosts > this host > Configuration\)/);
+  assert.match(movedOptionsNotice(["repo-cache", "repo-cache-scope"]), /^--repo-cache, --repo-cache-scope are ignored: the host's owner sets them in Pikibun now/);
 });

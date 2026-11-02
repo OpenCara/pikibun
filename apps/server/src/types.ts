@@ -47,7 +47,7 @@ export interface Env {
   WEB_SEARCH?: string;
   WEB_SEARCH_API_KEY?: string;
   WEB_SEARCH_URL?: string;
-  /** RSA private key (PEM, PKCS#8; secret) signing Pistead OIDC assertions for Entra federation and Forgejo integrations. */
+  /** RSA private key (PEM, PKCS#8; secret) signing Pikibun OIDC assertions for Entra federation and Forgejo integrations. */
   OIDC_SIGNING_KEY?: string;
   /** Comma-separated user IDs of the instance administrators, who manage every account (see `apps/server/src/admin.ts`). */
   ADMIN_USER_IDS?: string;
@@ -117,7 +117,7 @@ export interface SessionRow {
   repositories_json?: string;
   /** 'clone': no pins; the agent clones the workspace's repositories through the host's egress proxy. */
   repository_mode?: 'clone' | null;
-  /** A clone session's own branch, named when it was created; NULL: pistead/<id>. Immutable. */
+  /** A clone session's own branch, named when it was created; NULL: pikibun/<id>. Immutable. */
   branch?: string | null;
   /** 1: the session runs directly on its host's own environment, without the sandbox (SessionRecord.hostEnvironment). Immutable. */
   host_environment?: number | null;

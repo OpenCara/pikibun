@@ -36,7 +36,7 @@ export interface ConnectorCapabilities {
   /**
    * A connector that predates host configuration was started with --git-credentials: pushes in its owner's own sessions
    * may use this host's Git credentials. Absent means false. Connectors with `hostConfig` never advertise it: their
-   * owner turns this on in Pistead (HostConfig.gitCredentials).
+   * owner turns this on in Pikibun (HostConfig.gitCredentials).
    */
   gitCredentials?: boolean;
   /** The connector reads GitHub issues and pull requests and merges pull requests through the control plane (github_read, github_merge). Absent on older connectors. */
@@ -80,7 +80,7 @@ export interface ConnectorCapabilities {
   cloneBackups?: boolean;
   /**
    * The connector pushes a clone session's own branch under the name its binding carries (session.branch, named for the
-   * session's work), not only `pistead/<session-id>`. Absent on older connectors, whose sessions keep the old name.
+   * session's work), not only `pikibun/<session-id>`. Absent on older connectors, whose sessions keep the old name.
    */
   sessionBranches?: boolean;
   /**
@@ -135,13 +135,13 @@ export interface ConnectorCapabilities {
    */
   web?: boolean;
   /**
-   * The connector runs as its owner and admins configure it in Pistead (HostConfig: command time limit, GPU, Git
+   * The connector runs as its owner and admins configure it in Pikibun (HostConfig: command time limit, GPU, Git
    * credentials, repository cache), read from the control plane, rather than by connect options. Absent on older
    * connectors, which keep their options.
    */
   hostConfig?: boolean;
   /**
-   * The connector's sessions summarize long conversations by the compaction token counts set in Pistead
+   * The connector's sessions summarize long conversations by the compaction token counts set in Pikibun
    * (HostConfig.compaction) over its Pi settings. Absent on older connectors, which follow their Pi settings alone.
    */
   compactionConfig?: boolean;

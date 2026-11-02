@@ -27,7 +27,7 @@ async function collect(pack: AsyncIterable<Uint8Array>): Promise<Buffer> {
 }
 
 async function fixture(t: TestContext, options: { protocolV2?: boolean } = {}) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "pistead-git-remote-")));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-git-remote-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const upstream = join(root, "upstream.git"), work = join(root, "work");
   git(root, ["init", "--bare", "-b", "main", upstream]);
@@ -56,9 +56,9 @@ test("push creates a branch from a pack-objects pack", gitAvailable, async (t) =
   assert.equal(refs.get("refs/heads/main"), commits[2]);
   assert.ok(capabilities.has("report-status"));
   const pack = spawnSync("git", ["pack-objects", "--revs", "--stdout"], { cwd: work, input: `${tip}\n^${commits[2]}\n` }).stdout;
-  const result = await remote.push({ ref: "refs/heads/pistead/feature", old: ZERO_OID, new: tip }, (async function* () { yield new Uint8Array(pack); })(), capabilities);
+  const result = await remote.push({ ref: "refs/heads/pikibun/feature", old: ZERO_OID, new: tip }, (async function* () { yield new Uint8Array(pack); })(), capabilities);
   assert.deepEqual(result, { unpack: "ok", status: "ok" });
-  assert.equal(git(upstream, ["rev-parse", "refs/heads/pistead/feature"]), tip);
+  assert.equal(git(upstream, ["rev-parse", "refs/heads/pikibun/feature"]), tip);
 });
 
 test("push surfaces a server-side rejection as ng with reason", gitAvailable, async (t) => {

@@ -46,7 +46,7 @@ async function pendingApproval(session: RunnerSession, id?: RegExp) {
 }
 
 test("the agent works with other sessions through the control plane, asking the owner for the tool, a Read-only message's changes and a wider audience", async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-sessions-tool-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-sessions-tool-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests: SessionsToolRequest[] = [];
   const answers: SessionsToolResult[] = [];

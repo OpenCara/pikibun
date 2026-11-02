@@ -112,7 +112,7 @@ export function WorkspaceDatabaseSection({ workspace, owner }: { workspace: Work
     <p>The workspace owner can connect a Postgres database of their own. Backups of this workspace's sessions are then saved there, with each session's details, instead of in the server's own backup storage (if it has any), and downloads and restores read them back from it.</p>
     <p>Whoever can read that database can read the sessions saved there, private ones and their owners' personal environment values included. Other members confirm the database before each of their backups goes there, and again after it is pointed at another database.</p>
     <p>The owner can also have changed sessions backed up there on their own, once they're idle, on a schedule. Members' sessions take part once their owner confirms the database for all their backups, which also stops it asking before each one; pointing the connection at another database asks again.</p>
-    <p>The owner can also import a session or workspace export into it, adding session details and activity. Pistead creates the tables <code>pistead_workspaces</code>, <code>pistead_sessions</code>, <code>pistead_session_backups</code> and <code>pistead_audit</code> when they are missing. The password is write-only: it is never shown again after saving.</p>
+    <p>The owner can also import a session or workspace export into it, adding session details and activity. Pikibun creates the tables <code>pikibun_workspaces</code>, <code>pikibun_sessions</code>, <code>pikibun_session_backups</code> and <code>pikibun_audit</code> when they are missing. The password is write-only: it is never shown again after saving.</p>
   </div>} action={owner && data?.available && !database && <Button variant="outline" size="sm" icon="plus" onClick={() => setEditing(true)}>Connect database</Button>}>
     <ResourceState {...resource} retry={resource.refresh}>
       {database
@@ -153,7 +153,7 @@ function AutomaticBackups({ path, database, owner, state, saved }: { path: strin
     if (next) {
       const confirmed = await confirmDialog({
         title: "Confirm this database",
-        message: `Back up your sessions in ${databaseLabel(database)} without asking each time, automatic backups included? Whoever can read it can read them, including your personal environment values. Pistead asks again if the owner points the connection at another database.`,
+        message: `Back up your sessions in ${databaseLabel(database)} without asking each time, automatic backups included? Whoever can read it can read them, including your personal environment values. Pikibun asks again if the owner points the connection at another database.`,
         confirmLabel: "Confirm database",
       });
       if (!confirmed) return;
@@ -207,8 +207,8 @@ function ImportSheet({ path, database, close }: { path: string; database: Worksp
     {!imported && <Button variant="default" type="submit" form="workspace-import-form" disabled={!file || action.busy}>{action.busy ? "Importing..." : "Import"}</Button>}
   </>}>
     <form id="workspace-import-form" className="stack" onSubmit={submit}>
-      <p className="muted small">Adds an export of this workspace, or of one of its sessions, to {databaseLabel(database)}: session records and details (grants, approvals, pushes, backups and restores), their activity and the workspace's settings. A record replaces an older one of the same session; activity is added once, so importing a dump again changes nothing. Pistead itself is unchanged.</p>
-      <Field label="Dump file" hint="A JSON export from Pistead, up to 32 MiB">
+      <p className="muted small">Adds an export of this workspace, or of one of its sessions, to {databaseLabel(database)}: session records and details (grants, approvals, pushes, backups and restores), their activity and the workspace's settings. A record replaces an older one of the same session; activity is added once, so importing a dump again changes nothing. Pikibun itself is unchanged.</p>
+      <Field label="Dump file" hint="A JSON export from Pikibun, up to 32 MiB">
         <input className="input" type="file" accept="application/json,.json" disabled={action.busy} onChange={event => { setFile(event.target.files?.[0] ?? null); setImported(null); }} />
       </Field>
       {imported && <Alert variant="success" title="Imported" role="status">
@@ -265,9 +265,9 @@ function DatabaseSheet({ path, privateHosts, existing, close, saved }: { path: s
     <Button variant="default" type="submit" form="workspace-database-form" disabled={!ready || action.busy}>{action.busy ? "Connecting..." : "Save"}</Button>
   </>}>
     <form id="workspace-database-form" className="stack" onSubmit={save}>
-      <p className="muted small">Pistead connects when you save, to check the settings and create its tables. From then on, backups of this workspace's sessions are saved in this database{existing ? "; backups saved before stay where they are" : ""}.</p>
+      <p className="muted small">Pikibun connects when you save, to check the settings and create its tables. From then on, backups of this workspace's sessions are saved in this database{existing ? "; backups saved before stay where they are" : ""}.</p>
       <Field label="Connection URL" hint="Optional. Paste a postgres:// URL and fill in the fields below from it; the URL itself isn't sent">
-        <input className="input" value={url} onChange={event => setUrl(event.target.value)} autoComplete="off" spellCheck={false} placeholder="postgres://user:password@db.example.com:5432/pistead" />
+        <input className="input" value={url} onChange={event => setUrl(event.target.value)} autoComplete="off" spellCheck={false} placeholder="postgres://user:password@db.example.com:5432/pikibun" />
       </Field>
       <div className="inline"><Button variant="outline" size="sm" disabled={!url.trim() || action.busy} onClick={fill}>Fill in from URL</Button></div>
       <Feedback error={urlError} />
@@ -280,7 +280,7 @@ function DatabaseSheet({ path, privateHosts, existing, close, saved }: { path: s
       <Field label="Database">
         <input className="input" required value={database} onChange={event => setDatabase(event.target.value)} autoComplete="off" spellCheck={false} />
       </Field>
-      <Field label="User" hint="Needs to create Pistead's tables, or SELECT, INSERT and UPDATE on them if you create them yourself">
+      <Field label="User" hint="Needs to create Pikibun's tables, or SELECT, INSERT and UPDATE on them if you create them yourself">
         <input className="input" required value={user} onChange={event => setUser(event.target.value)} autoComplete="off" spellCheck={false} />
       </Field>
       <Field label="Password" hint="Write-only. Needed every time the connection is saved">

@@ -207,7 +207,7 @@ export function sandboxContent(value: Record<string, unknown>, target: RunnerBin
       || (parts[0] === "home" && parts[1] === ".tmp" && parts.length === 2)
       || (parts[0] === "git" && ["objects", "refs"].includes(parts[1]!) && parts.length === 2)
       // Written from the backup's clones below, never as files.
-      || (parts[0] === "git" && parts[1] === "pistead-clones")) invalid("Unsafe or reserved snapshot path");
+      || (parts[0] === "git" && parts[1] === "pikibun-clones")) invalid("Unsafe or reserved snapshot path");
     if (paths.has(file.path)) invalid("Duplicate snapshot path");
     paths.add(file.path);
     for (let i = 1; i < parts.length; i++) {
@@ -252,11 +252,11 @@ export function sandboxContent(value: Record<string, unknown>, target: RunnerBin
       if (total > MAX_BYTES) invalid("Decoded snapshot exceeds size limit");
       if (!/^# v[23] git bundle\n/.test(bytes.subarray(0, 32).toString("latin1"))) invalid("Invalid backup clone bundle");
       bundle = `${index}.bundle`;
-      files.push({ path: `git/pistead-clones/${bundle}`, bytes, mode: 0o600 });
+      files.push({ path: `git/pikibun-clones/${bundle}`, bytes, mode: 0o600 });
     }
     pending.push({ path, origin: clone.origin, branch: clone.branch, head: clone.head, worktree: clone.worktree, branches: clone.branches, bundle });
   });
-  if (pending.length) files.push({ path: "git/pistead-clones/manifest.json", bytes: Buffer.from(JSON.stringify({ version: 1, clones: pending })), mode: 0o600 });
+  if (pending.length) files.push({ path: "git/pikibun-clones/manifest.json", bytes: Buffer.from(JSON.stringify({ version: 1, clones: pending })), mode: 0o600 });
   // Sessions checked out from the host repository cache keep their objects there, not in the snapshot. Their backups
   // are refused when taken; one that exists anyway must not restore into a session missing its history.
   const marker = files.find(file => file.path === "git/repository-cache.json");

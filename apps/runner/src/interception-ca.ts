@@ -62,7 +62,7 @@ function time(at: Date): Buffer {
   return at.getUTCFullYear() < 2050 ? tlv(0x17, Buffer.from(`${iso.slice(2)}Z`)) : tlv(0x18, Buffer.from(`${iso}Z`));
 }
 function name(commonName: string): Buffer {
-  return sequence(set(sequence(oid("2.5.4.10"), utf8("Pistead"))), set(sequence(oid("2.5.4.3"), utf8(commonName))));
+  return sequence(set(sequence(oid("2.5.4.10"), utf8("Pikibun"))), set(sequence(oid("2.5.4.3"), utf8(commonName))));
 }
 function extension(id: string, critical: boolean, value: Buffer): Buffer {
   return sequence(oid(id), ...(critical ? [TRUE] : []), octets(value));
@@ -122,7 +122,7 @@ export class InterceptionAuthority {
     this.#key = privateKey;
     this.hosts = [...hosts];
     this.#keyId = keyIdentifier(subjectPublicKeyInfo(publicKey));
-    this.#subject = `Pistead egress proxy ${this.#keyId.subarray(0, 4).toString("hex")}`;
+    this.#subject = `Pikibun egress proxy ${this.#keyId.subarray(0, 4).toString("hex")}`;
     const issued = certificate({
       serial: serial(), issuer: this.#subject, subject: this.#subject, publicKey, signer: privateKey,
       notBefore: new Date(now.getTime() - BACKDATE_MS), notAfter: new Date(now.getTime() + CA_LIFETIME_MS),

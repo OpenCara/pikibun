@@ -1,15 +1,15 @@
-# UI tests that drive an installed Pistead development build (com.pistead.app) on a simulator.
+# UI tests that drive an installed Pikibun development build (com.pikibun.app) on a simulator.
 # Generated with XcodeGen by run.sh; the generated .xcodeproj is not checked in.
-name: PisteadE2E
+name: PikibunE2E
 options:
-  bundleIdPrefix: com.pistead.e2e
+  bundleIdPrefix: com.pikibun.e2e
   deploymentTarget:
     iOS: "16.0"
 targets:
-  PisteadUITests:
+  PikibunUITests:
     type: bundle.ui-testing
     platform: iOS
-    sources: [PisteadUITests]
+    sources: [PikibunUITests]
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -17,9 +17,9 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         SWIFT_VERSION: "5.0"
 schemes:
-  PisteadUITests:
+  PikibunUITests:
     build:
       targets:
-        PisteadUITests: [test]
+        PikibunUITests: [test]
     test:
-      targets: [PisteadUITests]
+      targets: [PikibunUITests]

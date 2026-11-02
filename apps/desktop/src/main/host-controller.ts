@@ -117,7 +117,7 @@ export class HostController {
     const inspection = await this.refresh();
     if (!inspection) return { ok: false, error: this.error ?? "This computer could not be inspected." };
     const failure = inspection.unsupported ?? inspection.prerequisitesError
-      ?? (!input.pairing && !inspection.pairedServer ? inspection.pairingError ?? "This computer is not paired yet. In Pistead, open Settings › Hosts, create a pairing code, then enter its pairing ID and code here." : undefined);
+      ?? (!input.pairing && !inspection.pairedServer ? inspection.pairingError ?? "This computer is not paired yet. In Pikibun, open Settings › Hosts, create a pairing code, then enter its pairing ID and code here." : undefined);
     if (failure) return this.refuse(failure);
     let unsandboxedConsent = false;
     if (inspection.mode === "unsandboxed") {

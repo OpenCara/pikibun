@@ -229,7 +229,7 @@ test("the server refuses to start with an incomplete web search provider, and of
   assert.equal(webSearchConfigurationError({ WEB_SEARCH: "searxng", WEB_SEARCH_URL: "http://searxng:8080" }), undefined);
   assert.equal(webSearchProvider({ APP_ORIGIN: "x", WEB_SEARCH: "brave" } as never), undefined);
   assert.equal(webSearchProvider({ APP_ORIGIN: "x", WEB_SEARCH: "Tavily", WEB_SEARCH_API_KEY: "key" } as never)?.name, "tavily");
-  const base = { APP_ORIGIN: "https://pistead.example.com", SESSION_SECRET: "s".repeat(32), VAULT_KEY: Buffer.alloc(32, 7).toString("base64url"), DATABASE_URL: "sqlite::memory:" };
+  const base = { APP_ORIGIN: "https://pikibun.example.com", SESSION_SECRET: "s".repeat(32), VAULT_KEY: Buffer.alloc(32, 7).toString("base64url"), DATABASE_URL: "sqlite::memory:" };
   await assert.rejects(loadConfig({ ...base, WEB_SEARCH: "tavily" }), ConfigurationError);
   const config = await loadConfig({ ...base, WEB_SEARCH: "brave", WEB_SEARCH_API_KEY: "brave-key" });
   try { assert.deepEqual([config.env.WEB_SEARCH, config.env.WEB_SEARCH_API_KEY], ["brave", "brave-key"]); }

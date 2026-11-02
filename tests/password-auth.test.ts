@@ -77,7 +77,7 @@ test("signing up creates a password account signed in with a cookie, and the use
   assert.equal(user.passwordSignIn, true);
   assert.equal(user.githubConnected, false);
   assert.equal(user.githubLogin, null);
-  assert.equal(user.gitEmail, "alice@users.pistead.invalid");
+  assert.equal(user.gitEmail, "alice@users.pikibun.invalid");
   const cookie = f.cookieOf(created);
   assert.match(cookie, /^test-auth=/);
   const me = await f.request("GET", "/api/me", { headers: { Cookie: cookie } });

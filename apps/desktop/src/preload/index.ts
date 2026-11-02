@@ -1,10 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { channels, type HostView, type PisteadBridge, type SettingsView } from "../shared/bridge.js";
+import { channels, type HostView, type PikibunBridge, type SettingsView } from "../shared/bridge.js";
 
 // Loaded only into the app's local pages. Each function forwards one typed call; the main process checks the sender
 // and validates every payload, so nothing here is trusted.
 
-const bridge: PisteadBridge = {
+const bridge: PikibunBridge = {
   host: {
     view: () => ipcRenderer.invoke(channels.hostView),
     refresh: () => ipcRenderer.invoke(channels.hostRefresh),
@@ -30,4 +30,4 @@ const bridge: PisteadBridge = {
   },
 };
 
-contextBridge.exposeInMainWorld("pistead", bridge);
+contextBridge.exposeInMainWorld("pikibun", bridge);

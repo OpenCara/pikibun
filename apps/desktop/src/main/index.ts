@@ -18,14 +18,14 @@ const hostTitle = mac ? "This Mac" : "This Computer";
 // developer's real pairing is untouched) and fixture models instead of Pi's.
 const development = !app.isPackaged;
 const developmentEnv = (name: string) => development ? process.env[name] || undefined : undefined;
-const fixtureModels = developmentEnv("PISTEAD_DESKTOP_ALLOW_FAUX") === "1";
-const stateDir = developmentEnv("PISTEAD_DESKTOP_STATE_DIR");
-const serverStateDir = developmentEnv("PISTEAD_DESKTOP_SERVER_STATE_DIR");
-const userData = developmentEnv("PISTEAD_DESKTOP_USER_DATA");
+const fixtureModels = developmentEnv("PIKIBUN_DESKTOP_ALLOW_FAUX") === "1";
+const stateDir = developmentEnv("PIKIBUN_DESKTOP_STATE_DIR");
+const serverStateDir = developmentEnv("PIKIBUN_DESKTOP_SERVER_STATE_DIR");
+const userData = developmentEnv("PIKIBUN_DESKTOP_USER_DATA");
 /** Writes PNGs of the windows into this directory, then quits: launch verification for any build. */
-const smokeDirectory = process.env.PISTEAD_DESKTOP_SMOKE || undefined;
+const smokeDirectory = process.env.PIKIBUN_DESKTOP_SMOKE || undefined;
 
-app.setName("Pistead");
+app.setName("Pikibun");
 if (userData) app.setPath("userData", userData);
 registerLocalScheme();
 
@@ -71,7 +71,7 @@ function main(): void {
   const hostEntry = app.isPackaged
     ? join(process.resourcesPath, "connector", "dist", "desktop-host.mjs")
     : join(appRoot, "dist", "host", "desktop-host.mjs");
-  // Pistead on this computer: the local server, staged beside the connector host (it shares its dependencies).
+  // Pikibun on this computer: the local server, staged beside the connector host (it shares its dependencies).
   const serverEntry = app.isPackaged
     ? join(process.resourcesPath, "connector", "dist", "desktop-server.mjs")
     : join(appRoot, "dist", "host", "desktop-server.mjs");
@@ -82,14 +82,14 @@ function main(): void {
         type: "warning" as const, buttons: ["Cancel", "Run Unsandboxed"], defaultId: 0, cancelId: 0, noLink: true,
         title: "Run sessions without a sandbox?",
         message: mac ? "This Mac has no isolated sandbox. Run your sessions directly on it?" : "This computer has no isolated sandbox. Run your sessions directly on it?",
-        detail: `${warning.trim()}\n\nWithout your consent, Pistead still runs here, and you can pair another machine to run sessions.`,
+        detail: `${warning.trim()}\n\nWithout your consent, Pikibun still runs here, and you can pair another machine to run sessions.`,
       };
       const parent = settingsWindow && !settingsWindow.isDestroyed() ? settingsWindow : undefined;
       const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
       return response === 1;
     },
   });
-  // Pistead on this computer while it runs, else the configured server: what the Pistead window shows.
+  // Pikibun on this computer while it runs, else the configured server: what the Pikibun window shows.
   const activeServer = () => localServer.origin ?? settings.get().server;
   hardenRemoteSession(activeServer);
 
@@ -147,7 +147,7 @@ function main(): void {
   publish();
 
   const settingsView = (): SettingsView => ({ server: settings.get().server, defaultServer: DEFAULT_SERVER, local: localServer.view() });
-  // The Pistead window follows Pistead on this computer: there once it runs (its sign-in link while nobody has claimed
+  // The Pikibun window follows Pikibun on this computer: there once it runs (its sign-in link while nobody has claimed
   // it), and back to the configured server once it stops.
   let shown = activeServer();
   localServer.onChange(() => {
@@ -205,7 +205,7 @@ function main(): void {
   app.on("second-instance", openMain);
   app.on("activate", () => { if (!BrowserWindow.getAllWindows().some(window => window.isVisible())) openMain(); });
   app.on("window-all-closed", () => {
-    // A running host, or Pistead running on this computer, keeps the app alive in the menu bar (macOS keeps it anyway).
+    // A running host, or Pikibun running on this computer, keeps the app alive in the menu bar (macOS keeps it anyway).
     if (controller.hostState !== "stopped" || localServer.running) { if (mac) app.dock?.hide(); return; }
     if (!mac) app.quit();
   });
@@ -227,7 +227,7 @@ function main(): void {
   void localServer.resume();
 }
 
-/** Captures the Pistead, host and Settings windows once they have rendered, then quits. */
+/** Captures the Pikibun, host and Settings windows once they have rendered, then quits. */
 async function smoke(directory: string, windows: Record<"main" | "host" | "settings", () => BrowserWindow | undefined>, controller: HostController): Promise<void> {
   mkdirSync(directory, { recursive: true });
   const capture = async (window: BrowserWindow | undefined, name: string) => {

@@ -11,7 +11,7 @@ import { canCreateSessions } from "../../../packages/shared/src/policy";
 import { DropdownMenu, IdentityBadge, Loading, RelativeTime, StatusDot } from "./ui";
 
 const SESSIONS_PER_WORKSPACE = 6;
-const COLLAPSED_KEY = "pistead.collapsedWorkspaces";
+const COLLAPSED_KEY = "pikibun.collapsedWorkspaces";
 
 function readCollapsed(): string[] {
   try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]") as string[]; } catch { return []; }
@@ -79,7 +79,7 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate: () =>
   const newSessionHref = currentWorkspace && canCreateSessions(currentWorkspace.role) ? href({ name: "new", workspaceId: currentWorkspace.id }) : undefined;
   return <aside className="sidebar" aria-label="Workspaces and sessions">
     <div className="sidebar-top">
-      <a className="nav-item" href="#/" onClick={onNavigate}><Logo size={20} /><span className="label" style={{ color: "var(--foreground)", fontWeight: 500 }}>Pistead</span></a>
+      <a className="nav-item" href="#/" onClick={onNavigate}><Logo size={20} /><span className="label" style={{ color: "var(--foreground)", fontWeight: 500 }}>Pikibun</span></a>
       {newSessionHref && <a className="nav-item" href={newSessionHref} onClick={onNavigate} aria-current={route.name === "new" ? "page" : undefined}><Icon name="plus" /><span className="label">New session</span></a>}
       <a className="nav-item" href={href({ name: "sessions" })} onClick={onNavigate} aria-current={route.name === "sessions" ? "page" : undefined}><Icon name="history" /><span className="label">Sessions</span></a>
     </div>

@@ -41,7 +41,7 @@ function git(args: string[], options: { cwd?: string; input?: string; env?: Reco
 
 /** A bare upstream served over smart HTTP to requests with `authorization`. */
 async function upstream(t: TestContext, authorization = AUTHORIZATION) {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-push-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-push-")));
   const source = join(directory, "source");
   await mkdir(source);
   await writeFile(join(source, "README.md"), "upstream\n");
@@ -105,7 +105,7 @@ async function pendingApproval(session: RunnerSession) {
 
 test("sessions run approved clone pushes in the background, auto-push only with an admission, and always report completion", sandboxMode, async t => {
   const { bare, credential } = await upstream(t);
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-push-session-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-push-session-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const grants: Record<string, Permission[]> = { "test:alice": ["read", "ask", "write", "approve", "manage"] };
   const credentialRequests: PushCredentialRequest[] = [];
@@ -186,7 +186,7 @@ test("sessions run approved clone pushes in the background, auto-push only with 
 
 test("close() during an automatic push aborts it, awaits settlement and reports an unknown outcome", sandboxMode, async t => {
   const { bare, credential } = await upstream(t);
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-push-close-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-push-close-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   // A forge that accepts the connection and never answers: the push is in flight until aborted.
   let requests = 0;
@@ -236,7 +236,7 @@ async function credentialConfig(directory: string, helper: string | null): Promi
 }
 
 test("the host's Git credentials come from its credential helpers, never from a prompt", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-credentials-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-credentials-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   // Without a helper Git would ask for a user name; prompts are off, so the read fails at once and no askpass runs.
   const none = await credentialConfig(directory, null);
@@ -252,7 +252,7 @@ test("the host's Git credentials come from its credential helpers, never from a 
 });
 
 test("pushes with the host's Git credentials run only in its owner's sessions while the owner opts in", sandboxMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-push-host-credentials-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-push-host-credentials-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(join(directory, "git"));
   const env = await credentialConfig(join(directory, "git"), "echo username=host-user && echo password=host-secret");
@@ -298,7 +298,7 @@ test("pushes with the host's Git credentials run only in its owner's sessions wh
   delete config.hostGitCredential;
   const off = await run("host-off", "test:alice");
   assert.equal(off.status, "failed");
-  assert.match(off.result ?? "", /turn them on in Pistead \(Settings → Hosts → the host → Configuration\)/);
+  assert.match(off.result ?? "", /turn them on in Pikibun \(Settings → Hosts → the host → Configuration\)/);
   assert.deepEqual(completions.map(item => [item.approvalId, item.outcome]), [[own.id, "pushed"], [shared.id, "failed"], [off.id, "failed"]]);
   for (const branch of ["shared", "off"]) assert.equal(spawnSync("git", ["--git-dir", bare, "rev-parse", "--verify", "-q", `refs/heads/${branch}`]).status, 1);
 });

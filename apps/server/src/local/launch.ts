@@ -8,7 +8,7 @@ import { startServer } from '../serve.js';
 import type { Env } from '../types.js';
 import type { LocalState } from './state.js';
 
-// A Pistead server for one person on their own computer: SQLite and backups in its state directory, listening on
+// A Pikibun server for one person on their own computer: SQLite and backups in its state directory, listening on
 // 127.0.0.1 only, and admitting only the GitHub account that claims it with the sign-in link it prints (auth.ts).
 
 export const LOCAL_ORIGIN_HOST = '127.0.0.1';
@@ -64,13 +64,13 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   // Absolute, so the database and storage URLs below name it whatever the working directory.
   const stateDir = resolve(options.stateDir);
   const staticDir = options.staticDir ?? defaultStaticDir();
-  if (!staticDir) throw new LocalServerError('The Pistead web app is missing from this installation. Reinstall it, or run `pnpm build` in a source checkout.');
+  if (!staticDir) throw new LocalServerError('The Pikibun web app is missing from this installation. Reinstall it, or run `pnpm build` in a source checkout.');
   const backups = join(stateDir, 'backups');
   await mkdir(backups, { recursive: true, mode: 0o700 });
   const origin = `http://${LOCAL_ORIGIN_HOST}:${state.port}`;
   const settings: Record<string, string> = {
     APP_ORIGIN: origin, HOST: LOCAL_ORIGIN_HOST, PORT: String(state.port), TRUST_PROXY: 'false',
-    DATABASE_URL: `sqlite://${join(stateDir, 'pistead.sqlite')}`, STORAGE_URL: pathToFileURL(backups).href, STATIC_DIR: staticDir,
+    DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STORAGE_URL: pathToFileURL(backups).href, STATIC_DIR: staticDir,
     SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey, LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: state.claimSecret,
     ...(state.github ? { GITHUB_CLIENT_ID: state.github.clientId, GITHUB_CLIENT_SECRET: state.github.clientSecret } : {}),
     ...options.extraEnv,
@@ -80,7 +80,7 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   try { server = await startServer(config); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-      throw new LocalServerError(`Port ${state.port} is in use: another Pistead may already be running here. Stop it, or choose another port with --port.`);
+      throw new LocalServerError(`Port ${state.port} is in use: another Pikibun may already be running here. Stop it, or choose another port with --port.`);
     }
     throw error;
   }
@@ -99,13 +99,13 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
 
 /** What to register at https://github.com/settings/applications/new for a local server on any port. */
 export function githubOAuthAppInstructions(): string {
-  return `Pistead signs you in with GitHub through an OAuth app of your own. Register one once at
+  return `Pikibun signs you in with GitHub through an OAuth app of your own. Register one once at
   https://github.com/settings/applications/new
 with
-  Application name:            Pistead on my computer (any name)
+  Application name:            Pikibun on my computer (any name)
   Homepage URL:                http://${LOCAL_ORIGIN_HOST}
   Authorization callback URL:  http://${LOCAL_ORIGIN_HOST}${githubCallbackPath}
-(GitHub accepts that callback on any port of ${LOCAL_ORIGIN_HOST}.) Then generate a client secret and give Pistead the
+(GitHub accepts that callback on any port of ${LOCAL_ORIGIN_HOST}.) Then generate a client secret and give Pikibun the
 client ID and secret.
 `;
 }

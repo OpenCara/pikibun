@@ -24,7 +24,7 @@ import { Sandbox, type CloneBackup, type SnapshotFile as SandboxFile } from "./s
  */
 
 export const PACK_FILE = "sandbox.pack";
-const PACK_FORMAT = "pistead-sandbox-pack-v1";
+const PACK_FORMAT = "pikibun-sandbox-pack-v1";
 /** A pack's JSON, as large as a backup may be (restore.ts MAX_BYTES), and so is the compressed file. */
 const MAX_PACK_BYTES = 24 * 1024 * 1024;
 /** Files a pack holds besides its clones, as many as a backup's (restore.ts MAX_FILES). */

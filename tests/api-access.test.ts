@@ -181,7 +181,7 @@ test("other repositories, and requests carrying their own credential, follow the
   assert.deepEqual(open.log().map(entry => entry.reason), ["without a credential (200)", "the command's own credential (200)"]);
 });
 
-test("without a credential from Pistead, the proxy says why", async t => {
+test("without a credential from Pikibun, the proxy says why", async t => {
   const reason = "Reading the GitHub API from sessions needs a GitHub App";
   const { socketPath, upstream } = await proxy(t, { credential: async () => ({ available: false, reason, cacheSeconds: 60 }) });
   const answer = await call(socketPath, "/repos/acme/app/actions/runs");
@@ -225,7 +225,7 @@ test("without the API in its grant (a pinned session, an older control plane), t
   const closed = await proxy(t, { apis: false });
   const refused = await call(closed.socketPath, "/repos/acme/app/releases/latest");
   assert.equal(refused.status, 403);
-  assert.match(JSON.parse(refused.body).message, /^Pistead gives this session no credential for the GitHub API/);
+  assert.match(JSON.parse(refused.body).message, /^Pikibun gives this session no credential for the GitHub API/);
   assert.deepEqual(closed.asked, [], "no credential is asked for");
   assert.equal(closed.upstream.length, 0);
 

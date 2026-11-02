@@ -1,11 +1,11 @@
 {
-  "name": "pistead",
+  "name": "pikibun",
   "version": "0.9.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
-      "name": "pistead",
+      "name": "pikibun",
       "version": "0.9.0",
       "license": "MIT",
       "dependencies": {
@@ -19,7 +19,7 @@
         "zod": "4.3.6"
       },
       "bin": {
-        "pistead": "dist/pistead.js"
+        "pikibun": "dist/pikibun.js"
       },
       "optionalDependencies": {
         "koffi": "3.3.5"

@@ -29,7 +29,7 @@ export const stateLabels: Record<HostState, string> = {
 export interface HostView {
   /** "This Mac" on macOS, "This computer" elsewhere. */
   title: string;
-  /** The configured Pistead server; the host pairs with and connects to it. */
+  /** The configured Pikibun server; the host pairs with and connects to it. */
   server: string;
   state: HostState;
   /** Set while the connector runs: the server it connects to and whether it runs unsandboxed. */
@@ -52,7 +52,7 @@ export interface StartInput {
 
 export type Outcome = { ok: true } | { ok: false; error: string };
 
-/** Pistead on this computer (Settings): the local server's state and what starting it would do. */
+/** Pikibun on this computer (Settings): the local server's state and what starting it would do. */
 export interface LocalView {
   /** On while the owner wants it running: it starts again at launch. */
   enabled: boolean;
@@ -67,7 +67,7 @@ export interface LocalStartInput { github?: { clientId: string; clientSecret: st
 
 export interface SettingsView { server: string; defaultServer: string; local: LocalView }
 
-export interface PisteadBridge {
+export interface PikibunBridge {
   host: {
     view(): Promise<HostView>;
     refresh(): Promise<void>;

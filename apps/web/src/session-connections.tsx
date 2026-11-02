@@ -28,7 +28,7 @@ export function ConnectionsSection({ session }: { session: SessionRecord }) {
   if (data && !data.parent && !data.children.length && !data.messages.length) return null;
   return <Section title="Connected sessions" info={<div className="stack">
     <p>Agents work with other sessions through the sessions tool, always as the person whose message they work on, with that person's own permissions there.</p>
-    <p>Messages they send name this session and their sender in their first line; Pistead also records each one here. Approvals in another session are decided only by people there.</p>
+    <p>Messages they send name this session and their sender in their first line; Pikibun also records each one here. Approvals in another session are decided only by people there.</p>
   </div>}>
     <ResourceState loading={connections.loading} error={connections.error} retry={connections.refresh}>
       {data && <>

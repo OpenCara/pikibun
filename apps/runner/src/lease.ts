@@ -7,7 +7,7 @@ import { ConnectorSetupError } from "./protocol.js";
 // The guardian reports LOCKED, then holds the kernel lock until its stdin reaches EOF.
 const GUARDIAN = ["/bin/sh", "-c", "echo LOCKED; exec /bin/cat >/dev/null"];
 
-/** The lease is held elsewhere: another connector or runner (a terminal `pistead connect`, an app) uses this directory. */
+/** The lease is held elsewhere: another connector or runner (a terminal `pikibun connect`, an app) uses this directory. */
 export class RunnerLeaseBusyError extends ConnectorSetupError {
   override name = "RunnerLeaseBusyError";
 }
@@ -18,7 +18,7 @@ export class RunnerLeaseBusyError extends ConnectorSetupError {
  * on one directory never both run.
  */
 async function acquireWindowsLease(directory: string, onLost: () => void): Promise<() => Promise<void>> {
-  const name = `\\\\.\\pipe\\pistead-lease-${createHash("sha256").update(resolve(directory).toLowerCase()).digest("hex").slice(0, 32)}`;
+  const name = `\\\\.\\pipe\\pikibun-lease-${createHash("sha256").update(resolve(directory).toLowerCase()).digest("hex").slice(0, 32)}`;
   const server = createServer(socket => socket.destroy());
   let releasing = false;
   await new Promise<void>((resolveListen, reject) => {

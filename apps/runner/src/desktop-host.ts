@@ -32,7 +32,7 @@ const hostRequestSchema: z.ZodType<HostRequest> = z.discriminatedUnion("type", [
 /** Only connector-authored text crosses to the app: SDK and HTTP errors can carry auth or configuration detail. */
 function hostError(error: unknown, fallback: string): HostError {
   if (error instanceof HostFailure) return { code: error.code, message: error.message };
-  if (error instanceof RunnerLeaseBusyError) return { code: "lease-busy", message: "Another Pistead connector is already running with this computer's pairing, for example `pistead connect` in a terminal. Stop it there, then start the host here." };
+  if (error instanceof RunnerLeaseBusyError) return { code: "lease-busy", message: "Another Pikibun connector is already running with this computer's pairing, for example `pikibun connect` in a terminal. Stop it there, then start the host here." };
   if (error instanceof ConnectorSetupError) return { code: "setup", message: error.message };
   return { code: "failed", message: fallback };
 }
@@ -49,7 +49,7 @@ function status(state: HostState, detail: { server?: string; unsandboxed?: boole
 async function inspect(allowFaux = false, allowInsecureLoopback = false): Promise<HostInspection> {
   try { assertConnectorPlatform(); }
   catch (error) {
-    return { platform: process.platform, stateDir, unsupported: hostError(error, "This computer cannot run the Pistead host.").message, mode: "unsandboxed", prerequisites: [], models: [] };
+    return { platform: process.platform, stateDir, unsupported: hostError(error, "This computer cannot run the Pikibun host.").message, mode: "unsandboxed", prerequisites: [], models: [] };
   }
   const { mode, sandboxPrerequisites, prerequisites } = await hostIsolation();
   const inspection: HostInspection = { platform: process.platform, stateDir, mode, prerequisites, models: [] };
@@ -68,19 +68,19 @@ async function inspect(allowFaux = false, allowInsecureLoopback = false): Promis
 async function start(request: StartRequest): Promise<void> {
   if (running) throw new HostFailure("already-running", "The host is already running.");
   try { assertConnectorPlatform(); }
-  catch (error) { throw new HostFailure("unsupported", hostError(error, "This computer cannot run the Pistead host.").message); }
+  catch (error) { throw new HostFailure("unsupported", hostError(error, "This computer cannot run the Pikibun host.").message); }
   const { mode, prerequisites } = await hostIsolation();
   const unsandboxed = mode === "unsandboxed";
   if (unsandboxed && request.unsandboxedConsent !== true) throw new HostFailure("consent-required", "This computer has no isolated sandbox: running the host needs your consent to run agent work directly on it.");
   assertPrerequisites(prerequisites, unsandboxed, "");
   let server: string;
   try { server = controlPlaneOrigin(request.server, request.allowInsecureLoopback); }
-  catch { throw new HostFailure("setup", "The server must be an HTTPS origin such as https://pistead.com."); }
+  catch { throw new HostFailure("setup", "The server must be an HTTPS origin such as https://pikibun.com."); }
   const localModels = await loadConnectorModels({ allowFaux: request.allowFaux, models: request.models });
   const replace = request.pairing !== undefined && request.replacePairing === true;
   // A replacement never reads the saved pairing: it may be revoked, unreadable or bound to another server.
   const paired = replace ? undefined : await savedPairing(stateDir, request.allowInsecureLoopback);
-  if (!request.pairing && !paired) throw new HostFailure("not-paired", "This computer is not paired yet. In Pistead, open Settings › Hosts, create a pairing code, then enter its pairing ID and code here.");
+  if (!request.pairing && !paired) throw new HostFailure("not-paired", "This computer is not paired yet. In Pikibun, open Settings › Hosts, create a pairing code, then enter its pairing ID and code here.");
   if (request.pairing && paired) throw new HostFailure("already-paired", "This computer is already paired. Choose \"Replace existing pairing\" to pair it again, or start without a new code to keep using it.");
   if (paired && paired !== server) throw new HostFailure("server-mismatch", `This computer is paired with ${paired}, not ${server}. Pair it again with a code from ${server}, or switch the server back in Settings.`);
   // Another start may have won while this one awaited its checks.
@@ -108,7 +108,7 @@ async function start(request: StartRequest): Promise<void> {
   log("info", unsandboxed
     ? "Running unsandboxed: approved commands execute directly on this machine."
     : "Sandbox capability is verified per session; production shell stays disabled without provisioned, verified limits.");
-  log("info", "Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pistead: Settings › Hosts › this host.");
+  log("info", "Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings › Hosts › this host.");
   void connector.start().then(
     () => log("info", `Connected to ${server}.`),
     async (error: unknown) => {

@@ -32,10 +32,10 @@ for (const target of targets) {
     shrinkwrap.version = version;
     shrinkwrap.packages[""].version = version;
     writeFileSync(shrinkwrapPath, JSON.stringify(shrinkwrap, null, 2) + "\n");
-    console.log(`pistead@${version}`);
+    console.log(`pikibun@${version}`);
   } else if (target === "desktop") {
     setManifestVersion(join(root, "apps", "desktop", "package.json"));
-    console.log(`@pistead/desktop ${version}`);
+    console.log(`@pikibun/desktop ${version}`);
   } else if (target === "mobile") {
     const buildNumber = process.env.IOS_BUILD_NUMBER;
     if (!buildNumber || !/^[0-9]+(\.[0-9]+){0,2}$/.test(buildNumber)) {
@@ -46,7 +46,7 @@ for (const target of targets) {
     appJson.expo.version = version.replace(/-.*$/, "");
     appJson.expo.ios.buildNumber = buildNumber;
     writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2) + "\n");
-    console.log(`Pistead for iOS ${appJson.expo.version} (${buildNumber})`);
+    console.log(`Pikibun for iOS ${appJson.expo.version} (${buildNumber})`);
   } else {
     throw new Error(`Unknown target ${target}: use cli, desktop or mobile.`);
   }

@@ -35,7 +35,7 @@ export async function migrateWhenReachable(db: Pick<Database, 'migrate' | 'provi
     try { return await db.migrate(); } catch (error) {
       const code = errorCode(error);
       if (!code || !transientDatabaseCodes.includes(code) || Date.now() >= deadline) throw error;
-      if (attempt === 1) console.error(`pistead: waiting for the ${db.provider} database (${code})`);
+      if (attempt === 1) console.error(`pikibun: waiting for the ${db.provider} database (${code})`);
       const { promise, resolve } = Promise.withResolvers<void>();
       setTimeout(resolve, Math.min(5000, 500 * attempt));
       await promise;
@@ -50,7 +50,7 @@ function sweep(name: string, ms: number, run: () => Promise<unknown>): NodeJS.Ti
     if (busy) return;
     busy = true;
     void run()
-      .catch(error => { console.error(`pistead: ${name} failed:`, error instanceof Error ? error.message : error); })
+      .catch(error => { console.error(`pikibun: ${name} failed:`, error instanceof Error ? error.message : error); })
       .finally(() => { busy = false; });
   }, ms);
   timer.unref();

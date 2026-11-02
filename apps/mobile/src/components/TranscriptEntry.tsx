@@ -1,5 +1,5 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { COMPACTION_FAILED_TITLE, compactionFailureText, copyText, splitToolCalls } from "@pistead/client";
+import { COMPACTION_FAILED_TITLE, compactionFailureText, copyText, splitToolCalls } from "@pikibun/client";
 import { memo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { EntryView } from "../../../../packages/shared/src/types";

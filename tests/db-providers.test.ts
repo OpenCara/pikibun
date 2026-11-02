@@ -319,7 +319,7 @@ for (const provider of providers) {
 }
 
 test('sqlite file databases use WAL, foreign keys and relative URLs', async t => {
-  const directory = mkdtempSync(join(tmpdir(), 'pistead-db-'));
+  const directory = mkdtempSync(join(tmpdir(), 'pikibun-db-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const db = await openDatabase(`sqlite://${join(directory, 'nested', 'control-plane.sqlite')}`);
   t.after(() => db.close());

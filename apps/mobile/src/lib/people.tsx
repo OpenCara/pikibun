@@ -1,4 +1,4 @@
-import { memberPerson, peopleDirectory, segment, username, type Person, type WorkspaceMember } from "@pistead/client";
+import { memberPerson, peopleDirectory, segment, username, type Person, type WorkspaceMember } from "@pikibun/client";
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
 import { useSession } from "./auth";
 import { useResource } from "./resource";

@@ -1,6 +1,6 @@
 # Packages dist/app (scripts/build.mjs) and the staged connector (scripts/stage-connector.mjs); see README.md.
-appId: com.pistead.desktop
-productName: Pistead
+appId: com.pikibun.desktop
+productName: Pikibun
 copyright: Copyright © OpenCara
 directories:
   output: dist/release
@@ -46,7 +46,7 @@ mac:
   notarize: false
 
 dmg:
-  title: Pistead
+  title: Pikibun
 
 # Declared for later Linux and Windows builds; `pnpm dist` builds macOS only.
 linux:

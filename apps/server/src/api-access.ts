@@ -57,10 +57,10 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
   await authorize();
 
   const mode = sandboxGitHubApiMode(c.env);
-  if (mode === 'off') return unavailable('GitHub API access from sessions is off on this Pistead server');
-  if (original.repository_mode !== 'clone') return unavailable('Only sessions that clone their repositories read the GitHub API through Pistead');
+  if (mode === 'off') return unavailable('GitHub API access from sessions is off on this Pikibun server');
+  if (original.repository_mode !== 'clone') return unavailable('Only sessions that clone their repositories read the GitHub API through Pikibun');
   const ownHost = connector !== null && connector.owner_id === original.owner_id && original.connector_owner_id === original.owner_id;
-  if (mode === 'own-hosts' && connector !== null && !ownHost) return unavailable('This Pistead server gives GitHub API credentials only to session owners\' own hosts');
+  if (mode === 'own-hosts' && connector !== null && !ownHost) return unavailable('This Pikibun server gives GitHub API credentials only to session owners\' own hosts');
 
   const bindings = await c.env.DB.query<RepositoryRow>("SELECT * FROM workspace_repositories WHERE workspace_id = ? AND provider = 'github' ORDER BY id")
     .bind(original.workspace_id).all();

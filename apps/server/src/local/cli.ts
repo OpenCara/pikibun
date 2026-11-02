@@ -8,31 +8,31 @@ import { startLocalHost, type LocalHost, type LocalHostOptions } from './host.js
 import { githubOAuthAppInstructions, LocalServerError, startLocalServer } from './launch.js';
 import { defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState, validGitHubApp, type GitHubOAuthApp } from './state.js';
 
-const HELP = `Usage: pistead serve [options]
+const HELP = `Usage: pikibun serve [options]
 
-Run Pistead on this computer, for yourself: the server and its web app on
+Run Pikibun on this computer, for yourself: the server and its web app on
 http://127.0.0.1:7878, reachable from this computer only, and this computer as
-the host that runs your sessions. No account at a Pistead service is needed.
+the host that runs your sessions. No account at a Pikibun service is needed.
 
 You sign in with GitHub through an OAuth app you register once (the first run
 says how). The first run prints a sign-in link: the GitHub account that opens
-it becomes this Pistead's owner, and the only account that can sign in.
+it becomes this Pikibun's owner, and the only account that can sign in.
 Everything is kept in the state directory; later runs need no options.
 
 Options:
   --port PORT              Listen on 127.0.0.1:PORT (default 7878; remembered)
   --github-client-id ID    Your GitHub OAuth app's client ID (remembered); its
                            secret is asked at a hidden prompt, or read from
-                           PISTEAD_GITHUB_CLIENT_SECRET
+                           PIKIBUN_GITHUB_CLIENT_SECRET
   --no-host                Serve only: run no sessions on this computer (pair
-                           other machines with \`pistead connect\` instead)
+                           other machines with \`pikibun connect\` instead)
   --unsafe-no-sandbox      Run agent work directly on this computer without
                            isolation (macOS or Linux without bubblewrap); asks
                            for confirmation
-  --state-dir PATH         Private state (default ~/.local/share/pistead/server)
+  --state-dir PATH         Private state (default ~/.local/share/pikibun/server)
   --help                   Show this help
 
-This computer as the host, as with \`pistead connect\`:
+This computer as the host, as with \`pikibun connect\`:
   --pi-agent-dir PATH      Pi config/auth directory (default: Pi's own)
   --model PROVIDER/MODEL   Offer this configured Pi model (repeatable)
   --resources PATH         Resource configuration JSON for sandboxed bash
@@ -57,18 +57,18 @@ async function githubApp(clientId: string | undefined, saved: boolean): Promise<
   if (!clientId) {
     if (saved) return undefined;
     process.stderr.write(`\n${githubOAuthAppInstructions()}\n`);
-    if (!interactive) throw new ConnectorSetupError('Run `pistead serve --github-client-id CLIENT_ID` with the secret in PISTEAD_GITHUB_CLIENT_SECRET, or run it in a terminal to be asked.');
+    if (!interactive) throw new ConnectorSetupError('Run `pikibun serve --github-client-id CLIENT_ID` with the secret in PIKIBUN_GITHUB_CLIENT_SECRET, or run it in a terminal to be asked.');
     clientId = await ask('Client ID: ');
   }
-  const fromEnvironment = process.env.PISTEAD_GITHUB_CLIENT_SECRET?.trim();
+  const fromEnvironment = process.env.PIKIBUN_GITHUB_CLIENT_SECRET?.trim();
   const clientSecret = fromEnvironment || (interactive ? (await promptHidden('Client secret (hidden): ', 'Entering the client secret', 'client secret')).trim() : '');
-  if (!clientSecret) throw new ConnectorSetupError('The GitHub OAuth app needs its client secret: type it at the prompt or set PISTEAD_GITHUB_CLIENT_SECRET.');
+  if (!clientSecret) throw new ConnectorSetupError('The GitHub OAuth app needs its client secret: type it at the prompt or set PIKIBUN_GITHUB_CLIENT_SECRET.');
   const app = { clientId, clientSecret };
   if (!validGitHubApp(app)) throw new ConnectorSetupError("That doesn't look like a GitHub OAuth app's client ID and secret.");
   return app;
 }
 
-/** Everything `pistead connect` checks before it starts, for this computer as the local server's host. */
+/** Everything `pikibun connect` checks before it starts, for this computer as the local server's host. */
 async function hostOptions(values: Record<string, string | boolean | string[] | undefined>): Promise<LocalHostOptions> {
   const unsandboxed = values['unsafe-no-sandbox'] === true;
   assertConnectorPlatform();
@@ -110,7 +110,7 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
   try {
     const existing = await peekLocalState(stateDir);
     const github = await githubApp(values['github-client-id'], existing?.github !== undefined);
-    // Checked (and consent asked) before anything starts, as `pistead connect` does.
+    // Checked (and consent asked) before anything starts, as `pikibun connect` does.
     const hostSetup = values['no-host'] ? undefined : await hostOptions(values);
     // Held while the server runs: nothing else creates, changes or serves this state meanwhile.
     const { state, release } = await openLocalState(stateDir, { ...(github ? { github } : {}), ...(port ? { port } : {}) });
@@ -118,9 +118,9 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
     server = await startLocalServer({ stateDir, state, release, ...(testSecret ? { extraEnv: {
       TEST_AUTH_ENABLED: 'true', TEST_AUTH_SECRET: testSecret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 24 * 3600_000).toISOString() } } : {}) });
     const claim = await server.claimUrl();
-    process.stderr.write(`\nPistead is running at ${server.origin} (this computer only).\n`);
+    process.stderr.write(`\nPikibun is running at ${server.origin} (this computer only).\n`);
     process.stderr.write(claim
-      ? `Sign in for the first time with this link; the GitHub account that opens it becomes this Pistead's owner:\n  ${claim}\nKeep it private until you have signed in.\n`
+      ? `Sign in for the first time with this link; the GitHub account that opens it becomes this Pikibun's owner:\n  ${claim}\nKeep it private until you have signed in.\n`
       : `Sign in at ${server.origin} with the GitHub account that owns it.\n`);
     if (testSecret) process.stderr.write(`Test mode for 24 hours. Test sign-in secret: ${testSecret}\n`);
     if (hostSetup) {
@@ -144,7 +144,7 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
   try { await stopped.promise; }
   finally {
     process.off('SIGINT', stop); process.off('SIGTERM', stop);
-    process.stderr.write('Stopping Pistead…\n');
+    process.stderr.write('Stopping Pikibun…\n');
     await host?.stop().catch(() => {});
     await server.close();
   }

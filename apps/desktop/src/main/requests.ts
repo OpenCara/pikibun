@@ -29,15 +29,15 @@ export function parseStartInput(value: unknown): Parsed<StartInput> {
   if (!pairingIdPattern.test(id)) {
     // Same guard as the CLI: a pasted code in the ID field is no longer private.
     return { ok: false, error: /^[A-Za-z0-9_-]{43}$/.test(id)
-      ? "That looks like the single-use pairing code, not the pairing ID. Create a new code in Pistead (this one is no longer private) and enter its pairing ID, which looks like 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed."
-      : "The pairing ID is shown in Pistead next to the code and looks like 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed." };
+      ? "That looks like the single-use pairing code, not the pairing ID. Create a new code in Pikibun (this one is no longer private) and enter its pairing ID, which looks like 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed."
+      : "The pairing ID is shown in Pikibun next to the code and looks like 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed." };
   }
-  if (!code) return { ok: false, error: "Enter the single-use pairing code shown in Pistead." };
-  if (!pairingCodePattern.test(code)) return { ok: false, error: "That pairing code is not valid. Copy the single-use code shown in Pistead." };
+  if (!code) return { ok: false, error: "Enter the single-use pairing code shown in Pikibun." };
+  if (!pairingCodePattern.test(code)) return { ok: false, error: "That pairing code is not valid. Copy the single-use code shown in Pikibun." };
   return { ok: true, value: { pairing: { id, code }, replacePairing: value.replacePairing } };
 }
 
-/** Settings' start of Pistead on this computer, with a GitHub OAuth app when the owner entered one. */
+/** Settings' start of Pikibun on this computer, with a GitHub OAuth app when the owner entered one. */
 export function parseLocalStartInput(value: unknown): Parsed<LocalStartInput> {
   if (!isRecord(value) || !onlyKeys(value, ["github"])) return { ok: false, error: "Invalid request." };
   if (value.github === undefined) return { ok: true, value: {} };
@@ -68,5 +68,5 @@ export function isLocalPage(url: string, page: string): boolean {
   return parsed.protocol === `${APP_SCHEME}:` && parsed.host === APP_HOST && parsed.pathname === `/${page}`;
 }
 
-export const APP_SCHEME = "pistead-app";
+export const APP_SCHEME = "pikibun-app";
 export const APP_HOST = "local";

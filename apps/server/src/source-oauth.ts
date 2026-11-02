@@ -13,7 +13,7 @@ import { accountRejected, clean, json, rateLimited, upstream } from './document-
  * Connecting a document source by signing in to its provider (OAuth 2.0 authorization code, with PKCE where the
  * provider takes it). The operator registers one app per provider (GOOGLE_CLIENT_ID, NOTION_CLIENT_ID,
  * DROPBOX_CLIENT_ID, MICROSOFT_CLIENT_ID, TENCENT_DOCS_CLIENT_ID and their secrets) with the redirect URI
- * APP_ORIGIN/api/source-accounts/<provider>/oauth/callback. Pistead keeps the member's tokens encrypted, refreshes them
+ * APP_ORIGIN/api/source-accounts/<provider>/oauth/callback. Pikibun keeps the member's tokens encrypted, refreshes them
  * on the control plane, and hands adapters only a current access token; none of it reaches a host.
  */
 const STATE_TTL = 10 * 60 * 1000;
@@ -145,7 +145,7 @@ function redirectUri(env: Env, kind: DocumentKind): string {
   return `${env.APP_ORIGIN}/api/source-accounts/${kind}/oauth/callback`;
 }
 
-/** A token response as what Pistead stores; refreshes keep the refresh token a provider doesn't repeat. */
+/** A token response as what Pikibun stores; refreshes keep the refresh token a provider doesn't repeat. */
 export function oauthSecret(tokens: Json, previous?: OAuthSecret): OAuthSecret {
   if (typeof tokens.access_token !== 'string' || !tokens.access_token) fail(502, 'invalid_source_response', 'The provider returned no access token.');
   const lifetime = typeof tokens.expires_in === 'number' ? tokens.expires_in : typeof tokens.expires_in === 'string' ? Number(tokens.expires_in) : NaN;

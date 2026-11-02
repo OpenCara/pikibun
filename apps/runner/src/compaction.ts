@@ -57,9 +57,9 @@ export function hostCompaction(host: CompactionSettings | undefined, models: Ite
 }
 
 /**
- * The host's Pi `compaction` setting with the token counts its owner and admins set in Pistead (HostConfig.compaction)
+ * The host's Pi `compaction` setting with the token counts its owner and admins set in Pikibun (HostConfig.compaction)
  * over it: each count set there replaces Pi's, for every model and for each model by itself, and Pi's other fields
- * (`enabled`, say) stay. A count set for every model in Pistead still gives way to a model's own one in Pi's settings,
+ * (`enabled`, say) stay. A count set for every model in Pikibun still gives way to a model's own one in Pi's settings,
  * as Pi's model overrides always win over its harness-wide counts.
  */
 export function configuredCompaction(pi: CompactionSettings | undefined, configured: HostCompaction | undefined): CompactionSettings | undefined {

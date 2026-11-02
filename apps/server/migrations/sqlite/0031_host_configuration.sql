@@ -1,5 +1,5 @@
--- How a host runs its sessions, set in Pistead by its owner and admins instead of connector options (HostConfig in
--- packages/shared/src/host-config.ts). No row means the defaults. Connectors that take their configuration from Pistead
+-- How a host runs its sessions, set in Pikibun by its owner and admins instead of connector options (HostConfig in
+-- packages/shared/src/host-config.ts). No row means the defaults. Connectors that take their configuration from Pikibun
 -- (capability hostConfig) read it; older ones keep their options.
 CREATE TABLE connector_configs (
   connector_id TEXT PRIMARY KEY NOT NULL REFERENCES connectors(id) ON DELETE CASCADE,
@@ -14,7 +14,7 @@ CREATE TABLE connector_configs (
 );
 
 -- A host whose last connection was started with --git-credentials or --repo-cache keeps them once its connector takes
--- its configuration from Pistead. Capabilities don't say which cache scope it used: it keeps one for the whole host.
+-- its configuration from Pikibun. Capabilities don't say which cache scope it used: it keeps one for the whole host.
 INSERT INTO connector_configs (connector_id, git_credentials, repository_cache, updated_by, updated_at)
   SELECT id,
     CASE WHEN json_extract(capabilities_json, '$.gitCredentials') = 1 THEN 1 ELSE 0 END,

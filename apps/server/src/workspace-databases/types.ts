@@ -67,7 +67,7 @@ export interface WorkspaceImport {
 
 export const workspaceDatabaseFailures = [
   'host_not_allowed', 'host_not_found', 'tls_not_allowed', 'unreachable', 'tls_failed', 'authentication_failed',
-  'database_not_found', 'permission_denied', 'pistead_database', 'schema_mismatch', 'response_too_large', 'unavailable',
+  'database_not_found', 'permission_denied', 'pikibun_database', 'schema_mismatch', 'response_too_large', 'unavailable',
 ] as const;
 export type WorkspaceDatabaseFailure = (typeof workspaceDatabaseFailures)[number];
 
@@ -92,7 +92,7 @@ export class WorkspaceDatabaseError extends Error {
 export interface WorkspaceDatabaseProvider {
   /** Whether hosts on private networks, and unencrypted connections to them, are allowed. */
   readonly privateHosts: boolean;
-  /** Connects, refuses a Pistead server's own database, creates Pistead's tables when missing and checks their privileges. */
+  /** Connects, refuses a Pikibun server's own database, creates Pikibun's tables when missing and checks their privileges. */
   verify(target: WorkspaceDatabaseTarget): Promise<void>;
   save(target: WorkspaceDatabaseTarget, save: WorkspaceBackupSave): Promise<void>;
   /** The snapshot of `backup`, or null when the database has no backup with that id, session and exact size. */

@@ -1,6 +1,6 @@
-name: Release pistead (npm)
+name: Release pikibun (npm)
 # Pushing a cli-v1.2.3 tag (cli-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then publishes the
-# `pistead` connector from packages/cli to npm, a prerelease to the `next` dist-tag. The tag decides the version:
+# `pikibun` connector from packages/cli to npm, a prerelease to the `next` dist-tag. The tag decides the version:
 # scripts/set-release-version.mjs sets it in package.json and npm-shrinkwrap.json before building, so no version bump
 # needs committing first. The other release lines are in release-check.yml.
 # npm auth: a trusted publisher on npmjs.com for this workflow file (release.yml, keep its name) and environment
@@ -44,10 +44,10 @@ jobs:
         env:
           VERSION: ${{ needs.check.outputs.version }}
         run: node scripts/set-release-version.mjs "$VERSION" cli
-      # The web app, which the CLI ships for `pistead serve`.
+      # The web app, which the CLI ships for `pikibun serve`.
       - run: pnpm build
       # prepublishOnly checks the shrinkwrap and builds dist.
-      - name: Publish pistead
+      - name: Publish pikibun
         working-directory: packages/cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

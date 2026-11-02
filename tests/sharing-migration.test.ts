@@ -18,7 +18,7 @@ function migrate(sqlite: DatabaseSync, files: string[]) {
 }
 
 function fixture(t: TestContext) {
-  const path = join(mkdtempSync(join(tmpdir(), 'pistead-sharing-')), 'control-plane.sqlite');
+  const path = join(mkdtempSync(join(tmpdir(), 'pikibun-sharing-')), 'control-plane.sqlite');
   const sqlite = new DatabaseSync(path);
   t.after(() => { sqlite.close(); rmSync(dirname(path), { recursive: true, force: true }); });
   sqlite.exec('PRAGMA foreign_keys = ON');

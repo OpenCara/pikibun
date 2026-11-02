@@ -215,7 +215,7 @@ export class HostWorkspace implements SessionWorkspace {
       await add(this.#root, "owner.gitconfig", "owner.gitconfig");
       await visit(this.worktree, "worktree", [".git"]);
       // Push scratch repositories are transient and never belong in a backup.
-      await visit(join(this.worktree, ".git"), "git", ["pistead-push"]);
+      await visit(join(this.worktree, ".git"), "git", ["pikibun-push"]);
       return files;
     });
   }

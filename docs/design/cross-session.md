@@ -71,7 +71,7 @@ private parent's outcome comes back from it without a card unless the parent has
 Each delivered message starts with a line the control plane writes:
 
 ```
-[Pistead cross-session message xs:<id> · from session "<title>" (<origin id>) · sent by @<login> through its agent · hop <n>]
+[Pikibun cross-session message xs:<id> · from session "<title>" (<origin id>) · sent by @<login> through its agent · hop <n>]
 ```
 
 Its request id is `xs:<id>`, so its write admission (`run_admissions.request_id`) ties the target's run, and every

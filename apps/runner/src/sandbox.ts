@@ -59,7 +59,7 @@ export interface SandboxOptions {
    * and the helper relays the sandbox's loopback EGRESS_PORT to it: their only way out of the network namespace.
    */
   egressSocket?: string;
-  /** The branch a clone session's shell commands may push through the proxy, given to them as PISTEAD_SESSION_BRANCH. */
+  /** The branch a clone session's shell commands may push through the proxy, given to them as PIKIBUN_SESSION_BRANCH. */
   sessionBranch?: string;
   /**
    * The host repository cache's mirrors this session may borrow from (clone sessions on a cache host), asked for before
@@ -75,7 +75,7 @@ export interface SandboxOptions {
 export interface MirrorMount { source: string; target: string }
 /** Where a clone session's shell commands see the host's mirrors; clones' `objects/info/alternates` name paths below it. */
 export const MIRROR_ROOT = "/repository-mirrors";
-const SHIM_DIRECTORY = "/opt/pistead/bin";
+const SHIM_DIRECTORY = "/opt/pikibun/bin";
 /** The host's trusted certificates in the session's private root, mounted read-only at CA_BUNDLE for shell commands. */
 export const CA_BUNDLE_FILE = "ca-certificates.crt";
 /**
@@ -127,7 +127,7 @@ LFS = next((path for path in ${JSON.stringify(GIT_LFS_PATHS)} if os.access(path,
 def endpoint(name, url, timeout):
     query = urllib.parse.urlencode({'remote': url})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    return opener.open('http://127.0.0.1:${EGRESS_PORT}/__pistead/' + name + '?' + query, timeout=timeout)
+    return opener.open('http://127.0.0.1:${EGRESS_PORT}/__pikibun/' + name + '?' + query, timeout=timeout)
 
 
 def ask(name, url, timeout):
@@ -141,7 +141,7 @@ def ask(name, url, timeout):
 
 def note(text):
     try:
-        sys.stderr.write('pistead: ' + text + '\n')
+        sys.stderr.write('pikibun: ' + text + '\n')
         sys.stderr.flush()
     except Exception:
         pass
@@ -257,7 +257,7 @@ export interface SnapshotFile {
 /**
  * One clone of a clone session as a backup keeps it (see Sandbox.cloneBackup). `worktree` commits its working tree,
  * untracked files included and ignored ones not, on top of `head`; `bundle` (base64) holds what `origin` doesn't have:
- * `worktree` and the local branches, as `refs/pistead/backup` and `refs/heads/*`.
+ * `worktree` and the local branches, as `refs/pikibun/backup` and `refs/heads/*`.
  */
 export interface CloneBackup {
   path: string; origin: string | null; branch: string | null; head: string | null; worktree: string;
@@ -711,7 +711,7 @@ def snapshot(request):
         visit(work, 'worktree', ('.git',))
         # Push scratch repositories are transient and never belong in a backup; pending clone restorations go with the
         # clones' bundles.
-        visit(git, 'git', ('pistead-push', CLONE_STATE))
+        visit(git, 'git', ('pikibun-push', CLONE_STATE))
         return files
     finally:
         os.close(git)
@@ -798,15 +798,15 @@ def clone_push_pack(request):
 
 # Clone sessions keep their clones' local work in backups as Git bundles, not as files: what the clone's origin already
 # has is cloned again on restore. Pending restorations live in the worktree's .git, which shell commands see read-only.
-CLONE_STATE = 'pistead-clones'
+CLONE_STATE = 'pikibun-clones'
 CLONE_PATH = re.compile(r'[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+){0,63}')
 MAX_CLONES = 50
 MAX_CLONE_BRANCHES = 200
 MAX_CLONE_BUNDLES = 16 * 1024 * 1024
 MAX_CLONE_SEARCH = 20000
-BACKUP_IDENTITY = {'GIT_AUTHOR_NAME': 'Pistead', 'GIT_AUTHOR_EMAIL': 'backup@pistead.invalid',
-                   'GIT_COMMITTER_NAME': 'Pistead', 'GIT_COMMITTER_EMAIL': 'backup@pistead.invalid'}
-RESTORED_MARKER = 'pistead-restored'
+BACKUP_IDENTITY = {'GIT_AUTHOR_NAME': 'Pikibun', 'GIT_AUTHOR_EMAIL': 'backup@pikibun.invalid',
+                   'GIT_COMMITTER_NAME': 'Pikibun', 'GIT_COMMITTER_EMAIL': 'backup@pikibun.invalid'}
+RESTORED_MARKER = 'pikibun-restored'
 
 
 def clone_path(value):
@@ -906,7 +906,7 @@ def clone_pack_check(path, directory, reason):
     for name in clone_git_checked(directory, ['for-each-ref', '--format=%(refname)'], reason=reason).splitlines():
         if name == 'refs/stash':
             raise ValueError('the clone ' + path + ' has stashed changes, which a pack can\'t keep')
-        if not name.startswith(('refs/heads/', 'refs/remotes/', 'refs/tags/', 'refs/pistead/')):
+        if not name.startswith(('refs/heads/', 'refs/remotes/', 'refs/tags/', 'refs/pikibun/')):
             raise ValueError('the clone ' + path + ' has refs other than branches and tags, which a pack can\'t keep')
     # Tags its origin may not have: tags on commits it doesn't have (or on something other than a commit) certainly not.
     code, output = clone_git(directory, ['rev-list', '--count', '--tags', '--not', '--remotes=origin'])
@@ -947,7 +947,7 @@ def clone_backup_one(path, nested, budget, pack=False):
     # The working tree, untracked files included and ignored ones not, as a commit on top of HEAD. A copy of the clone's
     # own index is the starting point, so sparse checkouts stay as they are and unchanged files aren't read again; the
     # clone's index and HEAD are left alone. Clones inside this one are backed up on their own.
-    index = os.path.join(directory, '.git', 'pistead-backup-index')
+    index = os.path.join(directory, '.git', 'pikibun-backup-index')
     extra = dict(BACKUP_IDENTITY, GIT_INDEX_FILE=index)
     try:
         try:
@@ -974,14 +974,14 @@ def clone_backup_one(path, nested, budget, pack=False):
         worktree = head
     else:
         worktree = clone_git_checked(directory, ['commit-tree', tree] + (['-p', head] if head else []),
-                                     b'Pistead backup of the working tree\n', extra=BACKUP_IDENTITY, reason=reason)
+                                     b'Pikibun backup of the working tree\n', extra=BACKUP_IDENTITY, reason=reason)
     if not OID.fullmatch(worktree):
         raise ValueError(reason)
     # Only what the clone's origin has is left out; a restore fetches by commit whatever its origin no longer lists.
     bundle = None
-    new = ['refs/pistead/backup', '--branches', '--not', '--remotes=origin']
-    clone_git_checked(directory, ['update-ref', 'refs/pistead/backup', worktree], reason=reason)
-    target = os.path.join(directory, '.git', 'pistead-backup.bundle')
+    new = ['refs/pikibun/backup', '--branches', '--not', '--remotes=origin']
+    clone_git_checked(directory, ['update-ref', 'refs/pikibun/backup', worktree], reason=reason)
+    target = os.path.join(directory, '.git', 'pikibun-backup.bundle')
     try:
         if int(clone_git_checked(directory, ['rev-list', '--count'] + new, reason=reason) or '0'):
             clone_git_checked(directory, ['bundle', 'create', target] + new, reason=reason)
@@ -996,7 +996,7 @@ def clone_backup_one(path, nested, budget, pack=False):
             if len(bundle) > budget:
                 raise ValueError('the clones\' local work exceeds the backup size limit')
     finally:
-        clone_git(directory, ['update-ref', '-d', 'refs/pistead/backup'])
+        clone_git(directory, ['update-ref', '-d', 'refs/pikibun/backup'])
         try:
             os.unlink(target)
         except FileNotFoundError:
@@ -1119,7 +1119,7 @@ def clone_restore(request):
                 if not stat.S_ISDIR(os.lstat(parent).st_mode):
                     raise ValueError('something else is already at the clone\'s path')
         # Built beside its path and moved there whole, so an interrupted restoration leaves nothing in the way of the next.
-        staging = os.path.join(parent, '.' + parts[-1] + '.pistead-restore')
+        staging = os.path.join(parent, '.' + parts[-1] + '.pikibun-restore')
         if os.path.lexists(staging):
             if os.path.islink(staging) or not os.path.isdir(staging):
                 raise ValueError('something else is already at the clone\'s path')
@@ -1153,7 +1153,7 @@ def clone_restore(request):
                 source = os.path.join(GITDIR or os.path.join(WORK, '.git'), CLONE_STATE, bundle)
                 fetch_missing(bundle_prerequisites(source))
                 clone_git_checked(staging, ['-c', 'protocol.file.allow=always', 'fetch', '--quiet', '--no-tags', source,
-                                            'refs/*:refs/pistead/restore/*'], reason=reason)
+                                            'refs/*:refs/pikibun/restore/*'], reason=reason)
             fetch_missing([oid for _, oid in branches] + ([head] if head else []) + [worktree])
             # The origin as the clone named it (an SSH remote, say), not the form it was cloned again from.
             if origin != url:
@@ -1161,8 +1161,8 @@ def clone_restore(request):
             for name, oid in branches:
                 clone_git_checked(staging, ['update-ref', 'refs/heads/' + name, oid], reason=reason)
             listed = {name for name, _ in branches}
-            for line in clone_git_checked(staging, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/pistead'], reason=reason).splitlines():
-                if line.startswith('refs/pistead/') or line[len('refs/heads/'):] not in listed:
+            for line in clone_git_checked(staging, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/pikibun'], reason=reason).splitlines():
+                if line.startswith('refs/pikibun/') or line[len('refs/heads/'):] not in listed:
                     clone_git_checked(staging, ['update-ref', '-d', line], reason=reason)
             if branch is not None:
                 clone_git_checked(staging, ['symbolic-ref', 'HEAD', 'refs/heads/' + branch], reason=reason)

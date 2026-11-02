@@ -16,7 +16,7 @@ async function failure(response: () => Response): Promise<ApiError> {
   throw new Error("expected the request to fail");
 }
 
-test("Pistead's own errors keep their message and code", async () => {
+test("Pikibun's own errors keep their message and code", async () => {
   const error = await failure(() => Response.json({ error: "The move target is archived.", code: "session_archived" }, { status: 409 }));
   assert.equal(error.message, "The move target is archived.");
   assert.equal(error.code, "session_archived");
@@ -31,7 +31,7 @@ test("a proxy's JSON 502 names the status and what the proxy said", async () => 
   assert.equal(error.status, 502);
   assert.equal(error.code, "BACKEND_UNAVAILABLE");
   assert.match(error.message, /HTTP 502 Bad Gateway: "Application failed to respond"/);
-  assert.match(error.message, /proxy in front of Pistead/);
+  assert.match(error.message, /proxy in front of Pikibun/);
   assert.match(error.message, /check the result before retrying/);
   assert.doesNotMatch(error.message, /Request failed \(502\)/);
 });
@@ -47,11 +47,11 @@ test("a proxy's HTML timeout page is reduced to its title", async () => {
 
 test("an empty or unparseable error body still says what status came back", async () => {
   const empty = await failure(() => new Response(null, { status: 502 }));
-  assert.match(empty.message, /^The proxy in front of Pistead got no valid answer from the server \(HTTP 502 Bad Gateway\)\./);
+  assert.match(empty.message, /^The proxy in front of Pikibun got no valid answer from the server \(HTTP 502 Bad Gateway\)\./);
   const broken = await failure(() => new Response("upstream connect error or disconnect/reset before headers", { status: 503, headers: { "Content-Type": "application/json" } }));
   assert.match(broken.message, /HTTP 503 Service Unavailable: "upstream connect error or disconnect\/reset before headers"/);
   const notFound = await failure(() => Response.json({}, { status: 404 }));
-  assert.equal(notFound.message, "The request failed before reaching Pistead's API (HTTP 404 Not Found).");
+  assert.equal(notFound.message, "The request failed before reaching Pikibun's API (HTTP 404 Not Found).");
 });
 
 test("rate limits and long proxy pages stay short and plain", async () => {

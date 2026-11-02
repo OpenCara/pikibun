@@ -63,7 +63,7 @@ let probe;
 try { probe = sdk.probe(config.request); } catch (error) { fail("this Windows can't run the process container: " + (error && error.message || "probe failed")); }
 if (probe.error || probe.tier !== "base-container" || (probe.warnings && probe.warnings.length)) {
   fail("this Windows can't run the OS process container (MXC chose " + (probe.tier || "nothing") + (probe.error ? ": " + probe.error : "")
-    + "); Pistead never uses MXC's AppContainer fallbacks. it needs Windows 11 24H2 or later with the latest update, or run the connector in WSL2");
+    + "); Pikibun never uses MXC's AppContainer fallbacks. it needs Windows 11 24H2 or later with the latest update, or run the connector in WSL2");
 }
 let child;
 try { child = await sdk.spawn(config.request); } catch (error) { fail("the process container could not start: " + (error && error.message || "unknown error")); }
@@ -147,7 +147,7 @@ export interface WindowsSandboxSupport {
 
 /** Runs WINDOWS_SUPPORT_CHECK with the SDK at `sdk` (its entry point). */
 export async function windowsSandboxSupport(sdk: string, node = process.execPath): Promise<WindowsSandboxSupport> {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pistead-sandbox-check-")));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-sandbox-check-")));
   try {
     const system = process.env.SystemRoot ?? "C:\\Windows";
     const run = spawnSync(node, ["--input-type=module", "-e", WINDOWS_SUPPORT_CHECK, sdk, directory, system], {

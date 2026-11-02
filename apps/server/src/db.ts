@@ -53,7 +53,7 @@ export function sessionPullRequest(url: string | null | undefined, state?: strin
 
 /**
  * The own branch of a session restored or moved to a host with these capabilities: named for its work (sessionBranchName)
- * where the host pushes named branches, otherwise none (pistead/<id>). A successor never takes its source's branch, so
+ * where the host pushes named branches, otherwise none (pikibun/<id>). A successor never takes its source's branch, so
  * two sessions never push the same one.
  */
 export function successorBranch(row: Pick<SessionRow, 'id' | 'title' | 'repository_mode'>, capabilities: ConnectorCapabilities): string | null {
@@ -61,7 +61,7 @@ export function successorBranch(row: Pick<SessionRow, 'id' | 'title' | 'reposito
 }
 
 export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRecord {
-  // A session pushes through Pistead or, on a host, with the host's own Git (session-branches.ts); a push's comes first.
+  // A session pushes through Pikibun or, on a host, with the host's own Git (session-branches.ts); a push's comes first.
   const pullRequest = row.pull_request_url ? sessionPullRequest(row.pull_request_url, row.pull_request_state)
     : sessionPullRequest(row.branch_pull_request_url, row.branch_pull_request_state);
   return { id: row.id, workspaceId: row.workspace_id, ownerId: row.owner_id, agentVersionId: row.agent_version_id,

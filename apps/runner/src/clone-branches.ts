@@ -6,7 +6,7 @@ import type { EgressRepository } from "../../../packages/shared/src/network.js";
 import { repositoryForRemote } from "./egress.js";
 
 /*
- * A session on a host pushes and opens pull requests with the host's own Git and credentials, so Pistead never sees
+ * A session on a host pushes and opens pull requests with the host's own Git and credentials, so Pikibun never sees
  * them. Its host reports the branches its clones have checked out instead, and the control plane finds their pull
  * requests on GitHub (apps/server/src/session-branches.ts). This reads those branches from the clones' Git metadata
  * as files, running no Git, so nothing in a clone's configuration runs.
@@ -91,7 +91,7 @@ function configValue(raw: string): string {
 
 /**
  * The checked-out branches of the clones in `worktree`, in directory order: directories up to MAX_DEPTH deep with a
- * .git directory of their own (the worktree's own .git is Pistead's), not followed through symlinks. A directory with a
+ * .git directory of their own (the worktree's own .git is Pikibun's), not followed through symlinks. A directory with a
  * .git file (a linked worktree or submodule) is neither reported nor looked into. A clone on a
  * detached HEAD, without an origin, or on its origin's default branch (refs/remotes/origin/HEAD, which git clone
  * records; main or master when it didn't) is left out: such work has no pull request of its own.

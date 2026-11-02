@@ -17,7 +17,7 @@ import { RunnerError } from "./protocol.js";
  *
  * For api.github.com the credential is a GitHub App installation token that can only read the workspace's repositories
  * the session owner can read, so writes are refused here and would fail at GitHub anyway: comments, issues, merges and
- * pushes stay with Pistead's approved tools.
+ * pushes stay with Pikibun's approved tools.
  */
 
 /** A GraphQL request's body; GitHub's own limit on a query is far below this. */
@@ -79,7 +79,7 @@ export function parseApiCredentialGrant(value: unknown): ApiCredentialGrant {
   return { available: true, credentials, cacheSeconds: cacheSeconds as number };
 }
 
-const READ_ONLY = "sandboxed commands only read through the GitHub API. Comments, issues, merges and pushes go through Pistead's approved tools "
+const READ_ONLY = "sandboxed commands only read through the GitHub API. Comments, issues, merges and pushes go through Pikibun's approved tools "
   + "(github_comment, github_issue, github_merge, git_push)";
 
 /** What a request to api.github.com may do from a sandbox: read (GET, HEAD, GraphQL queries), never write. */
@@ -110,7 +110,7 @@ function json(response: ServerResponse, status: number, message: string): void {
   if (response.headersSent) { response.destroy(); return; }
   // GitHub's own error shape, which gh and Octokit show as they are.
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-  response.end(`${JSON.stringify({ message, documentation_url: "https://github.com/OpenCara/pistead#network-access" })}\n`);
+  response.end(`${JSON.stringify({ message, documentation_url: "https://github.com/OpenCara/pikibun#network-access" })}\n`);
 }
 
 async function body(request: IncomingMessage, limit: number): Promise<Uint8Array> {
@@ -199,7 +199,7 @@ export class ApiAccess {
         let grant: ApiCredentialGrant;
         try { grant = parseApiCredentialGrant(await this.#options.credential(host)); }
         catch (error) {
-          const reason = error instanceof RunnerError && /^[\x20-\x7e]{1,300}$/.test(error.message) ? error.message : "Pistead gave no credential for this API";
+          const reason = error instanceof RunnerError && /^[\x20-\x7e]{1,300}$/.test(error.message) ? error.message : "Pikibun gave no credential for this API";
           const unavailable: ApiCredentialGrant = { available: false, reason, cacheSeconds: 0 };
           this.#credentials.set(host, { grant: unavailable, until: Date.now() + UNAVAILABLE_CACHE_MS });
           return unavailable;
@@ -259,14 +259,14 @@ export class ApiAccess {
     let credential: ApiCredential | undefined;
     if (supplied && !supplied.includes(API_TOKEN_PLACEHOLDER)) {
       // A credential the command brought itself, as it could have sent through a tunnel the policy allows.
-      if (!open) return refuse(403, `This request carries its own credential, and this workspace's network policy doesn't allow ${host}; leave GH_TOKEN as Pistead sets it`);
+      if (!open) return refuse(403, `This request carries its own credential, and this workspace's network policy doesn't allow ${host}; leave GH_TOKEN as Pikibun sets it`);
       headers.authorization = supplied;
       reason = "the command's own credential";
     } else {
       const repository = restRepository(pathname);
       // Only a grant that names the API comes with a credential for it; the placeholder goes no further either way.
       const available: ApiCredentialGrant = grant.apis?.some(api => api.host === host) ? await this.#credential(host)
-        : { available: false, reason: "Pistead gives this session no credential for the GitHub API (only sessions that clone their repositories get one)", cacheSeconds: 0 };
+        : { available: false, reason: "Pikibun gives this session no credential for the GitHub API (only sessions that clone their repositories get one)", cacheSeconds: 0 };
       credential = available.available ? credentialFor(available.credentials, repository, owner) : undefined;
       if (credential) {
         headers.authorization = credential.authorization;

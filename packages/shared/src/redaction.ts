@@ -240,7 +240,7 @@ const tokenFormats: { pattern: RegExp; digit?: boolean }[] = [
 const tokenHint = /gh[pousr]_|github_pat_|gl[a-z]{1,5}-|xox[abposr]-|xapp-|hooks\.slack\.com|discord(?:app)?\.com|A(?:KIA|SIA|BIA|CCA)|sk-|AIza|GOCSPX-|[sr]k_(?:live|test)_|whsec_|npm_|pypi-|hf_|SG\.|shp(?:at|ca|pa|ss)_|do[opr]_v1_|hv[sb]\.|dp\.|lin_api_/;
 /** A JSON Web Token: three base64url segments, the first two JSON objects. */
 const jwt = /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,1024}\.eyJ[A-Za-z0-9_-]{8,8192}\.[A-Za-z0-9_-]{8,1024}(?![A-Za-z0-9_-])/g;
-/** A Pistead share link's token: the link opens the session for anyone who has it. */
+/** A Pikibun share link's token: the link opens the session for anyone who has it. */
 const shareLink = /(#\/shared\/)([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/g;
 
 function tokens(text: string): string {

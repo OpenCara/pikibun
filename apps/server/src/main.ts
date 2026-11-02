@@ -11,7 +11,7 @@ import { WorkspaceDatabaseError } from './workspace-databases/types.js';
 if (process.argv.includes('--migrate-only')) {
   const db = await openDatabase(process.env.DATABASE_URL || defaultDatabaseUrl);
   try { await migrateWhenReachable(db); } finally { await db.close(); }
-  console.log(`pistead: migrations applied (${db.provider})`);
+  console.log(`pikibun: migrations applied (${db.provider})`);
   process.exit(0);
 }
 
@@ -31,7 +31,7 @@ function dumpRequest(argv: readonly string[]): { kind: 'session' | 'workspace'; 
   const [request] = requests;
   if (!request && !argv.includes('--dump')) return null;
   if (!request || requests.length > 1 || !request.id || !/^[A-Za-z0-9_-]{1,128}$/.test(request.id)) {
-    console.error('pistead: dump one session or workspace at a time: --dump-session SESSION_ID or --dump-workspace WORKSPACE_ID');
+    console.error('pikibun: dump one session or workspace at a time: --dump-session SESSION_ID or --dump-workspace WORKSPACE_ID');
     process.exit(2);
   }
   return { kind: request.kind, id: request.id };
@@ -44,7 +44,7 @@ function importRequest(argv: readonly string[]): string | null {
   const index = positions[0]!;
   const file = argv[index] === '--import-dump' ? argv[index + 1] : argv[index]!.slice('--import-dump='.length);
   if (positions.length > 1 || !file) {
-    console.error('pistead: import one dump at a time: --import-dump FILE (- reads standard input)');
+    console.error('pikibun: import one dump at a time: --import-dump FILE (- reads standard input)');
     process.exit(2);
   }
   return file;
@@ -75,11 +75,11 @@ const importFile = importRequest(commandLine);
 let accountCommand: PasswordCommand | null = null;
 try { accountCommand = passwordCommand(commandLine); } catch (error) {
   if (!(error instanceof PasswordCommandError)) throw error;
-  console.error(`pistead: ${error.message}`);
+  console.error(`pikibun: ${error.message}`);
   process.exit(2);
 }
 if ([dump, importFile, accountCommand].filter(Boolean).length > 1) {
-  console.error('pistead: dump, import or manage an account, one at a time');
+  console.error('pikibun: dump, import or manage an account, one at a time');
   process.exit(2);
 }
 
@@ -99,7 +99,7 @@ if (accountCommand) {
     await db.close();
   }
   if (failure !== null) {
-    console.error(`pistead: ${failure}`);
+    console.error(`pikibun: ${failure}`);
     process.exit(1);
   }
   await writeOut(outcome);
@@ -119,7 +119,7 @@ if (dump) {
     await db.close();
   }
   if (output === null) {
-    console.error(`pistead: ${dump.kind} ${dump.id} not found`);
+    console.error(`pikibun: ${dump.kind} ${dump.id} not found`);
     process.exit(1);
   }
   await writeOut(output);
@@ -133,7 +133,7 @@ if (importFile) {
   try {
     document = JSON.parse(await readDump(importFile));
   } catch (error) {
-    console.error(`pistead: ${error instanceof DumpImportError ? error.message : `no JSON dump could be read from ${importFile}`}`);
+    console.error(`pikibun: ${error instanceof DumpImportError ? error.message : `no JSON dump could be read from ${importFile}`}`);
     process.exit(1);
   }
   const db = await openDatabase(process.env.DATABASE_URL || defaultDatabaseUrl);
@@ -142,7 +142,7 @@ if (importFile) {
   try {
     await migrateWhenReachable(db);
     const { summary, database } = await importDumpFromCommandLine(db, process.env, document);
-    outcome = `pistead: imported ${summary.sessions} session record${summary.sessions === 1 ? '' : 's'} (${summary.sessionDetails} with details) and `
+    outcome = `pikibun: imported ${summary.sessions} session record${summary.sessions === 1 ? '' : 's'} (${summary.sessionDetails} with details) and `
       + `${summary.auditEntries} activity entr${summary.auditEntries === 1 ? 'y' : 'ies'}${summary.workspaceSettings ? ', with the workspace settings,' : ''} `
       + `into ${database.host}/${database.database_name}\n`;
   } catch (error) {
@@ -153,7 +153,7 @@ if (importFile) {
     await db.close();
   }
   if (failure !== null) {
-    console.error(`pistead: ${failure}`);
+    console.error(`pikibun: ${failure}`);
     process.exit(1);
   }
   await writeOut(outcome);
@@ -165,19 +165,19 @@ try {
   config = await loadConfig();
 } catch (error) {
   if (!(error instanceof ConfigurationError)) throw error;
-  console.error(`pistead: ${error.message}`);
+  console.error(`pikibun: ${error.message}`);
   process.exit(1);
 }
 const { env, staticDir, trustProxy } = config;
 const server = await startServer(config);
 const listening = `${server.address.address}:${server.address.port}`;
-console.log(`pistead: listening on http://${listening} (database=${env.DB.provider}, storage=${env.BUCKET?.provider ?? 'none'}, workspaceDatabases=${env.WORKSPACE_DATABASES ? (env.WORKSPACE_DATABASES.privateHosts ? 'public+private' : 'public') : 'off'}, static=${staticDir}, trustProxy=${trustProxy})`);
+console.log(`pikibun: listening on http://${listening} (database=${env.DB.provider}, storage=${env.BUCKET?.provider ?? 'none'}, workspaceDatabases=${env.WORKSPACE_DATABASES ? (env.WORKSPACE_DATABASES.privateHosts ? 'public+private' : 'public') : 'off'}, static=${staticDir}, trustProxy=${trustProxy})`);
 
 let stopping = false;
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (stopping) return;
   stopping = true;
-  console.log(`pistead: ${signal} received, shutting down`);
+  console.log(`pikibun: ${signal} received, shutting down`);
   const forced = setTimeout(() => process.exit(1), 10_000);
   forced.unref();
   await server.close();

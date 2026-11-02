@@ -49,7 +49,7 @@ export function NetworkAccess({ workspace, admin }: { workspace: Workspace; admi
   }
   return <Section title="Network access" info={<div className="stack">
     {!admin && <p>Only workspace owners and admins can change network access.</p>}
-    <p>Sandboxed shell commands have no direct network. Everything goes through the host's egress proxy: Git reads of this workspace's repositories always work, with the session owner's own account, which never leaves Pistead.</p>
+    <p>Sandboxed shell commands have no direct network. Everything goes through the host's egress proxy: Git reads of this workspace's repositories always work, with the session owner's own account, which never leaves Pikibun.</p>
     <p>This setting decides what else is reachable over HTTPS. Addresses inside the host's own networks are never reachable. Hosts running without the sandbox aren't confined by it.</p>
     <p>The agent's <code>web_fetch</code> tool reads web pages from the host as far as this reaches, on every host. <code>web_search</code> searches with the server's search provider, only where web search is on: each query leaves for that provider.</p>
   </div>}>

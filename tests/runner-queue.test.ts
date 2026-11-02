@@ -802,16 +802,16 @@ test("sessions compact by the host's Pi compaction settings, per model where it 
   assert.equal(await compactions({ ...always, enabled: false }), 0, "the host's Pi can turn automatic compaction off");
 });
 
-test("sessions compact by the token counts set in Pistead over the host's Pi settings, from their next message on", options, async t => {
+test("sessions compact by the token counts set in Pikibun over the host's Pi settings, from their next message on", options, async t => {
   let configured: HostCompaction = {};
-  // The host's Pi never compacts this conversation; Pistead's configuration of the host decides.
+  // The host's Pi never compacts this conversation; Pikibun's configuration of the host decides.
   const f = await fixture(t, { config: { compaction: { reserveTokens: 0 }, hostConfig: async () => ({ ...defaultHostConfig, compaction: configured }) } });
   const compactions = async () => (await f.session.view()).entries.filter(entry => entry.kind === "pi.compaction").length;
   for (const requestId of ["first", "second"]) {
     await submit(f.session, OWNER, "write", { content: "TEST_HOLD 0", requestId });
     await idle(f.session);
   }
-  assert.equal(await compactions(), 0, "the host's Pi settings apply while Pistead sets nothing");
+  assert.equal(await compactions(), 0, "the host's Pi settings apply while Pikibun sets nothing");
   // A threshold no context fits under, keeping nothing verbatim, for the session's model alone.
   configured = { modelOverrides: { "faux/queue-faux": { reserveTokens: 10_000_000, keepRecentTokens: 0 } } };
   await submit(f.session, OWNER, "write", { content: "TEST_HOLD 0", requestId: "third" });

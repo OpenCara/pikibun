@@ -55,7 +55,7 @@ function useLiveSession(id: string) {
   return { session, view, error, status, refresh, loadOlder, reconnect };
 }
 
-const PANEL_KEY = "pistead.sessionPanel";
+const PANEL_KEY = "pikibun.sessionPanel";
 /** Where the panel is a column beside the conversation (session.css); narrower, it covers the conversation. */
 const PANEL_BESIDE = "(min-width: 1100px)";
 

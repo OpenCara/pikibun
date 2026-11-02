@@ -36,13 +36,13 @@ export async function upstream(provider: string, url: string, init: RequestInit 
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   const headers = new Headers(response.headers);
-  if (cut) headers.set('x-pistead-truncated', '1');
+  if (cut) headers.set('x-pikibun-truncated', '1');
   return { status: response.status, headers, bytes };
 }
 
 /** A successful JSON answer as an object; an oversized or malformed one is a fixed refusal. */
 export function json(provider: string, answer: Upstream): Record<string, unknown> {
-  if (answer.headers.get('x-pistead-truncated')) fail(502, 'invalid_source_response', `${provider} returned a response too large to read.`);
+  if (answer.headers.get('x-pikibun-truncated')) fail(502, 'invalid_source_response', `${provider} returned a response too large to read.`);
   let value: unknown;
   try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(answer.bytes)); }
   catch { return fail(502, 'invalid_source_response', `${provider} returned a malformed response.`); }
@@ -52,7 +52,7 @@ export function json(provider: string, answer: Upstream): Record<string, unknown
 
 /** A text body, decoded leniently, and whether it was cut at the read limit. */
 export function textBody(answer: Upstream): { text: string; truncated: boolean } {
-  return { text: new TextDecoder('utf-8').decode(answer.bytes), truncated: answer.headers.get('x-pistead-truncated') === '1' };
+  return { text: new TextDecoder('utf-8').decode(answer.bytes), truncated: answer.headers.get('x-pikibun-truncated') === '1' };
 }
 
 export function clean(value: unknown, max = 300): string {

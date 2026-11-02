@@ -1,5 +1,5 @@
 /*
- * Pistead design system, modelled on Paseo: minimal, spacious, quiet.
+ * Pikibun design system, modelled on Paseo: minimal, spacious, quiet.
  * Hierarchy comes from weight and color, not size. One accent CTA per surface.
  * Area styles live next to their screens (session.css, settings-*.css); this file owns
  * tokens, primitives and the app shell only.
@@ -76,6 +76,39 @@
     --code-background: #1f1f1f;
     --diff-add: rgb(63 209 127 / 12%);
     --shadow: 0 12px 36px -12px rgb(0 0 0 / 70%), 0 1px 2px rgb(0 0 0 / 50%);
+  }
+
+  /* Pikibun: the character's night sky for surfaces, its cream belly for text, its lavender ears for the accent, its
+     violet feet for borders and its coral nose for danger. Dark, like [data-theme="dark"]. */
+  [data-theme="pikibun"] {
+    color-scheme: dark;
+    --background: #110530;
+    --surface-sidebar: #160937;
+    --surface1: #190c3b;
+    --surface2: #221447;
+    --surface3: #2c1c55;
+    --interaction: rgb(191 170 238 / 7%);
+    --interaction-strong: rgb(191 170 238 / 13%);
+    --border: #2b1a52;
+    --border-accent: #40296e;
+    --foreground: #f7ebd3;
+    --foreground-muted: #b9abd8;
+    --foreground-extra-muted: #7d6ca8;
+    --accent: #bfaaee;
+    --accent-hover: #d3c4f7;
+    --accent-foreground: #170a36;
+    --status-success: #8bd7a9;
+    --status-warning: #f3cf7f;
+    --status-danger: #f2937f;
+    --status-info: #a0b9f6;
+    --status-merged: #d7aaff;
+    --dot-success: #4fd98e;
+    --dot-warning: #f7c75a;
+    --dot-danger: #ff7a66;
+    --dot-running: #8fa6ff;
+    --code-background: #180a38;
+    --diff-add: rgb(79 217 142 / 13%);
+    --shadow: 0 12px 36px -12px rgb(4 0 18 / 78%), 0 1px 2px rgb(4 0 18 / 55%);
   }
 
   :root {

@@ -80,7 +80,7 @@ test("--reset-password sets a new password, clears failed sign-ins and signs the
 });
 
 test("the server's entry point creates the administrator from a password piped to it, and never takes one on argv", async t => {
-  const directory = mkdtempSync(join(tmpdir(), "pistead-password-cli-"));
+  const directory = mkdtempSync(join(tmpdir(), "pikibun-password-cli-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const url = `sqlite:${join(directory, "control-plane.sqlite")}`;
   const main = fileURLToPath(new URL("../apps/server/src/main.ts", import.meta.url));

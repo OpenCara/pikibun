@@ -78,7 +78,7 @@ CREATE TRIGGER document_sources_immutable BEFORE UPDATE ON document_sources BEGI
   SELECT RAISE(ABORT, 'workspace sources are immutable');
 END;
 
--- A member's sign-in to a source provider under way: the state Pistead sent and its PKCE verifier, for one user and
+-- A member's sign-in to a source provider under way: the state Pikibun sent and its PKCE verifier, for one user and
 -- provider, until the provider redirects back (at most 10 minutes). The browser carries the state in a cookie too.
 CREATE TABLE source_oauth_states (
   state_hash TEXT PRIMARY KEY NOT NULL,

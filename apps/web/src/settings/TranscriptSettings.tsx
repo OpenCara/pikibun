@@ -31,7 +31,7 @@ export function TranscriptSettings({ workspace, admin }: { workspace: Workspace;
     {!admin && <p>Only workspace owners and admins can change these.</p>}
     <p>With latest messages first, a session opens with the newest {transcriptPage.size} entries of each conversation, and earlier ones load as you scroll up. Long sessions open much faster this way; your browser's find on the page only searches what has loaded.</p>
     <p>Full tool output sets how new sessions here start: with every tool result in full, or with one line per tool result and long tool calls cut short. Each session's owner can still change their session's under its Details, and changing this leaves existing sessions as they are.</p>
-    <p>Hosts still send Pistead whole transcripts; these change only what reaches each viewer.</p>
+    <p>Hosts still send Pikibun whole transcripts; these change only what reaches each viewer.</p>
   </div>}>
     <ResourceState loading={resource.loading} error={resource.error} retry={resource.refresh}>
       {paging !== undefined && <Row title="Latest messages first" hint={paging ? `Sessions open with the newest ${transcriptPage.size} entries of each conversation` : "Sessions open with their whole transcript"}

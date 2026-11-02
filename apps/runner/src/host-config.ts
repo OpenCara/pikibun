@@ -9,7 +9,7 @@ const CONFIG_TTL_MS = 30_000;
 const CONFIG_STALE_MS = 5 * 60_000;
 
 /**
- * The host's configuration as its owner and admins set it in Pistead, asked for again at most every 30 seconds. Without
+ * The host's configuration as its owner and admins set it in Pikibun, asked for again at most every 30 seconds. Without
  * an answer it keeps the last one for a while, then falls back to the defaults, which are the most restrictive.
  */
 export class HostConfigSource {

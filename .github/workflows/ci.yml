@@ -44,11 +44,11 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      # The published CLI, with the web app and migrations `pistead serve` ships, and its server chunk loading.
-      - run: pnpm --filter pistead run build
-      - run: node packages/cli/dist/pistead.js serve --help
+      # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
+      - run: pnpm --filter pikibun run build
+      - run: node packages/cli/dist/pikibun.js serve --help
       # The desktop app's main process, pages and connector host bundle (packaging needs macOS and is not run here).
-      - run: pnpm --filter @pistead/desktop build
+      - run: pnpm --filter @pikibun/desktop build
       # The iOS app's JavaScript bundle, as the release archive's Xcode phase builds it with Metro, which resolves imports
       # differently from tsc and Vite (the shared sources' "./types.js" imports broke ios-v0.1.0). The native build needs
       # macOS and runs only in release-ios.yml.
@@ -62,9 +62,9 @@ jobs:
       # stayed healthy while every request through a TLS proxy was a 500 (#71).
       - name: Container image builds and serves health, directly and behind a proxy
         run: |
-          docker build -t pistead:ci .
-          docker run -d --name pistead -p 8787:8787 -e APP_ORIGIN=http://127.0.0.1:8787 -e TRUST_PROXY=true \
-            -e SESSION_SECRET=ci-session-secret-ci-session-secret-ci -e VAULT_KEY=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=') pistead:ci
+          docker build -t pikibun:ci .
+          docker run -d --name pikibun -p 8787:8787 -e APP_ORIGIN=http://127.0.0.1:8787 -e TRUST_PROXY=true \
+            -e SESSION_SECRET=ci-session-secret-ci-session-secret-ci -e VAULT_KEY=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=') pikibun:ci
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/api/health && break; sleep 1; done
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"workspaceDatabasesConfigured":true'
@@ -72,6 +72,6 @@ jobs:
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"githubSignup":"invite"'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"passwordSignup":"invite"'
           curl -fsS http://127.0.0.1:8787/ | grep -qi '<!doctype html'
-          curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: pistead.example' http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
+          curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: pikibun.example' http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
           curl -fsS -H 'X-Forwarded-Proto: https' http://127.0.0.1:8787/ | grep -qi '<!doctype html'
-          docker rm -f pistead
+          docker rm -f pikibun

@@ -12,7 +12,7 @@ import { RunnerError } from "./protocol.js";
  * request. HTML comes back as text with its links and headings kept; images as images; other text as it is.
  */
 
-const USER_AGENT = "Mozilla/5.0 (compatible; Pistead-web_fetch; +https://github.com/OpenCara/pistead)";
+const USER_AGENT = "Mozilla/5.0 (compatible; Pikibun-web_fetch; +https://github.com/OpenCara/pikibun)";
 /** How long one page may take to arrive, its headers and its body together. */
 const FETCH_TIMEOUT_MS = 60_000;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];

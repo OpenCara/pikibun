@@ -1,4 +1,4 @@
-import { errorMessage } from "@pistead/client";
+import { errorMessage } from "@pikibun/client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { useSession } from "./auth";

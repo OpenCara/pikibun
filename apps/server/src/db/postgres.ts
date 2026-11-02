@@ -9,6 +9,18 @@ types.setTypeParser(types.builtins.INT8, Number);
 
 const MIGRATION_LOCK = 0x70697374; // 'pist'
 
+/**
+ * Pistead became Pikibun: 0001_schema.sql creates the trigger function as pikibun_raise(), but a database migrated before
+ * the rename holds it as pistead_raise(), and its pending migrations (0033 and later, for one that skipped releases) call
+ * the new name. A migration file can't run ahead of files already applied, so migrate() renames it first, every time: a
+ * no-op once renamed, and on databases created since. Triggers keep working, since they reference the function itself.
+ */
+const RENAME_RAISE_FUNCTION = `DO $$ BEGIN
+  IF to_regprocedure('pistead_raise()') IS NOT NULL AND to_regprocedure('pikibun_raise()') IS NULL THEN
+    ALTER FUNCTION pistead_raise() RENAME TO pikibun_raise;
+  END IF;
+END $$`;
+
 /** Something that runs `$n` statements: the pool outside transactions, a checked-out client inside one. */
 interface Executor {
   query(config: { text: string; values: unknown[] }): Promise<pg.QueryResult>;
@@ -83,6 +95,10 @@ export class PostgresDatabase implements Database {
   async migrate(): Promise<void> {
     const files = await readMigrations(this.migrationsDirectory);
     await this.pool.query('CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
+    await this.withClient(async ({ executor }) => {
+      await executor.query({ text: 'SELECT pg_advisory_xact_lock($1)', values: [MIGRATION_LOCK] });
+      await executor.query({ text: RENAME_RAISE_FUNCTION, values: [] });
+    });
     for (const file of files) {
       await this.withClient(async ({ executor }) => {
         // Serialize concurrent starters; re-check once the lock is held.

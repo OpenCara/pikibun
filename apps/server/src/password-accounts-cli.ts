@@ -72,7 +72,7 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
       if (error instanceof ConstraintError) throw new PasswordCommandError(`${userId} exists already; --reset-password ${name} sets a new password for it`);
       throw error;
     }
-    return `pistead: created ${userId}, an administrator while ADMIN_USER_IDS lists it; sign in with the username ${name}`;
+    return `pikibun: created ${userId}, an administrator while ADMIN_USER_IDS lists it; sign in with the username ${name}`;
   }
   const account = await db.query<{ auth_kind: string }>('SELECT u.auth_kind FROM users u JOIN password_credentials p ON p.user_id = u.id WHERE u.id = ?')
     .bind(userId).first();
@@ -85,7 +85,7 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
     db.query('DELETE FROM auth_sessions WHERE user_id = ?').bind(userId),
     auditStatement({ DB: db } as Env, null, 'account.password.reset_by_operator', null, null, { userId }),
   ]);
-  return `pistead: set a new password for ${userId} and signed it out everywhere`;
+  return `pikibun: set a new password for ${userId} and signed it out everywhere`;
 }
 
 /** A line typed on the terminal without echo; any characters, up to 1,024. */

@@ -33,7 +33,7 @@ test("a clone's branch, origin and default branch are read from its Git files", 
 test("the worktree's clones report their checked-out branches of the workspace's github.com repositories", async t => {
   const root = await mkdtemp(join(tmpdir(), "clone-branches-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  // The worktree's own repository is Pistead's, not a clone.
+  // The worktree's own repository is Pikibun's, not a clone.
   await mkdir(join(root, ".git"), { recursive: true });
   await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/session\n");
   await clone(root, "app", { branch: "fix/login", url: "https://github.com/Owner/Repo.git" });

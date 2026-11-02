@@ -1,11 +1,11 @@
 import XCTest
 
-/// End-to-end flows against a test-mode Pistead server with a faux host (`pnpm dev:native`), driving an installed
+/// End-to-end flows against a test-mode Pikibun server with a faux host (`pnpm dev:native`), driving an installed
 /// development build. Configuration comes from run.sh through TEST_RUNNER_-prefixed environment variables.
-final class PisteadUITests: XCTestCase {
-  private let app = XCUIApplication(bundleIdentifier: "com.pistead.app")
+final class PikibunUITests: XCTestCase {
+  private let app = XCUIApplication(bundleIdentifier: "com.pikibun.app")
   private let env = ProcessInfo.processInfo.environment
-  private var shots: URL? { env["PISTEAD_SHOTS"].map { URL(fileURLWithPath: $0, isDirectory: true) } }
+  private var shots: URL? { env["PIKIBUN_SHOTS"].map { URL(fileURLWithPath: $0, isDirectory: true) } }
 
   override func setUp() {
     continueAfterFailure = false
@@ -59,11 +59,11 @@ final class PisteadUITests: XCTestCase {
     if element("server-change").exists { element("server-change").tap() }
     let server = wait(element("server-input"))
     server.tap()
-    server.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 60) + setting("PISTEAD_SERVER"))
+    server.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 60) + setting("PIKIBUN_SERVER"))
     element("developer-toggle").tap()
     let token = wait(element("developer-token"))
     token.tap()
-    token.typeText(setting("PISTEAD_TOKEN"))
+    token.typeText(setting("PIKIBUN_TOKEN"))
     shot("02-developer-sign-in")
     element("developer-sign-in").tap()
     wait(element("open-settings"), 30)
@@ -81,7 +81,7 @@ final class PisteadUITests: XCTestCase {
   func test1SignInSendApprove() {
     launch()
     signIn()
-    let sessionId = setting("PISTEAD_SESSION_ID")
+    let sessionId = setting("PIKIBUN_SESSION_ID")
     let row = wait(element("session-row-\(sessionId)"))
     // Each row shows the session's status, here what its agent last did.
     let statuses = ["In progress", "Needs approval", "Failed", "Done", "Idle"]

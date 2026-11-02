@@ -27,7 +27,7 @@ export function installAppMenu(actions: MenuActions): void {
       { role: "hide" as const }, { role: "hideOthers" as const }, { role: "unhide" as const }, { type: "separator" as const }, { role: "quit" as const },
     ] }] : []),
     { label: "File", submenu: [
-      { label: "Open Pistead", accelerator: "CommandOrControl+N", click: actions.openMain },
+      { label: "Open Pikibun", accelerator: "CommandOrControl+N", click: actions.openMain },
       ...(mac ? [] : [{ type: "separator" as const }, ...appItems]),
       { type: "separator" }, mac ? { role: "close" } : { role: "quit" },
     ] },
@@ -57,11 +57,11 @@ export class HostTray {
   update(state: HostState, error: string | undefined): void {
     const stopped = state === "stopped";
     const status = `Host: ${error && stopped ? "Stopped (error)" : stateLabels[state]}`;
-    this.tray.setToolTip(`Pistead — ${status}`);
+    this.tray.setToolTip(`Pikibun — ${status}`);
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: status, enabled: false },
       { type: "separator" },
-      { label: "Open Pistead", click: this.actions.openMain },
+      { label: "Open Pikibun", click: this.actions.openMain },
       { label: `${this.actions.hostTitle}…`, click: this.actions.openHost },
       stopped ? { label: "Start Host", click: this.actions.startHost } : { label: "Stop Host", enabled: state !== "stopping", click: this.actions.stopHost },
       { type: "separator" },

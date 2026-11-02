@@ -1,4 +1,4 @@
--- pistead: foreign-keys-off
+-- pikibun: foreign-keys-off
 -- Accounts that sign in with a username and password (PASSWORD_AUTH=true), as `password:<username>`, next to GitHub's.
 -- SQLite cannot change a CHECK constraint in place, so users is rebuilt with the same rows. Every other table references
 -- it, so the runner applies this file with foreign keys off (the first line above) and checks them all before commit;

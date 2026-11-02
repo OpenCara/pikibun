@@ -1,7 +1,7 @@
 // Pure rules for which server the app may load and where its remote window may navigate; no Electron imports, so
 // tests run them directly.
 
-export const DEFAULT_SERVER = "https://pistead.com";
+export const DEFAULT_SERVER = "https://pikibun.com";
 /** GitHub OAuth runs in the app window; the server sends the browser there and GitHub sends it back. */
 export const GITHUB_ORIGIN = "https://github.com";
 const LOOPBACK_HOSTS: Record<string, true> = { localhost: true, "127.0.0.1": true };
@@ -10,9 +10,9 @@ const LOOPBACK_HOSTS: Record<string, true> = { localhost: true, "127.0.0.1": tru
 export function parseServerOrigin(input: string): { ok: true; origin: string } | { ok: false; error: string } {
   const value = input.trim();
   let url: URL;
-  try { url = new URL(value); } catch { return { ok: false, error: "Enter the server's address, for example https://pistead.com." }; }
+  try { url = new URL(value); } catch { return { ok: false, error: "Enter the server's address, for example https://pikibun.com." }; }
   if (url.username || url.password || url.search || url.hash || url.pathname !== "/" || /[\s\\]/.test(value)) {
-    return { ok: false, error: "Enter only the server's origin, without a path, for example https://pistead.com." };
+    return { ok: false, error: "Enter only the server's origin, without a path, for example https://pikibun.com." };
   }
   if (url.protocol === "https:") return { ok: true, origin: url.origin };
   if (url.protocol === "http:" && Object.hasOwn(LOOPBACK_HOSTS, url.hostname)) return { ok: true, origin: url.origin };

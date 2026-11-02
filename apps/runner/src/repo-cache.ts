@@ -59,7 +59,7 @@ export interface MirrorTarget {
    */
   refs?: ReadonlyMap<string, string>;
 }
-/** One cached repository as `pistead cache list` shows it. */
+/** One cached repository as `pikibun cache list` shows it. */
 export interface CachedRepository { directory: string; bytes: number; sessions: number; pins: number }
 
 export class RepositoryCacheError extends Error {
@@ -71,11 +71,11 @@ const RETRY_DELAYS_MS = [2_000, 10_000];
 const FETCH_TIMEOUT_MS = 60 * 60 * 1000;
 const GIT_TIMEOUT_MS = 60 * 60 * 1000;
 const LOCK_POLL_MS = 250;
-const LOCK_NAME = "pistead.lock";
+const LOCK_NAME = "pikibun.lock";
 /** Pin refs of sessions from before every session cloned; they are listed and kept, but no longer written. */
-const PIN_PREFIX = "refs/pistead/pins/";
+const PIN_PREFIX = "refs/pikibun/pins/";
 /** A clone session's keep ref: a commit whose parents are the branch tips it saw, so its borrowed objects stay. */
-const SESSION_PREFIX = "refs/pistead/sessions/";
+const SESSION_PREFIX = "refs/pikibun/sessions/";
 /** Parents per keep commit; more tips chain several, so no command line grows past the system's limit. */
 const KEEP_PARENTS = 500;
 
@@ -384,7 +384,7 @@ async function keep(git: CacheGit, sessionId: string, tips: readonly string[]): 
   let head: string | undefined;
   for (let index = 0; index < parents.length; index += KEEP_PARENTS) {
     const batch = [...(head ? [head] : []), ...parents.slice(index, index + KEEP_PARENTS)];
-    head = (await git.capture(["-c", "user.name=Pistead", "-c", "user.email=pistead@localhost", "commit-tree", tree,
+    head = (await git.capture(["-c", "user.name=Pikibun", "-c", "user.email=pikibun@localhost", "commit-tree", tree,
       ...batch.flatMap(id => ["-p", id]), "-m", "Objects a clone session borrows"])).trim();
     if (!OID.test(head)) throw new RepositoryCacheError("The session's keep ref could not be written");
   }

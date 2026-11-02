@@ -9,16 +9,16 @@ import { ConnectorSetupError } from "./protocol.js";
 import type { ResourceConfig } from "./resources.js";
 import { DEFAULT_WINDOWS_LIMITS, validWindowsLimits, windowsRuntimeDirectory, type SandboxBackendConfig } from "./sandbox-backend.js";
 
-const HELP = `Usage: pistead connect [--server ORIGIN --pairing-id ID [--force]]
+const HELP = `Usage: pikibun connect [--server ORIGIN --pairing-id ID [--force]]
 
-Connect this machine to Pistead as a host, using an outbound WebSocket only.
+Connect this machine to Pikibun as a host, using an outbound WebSocket only.
 
-First time: in Pistead, open Settings > Hosts > Pair a host and run the command it shows:
-  npx pistead@latest connect --server https://pistead.com --pairing-id PAIRING_ID
+First time: in Pikibun, open Settings > Hosts > Pair a host and run the command it shows:
+  npx pikibun@latest connect --server https://pikibun.com --pairing-id PAIRING_ID
 then type the pairing code at the hidden prompt; it is never accepted as an argument.
 Later runs need no options: the connector reuses its private saved pairing.
 
-Everything else about the host is configured in Pistead by its owner and admins
+Everything else about the host is configured in Pikibun by its owner and admins
 (Settings > Hosts > the host): its sharing (it stays private to you until you share it),
 who may run host commands, how long sandboxed commands may run, whether they get its GPU,
 whether pushes in your own sessions may use this machine's Git credentials, and its
@@ -27,9 +27,9 @@ changes when the connector next connects.
 
 Options:
   --server ORIGIN          HTTPS control-plane origin (first pairing only)
-  --pairing-id ID          One-use pairing ID from Pistead
+  --pairing-id ID          One-use pairing ID from Pikibun
   --force                  With --pairing-id, replace this machine's saved pairing; the
-                           old host stays in Pistead, offline, until you remove it there
+                           old host stays in Pikibun, offline, until you remove it there
   --unsafe-no-sandbox      Run agent work directly on this machine without isolation
                            (macOS, Windows, or Linux without bubblewrap); asks for confirmation
   --experimental-sandbox   macOS and native Windows: run sessions in this platform's own
@@ -39,7 +39,7 @@ Options:
   --help                   Show this help without reading Pi configuration
 
 This machine's own setup, when the defaults don't fit:
-  --state-dir PATH         Private connector state (default ~/.local/share/pistead/connector)
+  --state-dir PATH         Private connector state (default ~/.local/share/pikibun/connector)
   --pi-agent-dir PATH      Pi config/auth directory (default: Pi's own getAgentDir())
   --model PROVIDER/MODEL   Advertise this configured local model (repeatable); without it,
                            the models matched by enabledModels in Pi's settings.json are
@@ -176,13 +176,13 @@ export async function confirmUnsandboxed(): Promise<void> {
   }
 }
 
-/** Options that became host configuration in Pistead: still accepted, so existing service units keep starting, and ignored. */
+/** Options that became host configuration in Pikibun: still accepted, so existing service units keep starting, and ignored. */
 const MOVED_OPTIONS = ["git-credentials", "repo-cache", "repo-cache-scope"] as const;
 
 /** The notice for moved options someone still passes, or nothing. */
 export function movedOptionsNotice(given: readonly string[]): string {
   if (!given.length) return "";
-  return `${given.map(name => `--${name}`).join(", ")} ${given.length === 1 ? "is" : "are"} ignored: the host's owner sets ${given.length === 1 ? "it" : "them"} in Pistead now `
+  return `${given.map(name => `--${name}`).join(", ")} ${given.length === 1 ? "is" : "are"} ignored: the host's owner sets ${given.length === 1 ? "it" : "them"} in Pikibun now `
     + "(Settings > Hosts > this host > Configuration). A host that used them keeps them there.\n";
 }
 
@@ -213,14 +213,14 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const pairingId = values["pairing-id"];
   if (pairingId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pairingId)) {
     throw new ConnectorSetupError(/^[A-Za-z0-9_-]{43}$/.test(pairingId)
-      ? "That --pairing-id value looks like the single-use pairing code, not the pairing ID. Copy the command shown in Pistead (its --pairing-id looks like 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed) and type the code only at the hidden prompt. Create a new code: this one is no longer private."
-      : "--pairing-id must be the pairing ID shown in Pistead, e.g. 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed.");
+      ? "That --pairing-id value looks like the single-use pairing code, not the pairing ID. Copy the command shown in Pikibun (its --pairing-id looks like 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed) and type the code only at the hidden prompt. Create a new code: this one is no longer private."
+      : "--pairing-id must be the pairing ID shown in Pikibun, e.g. 1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed.");
   }
-  if (pairingId && !values.server) throw new ConnectorSetupError("First pairing requires --server, e.g. --server https://pistead.com.");
-  if (values.force && !pairingId) throw new ConnectorSetupError("--force replaces this machine's saved pairing, so it needs a new one: create a pairing code in Pistead and run its command with --force added.");
+  if (pairingId && !values.server) throw new ConnectorSetupError("First pairing requires --server, e.g. --server https://pikibun.com.");
+  if (values.force && !pairingId) throw new ConnectorSetupError("--force replaces this machine's saved pairing, so it needs a new one: create a pairing code in Pikibun and run its command with --force added.");
   if (values.server) {
     try { controlPlaneOrigin(values.server, values["allow-insecure-loopback"]); }
-    catch { throw new ConnectorSetupError("--server must be an HTTPS origin such as https://pistead.com."); }
+    catch { throw new ConnectorSetupError("--server must be an HTTPS origin such as https://pikibun.com."); }
   }
   const dataDir = values["state-dir"] ?? defaultStateDir();
   assertPrerequisites(await checkPrerequisites(unsandboxed, experimental ? { stateDir: dataDir } : undefined), unsandboxed,
@@ -237,14 +237,14 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   // --force never reads the saved pairing: it may be revoked, unreadable or bound to another server.
   const paired = !values.force && await savedPairing(dataDir, values["allow-insecure-loopback"]) !== undefined;
   if (!pairingId && !paired) {
-    throw new ConnectorSetupError("This machine is not paired yet. In Pistead, open Connections, create a pairing code, then run:\n  npx pistead@latest connect --server https://pistead.com --pairing-id <PAIRING_ID>");
+    throw new ConnectorSetupError("This machine is not paired yet. In Pikibun, open Connections, create a pairing code, then run:\n  npx pikibun@latest connect --server https://pikibun.com --pairing-id <PAIRING_ID>");
   }
   if (pairingId && paired) {
     throw new ConnectorSetupError("This machine is already paired. Add --force to replace that pairing with this new one, run without --pairing-id to keep using it, or use a separate --state-dir for a second connection.");
   }
   if (unsandboxed) await confirmUnsandboxed();
   const code = pairingId ? await promptPairingCode() : "";
-  if (pairingId && !code) throw new ConnectorSetupError("No pairing code was entered. Paste the single-use code shown in Pistead at the hidden prompt.");
+  if (pairingId && !code) throw new ConnectorSetupError("No pairing code was entered. Paste the single-use code shown in Pikibun at the hidden prompt.");
   const pairing = pairingId ? { id: pairingId, code } : undefined;
   const connector = createConnector({
     dataDir,
@@ -260,7 +260,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     ? "Running unsandboxed: approved commands execute directly on this machine.\n"
     : sandboxBackend ? `Experimental ${sandboxBackend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.\n`
     : "Sandbox capability is verified per session; production shell stays disabled without provisioned, verified limits.\n");
-  process.stderr.write("Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pistead: Settings > Hosts > this host.\n");
+  process.stderr.write("Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings > Hosts > this host.\n");
   const stopped = Promise.withResolvers<void>();
   const stop = () => { void connector.stop().then(() => stopped.resolve(), () => stopped.reject(new Error("Connector shutdown failed"))); };
   process.once("SIGINT", stop);
