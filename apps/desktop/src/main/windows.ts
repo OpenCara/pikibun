@@ -6,7 +6,8 @@ import { APP_HOST, APP_SCHEME } from "./requests.js";
 import type { Bounds, SettingsStore } from "./settings.js";
 
 // Two kinds of windows. Pikibun windows show a server's web app (the primary server, another one this computer connects
-// to, or Pikibun on this computer), with no preload and no Node, in their own persistent session; each stays on its one
+// to, or Pikibun on this computer), with no Node, in their own persistent session, and a preload exposing only the
+// desktop bridge its Settings page uses (remote-bridge.ts, checked by origin in the main process); each stays on its one
 // server, and links within it can open in a window of their own (a session beside the list, say). Local windows (This
 // Mac, Settings) show pages bundled with the app, served by the app's own scheme in the default session, with a preload
 // exposing only the typed bridge.
@@ -128,6 +129,8 @@ export interface RemoteWindowOptions {
   label?: () => string | undefined;
   /** A same-server link that asked for a new window. */
   openWindow(url: string): void;
+  /** The desktop bridge for the server's own Settings page (remote-bridge.ts). */
+  preload?: string;
 }
 
 function cascade(): Partial<Bounds> {
@@ -144,7 +147,8 @@ export function createRemoteWindow(options: RemoteWindowOptions): BrowserWindow 
     width: 1280, height: 860, minWidth: 420, minHeight: 480, title: "Pikibun", show: false,
     ...(options.icon ? { icon: options.icon } : {}),
     ...(settings ? visibleBounds(settings.get().windowBounds) : cascade()),
-    webPreferences: { partition: REMOTE_PARTITION, contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, spellcheck: true },
+    webPreferences: { partition: REMOTE_PARTITION, contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, spellcheck: true,
+      ...(options.preload ? { preload: options.preload } : {}) },
   });
   guardRemote(window.webContents, server, options.openWindow);
   editContextMenu(window, server, options.openWindow);

@@ -17,6 +17,7 @@ await Promise.all([
   build({ ...node, entryPoints: [join(root, "src/main/index.ts")], outfile: join(out, "main.js") }),
   // Sandboxed preloads can require only a few Electron modules, so everything else is bundled in.
   build({ ...node, entryPoints: [join(root, "src/preload/index.ts")], outfile: join(out, "preload.js") }),
+  build({ ...node, entryPoints: [join(root, "src/preload/remote.ts")], outfile: join(out, "remote-preload.js") }),
   build({
     // No source maps: the local scheme serves only the pages' own files.
     bundle: true, platform: "browser", format: "iife", target: "chrome140", logLevel: "info",

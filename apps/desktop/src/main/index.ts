@@ -4,14 +4,16 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { app, BrowserWindow, dialog, ipcMain, net, type IpcMainInvokeEvent } from "electron";
-import { channels, type HostsView, type Outcome, type SettingsView } from "../shared/bridge.js";
+import { channels, type HostsView, type LocalStartInput, type Outcome, type SettingsView } from "../shared/bridge.js";
+import { remoteChannels, type DesktopView } from "../shared/remote-bridge.js";
 import { githubLookup, resolveAdmins } from "./admins.js";
 import { HostController } from "./host-controller.js";
 import { HostProcess } from "./host-process.js";
 import { LocalServerController } from "./local-server.js";
 import { HostTray, installAppMenu, type MenuActions } from "./menu.js";
 import { DEFAULT_SERVER, parseServerOrigin } from "./origin.js";
-import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parseStartInput, parseString } from "./requests.js";
+import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseStartInput, parseString } from "./requests.js";
+import { remoteView } from "./remote-view.js";
 import { PRIMARY_CONNECTION, SettingsStore } from "./settings.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
 
@@ -61,6 +63,7 @@ function main(): void {
   const assets = join(appRoot, "assets");
   const icon = mac ? undefined : join(assets, "icon.png");
   const preload = join(__dirname, "preload.js");
+  const remotePreload = join(__dirname, "remote-preload.js");
   const settings = new SettingsStore(join(app.getPath("userData"), "settings.json"));
   serveLocalPages(join(__dirname, "renderer"));
 
@@ -143,7 +146,7 @@ function main(): void {
   /** Another Pikibun window on `server`: at `url` (a session, say), else the server's start page. */
   const newServerWindow = (server: string, url?: string) => {
     if (mac) void app.dock?.show();
-    const window = createRemoteWindow({ icon, server: () => server, start: url ?? server, label: label(() => server), openWindow: next => newServerWindow(server, next) });
+    const window = createRemoteWindow({ icon, preload: remotePreload, server: () => server, start: url ?? server, label: label(() => server), openWindow: next => newServerWindow(server, next) });
     serverWindows.set(window, server);
     window.on("closed", () => { serverWindows.delete(window); });
     return window;
@@ -152,7 +155,7 @@ function main(): void {
     if (mainWindow && !mainWindow.isDestroyed()) { showWindow(mainWindow); return; }
     if (mac) void app.dock?.show();
     mainWindow = createRemoteWindow({
-      settings, icon, server: activeServer, start: localServer.claimUrl ?? activeServer(), label: label(activeServer),
+      settings, icon, preload: remotePreload, server: activeServer, start: localServer.claimUrl ?? activeServer(), label: label(activeServer),
       openWindow: url => newServerWindow(activeServer(), url),
     });
     mainWindow.on("closed", () => { mainWindow = undefined; });
@@ -182,8 +185,16 @@ function main(): void {
     settingsWindow.on("closed", () => { settingsWindow = undefined; });
     void localServer.inspect();
   };
+  /** Settings › This Mac in the main window's own Settings page; the app's Settings window while it shows no server. */
+  const openDesktopSettings = () => {
+    openMain();
+    const window = mainWindow;
+    const shown = window && URL.parse(window.webContents.getURL())?.origin;
+    if (!window || shown !== activeServer()) { openSettings(); return; }
+    void window.loadURL(`${activeServer()}/#/settings/desktop`).catch(() => {});
+  };
   const actions: MenuActions = {
-    hostTitle, openMain, newWindow, openHost, openSettings,
+    hostTitle, openMain, newWindow, openHost, openSettings, openDesktopSettings,
     servers: () => [
       ...(localServer.origin ? [{ label: `${hostLabel(localServer.origin)} (${localServer.shared ? "shared from" : "on"} this computer)`, open: openMain }] : []),
       ...settings.get().connections.map(connection => ({ label: hostLabel(connection.server), open: () => openServer(connection.server) })),
@@ -211,7 +222,16 @@ function main(): void {
     const key = JSON.stringify(actions.servers().map(server => server.label));
     if (key !== menuKey) { menuKey = key; installAppMenu(actions); }
     if (hostWindow && !hostWindow.isDestroyed()) hostWindow.webContents.send(channels.hostUpdate, hostsView());
+    // Every Pikibun window showing one of the owner's servers keeps its Settings › This Mac current.
+    for (const window of [mainWindow, ...serverWindows.keys()]) {
+      if (!window || window.isDestroyed()) continue;
+      const origin = URL.parse(window.webContents.getURL())?.origin;
+      if (origin && knownServers().has(origin)) window.webContents.send(remoteChannels.update, desktopView(origin));
+    }
   };
+  const desktopView = (origin: string): DesktopView => remoteView({
+    title: hostTitle, origin, primaryServer: settings.server, defaultServer: DEFAULT_SERVER, hosts: hostsView(), local: localServer.view(),
+  });
   publish();
 
   const settingsView = (): SettingsView => ({ server: settings.server, defaultServer: DEFAULT_SERVER, local: localServer.view() });
@@ -260,48 +280,76 @@ function main(): void {
     const models = parseModels(call.models);
     return models.ok ? target.controller.setModels(models.value) : models;
   }));
-  handle(channels.hostAdd, "host.html", host, (payload): Outcome => {
+  // The changes both the app's own pages and the servers' Settings pages make.
+  /** Adds a server; `confirm` asks the owner first (a web page's request). */
+  const addServer = async (payload: unknown, confirm?: (origin: string) => Promise<boolean>): Promise<Outcome & { id?: string }> => {
     const input = parseString(payload, 2048);
     if (!input.ok) return refused;
     const origin = parseServerOrigin(input.value);
     if (!origin.ok) return origin;
+    if (settings.get().connections.some(connection => connection.server === origin.origin)) return { ok: false, error: `${origin.origin} is already in the list.` };
+    if (confirm && !await confirm(origin.origin)) return { ok: false, error: "Not added." };
     const id = randomBytes(6).toString("hex");
     const added = settings.addConnection(origin.origin, id);
     if (!added.ok) return added;
     const created = createHost(id);
     void created.controller.refresh();
     publish();
-    return { ok: true };
-  });
-  handle(channels.hostRemove, "host.html", host, forConnection([], async target => {
-    if (target.controller.id === PRIMARY_CONNECTION) return { ok: false as const, error: "The primary server stays: change it in Settings instead." };
+    return { ok: true, id };
+  };
+  const removeServer = async (target: Host): Promise<Outcome> => {
+    if (target.controller.id === PRIMARY_CONNECTION) return { ok: false, error: "The primary server stays: change it in Settings instead." };
     const stopped = await target.controller.stop();
     if (!stopped.ok) return stopped;
     await target.process.shutdown(10_000);
     settings.removeConnection(target.controller.id);
     hosts.delete(target.controller.id);
     publish();
-    return { ok: true as const };
-  }));
-  handle(channels.hostOpenAtLogin, "host.html", host, (payload): Outcome => {
+    return { ok: true };
+  };
+  const setOpenAtLogin = (payload: unknown): Outcome => {
     const enabled = parseBoolean(payload);
     if (!enabled.ok) return refused;
     if (!loginItemSupported) return { ok: false, error: "Open at login is not available on this system." };
     app.setLoginItemSettings({ openAtLogin: enabled.value });
     publish();
     return app.getLoginItemSettings().openAtLogin === enabled.value ? { ok: true } : { ok: false, error: "The system did not accept the login item. Check System Settings › General › Login Items." };
-  });
+  };
+  const startLocal = async (input: LocalStartInput): Promise<Outcome> => {
+    if (input.mode === "local") return localServer.start(input);
+    // GitHub logins become the user IDs the server lists, before anything starts.
+    const admins = await resolveAdmins(input.shared.admins, githubLookup((url, init) => net.fetch(url, init)));
+    if (!admins.ok) return admins;
+    return localServer.start({ mode: "shared", shared: { ...input.shared, admins: admins.admins } });
+  };
+  /** The primary server, checked; `confirm` asks the owner first (a web page's request). */
+  const setPrimaryServer = async (payload: unknown, confirm?: (origin: string) => Promise<boolean>): Promise<Outcome> => {
+    const input = parseString(payload, 2048);
+    if (!input.ok) return refused;
+    const origin = parseServerOrigin(input.value);
+    if (!origin.ok) return origin;
+    if (origin.origin === settings.server) return { ok: true };
+    if (settings.get().connections.some(connection => connection.server === origin.origin)) {
+      return { ok: false, error: `${origin.origin} is already one of ${hostTitle}'s servers. Remove it there first.` };
+    }
+    if (confirm && !await confirm(origin.origin)) return { ok: false, error: "Not changed." };
+    settings.updateConnection(PRIMARY_CONNECTION, { server: origin.origin });
+    shown = activeServer();
+    if (mainWindow && !mainWindow.isDestroyed() && !localServer.origin) void mainWindow.loadURL(origin.origin).catch(() => {});
+    void primaryHost().refresh();
+    publish();
+    return { ok: true };
+  };
+
+  handle(channels.hostAdd, "host.html", host, payload => addServer(payload));
+  handle(channels.hostRemove, "host.html", host, forConnection([], removeServer));
+  handle(channels.hostOpenAtLogin, "host.html", host, setOpenAtLogin);
 
   const settingsPage = () => settingsWindow;
   handle(channels.settingsView, "settings.html", settingsPage, settingsView);
   handle(channels.localStart, "settings.html", settingsPage, async (payload): Promise<Outcome> => {
     const input = parseLocalStartInput(payload);
-    if (!input.ok) return { ok: false, error: input.error };
-    if (input.value.mode === "local") return localServer.start(input.value);
-    // GitHub logins become the user IDs the server lists, before anything starts.
-    const admins = await resolveAdmins(input.value.shared.admins, githubLookup((url, init) => net.fetch(url, init)));
-    if (!admins.ok) return admins;
-    return localServer.start({ mode: "shared", shared: { ...input.value.shared, admins: admins.admins } });
+    return input.ok ? startLocal(input.value) : { ok: false, error: input.error };
   });
   handle(channels.localStop, "settings.html", settingsPage, () => localServer.stop());
   handle(channels.localCreateAdmin, "settings.html", settingsPage, payload => {
@@ -313,20 +361,80 @@ function main(): void {
     openMain();
     return { ok: true };
   });
-  handle(channels.settingsServer, "settings.html", settingsPage, (payload): Outcome => {
-    const input = parseString(payload, 2048);
-    if (!input.ok) return refused;
-    const origin = parseServerOrigin(input.value);
-    if (!origin.ok) return origin;
-    if (origin.origin === settings.server) return { ok: true };
-    if (settings.get().connections.some(connection => connection.server === origin.origin)) {
-      return { ok: false, error: `${origin.origin} is already one of ${hostTitle}'s servers. Remove it there first.` };
+  handle(channels.settingsServer, "settings.html", settingsPage, payload => setPrimaryServer(payload));
+
+  // Settings › This Mac in the servers' own web app (remote-bridge.ts). Calls are honored only from the main frame of a
+  // Pikibun window while it shows one of the owner's servers; changes to which servers this computer serves or runs
+  // ask the owner in a native dialog naming the page's server first. Secrets never come this way.
+  const handleRemote = <T>(channel: string, run: (origin: string, window: BrowserWindow, payload: unknown) => T) => {
+    ipcMain.handle(channel, (event: IpcMainInvokeEvent, payload: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      const frame = event.senderFrame;
+      const origin = frame ? URL.parse(frame.url)?.origin : undefined;
+      if (!window || window.isDestroyed() || (window !== mainWindow && !serverWindows.has(window)) || !frame || frame !== event.sender.mainFrame
+        || !origin || !knownServers().has(origin)) {
+        throw new Error("Refused: not one of Pikibun's servers");
+      }
+      return run(origin, window, payload);
+    });
+  };
+  const ask = (window: BrowserWindow, origin: string, message: string, detail: string, allow: string) => confirm(window, {
+    type: "question", buttons: ["Cancel", allow], defaultId: 0, cancelId: 0, noLink: true,
+    title: "Pikibun", message, detail: `Asked by Settings › ${hostTitle} at ${hostLabel(origin)}. ${detail}`,
+  });
+  handleRemote(remoteChannels.view, origin => desktopView(origin));
+  handleRemote(remoteChannels.hostRefresh, (_origin, _window, payload) => forConnection([], async target => { await target.controller.refresh(); })(payload));
+  handleRemote(remoteChannels.hostStart, (_origin, _window, payload) => forConnection([], target => target.controller.start({ replacePairing: false }))(payload));
+  handleRemote(remoteChannels.hostStop, (_origin, _window, payload) => forConnection([], target => target.controller.stop())(payload));
+  handleRemote(remoteChannels.hostOpen, (_origin, _window, payload) => forConnection([], target => { openServer(target.controller.server); return { ok: true as const }; })(payload));
+  handleRemote(remoteChannels.hostModels, (_origin, _window, payload) => forConnection(["models"], (target, call) => {
+    const models = parseModels(call.models);
+    return models.ok ? target.controller.setModels(models.value) : models;
+  })(payload));
+  // A page pairs only the connection to its own server, with a pairing it just made for its signed-in user.
+  handleRemote(remoteChannels.hostPairHere, async (origin, window, payload): Promise<Outcome> => {
+    const input = parsePairHere(payload);
+    if (!input.ok) return { ok: false, error: input.error };
+    if (localServer.origin === origin) return { ok: false, error: `Pikibun on this computer pairs ${mac ? "this Mac" : "this computer"} by itself once you have signed in.` };
+    let connection = settings.get().connections.find(entry => entry.server === origin);
+    if (!connection) {
+      const added = await addServer(origin, server => ask(window, origin, `Run sessions for ${hostLabel(server)} on ${mac ? "this Mac" : "this computer"}?`,
+        `${server} is added to ${hostTitle}'s servers, and this computer becomes one of its hosts.`, "Add and Pair"));
+      if (!added.ok) return added;
+      connection = settings.connection(added.id!);
     }
-    settings.updateConnection(PRIMARY_CONNECTION, { server: origin.origin });
-    shown = activeServer();
-    if (mainWindow && !mainWindow.isDestroyed() && !localServer.origin) void mainWindow.loadURL(origin.origin).catch(() => {});
-    void primaryHost().refresh();
-    publish();
+    const target = connection && hosts.get(connection.id);
+    return target ? target.controller.start(input.value) : gone;
+  });
+  handleRemote(remoteChannels.hostAdd, (origin, window, payload) => addServer(payload, server => ask(window, origin, `Add ${hostLabel(server)} to ${hostTitle}'s servers?`,
+    `${mac ? "This Mac" : "This computer"} can then pair with ${server} and run sessions for it.`, "Add Server")));
+  handleRemote(remoteChannels.hostRemove, (origin, window, payload) => forConnection([], async target => {
+    if (!await ask(window, origin, `Remove ${hostLabel(target.controller.server)} from ${hostTitle}'s servers?`,
+      "Its host stops, and this computer stays paired in its state directory until you remove the host in that Pikibun.", "Remove")) return { ok: false as const, error: "Not removed." };
+    return removeServer(target);
+  })(payload));
+  handleRemote(remoteChannels.openAtLogin, (_origin, _window, payload) => setOpenAtLogin(payload));
+  handleRemote(remoteChannels.server, (origin, window, payload) => setPrimaryServer(payload, server => ask(window, origin, `Open ${hostLabel(server)} in the Pikibun window?`,
+    `${server} becomes the primary server: the Pikibun window opens it, and ${mac ? "this Mac" : "this computer"}'s primary host pairs with it.`, "Change Server")));
+  handleRemote(remoteChannels.localStart, async (origin, window, payload): Promise<Outcome> => {
+    const input = parseRemoteLocalStart(payload);
+    if (!input.ok) return { ok: false, error: input.error };
+    const shared = input.value.mode === "shared";
+    const allowed = await ask(window, origin, shared ? `Share Pikibun from ${mac ? "this Mac" : "this computer"}?` : `Run Pikibun on ${mac ? "this Mac" : "this computer"}?`,
+      shared ? `It serves others at ${input.value.mode === "shared" ? input.value.shared.origin : ""}, listening ${input.value.mode === "shared" && input.value.shared.listen === "all" ? "on every network interface" : "on this computer"}.`
+        : "It runs for you alone, and the Pikibun window shows it instead of this server.", shared ? "Share" : "Run");
+    return allowed ? startLocal(input.value) : { ok: false, error: "Not started." };
+  });
+  handleRemote(remoteChannels.localStop, async (origin, window): Promise<Outcome> => {
+    if (!await ask(window, origin, `Stop Pikibun on ${mac ? "this Mac" : "this computer"}?`, localServer.shared ? "Everyone signed in to it loses it until it runs again." : "The Pikibun window goes back to the primary server.", "Stop")) {
+      return { ok: false, error: "Not stopped." };
+    }
+    return localServer.stop();
+  });
+  handleRemote(remoteChannels.openWindow, (_origin, _window, payload): Outcome => {
+    if (payload === "host") openHost();
+    else if (payload === "settings") openSettings();
+    else return refused;
     return { ok: true };
   });
 

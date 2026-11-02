@@ -15,7 +15,10 @@ export interface MenuActions {
   /** Another window of the focused Pikibun window's server, else of the primary one. */
   newWindow(): void;
   openHost(): void;
+  /** The app's own Settings window: secrets, and settings while no server shows. */
   openSettings(): void;
+  /** Settings › This Mac in the server's own Settings page. */
+  openDesktopSettings(): void;
   servers(): ServerEntry[];
   hosts(): HostEntry[];
 }
@@ -27,7 +30,8 @@ export function installAppMenu(actions: MenuActions): void {
   const mac = process.platform === "darwin";
   const ellipsis = `${actions.hostTitle}…`;
   const appItems: MenuItemConstructorOptions[] = [
-    { label: "Settings…", accelerator: "CommandOrControl+,", click: actions.openSettings },
+    { label: "Settings…", accelerator: "CommandOrControl+,", click: actions.openDesktopSettings },
+    { label: "App Settings…", click: actions.openSettings },
     { label: ellipsis, click: actions.openHost },
   ];
   const servers = actions.servers();

@@ -13,12 +13,25 @@ An Electron app with three jobs, each the full version of what the command line 
   loopback for your GitHub account alone, or **Share with Others**, as `pikibun serve --share`, a full multi-user server
   at a public HTTPS address that others sign in to and pair their own hosts with.
 
+Its settings live in the web app's own Settings page: in a Pikibun window, **Settings → This Mac** (⌘, opens it)
+shows every server and its host, pairs this computer with the server the page belongs to in one step (also from **Hosts
+→ Pair a host**), and runs or shares Pikibun on this computer. The app's own This Mac and Settings windows (**App
+Settings…**) remain for what a web page never gets: GitHub OAuth apps' secrets, password administrators, pairing with a
+code for any server, and settings while no server answers.
+
 macOS builds ship today; the Linux and Windows targets are declared for later.
 
 - Pikibun windows load their server with no preload and no Node, in their own persistent session. Each navigates only
   within its server and GitHub (for sign-in); other links open in your default browser. The main window follows
   Pikibun on this computer while it runs, else shows the primary server (Settings); others stay on the server they
   opened.
+- Pikibun windows have a preload of their own (`src/preload/remote.ts`) exposing `window.pikibunDesktop`
+  (`src/shared/remote-bridge.ts`) for Settings → This Mac. The main process honors its calls only from the main frame
+  of a Pikibun window showing one of the owner's servers (a connection, or Pikibun on this computer), validates every
+  payload, and asks in a native dialog naming the page's server before adding, removing or changing servers and before
+  starting or stopping Pikibun on this computer. A page pairs only the connection to its own server, with a pairing it
+  just created for its signed-in user; it sees other servers' hosts but not their activity logs; and it can't send
+  secrets, which only the app's own Settings window takes.
 - This Mac and Settings are pages bundled with the app (served by its own `pikibun-app:` scheme under a strict CSP).
   Their preload exposes a small typed bridge (`src/shared/bridge.ts`); the main process checks the sender and
   validates every call.

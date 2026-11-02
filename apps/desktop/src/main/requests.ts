@@ -89,6 +89,21 @@ export function parseLocalStartInput(value: unknown): Parsed<LocalStartInput> {
   return { ok: true, value: { mode: "local", ...(github.value ? { github: github.value } : {}) } };
 }
 
+/** The web page's start of Pikibun on this computer: never with secrets, which only the app's own Settings window takes. */
+export function parseRemoteLocalStart(value: unknown): Parsed<LocalStartInput> {
+  if (isRecord(value) && (value.github !== undefined || (isRecord(value.shared) && value.shared.github !== undefined))) {
+    return { ok: false, error: "Enter GitHub OAuth apps' secrets in Pikibun's own Settings window, not in a web page." };
+  }
+  return parseLocalStartInput(value);
+}
+
+/** "Pair this computer" from the web page: a pairing its server just created, and whether to replace the saved one. */
+export function parsePairHere(value: unknown): Parsed<StartInput & { pairing: { id: string; code: string } }> {
+  if (!isRecord(value) || !onlyKeys(value, ["pairing", "replacePairing"]) || value.pairing === undefined) return { ok: false, error: "Invalid request." };
+  const parsed = parseStartInput(value);
+  return parsed.ok && parsed.value.pairing ? { ok: true, value: { ...parsed.value, pairing: parsed.value.pairing } } : { ok: false, error: parsed.ok ? "Invalid request." : parsed.error };
+}
+
 export function parseCreateAdmin(value: unknown): Parsed<{ username: string; password: string }> {
   if (!isRecord(value) || !onlyKeys(value, ["username", "password"]) || typeof value.username !== "string" || typeof value.password !== "string"
     || value.username.length > 100 || value.password.length > 1024) return { ok: false, error: "Invalid request." };
