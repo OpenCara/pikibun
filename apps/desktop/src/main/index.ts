@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, shell, type IpcMainInvokeEven
 import { channels, type HostsView, type LocalStartInput, type Outcome, type SettingsView } from "../shared/bridge.js";
 import { remoteChannels, type DesktopView, type UploadOutcome } from "../shared/remote-bridge.js";
 import { githubLookup, resolveAdmins } from "./admins.js";
+import { connectCommand } from "./connect-command.js";
 import { HostController } from "./host-controller.js";
 import { HostLaunchError, HostProcess, stdioHost } from "./host-process.js";
 import { LocalServerController } from "./local-server.js";
@@ -18,7 +19,7 @@ import { PRIMARY_CONNECTION, SettingsStore, type SandboxChoice } from "./setting
 import { UpdateChecker } from "./updates.js";
 import { utilityHost } from "./utility-host.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
-import { chooseDistro, wslCommand, wslExe, wslHostArgs, wslStateDir, wslStatus } from "./wsl.js";
+import { chooseDistro, wslExe, wslHostArgs, wslStateDir, wslStatus } from "./wsl.js";
 import type { WslStatus } from "../shared/bridge.js";
 
 const mac = process.platform === "darwin";
@@ -45,17 +46,11 @@ const smokeDirectory = process.env.PIKIBUN_DESKTOP_SMOKE || undefined;
  */
 const connectionsDirectory = stateDir ? join(dirname(stateDir), "connections") : join(homedir(), ".local", "share", "pikibun", "connections");
 const connectorStateDir = (id: string): string | undefined => id === PRIMARY_CONNECTION ? stateDir : join(connectionsDirectory, id);
-const quote = (value: string) => /^[A-Za-z0-9_./:@~-]+$/.test(value) ? value : windowsHost ? `"${value}"` : `'${value.replace(/'/g, "'\\''")}'`;
 /** A connection's sandbox on Windows, WSL2 unless the owner chose native Windows; undefined elsewhere. */
 const sandboxOf = (choice: SandboxChoice | undefined): SandboxChoice | undefined => windowsHost ? choice ?? { sandbox: "wsl2" } : undefined;
-const connectCommand = (id: string, server: string, sandbox: SandboxChoice | undefined) => {
-  if (sandbox?.sandbox === "wsl2") return wslCommand(sandbox.distro, server, wslStateDir(id, id === PRIMARY_CONNECTION), quote);
-  const directory = connectorStateDir(id);
-  const home = homedir();
-  const separator = windowsHost ? "\\" : "/";
-  const shown = directory?.startsWith(`${home}${separator}`) ? `~${directory.slice(home.length)}` : directory;
-  return `npx pikibun@latest connect --server ${quote(server)}${sandbox ? " --experimental-sandbox" : ""}${shown ? ` --state-dir ${quote(shown)}` : ""}`;
-};
+const connectCommandFor = (id: string, server: string, sandbox: SandboxChoice | undefined) => connectCommand({
+  server, sandbox, stateDir: connectorStateDir(id), wslStateDir: wslStateDir(id, id === PRIMARY_CONNECTION), home: homedir(), windows: windowsHost,
+});
 const hostLabel = (origin: string) => URL.parse(origin)?.host ?? origin;
 
 app.setName("Pikibun");
@@ -139,7 +134,7 @@ function main(): void {
     const directory = connectorStateDir(id);
     const sandbox = () => sandboxOf(settings.connection(id)?.windows);
     const controller = new HostController({
-      id, settings, fixtureModels, command: server => connectCommand(id, server, sandbox()),
+      id, settings, fixtureModels, command: server => connectCommandFor(id, server, sandbox()),
       ...(windowsHost ? { sandbox } : {}),
       confirmUnsandboxed: (warning, server, missing) => confirm(hostWindow, {
         type: "warning", buttons: ["Cancel", "Run Unsandboxed"], defaultId: 0, cancelId: 0, noLink: true,
@@ -476,6 +471,8 @@ function main(): void {
   handleRemote(remoteChannels.hostSandbox, (origin, window, payload) => forConnection(["choice"], async (target, call) => {
     const choice = parseSandbox(call.choice);
     if (!choice.ok) return choice;
+    const refusal = target.controller.sandboxRefusal();
+    if (refusal) return { ok: false as const, error: refusal };
     const current = target.controller.view().windows;
     if (current?.sandbox === choice.value.sandbox && (choice.value.sandbox !== "wsl2" || current.distro === choice.value.distro)) return { ok: true as const };
     const where = choice.value.sandbox === "native" ? "natively on Windows" : `in WSL2${choice.value.distro ? ` (${choice.value.distro})` : ""}`;

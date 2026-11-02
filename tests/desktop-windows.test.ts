@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HostInspection } from "../apps/runner/src/desktop-protocol.js";
 import { HostController } from "../apps/desktop/src/main/host-controller.js";
-import { HostLaunchError, HostProcess, stdioHost } from "../apps/desktop/src/main/host-process.js";
+import { connectCommand } from "../apps/desktop/src/main/connect-command.js";
+import { HostLaunchError, HostProcess, stdioHost, type HostChild } from "../apps/desktop/src/main/host-process.js";
 import { parseConnectionCall, parseSandbox } from "../apps/desktop/src/main/requests.js";
 import { remoteView } from "../apps/desktop/src/main/remote-view.js";
 import { parseSettings, SettingsStore } from "../apps/desktop/src/main/settings.js";
@@ -96,7 +97,9 @@ test("a Windows host's sandbox changes only while it is stopped, and native Wind
   controller.handleStatus("connected", { server: settings.server, unsandboxed: false, sandbox: "windows", connectorId: "c1" });
   assert.deepEqual(controller.view().running, { server: settings.server, unsandboxed: false, sandbox: "windows", connectorId: "c1" });
   assert.match((await controller.setSandbox({ sandbox: "native" }) as { error: string }).error, /Stop the host first/);
+  assert.match(controller.sandboxRefusal() ?? "", /Stop the host first/, "a page's change is refused before the owner is asked");
   controller.handleStatus("stopped", {});
+  assert.equal(controller.sandboxRefusal(), undefined);
 
   // Stopped: the choice is saved, resuming at launch ends, and the idle host process of the old choice is ended.
   settings.updateConnection("default", { resumeHost: { unsandboxedConsent: true } });
@@ -123,6 +126,71 @@ test("a Windows host's sandbox changes only while it is stopped, and native Wind
   const mac = new HostController({ id: "default", settings, fixtureModels: false, command: () => "", confirmUnsandboxed: async () => false });
   assert.equal(mac.view().windows, undefined);
   assert.match((await mac.setSandbox({ sandbox: "native" }) as { error: string }).error, /Only Windows/);
+  assert.match(mac.sandboxRefusal() ?? "", /Only Windows/);
+});
+
+test("the same host in a terminal: WSL2's in its distribution, native Windows' with its whole state path, which cmd and PowerShell take as is", () => {
+  const base = { server: "https://pikibun.com", wslStateDir: "~/.local/share/pikibun/connections/0123456789ab" };
+  assert.equal(connectCommand({ ...base, stateDir: "C:\\Users\\Ada Lovelace\\.local\\share\\pikibun\\connections\\0123456789ab", sandbox: { sandbox: "native" }, home: "C:\\Users\\Ada Lovelace", windows: true }),
+    'npx pikibun@latest connect --server https://pikibun.com --experimental-sandbox --state-dir "C:\\Users\\Ada Lovelace\\.local\\share\\pikibun\\connections\\0123456789ab"');
+  assert.equal(connectCommand({ ...base, stateDir: undefined, sandbox: { sandbox: "native" }, home: "C:\\Users\\ada", windows: true }),
+    "npx pikibun@latest connect --server https://pikibun.com --experimental-sandbox");
+  assert.equal(connectCommand({ ...base, stateDir: "C:\\Users\\ada\\x", sandbox: { sandbox: "wsl2", distro: "Ubuntu" }, home: "C:\\Users\\ada", windows: true }),
+    "wsl -d Ubuntu -- npx pikibun@latest connect --server https://pikibun.com --state-dir ~/.local/share/pikibun/connections/0123456789ab");
+  // macOS and Linux keep ~, which their shells expand.
+  assert.equal(connectCommand({ ...base, stateDir: "/Users/ada/.local/share/pikibun/connections/0123456789ab", sandbox: undefined, home: "/Users/ada", windows: false }),
+    "npx pikibun@latest connect --server https://pikibun.com --state-dir ~/.local/share/pikibun/connections/0123456789ab");
+});
+
+/** A host process that answers like the real one, for HostProcess's own logic. */
+function fakeChild(name: string, log: string[]): HostChild {
+  const messages: ((value: unknown) => void)[] = [];
+  const exits: ((code: number) => void)[] = [];
+  const exit = () => { for (const listener of exits.splice(0)) listener(0); };
+  return {
+    pid: 1,
+    postMessage: message => {
+      const request = message as { id: number; type: string };
+      log.push(`${name} ${request.type}`);
+      queueMicrotask(() => { for (const listener of messages) listener({ type: "result", id: request.id, ok: true }); });
+    },
+    // Ready once someone listens, as a real host is ready only after HostProcess subscribed.
+    onMessage: listener => { messages.push(listener); queueMicrotask(() => listener({ type: "ready" })); },
+    onOutput: () => {},
+    onError: () => {},
+    onceExit: listener => { exits.push(listener); },
+    terminate: () => { log.push(`${name} ended`); exit(); },
+    kill: () => { log.push(`${name} killed`); exit(); },
+  };
+}
+
+test("a launch under way when the sandbox changes is never used: its process ends, and the waiting requests get one as now configured", async () => {
+  const log: string[] = [];
+  let choice = "wsl2:Ubuntu";
+  const pending: { resolve: (child: HostChild) => void; choice: string }[] = [];
+  // Launches wait, as a WSL2 one does while wsl.exe lists the distributions; each reads the choice when it begins.
+  const host = new HostProcess({
+    launch: () => new Promise<HostChild>(resolve => { pending.push({ resolve, choice }); }),
+    onEvent: () => {}, onOutput: () => {}, onExit: () => {},
+  });
+  const first = host.request({ type: "inspect" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pending.length, 1);
+  // The owner switches the distribution meanwhile: the controller shuts the host down, then inspects again.
+  choice = "wsl2:Fedora";
+  await host.shutdown(1000);
+  const second = host.request({ type: "inspect" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pending.length, 2);
+  assert.deepEqual(pending.map(entry => entry.choice), ["wsl2:Ubuntu", "wsl2:Fedora"]);
+  pending[0]!.resolve(fakeChild("Ubuntu", log));
+  pending[1]!.resolve(fakeChild("Fedora", log));
+  assert.equal((await first).ok, true);
+  assert.equal((await second).ok, true);
+  assert.deepEqual(log, ["Ubuntu killed", "Fedora inspect", "Fedora inspect"], "the old choice's process never served a request");
+  assert.equal(host.running, true);
+  await host.shutdown(1000);
+  assert.deepEqual(log.slice(-2), ["Fedora stop", "Fedora ended"]);
 });
 
 test("another server's page sees a host's sandbox, but still not its connector id", () => {
@@ -167,6 +235,19 @@ test("a launcher's setup problem, or one that can't launch at all, is shown as i
     onEvent: () => {}, onOutput: () => {}, onExit: () => {},
   });
   assert.deepEqual(await setup.request({ type: "inspect" }), { type: "result", id: 0, ok: false, error: { code: "unsupported", message: "Node.js 24 or newer isn't installed in WSL2 (Ubuntu)." } });
+  // A process's last words without a line feed are kept too, and a setup line among them.
+  const output: string[] = [];
+  const crashed = new HostProcess({
+    launch: () => stdioHost("/bin/sh", ["-c", "printf 'library warning\\nfatal: out of memory' >&2; exit 1"]),
+    onEvent: () => {}, onOutput: line => output.push(line), onExit: () => {},
+  });
+  assert.equal((await crashed.request({ type: "inspect" })).ok, false);
+  assert.deepEqual(output, ["library warning", "fatal: out of memory"]);
+  const lastWords = new HostProcess({
+    launch: () => stdioHost("/bin/sh", ["-c", "printf 'pikibun-setup: Ubuntu runs on WSL 1.' >&2; exit 78"]),
+    onEvent: () => {}, onOutput: () => {}, onExit: () => {},
+  });
+  assert.deepEqual(await lastWords.request({ type: "inspect" }), { type: "result", id: 0, ok: false, error: { code: "unsupported", message: "Ubuntu runs on WSL 1." } });
   const missing = new HostProcess({ launch: () => { throw new HostLaunchError("WSL2 isn't set up on this computer."); }, onEvent: () => {}, onOutput: () => {}, onExit: () => {} });
   assert.deepEqual(await missing.request({ type: "inspect" }), { type: "result", id: 0, ok: false, error: { code: "unsupported", message: "WSL2 isn't set up on this computer." } });
   const absent = new HostProcess({ launch: () => stdioHost("/nonexistent/wsl.exe", []), onEvent: () => {}, onOutput: () => {}, onExit: () => {} });

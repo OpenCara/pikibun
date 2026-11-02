@@ -49,13 +49,19 @@ function SandboxField({ connection, view, bridge }: { connection: HostView; view
   const distros = view.hosts.wsl?.distros ?? [];
   const fallback = distros.find(distro => distro.default && distro.version === 2) ?? distros.find(distro => distro.version === 2);
   const chosen = choice.sandbox === "wsl2" ? choice.distro : undefined;
-  const change = (next: { sandbox: "wsl2"; distro?: string } | { sandbox: "native" }) => void action.run(() => check(setSandbox(connection.id, next)));
+  // Only while the host is stopped, as the app requires: a running host's buttons ask nothing.
+  const change = (next: { sandbox: "wsl2"; distro?: string } | { sandbox: "native" }) => {
+    if (!stopped || action.busy) return;
+    void action.run(() => check(setSandbox(connection.id, next)));
+  };
   return <Field label="Sandbox" hint={choice.sandbox === "wsl2"
     ? "Sessions run in WSL2's bubblewrap sandbox, with Node.js, Pi's models and the host's pairing inside that distribution, as `pikibun connect` run there does."
     : "Sessions run in Windows' own sandbox, which is experimental (Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32 and Microsoft's MXC SDK), or without one, after your consent, while it isn't ready. Pi's models and the host's pairing are your Windows profile's."}>
     <div className="stack">
-      <SegmentedControl label="Sandbox" value={choice.sandbox} onChange={sandbox => change(sandbox === "native" ? { sandbox: "native" } : { sandbox: "wsl2" })}
-        options={[{ value: "wsl2", label: "WSL2", hint: "bubblewrap in a WSL2 distribution" }, { value: "native", label: "Native Windows", hint: "Windows' own sandbox (experimental)" }]} />
+      <fieldset className="stack" disabled={action.busy || !stopped}>
+        <SegmentedControl label="Sandbox" value={choice.sandbox} onChange={sandbox => change(sandbox === "native" ? { sandbox: "native" } : { sandbox: "wsl2" })}
+          options={[{ value: "wsl2", label: "WSL2", hint: "bubblewrap in a WSL2 distribution" }, { value: "native", label: "Native Windows", hint: "Windows' own sandbox (experimental)" }]} />
+      </fieldset>
       {choice.sandbox === "wsl2" && <select className="select" aria-label="WSL distribution" value={chosen ?? ""} disabled={action.busy || !stopped}
         onChange={event => change(event.target.value ? { sandbox: "wsl2", distro: event.target.value } : { sandbox: "wsl2" })}>
         <option value="">{fallback ? `WSL's default (${fallback.name})` : "WSL's default"}</option>

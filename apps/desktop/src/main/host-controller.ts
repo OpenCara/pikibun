@@ -217,16 +217,23 @@ export class HostController {
     if (!outcome.ok) this.setResume(undefined);
   }
 
+  /** Why this host's sandbox can't change now, if it can't: checked before anyone is asked to confirm a change. */
+  sandboxRefusal(): string | undefined {
+    if (!this.connection) return "That server is no longer in the list.";
+    if (!this.options.sandbox) return "Only Windows offers a choice of sandbox.";
+    if (this.state !== "stopped") return "Stop the host first: its sandbox changes from its next start.";
+    return undefined;
+  }
+
   /**
    * Windows: where this host's sessions run from its next start, WSL2 or native Windows. Only while it is stopped: the
    * two are different host processes with different state (and pairings). The idle host process of the old choice
    * ends, so the next inspection launches the new one; resuming at launch ends too, since its consent was for the old.
    */
   async setSandbox(choice: SandboxChoice): Promise<Outcome> {
-    if (!this.connection) return { ok: false, error: "That server is no longer in the list." };
-    if (!this.options.sandbox) return { ok: false, error: "Only Windows offers a choice of sandbox." };
-    if (this.state !== "stopped") return { ok: false, error: "Stop the host first: its sandbox changes from its next start." };
-    const current = this.options.sandbox();
+    const refusal = this.sandboxRefusal();
+    if (refusal) return { ok: false, error: refusal };
+    const current = this.options.sandbox!();
     if (current && current.sandbox === choice.sandbox && (current.sandbox !== "wsl2" || choice.sandbox !== "wsl2" || current.distro === choice.distro)) return { ok: true };
     this.options.settings.updateConnection(this.options.id, { windows: choice, resumeHost: undefined });
     this.inspection = undefined;

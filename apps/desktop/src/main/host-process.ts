@@ -19,6 +19,9 @@ export const SETUP_PREFIX = "pikibun-setup: ";
 /** Why a host could not be launched at all (WSL2 missing, say): its message is shown to the owner as is. */
 export class HostLaunchError extends Error {}
 
+/** A launch a shutdown overtook (its sandbox changed meanwhile, say): its process is ended and a fresh one launched. */
+class StaleLaunch extends Error {}
+
 /** One running host process, however it was started. */
 export interface HostChild {
   readonly pid: number | undefined;
@@ -35,7 +38,10 @@ export interface HostChild {
   kill(): void;
 }
 
-/** Splits a stream into lines, handing each complete one (at most 1000 characters) to `line`. */
+/**
+ * Splits a stream into lines, handing each one to `line`; a last line without a line feed (a crashing process's final
+ * words, say) is handed over when the stream ends.
+ */
 export function lines(stream: NodeJS.ReadableStream | null | undefined, line: (text: string) => void, limit = 4096): void {
   let buffered = "";
   stream?.setEncoding("utf8");
@@ -45,6 +51,11 @@ export function lines(stream: NodeJS.ReadableStream | null | undefined, line: (t
     buffered = parts.pop()!;
     if (buffered.length > limit) buffered = buffered.slice(-limit);
     for (const part of parts) line(part.replace(/\r$/, ""));
+  });
+  stream?.on("end", () => {
+    const rest = buffered.replace(/\r$/, "");
+    buffered = "";
+    if (rest) line(rest);
   });
 }
 
@@ -74,11 +85,12 @@ export function stdioHost(command: string, args: string[], env?: NodeJS.ProcessE
     onMessage: listener => { messages.push(listener); },
     onOutput: listener => { output.push(listener); },
     onError: listener => { child.on("error", error => listener(`The host could not be started: ${error.message}`)); },
-    // A launcher that never started reports "error" without "exit".
+    // "close", not "exit": it comes once stdout and stderr have ended, so their last lines (a setup problem, say) are
+    // read first. A launcher that never started reports "error" without either.
     onceExit: listener => {
       let done = false;
       const once = (code: number | null) => { if (!done) { done = true; listener(code ?? 1); } };
-      child.once("exit", once);
+      child.once("close", once);
       child.once("error", () => once(1));
     },
     terminate: () => { child.stdin.end(); },
@@ -103,18 +115,28 @@ export class HostProcess {
   private stopping = false;
   /** Why the latest launch failed, for the requests that waited on it. */
   private launchFailure?: string;
+  /** Moves on with every shutdown: a launch begun under an earlier one is stale once it resolves. */
+  private generation = 0;
 
   constructor(private readonly options: HostProcessOptions) {}
 
   get running(): boolean { return this.child !== undefined; }
 
   private async spawn(): Promise<void> {
+    const generation = this.generation;
     this.launchFailure = undefined;
     let child: HostChild;
     try { child = await this.options.launch(); }
     catch (error) {
+      if (generation !== this.generation) throw new StaleLaunch();
       this.launchFailure = error instanceof HostLaunchError ? error.message : "The host process could not start.";
       throw error;
+    }
+    // Launched as configured before a shutdown (a change of sandbox or distribution): never used.
+    if (generation !== this.generation) {
+      child.onceExit(() => {});
+      child.kill();
+      throw new StaleLaunch();
     }
     const ready = Promise.withResolvers<void>();
     this.child = child;
@@ -147,13 +169,17 @@ export class HostProcess {
   }
 
   async request(message: Request): Promise<HostResult> {
-    this.ready ??= this.spawn();
-    const starting = this.ready;
-    try { await starting; }
-    catch {
-      if (this.ready === starting) this.ready = undefined;
-      const failure = this.launchFailure;
-      return { type: "result", id: 0, ok: false, error: failure ? { code: "unsupported", message: failure } : { code: "failed", message: "The host process could not start." } };
+    for (;;) {
+      this.ready ??= this.spawn();
+      const starting = this.ready;
+      try { await starting; break; }
+      catch (error) {
+        if (this.ready === starting) this.ready = undefined;
+        // A launch a shutdown overtook: wait for one as now configured instead.
+        if (error instanceof StaleLaunch) continue;
+        const failure = this.launchFailure;
+        return { type: "result", id: 0, ok: false, error: failure ? { code: "unsupported", message: failure } : { code: "failed", message: "The host process could not start." } };
+      }
     }
     const child = this.child!;
     const id = this.nextId++;
@@ -163,10 +189,14 @@ export class HostProcess {
     return result.promise;
   }
 
-  /** Stops the connector cleanly, then ends the process; a host that does not answer in time is killed. */
+  /**
+   * Stops the connector cleanly, then ends the process; a host that does not answer in time is killed. A launch still
+   * under way is abandoned: its process is ended once it appears, and the next request launches a fresh one.
+   */
   async shutdown(timeoutMs: number): Promise<void> {
+    this.generation++;
     const child = this.child;
-    if (!child) return;
+    if (!child) { this.ready = undefined; return; }
     this.stopping = true;
     const exited = Promise.withResolvers<void>();
     child.onceExit(() => exited.resolve());
