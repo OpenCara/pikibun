@@ -11,7 +11,7 @@ import { sha256, signToken } from "../../../packages/shared/src/crypto.js";
 import { documentItemTypes, documentKinds, type SourceReadView } from "../../../packages/shared/src/sources.js";
 import type { AuthorizationRequest, AuthorizationResult, GitHubEffectAuthority, GitHubIssueView, RunnerAction, RunnerBinding, ScheduleToolResult, SessionActivity, SessionBranch } from "../../../packages/shared/src/types.js";
 import type { SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
-import { webLimits, webSearchProviders, type WebSearchResult } from "../../../packages/shared/src/web.js";
+import { webLimits, type WebSearchResult } from "../../../packages/shared/src/web.js";
 import { MAX_CLONE_BRANCHES } from "./clone-branches.js";
 import { sessionActivities } from "../../../packages/shared/src/types.js";
 import { acquireRunnerLease } from "./lease.js";
@@ -679,9 +679,10 @@ export class LocalConnector {
         return result as SessionsToolResult;
       },
       // Like schedules, the control plane's refusal (web search off, no provider, the provider's) comes back with its reason.
+      // Any provider's name is read (ConnectorCapabilities.webSearchProviders), so providers added later need no update here.
       webSearch: async request => {
         const result = await this.brokerCallback(await this.connection(), "/api/connectors/self/web/search", request, WEB_SEARCH_LIMIT);
-        z.object({ query: z.string(), provider: z.enum(webSearchProviders), results: z.array(z.object({
+        z.object({ query: z.string(), provider: z.string().regex(/^[a-z0-9-]{1,32}$/), results: z.array(z.object({
           title: z.string().max(webLimits.titleLength), url: z.string().max(webLimits.urlLength).regex(/^https?:\/\//),
           snippet: z.string().max(webLimits.snippetLength), published: z.string().max(100).optional(),
         }).strict()).max(webLimits.maxResults) }).strict().parse(result);

@@ -879,6 +879,39 @@ test('connector manifests may advertise the repository cache, as a boolean only'
   assert.throws(() => parseManifest({ models: [], capabilities: { ...capabilities, repositoryCache: 'yes' } }, {} as Env), HTTPException);
 });
 
+test('workspace web search providers: members see which, administrators choose one with a key no one reads back', async t => {
+  const f = await fixture(t); github(t);
+  const owner = await f.client('owner'); const reader = await f.client('reader');
+  const team = await workspace(owner); await member(owner, team.id, reader);
+  const path = `/api/workspaces/${team.id}/web-search`;
+  const policyPath = `/api/workspaces/${team.id}/network-policy`;
+  type Settings = { settings: { provider: string | null; updatedBy: string | null; updatedAt: string | null; serverProvider: string | null } };
+  assert.deepEqual((await json<Settings>(await reader.request('GET', path))).settings, { provider: null, updatedBy: null, updatedAt: null, serverProvider: null });
+  await denied(await reader.request('PUT', path, { provider: 'brave', apiKey: 'k' }), 403, 'forbidden');
+  for (const body of [{ provider: 'searxng', apiKey: 'k' }, { provider: 'google', apiKey: 'k' }, { provider: 'brave' }, { provider: 'brave', apiKey: '  ' },
+    { provider: 'brave', apiKey: 'has space' }, { provider: 'brave', apiKey: 'k'.repeat(513) }, { provider: 'brave', apiKey: 'k', url: 'https://x' }]) {
+    await denied(await owner.request('PUT', path, body), 400, 'invalid_input');
+  }
+  const saved = (await json<Settings>(await owner.request('PUT', path, { provider: 'tavily', apiKey: ' tvly-secret ' }))).settings;
+  assert.equal(saved.provider, 'tavily'); assert.equal(saved.updatedBy, owner.user.id);
+  const read = await reader.request('GET', path);
+  assert.ok(!(await read.clone().text()).includes('tvly-secret'));
+  assert.equal((await json<Settings>(read)).settings.provider, 'tavily');
+  // The key is kept encrypted, for this workspace alone.
+  const row = f.sqlite.prepare('SELECT key_ciphertext FROM workspace_web_search WHERE workspace_id = ?').get(team.id) as { key_ciphertext: string };
+  assert.ok(row.key_ciphertext.startsWith('v1.') && !row.key_ciphertext.includes('tvly'));
+  // The network access page names the provider the workspace's searches use.
+  assert.equal((await json<{ webSearchProvider: string | null }>(await reader.request('GET', policyPath))).webSearchProvider, 'tavily');
+  await denied(await reader.request('DELETE', path), 403, 'forbidden');
+  f.env.WEB_SEARCH = 'brave'; f.env.WEB_SEARCH_API_KEY = 'brave-key';
+  assert.deepEqual((await json<Settings>(await owner.request('DELETE', path))).settings, { provider: null, updatedBy: null, updatedAt: null, serverProvider: 'brave' });
+  assert.equal((await json<{ webSearchProvider: string | null }>(await reader.request('GET', policyPath))).webSearchProvider, 'brave');
+  assert.deepEqual(f.sqlite.prepare("SELECT action, detail_json FROM audit WHERE action LIKE 'workspace.web_search.%' ORDER BY rowid").all().map(row => [row.action, JSON.parse(String(row.detail_json))]),
+    [['workspace.web_search.updated', { provider: 'tavily' }], ['workspace.web_search.removed', { provider: 'tavily' }]]);
+  const outsider = await f.client('outsider');
+  await denied(await outsider.request('GET', path), 404, 'not_found');
+});
+
 test('workspace network policies: members read, administrators write, invalid domains are refused', async t => {
   const f = await fixture(t); github(t);
   const owner = await f.client('owner'); const reader = await f.client('reader');

@@ -5,9 +5,9 @@ import type { ConnectorCapabilities } from "../../../packages/shared/src/connect
  * host too, and the sandboxed commands of members holding one where the host has no resource limits), lets the host's
  * owner decide host commands in any session on it they can read, runs the session owner's GitHub effects under
  * Auto-approve and the requests of members a session's owner auto-approves, lets the session panel browse a session's worktree read-only, and carries the web tools (web_fetch,
- * web_search); the control plane still offers each per host and session. On Linux, where restores can be published, it also accepts sessions moved to it from another host.
+ * web_search, reading results of every search provider); the control plane still offers each per host and session. On Linux, where restores can be published, it also accepts sessions moved to it from another host.
  */
 export function withHostToolCapabilities(capabilities: ConnectorCapabilities): ConnectorCapabilities {
   return { ...capabilities, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true,
-    automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, web: true, ...(process.platform === "linux" ? { hostMigration: true } : {}) };
+    automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, web: true, webSearchProviders: true, ...(process.platform === "linux" ? { hostMigration: true } : {}) };
 }

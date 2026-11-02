@@ -3726,6 +3726,58 @@ test('a web search goes to the operator\'s provider with its key, and returns pl
   assert.equal(calls.length, before);
 });
 
+test('a workspace\'s own search provider, with its key, takes the place of the server\'s, and needs a connector that reads its results', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'web_search']);
+  f.sqlite.prepare(`INSERT INTO workspace_network_policies (workspace_id, mode, domains_json, package_registries, web_search, updated_by, updated_at)
+    VALUES (?, 'off', '[]', 1, 1, ?, ?)`).run(s.team.id, s.admin.user.id, new Date().toISOString());
+  const owner = s.session.ownerId;
+  const admissionId = admit(f, s.session.id, owner);
+  const search = () => self(f, s.connector, 'web/search', { sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', query: 'pikibun' });
+  let answer = () => Response.json({});
+  const calls: { url: string; init?: RequestInit }[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => { calls.push({ url: String(input), init }); return answer(); });
+  f.env.WEB_SEARCH = 'brave'; f.env.WEB_SEARCH_API_KEY = 'server-key';
+  const settingsPath = `/api/workspaces/${s.team.id}/web-search`;
+  await json(await s.admin.request('PUT', settingsPath, { provider: 'serper', apiKey: 'serper-key' }));
+  // A connector from before Exa and Serper would refuse the result, so it is told to update, and nothing is searched.
+  await denied(await search(), 409, 'web_search_connector_outdated');
+  assert.equal(calls.length, 0);
+  const capabilities = JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(s.connector.connectorId)!.capabilities_json));
+  f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify({ ...capabilities, webSearchProviders: true }), s.connector.connectorId);
+
+  answer = () => Response.json({ organic: [{ title: 'G', link: 'https://g.example/', snippet: 'google snippet', date: 'Oct 1, 2026' }, { title: 'x', link: 'ftp://x' }] });
+  const serper = await json<{ provider: string; results: unknown[] }>(await search());
+  assert.equal(serper.provider, 'serper');
+  assert.deepEqual(serper.results, [{ title: 'G', url: 'https://g.example/', snippet: 'google snippet', published: 'Oct 1, 2026' }]);
+  assert.equal(calls.at(-1)!.url, 'https://google.serper.dev/search');
+  assert.equal(new Headers(calls.at(-1)!.init?.headers).get('x-api-key'), 'serper-key');
+  assert.deepEqual(JSON.parse(String(calls.at(-1)!.init?.body)), { q: 'pikibun', num: 8 });
+
+  await json(await s.admin.request('PUT', settingsPath, { provider: 'exa', apiKey: 'exa-key' }));
+  answer = () => Response.json({ results: [{ title: 'E', url: 'https://e.example/', text: 'exa text', publishedDate: '2026-09-30' }] });
+  assert.deepEqual((await json<{ results: unknown[] }>(await search())).results, [{ title: 'E', url: 'https://e.example/', snippet: 'exa text', published: '2026-09-30' }]);
+  assert.equal(calls.at(-1)!.url, 'https://api.exa.ai/search');
+  assert.equal(new Headers(calls.at(-1)!.init?.headers).get('x-api-key'), 'exa-key');
+  assert.deepEqual(JSON.parse(String(calls.at(-1)!.init?.body)), { query: 'pikibun', numResults: 8, contents: { text: { maxCharacters: 1000 } } });
+
+  // Brave with the workspace's key, not the server's.
+  await json(await s.admin.request('PUT', settingsPath, { provider: 'brave', apiKey: 'workspace-brave-key' }));
+  answer = () => Response.json({ web: { results: [] } });
+  await json(await search());
+  assert.equal(new Headers(calls.at(-1)!.init?.headers).get('x-subscription-token'), 'workspace-brave-key');
+  // Back to the server's provider and key.
+  await json(await s.admin.request('DELETE', settingsPath));
+  await json(await search());
+  assert.equal(new Headers(calls.at(-1)!.init?.headers).get('x-subscription-token'), 'server-key');
+  // With neither, there is nothing to search with.
+  delete f.env.WEB_SEARCH;
+  const before = calls.length;
+  await denied(await search(), 503, 'web_search_unconfigured');
+  assert.equal(calls.length, before);
+  const audits = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'web.search'").all().map(row => JSON.parse(String(row.detail_json)).provider);
+  assert.deepEqual(audits, ['serper', 'exa', 'brave', 'brave']);
+});
+
 /** A fake Notion API: a root page with a child page, a page under that child's block, a database, and a page elsewhere. */
 function notionFake(t: TestContext, tokens: Record<string, string>) {
   const ids = { root: '11111111-1111-4111-8111-111111111111', child: '22222222-2222-4222-8222-222222222222', block: '33333333-3333-4333-8333-333333333333',

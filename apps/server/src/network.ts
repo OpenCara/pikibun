@@ -20,7 +20,7 @@ import { requireBinding } from './push/broker.js';
 import { mintPushToken, mintRepositoryReadToken, type MintedToken } from './push/mint.js';
 import { sessionApis } from './api-access.js';
 import { sourceReadAs, workspaceAccess, workspaceGitAccess } from './workspace-connections.js';
-import { webSearchProvider } from './web-search.js';
+import { workspaceSearchProviderName } from './web-search.js';
 
 /** Owner/admin authority, re-checked inside the write (binds workspace id, user id). */
 const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
@@ -38,9 +38,9 @@ export async function workspaceNetworkPolicy(db: Database, workspaceId: string):
     webSearch: Number(row.web_search) === 1 };
 }
 
-/** What the network access page shows besides the policy: the allowlist's registries, and the server's search provider. */
-function policyResponse(env: Env, policy: NetworkPolicy) {
-  return { policy, packageRegistryDomains, webSearchProvider: webSearchProvider(env)?.name ?? null };
+/** What the network access page shows besides the policy: the allowlist's registries, and the workspace's search provider. */
+async function policyResponse(env: Env, workspaceId: string, policy: NetworkPolicy) {
+  return { policy, packageRegistryDomains, webSearchProvider: await workspaceSearchProviderName(env, workspaceId) };
 }
 
 export function registerNetworkPolicies(app: Hono<WorkerEnv>): void {
@@ -48,7 +48,7 @@ export function registerNetworkPolicies(app: Hono<WorkerEnv>): void {
   app.get('/api/workspaces/:id/network-policy', async c => {
     const workspaceId = identifier(c.req.param('id'));
     await requireMember(c.env, workspaceId, c.get('auth').userId);
-    return c.json(policyResponse(c.env, await workspaceNetworkPolicy(c.env.DB, workspaceId)));
+    return c.json(await policyResponse(c.env, workspaceId, await workspaceNetworkPolicy(c.env.DB, workspaceId)));
   });
   app.put('/api/workspaces/:id/network-policy', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
@@ -66,7 +66,7 @@ export function registerNetworkPolicies(app: Hono<WorkerEnv>): void {
       .bind(workspaceId, policy.mode, JSON.stringify(policy.domains), policy.packageRegistries ? 1 : 0, policy.webSearch ? 1 : 0, actor, now(), workspaceId, actor).first();
     if (!saved) fail(403, 'forbidden', 'Workspace administrator access is required.');
     await auditStatement(c.env, actor, 'workspace.network_policy.updated', workspaceId, null, { ...policy }).run();
-    return c.json(policyResponse(c.env, policy));
+    return c.json(await policyResponse(c.env, workspaceId, policy));
   });
 }
 

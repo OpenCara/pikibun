@@ -4,12 +4,51 @@
  * - web_fetch reads one https:// page on the session's host, exactly as far as the workspace's network access lets
  *   sandboxed commands reach (see NetworkPolicy): never an address in the host's own networks, and never with a
  *   credential. It needs no control plane call beyond the session's egress grant.
- * - web_search asks the control plane, which searches with the provider its operator configured (WEB_SEARCH) where the
- *   workspace's network access turns web search on (NetworkPolicy.webSearch). The provider's key stays on the server.
+ * - web_search asks the control plane, which searches where the workspace's network access turns web search on
+ *   (NetworkPolicy.webSearch), with the provider the workspace's owners and admins chose with their own API key
+ *   (WorkspaceWebSearch), else the one the server's operator configured (WEB_SEARCH). Keys stay on the server.
  */
 
-export const webSearchProviders = ["brave", "tavily", "searxng"] as const;
+export const webSearchProviders = ["brave", "tavily", "searxng", "exa", "serper"] as const;
 export type WebSearchProvider = (typeof webSearchProviders)[number];
+/**
+ * The providers connectors understood before workspaces chose their own; a search with another needs a connector that
+ * advertises ConnectorCapabilities.webSearchProviders, since older ones refuse a result naming it.
+ */
+export const legacyWebSearchProviders: readonly WebSearchProvider[] = ["brave", "tavily", "searxng"];
+/**
+ * The providers a workspace can choose, with its own API key: services at fixed public addresses. SearXNG, at an address
+ * of one's choosing that the server would call, is only the operator's to configure (WEB_SEARCH_URL).
+ */
+export const workspaceWebSearchProviders = ["brave", "tavily", "exa", "serper"] as const;
+export type WorkspaceWebSearchProvider = (typeof workspaceWebSearchProviders)[number];
+export const webSearchProviderNames: Record<WebSearchProvider, string> = {
+  brave: "Brave Search", tavily: "Tavily", searxng: "SearXNG", exa: "Exa", serper: "Serper (Google results)",
+};
+/** Where each provider issues its API keys, for the settings page. */
+export const webSearchProviderKeyPages: Record<WorkspaceWebSearchProvider, string> = {
+  brave: "https://brave.com/search/api/", tavily: "https://app.tavily.com", exa: "https://dashboard.exa.ai", serper: "https://serper.dev",
+};
+
+/** A workspace's search provider, as every member sees it: never its key. */
+export interface WorkspaceWebSearch {
+  /** The provider the workspace's owners and admins chose, with its key on the server; null: the server's. */
+  provider: WorkspaceWebSearchProvider | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+  /** The provider the server's operator configured (WEB_SEARCH), which workspaces without their own use; null: none. */
+  serverProvider: WebSearchProvider | null;
+}
+
+/** An API key as a workspace saves it: one line, without spaces, at most this long. */
+export const webSearchKeyLength = 512;
+export function webSearchKey(value: unknown): string {
+  if (typeof value !== "string") throw new Error("apiKey must be text");
+  const key = value.trim();
+  if (!key) throw new Error("Enter the provider's API key");
+  if (key.length > webSearchKeyLength || !/^[\x21-\x7e]+$/.test(key)) throw new Error(`An API key is up to ${webSearchKeyLength} printable characters, without spaces`);
+  return key;
+}
 
 export const webLimits = Object.freeze({
   /** A search query, in characters. */
