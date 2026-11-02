@@ -42,8 +42,11 @@ export interface HostView {
   /** The server the host pairs with and connects to. */
   server: string;
   state: HostState;
-  /** Set while the connector runs: the server it connects to and whether it runs unsandboxed. */
-  running?: { server: string; unsandboxed: boolean };
+  /**
+   * Set while the connector runs: the server it connects to and whether it runs unsandboxed; once connected, its id
+   * there, which the server's pages hand uploads to directly.
+   */
+  running?: { server: string; unsandboxed: boolean; connectorId?: string };
   inspection?: HostInspection;
   inspecting: boolean;
   /** The latest failure, cleared by the next start. */

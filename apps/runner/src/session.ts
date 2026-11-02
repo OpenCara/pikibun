@@ -17,6 +17,7 @@ import type { RestoreDescriptor } from "../../../packages/shared/src/connector.j
 import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
+import { ATTACHMENTS_DIRECTORY, fileUploadLimits, parseUploadChunk, type UploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
@@ -133,6 +134,10 @@ const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", vers
 type InputImage = { mimeType: string; data: string };
 /** Prepared images of queued messages that a session holds on disk at once, until their messages reach Pi. */
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
+/** Bytes of a session's uploads (file-uploads.ts) its host holds at once, until each is complete and in the worktree. */
+const MAX_STAGED_UPLOAD_BYTES = 4 * fileUploadLimits.maxBytes;
+/** An upload no chunk has reached for this long is abandoned, and the next one to start removes it. */
+const STALE_UPLOAD_MS = 60 * 60 * 1000;
 /** Tools that never change files or run commands: the whole toolset of side asks. */
 const readOnlyTools = ["identity", "read_file", "list_files"];
 /** How often a sessions tool wait reads its message's outcome. */
@@ -2868,6 +2873,92 @@ export class RunnerSession {
       if (code === "EACCES" || code === "ELOOP" || /permission denied|symlinks are not followed|too many levels of symbolic links/.test(message)) throw new RunnerError(422, "That path can't be read");
       throw error;
     }
+  }
+
+  /**
+   * One chunk of a file attached to a message (packages/shared/src/file-uploads.ts), as `write` sends it, since a
+   * collaborator could already have the agent write any file. Chunks wait in order in the session's uploads directory,
+   * outside the sandbox and the backups; the last one writes the whole file into the worktree's attachments directory,
+   * through the sandbox like a file tool, under a name not taken there yet, and answers where it went. Not exclusive with
+   * runs: like a file tool it waits only for the sandbox's own queue. One chunk of the session is handled at a time.
+   */
+  async upload(ticket: RunnerTicket, input: unknown): Promise<UploadResult> {
+    this.assertTicket(ticket);
+    await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    const chunk = parseUploadChunk(input);
+    if ("error" in chunk) throw new RunnerError(400, "Invalid upload chunk");
+    const turn = this.#uploading.then(() => this.receiveChunk(ticket, chunk));
+    this.#uploading = turn.then(() => {}, () => {});
+    return turn;
+  }
+
+  #uploading: Promise<void> = Promise.resolve();
+
+  private get uploadsDirectory(): string {
+    return join(this.directory, "uploads");
+  }
+
+  private async receiveChunk(ticket: RunnerTicket, chunk: UploadChunk): Promise<UploadResult> {
+    // One upload is one actor's one file: its chunks name the same file and size, or they are another upload.
+    const key = (await sha256(stableJson({ actor: ticket.actorId, uploadId: chunk.uploadId, name: chunk.name, size: chunk.size }))).slice(0, 43);
+    const part = join(this.uploadsDirectory, `${key}.part`);
+    const data = Buffer.from(chunk.data, "base64");
+    await mkdir(this.uploadsDirectory, { recursive: true, mode: 0o700 });
+    if (chunk.offset === 0) await this.sweepUploads(chunk.size);
+    else {
+      let staged: number;
+      try { staged = (await lstat(part)).size; }
+      catch { throw new RunnerError(409, "That upload is no longer on the host. Attach the file again"); }
+      if (staged !== chunk.offset) throw new RunnerError(409, "Upload chunks arrived out of order. Attach the file again");
+    }
+    const file = await open(part, chunk.offset === 0 ? "w" : "a", 0o600);
+    try {
+      await file.writeFile(data);
+      await file.sync();
+    } finally { await file.close(); }
+    const received = chunk.offset + data.length;
+    if (received < chunk.size) return { received };
+    try {
+      const bytes = await readFile(part);
+      if (bytes.length !== chunk.size) throw new RunnerError(409, "Upload chunks arrived out of order. Attach the file again");
+      const authorize = async () => { await this.authorize(ticket.actorId, "write", ticket.policyVersion); };
+      let path: string;
+      try { path = await this.sandbox.importFile(ATTACHMENTS_DIRECTORY, chunk.name, bytes, authorize); }
+      catch (error) {
+        if (error instanceof RunnerError) throw error;
+        // Fixed reasons only (the control plane shows a 422's): never a host path or raw sandbox output.
+        const message = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ""}`.toLowerCase() : "";
+        if (/too many files with this name/.test(message)) throw new RunnerError(422, "The attachments directory has too many files of that name. Rename the file and attach it again");
+        if (/not a directory|symlinks are not followed|too many levels of symbolic links|path component is not a real directory|not a real directory/.test(message)) {
+          throw new RunnerError(422, "The worktree's attachments path isn't a directory the file can go into");
+        }
+        if (/no space|quota|file too large|exceeds size limit/.test(message)) throw new RunnerError(422, "The session has no room for that file");
+        throw new RunnerError(422, "The file could not be written into the worktree");
+      }
+      return { received, path };
+    } finally {
+      await rm(part, { force: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Before a new upload starts: removes uploads left unfinished for an hour, then refuses one that would hold more than
+   * MAX_STAGED_UPLOAD_BYTES of the session's uploads, finished or not, on the host at once.
+   */
+  private async sweepUploads(size: number): Promise<void> {
+    let names: string[];
+    try { names = await readdir(this.uploadsDirectory); }
+    catch { return; }
+    let staged = 0;
+    for (const name of names) {
+      const path = join(this.uploadsDirectory, name);
+      try {
+        const info = await lstat(path);
+        if (!info.isFile() || Date.now() - info.mtimeMs > STALE_UPLOAD_MS) await rm(path, { force: true, recursive: true });
+        else staged += info.size;
+      } catch { /* Gone meanwhile. */ }
+    }
+    if (staged + size > MAX_STAGED_UPLOAD_BYTES) throw new RunnerError(429, "Too many files are being uploaded to this session at once. Try again shortly");
   }
 
   async close({ abortPushes = true }: { abortPushes?: boolean } = {}): Promise<void> {

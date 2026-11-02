@@ -63,7 +63,7 @@ const welcomeSchema = z.object({
 const actorSchema = z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f]+$/);
 const ticketSchema = z.object({
   aud: z.literal("runner"), sessionId: z.string().regex(IDENTIFIER), actorId: actorSchema, ownerId: actorSchema,
-  action: z.enum(["create", "view", "events", "submit", "ask", "operations", "approve", "backup", "restart", "restore", "stop", "files", "revert", "fork", "pack", "unpack", "withdraw"]),
+  action: z.enum(["create", "view", "events", "submit", "ask", "operations", "approve", "backup", "restart", "restore", "stop", "files", "revert", "fork", "pack", "unpack", "withdraw", "upload"]),
   policyVersion: z.number().int().positive(), iat: z.number().int(), exp: z.number().int(),
   jti: z.string().regex(IDENTIFIER), bodyHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/), connectorId: z.string().regex(IDENTIFIER),
 }).strict();
@@ -246,7 +246,7 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
     if (binding.session.connectorId !== connectorId || binding.model?.connectorId !== connectorId
       || binding.owner?.id !== rpc.ticket?.ownerId || binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign connector binding");
   } else {
-    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|operations|restart|backup|restore|stop|files|revert|fork|pack|unpack|withdraw|approvals\/[A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(rpc.path);
+    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|operations|restart|backup|restore|stop|files|revert|fork|pack|unpack|withdraw|upload|approvals\/[A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(rpc.path);
     if (!match) throw new Error("Relay path is not allowed");
     sessionId = match[1]!;
     action = match[2]!.startsWith("approvals/") ? "approve" : match[2]!.startsWith("view/") ? "view" : match[2] as RunnerAction;
@@ -297,6 +297,11 @@ export interface ConnectorOptions {
   resources?: RunnerConfig["resources"];
   /** Run session work directly on the host without isolation; requires explicit owner consent. */
   unsandboxed?: boolean;
+  /**
+   * The desktop app runs this connector, and hands it upload chunks itself (`direct`): advertised as `directUploads`, so
+   * the app's pages ask the control plane for grants instead of relaying the chunks.
+   */
+  directUploads?: boolean;
   /** The sandbox of a macOS or native Windows host (see sandbox-backend.ts); Linux uses bubblewrap. */
   sandboxBackend?: SandboxBackendConfig;
   /**
@@ -391,6 +396,9 @@ export class LocalConnector {
     if (options.allowTestShell && !options.allowFaux) throw new Error("Test shell requires explicit faux test mode");
     if (options.reconnectDelayMs !== undefined && (!Number.isFinite(options.reconnectDelayMs) || options.reconnectDelayMs < 1 || options.reconnectDelayMs > 30_000)) throw new Error("Invalid reconnect delay");
   }
+
+  /** This host's id once it is paired: the control plane's name for it, which its sessions' tickets carry. */
+  get connectorId(): string | undefined { return this.state?.connectorId; }
 
   start(): Promise<void> {
     if (this.lifetime.signal.aborted) return Promise.reject(new Error("Connector has stopped"));
@@ -522,7 +530,8 @@ export class LocalConnector {
       const runtime = await this.ensureRuntime(generation, answered || !this.runtime ? configured.repositoryCache : this.runtime.repositoryCache);
       this.requireGeneration(generation);
       const advertised = capabilities(this.options.capabilities, { unsandboxed: this.options.unsandboxed, repositoryCache: runtime.repositoryCache !== "off", gpu: this.gpu });
-      await this.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux), capabilities: withHostToolCapabilities(advertised) });
+      await this.callback(generation, "/api/connectors/self/manifest", { models: await connectorManifest(this.options.localModels, this.options.allowFaux),
+        capabilities: { ...withHostToolCapabilities(advertised), ...(this.options.directUploads ? { directUploads: true } : {}) } });
       this.requireGeneration(generation);
       generation.runtimeReady.resolve();
       this.options.onStatus?.("connected");
@@ -1008,6 +1017,49 @@ export class LocalConnector {
     // Escaping can make a body under responseBytes a frame over frameBytes.
     if (reply.payloadSize > connectorLimits.frameBytes) return failed(502, "The host's reply is too large to relay.");
     return reply;
+  }
+
+  /**
+   * One chunk of a file attached to a message, which the desktop app running this connector hands it on behalf of one
+   * of its pages, with the grant the control plane signed for it (file-uploads.ts on the server). The control plane
+   * checks the grant, that it names this host, and its actor's access, before anything else; the chunk then runs as a
+   * relayed request would, with the same checks of its ticket and body, once. Answers the runner's reply, or why the
+   * chunk was refused, in fixed connector text.
+   */
+  async direct(input: { grant: string; body: string }): Promise<{ status: number; body: string }> {
+    const refused = (status: number, error: string) => ({ status, body: JSON.stringify({ error, code: "connector_reply_error" }) });
+    const generation = this.welcomed;
+    if (!this.state || !generation || generation.abort.signal.aborted || !generation.connectionToken) return refused(503, "The host is not connected.");
+    if (typeof input?.grant !== "string" || input.grant.length > 16_384 || typeof input.body !== "string"
+      || encoder.encode(input.body).length > connectorLimits.requestBytes) return refused(400, "Invalid upload request.");
+    let verified: { ticket: ConnectorRpcRequest["ticket"]; size: number; path: string };
+    try {
+      const value = await this.callback(generation, "/api/connectors/self/uploads/verify", { grant: input.grant }) as Record<string, unknown> | undefined;
+      const ticket = ticketSchema.parse(value?.ticket);
+      if (ticket.action !== "upload" || ticket.connectorId !== this.state.connectorId || !Number.isSafeInteger(value?.size)
+        || value?.path !== `/v1/sessions/${ticket.sessionId}/upload`) throw new Error("Invalid upload grant");
+      verified = { ticket, size: value.size as number, path: value.path };
+    } catch { return refused(403, "The control plane refused the upload grant."); }
+    // The chunk must be of the file the grant was for: the control plane held its size to the workspace's limit.
+    let declared: unknown;
+    try { declared = (JSON.parse(input.body) as { size?: unknown } | null)?.size; } catch { declared = undefined; }
+    if (declared !== verified.size) return refused(400, "The upload doesn't match its grant.");
+    const rpc: ConnectorRpcRequest = { type: "request", id: verified.ticket.jti, method: "POST", path: verified.path, body: input.body, ticket: verified.ticket };
+    const now = Date.now();
+    for (const [key, expiry] of this.seen) if (expiry <= now) this.seen.delete(key);
+    const keys = [`request:${rpc.id}`, `ticket:${rpc.ticket.jti}`];
+    if (keys.some(key => this.seen.has(key))) return refused(409, "That upload grant was already used.");
+    for (const key of keys) this.seen.set(key, Math.min((rpc.ticket.exp + 5) * 1000, now + 70_000));
+    let authorization: string;
+    try { ({ authorization } = await validateRelayRequest(rpc, this.state.connectorId, this.secret)); }
+    catch { return refused(400, "Invalid upload request."); }
+    if (this.restarting) return refused(503, "The host's runner is restarting; try again shortly.");
+    try {
+      await generation.runtimeReady.promise;
+      const { payload } = await this.answer(generation, rpc, authorization);
+      const reply = JSON.parse(payload) as ConnectorRpcResponse;
+      return { status: reply.status, body: reply.body };
+    } catch { return refused(503, "The host lost its connection; inspect the session before retrying."); }
   }
 
   stop(): Promise<void> {

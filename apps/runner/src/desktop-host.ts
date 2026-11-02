@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createConnector, controlPlaneOrigin, type LocalConnector } from "./connector.js";
 import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, savedPairing, unsandboxedWarning } from "./connect-setup.js";
 import { parentTransport } from "./desktop-transport.js";
-import { pairingCodePattern, pairingIdPattern, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "./desktop-protocol.js";
+import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "./desktop-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
 import { ConnectorSetupError } from "./protocol.js";
 
@@ -27,6 +27,7 @@ const hostRequestSchema: z.ZodType<HostRequest> = z.discriminatedUnion("type", [
     ...developmentOptions,
   }).strict(),
   z.object({ type: z.literal("stop"), id: requestId }).strict(),
+  z.object({ type: z.literal("upload"), id: requestId, grant: z.string().min(1).max(uploadRequestLimits.grant), body: z.string().max(uploadRequestLimits.body) }).strict(),
 ]);
 
 /** Only connector-authored text crosses to the app: SDK and HTTP errors can carry auth or configuration detail. */
@@ -44,7 +45,7 @@ let running: { connector: LocalConnector; stopRequested: boolean } | undefined;
 
 function emit(event: HostEvent): void { transport.send(event); }
 function log(level: "info" | "warning" | "error", message: string): void { emit({ type: "log", level, message }); }
-function status(state: HostState, detail: { server?: string; unsandboxed?: boolean } = {}): void { emit({ type: "status", state, ...detail }); }
+function status(state: HostState, detail: { server?: string; unsandboxed?: boolean; connectorId?: string } = {}): void { emit({ type: "status", state, ...detail }); }
 
 async function inspect(allowFaux = false, allowInsecureLoopback = false): Promise<HostInspection> {
   try { assertConnectorPlatform(); }
@@ -92,9 +93,15 @@ async function start(request: StartRequest): Promise<void> {
     // Binary presence cannot attest a working namespace or a per-session resource
     // domain. Advertise conservatively; each actual operation verifies isolation.
     capabilities: { platform: process.platform, sandbox: false, productionShell: false },
+    // The app's pages hand this connector the files attached to their messages themselves (LocalConnector.direct).
+    directUploads: true,
     onStatus: state => {
       if (running?.connector !== connector) return;
-      if (state !== "stopped") { status(state, { server, unsandboxed }); return; }
+      if (state !== "stopped") {
+        const connectorId = state === "connected" ? connector.connectorId : undefined;
+        status(state, { server, unsandboxed, ...(connectorId ? { connectorId } : {}) });
+        return;
+      }
       const expected = running.stopRequested;
       running = undefined;
       status("stopped");
@@ -130,14 +137,17 @@ async function stop(): Promise<void> {
 
 async function handle(request: HostRequest): Promise<void> {
   try {
-    if (request.type === "inspect") {
+    if (request.type === "upload") {
+      if (!running) throw new HostFailure("not-running", "The host isn't running.");
+      emit({ type: "result", id: request.id, ok: true, reply: await running.connector.direct({ grant: request.grant, body: request.body }) });
+    } else if (request.type === "inspect") {
       emit({ type: "result", id: request.id, ok: true, inspection: await inspect(request.allowFaux, request.allowInsecureLoopback) });
     } else {
       await (request.type === "start" ? start(request) : stop());
       emit({ type: "result", id: request.id, ok: true });
     }
   } catch (error) {
-    emit({ type: "result", id: request.id, ok: false, error: hostError(error, request.type === "stop" ? "The host did not stop cleanly." : "The host could not start. Check this computer's pairing, Pi configuration and prerequisites.") });
+    emit({ type: "result", id: request.id, ok: false, error: hostError(error, request.type === "stop" ? "The host did not stop cleanly." : request.type === "upload" ? "The host could not take the file." : "The host could not start. Check this computer's pairing, Pi configuration and prerequisites.") });
   }
 }
 

@@ -25,7 +25,14 @@ export const remoteChannels = {
   localStart: "desktop:local-start",
   localStop: "desktop:local-stop",
   openWindow: "desktop:open-window",
+  upload: "desktop:upload",
 } as const;
+
+/**
+ * A chunk the page handed a host on this computer: the runner's reply, as the relay would have carried it; or why it
+ * couldn't, with `local` false when the host isn't this computer's (the page then sends the file through its server).
+ */
+export type UploadOutcome = { ok: true; status: number; body: string } | { ok: false; error: string; local: boolean };
 
 export interface DesktopView {
   /** "This Mac" on macOS, "This Computer" elsewhere. */
@@ -73,4 +80,10 @@ export interface DesktopBridge {
   };
   /** The app's own windows: This Mac, or Settings (where secrets are entered). */
   openWindow(which: "host" | "settings"): Promise<Outcome>;
+  /**
+   * Hands this computer's host `connectorId` one chunk of a file attached to a message, with the grant this page's
+   * server made for it (`POST /api/sessions/:id/uploads/direct`), so the file's bytes stay on this computer. Absent
+   * from apps that predate it.
+   */
+  upload?(input: { connectorId: string; grant: string; body: string }): Promise<UploadOutcome>;
 }

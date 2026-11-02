@@ -6,7 +6,7 @@ import { redactSecrets, REDACTED } from "../../../packages/shared/src/redaction"
 import { managesSession } from "../../../packages/shared/src/policy";
 import { api, segment } from "./api";
 import { useApp } from "./app-context";
-import { AttachButton, AttachmentStrip, encodeImages, forgetHandedOverImages, handedOverImages, imageBlobs, imagesUnavailable, restoreImages, useAttachments, useImageReceiver, type Attachments } from "./attachments";
+import { AttachButton, AttachmentStrip, encodeImages, forgetHandedOverImages, handedOverFiles, handedOverImages, imageBlobs, imagesUnavailable, restoreImages, useAttachments, useFileAttachmentOptions, useImageReceiver, withFilesNote, type Attachments } from "./attachments";
 import {
   accessUnavailable, autoApproveConfirmed, ChatOptionsBar, chatOptionsBody, confirmAutoApprove, initialSelection, modelUnavailable, mustConfirmAutoApprove, rememberChat,
   type ChatSelection,
@@ -416,7 +416,11 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   // message that failed to send from the new-session screen is handed over the same way.
   const [content, setContent] = useDraft(id);
   // So are its images, which the new-session screen keeps in memory.
-  const attachments = useAttachments(imagesUnavailable(host), () => handedOverImages(id));
+  // Files besides: uploaded into the session's worktree as the message is sent, within its workspace's limit.
+  const fileOptions = useFileAttachmentOptions(session.workspaceId, host);
+  const attachments = useAttachments(imagesUnavailable(host), () => handedOverImages(id),
+    (session.permissions ?? []).includes("write") ? fileOptions : { ...fileOptions, unavailable: "Attaching files writes them into the session, which takes write access." },
+    () => handedOverFiles(id));
   useEffect(() => {
     forgetHandedOverImages(id);
   }, [id]);
@@ -560,7 +564,8 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   async function submit(event?: FormEvent) {
     event?.preventDefault();
     const pasted = attachments.images;
-    if (!permitted || (!content.trim() && !pasted.length) || submission.busy || confirming.current) return;
+    const attached = attachments.files;
+    if (!permitted || (!content.trim() && !pasted.length && !attached.length) || submission.busy || confirming.current) return;
     const options = chatOptionsBody(host, selection, actualMode === "ask" ? "ask" : "submit");
     const unavailable = accessUnavailable(host, selection, actualMode === "ask" ? "ask" : "submit") ?? modelUnavailable(host, selection);
     // The owner's chat box can start on Auto-approve without asking, and it merges too: the first message that would asks
@@ -575,7 +580,7 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
     setWithdrawNotice("");
     const sent = content;
     // Changing the options or the images is a different request, so it needs a new idempotency key.
-    const key = `${actualMode}:${JSON.stringify(options ?? null)}:${pasted.map(image => image.id).join(",")}:${sent}`;
+    const key = `${actualMode}:${JSON.stringify(options ?? null)}:${[...pasted, ...attached].map(item => item.id).join(",")}:${sent}`;
     // Retry the same failed submission with the same idempotency key, not a duplicate turn.
     if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() };
     const pending = request.current;
@@ -584,15 +589,17 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
       if (unavailable) throw new Error(unavailable);
       // Encoded once per request, so a retry sends the same bytes under the same key.
       const images = pending.images ??= await encodeImages(pasted);
+      // Files go into the worktree first, each once even when sending is tried again, and the message says where.
+      const note = await attachments.upload(id, host, attached);
       const result = await api<SubmitResult>(`/api/sessions/${segment(id)}/${actualMode === "ask" ? "ask" : "submit"}`, { method: "POST",
-        body: { content: sent, requestId: pending.id, ...(options ? { options } : {}), ...(images.length ? { images } : {}) } });
+        body: { content: withFilesNote(sent, note), requestId: pending.id, ...(options ? { options } : {}), ...(images.length ? { images } : {}) } });
       setReceipt(result);
       // The next new chat starts from the model and reasoning this one went with, the session's own where none was picked.
       if (options) rememberChat(host, selection, view.agent);
       if (actualMode === "ask") setConversationId(result.conversationId);
       // Through the draft, not this box's state: the box may have unmounted, and another opened, while it was in flight.
       forgetSentDraft(id, sent);
-      attachments.sent(pasted);
+      attachments.sent(pasted, attached);
       request.current = null;
       refresh();
     });
@@ -771,7 +778,7 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
 /** whose keyboard has no Shift, Enter adds a line and the send button sends (touch.ts). */
 /** `onStop`, while the agent works and the person may stop it, shows a stop button beside send; messages can still be queued. */
 /** `onRecall`, while a message of the person's waits in the queue, is what ↑ in the empty box does: take it back to edit. */
-/** With `attachments`, images pasted into it or picked with its image button go with the message, which may then have no text. */
+/** With `attachments`, images and files pasted into it or picked with its attach button go with the message, which may then have no text. */
 /** `hint` is hidden on phones to keep the chat box to one toolbar row, unless `hintRequired` (it says why sending is */
 /** unavailable, or who can see what is sent). */
 function ComposerInput({ value, onChange, onSubmit, attachments, onStop, stopping, onRecall, busy, disabled, label, placeholder, sendLabel, hint, hintRequired, tools }: {
@@ -779,7 +786,7 @@ function ComposerInput({ value, onChange, onSubmit, attachments, onStop, stoppin
   label: string; placeholder: string; sendLabel: string; hint: ReactNode; hintRequired?: boolean; tools?: ReactNode;
 }) {
   const [sendsOnEnter] = useState(() => enterSends());
-  const sendable = Boolean(value.trim() || attachments?.images.length);
+  const sendable = Boolean(value.trim() || attachments?.count);
   const input = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const element = input.current;
@@ -795,14 +802,14 @@ function ComposerInput({ value, onChange, onSubmit, attachments, onStop, stoppin
     if (sendsOnEnter && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) submit(event);
     // Only from an empty box, so ↑ still moves the caret through text being written.
     else if (onRecall && event.key === "ArrowUp" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing
-      && !disabled && !busy && !value && !attachments?.images.length) {
+      && !disabled && !busy && !value && !attachments?.count) {
       event.preventDefault();
       onRecall();
     }
   }
   return <form className="composer" onSubmit={submit}>
     {attachments && <AttachmentStrip attachments={attachments} disabled={busy || disabled} />}
-    <textarea ref={input} rows={1} required={!attachments?.images.length} value={value} disabled={busy || disabled} aria-label={label} placeholder={placeholder}
+    <textarea ref={input} rows={1} required={!attachments?.count} value={value} disabled={busy || disabled} aria-label={label} placeholder={placeholder}
       enterKeyHint={sendsOnEnter ? "send" : "enter"} onChange={event => onChange(event.target.value)} onKeyDown={onKeyDown} onPaste={attachments?.paste} />
     {attachments?.notice && <p className="composer-notice" role="status">{attachments.notice}</p>}
     <div className="composer-toolbar">

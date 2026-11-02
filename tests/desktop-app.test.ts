@@ -8,7 +8,7 @@ import { resolveAdmins } from "../apps/desktop/src/main/admins.js";
 import { HostController } from "../apps/desktop/src/main/host-controller.js";
 import type { HostProcess } from "../apps/desktop/src/main/host-process.js";
 import { navigationDecision, parseServerOrigin, sameServerLink, windowOpenDecision } from "../apps/desktop/src/main/origin.js";
-import { isLocalPage, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parseStartInput } from "../apps/desktop/src/main/requests.js";
+import { isLocalPage, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parseStartInput, parseUpload } from "../apps/desktop/src/main/requests.js";
 import { parseSettings, SettingsStore } from "../apps/desktop/src/main/settings.js";
 
 const pairingId = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
@@ -303,4 +303,39 @@ test("a server's Settings page sees the app's settings, but only its own activit
   assert.equal(parseRemoteLocalStart({ mode: "shared", shared }).ok, true);
   assert.match((parseRemoteLocalStart({ mode: "local", github: secret }) as { error: string }).error, /own Settings window/);
   assert.match((parseRemoteLocalStart({ mode: "shared", shared: { ...shared, github: secret } }) as { error: string }).error, /own Settings window/);
+});
+
+test("a page's upload chunk reaches only this computer's connected host of the session, checked on the way", async t => {
+  const body = JSON.stringify({ uploadId: "upload-0001", name: "a.txt", size: 2, offset: 0, data: "aGk=" });
+  assert.deepEqual(parseUpload({ connectorId: "host-1", grant: "grant", body }), { ok: true, value: { connectorId: "host-1", grant: "grant", body } });
+  for (const refused of [null, { connectorId: "host-1", grant: "grant" }, { connectorId: "../x", grant: "grant", body }, { connectorId: "host-1", grant: "", body },
+    { connectorId: "host-1", grant: "grant", body, extra: 1 }, { connectorId: "host-1", grant: "g".repeat(16_385), body },
+    { connectorId: "host-1", grant: "grant", body: "x".repeat(1024 * 1024 + 1) }]) {
+    assert.equal(parseUpload(refused).ok, false, JSON.stringify(refused)?.slice(0, 80));
+  }
+
+  const directory = await mkdtemp(join(tmpdir(), "pikibun-desktop-upload-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const settings = new SettingsStore(join(directory, "settings.json"));
+  const handed: unknown[] = [];
+  const host = {
+    running: true,
+    async request(message: { type: string; grant?: string; body?: string }) {
+      if (message.type === "upload") handed.push(message);
+      return message.type === "upload" ? { type: "result", id: 0, ok: true, reply: { status: 200, body: '{"received":2,"path":"attachments/a.txt"}' } } : { type: "result", id: 0, ok: true };
+    },
+  };
+  const controller = new HostController({ id: "default", settings, fixtureModels: false, command: server => `connect ${server}`, confirmUnsandboxed: async () => false });
+  controller.attach(host as unknown as HostProcess);
+  // Until the host is connected, it isn't known to be the session's.
+  assert.deepEqual(await controller.upload("host-1", "grant", body), { ok: false, error: "That session's host isn't running on this computer.", local: false });
+  controller.handleStatus("connected", { server: settings.server, unsandboxed: false, connectorId: "host-1" });
+  assert.equal(controller.view().running?.connectorId, "host-1");
+  assert.deepEqual(await controller.upload("host-2", "grant", body), { ok: false, error: "That session's host isn't running on this computer.", local: false });
+  assert.deepEqual(handed, []);
+  assert.deepEqual(await controller.upload("host-1", "grant", body), { ok: true, status: 200, body: '{"received":2,"path":"attachments/a.txt"}' });
+  assert.deepEqual(handed, [{ type: "upload", grant: "grant", body }]);
+  // Reconnecting, it is again unknown until the host says which it is.
+  controller.handleStatus("disconnected", { server: settings.server, unsandboxed: false });
+  assert.equal(controller.view().running?.connectorId, undefined);
 });

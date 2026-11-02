@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
 import {
-  MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
+  importRequest, MAX_FILE_BYTES, MAX_OUTPUT_BYTES, SandboxProcessError, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig, quoteGitConfig, sessionEnvironment, text,
   type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SnapshotFile,
 } from "./sandbox.js";
 import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
@@ -16,6 +16,7 @@ import { browseDirectory, browseFile, checkedBrowse, type BrowseResult } from ".
 import type { SessionWorkspace } from "./workspace.js";
 import { bashPath, CREATE_FILE, hostBashArgs, killTree, OPEN_DIRECTORY, OPEN_FILE, privateEntry, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
 import { readCloneBranches, type CloneBranch } from "./clone-branches.js";
+import { ATTACHMENT_CANDIDATES, attachmentCandidate } from "../../../packages/shared/src/file-uploads.js";
 
 const MAX_ENTRIES = 10_000;
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
@@ -134,6 +135,35 @@ export class HostWorkspace implements SessionWorkspace {
     if (typeof content !== "string" || Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error("File exceeds size limit");
     await this.#operation(authorize, async () => {
       await writeAt(this.worktree, await this.#parts(value, true), content);
+    });
+  }
+
+  /** A file attached to a message, as a new file in `directory`, under the same path rules as the file tools. */
+  async importFile(directory: string, name: string, data: Buffer, authorize: SandboxAuthorize): Promise<string> {
+    const request = importRequest(directory, name, data);
+    return this.#operation(authorize, async () => {
+      const parts = await this.#parts(request.directory, true);
+      if (!parts.length) throw hostError("a directory is required");
+      const parent = await directoryAt(this.worktree, parts, true);
+      for (let index = 1; index <= ATTACHMENT_CANDIDATES; index++) {
+        const candidate = attachmentCandidate(name, index);
+        const target = join(parent, candidate);
+        let handle;
+        try { handle = await open(target, CREATE_FILE, 0o600); }
+        catch (error) { if (errorCode(error) === "EEXIST") continue; throw error; }
+        try {
+          await handle.writeFile(data);
+          await handle.sync();
+        } catch (error) {
+          await handle.close().catch(() => undefined);
+          handle = undefined;
+          await unlink(target).catch(() => undefined);
+          throw error;
+        } finally { await handle?.close(); }
+        await syncPath(parent);
+        return [...parts, candidate].join("/");
+      }
+      throw hostError("too many files with this name");
     });
   }
 

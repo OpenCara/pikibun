@@ -1,4 +1,4 @@
-import { pairingCodePattern, pairingIdPattern } from "../../../runner/src/desktop-protocol.js";
+import { pairingCodePattern, pairingIdPattern, uploadRequestLimits } from "../../../runner/src/desktop-protocol.js";
 import type { GitHubApp, LocalSharedSettings, LocalStartInput, ModelChoice, StartInput } from "../shared/bridge.js";
 import { isConnectionId, isModelChoice, MAX_MODELS } from "./settings.js";
 
@@ -144,3 +144,13 @@ export function isLocalPage(url: string, page: string): boolean {
 
 export const APP_SCHEME = "pikibun-app";
 export const APP_HOST = "local";
+
+/** A page's upload chunk for a host on this computer (remote-bridge.ts upload): bounded as the host bounds it again. */
+export function parseUpload(value: unknown): Parsed<{ connectorId: string; grant: string; body: string }> {
+  if (!isRecord(value) || !onlyKeys(value, ["connectorId", "grant", "body"]) || typeof value.connectorId !== "string"
+    || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value.connectorId) || typeof value.grant !== "string" || !value.grant
+    || value.grant.length > uploadRequestLimits.grant || typeof value.body !== "string" || value.body.length > uploadRequestLimits.body) {
+    return { ok: false, error: "Invalid upload request." };
+  }
+  return { ok: true, value: { connectorId: value.connectorId, grant: value.grant, body: value.body } };
+}

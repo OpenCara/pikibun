@@ -37,6 +37,9 @@ delete process.env.SANDBOX_EGRESS_NO_PROXY;
 const MAX_FILE = 1024 * 1024;
 const MAX_IMAGE = 16 * 1024 * 1024;
 const MAX_SNAPSHOT = 32 * 1024 * 1024;
+// Mirrors fileUploadLimits.maxBytes in packages/shared/src/file-uploads.ts; an import's request carries the file, base64.
+const MAX_IMPORT = 50 * 1024 * 1024;
+const MAX_REQUEST = Math.ceil(MAX_IMPORT / 3) * 4 + 64 * 1024;
 const MAX_ENTRIES = 10000;
 const BROWSE_ENTRIES = 1000;
 const BROWSE_TEXT = 256 * 1024;
@@ -265,6 +268,44 @@ function writeAt(parts, content) {
   } finally { if (created) { try { unlinkSync(temporary); } catch {} } }
 }
 
+// Mirrors attachmentCandidate in packages/shared/src/file-uploads.ts.
+function importCandidate(name, index) {
+  if (index <= 1) return name;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) + " (" + index + ")" + name.slice(dot) : name + " (" + index + ")";
+}
+
+/** A file attached to a message: created under a name not taken yet in its directory, never replacing a file. */
+function importAt(request) {
+  const name = request.name;
+  if (typeof name !== "string" || !name || /[\x00-\x1f\x7f\/\\]/.test(name) || name === "." || name === ".." || name.toLowerCase() === ".git"
+    || !windowsName(name) || Buffer.byteLength(name) > 240) refuse("invalid file name");
+  if (typeof request.data !== "string" || request.data.length % 4 || !/^[A-Za-z0-9+\/]*={0,2}$/.test(request.data)) refuse("invalid file data");
+  const data = Buffer.from(request.data, "base64");
+  if (data.length > MAX_IMPORT) refuse("file exceeds size limit");
+  const parts = partsFor(request.directory, true);
+  if (!parts.length) refuse("a directory is required");
+  const parent = directoryAt(parts, true);
+  for (let index = 1; index < 1000; index++) {
+    const candidate = importCandidate(name, index);
+    const target = join(parent, candidate);
+    let fd;
+    try { fd = openSync(target, "wx", 0o600); }
+    catch (error) { if (error.code === "EEXIST") continue; throw error; }
+    try {
+      for (let written = 0; written < data.length;) written += writeSync(fd, data, written, data.length - written);
+      fsyncSync(fd);
+      closeSync(fd);
+    } catch (error) {
+      try { closeSync(fd); } catch {}
+      try { unlinkSync(target); } catch {}
+      throw error;
+    }
+    return [...parts, candidate].join("/");
+  }
+  refuse("too many files with this name");
+}
+
 function run(argv, options = {}) {
   const result = spawnSync(argv[0], argv.slice(1), { cwd: WORK, stdio: ["ignore", "inherit", "inherit"], windowsHide: true, ...options });
   if (result.error) refuse("could not start " + basename(argv[0]));
@@ -373,12 +414,13 @@ async function clonePushPack(request) {
 
 async function readRequest() {
   const chunks = [];
+  let size = 0;
   for await (const chunk of process.stdin) {
+    const end = chunk.indexOf(10);
+    if (end >= 0) { chunks.push(chunk.subarray(0, end)); return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
     chunks.push(chunk);
-    const text = Buffer.concat(chunks).toString("utf8");
-    const end = text.indexOf("\n");
-    if (end >= 0) return JSON.parse(text.slice(0, end));
-    if (text.length > 4 * 1024 * 1024) refuse("request too large");
+    size += chunk.length;
+    if (size > MAX_REQUEST) refuse("request too large");
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
@@ -406,6 +448,7 @@ async function main() {
   if (kind === "clone-head") return print(cloneHead(request));
   if (kind === "clone-push-prepare") return print(clonePushPrepare(request));
   if (kind === "clone-push-pack") return clonePushPack(request);
+  if (kind === "import") return print({ path: importAt(request) });
   const parts = partsFor(request.path, kind === "write");
   if (kind === "write") { writeAt(parts, request.content); return print(null); }
   if (kind === "read" || kind === "read-content") {
@@ -439,5 +482,5 @@ main().catch(error => {
 `;
 
 /** The request kinds the Node helper runs. */
-export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "list", "browse", "snapshot", "bash",
+export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "snapshot", "bash",
   "clone-head", "clone-push-prepare", "clone-push-pack"]);

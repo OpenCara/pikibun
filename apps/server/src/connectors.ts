@@ -2,6 +2,7 @@ import { egressGrant, gitDirect, gitRelay } from './network.js';
 import { apiCredential } from './api-access.js';
 import { webSearch } from './web-search.js';
 import { withHostToolCapabilities } from './host-capabilities.js';
+import { verifyDirectUpload } from './file-uploads.js';
 import type { Hono } from 'hono';
 import type { ConnectorCapabilities, ConnectorInfo, ConnectorPairing, LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { gpuKinds, type GpuKind } from '../../../packages/shared/src/host-config.js';
@@ -413,6 +414,8 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
   app.post('/api/connectors/self/git/direct', async c => gitDirect(c, await authenticateConnector(c)));
   // The credential a session's egress proxy adds to the GitHub API requests it answers itself (api-access.ts).
   app.post('/api/connectors/self/api/credential', async c => apiCredential(c, await authenticateConnector(c)));
+  // A direct-upload grant a desktop app handed this host, checked before the host takes the chunk (file-uploads.ts).
+  app.post('/api/connectors/self/uploads/verify', async c => verifyDirectUpload(c, await authenticateConnector(c)));
 }
 
 /** A one-use pairing code for a new host of `ownerId`, valid ten minutes; also how a local server pairs its own machine. */

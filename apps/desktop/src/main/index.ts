@@ -5,14 +5,14 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { app, BrowserWindow, dialog, ipcMain, net, type IpcMainInvokeEvent } from "electron";
 import { channels, type HostsView, type LocalStartInput, type Outcome, type SettingsView } from "../shared/bridge.js";
-import { remoteChannels, type DesktopView } from "../shared/remote-bridge.js";
+import { remoteChannels, type DesktopView, type UploadOutcome } from "../shared/remote-bridge.js";
 import { githubLookup, resolveAdmins } from "./admins.js";
 import { HostController } from "./host-controller.js";
 import { HostProcess } from "./host-process.js";
 import { LocalServerController } from "./local-server.js";
 import { HostTray, installAppMenu, type MenuActions } from "./menu.js";
 import { DEFAULT_SERVER, parseServerOrigin } from "./origin.js";
-import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseStartInput, parseString } from "./requests.js";
+import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseStartInput, parseString, parseUpload } from "./requests.js";
 import { remoteView } from "./remote-view.js";
 import { PRIMARY_CONNECTION, SettingsStore } from "./settings.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
@@ -430,6 +430,15 @@ function main(): void {
       return { ok: false, error: "Not stopped." };
     }
     return localServer.stop();
+  });
+  // A file attached to a message, a chunk at a time, straight to this computer's host of the page's own server, when the
+  // session runs there: the page's server granted each chunk, and the host has it check that grant before taking it.
+  handleRemote(remoteChannels.upload, async (origin, _window, payload): Promise<UploadOutcome> => {
+    const input = parseUpload(payload);
+    if (!input.ok) return { ok: false, error: input.error, local: false };
+    const target = [...hosts.values()].find(({ controller }) => controller.server === origin && controller.view().running?.connectorId === input.value.connectorId);
+    if (!target) return { ok: false, error: "That session's host isn't running on this computer.", local: false };
+    return target.controller.upload(input.value.connectorId, input.value.grant, input.value.body);
   });
   handleRemote(remoteChannels.openWindow, (_origin, _window, payload): Outcome => {
     if (payload === "host") openHost();

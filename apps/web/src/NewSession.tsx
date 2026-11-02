@@ -3,7 +3,7 @@ import type { ModelDefinition, SessionRecord, Workspace } from "../../../package
 import { canCreateSessions } from "../../../packages/shared/src/policy";
 import { api, segment } from "./api";
 import { useApp } from "./app-context";
-import { AttachButton, AttachmentStrip, encodeImages, handOverImages, imagesUnavailable, useAttachments } from "./attachments";
+import { AttachButton, AttachmentStrip, encodeImages, handOverFiles, handOverImages, imagesUnavailable, useAttachments, useFileAttachmentOptions, withFilesNote } from "./attachments";
 import {
   autoApproveConfirmed, ChatOptionsBar, chatOptionsBody, confirmAutoApprove, mustConfirmAutoApprove, preferredSelection, readChatPreference, rememberChat, type ChatSelection,
 } from "./chat-options";
@@ -121,7 +121,7 @@ function Composer({ workspace }: { workspace: Workspace }) {
   const runOnHost = hostSessions && onHost;
   const unsandboxed = Boolean(host?.capabilities.unsandboxed || runOnHost);
   const canStart = Boolean(model && host && available && repositoriesReady && trusted && !action.busy);
-  const attachments = useAttachments(imagesUnavailable(host));
+  const attachments = useAttachments(imagesUnavailable(host), undefined, useFileAttachmentOptions(workspace.id, host));
 
   // Set while the owner decides on Auto-approve, so a second Enter can't start a second session.
   const confirming = useRef(false);
@@ -143,6 +143,7 @@ function Composer({ workspace }: { workspace: Workspace }) {
     if (!canStart || !model || !host || confirming.current) return;
     const message = content.trim();
     const pasted = attachments.images;
+    const attached = attachments.files;
     const options = chatOptionsBody(host, selection, "submit");
     // The chat box starts on Auto-approve without asking, and it merges too: the first message that would asks first.
     if (mustConfirmAutoApprove(options, autoApproveConfirmed())) {
@@ -159,14 +160,17 @@ function Composer({ workspace }: { workspace: Workspace }) {
       const sessionId = result.session.id;
       writeStorage(() => localStorage, LAST_START_KEY, `model:${model.id}`);
       rememberChat(host, selection);
-      if (message || images.length) {
+      if (message || images.length || attached.length) {
         try {
-          await api(`/api/sessions/${segment(sessionId)}/submit`, { method: "POST", body: { content: message, requestId: crypto.randomUUID(), ...(options ? { options } : {}),
+          // Files go into the new session's worktree first, and the message says where.
+          const note = await attachments.upload(sessionId, host, attached);
+          await api(`/api/sessions/${segment(sessionId)}/submit`, { method: "POST", body: { content: withFilesNote(message, note), requestId: crypto.randomUUID(), ...(options ? { options } : {}),
             ...(images.length ? { images } : {}) } });
         } catch {
-          // The session exists; keep the unsent text and images for its composer instead of failing the start.
+          // The session exists; keep the unsent text, images and files for its composer instead of failing the start.
           writeDraft(sessionId, message);
           handOverImages(sessionId, pasted);
+          handOverFiles(sessionId, attached);
         }
       }
       refreshSessions();
