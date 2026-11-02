@@ -100,6 +100,12 @@ export interface ConnectorCapabilities {
    */
   automaticGitHub?: boolean;
   /**
+   * The connector runs the requests of members a session's owner auto-approves (SessionRecord.autoApprovedRequesters)
+   * without asking, as the control plane reports it (AuthorizationResult.autoApprove). Absent on older connectors,
+   * which still ask for each.
+   */
+  requesterAutoApprove?: boolean;
+  /**
    * The connector lets members its owner granted host commands to (HostCommandGrant) approve them, or auto-approve
    * them in their own sessions, as the control plane reports. Absent on older connectors: only the owner decides them.
    */

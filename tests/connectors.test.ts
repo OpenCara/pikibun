@@ -2959,6 +2959,109 @@ test('the owner\'s Auto-approve message posts GitHub comments without a capabili
   assert.equal(fetch.mock.callCount(), 20);
 });
 
+test('a session owner auto-approves another member\'s requests from one of their cards, only while the workspace allows it', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_comment', 'github_merge', 'bash']);
+  const owner = s.creator.user.id; const member = s.admin.user.id;
+  const path = `/api/sessions/${s.session.id}`;
+  const settings = `/api/workspaces/${s.team.id}/approvals`;
+  // Off until the workspace's owner or an admin turns it on; members only see it.
+  assert.deepEqual(await json(await s.creator.request('GET', settings)), { settings: { requesterAutoApprove: false } });
+  await denied(await s.creator.request('PUT', settings, { requesterAutoApprove: true }), 403, 'forbidden');
+  await denied(await s.admin.request('PUT', settings, { requesterAutoApprove: 'yes' }), 400, 'invalid_input');
+
+  // The member's message asks for a command; its card is reviewed as any other.
+  const admissionId = autoAdmission(f, s.session.id, member, 'approval');
+  const pending = (id: string, operation: Operation): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: member, operation,
+    status: 'pending', admissionId, createdAt: new Date().toISOString() });
+  const command = pending('tool-command', { kind: 'bash', command: 'npm test' });
+  const merge = pending('tool-merge', { kind: 'github.merge', repository: 'owner/repo', pull: 5, sha: headSha, method: 'squash' });
+  let approvals: ApprovalRecord[] = [command, merge];
+  const decisions: string[] = [];
+  rpcHub(f, s.connector, envelope => {
+    const action = envelope.request.ticket.action;
+    if (action === 'view') return Response.json({ view: {
+      sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
+      entries: [], approvals, conversations: [], busy: true,
+    } });
+    assert.equal(action, 'approve');
+    const input = JSON.parse(envelope.request.body) as Record<string, unknown>;
+    // The host only ever sees a plain approval.
+    assert.equal(Object.hasOwn(input, 'alwaysApprove'), false);
+    decisions.push(String(input.approvalId));
+    const decided: ApprovalRecord = { ...approvals.find(approval => approval.id === input.approvalId)!, status: 'executing', decidedBy: owner };
+    approvals = approvals.map(approval => approval.id === decided.id ? decided : approval);
+    return Response.json({ approval: decided });
+  });
+  const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
+  let presented = await present();
+  const always = (client: Client, id: string, body: Record<string, unknown> = {}) =>
+    client.request('POST', `${path}/approvals/${id}`, { decision: 'approve', reviewHash: presented.get(id)!.reviewHash, alwaysApprove: true, ...body });
+  await denied(await always(s.creator, command.id), 403, 'requester_auto_approve_disabled');
+  assert.deepEqual(await json(await s.admin.request('PUT', settings, { requesterAutoApprove: true })), { settings: { requesterAutoApprove: true } });
+  let record = (await json<{ session: SessionRecord }>(await s.creator.request('GET', path))).session;
+  assert.equal(record.requesterAutoApprove, true);
+  assert.equal(Object.hasOwn(record, 'autoApprovedRequesters'), false);
+  // A host whose connector would still ask isn't offered it.
+  await denied(await always(s.creator, command.id), 409, 'connector_update_required');
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, requesterAutoApprove: true } }));
+  // Merges always ask, and Always approve only approves.
+  await denied(await always(s.creator, merge.id), 400, 'invalid_decision');
+  await denied(await always(s.creator, command.id, { decision: 'deny' }), 400, 'invalid_decision');
+  assert.deepEqual(decisions, []);
+
+  const authorize = async (actorId: string, autoApprove = true) => json<{ allowed: boolean; autoApprove?: true }>(await self(f, s.connector, 'authorize',
+    { ...authorization(s.session, actorId), ...(autoApprove ? { autoApprove: true } : {}) }));
+  assert.equal((await authorize(member)).autoApprove, undefined);
+  await json(await always(s.creator, command.id));
+  assert.deepEqual(decisions, [command.id]);
+  record = (await json<{ session: SessionRecord }>(await s.creator.request('GET', path))).session;
+  assert.deepEqual(record.autoApprovedRequesters, [member]);
+  // The host learns it only when it asks, and never for the owner, whose own messages choose their access.
+  assert.equal((await authorize(member)).autoApprove, true);
+  assert.equal(Object.hasOwn(await authorize(member, false), 'autoApprove'), false);
+  assert.equal((await authorize(owner)).autoApprove, undefined);
+
+  // The member's comments now post without a person, as the owner; their merges still need one.
+  const fetch = githubFetch(t);
+  const comment = (approvalId: string, admission = admissionId) => ({ sessionId: s.session.id, actorId: member, approvalId, admissionId: admission,
+    repository: 'owner/repo', issue: 3, body: 'Exactly approved text' });
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-borrowed', autoAdmission(f, s.session.id, owner))), 403, 'automatic_github_not_admitted');
+  assert.deepEqual(await json(await self(f, s.connector, 'github/comment', comment('tool-comment'))), { id: 99, url: 'https://github.com/owner/repo/issues/3#issuecomment-99' });
+  assert.equal(fetch.mock.callCount(), 1);
+  await denied(await self(f, s.connector, 'github/merge', { sessionId: s.session.id, actorId: member, approvalId: 'tool-automerge', admissionId,
+    repository: 'owner/repo', pull: 5, sha: headSha, method: 'squash' }), 403, 'permission_revoked');
+
+  // A view shows the member's command as automatic; a host can't claim the same of their merge.
+  const ran = (id: string, operation: Operation): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: member, decidedBy: owner, automatic: true,
+    admissionId, status: 'executed', result: 'ok', createdAt: new Date().toISOString(), operation });
+  approvals = [ran('tool-ran', { kind: 'bash', command: 'npm run build' })];
+  presented = await present();
+  assert.equal(presented.get('tool-ran')!.automatic, true);
+  approvals = [ran('tool-merged', merge.operation)];
+  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
+
+  // Turned off for the workspace, the member's requests ask again, and what already ran stays valid history.
+  await json(await s.admin.request('PUT', settings, { requesterAutoApprove: false }));
+  assert.equal((await authorize(member)).autoApprove, undefined);
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-later')), 403, 'permission_revoked');
+  approvals = [ran('tool-ran', { kind: 'bash', command: 'npm run build' })];
+  assert.equal((await present()).get('tool-ran')!.automatic, true);
+  record = (await json<{ session: SessionRecord }>(await s.creator.request('GET', path))).session;
+  assert.equal(Object.hasOwn(record, 'requesterAutoApprove'), false);
+  assert.deepEqual(record.autoApprovedRequesters, [member]);
+
+  // Only the owner stops it; then it stays stopped when the workspace allows it again.
+  await json(await s.admin.request('PUT', settings, { requesterAutoApprove: true }));
+  assert.equal((await authorize(member)).autoApprove, true);
+  await denied(await s.admin.request('DELETE', `${path}/auto-approved-requesters/${member}`), 403, 'owner_required');
+  assert.deepEqual(await json(await s.creator.request('DELETE', `${path}/auto-approved-requesters/${member}`)), { autoApprovedRequesters: [] });
+  await denied(await s.creator.request('DELETE', `${path}/auto-approved-requesters/${member}`), 404, 'not_found');
+  assert.equal((await authorize(member)).autoApprove, undefined);
+  assert.equal((await present()).get('tool-ran')!.automatic, true);
+  const audit = f.sqlite.prepare(`SELECT action FROM audit WHERE action LIKE 'session.requester_auto_approve.%' OR action = 'workspace.approvals.updated' ORDER BY rowid`).all().map(row => row.action);
+  assert.deepEqual(audit, ['workspace.approvals.updated', 'session.requester_auto_approve.started', 'workspace.approvals.updated', 'workspace.approvals.updated', 'session.requester_auto_approve.stopped']);
+});
+
 test('automatic GitHub merges need an Auto-approve admission marked to merge, and runtimes cannot claim otherwise', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_merge']);
   const calls = mergeFetch(t, () => Response.json({ merged: true, sha: mergedSha }));

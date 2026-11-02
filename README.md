@@ -125,7 +125,7 @@ Where the operator sets `PASSWORD_AUTH=true`, as the [Docker image](#docker) doe
 
 ### Workspaces and members
 
-Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Transcripts**, **Session database**, **Members** and, for owners and admins, **Data export**.
+Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Transcripts**, **Approvals**, **Session database**, **Members** and, for owners and admins, **Data export**.
 
 Owners and admins add people with **Members → Add member**, entering the person's **User ID** and a role; saving an existing member changes their role, which takes effect at once. Or they share an invite link instead (see [Invite links and pending members](#invite-links-and-pending-members)). Below the owner there are four tiers:
 
@@ -161,7 +161,7 @@ The workspace's owner and admins manage every session in it, private ones includ
 - give workspace members session roles up to **Collaborator** and remove anyone's, under **Details → People → Session roles**;
 - **Turn off** its share link.
 
-Everything that acts as the session's owner, or takes their work out of the session, stays theirs. Approving its tool calls takes a session role that allows it, since an approved operation runs as the owner with their Git accounts; the owner, or a session admin, gives that. Only the owner uses **Auto-approve**, decides permission requests, schedules prompts, restarts, backs up, restores, exports or moves the session, and creates or copies its share link. Every change a manager makes is recorded in the session's activity under their own name. Demoting an admin, or removing them, takes all of this away at once.
+Everything that acts as the session's owner, or takes their work out of the session, stays theirs. Approving its tool calls takes a session role that allows it, since an approved operation runs as the owner with their Git accounts; the owner, or a session admin, gives that. Only the owner uses **Auto-approve** (and chooses whether to [always approve another member](#always-approving-another-member)), decides permission requests, schedules prompts, restarts, backs up, restores, exports or moves the session, and creates or copies its share link. Every change a manager makes is recorded in the session's activity under their own name. Demoting an admin, or removing them, takes all of this away at once.
 
 #### Invite links and pending members
 
@@ -599,6 +599,12 @@ Commands, pushes, GitHub comments, merges and issues, and host commands each nee
 | Host commands | The host's owner, in any session on their host they can see (connector newer than 0.9.0; with an older one they also need approve permission on the session), or a member they [granted host commands](#host-admins-and-host-command-grants) who has approve permission on the session |
 
 The agent's tool call waits for the decision, and its message waits with it (connector 0.9.0 or newer). **Approve** runs the operation at once: its output appears on the card and goes back to the agent, which carries on. Commands, pushes and host commands run in the background (connector newer than 0.9.0 for commands), so the card shows them running until they end. After **Deny**, the agent learns the operation was denied. The card can be decided until an hour after its message was sent; a card whose call stops first (the message is stopped, the session restarts, or the hour passes) is marked interrupted and can no longer run. An operation you request yourself, outside a message, can be approved once the session's queue is idle. Approving also checks that whoever requested it still has write permission. You can request an operation yourself under **Details → Operation request** (**Bash command** or **GitHub comment**), with write permission; it needs approval like the agent's.
+
+#### Always approving another member
+
+Approved operations run as the session's owner, so by default only the owner's own **Auto-approve** messages run without asking. A workspace's owner or an admin can let session owners there go further: **Settings → Workspaces →** the workspace **→ Approvals → Auto-approve other members' requests** (`PUT /api/workspaces/:id/approvals` with `{"requesterAutoApprove": true}`; off by default).
+
+With it on, the session owner's card for another member's command, push, or GitHub comment or issue also offers **Always approve** *name*. It approves that card and, from then on, that member's messages in that session run those operations without asking, as the owner, recorded as automatic under the member's name. Their merges, host commands, commands of a session running on its host, commands without the host's [resource limits](#the-sandbox), and anything the session doesn't allow yet (a [permission request](#permission-requests)) still ask. Only the owner chooses it, member by member and session by session; the workspace setting alone auto-approves nobody. The session's **Details → People** lists who is always approved, and the owner's **Stop** ends it (`DELETE /api/sessions/:id/auto-approved-requesters/:userId`). Turning the workspace setting off makes every such member ask again everywhere; the owners' choices are kept and apply again if it's turned back on. Each choice and stop is recorded in the session's activity, and each change of the setting in the workspace's. The host re-checks with Pikibun before each such operation, so a stop, or a member losing write access, takes effect at the next one. This needs a connector advertising `requesterAutoApprove`; older ones keep asking.
 
 #### Permission requests
 

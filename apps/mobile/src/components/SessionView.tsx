@@ -1,6 +1,6 @@
 import {
   accessUnavailable, activeStatuses, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting, initialSelection, isHostCommand,
-  messageCut, modelUnavailable, mustConfirmAutoApprove, preparingRepositories, resendText, rewindable, segment, type ChatSelection,
+  messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, preparingRepositories, resendText, rewindable, segment, username, type ChatSelection,
 } from "@pikibun/client";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
@@ -92,15 +92,19 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
     return canApprove && (!ownerOnly || isOwner);
   }
 
-  /** `scope` answers a permission request: allow the one call, or the same need for the rest of the session. */
-  async function decide(approval: ApprovalRecord, decision: "approve" | "deny", scope?: "call" | "session") {
+  /**
+   * `scope` answers a permission request: allow the one call, or the same need for the rest of the session. `always`
+   * approves another member's card and auto-approves their requests from now on (offersAlwaysApprove).
+   */
+  async function decide(approval: ApprovalRecord, decision: "approve" | "deny", scope?: "call" | "session", always = false) {
     if (!decides(approval) || approvalAction.busy || !approval.reviewHash || approval.status !== "pending") return;
     // The card is the prompt: it shows the exact operation, who it runs as, its resource limits and any unsandboxed-host warning, so a tap decides at once.
     const notice = approval.operation.kind === "permission"
       ? decision === "deny" ? "Not allowed" : scope === "session" ? "Allowed for the rest of the session" : "Allowed for this call"
+      : always ? `Approved. ${username(people.person(approval.requestedBy))}'s requests here now run without asking; the owner can stop it on the web, under Details › People.`
       : decision === "approve" ? "Approval decision recorded" : "Operation denied";
     await approvalAction.run(async () => {
-      await api(`/api/sessions/${segment(id)}/approvals/${segment(approval.id)}`, { method: "POST", body: { decision, reviewHash: approval.reviewHash, ...(scope ? { scope } : {}) } });
+      await api(`/api/sessions/${segment(id)}/approvals/${segment(approval.id)}`, { method: "POST", body: { decision, reviewHash: approval.reviewHash, ...(scope ? { scope } : {}), ...(always ? { alwaysApprove: true } : {}) } });
       live.refresh();
     }, notice);
   }
@@ -150,6 +154,8 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
         </View> : <>
           <View style={ui.inline}>
             <Button testID="approval-approve" small variant="primary" label="Approve" disabled={disabled} onPress={() => void decide(approval, "approve")} />
+            {session && offersAlwaysApprove(approval, session, host, user.id) && <Button testID="approval-always" small label={`Always approve ${username(people.person(approval.requestedBy))}`}
+              disabled={disabled} onPress={() => void decide(approval, "approve", undefined, true)} />}
             <Button testID="approval-deny" small label="Deny" disabled={disabled} onPress={() => void decide(approval, "deny")} />
           </View>
           <Text testID="approval-hint" style={[ui.small, { color: palette.muted }]}>

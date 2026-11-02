@@ -1,3 +1,4 @@
+import { autoApprovesRequester } from './requester-auto-approve.js';
 import type { Hono, MiddlewareHandler } from 'hono';
 import type { AuthorizationResult, Permission } from '../../../packages/shared/src/types.js';
 import { permissions } from '../../../packages/shared/src/types.js';
@@ -59,6 +60,7 @@ export async function authorizeSession(c: AppContext, connectorId: string | null
     if (input.host !== undefined && input.host !== true) fail(400, 'invalid_authorization', 'Invalid authorization request.');
     if (input.hostSessions !== undefined && (input.hostSessions !== true || input.host !== true)) fail(400, 'invalid_authorization', 'Invalid authorization request.');
     if (input.archived !== undefined && (input.archived !== true || input.host !== undefined || input.permission !== 'manage')) fail(400, 'invalid_authorization', 'Invalid authorization request.');
+    if (input.autoApprove !== undefined && input.autoApprove !== true) fail(400, 'invalid_authorization', 'Invalid authorization request.');
     // An archived session admits nothing from its host but packing and unpacking its files, which ask as `archived` and are
     // admitted only while it is archived (see requireArchivedAction).
     const archived = access?.row.status === 'archived';
@@ -69,5 +71,7 @@ export async function authorizeSession(c: AppContext, connectorId: string | null
     if (host) result.hostCommands = host.level === 'owner' ? 'auto' : host.level;
     // Only to a connector that asks: older ones parse the reply strictly and know no such field.
     if (host?.sessions && input.hostSessions === true) result.hostSessions = true;
+    // Likewise only to a connector that asks: whether the session's owner auto-approves this member's requests.
+    if (allowed && input.autoApprove === true && await autoApprovesRequester(c.env, access!.row, actorId)) result.autoApprove = true;
     return c.json(result);
 }
