@@ -363,6 +363,11 @@ export class RunnerSession {
   #registry?: Registry;
   /** The session's Pi extensions (docs/design/host-extensions.md), where the host has any. */
   #hostExtensions?: SessionExtensions;
+  /**
+   * The shared conversation's model and reasoning level, as its extensions see them (`ctx.model`): read when the session
+   * opens and when each shared message starts, which may switch them.
+   */
+  #currentModel?: { provider: string; modelId: string; thinkingLevel?: string };
   private tools: ToolRegistration[] = [];
   private lock: Promise<unknown> = Promise.resolve();
   private generation = 0;
@@ -1028,6 +1033,7 @@ export class RunnerSession {
       doc.json = JSON.stringify(state);
     }, context);
     this.#shared = await this.sharedConversation();
+    await this.noteCurrentModel(this.#shared);
     this.closing = false;
     this.#opened = true;
     void this.#hostExtensions?.sessionStart().catch(() => {});
@@ -1397,11 +1403,18 @@ export class RunnerSession {
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
+    if (run.mode === "write") await this.noteCurrentModel(conversation);
     if (run.mode !== "write" || !this.#hostExtensions?.extensions.length) return;
     const text = typeof content === "string" ? content : (content ?? []).flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
     const images = typeof content === "string" ? [] : (content ?? []).flatMap(part => part.type === "image" ? [{ type: "image" as const, data: part.data, mimeType: part.mimeType }] : []);
     const prompts = extensions.length ? await this.#hostExtensions.beforeAgentStart(text, images.length ? images : undefined).catch(() => ({})) : {};
     await conversation.commit(async tx => { (await tx.doc(ExtensionPrompts, conversation.id)).prompts = prompts; }, context);
+  }
+
+  /** Notes the model and reasoning level `conversation` runs on now, for the session's extensions. */
+  private async noteCurrentModel(conversation: Conversation): Promise<void> {
+    const agent = await conversation.agent(context).catch(() => undefined);
+    if (agent?.model) this.#currentModel = { provider: agent.model.provider, modelId: agent.model.modelId, ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) };
   }
 
   /**
@@ -1436,7 +1449,11 @@ export class RunnerSession {
     return {
       directory: this.sandbox.worktree,
       ...(this.config.extensions?.modelRegistry ? { modelRegistry: this.config.extensions.modelRegistry } : {}),
-      model: () => this.modelRef && this.config.extensions?.modelRegistry?.find(this.modelRef.provider, this.modelRef.modelId) as never,
+      model: () => {
+        const current = this.#currentModel ?? this.modelRef;
+        return current && this.config.extensions?.modelRegistry?.find(current.provider, current.modelId) as never;
+      },
+      thinkingLevel: () => this.#currentModel?.thinkingLevel,
       state: async source => {
         const item = (await this.extensionChoice()).chosen.find(candidate => candidate.source === source);
         return { active: !!item, settings: item?.workspace?.settings ?? {} };

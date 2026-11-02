@@ -418,3 +418,56 @@ test("each extension keeps the tools no earlier one, nor the session, has", () =
     { source: "a", kept: ["x"], lost: ["bash"] }, { source: "b", kept: ["y"], lost: ["x"] }, { source: "c", kept: [], lost: [] },
   ]);
 });
+
+test("an extension sees the model and reasoning level the running message uses, after a switch too", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+  const root = await realpath(await directory(t));
+  await writeFile(join(root, "which.ts"), `import { Type } from "typebox";
+    export default function (pi) {
+      pi.registerTool({ name: "which_model", label: "Which", description: "Name the model.", parameters: Type.Object({}),
+        async execute(_id, _params, _signal, _onUpdate, ctx) { return { content: [{ type: "text", text: ctx.model.provider + "/" + ctx.model.id + " " + pi.getThinkingLevel() }], details: undefined }; } });
+    }`);
+  const store = new ExtensionStore(join(root, "state"));
+  await store.add(parseExtensionSource(join(root, "which.ts")));
+  const installed = await loadInstalled(store);
+  const faux = fauxProvider({ models: [{ id: "faux-1", reasoning: true }, { id: "faux-2", reasoning: true }] });
+  const respond: FauxResponseFactory = async request => {
+    faux.appendResponses([respond]);
+    const last = request.messages.findLast(message => message.role !== "system");
+    if (last?.role === "toolResult") return fauxAssistantMessage(`done: ${last.content.map(part => part.type === "text" ? part.text : "").join("")}`);
+    return fauxAssistantMessage(fauxToolCall("which_model", {}), { stopReason: "toolUse" });
+  };
+  faux.setResponses([respond]);
+  const models = createModels(); models.setProvider(faux.provider);
+  // The host's Pi model registry, as far as extensions read it here.
+  const modelRegistry = { find: (provider: string, id: string) => ({ provider, id }) } as unknown as ModelRegistry;
+  const target: RunnerBinding = {
+    session: { id: "model-session", workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Models", policyVersion: 1, status: "ready",
+      createdAt: "2026-01-01T00:00:00Z", repositories: [], repositoryMode: "clone", connectorId: "host-connector", connectorOwnerId: "test:alice" },
+    owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice", gitEmail: "alice@example.test", env: {}, githubConnected: false },
+    agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["read_file"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId: "faux-1", connectorId: "host-connector", connectorOwnerId: "test:alice" },
+  };
+  const service = new RunnerService({
+    dataDir: join(root, "runner"), sharedSecret: "extension-test-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787",
+    connectorId: "host-connector", allowFaux: true, unsandboxed: true,
+    authorize: async input => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => installed, workspace: async () => ({ extensions: [], automaticTools: false }), modelRegistry },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const claims = async (action: RunnerAction) => {
+    const now = Math.floor(Date.now() / 1000);
+    return { aud: "runner" as const, sessionId: target.session.id, actorId: "test:alice", ownerId: "test:alice", action, policyVersion: 1, iat: now, exp: now + 60,
+      jti: randomUUID(), bodyHash: await sha256(""), connectorId: "host-connector" };
+  };
+  const session = await service.provision(target, await claims("create"));
+  // The host owner's own Auto-approve messages run their dev extension's tools without a card.
+  const ask = async (content: string, options: Record<string, unknown>) => {
+    await session.submit(await claims("submit"), { content, requestId: content, admissionId: await sha256(content), options: { access: "auto", ...options } }, "write");
+    for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
+    return (await session.view()).entries.filter(entry => entry.role === "toolResult").at(-1)!.text;
+  };
+  assert.match(await ask("first", { thinkingLevel: "low" }), /faux\/faux-1 low/);
+  assert.match(await ask("second", { model: { provider: "faux", modelId: "faux-2" }, thinkingLevel: "high" }), /faux\/faux-2 high/);
+});
