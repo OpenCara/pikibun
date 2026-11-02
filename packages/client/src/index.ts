@@ -11,7 +11,7 @@ export {
 export { COMPACTION_FAILED_TITLE, compactionFailureText } from "./compaction";
 export { copyText, messageCut, resendText, rewindable, type MessageCut } from "./message-actions";
 export type { CompactionFailure } from "../../shared/src/types";
-export { decidedAsHostCommand, decidesHostCommand, decidesHostCommands, hostCommandWaiting, isHostCommand, offersAlwaysApprove, requesterAutoApproves } from "./host-commands";
+export { decidedAsHostCommand, decidesHostCommand, decidesHostCommands, hostCommandWaiting, isHostCommand, offersAlwaysApprove, requesterAutoApproves, automaticNote, extensionToolArguments, extensionToolNotice } from "./host-commands";
 export { formatBytes, preparingRepositories, repositoryPhaseLabel, repositoryProgressText, repositoryProgressValue } from "./repository-progress";
 export { sessionStatus, type SessionStatus, type SessionStatusTone } from "./session-status";
 export { openFetchEventStream, SseParser, type FetchEventStreamOptions } from "./sse";

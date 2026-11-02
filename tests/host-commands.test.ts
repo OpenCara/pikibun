@@ -141,3 +141,14 @@ test("another member's requests run without asking only for sandboxed commands, 
   // A host missing from the viewer's listing can't say; the control plane decides.
   assert.equal(offersAlwaysApprove(card, session, undefined, "alice"), true);
 });
+
+test("an extension's tool call is decided as a host command, by the host's owner without approve permission, and never auto-approved for another member", () => {
+  const call = { kind: "extension.tool" } as const;
+  const session = { ownerId: "github:2", connectorOwnerId: "github:1" };
+  assert.equal(isHostCommand(call, {}), true);
+  assert.equal(decidedAsHostCommand(call, session), true);
+  assert.equal(sharedRule(call, session), true);
+  assert.equal(requesterAutoApproves(call, session), false);
+  assert.equal(decidesHostCommand(call, session, undefined, "github:1", false), true, "the host's owner, without approve permission");
+  assert.equal(decidesHostCommand(call, session, undefined, "github:2", true), false, "the session's owner, without host command authority");
+});

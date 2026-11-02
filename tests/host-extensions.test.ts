@@ -334,6 +334,7 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   await idle();
   const decided = (await session.view()).approvals.find(item => item.id === card!.id)!;
   assert.deepEqual([decided.status, decided.decidedBy, decided.result], ["executed", "test:bob", "HELLO!"]);
+  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [] });
   assert.match((await results()).at(-1)!, /HELLO!/);
 
   await send("quietly", "read");
@@ -356,6 +357,9 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   const automatic = (await session.view()).approvals.at(-1)!;
   assert.deepEqual([automatic.status, automatic.automatic, automatic.result], ["executed", true, "NOW!"]);
 
+  // A version the host doesn't have: the session runs without it, and says so.
+  answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0" }]), automaticTools: true };
+  assert.deepEqual((await session.view()).extensions, { running: [], missing: ["npm:shout@2.0.0"] });
   // Turned off: its tool is no longer offered.
   answer = { extensions: [], automaticTools: true };
   await send("gone", "approval");

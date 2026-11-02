@@ -12,6 +12,7 @@ import { Alert, Button, CardBody, Collapsible, Combobox, confirmDialog, CopyFiel
 import { HostAdminsSection, HostCommandGrantsSection } from "./HostAccess";
 import { HostCompactionSection } from "./HostCompaction";
 import { HostConfigSection } from "./HostConfig";
+import { HostExtensionsSection } from "./HostExtensions";
 import { check, desktopBridge } from "../desktop";
 import "./settings.css";
 
@@ -250,6 +251,7 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
     </Section>
     <HostConfigSection connector={connector} refresh={refresh} />
     {connector.config && <HostCompactionSection connector={connector} refresh={refresh} />}
+    {connector.role && <HostExtensionsSection connector={connector} />}
     {connector.capabilities.hostCommands && <HostCommandGrantsSection connector={connector} refresh={refresh} />}
     <HostAdminsSection connector={connector} refresh={refresh} />
     <Section title="Details">

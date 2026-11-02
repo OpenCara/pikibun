@@ -62,8 +62,9 @@ the session's own, then maps what it registered:
 | `ctx.ui.*`, `registerCommand`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage`, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
 | `registerProvider`, `registerMcpServer`, `registerVirtualModel`, `input`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 
-`ctx.pikibun` adds the session (id, workspace, owner, whether it runs on the host). The host's page shows, per
-extension, which of its registrations work, are no-ops or are ignored, so a workspace can tell what it gets.
+The host's page shows, per extension, which of its registrations work, are no-ops or are ignored, so a workspace can
+tell what it gets. `ctx.modelRegistry` is the host's Pi model registry, so an extension that uses the host's provider keys
+works.
 
 Extensions written directly against pi-durable (`defineExtension`) are libraries without a plugin contract (their own
 options and lifecycle); the useful ones (`tool-search`, `codemode`, auto-compact) get small wrappers in Pikibun later.
@@ -144,7 +145,7 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 | Install store, loader and adapter through Pi's loader, `pikibun extensions` | Done |
 | Sessions: selection, `before_agent_start`, lifecycle events, `extension.tool` cards; connector sync and installs | Done (`session.ts`, `extensions/host.ts`, `connector.ts`) |
 | Control plane: tables, routes, owner/admin rules, connector reports, remote installs, audit | Done (`apps/server/src/extensions.ts`, migrations `0046`/`0039`) |
-| Web and mobile: workspace and host sections, install buttons, session list, approval card | Next |
+| Web and mobile: workspace and host sections, install buttons, session list, approval card | Done (`WorkspaceExtensions.tsx`, `HostExtensions.tsx`, `session-panel.tsx`; mobile: the approval card) |
 
 ## Later
 

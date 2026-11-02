@@ -3,12 +3,13 @@ import type { ApprovalRecord, Operation, SessionRecord } from "../../shared/src/
 import { requesterAutoApproves } from "../../shared/src/host-operations";
 
 /**
- * Whether an operation runs outside the sandbox, on the session's host, as a host command: `host_bash`, or any command
+ * Whether an operation runs outside the sandbox, on the session's host, as a host command: `host_bash`, an extension's
+ * tool call (`extension.tool`, which runs in the host's connector), or any command
  * of a session that runs directly on its host (SessionRecord.hostEnvironment). Only someone with host command authority
  * decides one (see `decidesHostCommands`); approve permission on the session isn't enough.
  */
 export function isHostCommand(operation: Pick<Operation, "kind">, session: Pick<SessionRecord, "hostEnvironment">): boolean {
-  return operation.kind === "host.bash" || (operation.kind === "bash" && session.hostEnvironment === true);
+  return operation.kind === "host.bash" || operation.kind === "extension.tool" || (operation.kind === "bash" && session.hostEnvironment === true);
 }
 
 /**
@@ -53,6 +54,8 @@ type ListedHost = Pick<ConnectorInfo, "hostCommandAccess"> & { capabilities?: Pi
  * owner's own, who decides them with the approve permission they hold there, like every other card.
  */
 function hostOwnerDecides(operation: Pick<Operation, "kind">, host: ListedHost | undefined): boolean {
+  // An extension's tool call (connectors with extensions all let their owner decide them so).
+  if (operation.kind === "extension.tool") return true;
   return operation.kind === "host.bash" && host?.capabilities?.hostOwnerDecides === true;
 }
 
@@ -72,4 +75,23 @@ export function decidesHostCommand(operation: Pick<Operation, "kind">, session: 
 export function hostCommandWaiting(operation: Pick<Operation, "kind">, host: ListedHost | undefined): string {
   return hostOwnerDecides(operation, host) ? "Waiting for the host's owner, or a member granted host commands with approve access to this session"
     : "Waiting for the host's owner or a member granted host commands, either with approve access to this session";
+}
+
+/** What an extension tool card says it does: it runs in the host's connector, outside the sandbox, decided like a host command. */
+export function extensionToolNotice(operation: { source: string; tool: string }): string {
+  return `${operation.tool} comes from the extension ${operation.source}. It runs on the session's host, in its connector, as the host's OS user, `
+    + "with access to their files, credentials and network, outside the sandbox. Only the host's owner, or a member granted host commands, can approve it.";
+}
+
+/** An extension tool call's arguments for its card: indented JSON, or as they are when cut short. */
+export function extensionToolArguments(operation: { arguments: string }): string {
+  try { return JSON.stringify(JSON.parse(operation.arguments), null, 2); }
+  catch { return operation.arguments; }
+}
+
+/** Why a card ran without a decision. */
+export function automaticNote(operation: Pick<Operation, "kind">): string {
+  return operation.kind === "extension.tool"
+    ? "Ran without a decision: its workspace runs this extension's tools automatically on this host, or the owner's auto-approve access ran it"
+    : "Ran under the owner's auto-approve access, without a per-command decision";
 }

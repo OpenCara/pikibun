@@ -2797,7 +2797,24 @@ export class RunnerSession {
       activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
         : sessionActivity(Object.values(state.runs).filter(tellsActivity), Object.values(state.approvals),
           activityEntry(snapshots.find(snapshot => snapshot.branch.mode === "write")?.entries.at(-1))),
+      ...await this.extensionView(),
     };
+  }
+
+  /** What the view tells of the session's extensions: those it runs with now, and its workspace's enabled ones its host lacks. */
+  private async extensionView(): Promise<Pick<SessionView, "extensions">> {
+    const config = this.config.extensions;
+    if (!config) return {};
+    try {
+      const answer = await config.workspace(this.binding.session.workspaceId);
+      const installed = config.installed().map(item => item.summary);
+      const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId });
+      const running = chosen.map(item => ({ source: item.source, dev: item.dev,
+        tools: this.#hostExtensions?.get(item.source)?.tools.map(tool => tool.name)
+          ?? installed.find(candidate => candidate.source === item.source)?.modules.flatMap(module => module.tools.map(tool => tool.name)) ?? [] }));
+      const missing = answer.extensions.filter(item => item.enabled && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
+      return running.length || missing.length ? { extensions: { running, missing } } : {};
+    } catch { return {}; }
   }
 
   private entryView(entry: EntryRecord, branch: number, actorId?: string, autoApproved?: ReturnType<typeof autoApprovedCalls>): SessionView["entries"][number] {

@@ -122,9 +122,21 @@ The sandbox has no network, so `gh` and `curl` inside it can't reach GitHub. Age
 - `github_comment` posts a comment. It waits for a human approval unless the session owner's message chose **Auto-approve**.
 - `github_issue` opens an issue with exactly the approved title and body in one of those repositories, and gives the agent its number and URL (connector newer than 0.9.0). It waits for a human approval unless the session owner's message chose **Auto-approve**. If GitHub refuses (issues turned off, no access), no issue is opened and the agent gets GitHub's reason.
 
-## Web pages and search
+## Extensions
 
-Pikibun's own `web_fetch` and `web_search` tools are retired: web search and page reading come from extensions a workspace chooses and its hosts install (`pikibun extensions --help`). They run in the connector, as this machine's user, outside the sandbox.
+Sessions on this host run the Pi extensions their workspace chose that are installed here at the same version. The host's owner installs them from Pikibun (the host's page), or here:
+
+```sh
+npx pikibun@latest extensions add npm:cc-safety-net@2.7.2         # an exact version
+npx pikibun@latest extensions add git:github.com/acme/ext@<commit>  # a full commit, over https
+npx pikibun@latest extensions add ./my-extension.ts                # a dev extension: your own sessions only
+npx pikibun@latest extensions list                                 # what each offers, ignores, or why it doesn't load
+npx pikibun@latest extensions remove cc-safety-net
+```
+
+They live in the connector's state directory; npm runs none of their install scripts unless you add `--allow-scripts`. A running connector picks up changes made here within half a minute. `pikibun connect --no-remote-installs` refuses installs asked for in Pikibun.
+
+Extensions run in the connector, as this machine's user, with your files, credentials and network, outside the sandbox. Install only code you trust. Their tool calls are approved like host commands. Pikibun's own `web_fetch` and `web_search` tools are retired: web search comes from extensions.
 
 ## Chat options
 

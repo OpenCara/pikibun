@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Linking, StyleSheet, Text, View } from "react-native";
 import { containsRedaction, REDACTED } from "../../../../packages/shared/src/redaction";
+import { automaticNote, extensionToolArguments, extensionToolNotice } from "@pikibun/client";
 import type {
   ApprovalRecord, GitHubMergeMethod, GitHubMergeOperation, GitPushOperation, PermissionNeed, PermissionRequest,
 } from "../../../../packages/shared/src/types";
@@ -105,7 +106,7 @@ export function ApprovalCard({ approval, onOpenSession, children }: { approval: 
     : `${approval.permission ? allowed(approval.permission.decidedBy, approval.permission.scope) : ""}${approval.decidedBy ? ` · Decision by ${name(approval.decidedBy)}` : ""}`;
   return <Card>
     <View style={ui.inline}>
-      <Text style={[styles.kind, { color: palette.text }]}>{operation.kind === "permission" ? "Permission" : operation.kind}</Text>
+      <Text style={[styles.kind, { color: palette.text }]}>{operation.kind === "permission" ? "Permission" : operation.kind === "extension.tool" ? `Extension tool · ${operation.tool}` : operation.kind}</Text>
       <View style={ui.flex} />
       {approval.unbounded && <Badge tone="warning">No resource limits</Badge>}
       {containsRedaction(operation) && <Badge tone="warning">Secret hidden</Badge>}
@@ -121,13 +122,14 @@ export function ApprovalCard({ approval, onOpenSession, children }: { approval: 
           Resolves <Text style={styles.code}>{operation.repository}</Text> at <Text style={styles.code}>{operation.ref}</Text>. Other repository pins stay unchanged. This session's files, commits and conversation stay here; they are not copied. Only the session owner can approve.
         </Text>
       </Banner>}
+      {operation.kind === "extension.tool" && <Banner tone="danger" title="Runs on the host, outside the sandbox">{extensionToolNotice(operation)}</Banner>}
       {operation.kind === "git.push" && <GitPushSummary operation={operation} />}
       {operation.kind === "github.merge" && <GitHubMergeSummary operation={operation} />}
-      <Text selectable testID="approval-operation" style={[styles.pre, { color: palette.text, backgroundColor: palette.code }]}>{JSON.stringify(operation, null, 2)}</Text>
+      <Text selectable testID="approval-operation" style={[styles.pre, { color: palette.text, backgroundColor: palette.code }]}>{operation.kind === "extension.tool" ? extensionToolArguments(operation) : JSON.stringify(operation, null, 2)}</Text>
       {approval.status === "pending" && containsRedaction(operation) && <HiddenSecretNote />}
     </>}
     <Text style={[ui.small, { color: palette.muted }]}>
-      Requested by {name(approval.requestedBy)} · {timestamp(approval.createdAt)}{approval.automatic ? " · Ran under the owner's auto-approve access, without a per-command decision" : decision}
+      Requested by {name(approval.requestedBy)} · {timestamp(approval.createdAt)}{approval.automatic ? ` · ${automaticNote(operation)}` : decision}
     </Text>
     {approval.result ? <Text selectable testID="approval-result" style={[styles.pre, { color: palette.text, backgroundColor: palette.code }]}>{approval.result}</Text> : null}
     {operation.kind === "git.repin" && approval.status === "executed" && onOpenSession && <RepinLink result={approval.result} onOpen={onOpenSession} />}

@@ -19,6 +19,7 @@ import {
   ResourceState, Row, Section, SegmentedControl, StatusBadge, Timestamp, useAction, useResource, type ActionState, type Tone,
 } from "./ui";
 import { userIdFromInput, usernameWithId, withUsernames, type Person } from "../../../packages/client/src/usernames";
+import { automaticNote, extensionToolArguments, extensionToolNotice } from "../../../packages/client/src/host-commands";
 
 export type AuditEvent = { id: string; actorId: string; action: string; detail: unknown; createdAt: string };
 export type PanelTab = "details" | "approvals" | "files" | "schedules" | "activity";
@@ -263,7 +264,7 @@ export function ApprovalCard({ approval, children }: { approval: ApprovalRecord;
     : <>{approval.permission && allowed(approval.permission.decidedBy, approval.permission.scope)}{approval.decidedBy && <> · Decision by <Username id={approval.decidedBy} /></>}</>;
   return <article className="approval-card card">
     <div className="approval-head">
-      <span className="approval-kind">{operation.kind === "permission" ? "Permission" : operation.kind}</span><span className="spacer" />
+      <span className="approval-kind">{operation.kind === "permission" ? "Permission" : operation.kind === "extension.tool" ? `Extension tool · ${operation.tool}` : operation.kind}</span><span className="spacer" />
       {approval.unbounded && <StatusBadge tone="warning">No resource limits</StatusBadge>}
       {containsRedaction(operation) && <StatusBadge tone="warning">Secret hidden</StatusBadge>}
       <ApprovalStatus approval={approval} />
@@ -271,12 +272,13 @@ export function ApprovalCard({ approval, children }: { approval: ApprovalRecord;
     {operation.kind === "permission" ? <PermissionSummary request={operation} pending={approval.status === "pending"} /> : <>
       {operation.kind === "host.bash" && <Alert variant="error" title="Runs outside the sandbox">This command runs as the host's OS user with access to their files, credentials and network, without CPU, memory or disk quotas. It runs in this session's files, which the agent can change, so builds, package scripts and Git hooks or settings there can run the agent's code on the host too. Only the host's owner, or a member granted host commands, can approve it. The time limit is {operation.timeoutSeconds} seconds.</Alert>}
       {operation.kind === "git.repin" && <Alert title="Creates a new private session">Resolves <code>{operation.repository}</code> at <code>{operation.ref}</code>. Other repository pins stay unchanged. This session's files, commits and conversation stay here; they are not copied. Only the session owner can approve.</Alert>}
+      {operation.kind === "extension.tool" && <Alert variant="error" title="Runs on the host, outside the sandbox">{extensionToolNotice(operation)}</Alert>}
       {operation.kind === "git.push" && <GitPushSummary operation={operation} />}
       {operation.kind === "github.merge" && <GitHubMergeSummary operation={operation} />}
-      <pre>{JSON.stringify(operation, null, 2)}</pre>
+      {operation.kind === "extension.tool" ? <pre>{extensionToolArguments(operation)}</pre> : <pre>{JSON.stringify(operation, null, 2)}</pre>}
       {approval.status === "pending" && containsRedaction(operation) && <HiddenSecretNote />}
     </>}
-    <p className="muted small">Requested by <Username id={approval.requestedBy} /> · <Timestamp value={approval.createdAt} />{approval.automatic ? <> · Ran under the owner's auto-approve access, without a per-command decision</> : decision}</p>
+    <p className="muted small">Requested by <Username id={approval.requestedBy} /> · <Timestamp value={approval.createdAt} />{approval.automatic ? <> · {automaticNote(operation)}</> : decision}</p>
     {approval.result && <pre>{approval.result}</pre>}
     {operation.kind === "git.repin" && approval.status === "executed" && <RepinLink result={approval.result} />}
     {children}
@@ -345,6 +347,7 @@ function PanelDetails({ session, view, user, workspaceRole, hosts, refresh, audi
   const changed = () => { audit.refresh(); refresh(); };
   return <div>
     <HostSection session={session} user={user} hosts={hosts} />
+    {view?.extensions && <ExtensionsSection extensions={view.extensions} />}
     <RepositoriesSection session={session} refresh={refresh} />
     <PeopleSection session={session} user={user} workspaceRole={workspaceRole} actions={actions} changed={changed} />
     <TranscriptSection session={session} manages={manages} changed={changed} />
@@ -404,6 +407,17 @@ function HostSection({ session, user, hosts }: { session: SessionRecord; user: U
       <Row title="Connection ID" hint={<code>{session.connectorId}</code>} />
     </>}
     {hosts.error && <CardBody><Feedback error={hosts.error} /></CardBody>}
+  </Section>;
+}
+
+/** The extensions the session runs with, and its workspace's enabled ones its host lacks. */
+function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView["extensions"]> }) {
+  return <Section title="Extensions" info={<p>Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls are approved like host commands unless the workspace and the host's owner let them run automatically. Dev extensions are the host owner's own, in their own sessions.</p>}>
+    {extensions.running.map(item => <Row key={item.source} leading={<Icon name="tool" size={16} />} title={<code>{item.source}</code>}
+      hint={item.tools.length ? `Tools: ${item.tools.join(", ")}` : "No tools: prompt or hooks only"}
+      trailing={item.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : <StatusBadge tone="success">Running</StatusBadge>} />)}
+    {extensions.missing.map(source => <Row key={source} title={<code>{source}</code>} hint="Not on this host at this version: the session runs without it until the host's owner installs it"
+      trailing={<StatusBadge tone="neutral">Missing</StatusBadge>} />)}
   </Section>;
 }
 

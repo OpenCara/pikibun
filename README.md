@@ -30,6 +30,7 @@ And around them:
   - [Repositories and Git accounts](#repositories-and-git-accounts)
   - [Hosts](#hosts)
   - [Models and tools](#models-and-tools)
+  - [Extensions](#extensions)
   - [Sessions](#sessions)
   - [Approvals and permission requests](#approvals-and-permission-requests)
   - [Collaborating on a session](#collaborating-on-a-session)
@@ -475,10 +476,21 @@ The tools an agent can use:
 | `schedule` | List, create, change or delete the session's [scheduled prompts](#scheduled-prompts) | A message from the session owner; Auto-approve for auto-approved schedules |
 | `sessions` | List, read, message, start, stop and archive the workspace's other sessions, as the message's sender (see [Working across sessions](#working-across-sessions)) | A shared message; permission in **Read only** messages for changes, and to pass content between sessions whose readers differ |
 | `host_bash` | Run a command on the host, outside the sandbox | The approval of the host owner, or of a member they [granted host commands](#host-admins-and-host-command-grants) |
+| Extension tools | Whatever the workspace's [extensions](#extensions) offer, run on the host outside the sandbox | Decided like `host_bash`, unless the workspace runs the extension's tools automatically and the host's owner allows that |
 
 "Approval" is skipped for messages the session owner sends with **Auto-approve**: always for commands, pushes, GitHub comments, merges and issues, and for `host_bash` only on the owner's own host or one whose owner granted them automatic host commands. Side asks offer only the read-only tools.
 
 Sessions started from a saved agent, before agents were removed, keep that agent's instructions and tools; any other tool they call first asks the session owner with a [permission request](#permission-requests).
+
+### Extensions
+
+A workspace's sessions can run [Pi extensions](https://github.com/earendil-works/pi): packages that add tools (web search, say), guard tool calls (blocking destructive commands), add to the system prompt or summarize long conversations. They load through Pi's own loader, so most Pi extensions work as they are; what Pikibun can't run, such as commands, interface widgets or model providers, does nothing or is ignored, and each host's page says which. See [the design](docs/design/host-extensions.md).
+
+- **The workspace chooses.** Under **Settings → Workspaces →** the workspace **→ Extensions**, owners and admins add an extension pinned to an exact version (`npm:<package>@<version>` or `git:<https URL>@<commit>`), turn it on or off, set its settings (the extension's own options; never secrets) and choose how its tools run: **Approval** or **Automatic**. Every member sees them, and where each host stands with them. When two enabled extensions offer a tool of the same name, sessions keep the first one's, and the page warns.
+- **Hosts install.** A host runs an extension only once it is installed there at that version. Its owner installs it from the host's page (**Settings → Hosts →** the host **→ Extensions**), which lists the extensions its workspaces use that it lacks with **Install** or **Update**, or the workspace's page; or on the machine with `pikibun extensions add` (see the [CLI's README](packages/cli/README.md)). The connector carries out an install within half a minute while it is online. Only the host's owner installs, and `pikibun connect --no-remote-installs` refuses installs from Pikibun.
+- **Sessions** run their workspace's enabled extensions their host has at that version, and nothing else; one the host lacks is skipped, and the session's panel says so. An extension installed on the host from a local path is a dev extension: it runs only in the host owner's own sessions there.
+- **Outside the sandbox.** Extensions run in the host's connector, as its owner's OS user, with their files, credentials and network; the workspace's network access doesn't confine them. Each extension tool call is an approval card decided like a [host command](#host-commands), by the host's owner or a member granted host commands. It runs without one only where the workspace sets the extension's tools to **Automatic** and the host's owner turns on **Let workspaces run extension tools without approval** for their host, or under the session owner's **Auto-approve** where `host_bash` would. A **Read only** message never runs them. Install only extensions you trust.
+- **Web search and page reading** come from extensions: Pikibun's own `web_fetch` and `web_search` tools are retired.
 
 ### Sessions
 

@@ -824,6 +824,12 @@ export interface SessionView {
   repositories?: RepositoryPreparationView;
   /** What the agent is doing now; absent from runners that predate activity reports. */
   activity?: SessionActivity;
+  /**
+   * The session's extensions (docs/design/host-extensions.md): those it runs with now, with the tools it got from each,
+   * and its workspace's enabled ones its host lacks or has at another version (`missing`). Absent from runners that
+   * predate extensions, and where the host has none to tell.
+   */
+  extensions?: { running: { source: string; dev: boolean; tools: string[] }[]; missing: string[] };
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
