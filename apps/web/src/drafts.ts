@@ -44,6 +44,20 @@ export function forgetSentDraft(sessionId: string, sent: string) {
   for (const listener of listeners.get(sessionId) ?? []) listener(sent);
 }
 
+/** Chat boxes open in this tab, handed text that comes back to them (see restoreDraft). */
+const restorers = new Map<string, Set<(merge: (current: string) => string) => void>>();
+
+/**
+ * Puts text back into a session's chat box, below anything typed there: a queued message taken back to edit. Open boxes
+ * of the session take it at once and remember it as their draft; with none open, the draft keeps it for the next one.
+ */
+export function restoreDraft(sessionId: string, text: string) {
+  const merge = (current: string) => current.trim() ? `${current}\n\n${text}` : text;
+  const open = restorers.get(sessionId);
+  if (open?.size) for (const restore of open) restore(merge);
+  else writeDraft(sessionId, merge(readDraft(sessionId)));
+}
+
 /**
  * A session's chat box text: starts from its draft, is remembered as it changes, and drops a sent text when
  * forgetSentDraft says so, here or (through the storage event) in another tab.
@@ -57,6 +71,10 @@ export function useDraft(sessionId: string) {
     const own = listeners.get(sessionId) ?? new Set();
     own.add(drop);
     listeners.set(sessionId, own);
+    const restore = (merge: (current: string) => string) => setContent(merge);
+    const restoring = restorers.get(sessionId) ?? new Set();
+    restoring.add(restore);
+    restorers.set(sessionId, restoring);
     const fromOtherTab = (event: StorageEvent) => {
       if (event.key === key(sessionId) && event.newValue === null && event.oldValue) drop(event.oldValue);
     };
@@ -67,6 +85,8 @@ export function useDraft(sessionId: string) {
     return () => {
       own.delete(drop);
       if (!own.size) listeners.delete(sessionId);
+      restoring.delete(restore);
+      if (!restoring.size) restorers.delete(sessionId);
       window.removeEventListener("storage", fromOtherTab);
     };
   }, [sessionId, initial]);

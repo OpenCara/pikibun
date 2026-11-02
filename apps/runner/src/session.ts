@@ -165,6 +165,14 @@ const DECISION_WAIT_MS = 60 * 60 * 1000;
 /** Why a command without the host's missing limits in a member's session waits for someone else (see grantedShell). */
 const GRANTED_SHELL_DECIDERS = "This command runs without the resource limits its host lacks, on the strength of a host command grant: "
   + "only the host owner, or a member granted host commands on this host, can decide it";
+/**
+ * Whether `run` still says what the session is doing: not one someone went back from (see `revert`), nor one its sender
+ * took back before it ran (see `withdraw`). Both the view and the activity reported to the control plane go by it.
+ */
+function tellsActivity(run: Run): boolean {
+  return !run.reverted && !run.withdrawn;
+}
+
 /** Whether `run` keeps the session busy: it is queued or at work, or a stop of it is still ending its work. */
 function holdsQueue(run: Run): boolean {
   return ["queued", "running", "admitting"].includes(run.status) || run.stopped?.pending === true;
@@ -1257,7 +1265,7 @@ export class RunnerSession {
     // Held work waits for the repositories, and a failed preparation holds it until the session restarts.
     if (preparation !== "ready") return preparation === "preparing" ? "working" : "failed";
     const state = await this.metadata();
-    const runs = Object.values(state.runs).filter(run => !run.reverted);
+    const runs = Object.values(state.runs).filter(tellsActivity);
     const approvals = Object.values(state.approvals);
     const activity = sessionActivity(runs, approvals);
     if (activity !== "done") return activity;
@@ -2702,7 +2710,7 @@ export class RunnerSession {
       ...(access ? { access } : {}),
       ...(repositories ? { repositories } : {}),
       activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
-        : sessionActivity(Object.values(state.runs).filter(run => !run.reverted && !run.withdrawn), Object.values(state.approvals),
+        : sessionActivity(Object.values(state.runs).filter(tellsActivity), Object.values(state.approvals),
           activityEntry(snapshots.find(snapshot => snapshot.branch.mode === "write")?.entries.at(-1))),
     };
   }

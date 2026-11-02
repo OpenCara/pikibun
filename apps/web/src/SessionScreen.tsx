@@ -6,12 +6,12 @@ import { redactSecrets, REDACTED } from "../../../packages/shared/src/redaction"
 import { managesSession } from "../../../packages/shared/src/policy";
 import { api, segment } from "./api";
 import { useApp } from "./app-context";
-import { AttachButton, AttachmentStrip, encodeImages, forgetHandedOverImages, handedOverImages, imageBlobs, imagesUnavailable, useAttachments, type Attachments } from "./attachments";
+import { AttachButton, AttachmentStrip, encodeImages, forgetHandedOverImages, handedOverImages, imageBlobs, imagesUnavailable, restoreImages, useAttachments, useImageReceiver, type Attachments } from "./attachments";
 import {
   accessUnavailable, autoApproveConfirmed, ChatOptionsBar, chatOptionsBody, confirmAutoApprove, initialSelection, modelUnavailable, mustConfirmAutoApprove, rememberChat,
   type ChatSelection,
 } from "./chat-options";
-import { forgetSentDraft, readDraft, useDraft, writeDraft } from "./drafts";
+import { forgetSentDraft, readDraft, restoreDraft, useDraft, writeDraft } from "./drafts";
 import { copyText, messageCut, resendText, rewindable, type MessageCut } from "../../../packages/client/src/message-actions";
 import { useConnections } from "./hosts";
 import { Icon, type IconName } from "./icons";
@@ -412,6 +412,7 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   useEffect(() => {
     forgetHandedOverImages(id);
   }, [id]);
+  useImageReceiver(id, attachments);
   const [conversationId, setConversationId] = useState("");
   const request = useRef<{ key: string; id: string; images?: ChatImage[] } | null>(null);
   // Set while the owner decides on Auto-approve, so a second Enter can't send the message twice.
@@ -420,6 +421,12 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   const stopping = useAction();
   const withdrawing = useAction();
   const [withdrawNotice, setWithdrawNotice] = useState("");
+  // Whether this chat box is still on screen: a message taken back after it closed goes to the session's draft instead.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [receipt, setReceipt] = useState<SubmitResult | null>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -446,6 +453,9 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   // box takes the latest, and the queue's details list each.
   const editable = view.withdrawable && !archived && !frozen
     ? activeQueue.filter(item => item.actorId === user.id && item.status === "queued" && (item.mode === "ask" ? canAsk : canWrite)) : [];
+  // A message comes back with up to as many images as a message carries, and the host keeps none of them: it is taken back
+  // only into a chat box without images, so none can be dropped for want of room.
+  const editBlocked = attachments.images.length > 0;
   const conversations = view.conversations;
   const sideConversations = conversations.filter(item => item.mode === "ask" && (!item.actorId || item.actorId === user.id));
   const entries = view.entries.filter(entry => {
@@ -554,6 +564,7 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
       if (!confirmed) { setSelection(current => ({ ...current, access: "approval" })); return; }
     }
     setReceipt(null);
+    setWithdrawNotice("");
     const sent = content;
     // Changing the options or the images is a different request, so it needs a new idempotency key.
     const key = `${actualMode}:${JSON.stringify(options ?? null)}:${pasted.map(image => image.id).join(",")}:${sent}`;
@@ -584,12 +595,15 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
    * the queue, and the edited message queues behind what is there now. Text typed meanwhile stays, above it.
    */
   function edit(submissionId: string) {
-    if (withdrawing.busy || submission.busy) return;
+    if (withdrawing.busy || submission.busy || editBlocked) return;
     setWithdrawNotice("");
     void withdrawing.run(async () => {
       const result = await api<WithdrawResult>(`/api/sessions/${segment(id)}/withdraw`, { method: "POST", body: { submissionId } });
-      setContent(current => current.trim() ? `${current}\n\n${result.content}` : result.content);
-      if (result.images?.length) attachments.add(imageBlobs(result.images));
+      // The message has left the queue and only this answer holds it: through the session's draft and images, not this
+      // box's state, so a box that closed meanwhile (another session was opened) or opened again still gets it.
+      restoreDraft(id, result.content);
+      restoreImages(id, imageBlobs(result.images ?? []));
+      if (!mounted.current) return;
       if (result.imagesLost) setWithdrawNotice("Its images were no longer on the host: attach them again before sending.");
       setMode(result.mode);
       stick.current = true;
@@ -699,8 +713,9 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
             {activeQueue.length > 0 && <ol className="queue-items">{activeQueue.map((item, index) => <li key={item.submissionId}>
               <span>{index + 1}. {item.mode === "ask" ? "Read-only side ask" : "Shared submission"} · {item.status}</span>
               <span className="muted small">By <Username id={item.actorId} you /> · Receipt <code>{item.submissionId}</code></span>
-              {editable.includes(item) && <span className="inline"><Button variant="outline" size="xs" icon="pencil" disabled={withdrawing.busy || submission.busy}
-                title="Take this message out of the queue and back into your chat box" onClick={() => edit(item.submissionId)}>Edit</Button></span>}
+              {editable.includes(item) && <span className="inline"><Button variant="outline" size="xs" icon="pencil" disabled={withdrawing.busy || submission.busy || editBlocked}
+                title={editBlocked ? "Remove the images from your chat box to edit this message there" : "Take this message out of the queue and back into your chat box"}
+                onClick={() => edit(item.submissionId)}>Edit</Button></span>}
             </li>)}</ol>}
             {recentSubmissions.length > 0 && <ul className="queue-items">{recentSubmissions.map(item => <li key={item.submissionId}>
               <span>{item.status} · {item.mode === "ask" ? "Side ask" : "Shared submission"}</span>
@@ -720,9 +735,9 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
           disabled={!permitted}
           onStop={canStop ? stop : undefined}
           stopping={stopping.busy}
-          onRecall={permitted && editable.length ? () => edit(editable.at(-1)!.submissionId) : undefined}
+          onRecall={permitted && editable.length && !editBlocked ? () => edit(editable.at(-1)!.submissionId) : undefined}
           label={actualMode === "ask" ? "Ask without making changes" : "Continue the shared work"}
-          placeholder={!permitted ? "Read-only" : editable.length ? "Press ↑ to edit your queued message" : actualMode === "ask" ? "Ask without changing anything" : "Message the agent"}
+          placeholder={!permitted ? "Read-only" : editable.length && !editBlocked ? "Press ↑ to edit your queued message" : actualMode === "ask" ? "Ask without changing anything" : "Message the agent"}
           sendLabel={actualMode === "ask" ? "Send side ask" : "Submit to session"}
           hintRequired={!permitted || actualMode === "ask"}
           hint={archived ? "Read-only · this session is archived" : frozen ? "Read-only · this session pinned its repositories when it started" : !permitted ? (canAsk ? "Read-only · switch to Side ask to ask questions" : "Read-only · submitting needs write permission")

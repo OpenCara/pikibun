@@ -898,12 +898,13 @@ test("a sender takes back a message of theirs while it is queued, and it never r
   assert.equal(retry.status, "interrupted", "a withdrawn message is never replayed under its request id");
 });
 
-test("a session whose only message was taken back is idle, and a side ask comes back as one", options, async t => {
-  const f = await fixture(t);
+test("a session whose only message was taken back is idle, as its host reports too, and a side ask comes back as one", options, async t => {
+  const f = await fixture(t, { reportActivity: true });
   await pauseQueue(f.session);
   const withdraw = async (actorId: string, input: unknown) => f.session.withdraw(await ticket(f.session.binding.session.id, "withdraw", actorId, JSON.stringify(input)), input);
   const shared = await submit(f.session, OWNER, "write", { content: "TEST_IDENTITY", requestId: "shared" });
   const side = await submit(f.session, WRITER, "ask", { content: "what is here?", requestId: "side" });
+  await f.reported("working");
   assert.deepEqual(await withdraw(WRITER, { submissionId: side.submissionId }), { content: "what is here?", mode: "ask" });
   assert.deepEqual(await withdraw(OWNER, { submissionId: shared.submissionId }), { content: "TEST_IDENTITY", mode: "write" });
   const view = await f.session.view();
@@ -911,4 +912,6 @@ test("a session whose only message was taken back is idle, and a side ask comes 
   assert.deepEqual(queue(view).map(run => run.status), ["withdrawn", "withdrawn"]);
   assert.equal(view.activity, "idle");
   assert.equal(view.entries.length, 0);
+  // The control plane's session list says the same as the view: not failed.
+  await f.reported("idle");
 });
