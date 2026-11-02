@@ -5,7 +5,7 @@ import { parentTransport } from '../../../runner/src/desktop-transport.js';
 import type { LocalModels } from '../../../runner/src/local-pi.js';
 import { ConnectorSetupError } from '../../../runner/src/protocol.js';
 import { ConfigurationError } from '../config.js';
-import type { LocalHostState, LocalInspection, LocalServerEvent, LocalServerRequest, LocalStartRequest, LocalStatus } from './desktop-protocol.js';
+import type { LocalCreateAdminRequest, LocalHostState, LocalInspection, LocalServerEvent, LocalServerRequest, LocalStartRequest, LocalStatus } from './desktop-protocol.js';
 import { startLocalHost, type LocalHost } from './host.js';
 import { LocalServerError, startLocalServer, type LocalServer } from './launch.js';
 import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState } from './state.js';
@@ -14,15 +14,22 @@ import { DEFAULT_LOCAL_PORT, defaultLocalStateDir, LocalStateError, openLocalSta
 // with requests arriving over the parent's IPC channel and status and logs going back the same way.
 
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const githubApp = z.object({ clientId: z.string().min(1).max(100), clientSecret: z.string().min(1).max(200) }).strict();
+/** Shapes only: state.ts checks the values (sharedConfigError) and says what is wrong. */
+const sharedSettings = z.object({
+  origin: z.string().min(1).max(2048), listen: z.enum(['loopback', 'all']), trustProxy: z.boolean(), signup: z.enum(['open', 'invite', 'off']),
+  passwordAuth: z.boolean(), admins: z.array(z.string().min(1).max(100)).max(20), github: githubApp.optional(),
+}).strict();
 /** Strict: unknown request types and unknown fields are refused, never ignored. */
 const requestSchema: z.ZodType<LocalServerRequest> = z.discriminatedUnion('type', [
   z.object({ type: z.literal('inspect'), id: requestId }).strict(),
   z.object({
-    type: z.literal('start'), id: requestId,
-    github: z.object({ clientId: z.string().min(1).max(100), clientSecret: z.string().min(1).max(200) }).strict().optional(),
+    type: z.literal('start'), id: requestId, mode: z.enum(['local', 'shared']).optional(),
+    github: githubApp.optional(), shared: sharedSettings.optional(),
     unsandboxedConsent: z.boolean().optional(), testMode: z.boolean().optional(),
   }).strict(),
   z.object({ type: z.literal('stop'), id: requestId }).strict(),
+  z.object({ type: z.literal('create-admin'), id: requestId, username: z.string().min(1).max(100), password: z.string().min(1).max(1024) }).strict(),
 ]);
 
 class LocalFailure extends Error {}
@@ -50,7 +57,8 @@ async function status(): Promise<void> {
   const current = running;
   if (!current) { emit({ type: 'status', state: 'stopped', host: 'off' }); return; }
   const claimUrl = await current.server.claimUrl().catch(() => null);
-  const update: LocalStatus = { state: current.stopping ? 'stopping' : 'running', origin: current.server.origin, host: current.hostState, ...(claimUrl ? { claimUrl } : {}) };
+  const update: LocalStatus = { state: current.stopping ? 'stopping' : 'running', mode: current.server.mode, origin: current.server.origin,
+    address: current.server.address, host: current.hostState, ...(claimUrl ? { claimUrl } : {}) };
   if (running === current) emit({ type: 'status', ...update });
 }
 
@@ -71,9 +79,12 @@ async function inspect(): Promise<LocalInspection> {
   // Read only: a server running from this state (here or in a terminal) holds its lease, and nothing is created yet.
   const state = await peekLocalState(stateDir);
   const host = await hostCheck(false);
+  const shared = state?.shared;
   return {
     stateDir, port: state?.port ?? DEFAULT_LOCAL_PORT, hostMode: host.mode,
     ...(state?.github ? { githubClientId: state.github.clientId } : {}),
+    ...(shared ? { shared: { origin: shared.origin, listen: shared.listen, trustProxy: shared.trustProxy, signup: shared.signup,
+      passwordAuth: shared.passwordAuth, admins: [...shared.admins], ...(shared.github ? { githubClientId: shared.github.clientId } : {}) } } : {}),
     ...(host.mode === 'unsandboxed' ? { unsandboxedWarning: unsandboxedWarning() } : {}),
     ...(host.problem ? { hostProblem: host.problem } : {}),
   };
@@ -83,18 +94,25 @@ async function start(request: LocalStartRequest): Promise<void> {
   if (running || starting) throw new LocalFailure('Pikibun is already running on this computer.');
   starting = true;
   try {
-    const github = request.github && { clientId: request.github.clientId.trim(), clientSecret: request.github.clientSecret.trim() };
+    const mode = request.mode ?? 'local';
+    const trim = (app: { clientId: string; clientSecret: string } | undefined) => app && { clientId: app.clientId.trim(), clientSecret: app.clientSecret.trim() };
+    const github = mode === 'local' ? trim(request.github) : undefined;
+    const shared = mode === 'shared' && request.shared ? { ...request.shared, origin: request.shared.origin.trim(), admins: request.shared.admins.map(item => item.trim()),
+      ...(request.shared.github ? { github: trim(request.shared.github)! } : {}) } : undefined;
     // Held while the server runs: nothing else creates, changes or serves this state meanwhile.
-    const { state, release } = await openLocalState(stateDir, github ? { github } : {});
-    if (!state.github) { await release(); throw new LocalFailure('Add your GitHub OAuth app first: Pikibun signs you in with it.'); }
+    const { state, release } = await openLocalState(stateDir, { ...(github ? { github } : {}), ...(shared ? { shared } : {}) });
+    if (mode === 'local' && !state.github) { await release(); throw new LocalFailure('Add your GitHub OAuth app first: Pikibun signs you in with it.'); }
+    if (mode === 'shared' && !state.shared) { await release(); throw new LocalFailure('Set up sharing first: its public HTTPS address, sign-in and administrators.'); }
     const testMode = request.testMode === true;
     const host = await hostCheck(testMode).catch(async (error: unknown) => { await release(); throw error; });
-    const server = await startLocalServer({ stateDir, state, release, ...(staticDir ? { staticDir } : {}), ...(testMode ? { extraEnv: {
+    const server = await startLocalServer({ stateDir, state, release, mode, ...(staticDir ? { staticDir } : {}), ...(testMode ? { extraEnv: {
       TEST_AUTH_ENABLED: 'true', TEST_AUTH_SECRET: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url'),
       TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 24 * 3600_000).toISOString() } } : {}) });
     const current: Running = { server, hostState: 'off', stopping: false };
     running = current;
-    log('info', `Pikibun is running at ${server.origin}, reachable from this computer only.`);
+    log('info', mode === 'shared'
+      ? `Pikibun is shared at ${server.origin}, listening on ${server.address}: your proxy or tunnel forwards that address to it.`
+      : `Pikibun is running at ${server.origin}, reachable from this computer only.`);
     const unsandboxed = host.mode === 'unsandboxed';
     if (host.problem || !host.models) log('warning', `This computer can't run sessions: ${host.problem ?? 'no models.'} Pair another machine in Settings › Hosts instead.`);
     else if (unsandboxed && request.unsandboxedConsent !== true) log('warning', 'This computer runs no sessions: running them without a sandbox needs your consent.');
@@ -133,16 +151,28 @@ async function stop(): Promise<void> {
   }
 }
 
+async function createAdmin(request: LocalCreateAdminRequest): Promise<string> {
+  const current = running;
+  if (!current || current.stopping || current.server.mode !== 'shared') throw new LocalFailure('Share Pikibun first: administrator accounts are made on the running shared server.');
+  return current.server.createAdmin(request.username.trim(), request.password);
+}
+
 async function handle(request: LocalServerRequest): Promise<void> {
   try {
     if (request.type === 'inspect') emit({ type: 'result', id: request.id, ok: true, inspection: await inspect() });
-    else {
+    else if (request.type === 'create-admin') {
+      const done = await createAdmin(request);
+      request.password = '';
+      log('info', done);
+      emit({ type: 'result', id: request.id, ok: true, message: done });
+    } else {
       await (request.type === 'start' ? start(request) : stop());
       emit({ type: 'result', id: request.id, ok: true });
     }
   } catch (error) {
-    emit({ type: 'result', id: request.id, ok: false, error: { message: message(error, request.type === 'stop'
-      ? 'Pikibun did not stop cleanly.' : 'Pikibun could not start on this computer. Check its state directory and port.') } });
+    if (request.type === 'create-admin') request.password = '';
+    emit({ type: 'result', id: request.id, ok: false, error: { message: message(error, request.type === 'stop' ? 'Pikibun did not stop cleanly.'
+      : request.type === 'create-admin' ? 'The administrator could not be created.' : 'Pikibun could not start on this computer. Check its state directory and port.') } });
   }
 }
 

@@ -6,7 +6,8 @@ import { ConnectorSetupError } from '../../../runner/src/protocol.js';
 import { ConfigurationError } from '../config.js';
 import { startLocalHost, type LocalHost, type LocalHostOptions } from './host.js';
 import { githubOAuthAppInstructions, LocalServerError, startLocalServer } from './launch.js';
-import { defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState, validGitHubApp, type GitHubOAuthApp } from './state.js';
+import { readNewPassword } from '../password-accounts-cli.js';
+import { defaultLocalStateDir, LocalStateError, openLocalState, peekLocalState, sharedOrigin, validGitHubApp, type GitHubOAuthApp, type SharedConfig } from './state.js';
 
 const HELP = `Usage: pikibun serve [options]
 
@@ -31,6 +32,26 @@ Options:
                            for confirmation
   --state-dir PATH         Private state (default ~/.local/share/pikibun/server)
   --help                   Show this help
+
+Share it with others (a full multi-user server, from the same data):
+  --share                  Serve others at a public HTTPS address, through a TLS
+                           proxy or tunnel you run (Caddy, Tailscale Serve,
+                           Cloudflare Tunnel); the settings below are remembered,
+                           so later runs need only --share
+  --public-origin URL      The address people open, https://... (required once)
+  --admin USER_ID          An administrator, github:12345 or password:alice
+                           (repeatable; required once). The first with an
+                           account owns this computer's host
+  --listen WHERE           loopback (default: a proxy or tunnel on this
+                           computer) or all (a proxy on another machine)
+  --trust-proxy            Honor the proxy's X-Forwarded-Proto/-Host
+  --signup MODE            Who may create an account: invite (default), open
+                           or off
+  --password-auth          Also sign in with usernames and passwords
+  --create-admin USERNAME  Create the listed administrator password:USERNAME;
+                           asks for its password at a hidden prompt
+  With --share, --github-client-id names a GitHub OAuth app whose callback is
+  <public origin>/api/auth/github/callback (its secret as above).
 
 This computer as the host, as with \`pikibun connect\`:
   --pi-agent-dir PATH      Pi config/auth directory (default: Pi's own)
@@ -93,14 +114,38 @@ async function hostOptions(values: Record<string, string | boolean | string[] | 
   };
 }
 
+/** The sharing settings: the saved ones with the options' changes, or why they can't serve. */
+export function sharedSettings(saved: SharedConfig | undefined, values: {
+  'public-origin'?: string; admin?: string[]; listen?: string; 'trust-proxy'?: boolean; signup?: string; 'password-auth'?: boolean;
+}): Omit<SharedConfig, 'github'> {
+  const origin = values['public-origin'] ?? saved?.origin;
+  if (!origin) throw new ConnectorSetupError('--share needs --public-origin https://... the first time: the address people open, served by your TLS proxy or tunnel.');
+  const parsed = sharedOrigin(origin);
+  if (!parsed.ok) throw new ConnectorSetupError(`--public-origin: ${parsed.error}`);
+  const admins = values.admin ?? saved?.admins;
+  if (!admins?.length) throw new ConnectorSetupError('--share needs --admin USER_ID the first time (github:12345, which https://api.github.com/users/<login> shows as id, or password:alice).');
+  const listen = values.listen ?? saved?.listen ?? 'loopback';
+  if (listen !== 'loopback' && listen !== 'all') throw new ConnectorSetupError('--listen must be loopback or all.');
+  const signup = values.signup ?? saved?.signup ?? 'invite';
+  if (signup !== 'open' && signup !== 'invite' && signup !== 'off') throw new ConnectorSetupError('--signup must be open, invite or off.');
+  return { origin: parsed.origin, admins, listen, signup, trustProxy: values['trust-proxy'] ?? saved?.trustProxy ?? false,
+    passwordAuth: values['password-auth'] ?? saved?.passwordAuth ?? false };
+}
+
 export async function serveMain(args = process.argv.slice(2)): Promise<void> {
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
     help: { type: 'boolean' }, port: { type: 'string' }, 'github-client-id': { type: 'string' }, 'no-host': { type: 'boolean' },
     'unsafe-no-sandbox': { type: 'boolean' }, 'state-dir': { type: 'string' }, 'pi-agent-dir': { type: 'string' },
     model: { type: 'string', multiple: true }, resources: { type: 'string' },
     'allow-faux': { type: 'boolean' }, 'allow-test-shell': { type: 'boolean' }, 'test-mode': { type: 'boolean' },
+    share: { type: 'boolean' }, 'public-origin': { type: 'string' }, admin: { type: 'string', multiple: true }, listen: { type: 'string' },
+    'trust-proxy': { type: 'boolean' }, signup: { type: 'string' }, 'password-auth': { type: 'boolean' }, 'create-admin': { type: 'string' },
   } });
   if (values.help) { process.stdout.write(HELP); return; }
+  const share = values.share === true;
+  const shareOnly = ['public-origin', 'admin', 'listen', 'trust-proxy', 'signup', 'password-auth', 'create-admin'] as const;
+  const misplaced = shareOnly.find(name => values[name] !== undefined);
+  if (!share && misplaced) throw new ConnectorSetupError(`--${misplaced} needs --share.`);
   const port = values.port === undefined ? undefined : Number(values.port);
   if (port !== undefined && !(Number.isInteger(port) && port >= 1024 && port <= 65535)) throw new ConnectorSetupError('--port must be a number from 1024 to 65535.');
   if (values['allow-faux'] && !values['test-mode']) throw new ConnectorSetupError('--allow-faux needs --test-mode: a server outside test mode offers no fixture models.');
@@ -109,19 +154,33 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
   let host: LocalHost | undefined;
   try {
     const existing = await peekLocalState(stateDir);
-    const github = await githubApp(values['github-client-id'], existing?.github !== undefined);
+    const shared = share ? sharedSettings(existing?.shared, values) : undefined;
+    // Shared, the GitHub OAuth app is optional with passwords, and is the public origin's own.
+    const github = shared
+      ? (values['github-client-id'] ? await githubApp(values['github-client-id'], false) : undefined)
+      : await githubApp(values['github-client-id'], existing?.github !== undefined);
+    if (values['create-admin'] && !values['create-admin'].trim()) throw new ConnectorSetupError('--create-admin needs a username.');
     // Checked (and consent asked) before anything starts, as `pikibun connect` does.
     const hostSetup = values['no-host'] ? undefined : await hostOptions(values);
     // Held while the server runs: nothing else creates, changes or serves this state meanwhile.
-    const { state, release } = await openLocalState(stateDir, { ...(github ? { github } : {}), ...(port ? { port } : {}) });
+    const { state, release } = await openLocalState(stateDir, {
+      ...(shared ? { shared: { ...shared, ...(github ? { github } : {}) } } : github ? { github } : {}), ...(port ? { port } : {}),
+    });
     const testSecret = values['test-mode'] ? Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url') : undefined;
-    server = await startLocalServer({ stateDir, state, release, ...(testSecret ? { extraEnv: {
+    server = await startLocalServer({ stateDir, state, release, mode: shared ? 'shared' : 'local', ...(testSecret ? { extraEnv: {
       TEST_AUTH_ENABLED: 'true', TEST_AUTH_SECRET: testSecret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 24 * 3600_000).toISOString() } } : {}) });
-    const claim = await server.claimUrl();
-    process.stderr.write(`\nPikibun is running at ${server.origin} (this computer only).\n`);
-    process.stderr.write(claim
-      ? `Sign in for the first time with this link; the GitHub account that opens it becomes this Pikibun's owner:\n  ${claim}\nKeep it private until you have signed in.\n`
-      : `Sign in at ${server.origin} with the GitHub account that owns it.\n`);
+    if (shared) {
+      process.stderr.write(`\nPikibun is shared at ${server.origin}, listening on ${server.address}.\n`
+        + `Point your TLS proxy or tunnel for ${server.origin} at ${server.address.replace('0.0.0.0', '<this computer>')}.\n`
+        + `Administrators: ${state.shared!.admins.join(', ')}. New accounts: ${state.shared!.signup}.\n`);
+      if (values['create-admin']) process.stderr.write(`${await server.createAdmin(values['create-admin'].trim(), await readNewPassword())}\n`);
+    } else {
+      const claim = await server.claimUrl();
+      process.stderr.write(`\nPikibun is running at ${server.origin} (this computer only).\n`);
+      process.stderr.write(claim
+        ? `Sign in for the first time with this link; the GitHub account that opens it becomes this Pikibun's owner:\n  ${claim}\nKeep it private until you have signed in.\n`
+        : `Sign in at ${server.origin} with the GitHub account that owns it.\n`);
+    }
     if (testSecret) process.stderr.write(`Test mode for 24 hours. Test sign-in secret: ${testSecret}\n`);
     if (hostSetup) {
       host = startLocalHost(server, stateDir, { ...hostSetup, onWaiting: () => process.stderr.write('This computer becomes your host once you have signed in.\n') });

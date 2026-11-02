@@ -14,7 +14,7 @@
         <label>Pikibun server
           <input id="server" name="server" type="url" spellcheck="false" autocapitalize="off" required />
         </label>
-        <p class="muted">The Pikibun window opens this server, and the host pairs with it. Use HTTPS; plain HTTP works only for localhost and 127.0.0.1.</p>
+        <p class="muted">The Pikibun window opens this server, and this computer's primary host pairs with it. Add more servers, each with a host of its own, under This Mac. Use HTTPS; plain HTTP works only for localhost and 127.0.0.1.</p>
         <p id="message" role="status" hidden></p>
         <div class="actions">
           <button class="primary" type="submit">Save</button>
@@ -27,15 +27,21 @@
           <h2 id="local-heading">Pikibun on this computer</h2>
           <span id="local-status" class="pill" role="status">Off</span>
         </header>
-        <p class="muted">Run Pikibun here, for yourself, without a server: the Pikibun window shows it instead of the server above, and this computer runs your sessions. Only this computer can reach it, and only your GitHub account can sign in. It's the same as <code>pikibun serve</code> in a terminal, and shares its data.</p>
+        <p class="muted">Run Pikibun itself here, without a server elsewhere: the Pikibun window shows it instead of the server above, and this computer runs your sessions. It's the same as <code>pikibun serve</code> in a terminal, and shares its data.</p>
+        <div class="tabs" role="group" aria-label="Who uses it">
+          <button id="tab-local" type="button" aria-pressed="true">Just for Me</button>
+          <button id="tab-shared" type="button" aria-pressed="false">Share with Others</button>
+        </div>
         <dl class="facts" id="local-facts" hidden>
           <dt>Address</dt><dd id="local-origin"></dd>
+          <dt id="local-address-label">Listens on</dt><dd id="local-address"></dd>
           <dt>Sessions</dt><dd id="local-host"></dd>
           <dt>Data</dt><dd id="local-state-dir"></dd>
         </dl>
+
         <form id="local-form" autocomplete="off" novalidate>
-          <div id="github-fields">
-            <p class="muted">Pikibun signs you in with GitHub through an OAuth app of your own. Register one once at
+          <div id="local-fields">
+            <p class="muted">Only this computer can reach it, and only your GitHub account can sign in. Pikibun signs you in with GitHub through an OAuth app of your own. Register one once at
               <code>https://github.com/settings/applications/new</code> with the homepage <code>http://127.0.0.1</code> and the
               authorization callback URL <code>http://127.0.0.1/api/auth/github/callback</code>, generate a client secret, and enter both here.</p>
             <p id="github-saved" class="muted" hidden></p>
@@ -46,11 +52,65 @@
               <input id="client-secret" name="client-secret" type="password" spellcheck="false" autocapitalize="off" />
             </label>
           </div>
+
+          <fieldset id="shared-fields" hidden>
+            <p class="muted">A full Pikibun server for your team, from the same data: people sign in, create workspaces, and pair their own machines with <code>pikibun connect</code> or this app. It serves plain HTTP on this computer; people reach it at a public HTTPS address through a TLS proxy or tunnel you run, such as <code>tailscale serve</code>, Cloudflare Tunnel or Caddy, which forwards to the address below.</p>
+            <label>Public address
+              <input id="shared-origin" type="url" spellcheck="false" autocapitalize="off" placeholder="https://pikibun.example.com" />
+            </label>
+            <label>Listen on
+              <select id="shared-listen">
+                <option value="loopback">This computer only — the proxy or tunnel runs here</option>
+                <option value="all">Every network interface — the proxy runs on another machine</option>
+              </select>
+            </label>
+            <label class="check">
+              <input id="shared-trust-proxy" type="checkbox" />
+              <span>Trust the proxy's <code>X-Forwarded-Proto</code> and <code>X-Forwarded-Host</code></span>
+            </label>
+            <label>Who may create an account
+              <select id="shared-signup">
+                <option value="invite">Only people with a workspace's invite link</option>
+                <option value="open">Anyone who reaches it</option>
+                <option value="off">Nobody new: only the administrators</option>
+              </select>
+            </label>
+            <label class="check">
+              <input id="shared-password" type="checkbox" />
+              <span>Usernames and passwords <span class="muted">— besides GitHub, or instead of it</span></span>
+            </label>
+            <label>Administrators
+              <textarea id="shared-admins" rows="3" spellcheck="false" autocapitalize="off" placeholder="octocat&#10;github:12345&#10;password:admin"></textarea>
+            </label>
+            <p class="muted">One per line: a GitHub login (the app looks up its user ID), <code>github:12345</code> or <code>password:alice</code>. They see every account and host, can always sign up, and the first one with an account owns this computer's host.</p>
+            <p class="muted" id="shared-github-note">GitHub sign-in needs an OAuth app of its own for the public address, with the authorization callback URL <code>https://…/api/auth/github/callback</code>. Leave these empty with usernames and passwords only.</p>
+            <p id="shared-github-saved" class="muted" hidden></p>
+            <label>GitHub client ID
+              <input id="shared-client-id" spellcheck="false" autocapitalize="off" />
+            </label>
+            <label>GitHub client secret
+              <input id="shared-client-secret" type="password" spellcheck="false" autocapitalize="off" />
+            </label>
+          </fieldset>
+
           <p id="local-message" role="status" hidden></p>
           <div class="actions">
             <button id="local-start" class="primary" type="submit">Run on This Computer</button>
+            <button id="local-open" type="button" hidden>Open</button>
             <button id="local-stop" type="button" hidden>Stop</button>
           </div>
+        </form>
+
+        <form id="admin-form" autocomplete="off" novalidate hidden>
+          <h2>Create an administrator</h2>
+          <p class="muted">For a listed <code>password:</code> administrator who has no account yet, as <code>pikibun serve --create-admin</code> does. The password goes only to the server, which keeps a salted hash.</p>
+          <label>Username
+            <input id="admin-username" spellcheck="false" autocapitalize="off" />
+          </label>
+          <label>Password <span class="muted">(at least 12 characters)</span>
+            <input id="admin-password" type="password" autocomplete="new-password" />
+          </label>
+          <div class="actions"><button id="admin-create" type="submit">Create Administrator</button></div>
         </form>
         <ol id="local-logs" class="logs" hidden></ol>
       </section>

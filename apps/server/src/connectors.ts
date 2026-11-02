@@ -10,7 +10,7 @@ import { constantTimeEqual, sha256 } from '../../../packages/shared/src/crypto.j
 import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
 import type { Query } from './db/types.js';
 import { auditStatement, requireMember } from './db.js';
-import { appOrigin, fail, id, identifier, jsonObject, loopbackHttp, now, randomToken, requireOrigin, testMode, text } from './http.js';
+import { appOrigin, fail, id, identifier, jsonObject, localMode, localOwnerQuery, loopbackHttp, now, randomToken, requireOrigin, testMode, text } from './http.js';
 import { authorizeSession } from './internal.js';
 import { markSessionChanged } from './session-changes.js';
 import { githubComment, githubIssue, githubMerge, githubRead } from './github-broker.js';
@@ -112,6 +112,12 @@ export async function authenticateConnectorToken(env: Env, token: string, connec
     WHERE c.credential_hash = ? AND c.revoked_at IS NULL AND u.suspended_at IS NULL AND (? = 1 OR u.auth_kind <> 'test')`)
     .bind(await sha256(token), testMode(env) ? 1 : 0).first();
   if (!row) fail(401, 'connector_authentication_required', 'Connector authentication is required.');
+  // A local server's hosts are its owner's alone, even where the same data has served others' hosts.
+  if (localMode(env) && !(testMode(env) && row.owner_id.startsWith('test:'))) {
+    const owner = localOwnerQuery(env);
+    const found = await env.DB.query<{ id: string }>(owner.sql).bind(...owner.params).first();
+    if (found?.id !== row.owner_id) fail(401, 'connector_authentication_required', 'Connector authentication is required.');
+  }
   if (currentConnection && (!connectionToken || !/^[A-Za-z0-9_-]{43}$/.test(connectionToken) || !row.connection_hash || !constantTimeEqual(await sha256(connectionToken), row.connection_hash))) {
     fail(401, 'stale_connection', 'A current connector connection is required.');
   }

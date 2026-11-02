@@ -256,3 +256,201 @@ test("pikibun serve's server pairs this computer as its owner's host once claime
   await again.started;
   assert.deepEqual((await connectors()).map(row => row.id), [paired!.id]);
 });
+
+const sharedBase = { origin: "https://pikibun.example.test", listen: "loopback" as const, trustProxy: true, signup: "invite" as const, passwordAuth: true, admins: ["password:admin", "github:4242"] };
+
+test("sharing settings are checked field by field, saved with the state, and keep their GitHub OAuth app until replaced", async t => {
+  const stateDir = join(await directory(t), "server");
+  const first = await loadLocalState(stateDir);
+  for (const [shared, message] of [
+    [{ ...sharedBase, origin: "http://pikibun.example.test" }, /HTTPS/],
+    [{ ...sharedBase, origin: "https://pikibun.example.test/app" }, /origin/],
+    [{ ...sharedBase, admins: [] }, /at least one administrator/],
+    [{ ...sharedBase, admins: ["octocat"] }, /user IDs/],
+    [{ ...sharedBase, admins: ["github:1", "github:1"] }, /twice/],
+    [{ ...sharedBase, passwordAuth: false }, /way to sign in/],
+    [{ ...sharedBase, signup: "anyone" }, /create an account/],
+    [{ ...sharedBase, listen: "lan" }, /listens/],
+    [{ ...sharedBase, extra: 1 }, /unknown/],
+  ] as const) {
+    await assert.rejects(loadLocalState(stateDir, { shared: shared as never }), message, JSON.stringify(shared));
+  }
+  assert.deepEqual(await loadLocalState(stateDir), first);
+  const github = { clientId: "Ov23liShared", clientSecret: "0123456789abcdef0123456789abcdef01234567" };
+  const saved = await loadLocalState(stateDir, { shared: { ...sharedBase, passwordAuth: false, admins: ["github:4242"], github } });
+  assert.deepEqual(saved.shared, { ...sharedBase, passwordAuth: false, admins: ["github:4242"], github });
+  // The loopback GitHub app and the secrets are untouched; a later change without an app keeps the saved one.
+  assert.deepEqual({ ...saved, shared: undefined }, { ...first, shared: undefined });
+  const changed = await loadLocalState(stateDir, { shared: { ...sharedBase, signup: "open" } });
+  assert.deepEqual(changed.shared, { ...sharedBase, signup: "open", github });
+  assert.deepEqual(await peekLocalState(stateDir), changed);
+});
+
+test("shared, the same state serves others at its public origin: no claim link, its administrators own this computer's host", async t => {
+  const stateDir = join(await directory(t), "server");
+  const port = await freePort();
+  await loadLocalState(stateDir, { port });
+  const web = await directory(t);
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
+  await mkdir(join(web, "assets"));
+  await assert.rejects(startLocalServer({ stateDir, state: await loadLocalState(stateDir), staticDir: web, mode: "shared" }), /Set up sharing first/);
+  const state = await loadLocalState(stateDir, { shared: sharedBase });
+  const server = await startLocalServer({ stateDir, state, staticDir: web, mode: "shared" });
+  t.after(() => server.close());
+  assert.equal(server.mode, "shared");
+  assert.equal(server.origin, "https://pikibun.example.test");
+  assert.equal(server.address, `http://127.0.0.1:${port}`);
+  assert.equal(await server.claimUrl(), null);
+  const health = await (await fetch(`${server.address}/api/health`)).json() as Record<string, unknown>;
+  assert.deepEqual([health.passwordAuth, health.githubSignup, health.passwordSignup, health.localServer], [true, "invite", "invite", undefined]);
+
+  // Nobody has an account yet: this computer's host waits. The first listed administrator with one owns it.
+  assert.equal(await server.owner(), null);
+  await server.env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES ('github:4242', '4242', 'octo', 'Octo', 'Octo', 'octo@example.test', '{}', 'github', ?)`).bind(new Date().toISOString()).run();
+  assert.deepEqual(await server.owner(), { id: "github:4242" });
+  await assert.rejects(server.createAdmin("someone", "a long enough password"), /administrators/);
+  await assert.rejects(server.createAdmin("admin", "short"), /12/);
+  assert.match(await server.createAdmin("Admin", "a long enough password"), /Created the administrator password:admin: sign in at https:\/\/pikibun.example.test with the username admin/);
+  await assert.rejects(server.createAdmin("admin", "a long enough password"), /exists already/);
+  assert.deepEqual(await server.owner(), { id: "password:admin" });
+});
+
+test("pikibun serve --share takes its settings from the options once, then from the saved state", async () => {
+  const { sharedSettings } = await import("../apps/server/src/local/cli.js");
+  assert.throws(() => sharedSettings(undefined, {}), /--public-origin/);
+  assert.throws(() => sharedSettings(undefined, { "public-origin": "https://pikibun.example.test" }), /--admin/);
+  assert.throws(() => sharedSettings(undefined, { "public-origin": "http://pikibun.example.test", admin: ["github:1"] }), /HTTPS/);
+  assert.throws(() => sharedSettings(undefined, { "public-origin": "https://pikibun.example.test", admin: ["github:1"], listen: "lan" }), /--listen/);
+  const first = sharedSettings(undefined, { "public-origin": "https://pikibun.example.test/", admin: ["github:1"] });
+  assert.deepEqual(first, { origin: "https://pikibun.example.test", admins: ["github:1"], listen: "loopback", signup: "invite", trustProxy: false, passwordAuth: false });
+  assert.deepEqual(sharedSettings({ ...first, signup: "open", passwordAuth: true }, { listen: "all" }),
+    { ...first, signup: "open", passwordAuth: true, listen: "all" });
+});
+
+test("after serving others, running for its owner alone admits only the pinned owner: teammates' sign-ins and hosts are refused", async t => {
+  const { newSession } = await import("../apps/server/src/auth.js");
+  const { authenticateConnectorToken } = await import("../apps/server/src/connectors.js");
+  const { sha256 } = await import("../packages/shared/src/crypto.js");
+  const f = await localFixture(t, false);
+  // Test mode lets this plain-HTTP origin serve outside local mode, as the shared server does behind its proxy.
+  Object.assign(f.env, { TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: "t".repeat(43), TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString() });
+  // Shared, a teammate's account is created before the owner's: the first GitHub user is no longer the owner.
+  const user = (id: number, at: string) => f.sqlite.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, '{}', 'github', ?)`).run(`github:${id}`, String(id), `u${id}`, `U${id}`, `U${id}`, `u${id}@example.test`, at);
+  user(5151, "2000-01-01T00:00:00.000Z");
+  user(4242, "2001-01-01T00:00:00.000Z");
+  const signIn = async (userId: string) => {
+    const session = await newSession(f.env, userId, "github");
+    await session.statement.run();
+    return `test-auth=${session.token}`;
+  };
+  const teammate = await signIn("github:5151");
+  const owner = await signIn("github:4242");
+  const token = "h".repeat(43);
+  f.sqlite.prepare(`INSERT INTO connectors (id, owner_id, name, credential_hash, created_at, models_json, capabilities_json) VALUES ('c1', 'github:5151', 'Theirs', ?, ?, '[]', '{}')`)
+    .run(await sha256(token), new Date().toISOString());
+  assert.equal((await f.request("/api/me", { Cookie: teammate })).status, 200);
+  assert.equal((await authenticateConnectorToken(f.env, token)).id, "c1");
+
+  // For its owner alone again, with the owner pinned: only they sign in, and only their hosts connect.
+  Object.assign(f.env, { LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, LOCAL_OWNER_ID: "github:4242" });
+  assert.equal((await f.request("/api/me", { Cookie: teammate })).status, 401);
+  assert.equal((await f.request("/api/me", { Cookie: owner })).status, 200);
+  await assert.rejects(authenticateConnectorToken(f.env, token), (error: { status?: number }) => error.status === 401);
+  assert.deepEqual(await f.health(), { claimed: true });
+});
+
+test("running for its owner alone after sharing pins its owner: the one recorded at the first share, else its first GitHub administrator", async t => {
+  const stateDir = join(await directory(t), "server");
+  const web = await directory(t);
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
+  await mkdir(join(web, "assets"));
+  await loadLocalState(stateDir, { port: await freePort() });
+  const shared = { ...sharedBase, admins: ["github:4242", "password:admin"] };
+  const insert = (env: Env, id: number) => env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, 'u', 'U', 'U', 'u@example.test', '{}', 'github', ?)`).bind(`github:${id}`, String(id), new Date(Date.UTC(2000, 0, id % 1000)).toISOString()).run();
+
+  // Shared before anyone claimed it; a teammate signs up first, then the administrator.
+  let { state, release } = await openLocalState(stateDir, { shared });
+  let server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
+  await insert(server.env, 5151);
+  await insert(server.env, 4242);
+  await server.close();
+  assert.equal((await peekLocalState(stateDir))?.owner, undefined);
+  // Shared again (a relaunch, say): its first GitHub user is a teammate now, and nothing is pinned.
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
+  await server.close();
+  assert.deepEqual([(await peekLocalState(stateDir))?.owner, (await peekLocalState(stateDir))?.sharedOnce], [undefined, true]);
+
+  // For the owner alone: the listed GitHub administrator, not the first GitHub user, owns it, and stays pinned.
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web });
+  t.after(() => server.close());
+  assert.equal(server.env.LOCAL_OWNER_ID, "github:4242");
+  assert.deepEqual(await server.owner(), { id: "github:4242", github_id: "4242" });
+  assert.equal((await peekLocalState(stateDir))?.owner, "github:4242");
+});
+
+test("this computer pairs again for a shared server's new owner, and keeps the pairing while the owner stays", async t => {
+  const stateDir = join(await directory(t), "server");
+  const state = await loadLocalState(stateDir, { port: await freePort() });
+  const web = await directory(t);
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
+  await mkdir(join(web, "assets"));
+  const testMode = { TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: "t".repeat(43), TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString() };
+  const local = await startLocalServer({ stateDir, state, staticDir: web, extraEnv: testMode });
+  t.after(() => local.close());
+  for (const name of ["alice", "bob"]) {
+    await local.env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+      VALUES (?, NULL, ?, ?, ?, ?, '{}', 'test', ?)`).bind(`test:${name}`, name, name, name, `${name}@example.test`, new Date().toISOString()).run();
+  }
+  // The server as shared: the same origin, whose owner (its first administrator with an account) changes.
+  let owner = "test:alice";
+  const shared = { ...local, mode: "shared" as const, owner: async () => ({ id: owner }) };
+  const hostOptions = {
+    localModels: createFauxLocalModels("faux-1"), allowFaux: true, unsandboxed: true, pollMs: 50,
+    acquireLease: () => Promise.resolve(() => Promise.resolve()),
+    runtimeFactory: () => Promise.resolve({ fetch: () => Response.json({ ok: true }), close: () => Promise.resolve() }),
+  };
+  const connectors = () => local.env.DB.query<{ owner_id: string }>("SELECT owner_id FROM connectors WHERE revoked_at IS NULL ORDER BY created_at").all();
+  const run = async () => { const host = startLocalHost(shared, stateDir, hostOptions); await host.started; await host.stop(); };
+  await run();
+  await run();
+  assert.deepEqual((await connectors()).map(row => row.owner_id), ["test:alice"]);
+  owner = "test:bob";
+  await run();
+  assert.deepEqual((await connectors()).map(row => row.owner_id).sort(), ["test:alice", "test:bob"]);
+  await run();
+  assert.equal((await connectors()).length, 2);
+});
+
+test("sharing a Pikibun its owner had claimed pins them before anyone else can sign in, and later shares keep them", async t => {
+  const stateDir = join(await directory(t), "server");
+  const web = await directory(t);
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
+  await mkdir(join(web, "assets"));
+  await loadLocalState(stateDir, { port: await freePort() });
+  const insert = (env: Env, id: number, at: string) => env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, 'u', 'U', 'U', 'u@example.test', '{}', 'github', ?)`).bind(`github:${id}`, String(id), at).run();
+  // Claimed for its owner alone first.
+  let { state, release } = await openLocalState(stateDir);
+  let server = await startLocalServer({ stateDir, state, release, staticDir: web });
+  await insert(server.env, 7777, "2001-01-01T00:00:00.000Z");
+  await server.close();
+  // Shared: the owner is pinned at once, though a teammate's account then sorts before theirs.
+  ({ state, release } = await openLocalState(stateDir, { shared: { ...sharedBase, admins: ["password:admin"] } }));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
+  assert.equal((await peekLocalState(stateDir))?.owner, "github:7777");
+  await insert(server.env, 5151, "2000-01-01T00:00:00.000Z");
+  await server.close();
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
+  await server.close();
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web });
+  t.after(() => server.close());
+  assert.equal(server.env.LOCAL_OWNER_ID, "github:7777");
+  assert.deepEqual(await server.owner(), { id: "github:7777", github_id: "7777" });
+});

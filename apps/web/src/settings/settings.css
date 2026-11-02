@@ -30,4 +30,6 @@
   @media (max-width: 640px) {
     .token-input { width: 88px; }
   }
+  .desktop-logs { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
+  .desktop-logs .danger { color: var(--status-danger); }
 }

@@ -1,11 +1,12 @@
 import { utilityProcess, type UtilityProcess } from "electron";
 import type { LocalInspection, LocalServerEvent, LocalServerRequest, LocalStatus } from "../../../server/src/local/desktop-protocol.js";
-import type { LocalView, LogLine, Outcome } from "../shared/bridge.js";
+import type { LocalStartInput, LocalView, LogLine, Outcome } from "../shared/bridge.js";
 import type { SettingsStore } from "./settings.js";
 
 // Pikibun on this computer: the local server (`pikibun serve`'s, see apps/server/src/local/desktop.ts) in an Electron
-// utility process, started when the owner turns it on in Settings and again at launch while it stays on. The Pikibun
-// window shows it instead of the configured server while it runs.
+// utility process, started when the owner turns it on in Settings and again at launch while it stays on: for them alone
+// on loopback, or shared with others at a public HTTPS origin (`pikibun serve --share`). The Pikibun window shows it
+// instead of the primary server while it runs.
 
 type Request = LocalServerRequest extends infer R ? R extends LocalServerRequest ? Omit<R, "id"> : never : never;
 type Result = Extract<LocalServerEvent, { type: "result" }>;
@@ -34,6 +35,7 @@ export class LocalServerController {
   private status: LocalStatus = { state: "stopped", host: "off" };
   private inspection?: LocalInspection;
   private error?: string;
+  private notice?: string;
   private readonly logs: LogLine[] = [];
   private readonly listeners = new Set<() => void>();
 
@@ -50,11 +52,14 @@ export class LocalServerController {
   get origin(): string | undefined { return this.status.state === "running" ? this.status.origin : undefined; }
   get claimUrl(): string | undefined { return this.status.state === "running" ? this.status.claimUrl : undefined; }
   get running(): boolean { return this.child !== undefined && this.status.state !== "stopped"; }
+  get shared(): boolean { return this.status.state === "running" && this.status.mode === "shared"; }
 
   view(): LocalView {
+    const enabled = this.options.settings.get().localServer;
+    const mode = this.status.state !== "stopped" && this.status.mode ? this.status.mode : enabled?.mode ?? "local";
     return {
-      enabled: this.options.settings.get().localServer !== undefined, status: { ...this.status }, logs: [...this.logs],
-      ...(this.inspection ? { inspection: this.inspection } : {}), ...(this.error ? { error: this.error } : {}),
+      enabled: enabled !== undefined, mode, status: { ...this.status }, logs: [...this.logs],
+      ...(this.inspection ? { inspection: this.inspection } : {}), ...(this.error ? { error: this.error } : {}), ...(this.notice ? { notice: this.notice } : {}),
     };
   }
 
@@ -136,21 +141,46 @@ export class LocalServerController {
    * a native dialog where this computer would run sessions without a sandbox. `resume` replays the consent given at the
    * owner's last start instead of asking.
    */
-  async start(github?: { clientId: string; clientSecret: string }, resume?: { unsandboxedConsent: boolean }): Promise<Outcome> {
+  /**
+   * The owner's start from Settings: for them alone with their GitHub OAuth app when they entered one, or shared with the
+   * settings they entered (administrators already user IDs, see admins.ts). Asks for unsandboxed consent in a native
+   * dialog where this computer would run sessions without a sandbox. `resume` restarts it as the owner last left it,
+   * replaying the consent given then instead of asking.
+   */
+  async start(input: LocalStartInput | undefined, resume?: { unsandboxedConsent: boolean; mode?: "shared" }): Promise<Outcome> {
     if (this.status.state !== "stopped") return { ok: false, error: "Pikibun is already running on this computer." };
     const inspection = await this.inspect();
     if (!inspection) return this.refuse(this.error ?? "This computer could not be inspected.");
-    if (!github && !inspection.githubClientId) return this.refuse("Add your GitHub OAuth app's client ID and secret first.");
+    const mode = input?.mode ?? resume?.mode ?? "local";
+    if (mode === "local" && !(input?.mode === "local" && input.github) && !inspection.githubClientId) return this.refuse("Add your GitHub OAuth app's client ID and secret first.");
+    if (mode === "shared" && input?.mode !== "shared" && !inspection.shared) return this.refuse("Set up sharing first: its public address, sign-in and administrators.");
     let unsandboxedConsent = false;
     if (inspection.hostMode === "unsandboxed" && !inspection.hostProblem) {
       unsandboxedConsent = resume ? resume.unsandboxedConsent : await this.options.confirmUnsandboxed(inspection.unsandboxedWarning ?? "");
     }
     this.error = undefined;
-    const result = await this.request({ type: "start", ...(github ? { github } : {}), ...(unsandboxedConsent ? { unsandboxedConsent } : {}),
-      ...(this.options.testMode ? { testMode: true } : {}) });
+    this.notice = undefined;
+    const result = await this.request({
+      type: "start", mode,
+      ...(input?.mode === "local" && input.github ? { github: input.github } : {}),
+      ...(input?.mode === "shared" ? { shared: input.shared } : {}),
+      ...(unsandboxedConsent ? { unsandboxedConsent } : {}),
+      ...(this.options.testMode ? { testMode: true } : {}),
+    });
     if (!result.ok) return this.refuse(result.error.message);
-    this.options.settings.update({ localServer: { unsandboxedConsent } });
+    this.options.settings.update({ localServer: { unsandboxedConsent, ...(mode === "shared" ? { mode } : {}) } });
     void this.inspect();
+    return { ok: true };
+  }
+
+  /** Shared with password sign-in: creates a listed administrator's account, as `pikibun serve --create-admin` does. */
+  async createAdmin(username: string, password: string): Promise<Outcome> {
+    if (!this.shared) return this.refuse("Share Pikibun first: administrator accounts are made on the running shared server.");
+    const result = await this.request({ type: "create-admin", username, password });
+    if (!result.ok) return this.refuse(result.error.message);
+    this.error = undefined;
+    this.notice = result.message;
+    this.changed();
     return { ok: true };
   }
 
@@ -172,7 +202,7 @@ export class LocalServerController {
   async resume(): Promise<void> {
     const resume = this.options.settings.get().localServer;
     if (!resume) return;
-    const outcome = await this.start(undefined, resume);
+    const outcome = await this.start(undefined, { ...resume });
     if (!outcome.ok) this.log("error", outcome.error);
   }
 

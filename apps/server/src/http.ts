@@ -91,6 +91,15 @@ export function testMode(env: Env): boolean {
 export function localMode(env: Env): boolean {
   return env.LOCAL_MODE === 'true' && !!env.LOCAL_CLAIM_SECRET && /^[A-Za-z0-9_-]{43}$/.test(env.LOCAL_CLAIM_SECRET);
 }
+/**
+ * The local server's owner as SQL: the user LOCAL_OWNER_ID names (pinned once the same data has served others, see
+ * local/launch.ts), else its first GitHub user, the one that claimed it.
+ */
+export function localOwnerQuery(env: Env): { sql: string; params: string[] } {
+  return env.LOCAL_OWNER_ID && /^github:[1-9][0-9]*$/.test(env.LOCAL_OWNER_ID)
+    ? { sql: `SELECT id, github_id FROM users WHERE id = ? AND auth_kind = 'github' AND github_id IS NOT NULL`, params: [env.LOCAL_OWNER_ID] }
+    : { sql: `SELECT id, github_id FROM users WHERE auth_kind = 'github' AND github_id IS NOT NULL ORDER BY created_at, id LIMIT 1`, params: [] };
+}
 const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
 /** Plain HTTP is only for loopback, and only in test mode or on a local server, which never leaves this machine. */
 export function loopbackHttp(env: Env, url: URL): boolean {

@@ -1,5 +1,6 @@
 import { pairingCodePattern, pairingIdPattern } from "../../../runner/src/desktop-protocol.js";
-import type { LocalStartInput, StartInput } from "../shared/bridge.js";
+import type { GitHubApp, LocalSharedSettings, LocalStartInput, ModelChoice, StartInput } from "../shared/bridge.js";
+import { isConnectionId, isModelChoice, MAX_MODELS } from "./settings.js";
 
 // Validation of every payload a local page sends the main process; pure, so tests run it without Electron.
 
@@ -37,20 +38,93 @@ export function parseStartInput(value: unknown): Parsed<StartInput> {
   return { ok: true, value: { pairing: { id, code }, replacePairing: value.replacePairing } };
 }
 
-/** Settings' start of Pikibun on this computer, with a GitHub OAuth app when the owner entered one. */
-export function parseLocalStartInput(value: unknown): Parsed<LocalStartInput> {
-  if (!isRecord(value) || !onlyKeys(value, ["github"])) return { ok: false, error: "Invalid request." };
-  if (value.github === undefined) return { ok: true, value: {} };
-  const github = value.github;
+/** A GitHub OAuth app the page sent: both fields empty means none (keep the saved one). */
+function parseGitHubApp(github: unknown): Parsed<GitHubApp | undefined> {
+  if (github === undefined) return { ok: true, value: undefined };
   if (!isRecord(github) || !onlyKeys(github, ["clientId", "clientSecret"]) || typeof github.clientId !== "string" || typeof github.clientSecret !== "string") {
     return { ok: false, error: "Invalid request." };
   }
   const clientId = github.clientId.trim();
   const clientSecret = github.clientSecret.trim();
-  if (!clientId && !clientSecret) return { ok: true, value: {} };
+  if (!clientId && !clientSecret) return { ok: true, value: undefined };
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(clientId)) return { ok: false, error: "Enter the client ID GitHub shows for your OAuth app." };
   if (!/^[A-Za-z0-9._-]{1,200}$/.test(clientSecret)) return { ok: false, error: "Enter a client secret you generated for your OAuth app." };
-  return { ok: true, value: { github: { clientId, clientSecret } } };
+  return { ok: true, value: { clientId, clientSecret } };
+}
+
+/** An administrator as the owner typed it: a user ID, or a GitHub login the app looks up (admins.ts). */
+export const ADMIN_ENTRY = /^(?:github:[1-9][0-9]{0,19}|password:[a-z0-9][a-z0-9_-]{2,38}|@?[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})$/;
+
+function parseShared(value: unknown): Parsed<LocalSharedSettings & { github?: GitHubApp }> {
+  const invalid = { ok: false as const, error: "Invalid request." };
+  if (!isRecord(value) || !onlyKeys(value, ["origin", "listen", "trustProxy", "signup", "passwordAuth", "admins", "github"])) return invalid;
+  const { origin, listen, trustProxy, signup, passwordAuth, admins } = value;
+  if (typeof origin !== "string" || origin.length > 2048 || typeof trustProxy !== "boolean" || typeof passwordAuth !== "boolean"
+    || (listen !== "loopback" && listen !== "all") || (signup !== "open" && signup !== "invite" && signup !== "off")
+    || !Array.isArray(admins) || admins.length > 20 || admins.some(item => typeof item !== "string" || item.length > 100)) return invalid;
+  const url = URL.parse(origin.trim());
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    return { ok: false, error: "Enter the public HTTPS address people open, such as https://pikibun.example.com: your TLS proxy or tunnel serves it." };
+  }
+  const entries = [...new Set((admins as string[]).map(item => item.trim()).filter(Boolean))];
+  if (!entries.length) return { ok: false, error: "Name at least one administrator: a GitHub login, github:12345 or password:alice." };
+  const wrong = entries.find(item => !ADMIN_ENTRY.test(item));
+  if (wrong) return { ok: false, error: `"${wrong}" is not a GitHub login, github:12345 or password:alice.` };
+  const github = parseGitHubApp(value.github);
+  if (!github.ok) return github;
+  return { ok: true, value: { origin: url.origin, listen, trustProxy, signup, passwordAuth, admins: entries, ...(github.value ? { github: github.value } : {}) } };
+}
+
+/** Settings' start of Pikibun on this computer: for the owner alone with their GitHub OAuth app, or shared with others. */
+export function parseLocalStartInput(value: unknown): Parsed<LocalStartInput> {
+  if (!isRecord(value)) return { ok: false, error: "Invalid request." };
+  if (value.mode === "shared") {
+    if (!onlyKeys(value, ["mode", "shared"])) return { ok: false, error: "Invalid request." };
+    const shared = parseShared(value.shared);
+    return shared.ok ? { ok: true, value: { mode: "shared", shared: shared.value } } : shared;
+  }
+  if (!onlyKeys(value, ["mode", "github"]) || (value.mode !== undefined && value.mode !== "local")) return { ok: false, error: "Invalid request." };
+  const github = parseGitHubApp(value.github);
+  if (!github.ok) return github;
+  return { ok: true, value: { mode: "local", ...(github.value ? { github: github.value } : {}) } };
+}
+
+/** The web page's start of Pikibun on this computer: never with secrets, which only the app's own Settings window takes. */
+export function parseRemoteLocalStart(value: unknown): Parsed<LocalStartInput> {
+  if (isRecord(value) && (value.github !== undefined || (isRecord(value.shared) && value.shared.github !== undefined))) {
+    return { ok: false, error: "Enter GitHub OAuth apps' secrets in Pikibun's own Settings window, not in a web page." };
+  }
+  return parseLocalStartInput(value);
+}
+
+/** "Pair this computer" from the web page: a pairing its server just created, and whether to replace the saved one. */
+export function parsePairHere(value: unknown): Parsed<StartInput & { pairing: { id: string; code: string } }> {
+  if (!isRecord(value) || !onlyKeys(value, ["pairing", "replacePairing"]) || value.pairing === undefined) return { ok: false, error: "Invalid request." };
+  const parsed = parseStartInput(value);
+  return parsed.ok && parsed.value.pairing ? { ok: true, value: { ...parsed.value, pairing: parsed.value.pairing } } : { ok: false, error: parsed.ok ? "Invalid request." : parsed.error };
+}
+
+export function parseCreateAdmin(value: unknown): Parsed<{ username: string; password: string }> {
+  if (!isRecord(value) || !onlyKeys(value, ["username", "password"]) || typeof value.username !== "string" || typeof value.password !== "string"
+    || value.username.length > 100 || value.password.length > 1024) return { ok: false, error: "Invalid request." };
+  const username = value.username.trim().replace(/^password:/, "");
+  if (!username) return { ok: false, error: "Enter the administrator's username." };
+  if (!value.password) return { ok: false, error: "Enter a password for the administrator." };
+  return { ok: true, value: { username, password: value.password } };
+}
+
+/** A call about one connection of the host page: `{ id }`, with the fields `extra` names. */
+export function parseConnectionCall(value: unknown, extra: readonly string[] = []): Parsed<Record<string, unknown> & { id: string }> {
+  if (!isRecord(value) || !onlyKeys(value, ["id", ...extra]) || !isConnectionId(value.id)) return { ok: false, error: "Invalid request." };
+  return { ok: true, value: value as Record<string, unknown> & { id: string } };
+}
+
+export function parseModels(value: unknown): Parsed<ModelChoice[] | null> {
+  if (value === null) return { ok: true, value: null };
+  if (!Array.isArray(value) || value.length > MAX_MODELS || !value.every(isModelChoice)) return { ok: false, error: "Invalid request." };
+  if (!value.length) return { ok: false, error: "Offer at least one model, or let Pi choose." };
+  const unique = new Map(value.map(model => [`${model.provider}/${model.modelId}`, { provider: model.provider, modelId: model.modelId }]));
+  return { ok: true, value: [...unique.values()] };
 }
 
 export function parseBoolean(value: unknown): Parsed<boolean> {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export type SettingsSection = "profile" | "appearance" | "hosts" | "workspaces" | "admin";
+export type SettingsSection = "profile" | "appearance" | "hosts" | "desktop" | "workspaces" | "admin";
 
 export type Route =
   | { name: "home" }
@@ -13,7 +13,7 @@ export type Route =
   /** A workspace's invite link, also with its token in the fragment: a signed-in visitor can ask to join. */
   | { name: "join"; token: string };
 
-const sections: readonly SettingsSection[] = ["profile", "appearance", "hosts", "workspaces", "admin"];
+const sections: readonly SettingsSection[] = ["profile", "appearance", "hosts", "desktop", "workspaces", "admin"];
 
 function decode(value: string | undefined): string | undefined {
   if (!value) return undefined;

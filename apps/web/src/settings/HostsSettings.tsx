@@ -12,6 +12,7 @@ import { Alert, Button, CardBody, Collapsible, Combobox, confirmDialog, CopyFiel
 import { HostAdminsSection, HostCommandGrantsSection } from "./HostAccess";
 import { HostCompactionSection } from "./HostCompaction";
 import { HostConfigSection } from "./HostConfig";
+import { check, desktopBridge } from "../desktop";
 import "./settings.css";
 
 const hostsInfo = <>
@@ -124,6 +125,17 @@ function PairHostSheet({ onClose, refresh }: { onClose: () => void; refresh: () 
     refresh();
     onClose();
   }
+  // In the desktop app, this computer can take the code itself.
+  const desktop = desktopBridge();
+  const desktopAction = useAction();
+  function pairHere() {
+    if (!pairing || !desktop) return;
+    const code = { id: pairing.id, code: pairing.code };
+    void desktopAction.run(async () => {
+      await check(desktop.host.pairHere(code, false));
+      setPairing(null);
+    }, "This computer is pairing. It appears in this list once it is online.");
+  }
   const sessionWorkspace = currentWorkspace ?? workspaces[0] ?? null;
   const createLabel = action.busy ? "Creating code..." : pairing ? "Create another code" : "Create pairing code";
   const footer = pairing
@@ -138,6 +150,10 @@ function PairHostSheet({ onClose, refresh }: { onClose: () => void; refresh: () 
       </form>
       <Feedback {...action} />
       {expired && <Alert variant="warning" role="status" title="Pairing code expired">The code was cleared. Create a new code to try again.</Alert>}
+      {pairing && desktop && <Alert variant="info" title="Pairing this computer?" actions={<Button size="sm" variant="outline" disabled={desktopAction.busy} onClick={pairHere}>Pair this computer</Button>}>
+        Pikibun's app runs here: it can pair this computer with the code below and start it as your host, with nothing to copy.
+      </Alert>}
+      <Feedback {...desktopAction} />
       {pairing && <section className="stack" aria-label="One-time pairing instructions">
         <span role="status">Code ready. Expires <Timestamp value={pairing.expiresAt} /></span>
         <Field label="Run this on your host"><CopyField value={`npx pikibun@latest connect --server ${window.location.origin} --pairing-id ${pairing.id}`} label="Copy command" /></Field>
