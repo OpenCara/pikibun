@@ -2337,7 +2337,7 @@ test('owners pack an archived session\'s files on its host, and unarchiving unpa
   assert.equal(actions.length, 8);
 });
 
-test('the host\'s authorization callback admits packing and unpacking an archived session, and nothing else of it', async t => {
+test('the host\'s authorization callback admits reads of an archived session, packing and unpacking it, and nothing else of it', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const manage = { ...authorization(s.session), permission: 'manage' };
   const allowed = async (body: unknown) => (await json<{ allowed: boolean }>(await self(f, s.connector, 'authorize', body))).allowed;
@@ -2346,6 +2346,12 @@ test('the host\'s authorization callback admits packing and unpacking an archive
   await json(await s.owner.request('POST', `/api/sessions/${s.session.id}/archive`));
   assert.equal(await allowed(manage), false);
   assert.equal(await allowed(authorization(s.session)), false);
+  // Its conversation stays viewable: its host serves its view and events, which ask for read, but never with host authority.
+  const read = { ...authorization(s.session), permission: 'read' };
+  assert.equal(await allowed(read), true);
+  assert.equal(await allowed({ ...read, host: true }), false);
+  assert.equal(await allowed({ ...read, autoApprove: true }), false);
+  assert.equal(await allowed({ ...read, permission: 'ask' }), false);
   assert.equal(await allowed({ ...manage, archived: true }), true);
   assert.equal(await allowed({ ...manage, archived: true, actorId: s.member.user.id }), false);
   for (const body of [{ ...manage, archived: false }, { ...manage, permission: 'write', archived: true }, { ...manage, archived: true, host: true }]) {
