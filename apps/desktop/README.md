@@ -148,7 +148,8 @@ environment, otherwise unsigned, so SmartScreen asks before its first launch (**
 build will join as one more job.
 
 `.github/workflows/desktop-windows.yml` builds the unpacked Windows app on every change to the app or its connector
-host, launches it once with `PIKIBUN_DESKTOP_SMOKE`, and uploads its windows' screenshots (`desktop-windows-smoke`).
+host in a pull request or on main, launches it once with `PIKIBUN_DESKTOP_SMOKE`, and uploads its windows' screenshots
+(`desktop-windows-smoke`).
 
 Check the result with `codesign --verify --deep --strict --verbose=2 dist/release/mac-arm64/Pikibun.app` and
 `spctl --assess --type execute --verbose dist/release/mac-arm64/Pikibun.app`.

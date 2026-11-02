@@ -2,10 +2,10 @@ name: Desktop app on Windows
 # Builds the desktop app on Windows as release-desktop.yml does, without the installer, and launches it once: it opens
 # its windows, inspects this computer's host (WSL2 by default; a runner has no WSL distribution, so the host says how to
 # set one up) and saves their screenshots (PIKIBUN_DESKTOP_SMOKE), uploaded as the desktop-windows-smoke artifact to
-# look at. Runs when the app, its connector host or their dependencies change.
+# look at. Runs when the app, its connector host or their dependencies change: in a pull request, on main, or by hand.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     paths:
       - apps/desktop/**
       - apps/runner/src/connect-setup.ts
