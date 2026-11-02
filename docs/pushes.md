@@ -1,0 +1,35 @@
+# Commits, pushes and pull requests
+
+Agents commit with Git itself, as the session owner's Git identity, and push committed work to a branch:
+
+- The agent pushes the session's own branch (`pikibun/<title-slug>-<short id>`) with plain `git push`, without approval: Pikibun checks, as for `git_push`, that the session owner may push to the repository, and pushes with the workspace's push identity (its own Git credentials on the host can't serve here). For any other branch, `git_push {directory, branch}` pushes a clone's checked-out commit as it is to the workspace repository the clone's `origin` names; if the branch moved, the agent fetches and merges or rebases first. To open a pull request from the session branch, the agent calls `git_push` with that branch and a pull request.
+- To tag a release, the agent checks out a commit that is already on a branch (main, say) and calls `git_push {directory, branch, tag}`. That creates the lightweight tag `refs/tags/<tag>` at the commit and moves no branch. Before pushing, Pikibun confirms against the remote that the branch reaches the commit, and that the tag doesn't exist yet. Tags are never moved or replaced, a tag push opens no pull request, and the default-branch setting below doesn't apply because no branch moves. Plain `git push` of a tag is refused, like any ref other than the session branch.
+- The approval shows the repository, the clone's directory if any, the branch, the tag if any and the exact commit.
+- Pushes are fast-forward only and never forced; a branch that moved elsewhere is refused.
+- The agent can also ask for a pull request, which Pikibun opens as the session owner with their connected account. Session lists and the session header then show the session's newest pull request with its state: **Draft**, **Open**, **CI failed** (a check run or commit status of its head failed), **Changes requested** (a reviewer's latest review asks for changes), **Merged** or **Closed**. Pikibun reads the state in the background with the session owner's GitHub account, about every two minutes (every 30 minutes for archived sessions), and stops once the pull request is merged or closed. Only github.com pull requests show a state so far.
+- Sessions that run directly on a host push and open pull requests with the host's own Git and credentials (`gh pr create`, say), so Pikibun doesn't see those pull requests open. Instead, once the agent stops, the host reports which branches the session's clones of the workspace's github.com repositories have checked out (not their default branch). Pikibun then looks up each branch's newest pull request opened since the session started, in the repository itself rather than a fork, with the session owner's GitHub account, and shows it and its state in the same way. A pull request found this way stays with the session after its clone switches away from the branch.
+- Before each push, Pikibun checks with the session owner's own account that they may push to the repository and, where the Git host reports it, to that branch; GitHub protected branches are refused. For a tag, it checks that they may push to the repository (on Azure DevOps, that they may create that tag); tag rules on the Git host (GitHub rulesets, GitLab and Gitea protected tags) apply to the push identity's push, and its bypass list too. Owners and admins can forbid pushes to a repository's default branch by clearing **Allow agent pushes to the default branch**.
+- The connector holds the push credential in memory only and talks to the Git host directly; the sandbox never sees it.
+
+## Push access
+
+Owners and admins set up how agents push, per provider, under **Settings → Workspaces → Push access** (**Add identity**). Usually that's an app or bot that Pikibun mints a short-lived token from:
+
+| Provider | Push identity | Token |
+|---|---|---|
+| GitHub | **GitHub App**: the operator's (`GITHUB_APP_*`, listed as **Operator GitHub App** with an **Install** link) or the workspace's own | 1 hour, this repository only, revoked after the push |
+| GitHub Enterprise Server | **GitHub App** registered on your server | 1 hour, this repository only, revoked after the push |
+| GitLab | **OAuth app authorized by a bot account** (`write_repository read_user`) | Up to 2 hours, the bot's projects |
+| Bitbucket Cloud | **Bitbucket OAuth consumer** with Repositories: Write | 1–2 hours, the Bitbucket workspace's repositories |
+| Azure DevOps | **Entra workload identity federation**: an app whose federated credential trusts Pikibun, its service principal added to the organization | About 1 hour, what the service principal is granted |
+| Forgejo v16 or newer | **Forgejo authorized integration**: a Generic JWT integration that trusts Pikibun | 10 minutes, what the integration allows |
+| Gitea 1.23 or newer | **OAuth app authorized by a bot account** (`write:repository read:user`) | Up to 1 hour, the bot's repositories |
+
+OAuth app identities show a **Redirect URI** to register and need **Authorize** (signed in as the bot) before they're **Ready**; Entra and Forgejo identities need the operator's `OIDC_SIGNING_KEY`. Secrets are write-only. Except for GitHub, a minted token reaches everything its identity can until it expires, and the host running the session receives it: give each bot, consumer, service principal or integration access to the workspace's repositories only (a Forgejo integration can also require the `repository` and `ref` claims Pikibun adds).
+
+Instead of an app or bot, an identity can be one of these. Both push only from sessions on the session owner's own hosts, so nobody's credentials reach anyone else's machine; elsewhere the push is refused:
+
+- **Session owner's account**: the account the owner connected (their GitHub sign-in, or a token under **Git accounts** with write scopes). Their own host receives that token for each push; Pikibun resets a GitHub token when the push ends, but tokens of other providers stay valid.
+- **Host's Git credentials** (connector 0.6.0 or newer): the connector reads the HTTPS credentials Git on the host would use, through its credential helpers (for example after `gh auth setup-git`, or from the macOS keychain or Git Credential Manager), without prompting. The host's owner turns on **Git credentials** in its [configuration](hosts.md#host-configuration) (connectors 0.9.0 and older: `npx pikibun@latest connect --git-credentials`).
+
+Pull requests are opened as the session owner with their connected account either way. [`packages/cli/README.md`](../packages/cli/README.md#pushing-commits) has the full details of each identity.

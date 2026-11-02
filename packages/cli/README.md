@@ -66,7 +66,7 @@ Each exact command and timeout needs the approval of the **host owner**, or of a
 
 ## macOS, Windows and hosts without bubblewrap
 
-The isolated sandbox needs Linux (or WSL2 on Windows). macOS and native Windows can try their own experimental sandboxes with `--experimental-sandbox` (see the main README, "Experimental sandboxes on macOS and Windows"). On macOS, native Windows, or Linux without bubblewrap, you can also opt out of isolation:
+The isolated sandbox needs Linux (or WSL2 on Windows). macOS and native Windows can try their own experimental sandboxes with `--experimental-sandbox` (see "Experimental sandboxes on macOS and Windows" in [`docs/hosts.md`](https://github.com/OpenCara/pikibun/blob/main/docs/hosts.md#experimental-sandboxes-on-macos-and-windows)). On macOS, native Windows, or Linux without bubblewrap, you can also opt out of isolation:
 
 ```sh
 npx pikibun@latest connect --unsafe-no-sandbox
