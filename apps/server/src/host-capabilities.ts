@@ -11,15 +11,15 @@ type Manifest = { models: LocalModelSummary[]; capabilities: ConnectorCapabiliti
  * effects under Auto-approve (`automaticGitHub`), that run the requests of members a session's owner auto-approves
  * without asking (`requesterAutoApprove`), that browse a session's worktree for the session panel
  * (`fileBrowser`), that take files attached to messages (`fileUploads`), also from the desktop app beside them
- * (`directUploads`), and that carry the web tools (`web`), and leaves every other manifest field to `parse`, which still rejects unknown ones. An absent flag
+ * (`directUploads`), that carried the retired web tools (`web`) and that run extensions (`extensions`), and leaves every other manifest field to `parse`, which still rejects unknown ones. An absent flag
  * stays absent, as from older connectors, so nothing is offered on hosts that can't do it. `gitRepin`, from connectors
  * of when sessions pinned their repositories, is accepted and dropped.
  */
 export function withHostToolCapabilities(input: Record<string, unknown>, parse: (input: Record<string, unknown>) => Manifest): Manifest {
   const value = input.capabilities;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return parse(input);
-  const { hostCommands, hostGrants, hostSessionGrants, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, fileBrowser, fileUploads, directUploads, web, gitRepin, ...rest } = value as Record<string, unknown>;
-  if ([hostCommands, hostGrants, hostSessionGrants, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, fileBrowser, fileUploads, directUploads, web, gitRepin].some(flag => flag !== undefined && typeof flag !== 'boolean')
+  const { hostCommands, hostGrants, hostSessionGrants, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, fileBrowser, fileUploads, directUploads, web, extensions, gitRepin, ...rest } = value as Record<string, unknown>;
+  if ([hostCommands, hostGrants, hostSessionGrants, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, fileBrowser, fileUploads, directUploads, web, extensions, gitRepin].some(flag => flag !== undefined && typeof flag !== 'boolean')
     || (hostGrants && !hostCommands) || (hostSessionGrants && !hostGrants) || (unboundedShellGrants && !hostGrants) || (hostOwnerDecides && !hostCommands) || (directUploads && !fileUploads)) {
     fail(400, 'invalid_manifest', 'Invalid capabilities.');
   }
@@ -27,5 +27,5 @@ export function withHostToolCapabilities(input: Record<string, unknown>, parse: 
   return { ...manifest, capabilities: { ...manifest.capabilities, ...(hostCommands ? { hostCommands: true } : {}), ...(hostGrants ? { hostGrants: true } : {}),
     ...(hostSessionGrants ? { hostSessionGrants: true } : {}), ...(unboundedShellGrants ? { unboundedShellGrants: true } : {}),
     ...(hostOwnerDecides ? { hostOwnerDecides: true } : {}), ...(automaticGitHub ? { automaticGitHub: true } : {}), ...(requesterAutoApprove ? { requesterAutoApprove: true } : {}), ...(fileBrowser ? { fileBrowser: true } : {}),
-    ...(fileUploads ? { fileUploads: true } : {}), ...(directUploads ? { directUploads: true } : {}), ...(web ? { web: true } : {}) } };
+    ...(fileUploads ? { fileUploads: true } : {}), ...(directUploads ? { directUploads: true } : {}), ...(web ? { web: true } : {}), ...(extensions ? { extensions: true } : {}) } };
 }

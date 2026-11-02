@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, link, lstat, mkdtemp, readFile, realpath, rm, symlink, unlink } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
@@ -14,6 +14,8 @@ import { connectorLimits } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { claimConnectorPairing, connectorManifest, controlPlaneOrigin, createConnector, readConnectorState, validateRelayRequest, writeConnectorState } from '../apps/runner/src/connector.js';
 import { verifyRunnerTicket } from '../apps/runner/src/protocol.js';
+import { HostExtensions } from '../apps/runner/src/extensions/host.js';
+import { ExtensionStore } from '../apps/runner/src/extensions/store.js';
 
 // Linux connectors also accept sessions moved from another host.
 const hostMigration = process.platform === 'linux' ? { hostMigration: true } : {};
@@ -156,7 +158,7 @@ test('pairing posts only to the fixed origin and strips extra model/capability s
   assert.equal(request.redirect, 'error');
   assert.equal(request.credentials, 'omit');
   assert.equal(request.headers.get('authorization'), null);
-  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, extensions: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   for (const secret of [providerSecret, credentials.token, 'fixture_pairing_code']) assert.equal(request.url.includes(secret), false);
 });
 
@@ -368,6 +370,9 @@ type FixtureOptions = {
   piSettings?: Pick<LocalModels, 'compaction' | 'identity'>;
   /** The control plane's check of a direct-upload grant the desktop app handed the host. */
   uploadVerify?: (request: Request) => Response | Promise<Response>;
+  /** The host's extensions, and the control plane's answer to each sync of them; none to install without it. */
+  extensions?: HostExtensions;
+  extensionsSync?: (body: unknown) => Response | Promise<Response>;
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -385,7 +390,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
   let manifests = 0;
   const connector = createConnector({
     dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
-    capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null,
+    capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
     acquireLease: path => {
       assert.equal(path, dataDir);
       leases.acquired++;
@@ -419,6 +424,8 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
       if (request.url === `${origin}/api/connectors/self/config`) {
         return options.hostConfig?.() ?? Response.json({ config: { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off' } });
       }
+      // Extensions sync in the background of each connection: kept out of the ordered calls too.
+      if (request.url === `${origin}/api/connectors/self/extensions`) return options.extensionsSync?.(JSON.parse(call.body)) ?? Response.json({ requests: [] });
       workerCalls.push(call);
       if (request.url === `${origin}/api/connectors/self/manifest`) {
         return options.manifest?.(manifests++) ?? Response.json({ ok: true });
@@ -523,7 +530,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   socket.welcome();
   const call = await fixture.workerCalls.next();
   assert.equal(call.request.url, `${origin}/api/connectors/self/manifest`);
-  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, extensions: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   assert.equal(call.request.headers.get('x-connection-token'), connectionToken);
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(ready, false);
@@ -552,7 +559,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.deepEqual(fixture.statuses, ['connecting', 'connected', 'stopped']);
 });
 
-const advertisedBase = { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true };
+const advertisedBase = { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, extensions: true, ...hostMigration, hostConfig: true, compactionConfig: true };
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
@@ -1360,4 +1367,31 @@ test('a request already waiting when the runner is replaced is told it is restar
   assert.deepEqual(fixture.runtimes.map(record => record.requests.length), [0, 0], 'the waiting request ran on neither runner');
   assert.equal(second.readyState, 1);
   assert.equal(second.sent.length, 1);
+});
+
+test('a connected host reports its extensions, carries out the installs its owner asked for, and reports how they went', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-extensions-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // npm, as far as the store sees it: the package lands in the project's node_modules.
+  const store = new ExtensionStore(join(root, 'extensions'), async (args, cwd) => {
+    const spec = args.at(-1)!;
+    await mkdir(join(cwd, 'node_modules', 'pi-hello'), { recursive: true });
+    await writeFile(join(cwd, 'node_modules', 'pi-hello', 'package.json'), JSON.stringify({ name: 'pi-hello', version: '1.0.0', pi: { extensions: ['./index.js'] } }));
+    await writeFile(join(cwd, 'node_modules', 'pi-hello', 'index.js'), 'export default function () {}');
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ dependencies: { 'pi-hello': spec.slice(spec.lastIndexOf('@') + 1) } }));
+  });
+  const syncs = mailbox<{ report: { installed: { source: string }[]; remoteInstalls: boolean }; results: unknown[] }>();
+  let asked = false;
+  const fixture = await connectorFixture(t, { extensions: new HostExtensions(store, { remoteInstalls: true }), extensionsSync: body => {
+    syncs.push(body as never);
+    const requests = asked ? [] : [{ id: 'request-1', action: 'install', source: 'npm:pi-hello@1.0.0' }];
+    asked = true;
+    return Response.json({ requests });
+  } });
+  await startFixture(fixture);
+  assert.deepEqual(await syncs.next(), { report: { installed: [], remoteInstalls: true }, results: [] });
+  const second = await syncs.next();
+  assert.deepEqual(second.results, [{ id: 'request-1', ok: true }]);
+  assert.deepEqual(second.report.installed.map(item => item.source), ['npm:pi-hello@1.0.0']);
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['npm:pi-hello@1.0.0'], 'sessions see it at once');
 });

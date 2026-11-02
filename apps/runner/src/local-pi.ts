@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { ClientIdentity } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
 import type { CompactionSettings } from "@earendil-works/pi-durable";
-import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, ModelRegistry, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
 import type { LocalModelSummary } from "../../../packages/shared/src/connector.js";
 import { connectorLimits } from "../../../packages/shared/src/connector.js";
 import { thinkingLevels, type ModelDefinition, type ThinkingLevel } from "../../../packages/shared/src/types.js";
@@ -24,6 +24,8 @@ export interface LocalModels {
   readonly compaction?: CompactionSettings;
   /** How this host's Pi identifies its requests to providers, which its sessions' requests follow. */
   readonly identity?: ClientIdentity;
+  /** The host's Pi model registry, which its sessions' extensions get as `ctx.modelRegistry`. */
+  readonly modelRegistry?: ModelRegistry;
 }
 
 /** Only these non-secret fields can cross the connector boundary. */
@@ -188,8 +190,11 @@ export async function loadLocalPiModels(options: LocalPiOptions = {}): Promise<L
     return result.sort((a, b) => a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId));
   };
   await manifest();
+  let modelRegistry: ModelRegistry | undefined;
+  try { modelRegistry = new ModelRegistry(runtime as ModelRuntime); } catch { /* A stand-in runtime (tests) has none. */ }
   return {
     manifest,
+    ...(modelRegistry ? { modelRegistry } : {}),
     ...(options.compaction ? { compaction: options.compaction } : {}),
     // Pi's own identity without attribution; otherwise pi-durable's default, which attributes requests to pi as Pi does.
     ...(options.attribution === false ? { identity: { attribution: null } } : {}),

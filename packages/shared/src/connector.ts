@@ -147,11 +147,15 @@ export interface ConnectorCapabilities {
    */
   directUploads?: boolean;
   /**
-   * The connector carries the agent's web tools: web_fetch, which reads pages on the host as far as the workspace's
-   * network access reaches, and web_search, through the control plane's search provider (see web.ts). Absent on older
-   * connectors.
+   * Retired: connectors from before extensions carried the web tools (web_fetch, web_search), which extensions provide
+   * now. The control plane accepts the flag from them and offers neither tool.
    */
   web?: boolean;
+  /**
+   * The connector runs the extensions its workspaces choose and it has installed (docs/design/host-extensions.md),
+   * reports them, and takes installs its owner asks for. Absent on older connectors, whose sessions run none.
+   */
+  extensions?: boolean;
   /**
    * The connector runs as its owner and admins configure it in Pikibun (HostConfig: command time limit, GPU, Git
    * credentials, repository cache), read from the control plane, rather than by connect options. Absent on older

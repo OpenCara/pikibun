@@ -7,19 +7,16 @@ import type { GrantSource } from "./sources.js";
  * - off: nothing else;
  * - allowlist: the listed domains, plus the package registries below when `packageRegistries` is set;
  * - open: any public host.
- * Private, loopback and link-local addresses are never reachable, whatever the mode. The agent's web_fetch tool reaches
- * exactly what this lets sandboxed commands reach.
+ * Private, loopback and link-local addresses are never reachable, whatever the mode.
  *
- * `webSearch` lets the workspace's agents search the web with web_search, through the search provider the server's
- * operator configured: each query leaves for that provider. The control plane always names it; a policy from an older
- * client leaves it out, which keeps the saved setting. Egress grants never carry it, as older connectors would refuse
- * a policy with it (see egressGrantPolicy).
+ * `webSearch`, the setting of the retired web_search tool (web tools come from extensions now), is still accepted from
+ * older clients and dropped.
  */
 export const networkModes = ["off", "allowlist", "open"] as const;
 export type NetworkMode = (typeof networkModes)[number];
-export interface NetworkPolicy { mode: NetworkMode; domains: string[]; packageRegistries: boolean; webSearch?: boolean }
+export interface NetworkPolicy { mode: NetworkMode; domains: string[]; packageRegistries: boolean }
 
-export const defaultNetworkPolicy: NetworkPolicy = Object.freeze({ mode: "off", domains: [], packageRegistries: true, webSearch: false }) as NetworkPolicy;
+export const defaultNetworkPolicy: NetworkPolicy = Object.freeze({ mode: "off", domains: [], packageRegistries: true }) as NetworkPolicy;
 export const networkLimits = { domains: 100 } as const;
 
 /** Package registries an allowlist includes when `packageRegistries` is set. */
@@ -47,16 +44,14 @@ export function parseNetworkPolicy(value: unknown): NetworkPolicy {
   if (Object.keys(input).some(key => !["mode", "domains", "packageRegistries", "webSearch"].includes(key))) throw new Error("Invalid network policy");
   if (!networkModes.includes(input.mode as NetworkMode)) throw new Error("Invalid network mode");
   if (typeof input.packageRegistries !== "boolean") throw new Error("Invalid package registry setting");
-  if (input.webSearch !== undefined && typeof input.webSearch !== "boolean") throw new Error("Invalid web search setting");
   const domains = input.domains ?? [];
   if (!Array.isArray(domains) || domains.length > networkLimits.domains) throw new Error(`At most ${networkLimits.domains} domains are allowed`);
   const invalid = domains.find(domain => !validNetworkDomain(domain));
   if (invalid !== undefined) throw new Error(`Invalid domain: ${String(invalid).slice(0, 100)}`);
-  return { mode: input.mode as NetworkMode, domains: [...new Set(domains as string[])], packageRegistries: input.packageRegistries,
-    ...(input.webSearch !== undefined ? { webSearch: input.webSearch } : {}) };
+  return { mode: input.mode as NetworkMode, domains: [...new Set(domains as string[])], packageRegistries: input.packageRegistries };
 }
 
-/** The policy as egress grants carry it: what the proxy and web_fetch enforce, without the workspace's web search setting. */
+/** The policy as egress grants carry it: what the proxy enforces. */
 export function egressGrantPolicy(policy: NetworkPolicy): NetworkPolicy {
   return { mode: policy.mode, domains: [...policy.domains], packageRegistries: policy.packageRegistries };
 }

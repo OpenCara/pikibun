@@ -1,4 +1,4 @@
-import type { GitRepinOperation, HostCommandOperation } from "./types.js";
+import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation, type GitRepinOperation, type HostCommandOperation } from "./types.js";
 
 // Declared next to their operations, by interface merging, so the base capability list stays as it was.
 declare module "./connector.js" {
@@ -39,7 +39,8 @@ export function grantedShell(session: HostCommandSession): boolean {
  * who holds automatic host commands there.
  */
 export function decidedAsHostCommand(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
-  if (operation.kind === "host.bash") return true;
+  // An extension's tool runs in the connector, as the host's OS user, as a host command does.
+  if (operation.kind === "host.bash" || operation.kind === "extension.tool") return true;
   return operation.kind === "bash" && (session.hostEnvironment === true || (unbounded && grantedShell(session)));
 }
 
@@ -72,4 +73,16 @@ export function validHostOperation(value: unknown): value is HostCommandOperatio
     && typeof op.repository === "string" && op.repository.length <= 512
     && /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){1,63}$/.test(op.repository)
     && !op.repository.split("/").some(part => [".", "..", ".git"].includes(part.toLowerCase())) && validRepinRef(op.ref);
+}
+
+/** An extension tool call's card, with the exact keys and bounds the runner and the control plane both check. */
+export function validExtensionToolOperation(value: unknown): value is ExtensionToolOperation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const op = value as Record<string, unknown>;
+  // Exactly these keys, in any order, as validHostOperation takes them; both sides then build the canonical order.
+  return op.kind === "extension.tool" && Object.keys(op).sort().join() === "arguments,digest,kind,source,tool"
+    && typeof op.source === "string" && op.source.length > 0 && op.source.length <= 1024 && !op.source.includes("\0")
+    && typeof op.tool === "string" && /^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,127}$/.test(op.tool)
+    && typeof op.arguments === "string" && op.arguments.length <= EXTENSION_ARGUMENTS_SHOWN + 1 && !op.arguments.includes("\0")
+    && typeof op.digest === "string" && /^[0-9a-f]{64}$/.test(op.digest);
 }

@@ -2068,7 +2068,7 @@ test('a session starts from a model and gets its own chat agent with every tool 
   assert.equal(session.status, 'ready');
   const agent = startedAgent();
   assert.equal(agent.id, session.agentVersionId);
-  assert.deepEqual(agent.tools, offered.filter(tool => !['git_push', 'github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'web_fetch', 'web_search', 'source_read'].includes(tool)));
+  assert.deepEqual(agent.tools, offered.filter(tool => !['git_push', 'github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'source_read'].includes(tool)));
   assert.deepEqual([agent.name, agent.instructions, agent.workspaceId, agent.authorId, agent.modelId], [s.model.name, '', null, s.owner.user.id, s.model.id]);
 
   // There is no agent catalog: agents can't be listed, revised or published.
@@ -2080,22 +2080,23 @@ test('a session starts from a model and gets its own chat agent with every tool 
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true } }));
   const { session: second } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(second.agentVersionId, session.agentVersionId);
-  assert.deepEqual(startedAgent().tools, offered.filter(tool => !['github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'web_fetch', 'web_search', 'source_read'].includes(tool)));
+  assert.deepEqual(startedAgent().tools, offered.filter(tool => !['github_read', 'github_merge', 'host_bash', 'github_issue', 'schedule', 'sessions', 'source_read'].includes(tool)));
 
   // A host that also carries GitHub reads and merges offers those; opening issues, managing schedules and working with
   // other sessions need their own capabilities, which connectors from before github_issue, schedule and sessions don't
-  // advertise, and so do the web tools.
+  // advertise.
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true, github: true, hostCommands: true } }));
   const { session: third } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(third.agentVersionId, second.agentVersionId);
-  assert.deepEqual(startedAgent().tools, offered.filter(tool => !['github_issue', 'schedule', 'sessions', 'web_fetch', 'web_search', 'source_read'].includes(tool)));
+  assert.deepEqual(startedAgent().tools, offered.filter(tool => !['github_issue', 'schedule', 'sessions', 'source_read'].includes(tool)));
 
-  // A current host gets every tool.
+  // A current host gets every tool. One from before extensions still carries the retired web tools, which no session gets.
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, gitPush: true, github: true, githubIssues: true, schedules: true, crossSessions: true, sources: true, hostCommands: true, web: true } }));
   const { session: fourth } = await json<{ session: SessionRecord }>(await start(s.owner, { modelId: s.model.id }), 201);
   assert.notEqual(fourth.agentVersionId, third.agentVersionId);
   assert.deepEqual(startedAgent().tools, offered);
-  assert.ok(offered.includes('github_issue') && offered.includes('schedule') && offered.includes('sessions') && offered.includes('web_fetch') && offered.includes('web_search'));
+  assert.ok(offered.includes('github_issue') && offered.includes('schedule') && offered.includes('sessions'));
+  assert.ok(!offered.includes('web_fetch') && !offered.includes('web_search'));
 });
 
 test('workspace read does not grant mutations, connector credentials, personal environment or backup access', async t => {
@@ -3069,6 +3070,44 @@ test('a session owner auto-approves another member\'s requests from one of their
   assert.deepEqual(audit, ['workspace.approvals.updated', 'session.requester_auto_approve.started', 'workspace.approvals.updated', 'workspace.approvals.updated', 'session.requester_auto_approve.stopped']);
 });
 
+test('another member\'s extension tool call that ran automatically shows in the session view, checked once against the workspace and the host owner\'s leave', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const owner = s.creator.user.id; const member = s.admin.user.id;
+  const path = `/api/sessions/${s.session.id}`;
+  const admissionId = autoAdmission(f, s.session.id, member, 'approval');
+  const operation: Operation = { kind: 'extension.tool', source: 'npm:shout@1.0.0', tool: 'shout', arguments: '{"text":"hi"}', digest: 'a'.repeat(64) };
+  const ran = (id: string, admission: string | null = admissionId): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: member, decidedBy: owner,
+    automatic: true, ...(admission ? { admissionId: admission } : {}), status: 'executed', result: 'HI!', createdAt: new Date().toISOString(), operation });
+  let approvals: ApprovalRecord[] = [];
+  rpcHub(f, s.connector, envelope => {
+    assert.equal(envelope.request.ticket.action, 'view');
+    return Response.json({ view: { sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
+      entries: [], approvals, conversations: [], busy: false } });
+  });
+  const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
+  // The workspace doesn't run it automatically (yet): the view still loads, and the record is shown unreviewed, as a plain one.
+  approvals = [ran('tool-early')];
+  const early = (await present()).get('tool-early')!;
+  assert.deepEqual([early.reviewHash, early.automatic, early.status], [undefined, undefined, 'executed']);
+  // The workspace runs its tools automatically and the host's owner allows that: reviewed, and kept so.
+  await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'npm:shout@1.0.0', tools: 'automatic' }));
+  await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }));
+  // What was shown unconfirmed stays so: a setting that allows it now doesn't vouch for a call that ran before.
+  approvals = [ran('tool-early')];
+  const later = (await present()).get('tool-early')!;
+  assert.deepEqual([later.reviewHash, later.automatic], [undefined, undefined]);
+  approvals = [ran('tool-ran')];
+  const presented = (await present()).get('tool-ran')!;
+  assert.deepEqual([presented.automatic, presented.status, typeof presented.reviewHash], [true, 'executed', 'string']);
+  await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: false }));
+  assert.equal(typeof (await present()).get('tool-ran')!.reviewHash, 'string', 'a setting changed later doesn\'t undo what it allowed');
+  // Without the member's own message, a host can't claim it.
+  approvals = [ran('tool-forged', null)];
+  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
+  approvals = [ran('tool-borrowed', autoAdmission(f, s.session.id, owner))];
+  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
+});
+
 test('automatic GitHub merges need an Auto-approve admission marked to merge, and runtimes cannot claim otherwise', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_merge']);
   const calls = mergeFetch(t, () => Response.json({ merged: true, sha: mergedSha }));
@@ -3723,95 +3762,13 @@ test('a member it is shared with starts sessions directly on a host only with a 
   assert.equal(onHost(), 1);
 });
 
-test('web searches need the requester\'s live write admission, the web_search tool or the owner\'s grant, and web search on in the workspace', async t => {
+test('the web tools are retired: hosts that still carry them are never offered them, and their searches are refused', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
-  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('The search provider must not be called'); });
-  f.env.WEB_SEARCH = 'brave'; f.env.WEB_SEARCH_API_KEY = 'brave-key';
+  const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('No search provider is called'); });
   const owner = s.session.ownerId;
-  const search = (admissionId: string, body: Record<string, unknown> = {}) => self(f, s.connector, 'web/search', {
-    sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', query: 'pikibun egress proxy', ...body,
-  });
-  for (const admissionId of [token(), admit(f, s.session.id, owner, { expiresAt: Math.floor(Date.now() / 1000) - 1 }), admit(f, s.session.id, owner, { mode: 'ask' })]) {
-    await denied(await search(admissionId), 403, 'web_search_not_admitted');
-  }
-  const admissionId = admit(f, s.session.id, owner);
-  await denied(await search(admissionId, { query: '  ' }), 400, 'invalid_input');
-  await denied(await search(admissionId, { count: 21 }), 400, 'invalid_input');
-  await denied(await search(admissionId, { extra: true }), 400, 'invalid_input');
-  await denied(await search(admissionId), 403, 'tool_not_allowed');
-  // A one-call grant covers only the query its card showed.
-  const grant = f.sqlite.prepare('INSERT INTO session_tool_grants (session_id,tool,call_id,approval_id,granted_by,created_at) VALUES (?,?,?,?,?,?)');
-  grant.run(s.session.id, 'web_search', 'call-1', 'permission-call-1', owner, new Date().toISOString());
-  f.sqlite.prepare(`INSERT INTO approval_reviews (session_id,approval_id,requested_by,source,admission_id,operation_json,review_hash,created_at)
-    VALUES (?,?,?,?,?,?,?,?)`).run(s.session.id, 'permission-call-1', owner, 'model', admissionId,
-    JSON.stringify({ kind: 'permission', tool: 'web_search', target: 'pikibun egress proxy', needs: ['tool'] }), token(), new Date().toISOString());
-  await denied(await search(admissionId, { query: 'something else' }), 403, 'tool_not_allowed');
-  // Allowed, but the workspace hasn't turned web search on.
-  await denied(await search(admissionId), 403, 'web_search_off');
-  f.sqlite.prepare(`INSERT INTO workspace_network_policies (workspace_id, mode, domains_json, package_registries, web_search, updated_by, updated_at)
-    VALUES (?, 'off', '[]', 1, 1, ?, ?)`).run(s.team.id, s.admin.user.id, new Date().toISOString());
-  // On, but the server has no provider.
-  delete f.env.WEB_SEARCH;
-  await denied(await search(admissionId), 503, 'web_search_unconfigured');
+  await denied(await self(f, s.connector, 'web/search', { sessionId: s.session.id, actorId: owner, admissionId: admit(f, s.session.id, owner),
+    callId: 'call-1', query: 'pikibun' }), 410, 'web_search_retired');
   assert.equal(fetch.mock.callCount(), 0);
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'web.search'").get()!.n, 0);
-});
-
-test('a web search goes to the operator\'s provider with its key, and returns plain, bounded results that are audited', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'web_search']);
-  f.sqlite.prepare(`INSERT INTO workspace_network_policies (workspace_id, mode, domains_json, package_registries, web_search, updated_by, updated_at)
-    VALUES (?, 'off', '[]', 1, 1, ?, ?)`).run(s.team.id, s.admin.user.id, new Date().toISOString());
-  const owner = s.session.ownerId;
-  const admissionId = admit(f, s.session.id, owner);
-  const search = (body: Record<string, unknown> = {}) => self(f, s.connector, 'web/search', {
-    sessionId: s.session.id, actorId: owner, admissionId, callId: 'call-1', query: 'pikibun  egress\nproxy', ...body,
-  });
-  let answer = () => Response.json({ web: { results: [
-    { title: 'Pikibun <strong>egress</strong> &amp; proxy', url: 'https://github.com/OpenCara/pikibun#network-access', description: 'The <strong>proxy</strong> &#39;answers&#39;', age: '2 days ago' },
-    { title: 'Not a page', url: 'javascript:alert(1)', description: 'dropped' },
-    { title: '', url: 'https://example.com/untitled', description: 'd'.repeat(2000) },
-  ] } });
-  const calls: { url: string; init?: RequestInit }[] = [];
-  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => { calls.push({ url: String(input), init }); return answer(); });
-  f.env.WEB_SEARCH = 'brave'; f.env.WEB_SEARCH_API_KEY = 'brave-key';
-  const result = await json<{ query: string; provider: string; results: { title: string; url: string; snippet: string; published?: string }[] }>(await search({ count: 3 }));
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.url, 'https://api.search.brave.com/res/v1/web/search?q=pikibun+egress+proxy&count=3');
-  assert.equal(new Headers(calls[0]!.init?.headers).get('x-subscription-token'), 'brave-key');
-  assert.equal(calls[0]!.init?.redirect, 'error');
-  assert.equal(result.query, 'pikibun egress proxy');
-  assert.equal(result.provider, 'brave');
-  assert.deepEqual(result.results.slice(0, 1), [{ title: 'Pikibun egress & proxy', url: 'https://github.com/OpenCara/pikibun#network-access', snippet: 'The proxy \'answers\'', published: '2 days ago' }]);
-  assert.equal(result.results.length, 2);
-  assert.equal(result.results[1]!.title, 'https://example.com/untitled');
-  assert.equal(result.results[1]!.snippet.length, 1000);
-  assert.ok(!JSON.stringify(result).includes('brave-key'));
-  const audits = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'web.search'").all().map(row => JSON.parse(String(row.detail_json)));
-  assert.deepEqual(audits, [{ provider: 'brave', query: 'pikibun egress proxy', results: 2 }]);
-
-  // Tavily and SearXNG answer in their own shapes.
-  f.env.WEB_SEARCH = 'tavily'; f.env.WEB_SEARCH_API_KEY = 'tavily-key';
-  answer = () => Response.json({ results: [{ title: 'T', url: 'https://t.example/', content: 'tavily snippet', published_date: '2026-10-01' }] });
-  assert.deepEqual((await json<{ results: unknown[] }>(await search())).results, [{ title: 'T', url: 'https://t.example/', snippet: 'tavily snippet', published: '2026-10-01' }]);
-  assert.equal(calls.at(-1)!.url, 'https://api.tavily.com/search');
-  assert.equal(new Headers(calls.at(-1)!.init?.headers).get('authorization'), 'Bearer tavily-key');
-  assert.deepEqual(JSON.parse(String(calls.at(-1)!.init?.body)), { query: 'pikibun egress proxy', max_results: 8, search_depth: 'basic' });
-  f.env.WEB_SEARCH = 'searxng'; delete f.env.WEB_SEARCH_API_KEY; f.env.WEB_SEARCH_URL = 'https://search.example.org/';
-  answer = () => Response.json({ results: [{ title: 'S', url: 'https://s.example/', content: 'searx snippet' }] });
-  assert.deepEqual((await json<{ results: unknown[] }>(await search())).results, [{ title: 'S', url: 'https://s.example/', snippet: 'searx snippet' }]);
-  assert.equal(calls.at(-1)!.url, 'https://search.example.org/search?q=pikibun+egress+proxy&format=json');
-
-  // The provider's refusals come back as such, with nothing of its answer.
-  answer = () => new Response('slow down', { status: 429 });
-  await denied(await search(), 429, 'web_search_rate_limited');
-  answer = () => new Response('<html>broken</html>', { status: 200 });
-  await denied(await search(), 502, 'web_search_failed');
-
-  // Turning web search off stops the next search.
-  f.sqlite.prepare('UPDATE workspace_network_policies SET web_search = 0 WHERE workspace_id = ?').run(s.team.id);
-  const before = calls.length;
-  await denied(await search(), 403, 'web_search_off');
-  assert.equal(calls.length, before);
 });
 
 /** A fake Notion API: a root page with a child page, a page under that child's block, a database, and a page elsewhere. */

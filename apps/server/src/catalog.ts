@@ -171,7 +171,6 @@ function carries(capabilities: ConnectorCapabilities, tool: ToolName): boolean {
   if (tool === 'source_read') return capabilities.sources === true;
   if (tool === 'schedule') return capabilities.schedules === true;
   if (tool === 'sessions') return capabilities.crossSessions === true;
-  if (tool === 'web_fetch' || tool === 'web_search') return capabilities.web === true;
   return true;
 }
 

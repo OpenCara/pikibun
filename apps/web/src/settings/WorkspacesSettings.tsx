@@ -16,6 +16,7 @@ import { Alert, Button, CardBody, Combobox, CopyField, DropdownMenu, EmptyState,
 import type { WorkspaceInviteLink, WorkspaceJoinRequest } from "../../../../packages/shared/src/invites";
 import { memberPerson, userIdFromInput, username, usernameWithId, type WorkspaceMember } from "../../../../packages/client/src/usernames";
 import { NetworkAccess } from "./NetworkAccess";
+import { WorkspaceExtensions } from "./WorkspaceExtensions";
 import { TranscriptSettings } from "./TranscriptSettings";
 import { AttachmentSettings } from "./AttachmentSettings";
 import { ApprovalSettings } from "./ApprovalSettings";
@@ -88,6 +89,7 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
     <WorkspaceConnections workspaceId={workspace.id} admin={admin} {...connections} changed={sourcesChanged} />
     <PushAccess workspace={workspace} admin={admin} />
     <NetworkAccess workspace={workspace} admin={admin} />
+    <WorkspaceExtensions workspace={workspace} userId={user.id} />
     <TranscriptSettings workspace={workspace} admin={admin} />
     <ApprovalSettings workspace={workspace} admin={admin} />
     <AttachmentSettings workspace={workspace} admin={admin} />

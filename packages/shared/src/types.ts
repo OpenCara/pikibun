@@ -22,10 +22,11 @@ export type SessionRole = (typeof sessionRoles)[number];
 export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read"] as const;
 export type ToolName = (typeof toolNames)[number];
 /**
- * Tools of sessions that pinned their repositories, which are read-only now: still valid in stored agents and
- * approvals, but no session offers them (the agent uses Git itself in bash).
+ * Tools no session offers any more, still valid in stored agents and approvals: those of sessions that pinned their
+ * repositories (the agent uses Git itself in bash), and the web tools, which extensions provide now
+ * (docs/design/host-extensions.md). An extension may name a tool like a retired one.
  */
-export const retiredToolNames: readonly ToolName[] = ["git_status", "git_commit", "git_repin"];
+export const retiredToolNames: readonly ToolName[] = ["git_status", "git_commit", "git_repin", "web_fetch", "web_search"];
 export interface UserProfile {
   id: string;
   githubId: string | null;
@@ -412,6 +413,20 @@ export interface HostCommandOperation {
   command: string;
   timeoutSeconds: number;
 }
+/**
+ * A call of a tool one of the session's extensions offers (docs/design/host-extensions.md). It runs in the connector,
+ * outside the sandbox, so it is decided like a host command. `arguments` are the call's arguments as JSON, cut to
+ * EXTENSION_ARGUMENTS_SHOWN characters for the card; `digest` is the SHA-256 of the whole JSON, which is what runs.
+ * Key order is canonical: kind, source, tool, arguments, digest.
+ */
+export interface ExtensionToolOperation {
+  kind: "extension.tool";
+  source: string;
+  tool: string;
+  arguments: string;
+  digest: string;
+}
+export const EXTENSION_ARGUMENTS_SHOWN = 8000;
 /** Creates a private successor session; never replaces the source worktree or its history. */
 export interface GitRepinOperation {
   kind: "git.repin";
@@ -432,6 +447,7 @@ export interface RepinResult {
   repositories: SessionRepository[];
 }
 export type Operation =
+  | ExtensionToolOperation
   | { kind: "git.commit"; message: string }
   | { kind: "bash"; command: string }
   | { kind: "github.comment"; repository: string; issue: number; body: string }
@@ -808,6 +824,12 @@ export interface SessionView {
   repositories?: RepositoryPreparationView;
   /** What the agent is doing now; absent from runners that predate activity reports. */
   activity?: SessionActivity;
+  /**
+   * The session's extensions (docs/design/host-extensions.md): those it runs with now, with the tools it got from each,
+   * and its workspace's enabled ones its host lacks or has at another version (`missing`). Absent from runners that
+   * predate extensions, and where the host has none to tell.
+   */
+  extensions?: { running: { source: string; dev: boolean; tools: string[] }[]; missing: string[] };
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
