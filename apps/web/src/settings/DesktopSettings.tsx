@@ -275,6 +275,9 @@ function AppSection({ view, bridge }: { view: DesktopView; bridge: DesktopBridge
       trailing={<input type="checkbox" className="checkbox" role="switch" aria-label="Open Pikibun at login" checked={view.hosts.openAtLogin} disabled={login.busy}
         onChange={event => { const enabled = event.target.checked; void login.run(() => check(bridge.setOpenAtLogin(enabled))); }} />} />}
     {login.error && <CardBody><Feedback {...login} /></CardBody>}
+    {view.version && <Row title={view.update ? `Pikibun ${view.update.version} is available` : "Version"}
+      hint={view.update ? `You have ${view.version}. Download the new version from its GitHub release page and install it over this one.` : `Pikibun ${view.version}`}
+      trailing={view.update && bridge.openUpdate ? <Button variant="default" onClick={() => void bridge.openUpdate?.()}>Update</Button> : undefined} />}
     <Row title={`${view.title} window`} hint="Prerequisites, activity, and pairing with a code for any server" onClick={() => void bridge.openWindow("host")} chevron />
     <Row title="App Settings window" hint="GitHub OAuth apps' secrets and password administrators, and settings while no server answers" onClick={() => void bridge.openWindow("settings")} chevron />
   </Section>;

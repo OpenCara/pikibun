@@ -1,5 +1,6 @@
 import type { HostsView, LocalView } from "../shared/bridge.js";
 import type { DesktopView } from "../shared/remote-bridge.js";
+import type { AvailableUpdate } from "./updates.js";
 
 // What a server's own web page sees of the app's settings (remote-bridge.ts): every connection and Pikibun on this
 // computer, as This Mac and Settings show them, but the activity logs (and connected host id) only of its own server, since they name other
@@ -12,7 +13,8 @@ function publicStatus(status: LocalView["status"]): LocalView["status"] {
     ...(status.address ? { address: status.address } : {}) };
 }
 
-export function remoteView(input: { title: string; origin: string; primaryServer: string; defaultServer: string; hosts: HostsView; local: LocalView }): DesktopView {
+export function remoteView(input: { title: string; origin: string; primaryServer: string; defaultServer: string; hosts: HostsView; local: LocalView;
+  version: string; update?: AvailableUpdate | undefined }): DesktopView {
   const { origin, hosts, local } = input;
   const here = hosts.connections.find(connection => connection.server === origin);
   return {
@@ -22,5 +24,6 @@ export function remoteView(input: { title: string; origin: string; primaryServer
     hosts: { ...hosts, connections: hosts.connections.map(connection => connection.server === origin ? connection
       : { ...connection, logs: [], ...(connection.running ? { running: { server: connection.running.server, unsandboxed: connection.running.unsandboxed } } : {}) }) },
     local: local.status.origin === origin ? local : { ...local, status: publicStatus(local.status), logs: [] },
+    version: input.version, ...(input.update ? { update: input.update } : {}),
   };
 }

@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { app, BrowserWindow, dialog, ipcMain, net, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, shell, type IpcMainInvokeEvent } from "electron";
 import { channels, type HostsView, type LocalStartInput, type Outcome, type SettingsView } from "../shared/bridge.js";
 import { remoteChannels, type DesktopView, type UploadOutcome } from "../shared/remote-bridge.js";
 import { githubLookup, resolveAdmins } from "./admins.js";
@@ -15,6 +15,7 @@ import { DEFAULT_SERVER, parseServerOrigin } from "./origin.js";
 import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseStartInput, parseString, parseUpload } from "./requests.js";
 import { remoteView } from "./remote-view.js";
 import { PRIMARY_CONNECTION, SettingsStore } from "./settings.js";
+import { UpdateChecker } from "./updates.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
 
 const mac = process.platform === "darwin";
@@ -27,6 +28,8 @@ const fixtureModels = developmentEnv("PIKIBUN_DESKTOP_ALLOW_FAUX") === "1";
 const stateDir = developmentEnv("PIKIBUN_DESKTOP_STATE_DIR");
 const serverStateDir = developmentEnv("PIKIBUN_DESKTOP_SERVER_STATE_DIR");
 const userData = developmentEnv("PIKIBUN_DESKTOP_USER_DATA");
+/** Packaged apps look for newer releases on GitHub; an unpackaged one only with this switch (or from the menu). */
+const checkUpdates = !development || developmentEnv("PIKIBUN_DESKTOP_CHECK_UPDATES") === "1";
 /** Writes PNGs of the windows into this directory, then quits: launch verification for any build. */
 const smokeDirectory = process.env.PIKIBUN_DESKTOP_SMOKE || undefined;
 
@@ -193,8 +196,32 @@ function main(): void {
     if (!window || shown !== activeServer()) { openSettings(); return; }
     void window.loadURL(`${activeServer()}/#/settings/desktop`).catch(() => {});
   };
+  // Newer desktop releases on GitHub: offered in the menus, the tray and the web app's sidebar; updating opens the
+  // release page in the browser.
+  const updates = new UpdateChecker({ current: app.getVersion(), fetch: (url, init) => net.fetch(url, init), onChange: () => publish() });
+  const openUpdate = (): Outcome => {
+    const update = updates.available;
+    if (!update) return { ok: false, error: "No newer version of Pikibun is known." };
+    void shell.openExternal(update.url);
+    return { ok: true };
+  };
+  const checkForUpdates = async () => {
+    const reached = await updates.check();
+    const parent = BrowserWindow.getFocusedWindow() ?? undefined;
+    const update = updates.available;
+    if (reached && update) {
+      if (await confirm(parent, { type: "info", buttons: ["Later", "Download"], defaultId: 1, cancelId: 0, noLink: true, title: "Pikibun",
+        message: `Pikibun ${update.version} is available.`, detail: `You have ${app.getVersion()}. Download it from its GitHub release page, then ${mac ? "replace Pikibun in your Applications folder" : "install it over this one"}.` })) openUpdate();
+      return;
+    }
+    const options: Electron.MessageBoxOptions = reached
+      ? { type: "info", title: "Pikibun", message: "Pikibun is up to date.", detail: `${app.getVersion()} is the newest version.` }
+      : { type: "warning", title: "Pikibun", message: "Couldn't check for updates.", detail: "GitHub didn't answer. Try again later." };
+    if (parent) await dialog.showMessageBox(parent, options); else await dialog.showMessageBox(options);
+  };
   const actions: MenuActions = {
     hostTitle, openMain, newWindow, openHost, openSettings, openDesktopSettings,
+    update: () => updates.available, openUpdate: () => { openUpdate(); }, checkForUpdates: () => void checkForUpdates(),
     servers: () => [
       ...(localServer.origin ? [{ label: `${hostLabel(localServer.origin)} (${localServer.shared ? "shared from" : "on"} this computer)`, open: openMain }] : []),
       ...settings.get().connections.map(connection => ({ label: hostLabel(connection.server), open: () => openServer(connection.server) })),
@@ -219,7 +246,7 @@ function main(): void {
   let menuKey = "";
   publish = () => {
     tray.update();
-    const key = JSON.stringify(actions.servers().map(server => server.label));
+    const key = JSON.stringify([actions.servers().map(server => server.label), updates.available?.version]);
     if (key !== menuKey) { menuKey = key; installAppMenu(actions); }
     if (hostWindow && !hostWindow.isDestroyed()) hostWindow.webContents.send(channels.hostUpdate, hostsView());
     // Every Pikibun window showing one of the owner's servers keeps its Settings › This Mac current.
@@ -231,6 +258,7 @@ function main(): void {
   };
   const desktopView = (origin: string): DesktopView => remoteView({
     title: hostTitle, origin, primaryServer: settings.server, defaultServer: DEFAULT_SERVER, hosts: hostsView(), local: localServer.view(),
+    version: app.getVersion(), update: updates.available,
   });
   publish();
 
@@ -446,6 +474,7 @@ function main(): void {
     else return refused;
     return { ok: true };
   });
+  handleRemote(remoteChannels.openUpdate, () => openUpdate());
 
   app.on("second-instance", openMain);
   app.on("activate", () => { if (!BrowserWindow.getAllWindows().some(window => window.isVisible())) openMain(); });
@@ -472,6 +501,7 @@ function main(): void {
   }
   for (const { controller } of hosts.values()) void controller.resume();
   void localServer.resume();
+  if (checkUpdates) updates.start();
 }
 
 /** Captures the Pikibun, host and Settings windows once they have rendered, then quits. */

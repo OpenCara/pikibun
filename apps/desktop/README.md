@@ -61,6 +61,12 @@ macOS builds ship today; the Linux and Windows targets are declared for later.
   create an account, whether usernames and passwords sign in, and a GitHub OAuth app whose callback is on the public
   address; **Create Administrator** makes a listed password administrator's account on the running server. The
   settings are saved with the server's state, which `pikibun serve --share` reads too.
+- Updates: a packaged app checks GitHub's releases of this repository soon after launch and every six hours
+  (`src/main/updates.ts`) for a `desktop-v1.2.3` release newer than itself, skipping drafts, other release lines and,
+  unless it runs a prerelease itself, prereleases. Once one is out, the app menu (**File** outside macOS) and the tray
+  offer **Update to Pikibun 1.2.3…**, and Pikibun windows show an **Update** button in the web app's sidebar and in
+  Settings › This Mac (`DesktopView.update`). Updating opens the release page, built from the tag, in the browser:
+  nothing downloads or installs by itself. **Check for Updates…** in the same menu checks at once.
 - A host left running when Pikibun quits starts again the next time it opens, with the consent given at its start;
   stopping the host, or a host failure, ends that, for each server on its own. With a host running, closing every
   window keeps Pikibun in the menu bar, whose menu starts and stops each server's host.
@@ -80,6 +86,7 @@ Development switches, honored only when the app runs unpackaged:
 | `PIKIBUN_DESKTOP_STATE_DIR=/path` | Connector state other than the CLI's, so your real pairing is untouched; other servers' go in `connections/` beside it |
 | `PIKIBUN_DESKTOP_SERVER_STATE_DIR=/path` | Local server state other than `pikibun serve`'s (with `PIKIBUN_DESKTOP_ALLOW_FAUX=1` it runs in test mode with the fixture model) |
 | `PIKIBUN_DESKTOP_USER_DATA=/path` | A separate app profile (settings, window bounds, Pikibun session) |
+| `PIKIBUN_DESKTOP_CHECK_UPDATES=1` | Check GitHub for newer releases as a packaged app does (an unpackaged app has the version in `package.json`) |
 
 `PIKIBUN_DESKTOP_SMOKE=/path` works in any build: the app writes `main.png` (Pikibun window), `host.png` (This Mac)
 and `settings.png` there once each has rendered, then quits. It never starts or resumes the host.
