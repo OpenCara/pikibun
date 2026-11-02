@@ -1,6 +1,6 @@
 import {
   accessUnavailable, activeStatuses, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting, initialSelection, isHostCommand,
-  messageCut, modelUnavailable, mustConfirmAutoApprove, preparingRepositories, resendText, rewindable, segment, type ChatSelection,
+  messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, preparingRepositories, resendText, rewindable, segment, username, type ChatSelection,
 } from "@pikibun/client";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
@@ -92,15 +92,19 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
     return canApprove && (!ownerOnly || isOwner);
   }
 
-  /** `scope` answers a permission request: allow the one call, or the same need for the rest of the session. */
-  async function decide(approval: ApprovalRecord, decision: "approve" | "deny", scope?: "call" | "session") {
+  /**
+   * `scope` answers a permission request: allow the one call, or the same need for the rest of the session. `always`
+   * approves another member's card and auto-approves their requests from now on (offersAlwaysApprove).
+   */
+  async function decide(approval: ApprovalRecord, decision: "approve" | "deny", scope?: "call" | "session", always = false) {
     if (!decides(approval) || approvalAction.busy || !approval.reviewHash || approval.status !== "pending") return;
     // The card is the prompt: it shows the exact operation, who it runs as, its resource limits and any unsandboxed-host warning, so a tap decides at once.
     const notice = approval.operation.kind === "permission"
       ? decision === "deny" ? "Not allowed" : scope === "session" ? "Allowed for the rest of the session" : "Allowed for this call"
+      : always ? `Approved. ${username(people.person(approval.requestedBy))}'s requests here now run without asking; stop it under Approvals.`
       : decision === "approve" ? "Approval decision recorded" : "Operation denied";
     await approvalAction.run(async () => {
-      await api(`/api/sessions/${segment(id)}/approvals/${segment(approval.id)}`, { method: "POST", body: { decision, reviewHash: approval.reviewHash, ...(scope ? { scope } : {}) } });
+      await api(`/api/sessions/${segment(id)}/approvals/${segment(approval.id)}`, { method: "POST", body: { decision, reviewHash: approval.reviewHash, ...(scope ? { scope } : {}), ...(always ? { alwaysApprove: true } : {}) } });
       live.refresh();
     }, notice);
   }
@@ -150,6 +154,8 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
         </View> : <>
           <View style={ui.inline}>
             <Button testID="approval-approve" small variant="primary" label="Approve" disabled={disabled} onPress={() => void decide(approval, "approve")} />
+            {session && offersAlwaysApprove(approval, session, host, user.id) && <Button testID="approval-always" small label={`Always approve ${username(people.person(approval.requestedBy))}`}
+              disabled={disabled} onPress={() => void decide(approval, "approve", undefined, true)} />}
             <Button testID="approval-deny" small label="Deny" disabled={disabled} onPress={() => void decide(approval, "deny")} />
           </View>
           <Text testID="approval-hint" style={[ui.small, { color: palette.muted }]}>
@@ -203,7 +209,7 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
           <Feedback error={approvalAction.error} notice={approvalAction.notice} />
         </>} />}
     <ApprovalsSheet visible={approvalsOpen} approvals={approvals} olderApprovals={view?.olderApprovals} onClose={() => setApprovalsOpen(false)}
-      onOpenSession={target => { refreshSessions(); openSession(target); }} />
+      onOpenSession={target => { refreshSessions(); openSession(target); }} session={session} onChanged={live.refresh} />
   </KeyboardAvoidingView></PeopleProvider>;
 }
 
@@ -226,8 +232,21 @@ const AUTO_APPROVED_NOTE = "Commands that ran under auto-approve are marked on t
  * Every approval of the session, pending first, with what each decided one did. On iOS a repinned session opens once
  * the sheet has gone, so the navigation is not hidden behind (or dropped by) the closing modal.
  */
-function ApprovalsSheet({ visible, approvals, olderApprovals, onClose, onOpenSession }: { visible: boolean; approvals: ApprovalRecord[]; olderApprovals?: number; onClose: () => void; onOpenSession: (id: string) => void }) {
+function ApprovalsSheet({ visible, approvals, olderApprovals, onClose, onOpenSession, session, onChanged }: { visible: boolean; approvals: ApprovalRecord[]; olderApprovals?: number; onClose: () => void; onOpenSession: (id: string) => void;
+  session: SessionRecord | null | undefined; onChanged: () => void }) {
   const palette = usePalette();
+  const { user, api } = useSession();
+  const name = useUsername();
+  const stopping = useAction();
+  const always = session?.autoApprovedRequesters ?? [];
+  /** The owner stops auto-approving `requester`'s requests (chosen with Always approve on one of their cards). */
+  function stop(requester: string) {
+    if (!session || stopping.busy) return;
+    void stopping.run(async () => {
+      await api(`/api/sessions/${segment(session.id)}/auto-approved-requesters/${segment(requester)}`, { method: "DELETE" });
+      onChanged();
+    }, `${name(requester)}'s requests ask again.`);
+  }
   const opening = useRef<string | null>(null);
   const sorted = [...approvals].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending"));
   function open(target: string) {
@@ -246,6 +265,15 @@ function ApprovalsSheet({ visible, approvals, olderApprovals, onClose, onOpenSes
         <Text style={[styles.paneTitle, { color: palette.text }]}>Approvals</Text>
         <Button small variant="ghost" label="Done" onPress={onClose} />
       </View>
+      {session && always.length > 0 && <View style={styles.sheetList}>
+        {always.map(requester => <View key={requester} style={ui.inline}>
+          <Text style={[ui.small, ui.flex, { color: palette.text }]}>
+            {`Always approves ${name(requester, true)}: ${session.requesterAutoApprove ? "their commands, pushes, and GitHub comments and issues run without asking" : "paused while the workspace doesn't allow it"}`}
+          </Text>
+          {session.ownerId === user.id && <Button small label="Stop" disabled={stopping.busy} onPress={() => stop(requester)} />}
+        </View>)}
+        <Feedback error={stopping.error} notice={stopping.notice} />
+      </View>}
       {sorted.length ? <ScrollView contentContainerStyle={styles.sheetList}>
         {sorted.map(approval => <ApprovalCard key={approval.id} approval={approval} onOpenSession={open} />)}
         {!!olderApprovals && <Text style={[ui.small, { color: palette.muted }]}>{`${olderApprovals} older settled ${olderApprovals === 1 ? "approval isn't" : "approvals aren't"} listed. ${AUTO_APPROVED_NOTE}`}</Text>}

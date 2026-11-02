@@ -30,6 +30,7 @@ import { registerWorkspaceDatabases } from './workspace-databases/routes.js';
 import { registerDataExports } from './data-export.js';
 import { registerNetworkPolicies } from './network.js';
 import { registerTranscriptSettings } from './transcript-settings.js';
+import { registerRequesterAutoApprove } from './requester-auto-approve.js';
 import { registerAdmin } from './admin.js';
 import { registerWorkspaceInvites } from './workspace-invites.js';
 import { compression } from './compression.js';
@@ -106,6 +107,7 @@ registerWorkspaceDatabases(app);
 registerDataExports(app);
 registerNetworkPolicies(app);
 registerTranscriptSettings(app);
+registerRequesterAutoApprove(app);
 registerAdmin(app);
 app.all('/api/*', () => fail(404, 'not_found', 'API route not found.'));
 

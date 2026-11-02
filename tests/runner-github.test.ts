@@ -511,3 +511,56 @@ test("the owner's Auto-approve posts comments, opens issues and merges at once w
   await assert.rejects(session.submit(await ticket(target.session.id, "submit"), { content: "Merge?", requestId: "asking-merge", admissionId: await sha256("asking"), options: { access: "approval", autoMerge: true } }, "write"),
     (error: unknown) => error instanceof RunnerError && error.status === 422);
 });
+
+test("another member's comments run at once while the control plane says the owner auto-approves their requests; merges still wait", hostMode, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-github-requester-")));
+  const comments: Record<string, unknown>[] = [];
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("github_comment", { repository: "acme/alpha", issue: 7, body: "Looks good." })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("github_merge", { repository: "acme/alpha", pull: 7, sha: head, method: "squash" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Merge requested."),
+    fauxAssistantMessage([fauxToolCall("github_comment", { repository: "acme/alpha", issue: 7, body: "Again." })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Comment requested."),
+  ]);
+  const models = createModels(); models.setProvider(faux.provider);
+  const target = binding("github-requester");
+  target.agent.tools = ["github_comment", "github_merge"];
+  // Whether alice auto-approves bob's requests, as the control plane would report it; asked only by name.
+  let autoApproved = true;
+  const asked: AuthorizationRequest[] = [];
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-github-requester-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => {
+      if (input.autoApprove) asked.push(input);
+      return { allowed: true, ownerId: input.ownerId, policyVersion: 1, ...(input.autoApprove && input.actorId === "test:bob" && autoApproved ? { autoApprove: true as const } : {}) };
+    },
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    githubComment: async request => { comments.push(request as unknown as Record<string, unknown>); return { id: 5, url: "https://github.com/acme/alpha/issues/7#issuecomment-5" }; },
+  });
+  await service.initialize();
+  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
+  const session = await service.provision(target, await ticket(target.session.id, "create"));
+  const bob = async (action: RunnerAction) => ({ ...await ticket(target.session.id, action), actorId: "test:bob" });
+
+  const admissionId = await sha256("bob's admission");
+  await session.submit(await bob("submit"), { content: "Comment, then merge.", requestId: "bob", admissionId, options: { access: "approval" } }, "write");
+  const card = await pendingApproval(session);
+  assert.equal(card.operation.kind, "github.merge", "a merge always waits for a person");
+  assert.equal(comments.length, 1);
+  assert.deepEqual([comments[0]!.actorId, comments[0]!.admissionId, comments[0]!.capability], ["test:bob", admissionId, undefined]);
+  const ran = (await session.view()).approvals.find(approval => approval.operation.kind === "github.comment")!;
+  assert.deepEqual([ran.automatic, ran.status, ran.requestedBy, ran.decidedBy], [true, "executed", "test:bob", "test:alice"]);
+  assert.ok(asked.length > 0 && asked.every(input => input.actorId === "test:bob"), "only another member's request asks");
+  await session.decide(await ticket(target.session.id, "approve"), card.id, { decision: "deny", operation: card.operation });
+  await idle(session);
+
+  // Once the owner stops, or the workspace turns it off, their comments wait again.
+  autoApproved = false;
+  await session.submit(await bob("submit"), { content: "Comment again.", requestId: "bob-later", admissionId: await sha256("bob's later admission"), options: { access: "approval" } }, "write");
+  const waiting = await pendingApproval(session);
+  assert.equal(waiting.operation.kind, "github.comment");
+  assert.equal(comments.length, 1);
+  await session.decide(await ticket(target.session.id, "approve"), waiting.id, { decision: "deny", operation: waiting.operation });
+  await idle(session);
+});

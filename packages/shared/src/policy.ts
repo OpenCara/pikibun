@@ -59,7 +59,8 @@ export function workspaceSessionPermissions(role: WorkspaceRole, visibility: "pr
  * Whether `userId`, whose role in the session's workspace is `role`, manages the session as a whole as its owner does:
  * renames, archives and unarchives it, changes its visibility and tool output, and turns off its share link. Its owner
  * does, and so do its workspace's owner and admins; a session admin role manages only who holds a session role.
- * What acts as the session's owner or takes their work elsewhere stays theirs alone: Auto-approve, permission requests,
+ * What acts as the session's owner or takes their work elsewhere stays theirs alone: Auto-approve (and auto-approving
+ * another member's requests, where the workspace allows it; see requester-auto-approve.ts), permission requests,
  * scheduled prompts, restarts, backups, restores, moves, exports and creating a share link.
  */
 export function managesSession(userId: string, ownerId: string, role: WorkspaceRole | undefined): boolean {

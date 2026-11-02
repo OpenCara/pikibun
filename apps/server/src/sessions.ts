@@ -24,12 +24,13 @@ import { cloneRepositories, legacyRepositoryFixture } from './repositories.js';
 import { chatAgentVersion, requireModel } from './catalog.js';
 import { isLinkShared } from './session-links.js';
 import { hostAuthority, hostCommandSession, hostOwnerDecides, mayDecideHostCommands, runsShellCommands } from './host-access.js';
-import { decidedAsHostCommand, grantedShell } from '../../../packages/shared/src/host-operations.js';
+import { decidedAsHostCommand, grantedShell, requesterAutoApproves } from '../../../packages/shared/src/host-operations.js';
 import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL, requireEnabledModel } from './host-models.js';
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
+import { autoApprovedRequesters, chooseAutoApprovedRequester, workspaceApprovalSettings } from './requester-auto-approve.js';
 
 /**
  * Per-message model, reasoning and access. The model must be one the session's own host offers: one it advertises that its
@@ -517,8 +518,12 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
     const notice = agent ? await cloneUnavailable(c.env, capabilities as ConnectorCapabilities, access.row, JSON.parse(agent.tools_json) as string[]) : undefined;
     // Everyone who can view the session learns that its shared conversation is also visible to anyone with its link.
     const linkShared = await isLinkShared(c.env, access.row.id);
+    // Everyone who can view it learns whose requests its owner auto-approves, and whether the workspace lets them.
+    const requesterAutoApprove = (await workspaceApprovalSettings(c.env.DB, access.row.workspace_id)).requesterAutoApprove;
+    const autoApproved = await autoApprovedRequesters(c.env.DB, access.row.id);
     return c.json({ session: { ...sessionRecord(access.row, access.permissions), ...(hostUnsandboxed ? { hostUnsandboxed } : {}), ...(linkShared ? { linkShared } : {}),
-      ...(notice ? { cloneUnavailable: notice } : {}) } });
+      ...(notice ? { cloneUnavailable: notice } : {}), ...(requesterAutoApprove ? { requesterAutoApprove: true } : {}),
+      ...(autoApproved.length ? { autoApprovedRequesters: autoApproved } : {}) } });
   });
   // The session's owner, and its workspace's owner and admins (managesSession), rename it and change its tool output
   // and visibility. Each statement checks again, as it writes, that the request's user still manages the session.
@@ -700,6 +705,25 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
       if (input.scope === 'session' && operation.tool === 'host_bash') fail(400, 'invalid_decision', 'Host commands can only be allowed once.');
     } else if (input.scope !== undefined) fail(400, 'invalid_decision', 'Only permission requests take a scope.');
     const scope = operation.kind === 'permission' ? (input.scope === 'session' ? 'session' : 'call') : undefined;
+    // "Always approve": the owner approves this card and auto-approves its requester's requests from now on, as far as
+    // requesterAutoApproves goes, while the workspace allows it (requester-auto-approve.ts).
+    const alwaysApprove = input.alwaysApprove === true;
+    if (input.alwaysApprove !== undefined) {
+      if (input.alwaysApprove !== true || input.decision !== 'approve') fail(400, 'invalid_decision', 'Always approve only approves.');
+      if (c.get('auth').userId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can auto-approve another member\'s requests.');
+      if (review.requested_by === row.owner_id) fail(400, 'invalid_decision', 'Your own requests run without asking under Auto-approve.');
+      if (!requesterAutoApproves(operation, hostSession, approval.unbounded === true)) {
+        fail(400, 'invalid_decision', 'Only sandboxed commands, pushes and GitHub comments and issues are auto-approved for another member; approve this one once.');
+      }
+      if (!(await workspaceApprovalSettings(c.env.DB, row.workspace_id)).requesterAutoApprove) {
+        fail(403, 'requester_auto_approve_disabled', 'This workspace doesn\'t let session owners auto-approve other members\' requests. Its owner or an admin can turn that on in its settings.');
+      }
+      const host = row.connector_id ? await c.env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
+        .bind(row.connector_id).first() : null;
+      if (!host || (JSON.parse(host.capabilities_json) as ConnectorCapabilities).requesterAutoApprove !== true) {
+        fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to auto-approve other members\' requests.');
+      }
+    }
     let brokerCapability: string | undefined;
     if (input.decision === 'approve') {
       const writer = await sessionAccess(c.env, row.id, review.requested_by);
@@ -741,6 +765,8 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
     if (!decided?.approval || decided.approval.id !== approvalId || decided.approval.sessionId !== row.id) fail(502, 'invalid_runner_response', 'The runner returned an invalid approval result.');
     [decided.approval] = await presentApprovals(c, row, [decided.approval]);
     await auditStatement(c.env, c.get('auth').userId, `approval.${input.decision}`, row.workspace_id, row.id, { approvalId, kind: operation.kind, status: decided.approval.status, ...(scope ? { scope } : {}) }).run();
+    // Once this card is approved, so a refused decision chooses nothing.
+    if (alwaysApprove) await chooseAutoApprovedRequester(c.env, row, c.get('auth').userId, review.requested_by, approvalId);
     return c.json({ ...decided, approval: redactApproval(decided.approval) });
   });
 

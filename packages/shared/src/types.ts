@@ -156,6 +156,17 @@ export interface SessionRecord {
    * user; deciding them needs host command authority, as host commands do.
    */
   hostEnvironment?: true;
+  /**
+   * Present only on single-session reads, while its workspace lets session owners auto-approve other members' requests
+   * (WorkspaceApprovalSettings.requesterAutoApprove): its owner can choose that from a member's approval card.
+   */
+  requesterAutoApprove?: true;
+  /**
+   * Present only on single-session reads: the members whose requests its owner auto-approves, chosen from one of their
+   * approval cards. Their messages' sandboxed commands, pushes and GitHub comments and issues run without asking while
+   * the workspace allows it (requesterAutoApprove), as the owner's own would under Auto-approve (requesterAutoApproves).
+   */
+  autoApprovedRequesters?: string[];
   /** What its agent is doing, as its host last reported it; absent until a connector that reports activity opens it. */
   activity?: SessionActivity;
   /**
@@ -275,6 +286,11 @@ export interface AuthorizationRequest {
    * other request of an archived session.
    */
   archived?: boolean;
+  /**
+   * Also report whether the session's owner auto-approves the actor's requests (`autoApprove`). Asked only by connectors
+   * that honor that (ConnectorCapabilities.requesterAutoApprove), so older ones never receive the field.
+   */
+  autoApprove?: boolean;
 }
 /**
  * What a member may do with host_bash on a host: `approve` decides each host command; `auto` also runs the host
@@ -294,6 +310,11 @@ export interface AuthorizationResult {
    * host: they own it, or hold a grant there that includes sessions on the host (HostCommandGrant.hostSessions).
    */
   hostSessions?: true;
+  /**
+   * Present only when requested (`autoApprove`) and the session's owner auto-approves the actor's requests: the actor
+   * isn't the owner and can still write, the workspace allows it (requester auto-approve) and the owner chose it for them.
+   */
+  autoApprove?: true;
 }
 /** A pull request the control plane opens as the session owner after a successful push. `base` defaults to the default branch. */
 export interface PullRequestRequest {

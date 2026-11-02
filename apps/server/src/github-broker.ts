@@ -13,6 +13,7 @@ import { requireCallbackScope } from './connectors.js';
 import { requireBrokerReview, requireOperationTool, requireToolCall } from './approval-reviews.js';
 import { cloneSessionRepository, recheckAccess, verifyRepository, type GitHubAccess } from './repositories.js';
 import { requireBinding, requireNoRestore } from './push/broker.js';
+import { autoApprovesRequester } from './requester-auto-approve.js';
 
 /*
  * Agents reach GitHub only through these brokers, as the session owner: the owner's token stays in the control plane's
@@ -78,7 +79,8 @@ function approvalInput(input: Record<string, unknown>): ApprovalInput {
  * Authorizes one GitHub effect of the session owner's Auto-approve message and consumes its tool call's single attempt
  * before the effect runs: the requester must be the session owner, still able to write, and the admission theirs, for
  * this session, unexpired and sent with Auto-approve (for a merge, also marked `auto_merge`, as the apps ask for every
- * Auto-approve message to a host that runs GitHub effects automatically). As with approved effects, every check is
+ * Auto-approve message to a host that runs GitHub effects automatically). A comment or issue may also come from the
+ * message of a member whose requests the owner auto-approves now (autoApprovesRequester), with that message's admission. As with approved effects, every check is
  * repeated after each await boundary that precedes the effect.
  */
 async function automaticEffect<T>(c: AppContext, connectorId: string | null, approval: ApprovalInput & { admissionId: string }, operation: Operation,
@@ -88,15 +90,19 @@ async function automaticEffect<T>(c: AppContext, connectorId: string | null, app
   if (!approvalId.startsWith('tool-')) fail(400, 'invalid_input', 'Automatic GitHub effects must name a tool-call approval.');
   const authorize = async (): Promise<SessionRow> => {
     const owner = await sessionAccess(c.env, sessionId, actorId);
-    if (!owner || owner.row.owner_id !== actorId || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write')) {
-      fail(403, 'permission_revoked', 'Automatic GitHub effects require the session owner.');
+    // Another member's comments and issues (never merges) run without asking only while the session's owner
+    // auto-approves their requests (requesterAutoApproves).
+    const member = !!owner && owner.row.owner_id !== actorId;
+    if (!owner || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write')
+      || (member && (action === 'github.merge' || !await autoApprovesRequester(c.env, owner.row, actorId)))) {
+      fail(403, 'permission_revoked', 'Automatic GitHub effects require the session owner, or for comments and issues a member whose requests the owner auto-approves.');
     }
     requireUnfrozen(owner.row);
     const admission = await c.env.DB.query<{ id: string; session_id: string; actor_id: string; mode: string; access: string | null; auto_merge: number; expires_at: number }>(
       'SELECT id, session_id, actor_id, mode, access, auto_merge, expires_at FROM run_admissions WHERE id = ?').bind(admissionId).first();
-    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || admission.access !== 'auto'
+    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || (!member && admission.access !== 'auto')
       || admission.expires_at <= Math.floor(Date.now() / 1000)) {
-      fail(403, 'automatic_github_not_admitted', 'GitHub effects run without asking only for an unexpired message the session owner sent with Auto-approve.');
+      fail(403, 'automatic_github_not_admitted', 'GitHub effects run without asking only for an unexpired message the session owner sent with Auto-approve, or one from a member whose requests the owner auto-approves.');
     }
     if (action === 'github.merge' && admission.auto_merge !== 1) fail(403, 'automatic_merge_not_admitted', 'Merges run without asking only for an Auto-approve message admitted to merge.');
     await requireCallbackScope(c, owner.row, connectorId);
@@ -116,7 +122,7 @@ async function automaticEffect<T>(c: AppContext, connectorId: string | null, app
       AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND owner_id = ? AND policy_version = ? AND status <> ?)
     ON CONFLICT (session_id, approval_id) DO NOTHING RETURNING approval_id`)
     .bind(sessionId, approvalId, admissionId, action, await sha256(JSON.stringify(operation)), now(), admissionId, automaticEffectsPerAdmission,
-      sessionId, actorId, row.policy_version, 'archived').first();
+      sessionId, row.owner_id, row.policy_version, 'archived').first();
   if (!consumed) {
     if (await c.env.DB.query('SELECT 1 FROM automatic_github_effects WHERE session_id = ? AND approval_id = ?').bind(sessionId, approvalId).first()) {
       fail(409, 'capability_consumed', 'This operation has already been attempted; do not retry the external effect.');
