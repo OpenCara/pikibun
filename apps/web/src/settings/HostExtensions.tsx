@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { ConnectorInfo } from "../../../../packages/shared/src/connector";
+import { builtinExtensions, type BuiltinExtensionName } from "../../../../packages/shared/src/host-config";
 import { normalizeExtensionSource, type ExtensionAvailability, type HostExtensionsReport, type InstalledExtension } from "../../../../packages/shared/src/host-extensions";
 import { api, segment } from "../api";
 import { Icon } from "../icons";
@@ -10,7 +11,8 @@ import { Alert, Button, CardBody, Collapsible, confirmDialog, Feedback, Field, R
  * A host's extensions (docs/design/host-extensions.md): what it has installed and what each offers, ignores or does
  * nothing with; the extensions its workspaces use that it lacks, which its owner installs here; and its owner's switch
  * that lets workspaces run extension tools without approval on it. Its connector carries out installs when it next
- * syncs, within half a minute while it is online.
+ * syncs, within half a minute while it is online. Above them, Pi's built-in extensions, which its owner and admins turn
+ * on for every session on it (HostConfig.builtinExtensions), with nothing to install.
  */
 
 interface HostRequest { id: string; action: "install" | "remove"; source: string; status: "pending" | "done" | "failed"; error?: string; requestedAt: string; finishedAt?: string }
@@ -26,6 +28,7 @@ const info = <div className="stack">
   <p>Pi extensions this host runs for the sessions on it: those a workspace chose that it has installed at the same version. They run in its connector, as your OS user, outside the sandbox.</p>
   <p>Install what your workspaces use here, or on the host with <code>pikibun extensions add</code>. A dev extension, installed there from a local path, runs only in your own sessions on this host.</p>
   <p>Extension tool calls need the approval of you or a member granted host commands, unless a workspace sets an extension's tools to automatic and you let workspaces do that here.</p>
+  <p>Built-in extensions come with Pikibun. Turned on, every session on this host runs with them, in every workspace; the tools they call are the session's own, decided as usual.</p>
 </div>;
 
 function ModuleDetails({ extension }: { extension: InstalledExtension }) {
@@ -43,7 +46,7 @@ function ModuleDetails({ extension }: { extension: InstalledExtension }) {
   </CardBody>)}</>;
 }
 
-export function HostExtensionsSection({ connector }: { connector: ConnectorInfo }) {
+export function HostExtensionsSection({ connector, refresh }: { connector: ConnectorInfo; refresh: () => void }) {
   const path = `/api/connectors/${segment(connector.id)}/extensions`;
   const resource = useResource<HostExtensionsResponse>(path);
   const action = useAction();
@@ -79,12 +82,28 @@ export function HostExtensionsSection({ connector }: { connector: ConnectorInfo 
       resource.refresh();
     }, automaticTools ? "Workspaces may now run extension tools without approval on this host, where they set them to automatic." : "Extension tools on this host need approval again.");
   }
+  const builtin = connector.config?.builtinExtensions ?? [];
+  function setBuiltin(name: BuiltinExtensionName, on: boolean) {
+    const next = builtinExtensions.map(item => item.name).filter(item => item === name ? on : builtin.includes(item));
+    const title = builtinExtensions.find(item => item.name === name)?.title ?? name;
+    void action.run(async () => {
+      await api(`/api/connectors/${segment(connector.id)}/config`, { method: "PATCH", body: { builtinExtensions: next } });
+      refresh();
+    }, on ? `${title} is on: sessions on this host get it with their next message, within a minute.` : `${title} is off: sessions on this host run without it from their next message, within a minute.`);
+  }
   const missing = (data?.workspaces ?? []).flatMap(workspace => workspace.extensions.filter(item => item.availability.status !== "installed").map(item => ({ workspace, ...item })));
   const waiting = (source: string) => pending.some(item => item.source === source);
   return <Section title="Extensions" bare info={info} action={owner && data?.report?.remoteInstalls !== false
     ? <Button variant="outline" size="sm" icon="plus" disabled={!!connector.revokedAt} onClick={() => setInstalling(true)}>Install extension</Button> : undefined}>
     <ResourceState loading={resource.loading && !data} error={resource.error} retry={resource.refresh}>
       {data && <div className="card">
+        {connector.config && builtinExtensions.map(item => <Row key={`builtin ${item.name}`} leading={<Icon name="tool" size={16} />}
+          title={<>{item.title} <span className="muted">built in</span></>}
+          hint={connector.capabilities.builtinExtensions ? `${item.description} Tools: ${item.tools.join(", ")}`
+            : "This host's connector predates built-in extensions: its sessions run without them until it is updated (npx pikibun@latest connect)"}
+          trailing={<label className="check-row small"><input type="checkbox" className="checkbox" aria-label={`Run ${item.title} in every session on this host`}
+            checked={builtin.includes(item.name)} disabled={action.busy || !!connector.revokedAt} onChange={event => setBuiltin(item.name, event.target.checked)} />
+            <span>Every session</span></label>} />)}
         {!connector.capabilities.extensions && <Row title="Update the host's connector" hint="This host's connector predates extensions: its sessions run none until it is updated (npx pikibun@latest connect)." />}
         {connector.capabilities.extensions && !data.report && <Row title="Not reported yet" hint="The host reports its extensions once its connector is online" />}
         {data.report && !data.report.remoteInstalls && <Row title="Installs from Pikibun are off" hint="Its connector runs with --no-remote-installs: install extensions on the host with pikibun extensions" />}
