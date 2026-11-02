@@ -221,7 +221,7 @@ export interface RunnerBinding {
   model: ModelDefinition;
 }
 export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "operations" | "approve" | "backup" | "restart" | "restore" | "stop" | "files"
-  | "revert" | "fork" | "pack" | "unpack";
+  | "revert" | "fork" | "pack" | "unpack" | "withdraw";
 
 /** How far the session file browser reads: entries listed per directory, and bytes of a file previewed. */
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
@@ -767,6 +767,11 @@ export interface SessionView {
   /** The host can stop the session's work: the message running and those queued behind it. Absent from older runners. */
   stoppable?: boolean;
   /**
+   * The host lets a message's sender take it back while it is still queued, to edit it (`POST /api/sessions/:id/withdraw`).
+   * Such a message then shows as `withdrawn`. Absent from older runners.
+   */
+  withdrawable?: boolean;
+  /**
    * The host can take the shared conversation back to one of its messages, and fork a new session from one
    * (`POST /api/sessions/:id/revert` and `/fork`). Absent from older runners.
    */
@@ -818,4 +823,14 @@ export interface SubmitResult {
   conversationId: string;
   status: string;
   queuePosition?: number;
+}
+/**
+ * A queued message its sender took back to edit (`POST /api/sessions/:id/withdraw`): what it said, as its sender sent
+ * it, and its images as the host prepared them. `imagesLost`: it carried images the host no longer had.
+ */
+export interface WithdrawResult {
+  content: string;
+  mode: "write" | "ask";
+  images?: ChatImage[];
+  imagesLost?: true;
 }

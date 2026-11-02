@@ -28,7 +28,8 @@ export function requestKey(actorId: string, mode: "write" | "ask", requestId: st
 export function permissionFor(action: RunnerAction): Permission {
   // The file browser reads the worktree as a collaborator could have the agent read it.
   if (action === "submit" || action === "operations" || action === "create" || action === "stop" || action === "files" || action === "revert" || action === "fork") return "write";
-  if (action === "ask") return "ask";
+  // Taking back a queued message needs the access it was sent with, which the session checks: a side ask's is ask.
+  if (action === "ask" || action === "withdraw") return "ask";
   if (action === "approve") return "approve";
   if (action === "restart" || action === "backup" || action === "restore" || action === "pack" || action === "unpack") return "manage";
   return "read";

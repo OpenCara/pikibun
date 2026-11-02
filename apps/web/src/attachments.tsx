@@ -72,7 +72,7 @@ export function useAttachments(unavailable?: string, initial?: () => Blob[]) {
     const ids = new Set(images.map(image => image.id));
     setImages(previous => previous.filter(image => !ids.has(image.id)));
   }
-  return { images, notice, paste, pick, remove, sent };
+  return { images, notice, paste, pick, remove, sent, add };
 }
 export type Attachments = ReturnType<typeof useAttachments>;
 
@@ -118,12 +118,44 @@ const handedOver = new Map<string, Blob[]>();
 export function handOverImages(sessionId: string, images: readonly PastedImage[]): void {
   if (images.length) handedOver.set(sessionId, images.map(image => image.file));
 }
+/** A session's open composer, which images coming back to that session go to (see restoreImages). */
+const receivers = new Map<string, (files: Blob[]) => void>();
+/** While mounted, images coming back to `sessionId` are attached to `attachments`. */
+export function useImageReceiver(sessionId: string, attachments: Attachments): void {
+  const current = useRef(attachments);
+  current.current = attachments;
+  useEffect(() => {
+    const receive = (files: Blob[]) => current.current.add(files);
+    receivers.set(sessionId, receive);
+    return () => { if (receivers.get(sessionId) === receive) receivers.delete(sessionId); };
+  }, [sessionId]);
+}
+/**
+ * Attaches images coming back to a session (a queued message taken back to edit) to its open composer, or keeps them
+ * in memory for its next one, after any kept already.
+ */
+export function restoreImages(sessionId: string, files: readonly Blob[]): void {
+  if (!files.length) return;
+  const receive = receivers.get(sessionId);
+  if (receive) receive([...files]);
+  else handedOver.set(sessionId, [...(handedOver.get(sessionId) ?? []), ...files]);
+}
 /** Read when the composer starts; `forgetHandedOverImages` once it has (the start may run twice in development). */
 export function handedOverImages(sessionId: string): Blob[] {
   return handedOver.get(sessionId) ?? [];
 }
 export function forgetHandedOverImages(sessionId: string): void {
   handedOver.delete(sessionId);
+}
+
+/** A message's images as its host sent them back (a queued message taken back to edit), to attach to a composer again. */
+export function imageBlobs(images: readonly ChatImage[]): Blob[] {
+  return images.map(image => {
+    const binary = atob(image.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    return new Blob([bytes], { type: image.mimeType });
+  });
 }
 
 const base64Length = (bytes: number) => Math.ceil(bytes / 3) * 4;

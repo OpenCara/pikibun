@@ -2488,6 +2488,34 @@ test('writers stop a session\'s work through its host, audited; archived session
   assert.equal(requests.length, 2);
 });
 
+test('a sender takes a queued message back through its host, audited; readers, bad replies and archived sessions refuse', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const path = `/api/sessions/${s.session.id}`;
+  const submissionId = 'a'.repeat(43);
+  const image = { mimeType: 'image/png', data: 'iVBORw0KGgo=' };
+  let answer: unknown = { content: 'Fix the tests', mode: 'write', images: [image] };
+  const requests = rpcHub(f, s.connector, () => Response.json(answer));
+  assert.deepEqual(await json(await s.owner.request('POST', `${path}/withdraw`, { submissionId })), { content: 'Fix the tests', mode: 'write', images: [image] });
+  const { request } = requests[0]!;
+  assert.deepEqual([request.method, request.path, request.body, request.ticket.action, request.ticket.actorId],
+    ['POST', `/v1/sessions/${s.session.id}/withdraw`, JSON.stringify({ submissionId }), 'withdraw', s.owner.user.id]);
+  const audit = f.sqlite.prepare("SELECT actor_id, detail_json FROM audit WHERE session_id = ? AND action = 'session.withdrawn'").all(s.session.id);
+  assert.deepEqual(audit.map(row => ({ ...row })), [{ actor_id: s.owner.user.id, detail_json: JSON.stringify({ submissionId }) }]);
+  answer = { content: 'Lost', mode: 'ask', imagesLost: true };
+  assert.deepEqual(await json(await s.owner.request('POST', `${path}/withdraw`, { submissionId })), { content: 'Lost', mode: 'ask', imagesLost: true });
+  for (const body of [{}, { submissionId: 'short' }, { submissionId: `${submissionId}!` }, { submissionId, extra: true }]) {
+    await denied(await s.owner.request('POST', `${path}/withdraw`, body), 400, 'invalid_input');
+  }
+  await denied(await s.member.request('POST', `${path}/withdraw`, { submissionId }), 403, 'forbidden');
+  for (const bad of [{}, { content: 'x', mode: 'manage' }, { content: 'x', mode: 'write', images: [{ mimeType: 'text/html', data: 'AAAA' }] }]) {
+    answer = bad;
+    await denied(await s.owner.request('POST', `${path}/withdraw`, { submissionId }), 502, 'invalid_runner_response');
+  }
+  await json(await s.owner.request('POST', `${path}/archive`));
+  await denied(await s.owner.request('POST', `${path}/withdraw`, { submissionId }), 409, 'session_archived');
+  assert.equal(requests.length, 5);
+});
+
 test('writers take the shared conversation back to a message through its host, audited; readers and archived sessions refuse', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}`;

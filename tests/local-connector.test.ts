@@ -197,7 +197,7 @@ test('relay accepts exactly the supported action/method/path combinations and lo
     create: JSON.stringify(binding()), view: '', submit: '{}', ask: '{}', operations: '{}',
     approve: '{}', backup: '{}', restart: '{}', restore: JSON.stringify({ binding: binding() }), stop: '{}',
     files: JSON.stringify({ path: 'src' }), revert: JSON.stringify({ entryId: '1:2' }),
-    fork: JSON.stringify({ sourceSessionId: 'other', entryId: '1:2' }), pack: '{}', unpack: '{}',
+    fork: JSON.stringify({ sourceSessionId: 'other', entryId: '1:2' }), pack: '{}', unpack: '{}', withdraw: JSON.stringify({ submissionId: 'a'.repeat(43) }),
   };
   for (const action of Object.keys(bodies) as (keyof typeof bodies)[]) {
     await t.test(action, async () => {

@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
-import type { ApprovalRecord, ChatOptions, Operation, Permission, RunnerBinding, SessionRole, SessionView, SubmitResult, WorkspaceRole } from '../../../packages/shared/src/types.js';
+import type { ApprovalRecord, ChatOptions, Operation, Permission, RunnerBinding, SessionRole, SessionView, SubmitResult, WithdrawResult, WorkspaceRole } from '../../../packages/shared/src/types.js';
 import { accessModes, permissions, sessionRoles, thinkingLevels } from '../../../packages/shared/src/types.js';
 import { connectorLimits, type ConnectorCapabilities, type LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { parseChatImages, type ChatImage } from '../../../packages/shared/src/chat-images.js';
@@ -815,6 +815,24 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
   app.post('/api/sessions/:id/stop', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
     return c.json({ stopped: await stopSession(c, row) });
+  });
+
+  // A message's sender can take it back while it is still queued, to edit it: with the access it was sent with, which its
+  // host checks (a side ask's is ask), so the route asks no more than that.
+  app.post('/api/sessions/:id/withdraw', async c => {
+    const { row } = await requireSession(c, identifier(c.req.param('id')), 'ask');
+    const input = await jsonObject(c, 4096);
+    if (Object.keys(input).some(key => key !== 'submissionId') || typeof input.submissionId !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.submissionId)) {
+      fail(400, 'invalid_input', 'submissionId names one queued message.');
+    }
+    const result = await runnerJSON<WithdrawResult>(await runnerRequest(c, row, 'withdraw', '', { submissionId: input.submissionId }));
+    invalidateSessionView(c, row.id);
+    if (typeof result?.content !== 'string' || (result.mode !== 'write' && result.mode !== 'ask')
+      || (result.images !== undefined && 'error' in parseChatImages(result.images)) || (result.imagesLost !== undefined && result.imagesLost !== true)) {
+      fail(502, 'invalid_runner_response', 'The runner returned an invalid withdrawal result.');
+    }
+    await auditStatement(c.env, c.get('auth').userId, 'session.withdrawn', row.workspace_id, row.id, { submissionId: input.submissionId }).run();
+    return c.json({ content: result.content, mode: result.mode, ...(result.images?.length ? { images: result.images } : {}), ...(result.imagesLost ? { imagesLost: true } : {}) });
   });
 
   // Anyone who can write to the session can take its shared conversation back to one of its messages, as they drive it.
