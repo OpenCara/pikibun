@@ -10,15 +10,30 @@ export interface Prerequisite { name: string; ok: boolean }
 export const pairingIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const pairingCodePattern = /^[A-Za-z0-9_-]{8,256}$/;
 
+/**
+ * Marks each message line on a --stdio host's stdout (desktop-transport.ts stdioTransport). Anything else there (a
+ * library's console.log, say) reaches the app as output, never as a message: the app reads only lines that start with it.
+ */
+export const STDIO_FRAME = "\u001epikibun ";
+
 /** Development only: the app sets these solely when it runs unpackaged or against a loopback server. */
 interface DevelopmentOptions {
   allowFaux?: boolean;
   allowInsecureLoopback?: boolean;
 }
 
-export interface InspectRequest extends DevelopmentOptions { type: "inspect"; id: number }
+/**
+ * On macOS and native Windows, run sessions in that platform's own sandbox (`pikibun connect --experimental-sandbox`)
+ * where its prerequisites are met, else unsandboxed with consent. Without it those platforms run unsandboxed (macOS) or
+ * are refused (native Windows, whose sandbox is otherwise WSL2's). Linux ignores it: bubblewrap is its sandbox.
+ */
+interface IsolationOptions {
+  experimentalSandbox?: boolean;
+}
 
-export interface StartRequest extends DevelopmentOptions {
+export interface InspectRequest extends DevelopmentOptions, IsolationOptions { type: "inspect"; id: number }
+
+export interface StartRequest extends DevelopmentOptions, IsolationOptions {
   type: "start";
   id: number;
   /** The app's configured origin; a saved pairing for another server is refused, never silently used. */
@@ -53,9 +68,14 @@ export interface HostInspection {
   stateDir: string;
   /** Why this machine cannot host at all (native Windows, an old Node.js). */
   unsupported?: string;
-  /** Linux with bubblewrap and its companions runs sandboxed; everything else needs the owner's unsandboxed consent. */
+  /**
+   * Linux with bubblewrap and its companions runs sandboxed, as do macOS and native Windows with `experimentalSandbox`
+   * and every prerequisite of their own sandbox; everything else needs the owner's unsandboxed consent.
+   */
   mode: "sandboxed" | "unsandboxed";
-  /** Linux only: the isolated sandbox's prerequisites, present even when they are missing. */
+  /** Which sandbox, when sandboxed; absent from hosts that predate it, which sandbox only with bubblewrap. */
+  sandbox?: "bubblewrap" | "seatbelt" | "windows";
+  /** The isolated sandbox's prerequisites, present even when they are missing (Linux, or `experimentalSandbox`). */
   sandboxPrerequisites?: Prerequisite[];
   /** The chosen mode's prerequisites. */
   prerequisites: Prerequisite[];
@@ -79,7 +99,7 @@ export type HostEvent =
   | { type: "result"; id: number; ok: true; inspection?: HostInspection; reply?: { status: number; body: string } }
   | { type: "result"; id: number; ok: false; error: HostError }
   /** `connectorId`, once connected: the host this computer is on that server, which its pages hand uploads to directly. */
-  | { type: "status"; state: HostState; server?: string; unsandboxed?: boolean; connectorId?: string }
+  | { type: "status"; state: HostState; server?: string; unsandboxed?: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string }
   | { type: "log"; level: "info" | "warning" | "error"; message: string }
   /** A started connector failed or stopped without being asked to. */
   | { type: "failed"; error: HostError };

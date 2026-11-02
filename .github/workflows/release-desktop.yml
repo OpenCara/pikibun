@@ -1,9 +1,9 @@
 name: Release desktop
 # Pushing a desktop-v1.2.3 tag (desktop-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then builds the
 # desktop app (apps/desktop) at the tag's version and attaches it to the tag's GitHub release, which is marked latest
-# unless it is a prerelease. Every platform is built from the same tag: macOS (arm64 DMG and zip) today. Windows and
-# Linux, declared in electron-builder.yml, become one more job each uploading a desktop-<platform> artifact, listed in
-# github-release's needs.
+# unless it is a prerelease. Every platform is built from the same tag: macOS (arm64 DMG and zip) and Windows (x64 NSIS
+# installer). Linux, declared in electron-builder.yml, becomes one more job uploading a desktop-<platform> artifact,
+# listed in github-release's needs.
 #
 # The app bundles the connector from packages/cli at the tagged commit, whatever version npm has.
 #
@@ -12,6 +12,9 @@ name: Release desktop
 # "OpenCara (TEAMID)"), and for notarization APP_STORE_CONNECT_API_KEY (the .p8's contents),
 # APP_STORE_CONNECT_API_KEY_ID and APP_STORE_CONNECT_API_ISSUER_ID. Without the certificate the app is ad-hoc signed,
 # as `pnpm --filter @pikibun/desktop dist` builds it, and Gatekeeper blocks it on other Macs.
+#
+# Windows signing, in the same environment: WIN_CERTIFICATE_P12 (base64 code-signing .p12) and WIN_CERTIFICATE_PASSWORD.
+# Without them the installer is unsigned, and SmartScreen warns before its first launch.
 on:
   push:
     tags: ["desktop-v*.*.*"]
@@ -100,9 +103,60 @@ jobs:
             apps/desktop/dist/release/*.zip
           if-no-files-found: error
 
+  windows:
+    needs: [check, ci]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: release
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Set the version from the tag
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: node scripts/set-release-version.mjs "$VERSION" desktop
+      # The web app, which the app ships for Pikibun on this computer.
+      - run: pnpm build
+      - run: pnpm --filter @pikibun/desktop build
+      - name: Stage the connector
+        working-directory: apps/desktop
+        run: node scripts/stage-connector.mjs
+      # Signed with the code-signing certificate when it is configured; otherwise unsigned.
+      - name: Package
+        working-directory: apps/desktop
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CERTIFICATE_P12 }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$WIN_CSC_LINK" ]; then
+            unset WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
+            echo "::warning::WIN_CERTIFICATE_P12 is not set: the Windows installer is unsigned, so SmartScreen warns before its first launch."
+          fi
+          pnpm exec electron-builder --win --x64 --publish never
+      - name: The WSL2 launcher keeps line feeds
+        working-directory: apps/desktop
+        run: |
+          if grep -q $'\r' dist/release/win-unpacked/resources/connector/dist/wsl-host.sh; then
+            echo "::error::wsl-host.sh has carriage returns: WSL2's /bin/sh can't run it."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: apps/desktop/dist/release/*.exe
+          if-no-files-found: error
+
   # One release for every platform's files; a re-run replaces them.
   github-release:
-    needs: [check, macos]
+    needs: [check, macos, windows]
     runs-on: ubuntu-latest
     environment: release
     permissions:

@@ -1,14 +1,18 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { createConnector, controlPlaneOrigin, type LocalConnector } from "./connector.js";
-import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, savedPairing, unsandboxedWarning } from "./connect-setup.js";
-import { parentTransport } from "./desktop-transport.js";
+import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, savedPairing, unsandboxedWarning, type HostIsolation } from "./connect-setup.js";
+import { parentTransport, stdioTransport } from "./desktop-transport.js";
 import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "./desktop-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
 import { ConnectorSetupError } from "./protocol.js";
+import { DEFAULT_WINDOWS_LIMITS, windowsRuntimeDirectory, type SandboxBackendConfig } from "./sandbox-backend.js";
 
 // The connector, run by a desktop app instead of a terminal: requests arrive over the parent's IPC channel (Electron's
-// utilityProcess parentPort, or Node's fork channel) and status, logs and failures go back the same way.
+// utilityProcess parentPort, or Node's fork channel) and status, logs and failures go back the same way. With --stdio
+// the channel is JSON lines on stdin and stdout instead: the Windows app runs this host inside WSL2 through wsl.exe.
 
 class HostFailure extends ConnectorSetupError {
   constructor(readonly code: HostErrorCode, message: string) { super(message); }
@@ -16,15 +20,16 @@ class HostFailure extends ConnectorSetupError {
 
 const requestId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const developmentOptions = { allowFaux: z.boolean().optional(), allowInsecureLoopback: z.boolean().optional() };
+const isolationOptions = { experimentalSandbox: z.boolean().optional() };
 /** Strict: unknown request types and unknown fields are refused, never ignored. */
 const hostRequestSchema: z.ZodType<HostRequest> = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("inspect"), id: requestId, ...developmentOptions }).strict(),
+  z.object({ type: z.literal("inspect"), id: requestId, ...isolationOptions, ...developmentOptions }).strict(),
   z.object({
     type: z.literal("start"), id: requestId, server: z.string().min(1).max(2048),
     pairing: z.object({ id: z.string().regex(pairingIdPattern), code: z.string().regex(pairingCodePattern) }).strict().optional(),
     replacePairing: z.boolean().optional(), unsandboxedConsent: z.boolean().optional(),
     models: z.array(z.object({ provider: z.string().min(1).max(128), modelId: z.string().min(1).max(256) }).strict()).min(1).max(200).optional(),
-    ...developmentOptions,
+    ...isolationOptions, ...developmentOptions,
   }).strict(),
   z.object({ type: z.literal("stop"), id: requestId }).strict(),
   z.object({ type: z.literal("upload"), id: requestId, grant: z.string().min(1).max(uploadRequestLimits.grant), body: z.string().max(uploadRequestLimits.body) }).strict(),
@@ -38,22 +43,40 @@ function hostError(error: unknown, fallback: string): HostError {
   return { code: "failed", message: fallback };
 }
 
-const { values } = parseArgs({ args: process.argv.slice(2), strict: true, allowPositionals: false, options: { "state-dir": { type: "string" } } });
-const stateDir = values["state-dir"] ?? defaultStateDir();
-const transport = parentTransport<HostEvent>();
+const { values } = parseArgs({ args: process.argv.slice(2), strict: true, allowPositionals: false, options: { "state-dir": { type: "string" }, stdio: { type: "boolean" } } });
+/** `~/` is this host's home: the Windows app names a state directory inside WSL2 without knowing where its home is. */
+const givenStateDir = values["state-dir"];
+const stateDir = givenStateDir === undefined ? defaultStateDir() : givenStateDir.startsWith("~/") ? join(homedir(), givenStateDir.slice(2)) : givenStateDir;
+const transport = values.stdio ? stdioTransport<HostEvent>() : parentTransport<HostEvent>();
 let running: { connector: LocalConnector; stopRequested: boolean } | undefined;
 
 function emit(event: HostEvent): void { transport.send(event); }
 function log(level: "info" | "warning" | "error", message: string): void { emit({ type: "log", level, message }); }
-function status(state: HostState, detail: { server?: string; unsandboxed?: boolean; connectorId?: string } = {}): void { emit({ type: "status", state, ...detail }); }
+function status(state: HostState, detail: { server?: string; unsandboxed?: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string } = {}): void { emit({ type: "status", state, ...detail }); }
 
-async function inspect(allowFaux = false, allowInsecureLoopback = false): Promise<HostInspection> {
-  try { assertConnectorPlatform(); }
+/** The isolation `experimentalSandbox` asks for: the platform's own sandbox, where it has one, on macOS and native Windows. */
+function isolation(experimentalSandbox = false): Promise<HostIsolation> {
+  assertConnectorPlatform({ experimentalSandbox: experimentalSandbox && process.platform !== "linux" });
+  return hostIsolation(experimentalSandbox ? { stateDir } : undefined);
+}
+
+/** The sandbox backend of an isolation that runs macOS's or Windows' own sandbox, with the CLI's default limits. */
+function sandboxBackend(chosen: HostIsolation): SandboxBackendConfig | undefined {
+  if (chosen.mode !== "sandboxed") return undefined;
+  if (chosen.sandbox === "seatbelt") return { kind: "seatbelt" };
+  if (chosen.sandbox === "windows") return { kind: "windows", runtime: windowsRuntimeDirectory(stateDir), limits: DEFAULT_WINDOWS_LIMITS };
+  return undefined;
+}
+
+async function inspect(allowFaux = false, allowInsecureLoopback = false, experimentalSandbox = false): Promise<HostInspection> {
+  let chosen: HostIsolation;
+  try { chosen = await isolation(experimentalSandbox); }
   catch (error) {
     return { platform: process.platform, stateDir, unsupported: hostError(error, "This computer cannot run the Pikibun host.").message, mode: "unsandboxed", prerequisites: [], models: [] };
   }
-  const { mode, sandboxPrerequisites, prerequisites } = await hostIsolation();
+  const { mode, sandbox, sandboxPrerequisites, prerequisites } = chosen;
   const inspection: HostInspection = { platform: process.platform, stateDir, mode, prerequisites, models: [] };
+  if (sandbox) inspection.sandbox = sandbox;
   if (sandboxPrerequisites) inspection.sandboxPrerequisites = sandboxPrerequisites;
   if (mode === "unsandboxed") inspection.unsandboxedWarning = unsandboxedWarning();
   try { assertPrerequisites(prerequisites, mode === "unsandboxed", ""); }
@@ -68,10 +91,13 @@ async function inspect(allowFaux = false, allowInsecureLoopback = false): Promis
 /** Checks everything the CLI checks before it prompts, then starts the connector; progress arrives as events. */
 async function start(request: StartRequest): Promise<void> {
   if (running) throw new HostFailure("already-running", "The host is already running.");
-  try { assertConnectorPlatform(); }
+  let chosen: HostIsolation;
+  try { chosen = await isolation(request.experimentalSandbox); }
   catch (error) { throw new HostFailure("unsupported", hostError(error, "This computer cannot run the Pikibun host.").message); }
-  const { mode, prerequisites } = await hostIsolation();
+  const { mode, prerequisites } = chosen;
   const unsandboxed = mode === "unsandboxed";
+  const backend = sandboxBackend(chosen);
+  const sandbox = unsandboxed ? undefined : chosen.sandbox;
   if (unsandboxed && request.unsandboxedConsent !== true) throw new HostFailure("consent-required", "This computer has no isolated sandbox: running the host needs your consent to run agent work directly on it.");
   assertPrerequisites(prerequisites, unsandboxed, "");
   let server: string;
@@ -88,7 +114,7 @@ async function start(request: StartRequest): Promise<void> {
   if (running) throw new HostFailure("already-running", "The host is already running.");
   const pairing = request.pairing && { id: request.pairing.id, code: request.pairing.code };
   const connector = createConnector({
-    dataDir: stateDir, server, pairing, replacePairing: replace, localModels, unsandboxed,
+    dataDir: stateDir, server, pairing, replacePairing: replace, localModels, unsandboxed, ...(backend ? { sandboxBackend: backend } : {}),
     allowInsecureLoopback: request.allowInsecureLoopback, allowFaux: request.allowFaux,
     // Binary presence cannot attest a working namespace or a per-session resource
     // domain. Advertise conservatively; each actual operation verifies isolation.
@@ -99,7 +125,7 @@ async function start(request: StartRequest): Promise<void> {
       if (running?.connector !== connector) return;
       if (state !== "stopped") {
         const connectorId = state === "connected" ? connector.connectorId : undefined;
-        status(state, { server, unsandboxed, ...(connectorId ? { connectorId } : {}) });
+        status(state, { server, unsandboxed, ...(sandbox ? { sandbox } : {}), ...(connectorId ? { connectorId } : {}) });
         return;
       }
       const expected = running.stopRequested;
@@ -111,9 +137,10 @@ async function start(request: StartRequest): Promise<void> {
   });
   const current = { connector, stopRequested: false };
   running = current;
-  status("starting", { server, unsandboxed });
+  status("starting", { server, unsandboxed, ...(sandbox ? { sandbox } : {}) });
   log("info", unsandboxed
     ? "Running unsandboxed: approved commands execute directly on this machine."
+    : backend ? `Experimental ${backend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.`
     : "Sandbox capability is verified per session; production shell stays disabled without provisioned, verified limits.");
   log("info", "Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings › Hosts › this host.");
   void connector.start().then(
@@ -141,7 +168,7 @@ async function handle(request: HostRequest): Promise<void> {
       if (!running) throw new HostFailure("not-running", "The host isn't running.");
       emit({ type: "result", id: request.id, ok: true, reply: await running.connector.direct({ grant: request.grant, body: request.body }) });
     } else if (request.type === "inspect") {
-      emit({ type: "result", id: request.id, ok: true, inspection: await inspect(request.allowFaux, request.allowInsecureLoopback) });
+      emit({ type: "result", id: request.id, ok: true, inspection: await inspect(request.allowFaux, request.allowInsecureLoopback, request.experimentalSandbox) });
     } else {
       await (request.type === "start" ? start(request) : stop());
       emit({ type: "result", id: request.id, ok: true });

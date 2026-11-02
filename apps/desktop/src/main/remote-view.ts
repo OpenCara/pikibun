@@ -22,7 +22,7 @@ export function remoteView(input: { title: string; origin: string; primaryServer
     ...(here ? { connectionHere: here.id } : {}),
     // Another server's host id, which only that server's pages hand uploads to, is left out with its logs.
     hosts: { ...hosts, connections: hosts.connections.map(connection => connection.server === origin ? connection
-      : { ...connection, logs: [], ...(connection.running ? { running: { server: connection.running.server, unsandboxed: connection.running.unsandboxed } } : {}) }) },
+      : { ...connection, logs: [], ...(connection.running ? { running: { server: connection.running.server, unsandboxed: connection.running.unsandboxed, ...(connection.running.sandbox ? { sandbox: connection.running.sandbox } : {}) } } : {}) }) },
     local: local.status.origin === origin ? local : { ...local, status: publicStatus(local.status), logs: [] },
     version: input.version, ...(input.update ? { update: input.update } : {}),
   };

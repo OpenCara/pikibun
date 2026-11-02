@@ -15,6 +15,7 @@ export const channels = {
   hostRemove: "host:remove",
   hostOpen: "host:open",
   hostModels: "host:models",
+  hostSandbox: "host:sandbox",
   hostOpenAtLogin: "host:open-at-login",
   settingsView: "settings:view",
   settingsServer: "settings:server",
@@ -34,6 +35,24 @@ export const stateLabels: Record<HostState, string> = {
 
 export interface ModelChoice { provider: string; modelId: string }
 
+/**
+ * Where a Windows host's sessions run: in WSL2 (its bubblewrap sandbox, with WSL2's own Pi and connector state, as
+ * `pikibun connect` run there), or natively (Windows' own process-container sandbox, experimental, as
+ * `pikibun connect --experimental-sandbox`, else unsandboxed with consent). Each server's host has its own choice.
+ */
+export type WindowsSandbox = "wsl2" | "native";
+
+export interface SandboxChoice {
+  sandbox: WindowsSandbox;
+  /** WSL2 only: the distribution, else WSL's default WSL2 one. */
+  distro?: string;
+}
+
+export interface WslDistro { name: string; version: number; default: boolean }
+
+/** This computer's WSL: whether wsl.exe lists anything, and its distributions (Docker Desktop's own left out). */
+export interface WslStatus { installed: boolean; distros: WslDistro[] }
+
 /** This computer as a host of one server: one connector, like one `pikibun connect`. */
 export interface HostView {
   id: string;
@@ -46,7 +65,9 @@ export interface HostView {
    * Set while the connector runs: the server it connects to and whether it runs unsandboxed; once connected, its id
    * there, which the server's pages hand uploads to directly.
    */
-  running?: { server: string; unsandboxed: boolean; connectorId?: string };
+  running?: { server: string; unsandboxed: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string };
+  /** Windows only: where this host's sessions run, WSL2 or native Windows. */
+  windows?: SandboxChoice;
   inspection?: HostInspection;
   inspecting: boolean;
   /** The latest failure, cleared by the next start. */
@@ -66,6 +87,8 @@ export interface HostsView {
   openAtLogin?: boolean;
   /** Development builds may advertise fixture models instead of Pi's. */
   fixtureModels: boolean;
+  /** Windows only: WSL2's distributions, for hosts that run there. */
+  wsl?: WslStatus;
 }
 
 export interface StartInput {
@@ -116,6 +139,8 @@ export interface PikibunBridge {
     open(id: string): Promise<Outcome>;
     /** The models to offer, or null for Pi's own choice. */
     setModels(id: string, models: ModelChoice[] | null): Promise<Outcome>;
+    /** Windows only: where the host's sessions run, from its next start; refused while it runs. */
+    setSandbox(id: string, choice: SandboxChoice): Promise<Outcome>;
     setOpenAtLogin(enabled: boolean): Promise<Outcome>;
     onUpdate(listener: (view: HostsView) => void): () => void;
   };

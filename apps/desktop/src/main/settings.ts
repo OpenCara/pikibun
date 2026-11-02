@@ -2,10 +2,14 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_SERVER, parseServerOrigin } from "./origin.js";
 import { isRecord } from "./requests.js";
+import { WSL_DISTRO } from "./wsl.js";
 
 export interface Bounds { x: number; y: number; width: number; height: number }
 
 export interface ModelChoice { provider: string; modelId: string }
+
+/** Where a Windows host's sessions run (bridge.ts SandboxChoice): WSL2, in a distribution or WSL's default, or natively. */
+export type SandboxChoice = { sandbox: "wsl2"; distro?: string } | { sandbox: "native" };
 
 /**
  * A Pikibun server this computer connects to: its window, and the connector (`pikibun connect`) that makes this computer
@@ -23,6 +27,11 @@ export interface ConnectionSettings {
   resumeHost?: { unsandboxedConsent: boolean };
   /** The models this host offers, like `pikibun connect --model`; absent, Pi's enabledModels or every configured one. */
   models?: ModelChoice[];
+  /**
+   * Windows only: where this host's sessions run; absent, WSL2 in WSL's default distribution. Each choice has its own
+   * connector state, and so its own pairing: WSL2's is inside the distribution, native Windows' in the user's profile.
+   */
+  windows?: SandboxChoice;
 }
 
 export interface Settings {
@@ -52,6 +61,14 @@ export const isModelChoice = (value: unknown): value is ModelChoice => isRecord(
   && typeof value.provider === "string" && value.provider.length >= 1 && value.provider.length <= 128
   && typeof value.modelId === "string" && value.modelId.length >= 1 && value.modelId.length <= 256;
 
+export function parseSandboxChoice(value: unknown): SandboxChoice | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.sandbox === "native" && Object.keys(value).length === 1) return { sandbox: "native" };
+  if (value.sandbox !== "wsl2" || !Object.keys(value).every(key => key === "sandbox" || key === "distro")) return undefined;
+  if (value.distro === undefined) return { sandbox: "wsl2" };
+  return typeof value.distro === "string" && WSL_DISTRO.test(value.distro) ? { sandbox: "wsl2", distro: value.distro } : undefined;
+}
+
 const parseResume = (value: unknown) => isRecord(value) && typeof value.unsandboxedConsent === "boolean" ? { unsandboxedConsent: value.unsandboxedConsent } : undefined;
 
 function parseConnection(value: unknown): ConnectionSettings | undefined {
@@ -64,6 +81,8 @@ function parseConnection(value: unknown): ConnectionSettings | undefined {
   if (Array.isArray(value.models) && value.models.length >= 1 && value.models.length <= MAX_MODELS && value.models.every(isModelChoice)) {
     connection.models = value.models.map(model => ({ provider: model.provider, modelId: model.modelId }));
   }
+  const windows = parseSandboxChoice(value.windows);
+  if (windows) connection.windows = windows;
   return connection;
 }
 

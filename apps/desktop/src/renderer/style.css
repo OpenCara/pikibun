@@ -76,6 +76,7 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap:
 .servers button.server[aria-current="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .inline { display: flex; gap: 8px; align-items: end; }
 .inline label { flex: 1; margin-bottom: 0; }
+#sandbox-row .inline { margin-bottom: 8px; }
 .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .tabs button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 fieldset { border: 0; margin: 0; padding: 0; }

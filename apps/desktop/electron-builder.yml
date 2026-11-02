@@ -48,11 +48,25 @@ mac:
 dmg:
   title: Pikibun
 
-# Declared for later Linux and Windows builds; `pnpm dist` builds macOS only.
+# Windows: an x64 installer (`pnpm dist:win`, on Windows), per user and without administrator rights, into
+# %LOCALAPPDATA%\Programs\Pikibun. Windows on Arm runs it emulated. Unsigned unless the release workflow has a
+# certificate (README.md, "Signing"), so SmartScreen asks before the first launch.
+win:
+  icon: build/icon.png
+  executableName: Pikibun
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: true
+  perMachine: false
+  artifactName: Pikibun-${version}-${arch}-setup.${ext}
+  shortcutName: Pikibun
+  # The app's settings and Pikibun windows' sign-ins stay when it is uninstalled, as on macOS.
+  deleteAppDataOnUninstall: false
+
+# Declared for a later Linux build.
 linux:
   icon: build/icon.png
   category: Development
   target: [AppImage, deb]
-win:
-  icon: build/icon.png
-  target: [nsis]

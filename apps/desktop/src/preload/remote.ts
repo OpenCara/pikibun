@@ -22,6 +22,7 @@ const bridge: DesktopBridge = {
     remove: id => ipcRenderer.invoke(channels.hostRemove, { id }),
     open: id => ipcRenderer.invoke(channels.hostOpen, { id }),
     setModels: (id, models) => ipcRenderer.invoke(channels.hostModels, { id, models }),
+    setSandbox: (id, choice) => ipcRenderer.invoke(channels.hostSandbox, { id, choice }),
   },
   setOpenAtLogin: enabled => ipcRenderer.invoke(channels.openAtLogin, enabled),
   setServer: origin => ipcRenderer.invoke(channels.server, origin),

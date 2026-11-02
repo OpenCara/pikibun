@@ -12,6 +12,7 @@
     "build": "node scripts/build.mjs",
     "dev": "pnpm run build && electron .",
     "dist": "pnpm run build && node scripts/stage-connector.mjs && electron-builder --mac --publish never",
+    "dist:win": "pnpm run build && node scripts/stage-connector.mjs && electron-builder --win --x64 --publish never",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

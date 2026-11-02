@@ -2,7 +2,7 @@
 
 # Pikibun
 
-Run [Pi](https://github.com/earendil-works/pi) coding agents on your own machines and work on them together with your team. Pikibun is a self-hosted control plane: a web app (with iPhone, iPad and Mac apps), a Node.js server, and the `pikibun` connector that each host runs to offer its local Pi to a workspace.
+Run [Pi](https://github.com/earendil-works/pi) coding agents on your own machines and work on them together with your team. Pikibun is a self-hosted control plane: a web app (with iPhone, iPad, Mac and Windows apps), a Node.js server, and the `pikibun` connector that each host runs to offer its local Pi to a workspace.
 
 Two things set it apart:
 
@@ -39,7 +39,7 @@ And around them:
   - [Backups, restores and exports](#backups-restores-and-exports)
   - [Packing archived sessions](#packing-archived-sessions)
   - [Moving a session to another host](#moving-a-session-to-another-host)
-  - [iPhone, iPad and Mac apps](#iphone-ipad-and-mac-apps)
+  - [iPhone, iPad, Mac and Windows apps](#iphone-ipad-mac-and-windows-apps)
 - [Running Pikibun on your own computer](#running-pikibun-on-your-own-computer)
 - [Running the server](#running-the-server)
 - [Development](#development)
@@ -55,7 +55,7 @@ And around them:
 - The **server** keeps workspaces, members, session records, permissions and approvals. It decides every Git request of a session: the host then makes it at the Git host itself with a credential the server gives it for that repository, or the server relays it (see [Network access](#network-access)). It issues short-lived push credentials and acts on GitHub for session owners. It never runs an agent itself.
 - A **host** runs the agents. Pi's configuration and model credentials, each session's files and its conversation stay there; the server relays every request to it. While a host is offline, its sessions' conversations can't load and no work runs on them.
 - Everyone watching a session shares the server's reads of it, about one a second, and after the first read the host, the server and the apps send each other only what changed in the conversation.
-- The web app is the complete client; the Mac app shows it in its own window, and the iPhone and iPad app covers sessions (see [iPhone, iPad and Mac apps](#iphone-ipad-and-mac-apps)). They all call the same API.
+- The web app is the complete client; the Mac and Windows app shows it in its own windows, and the iPhone and iPad app covers sessions (see [iPhone, iPad, Mac and Windows apps](#iphone-ipad-mac-and-windows-apps)). They all call the same API.
 
 | Concept | What it is |
 |---|---|
@@ -456,7 +456,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 
 Everything else is the host's [configuration](#host-configuration), set in Pikibun: its command time limit, GPU, Git credentials and repository cache. `--git-credentials`, `--repo-cache` and `--repo-cache-scope` are still accepted, so existing service units keep starting, but ignored.
 
-The Mac app's **This Mac** runs the same connector; see [iPhone, iPad and Mac apps](#iphone-ipad-and-mac-apps). [`packages/cli/README.md`](packages/cli/README.md) is the connector's own guide.
+The Mac app's **This Mac** runs the same connector; see [iPhone, iPad, Mac and Windows apps](#iphone-ipad-mac-and-windows-apps). [`packages/cli/README.md`](packages/cli/README.md) is the connector's own guide.
 
 ### Models and tools
 
@@ -769,10 +769,11 @@ While both hosts are connected, a session's owner can move it to a model on anot
 - The session must be idle. Until the move finishes, both sessions only accept reads, so nothing sent after the snapshot is lost. The control plane holds the snapshot until then; retrying with the same `requestId` needs only the new host, and `POST /api/sessions/:id/migrations/:migrationId/cancel` gives up on the move, archiving the unfinished copy.
 - Moving to a host someone else owns needs `trustedConnectorId`, as starting a session there does. The new host must run a current connector on Linux (`hostMigration` capability).
 
-### iPhone, iPad and Mac apps
+### iPhone, iPad, Mac and Windows apps
 
 - **iPhone and iPad** ([`apps/mobile`](apps/mobile/README.md), Expo): your sessions grouped by workspace with their status; a session opens live with its transcript, queue, pending approvals to decide, and the chat box for shared messages and side asks; new sessions start from the app. It isn't on the App Store or TestFlight yet: build it from source as a development build.
 - **macOS** ([`apps/desktop`](apps/desktop/README.md), Electron): Pikibun in its own windows, as on the web (a session can open in a window of its own), plus **This Mac**, which runs the `pikibun` connector on the Mac without a terminal, for one server or several at once, each with its own host and pairing. Its settings are in the web app: **Settings → This Mac**, shown only in the app, lists the servers and their hosts, pairs the Mac with the server it belongs to in one click (as does **Settings → Hosts → Pair a host**), and runs Pikibun on the Mac; other servers pair from their own Settings, or with a pairing ID and code in the app. The primary server shares the command-line connector's state, so a Mac paired with `pikibun connect` is adopted as is, and only one of the two can run at a time. macOS has no sandbox, so starting a host asks for the same consent as `--unsafe-no-sandbox`. **Pikibun on this computer** (in Settings → This Mac) runs Pikibun itself on the Mac instead of using a server, for you alone or shared with others (see [Running Pikibun on your own computer](#running-pikibun-on-your-own-computer)).
+- **Windows** (the same app, x64, on Windows 10 or 11): the same windows and settings, with **This Computer** for This Mac, and each server's host chooses where its sessions run (**Sandbox**, in This Computer or Settings → This Computer): in **WSL2**, the default, where the app runs the connector inside a WSL2 distribution and its sessions get the bubblewrap sandbox, with that distribution's Node.js 24, Pi configuration and pairing, as `pikibun connect` run there; or **natively**, in Windows' own [experimental sandbox](#experimental-sandboxes-on-macos-and-windows), or without one after the same consent as `--unsafe-no-sandbox` while it isn't ready. The two keep separate pairings, and different servers can use different ones. See [the app's README](apps/desktop/README.md#windows).
 
 The iPhone and iPad app signs in with GitHub through the server's GitHub OAuth app; nothing else needs configuring. It doesn't offer username and password sign-in yet. Each of its sign-ins lasts 30 days and appears under **Settings → Profile → Signed-in apps**, where you can sign it out. The Mac app shows the server's own sign-in page, so it signs in as a browser does: with GitHub or, where the server allows it, a username and password, for 7 days. Neither app opens invite links (the Mac app sends links to your default browser): where `SIGNUP=invite`, a new person creates their account through the link in a browser, then signs in on the app.
 
@@ -1009,7 +1010,7 @@ await fetch("/api/auth/test", { method: "POST", headers: { Authorization: "Beare
   | --- | --- | --- |
   | `cli-v1.2.3` | `release.yml` | `pikibun` on npm, with provenance; a prerelease goes to the `next` dist-tag |
   | `server-v1.2.3` | `release-server.yml` | The server image (web app and backend) to `ghcr.io/opencara/pikibun`, then deploys a release (not a prerelease) to the deployment server once the image is pushed; no GitHub release |
-  | `desktop-v1.2.3` | `release-desktop.yml` | The desktop app on a GitHub release: macOS (arm64 DMG and zip) today, Windows and Linux from the same tag later |
+  | `desktop-v1.2.3` | `release-desktop.yml` | The desktop app on a GitHub release: macOS (arm64 DMG and zip) and Windows (x64 installer); Linux from the same tag later |
   | `ios-v1.2.3` | `release-ios.yml` | The iOS app to TestFlight |
 
   Only the desktop line creates a GitHub release, the one GitHub marks latest, with notes since the line's previous tag. The desktop app bundles the connector from `packages/cli` at its tagged commit, so when a connector change matters to it, release `cli-v` and then `desktop-v`. npm needs either a trusted publisher on npmjs.com for `OpenCara/pikibun`, workflow `release.yml` (keep that file name), environment `release`, or an `NPM_TOKEN` repository secret.
@@ -1021,12 +1022,13 @@ await fetch("/api/auth/test", { method: "POST", headers: { Authorization: "Beare
   - An App Store Connect API key (Users and Access › Integrations; the App Manager role is enough), shared by both apps: `APP_STORE_CONNECT_API_KEY` (the `.p8` file's contents), `APP_STORE_CONNECT_API_KEY_ID` and `APP_STORE_CONNECT_API_ISSUER_ID`.
   - macOS, signed with Developer ID and notarized: `MAC_CERTIFICATE_P12` (a **Developer ID Application** certificate and its key, exported as `.p12`, base64: `base64 -i cert.p12`), `MAC_CERTIFICATE_PASSWORD`, and the variable `MAC_SIGNING_IDENTITY`, the certificate's name without its `Developer ID Application:` prefix (e.g. `OpenCara (TEAMID)`).
   - iOS, uploaded to TestFlight: an app record for the bundle ID `com.pikibun.app` in App Store Connect, `IOS_CERTIFICATE_P12` (an **Apple Distribution** certificate as base64 `.p12`), `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE` (an App Store provisioning profile for `com.pikibun.app`, base64) and the variable `APPLE_TEAM_ID`. Its version is the tag's without a prerelease suffix, and its build number is the run's (`run number.attempt`). Every `ios-v` tag goes to TestFlight; submitting a build for App Store review stays manual.
+- Windows signing for the `desktop-v` release, in the same `release` environment: `WIN_CERTIFICATE_P12` (a code-signing certificate and its key as base64 `.p12`) and `WIN_CERTIFICATE_PASSWORD`. Without them the Windows installer is released unsigned, and SmartScreen warns before its first launch (**More info → Run anyway**).
 
 ## Layout
 
 - `apps/server`: the control plane (Hono on Node); `src/local` runs it on one person's own computer (`pikibun serve` and the desktop app). `src/db` holds the database providers and the SQLite→Postgres dialect translation; `src/storage` the backup storage providers; `src/workspace-databases` the owner-connected session databases; `src/git` the Git providers and accounts; `src/push` push identities and credentials; `src/data-export.ts` the session and workspace exports; `src/admin.ts` the server administration API; `src/auth.ts` GitHub and session sign-in and `src/password-auth.ts` password accounts, with `src/password-accounts-cli.ts` for `--create-admin` and `--reset-password`; `src/connector-hub.ts` the WebSocket relay to connected hosts.
 - `apps/web`: the React UI.
-- `apps/mobile`: the iPhone and iPad app (Expo; Android later). `apps/desktop`: the macOS app (Electron; Linux and Windows later).
+- `apps/mobile`: the iPhone and iPad app (Expo; Android later). `apps/desktop`: the macOS and Windows app (Electron; Linux later).
 - `apps/runner`: the connector runtime that runs on each host, published as the `pikibun` CLI from `packages/cli` (with the server, for `pikibun serve`) and bundled into the desktop app.
 - `packages/shared`: types and policy shared by all of the above. `packages/client`: the API client, live session updates and chat-option rules shared by the web and the apps.
 - `docs/design`: design notes, such as the [repository cache](docs/design/repository-cache.md).

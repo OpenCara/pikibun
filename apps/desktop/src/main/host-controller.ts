@@ -3,11 +3,12 @@ import type { HostView, LogLine, ModelChoice, Outcome, StartInput } from "../sha
 import type { UploadOutcome } from "../shared/remote-bridge.js";
 import type { HostProcess } from "./host-process.js";
 import { isLoopbackHttp } from "./origin.js";
-import type { SettingsStore } from "./settings.js";
+import type { SandboxChoice, SettingsStore } from "./settings.js";
 
 // The app's view of one connector host, this computer as a host of one server (one connection, one `pikibun connect`):
 // what its host process reports, the owner's settings for it, and the start flow with the native unsandboxed consent.
-// Windows and the tray render from `view()` and re-render on every change.
+// Windows and the tray render from `view()` and re-render on every change. On Windows each host also has its sandbox,
+// WSL2 or native Windows (`SandboxChoice`), which decides how its host process is launched (index.ts).
 
 const LOG_LIMIT = 200;
 
@@ -19,13 +20,18 @@ export interface HostControllerOptions {
   command(server: string): string;
   /** Fixture models instead of Pi's: development builds only. */
   fixtureModels: boolean;
-  /** Shows the CLI's warning in a native dialog; resolves true only when the owner accepts it. */
-  confirmUnsandboxed(warning: string, server: string): Promise<boolean>;
+  /**
+   * Shows the CLI's warning in a native dialog; resolves true only when the owner accepts it. `missing` names the
+   * sandbox prerequisites this computer lacks, where it has a sandbox it can't run yet.
+   */
+  confirmUnsandboxed(warning: string, server: string, missing: string[]): Promise<boolean>;
+  /** Windows only: the connection's sandbox, defaulted; undefined elsewhere. */
+  sandbox?(): SandboxChoice | undefined;
 }
 
 export class HostController {
   private state: HostState = "stopped";
-  private running?: { server: string; unsandboxed: boolean; connectorId?: string };
+  private running?: { server: string; unsandboxed: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string };
   private inspection?: HostInspection;
   private inspecting = 0;
   private error?: string;
@@ -70,6 +76,8 @@ export class HostController {
     };
     if (connection?.models) view.models = connection.models.map(model => ({ ...model }));
     if (this.running) view.running = { ...this.running };
+    const sandbox = this.options.sandbox?.();
+    if (sandbox) view.windows = { ...sandbox };
     if (this.inspection) view.inspection = this.inspection;
     if (this.error) view.error = this.error;
     return view;
@@ -82,12 +90,13 @@ export class HostController {
   }
 
   /** Host process events, already shape-checked by HostProcess. */
-  handleStatus(state: HostState, detail: { server?: string; unsandboxed?: boolean; connectorId?: string }): void {
+  handleStatus(state: HostState, detail: { server?: string; unsandboxed?: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string }): void {
     const previous = this.state;
     this.state = state;
     if (state === "stopped") this.running = undefined;
     else if (detail.server !== undefined) {
       this.running = { server: detail.server, unsandboxed: detail.unsandboxed === true,
+        ...(detail.sandbox === "bubblewrap" || detail.sandbox === "seatbelt" || detail.sandbox === "windows" ? { sandbox: detail.sandbox } : {}),
         ...(state === "connected" && typeof detail.connectorId === "string" ? { connectorId: detail.connectorId } : {}) };
     }
     if (state === "connected") this.error = undefined;
@@ -115,13 +124,20 @@ export class HostController {
     return { ...(this.options.fixtureModels ? { allowFaux: true } : {}), ...(isLoopbackHttp(server) ? { allowInsecureLoopback: true } : {}) };
   }
 
+  /** Native Windows asks for its own sandbox; a WSL2 host is Linux, whose sandbox is bubblewrap anyway. */
+  private isolationOptions(): { experimentalSandbox?: true } {
+    return this.options.sandbox?.()?.sandbox === "native" ? { experimentalSandbox: true } : {};
+  }
+
   async refresh(): Promise<HostInspection | undefined> {
     if (!this.process) return undefined;
     this.inspecting++;
     this.changed();
     try {
-      const result = await this.process.request({ type: "inspect", ...this.developmentOptions(this.server) });
+      const result = await this.process.request({ type: "inspect", ...this.isolationOptions(), ...this.developmentOptions(this.server) });
       if (result.ok && result.inspection) this.inspection = result.inspection;
+      // A host that can't be launched here as configured (no WSL2, no Node.js in it) says what to do instead.
+      else if (!result.ok && result.error.code === "unsupported") this.inspection = { platform: process.platform, stateDir: "", unsupported: result.error.message, mode: "unsandboxed", prerequisites: [], models: [] };
       else if (!result.ok) this.error = result.error.message;
       return this.inspection;
     } finally {
@@ -144,7 +160,8 @@ export class HostController {
     if (failure) return this.refuse(failure);
     let unsandboxedConsent = false;
     if (inspection.mode === "unsandboxed") {
-      unsandboxedConsent = resume ? resume.unsandboxedConsent : await this.options.confirmUnsandboxed(inspection.unsandboxedWarning ?? "", this.server);
+      const missing = inspection.sandboxPrerequisites?.filter(item => !item.ok).map(item => item.name) ?? [];
+      unsandboxedConsent = resume ? resume.unsandboxedConsent : await this.options.confirmUnsandboxed(inspection.unsandboxedWarning ?? "", this.server, missing);
       if (!unsandboxedConsent) return this.refuse(resume ? "Hosting was not resumed: this computer now runs agent work unsandboxed, which needs your consent. Start the host to review it." : "Unsandboxed mode was not confirmed; nothing was started.");
     }
     const server = this.server;
@@ -156,7 +173,7 @@ export class HostController {
       ...(input.pairing ? { pairing: input.pairing, replacePairing: input.replacePairing } : {}),
       ...(unsandboxedConsent ? { unsandboxedConsent: true } : {}),
       ...(models ? { models: models.map(model => ({ ...model })) } : {}),
-      ...this.developmentOptions(server),
+      ...this.isolationOptions(), ...this.developmentOptions(server),
     });
     if (!result.ok) return this.refuse(result.error.message);
     this.setResume({ unsandboxedConsent });
@@ -198,6 +215,33 @@ export class HostController {
     if (!resume) return;
     const outcome = await this.start({ replacePairing: false }, resume);
     if (!outcome.ok) this.setResume(undefined);
+  }
+
+  /** Why this host's sandbox can't change now, if it can't: checked before anyone is asked to confirm a change. */
+  sandboxRefusal(): string | undefined {
+    if (!this.connection) return "That server is no longer in the list.";
+    if (!this.options.sandbox) return "Only Windows offers a choice of sandbox.";
+    if (this.state !== "stopped") return "Stop the host first: its sandbox changes from its next start.";
+    return undefined;
+  }
+
+  /**
+   * Windows: where this host's sessions run from its next start, WSL2 or native Windows. Only while it is stopped: the
+   * two are different host processes with different state (and pairings). The idle host process of the old choice
+   * ends, so the next inspection launches the new one; resuming at launch ends too, since its consent was for the old.
+   */
+  async setSandbox(choice: SandboxChoice): Promise<Outcome> {
+    const refusal = this.sandboxRefusal();
+    if (refusal) return { ok: false, error: refusal };
+    const current = this.options.sandbox!();
+    if (current && current.sandbox === choice.sandbox && (current.sandbox !== "wsl2" || choice.sandbox !== "wsl2" || current.distro === choice.distro)) return { ok: true };
+    this.options.settings.updateConnection(this.options.id, { windows: choice, resumeHost: undefined });
+    this.inspection = undefined;
+    this.error = undefined;
+    this.log("info", choice.sandbox === "native" ? "Sessions run natively on Windows from the host's next start." : `Sessions run in WSL2${choice.distro ? ` (${choice.distro})` : ""} from the host's next start.`);
+    await this.process?.shutdown(10_000);
+    void this.refresh();
+    return { ok: true };
   }
 
   /** The models to offer from the next start; null leaves the choice to Pi, as `pikibun connect` without --model. */

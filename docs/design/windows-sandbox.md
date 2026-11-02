@@ -6,6 +6,11 @@ native Windows without a sandbox (`--unsafe-no-sandbox`); not yet run on either 
 decision is in [Choosing](#choosing-across-windows-linux-and-macos-from-the-requirements-alone). Native Windows is refused today
 (`apps/runner/src/connect-setup.ts`), and Windows hosts run the connector inside WSL2.
 
+The Windows desktop app offers both for each server's host: **WSL2** (the default; the app runs the connector inside a
+distribution) or **Native Windows**, which is this sandbox, through the desktop host's `experimentalSandbox` request,
+with the CLI's default limits, or unsandboxed with consent while its prerequisites are missing. See
+[the app's README](../../apps/desktop/README.md#windows).
+
 This note sets out what a native backend has to guarantee, the Windows primitives that can provide it, how three
 open-source sandboxes build on those primitives, and a recommended path. Sources read for it:
 

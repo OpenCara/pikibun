@@ -42,6 +42,20 @@
           <dt>State</dt><dd id="state-dir"></dd>
           <dt>In a terminal</dt><dd><code id="command" class="command"></code></dd>
         </dl>
+        <div id="sandbox-row" hidden>
+          <div class="inline">
+            <label>Sandbox
+              <select id="sandbox">
+                <option value="wsl2">WSL2 (bubblewrap)</option>
+                <option value="native">Native Windows (experimental)</option>
+              </select>
+            </label>
+            <label id="distro-row">WSL distribution
+              <select id="distro"></select>
+            </label>
+          </div>
+          <p id="sandbox-note" class="muted"></p>
+        </div>
         <div class="actions">
           <button id="start" class="primary" type="button">Start Host</button>
           <button id="stop" type="button">Stop Host</button>

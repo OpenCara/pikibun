@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -7,18 +7,24 @@ import { app, BrowserWindow, dialog, ipcMain, net, shell, type IpcMainInvokeEven
 import { channels, type HostsView, type LocalStartInput, type Outcome, type SettingsView } from "../shared/bridge.js";
 import { remoteChannels, type DesktopView, type UploadOutcome } from "../shared/remote-bridge.js";
 import { githubLookup, resolveAdmins } from "./admins.js";
+import { connectCommand } from "./connect-command.js";
 import { HostController } from "./host-controller.js";
-import { HostProcess } from "./host-process.js";
+import { HostLaunchError, HostProcess, stdioHost } from "./host-process.js";
 import { LocalServerController } from "./local-server.js";
 import { HostTray, installAppMenu, type MenuActions } from "./menu.js";
 import { DEFAULT_SERVER, parseServerOrigin } from "./origin.js";
-import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseStartInput, parseString, parseUpload } from "./requests.js";
+import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseSandbox, parseStartInput, parseString, parseUpload } from "./requests.js";
 import { remoteView } from "./remote-view.js";
-import { PRIMARY_CONNECTION, SettingsStore } from "./settings.js";
+import { PRIMARY_CONNECTION, SettingsStore, type SandboxChoice } from "./settings.js";
 import { UpdateChecker } from "./updates.js";
+import { utilityHost } from "./utility-host.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
+import { chooseDistro, wslExe, wslHostArgs, wslStateDir, wslStatus } from "./wsl.js";
+import type { WslStatus } from "../shared/bridge.js";
 
 const mac = process.platform === "darwin";
+/** Windows hosts choose their sandbox: WSL2 (the default) or native Windows. */
+const windowsHost = process.platform === "win32";
 const hostTitle = mac ? "This Mac" : "This Computer";
 // Development switches, honored only when the app runs unpackaged: a separate userData and connector state (so a
 // developer's real pairing is untouched) and fixture models instead of Pi's.
@@ -40,13 +46,11 @@ const smokeDirectory = process.env.PIKIBUN_DESKTOP_SMOKE || undefined;
  */
 const connectionsDirectory = stateDir ? join(dirname(stateDir), "connections") : join(homedir(), ".local", "share", "pikibun", "connections");
 const connectorStateDir = (id: string): string | undefined => id === PRIMARY_CONNECTION ? stateDir : join(connectionsDirectory, id);
-const quote = (value: string) => /^[A-Za-z0-9_./:@~-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
-const connectCommand = (id: string, server: string) => {
-  const directory = connectorStateDir(id);
-  const home = homedir();
-  const shown = directory?.startsWith(`${home}/`) ? `~${directory.slice(home.length)}` : directory;
-  return `npx pikibun@latest connect --server ${quote(server)}${shown ? ` --state-dir ${quote(shown)}` : ""}`;
-};
+/** A connection's sandbox on Windows, WSL2 unless the owner chose native Windows; undefined elsewhere. */
+const sandboxOf = (choice: SandboxChoice | undefined): SandboxChoice | undefined => windowsHost ? choice ?? { sandbox: "wsl2" } : undefined;
+const connectCommandFor = (id: string, server: string, sandbox: SandboxChoice | undefined) => connectCommand({
+  server, sandbox, stateDir: connectorStateDir(id), wslStateDir: wslStateDir(id, id === PRIMARY_CONNECTION), home: homedir(), windows: windowsHost,
+});
 const hostLabel = (origin: string) => URL.parse(origin)?.host ?? origin;
 
 app.setName("Pikibun");
@@ -87,6 +91,22 @@ function main(): void {
   const hostEntry = app.isPackaged
     ? join(process.resourcesPath, "connector", "dist", "desktop-host.mjs")
     : join(appRoot, "dist", "host", "desktop-host.mjs");
+  // WSL2 hosts copy the staged connector into WSL2 (wsl-host.sh): the packaged one, or, unpackaged, what
+  // scripts/stage-connector.mjs staged, since the workspace's node_modules are Windows links WSL2 can't follow.
+  const wslConnector = app.isPackaged ? join(process.resourcesPath, "connector") : join(appRoot, "dist", "connector");
+  /** Names the connector's copy inside WSL2: a release's version, or a development build's own stamp. */
+  const wslBuild = () => app.isPackaged ? app.getVersion() : `${app.getVersion()}-dev.${Math.floor(statSync(join(wslConnector, "dist", "desktop-host.mjs")).mtimeMs)}`;
+  // Native Windows hosts share one MXC SDK install, beside the primary connection's state, unless the owner set one.
+  const nativeEnv: NodeJS.ProcessEnv | undefined = windowsHost
+    ? { ...process.env, PIKIBUN_MXC_RUNTIME: process.env.PIKIBUN_MXC_RUNTIME || join(stateDir ?? join(homedir(), ".local", "share", "pikibun", "connector"), "mxc") }
+    : undefined;
+  /** WSL's distributions, as last listed: shown on Windows, refreshed whenever a WSL2 host launches or the owner looks. */
+  let wsl: WslStatus | undefined;
+  const refreshWsl = async () => {
+    wsl = await wslStatus();
+    publish();
+    return wsl;
+  };
   // Pikibun on this computer: the local server, staged beside the connector host (it shares its dependencies).
   const serverEntry = app.isPackaged
     ? join(process.resourcesPath, "connector", "dist", "desktop-server.mjs")
@@ -112,17 +132,33 @@ function main(): void {
   let publish = () => {};
   const createHost = (id: string): Host => {
     const directory = connectorStateDir(id);
+    const sandbox = () => sandboxOf(settings.connection(id)?.windows);
     const controller = new HostController({
-      id, settings, fixtureModels, command: server => connectCommand(id, server),
-      confirmUnsandboxed: (warning, server) => confirm(hostWindow, {
+      id, settings, fixtureModels, command: server => connectCommandFor(id, server, sandbox()),
+      ...(windowsHost ? { sandbox } : {}),
+      confirmUnsandboxed: (warning, server, missing) => confirm(hostWindow, {
         type: "warning", buttons: ["Cancel", "Run Unsandboxed"], defaultId: 0, cancelId: 0, noLink: true,
         title: "Run without a sandbox?",
-        message: `${mac ? "This Mac" : "This computer"} has no isolated sandbox. Run ${hostLabel(server)}'s agent work directly on it?`,
-        detail: warning.trim(),
+        message: missing.length
+          ? `${mac ? "This Mac" : "This computer"}'s sandbox isn't ready. Run ${hostLabel(server)}'s agent work directly on it?`
+          : `${mac ? "This Mac" : "This computer"} has no isolated sandbox. Run ${hostLabel(server)}'s agent work directly on it?`,
+        detail: `${missing.length ? `The sandbox needs: ${missing.join("; ")}.\n\n` : ""}${warning.trim()}`,
       }),
     });
+    /** A utility process here, or, for a Windows host in WSL2, the host inside the chosen distribution. */
+    const launch = async () => {
+      const choice = sandbox();
+      if (choice?.sandbox !== "wsl2") return utilityHost(hostEntry, directory ? ["--state-dir", directory] : [], nativeEnv);
+      const distro = chooseDistro(await refreshWsl(), choice.distro);
+      if (!distro.ok) throw new HostLaunchError(distro.error);
+      if (!existsSync(join(wslConnector, "dist", "desktop-host.mjs")) || !existsSync(join(wslConnector, "node_modules"))) {
+        throw new HostLaunchError(app.isPackaged ? "Pikibun's connector is missing from this installation: reinstall Pikibun." : "WSL2 hosts run the staged connector: run `pnpm build`, then `node scripts/stage-connector.mjs` in apps/desktop.");
+      }
+      const stateDirectory = wslStateDir(id, id === PRIMARY_CONNECTION);
+      return stdioHost(wslExe(), wslHostArgs({ distro: distro.name, connector: wslConnector, build: wslBuild(), ...(stateDirectory ? { stateDir: stateDirectory } : {}) }));
+    };
     const process = new HostProcess({
-      entry: hostEntry, args: directory ? ["--state-dir", directory] : [],
+      launch,
       onEvent: event => {
         if (event.type === "status") controller.handleStatus(event.state, event);
         else if (event.type === "log") controller.log(event.level, event.message);
@@ -179,6 +215,7 @@ function main(): void {
     if (mac) void app.dock?.show();
     hostWindow = createLocalWindow("host.html", { title: hostTitle, width: 720, height: 860, preload, icon });
     hostWindow.on("closed", () => { hostWindow = undefined; });
+    if (windowsHost) void refreshWsl();
     for (const { controller } of hosts.values()) void controller.refresh();
   };
   const openSettings = () => {
@@ -238,7 +275,7 @@ function main(): void {
   const tray = new HostTray(actions, assets);
 
   const hostsView = (): HostsView => ({
-    title: hostTitle, fixtureModels,
+    title: hostTitle, fixtureModels, ...(wsl ? { wsl } : {}),
     connections: settings.get().connections.flatMap(connection => { const host = hosts.get(connection.id); return host ? [host.controller.view()] : []; }),
     ...(loginItemSupported ? { openAtLogin: app.getLoginItemSettings().openAtLogin } : {}),
   });
@@ -261,6 +298,7 @@ function main(): void {
     version: app.getVersion(), update: updates.available,
   });
   publish();
+  if (windowsHost) void refreshWsl();
 
   const settingsView = (): SettingsView => ({ server: settings.server, defaultServer: DEFAULT_SERVER, local: localServer.view() });
   // The main Pikibun window follows Pikibun on this computer: there once it runs (its sign-in link while nobody has
@@ -297,7 +335,10 @@ function main(): void {
     return target ? run(target, call.value) : gone;
   };
   handle(channels.hostView, "host.html", host, hostsView);
-  handle(channels.hostRefresh, "host.html", host, forConnection([], async target => { await target.controller.refresh(); }));
+  handle(channels.hostRefresh, "host.html", host, forConnection([], async target => {
+    if (windowsHost) await refreshWsl();
+    await target.controller.refresh();
+  }));
   handle(channels.hostStart, "host.html", host, forConnection(["input"], (target, call) => {
     const input = parseStartInput(call.input);
     return input.ok ? target.controller.start(input.value) : { ok: false, error: input.error };
@@ -307,6 +348,10 @@ function main(): void {
   handle(channels.hostModels, "host.html", host, forConnection(["models"], (target, call) => {
     const models = parseModels(call.models);
     return models.ok ? target.controller.setModels(models.value) : models;
+  }));
+  handle(channels.hostSandbox, "host.html", host, forConnection(["choice"], (target, call) => {
+    const choice = parseSandbox(call.choice);
+    return choice.ok ? target.controller.setSandbox(choice.value) : choice;
   }));
   // The changes both the app's own pages and the servers' Settings pages make.
   /** Adds a server; `confirm` asks the owner first (a web page's request). */
@@ -411,13 +456,33 @@ function main(): void {
     title: "Pikibun", message, detail: `Asked by Settings › ${hostTitle} at ${hostLabel(origin)}. ${detail}`,
   });
   handleRemote(remoteChannels.view, origin => desktopView(origin));
-  handleRemote(remoteChannels.hostRefresh, (_origin, _window, payload) => forConnection([], async target => { await target.controller.refresh(); })(payload));
+  handleRemote(remoteChannels.hostRefresh, (_origin, _window, payload) => forConnection([], async target => {
+    if (windowsHost) await refreshWsl();
+    await target.controller.refresh();
+  })(payload));
   handleRemote(remoteChannels.hostStart, (_origin, _window, payload) => forConnection([], target => target.controller.start({ replacePairing: false }))(payload));
   handleRemote(remoteChannels.hostStop, (_origin, _window, payload) => forConnection([], target => target.controller.stop())(payload));
   handleRemote(remoteChannels.hostOpen, (_origin, _window, payload) => forConnection([], target => { openServer(target.controller.server); return { ok: true as const }; })(payload));
   handleRemote(remoteChannels.hostModels, (_origin, _window, payload) => forConnection(["models"], (target, call) => {
     const models = parseModels(call.models);
     return models.ok ? target.controller.setModels(models.value) : models;
+  })(payload));
+  // Where a Windows host's sessions run: the page's choice, once the owner agrees in a native dialog.
+  handleRemote(remoteChannels.hostSandbox, (origin, window, payload) => forConnection(["choice"], async (target, call) => {
+    const choice = parseSandbox(call.choice);
+    if (!choice.ok) return choice;
+    const refusal = target.controller.sandboxRefusal();
+    if (refusal) return { ok: false as const, error: refusal };
+    const current = target.controller.view().windows;
+    if (current?.sandbox === choice.value.sandbox && (choice.value.sandbox !== "wsl2" || current.distro === choice.value.distro)) return { ok: true as const };
+    const where = choice.value.sandbox === "native" ? "natively on Windows" : `in WSL2${choice.value.distro ? ` (${choice.value.distro})` : ""}`;
+    if (!await ask(window, origin, `Run ${hostLabel(target.controller.server)}'s sessions ${where}?`,
+      choice.value.sandbox === "native"
+        ? "From the host's next start, sessions run in Windows' own sandbox, which is experimental, or without one if it isn't ready, after your consent. Native Windows has its own pairing."
+        : "From the host's next start, sessions run in WSL2's bubblewrap sandbox, with WSL2's Pi configuration and its own pairing.", "Change")) {
+      return { ok: false as const, error: "Not changed." };
+    }
+    return target.controller.setSandbox(choice.value);
   })(payload));
   // A page pairs only the connection to its own server, with a pairing it just made for its signed-in user.
   handleRemote(remoteChannels.hostPairHere, async (origin, window, payload): Promise<Outcome> => {

@@ -19,7 +19,8 @@ shows every server and its host, pairs this computer with the server the page be
 Settings…**) remain for what a web page never gets: GitHub OAuth apps' secrets, password administrators, pairing with a
 code for any server, and settings while no server answers.
 
-macOS builds ship today; the Linux and Windows targets are declared for later.
+Builds ship for macOS (Apple silicon) and Windows (x64; Windows on Arm runs it emulated); the Linux target is declared
+for later. On Windows, each server's host runs its sessions in WSL2 or natively: see [Windows](#windows).
 
 - Pikibun windows load their server with no preload and no Node, in their own persistent session. Each navigates only
   within its server and GitHub (for sign-in); other links open in your default browser. The main window follows
@@ -45,7 +46,8 @@ macOS builds ship today; the Linux and Windows targets are declared for later.
   or logs.
 - macOS has no isolated sandbox, so starting the host asks for consent in a native dialog showing the CLI's own
   `--unsafe-no-sandbox` warning. Linux uses the bubblewrap sandbox when its prerequisites are installed and asks the
-  same consent otherwise; native Windows gets the CLI's WSL2 instructions.
+  same consent otherwise. Windows runs each host in WSL2's bubblewrap sandbox or natively, as its owner chooses
+  ([Windows](#windows)).
 - Pikibun on this computer runs the local server (`dist/host/desktop-server.mjs`, bundled from
   `apps/server/src/local/desktop.ts`) in a second utility process, with `pikibun serve`'s state
   (`~/.local/share/pikibun/server`), so the two share their data; a kernel lease on that directory (flock or lockf, as
@@ -109,6 +111,11 @@ repository's `dist/web`: run `pnpm build` first) with its production dependencie
 from `packages/cli/npm-shrinkwrap.json` (the registry must be reachable), and writes an arm64 DMG and zip to
 `dist/release`. The connector is copied to `Pikibun.app/Contents/Resources/connector`, outside the asar.
 
+On Windows, `pnpm --filter @pikibun/desktop dist:win` does the same and writes an x64 NSIS installer,
+`Pikibun-<version>-x64-setup.exe`, which installs per user (no administrator rights) into
+`%LOCALAPPDATA%\Programs\Pikibun`; the connector is in `resources\connector` beside `app.asar`. Add `--dir` to
+`electron-builder --win --x64` for the unpacked app alone (`dist/release/win-unpacked`).
+
 Icons: `build/icon.png` (1024×1024) and `assets/icon.png` (512×512) are the Pikibun artwork (`docs/images/pikibun.webp`)
 on a rounded night-sky tile on the macOS icon grid (an 824px tile with 100px margins, transparent outside).
 `docs/images/pikibun-icon.png`, at the top of the main README, is that tile alone (without the margins) at 320×320.
@@ -135,15 +142,59 @@ The desktop release workflow (`.github/workflows/release-desktop.yml`, started b
 this without editing `electron-builder.yml`: once `MAC_CERTIFICATE_P12` and the notarization key are configured (the
 root README, "Releasing", lists them), it overrides the identity, hardened runtime and notarization on the command
 line. It then attaches the DMG and zip to the tag's GitHub release, and without those secrets it releases the ad-hoc
-signed build. Windows and Linux builds will join the same release as one more job each.
+signed build. A Windows job builds the x64 installer from the same tag and attaches it to the same release: signed when
+`WIN_CERTIFICATE_P12` (a base64 code-signing .p12) and `WIN_CERTIFICATE_PASSWORD` are set in the `release`
+environment, otherwise unsigned, so SmartScreen asks before its first launch (**More info → Run anyway**). The Linux
+build will join as one more job.
+
+`.github/workflows/desktop-windows.yml` builds the unpacked Windows app on every change to the app or its connector
+host, launches it once with `PIKIBUN_DESKTOP_SMOKE`, and uploads its windows' screenshots (`desktop-windows-smoke`).
 
 Check the result with `codesign --verify --deep --strict --verbose=2 dist/release/mac-arm64/Pikibun.app` and
 `spctl --assess --type execute --verbose dist/release/mac-arm64/Pikibun.app`.
 
-## Linux and Windows
+## Windows
+
+The window is **This Computer** instead of This Mac, and each server's host chooses where its sessions run, under
+**Sandbox** (This Computer, or Settings › This Computer in the web app, which asks in a native dialog first). The
+choice changes only while that host is stopped, and applies from its next start:
+
+- **WSL2** (the default): the host runs inside a WSL2 distribution, WSL's default WSL2 one or the one chosen, and its
+  sessions run in WSL2's bubblewrap sandbox, exactly as `pikibun connect` run in that distribution. It needs what the
+  CLI needs there: Node.js 24 or newer, Pi configured with its models, and bubblewrap, Python 3, Git and util-linux
+  (`sudo apt install bubblewrap python3 git util-linux` on Ubuntu); This Computer lists what is missing. Pi's
+  configuration and the connector's state are the distribution's own, so a distribution already paired with
+  `pikibun connect` is adopted as is (the primary server uses `~/.local/share/pikibun/connector` there, every other
+  one `~/.local/share/pikibun/connections/<id>`), and only one of the two can run at a time.
+- **Native Windows**: the host runs in the app, as on macOS, and its sessions run in Windows' own process containers
+  (`pikibun connect --experimental-sandbox`: Windows 11 24H2 or later with the October 2026 update, Git for Windows,
+  busybox-w32 and Microsoft's MXC SDK; experimental, see `docs/design/windows-sandbox.md`). Every native host shares
+  one MXC SDK install, beside the primary connection's state (`%USERPROFILE%\.local\share\pikibun\connector\mxc`,
+  or `PIKIBUN_MXC_RUNTIME`); its prerequisite shows the command that installs it. While the sandbox isn't ready, the
+  host offers to run unsandboxed instead, after the same consent as `--unsafe-no-sandbox`, which needs only Git for
+  Windows. Pi's configuration and the connector's state are your Windows profile's.
+
+The two are separate hosts with separate pairings, so switching a server's host from one to the other shows the other's
+pairing, if it has one. Different servers can use different ones: a team's server in WSL2 and another natively, say.
+
+How a WSL2 host runs: the app starts
+`wsl.exe --distribution <name> --cd <the app's resources\connector> --exec /bin/sh dist/wsl-host.sh <version> [--state-dir …]`
+(`src/main/wsl.ts`). `src/wsl/wsl-host.sh` finds Node.js 24 (on PATH, or from nvm, fnm, Volta, mise or asdf), copies
+the connector into `~/.local/share/pikibun/desktop/connector-<version>` the first time a version starts (WSL2's own
+filesystem loads modules much faster than the Windows drive, and keeps POSIX permissions), removes older versions' copies,
+then runs the same host bundle with `--stdio`: requests are JSON lines on its stdin and events are lines on its stdout
+(`STDIO_FRAME`, `desktop-transport.ts`), the only channel wsl.exe carries, and pairing codes cross it as they cross a
+utility process's port. What it can't do (no WSL2, a WSL 1 distribution, no Node.js 24) is shown where the host's
+isolation is. Unpackaged, WSL2 hosts run the staged `dist/connector` (`node scripts/stage-connector.mjs`), since the
+workspace's `node_modules` are Windows links WSL2 can't follow; the development state directory switches apply to
+native hosts only.
+
+Pikibun on this computer (Settings) runs on Windows too, but doesn't make this computer its host yet: pair another
+machine with it. (Its loopback address isn't WSL2's, unless WSL uses mirrored networking.)
+
+## Linux
 
 The code keeps platform choices explicit (`process.platform` checks in `src/main`): the tray uses a full-color icon
 outside macOS, window icons come from `assets/icon.png`, open-at-login is offered only where Electron supports it, and
-closing every window quits unless the host is running. `electron-builder.yml` declares AppImage/deb and NSIS targets;
-building them needs `electron-builder --linux` / `--win` and, on Windows, a host that only reports the WSL2
-instructions until the connector supports it.
+closing every window quits unless the host is running. `electron-builder.yml` declares AppImage and deb targets, which
+`electron-builder --linux` builds; no release ships them yet.
