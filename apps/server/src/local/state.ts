@@ -58,6 +58,8 @@ export interface LocalState {
    * so running for its owner alone admits this account only (the server's LOCAL_OWNER_ID).
    */
   owner?: string;
+  /** Set by its first shared start, before it served anyone: from then its first GitHub user may be a teammate. */
+  sharedOnce?: true;
 }
 
 const secret = () => randomBytes(32).toString('base64url');
@@ -116,12 +118,13 @@ function parseState(value: unknown): LocalState {
   const state = value as Partial<LocalState> | null;
   if (!state || typeof state !== 'object' || state.version !== 1 || ![state.sessionSecret, state.vaultKey, state.claimSecret].every(item => typeof item === 'string' && SECRET.test(item))
     || !validPort(state.port) || (state.github !== undefined && !validGitHubApp(state.github)) || (state.shared !== undefined && sharedConfigError(state.shared) !== undefined)
-    || (state.owner !== undefined && (typeof state.owner !== 'string' || !OWNER_ID.test(state.owner)))) {
+    || (state.owner !== undefined && (typeof state.owner !== 'string' || !OWNER_ID.test(state.owner))) || (state.sharedOnce !== undefined && state.sharedOnce !== true)) {
     throw new LocalStateError('The local server state is damaged or from another version.');
   }
   return { version: 1, sessionSecret: state.sessionSecret!, vaultKey: state.vaultKey!, claimSecret: state.claimSecret!, port: state.port!,
     ...(state.github ? { github: { clientId: state.github.clientId, clientSecret: state.github.clientSecret } } : {}),
-    ...(state.shared ? { shared: copyShared(state.shared) } : {}), ...(state.owner ? { owner: state.owner } : {}) };
+    ...(state.shared ? { shared: copyShared(state.shared) } : {}), ...(state.owner ? { owner: state.owner } : {}),
+    ...(state.sharedOnce ? { sharedOnce: true as const } : {}) };
 }
 
 /** The state directory, created owner-only; refused when it is a symlink, someone else's, or open to others. */
@@ -228,12 +231,12 @@ export async function openLocalState(directory: string, changes: LocalStateChang
 }
 
 /**
- * Pins the state's owner while its server runs: the caller holds the lease (openLocalState), so nothing else writes the
- * state meanwhile. Returns the state as saved.
+ * Records who owns the state (its pinned owner) and that it has been shared, while the caller holds the lease
+ * (openLocalState), so nothing else writes the state meanwhile. Returns the state as saved.
  */
-export async function pinLocalOwner(directory: string, state: LocalState, owner: string): Promise<LocalState> {
-  if (!OWNER_ID.test(owner)) throw new LocalStateError('The owner must be a GitHub user ID such as github:12345.');
-  const next = { ...state, owner };
+export async function recordLocalOwnership(directory: string, state: LocalState, changes: { owner?: string; sharedOnce?: true }): Promise<LocalState> {
+  if (changes.owner !== undefined && !OWNER_ID.test(changes.owner)) throw new LocalStateError('The owner must be a GitHub user ID such as github:12345.');
+  const next: LocalState = { ...state, ...(changes.owner ? { owner: changes.owner } : {}), ...(changes.sharedOnce ? { sharedOnce: true as const } : {}) };
   await writeState(await privateStateDirectory(directory), next);
   return next;
 }

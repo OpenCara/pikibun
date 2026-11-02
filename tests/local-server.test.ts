@@ -378,6 +378,11 @@ test("running for its owner alone after sharing pins its owner: the one recorded
   await insert(server.env, 4242);
   await server.close();
   assert.equal((await peekLocalState(stateDir))?.owner, undefined);
+  // Shared again (a relaunch, say): its first GitHub user is a teammate now, and nothing is pinned.
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
+  await server.close();
+  assert.deepEqual([(await peekLocalState(stateDir))?.owner, (await peekLocalState(stateDir))?.sharedOnce], [undefined, true]);
 
   // For the owner alone: the listed GitHub administrator, not the first GitHub user, owns it, and stays pinned.
   ({ state, release } = await openLocalState(stateDir));
@@ -419,4 +424,33 @@ test("this computer pairs again for a shared server's new owner, and keeps the p
   assert.deepEqual((await connectors()).map(row => row.owner_id).sort(), ["test:alice", "test:bob"]);
   await run();
   assert.equal((await connectors()).length, 2);
+});
+
+test("sharing a Pikibun its owner had claimed pins them before anyone else can sign in, and later shares keep them", async t => {
+  const stateDir = join(await directory(t), "server");
+  const web = await directory(t);
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
+  await mkdir(join(web, "assets"));
+  await loadLocalState(stateDir, { port: await freePort() });
+  const insert = (env: Env, id: number, at: string) => env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES (?, ?, 'u', 'U', 'U', 'u@example.test', '{}', 'github', ?)`).bind(`github:${id}`, String(id), at).run();
+  // Claimed for its owner alone first.
+  let { state, release } = await openLocalState(stateDir);
+  let server = await startLocalServer({ stateDir, state, release, staticDir: web });
+  await insert(server.env, 7777, "2001-01-01T00:00:00.000Z");
+  await server.close();
+  // Shared: the owner is pinned at once, though a teammate's account then sorts before theirs.
+  ({ state, release } = await openLocalState(stateDir, { shared: { ...sharedBase, admins: ["password:admin"] } }));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
+  assert.equal((await peekLocalState(stateDir))?.owner, "github:7777");
+  await insert(server.env, 5151, "2000-01-01T00:00:00.000Z");
+  await server.close();
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
+  await server.close();
+  ({ state, release } = await openLocalState(stateDir));
+  server = await startLocalServer({ stateDir, state, release, staticDir: web });
+  t.after(() => server.close());
+  assert.equal(server.env.LOCAL_OWNER_ID, "github:7777");
+  assert.deepEqual(await server.owner(), { id: "github:7777", github_id: "7777" });
 });
