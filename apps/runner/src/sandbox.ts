@@ -906,7 +906,7 @@ def clone_pack_check(path, directory, reason):
     for name in clone_git_checked(directory, ['for-each-ref', '--format=%(refname)'], reason=reason).splitlines():
         if name == 'refs/stash':
             raise ValueError('the clone ' + path + ' has stashed changes, which a pack can\'t keep')
-        if not name.startswith(('refs/heads/', 'refs/remotes/', 'refs/tags/', 'refs/pistead/')):
+        if not name.startswith(('refs/heads/', 'refs/remotes/', 'refs/tags/', 'refs/pikibun/')):
             raise ValueError('the clone ' + path + ' has refs other than branches and tags, which a pack can\'t keep')
     # Tags its origin may not have: tags on commits it doesn't have (or on something other than a commit) certainly not.
     code, output = clone_git(directory, ['rev-list', '--count', '--tags', '--not', '--remotes=origin'])
