@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/images/pikibun.webp" alt="Pikibun, a round cream and lavender creature with maple-seed ears, floating on a night sky" width="240"></p>
+<p align="center"><img src="docs/images/pikibun-icon.png" alt="Pikibun's icon: a round cream and lavender creature with maple-seed ears, floating on a night-sky tile" width="160" height="160"></p>
 
 # Pikibun
 

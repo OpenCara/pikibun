@@ -68,6 +68,7 @@ from `packages/cli/npm-shrinkwrap.json` (the registry must be reachable), and wr
 
 Icons: `build/icon.png` (1024×1024) and `assets/icon.png` (512×512) are the Pikibun artwork (`docs/images/pikibun.webp`)
 on a rounded night-sky tile on the macOS icon grid (an 824px tile with 100px margins, transparent outside).
+`docs/images/pikibun-icon.png`, at the top of the main README, is that tile alone (without the margins) at 320×320.
 `assets/tray.png` is the vector mark (`apps/web/public/favicon.svg`) at 32×32, and `build/tray.svg` (Pikibun's
 silhouette, black on transparent, for macOS to tint) is the source of `assets/trayTemplate{,@2x}.png` at 18 and 36px;
 re-render the PNGs at those sizes after changing them.
