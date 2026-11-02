@@ -15,7 +15,15 @@ cd "$dir"
 [ -f .env ] || { echo "No .env in $(pwd): set up the server as README.md's \"Docker\" says first." >&2; exit 1; }
 
 echo "Pulling $image"
-docker pull --quiet "$image"
+if ! docker pull --quiet "$image"; then
+  # Docker sends a saved login for the registry with every pull, and the registry refuses an expired one even for a
+  # public image. Deploys of other projects on the same server leave such logins behind (a job's GITHUB_TOKEN, valid
+  # only while that job runs), so retry once without any saved credentials: the release image is public.
+  echo "Pull refused; retrying without saved registry logins"
+  anonymous=$(mktemp -d)
+  trap 'rm -rf "$anonymous"' EXIT
+  DOCKER_CONFIG="$anonymous" docker pull --quiet "$image"
+fi
 
 if grep -q '^PIKIBUN_IMAGE=' .env; then
   # --follow-symlinks keeps a symlinked .env a symlink, editing the file it points at.
