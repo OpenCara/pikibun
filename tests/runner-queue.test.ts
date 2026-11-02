@@ -865,3 +865,50 @@ test("parked background work, such as a compaction, is aborted without ending th
   for (let count = 0; count < 250 && (await tasks(f.session)).length; count++) await delay(20);
   assert.deepEqual(await tasks(f.session), []);
 });
+
+test("a sender takes back a message of theirs while it is queued, and it never reaches pi", options, async t => {
+  const f = await fixture(t, { reportActivity: true });
+  const withdraw = async (actorId: string, input: unknown) => f.session.withdraw(await ticket(f.session.binding.session.id, "withdraw", actorId, JSON.stringify(input)), input);
+  const gate = f.gateTool(OWNER, "write");
+  const running = await submit(f.session, OWNER, "write", { content: "TEST_IDENTITY", requestId: "running" });
+  await gate.entered();
+  const takenInput = { content: "TEST_WRITE withdrawn.txt\nnever", requestId: "taken" };
+  const taken = await submit(f.session, WRITER, "write", takenInput);
+  const keptInput = { content: "TEST_WRITE kept.txt\nran", requestId: "kept" };
+  const kept = await submit(f.session, WRITER, "write", keptInput);
+  assert.equal((await f.session.view()).withdrawable, true);
+  await assert.rejects(withdraw(WRITER, { submissionId: "not a receipt" }), runnerError(400, /Invalid withdrawal/));
+  await assert.rejects(withdraw(WRITER, { submissionId: taken.submissionId, extra: true }), runnerError(400, /Invalid withdrawal/));
+  await assert.rejects(withdraw(OWNER, { submissionId: taken.submissionId }), runnerError(404, /of yours/), "only its sender takes a message back");
+  await assert.rejects(withdraw(OWNER, { submissionId: running.submissionId }), runnerError(409, /already started/), "a message that started stays");
+  assert.deepEqual(await withdraw(WRITER, { submissionId: taken.submissionId }), { content: takenInput.content, mode: "write" });
+  await assert.rejects(withdraw(WRITER, { submissionId: taken.submissionId }), runnerError(409, /already started or ended/), "taken back once");
+  let view = await f.session.view();
+  assert.deepEqual(queue(view).map(run => run.status), ["running", "withdrawn", "queued"]);
+  gate.release();
+  view = await idle(f.session);
+  assert.deepEqual(queue(view).map(run => run.status), ["settled", "withdrawn", "settled"]);
+  assert.equal(userEntries(view, taken, takenInput.content).length, 0, "a withdrawn message never reaches pi");
+  await assert.rejects(file(f.session, "withdrawn.txt"), { code: "ENOENT" });
+  assert.equal(await file(f.session, "kept.txt"), "ran");
+  toolResult(view, kept, result => result.written === "kept.txt");
+  assert.equal(view.activity, "done");
+  const retry = await submit(f.session, WRITER, "write", takenInput);
+  sameReceipt(retry, taken);
+  assert.equal(retry.status, "interrupted", "a withdrawn message is never replayed under its request id");
+});
+
+test("a session whose only message was taken back is idle, and a side ask comes back as one", options, async t => {
+  const f = await fixture(t);
+  await pauseQueue(f.session);
+  const withdraw = async (actorId: string, input: unknown) => f.session.withdraw(await ticket(f.session.binding.session.id, "withdraw", actorId, JSON.stringify(input)), input);
+  const shared = await submit(f.session, OWNER, "write", { content: "TEST_IDENTITY", requestId: "shared" });
+  const side = await submit(f.session, WRITER, "ask", { content: "what is here?", requestId: "side" });
+  assert.deepEqual(await withdraw(WRITER, { submissionId: side.submissionId }), { content: "what is here?", mode: "ask" });
+  assert.deepEqual(await withdraw(OWNER, { submissionId: shared.submissionId }), { content: "TEST_IDENTITY", mode: "write" });
+  const view = await f.session.view();
+  assert.equal(view.busy, false);
+  assert.deepEqual(queue(view).map(run => run.status), ["withdrawn", "withdrawn"]);
+  assert.equal(view.activity, "idle");
+  assert.equal(view.entries.length, 0);
+});

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { ChatImage } from "../../../packages/shared/src/chat-images";
 import type { ConnectorInfo } from "../../../packages/shared/src/connector";
-import type { ApprovalRecord, EntryView, SessionRecord, SessionView, SubmitResult, UserProfile } from "../../../packages/shared/src/types";
+import type { ApprovalRecord, EntryView, SessionRecord, SessionView, SubmitResult, UserProfile, WithdrawResult } from "../../../packages/shared/src/types";
 import { redactSecrets, REDACTED } from "../../../packages/shared/src/redaction";
 import { managesSession } from "../../../packages/shared/src/policy";
 import { api, segment } from "./api";
 import { useApp } from "./app-context";
-import { AttachButton, AttachmentStrip, encodeImages, forgetHandedOverImages, handedOverImages, imagesUnavailable, useAttachments, type Attachments } from "./attachments";
+import { AttachButton, AttachmentStrip, encodeImages, forgetHandedOverImages, handedOverImages, imageBlobs, imagesUnavailable, useAttachments, type Attachments } from "./attachments";
 import {
   accessUnavailable, autoApproveConfirmed, ChatOptionsBar, chatOptionsBody, confirmAutoApprove, initialSelection, modelUnavailable, mustConfirmAutoApprove, rememberChat,
   type ChatSelection,
@@ -418,6 +418,8 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   const confirming = useRef(false);
   const submission = useAction();
   const stopping = useAction();
+  const withdrawing = useAction();
+  const [withdrawNotice, setWithdrawNotice] = useState("");
   const [receipt, setReceipt] = useState<SubmitResult | null>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -440,6 +442,10 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   // Stopping takes the running message and everything queued; hosts that predate it don't offer it.
   const canStop = Boolean(view.stoppable) && !archived && canWrite && activeQueue.length > 0;
   const stopPending = queue.some(item => item.status === "stopping");
+  // Messages of yours still waiting in the queue can be taken back to edit, on a host that offers it: ↑ in an empty chat
+  // box takes the latest, and the queue's details list each.
+  const editable = view.withdrawable && !archived && !frozen
+    ? activeQueue.filter(item => item.actorId === user.id && item.status === "queued" && (item.mode === "ask" ? canAsk : canWrite)) : [];
   const conversations = view.conversations;
   const sideConversations = conversations.filter(item => item.mode === "ask" && (!item.actorId || item.actorId === user.id));
   const entries = view.entries.filter(entry => {
@@ -573,6 +579,24 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
     });
   }
 
+  /**
+   * Takes a queued message of yours back into the chat box, with its images and mode, to edit and send again: it leaves
+   * the queue, and the edited message queues behind what is there now. Text typed meanwhile stays, above it.
+   */
+  function edit(submissionId: string) {
+    if (withdrawing.busy || submission.busy) return;
+    setWithdrawNotice("");
+    void withdrawing.run(async () => {
+      const result = await api<WithdrawResult>(`/api/sessions/${segment(id)}/withdraw`, { method: "POST", body: { submissionId } });
+      setContent(current => current.trim() ? `${current}\n\n${result.content}` : result.content);
+      if (result.images?.length) attachments.add(imageBlobs(result.images));
+      if (result.imagesLost) setWithdrawNotice("Its images were no longer on the host: attach them again before sending.");
+      setMode(result.mode);
+      stick.current = true;
+      refresh();
+    });
+  }
+
   function stop() {
     if (!canStop || stopping.busy) return;
     void stopping.run(async () => {
@@ -675,6 +699,8 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
             {activeQueue.length > 0 && <ol className="queue-items">{activeQueue.map((item, index) => <li key={item.submissionId}>
               <span>{index + 1}. {item.mode === "ask" ? "Read-only side ask" : "Shared submission"} · {item.status}</span>
               <span className="muted small">By <Username id={item.actorId} you /> · Receipt <code>{item.submissionId}</code></span>
+              {editable.includes(item) && <span className="inline"><Button variant="outline" size="xs" icon="pencil" disabled={withdrawing.busy || submission.busy}
+                title="Take this message out of the queue and back into your chat box" onClick={() => edit(item.submissionId)}>Edit</Button></span>}
             </li>)}</ol>}
             {recentSubmissions.length > 0 && <ul className="queue-items">{recentSubmissions.map(item => <li key={item.submissionId}>
               <span>{item.status} · {item.mode === "ask" ? "Side ask" : "Shared submission"}</span>
@@ -694,8 +720,9 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
           disabled={!permitted}
           onStop={canStop ? stop : undefined}
           stopping={stopping.busy}
+          onRecall={permitted && editable.length ? () => edit(editable.at(-1)!.submissionId) : undefined}
           label={actualMode === "ask" ? "Ask without making changes" : "Continue the shared work"}
-          placeholder={!permitted ? "Read-only" : actualMode === "ask" ? "Ask without changing anything" : "Message the agent"}
+          placeholder={!permitted ? "Read-only" : editable.length ? "Press ↑ to edit your queued message" : actualMode === "ask" ? "Ask without changing anything" : "Message the agent"}
           sendLabel={actualMode === "ask" ? "Send side ask" : "Submit to session"}
           hintRequired={!permitted || actualMode === "ask"}
           hint={archived ? "Read-only · this session is archived" : frozen ? "Read-only · this session pinned its repositories when it started" : !permitted ? (canAsk ? "Read-only · switch to Side ask to ask questions" : "Read-only · submitting needs write permission")
@@ -711,7 +738,7 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
           </>}
         />
         {draftHasSecret && <p className="muted small" role="status">This message looks like it holds a secret. Everyone, you included, sees it as {REDACTED} in the transcript, but the agent and its host receive it as typed.</p>}
-        <Feedback error={submission.error || stopping.error || rewinding.error} />
+        <Feedback error={submission.error || stopping.error || withdrawing.error || rewinding.error} notice={withdrawNotice} />
       </div>
     </div>
   </>;
@@ -720,11 +747,12 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
 /** The chat box: auto-growing input; Enter sends, Shift+Enter adds a line, IME composition is respected. On a phone, */
 /** whose keyboard has no Shift, Enter adds a line and the send button sends (touch.ts). */
 /** `onStop`, while the agent works and the person may stop it, shows a stop button beside send; messages can still be queued. */
+/** `onRecall`, while a message of the person's waits in the queue, is what ↑ in the empty box does: take it back to edit. */
 /** With `attachments`, images pasted into it or picked with its image button go with the message, which may then have no text. */
 /** `hint` is hidden on phones to keep the chat box to one toolbar row, unless `hintRequired` (it says why sending is */
 /** unavailable, or who can see what is sent). */
-function ComposerInput({ value, onChange, onSubmit, attachments, onStop, stopping, busy, disabled, label, placeholder, sendLabel, hint, hintRequired, tools }: {
-  value: string; onChange: (value: string) => void; onSubmit: () => void; attachments?: Attachments; onStop?: () => void; stopping?: boolean; busy: boolean; disabled?: boolean;
+function ComposerInput({ value, onChange, onSubmit, attachments, onStop, stopping, onRecall, busy, disabled, label, placeholder, sendLabel, hint, hintRequired, tools }: {
+  value: string; onChange: (value: string) => void; onSubmit: () => void; attachments?: Attachments; onStop?: () => void; stopping?: boolean; onRecall?: () => void; busy: boolean; disabled?: boolean;
   label: string; placeholder: string; sendLabel: string; hint: ReactNode; hintRequired?: boolean; tools?: ReactNode;
 }) {
   const [sendsOnEnter] = useState(() => enterSends());
@@ -742,6 +770,12 @@ function ComposerInput({ value, onChange, onSubmit, attachments, onStop, stoppin
   }
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (sendsOnEnter && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) submit(event);
+    // Only from an empty box, so ↑ still moves the caret through text being written.
+    else if (onRecall && event.key === "ArrowUp" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing
+      && !disabled && !busy && !value && !attachments?.images.length) {
+      event.preventDefault();
+      onRecall();
+    }
   }
   return <form className="composer" onSubmit={submit}>
     {attachments && <AttachmentStrip attachments={attachments} disabled={busy || disabled} />}

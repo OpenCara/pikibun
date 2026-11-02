@@ -8,7 +8,7 @@ import { awaitWithContext, BACKGROUND_CONTEXT as context, type Context } from "@
 import { getSupportedThinkingLevels, StringEnum, Type, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
 import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Storage, type SubmissionId, type ToolExecutionApi, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, PermissionNeed, PermissionRequest, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, HostCommandLevel, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, ToolName } from "../../../packages/shared/src/types.js";
+import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, PermissionNeed, PermissionRequest, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, HostCommandLevel, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, ToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
 import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../../../packages/shared/src/cron.js";
 import { crossSessionLimits, sessionsToolActions, sessionsToolTarget, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
@@ -81,6 +81,8 @@ type Run = {
   crashed?: true;
   /** Someone went back to before this shared message (see `revert`): it no longer says what the session is doing. */
   reverted?: true;
+  /** Its sender took it back before it ran, to edit it (see `withdraw`): it never reached Pi, and says nothing of the session. */
+  withdrawn?: true;
 };
 /**
  * One of the session's conversations. The shared conversation is the write branch that isn't `superseded`: going back to
@@ -1630,6 +1632,32 @@ export class RunnerSession {
     return { stopped: stopped.length };
   }
 
+  /**
+   * Takes back a message of the caller's that is still queued, to edit and send again: it ends without ever reaching Pi,
+   * and its text, mode and images come back to its sender. Only its sender takes it back, with the access it was sent
+   * with, and only before it starts: the session's turn admits runs, so one it already admitted is refused here.
+   */
+  async withdraw(ticket: RunnerTicket, input: unknown): Promise<WithdrawResult> {
+    this.assertTicket(ticket);
+    const value = input as { submissionId?: unknown } | null;
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => key !== "submissionId")
+      || typeof value.submissionId !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value.submissionId)) throw new RunnerError(400, "Invalid withdrawal");
+    const key = value.submissionId;
+    return this.exclusive(async () => {
+      if (this.closing) throw new RunnerError(503, "Session is closing");
+      const run = (await this.metadata()).runs[key];
+      if (!run || run.initiatedBy !== ticket.actorId) throw new RunnerError(404, "No queued message of yours has that receipt");
+      await this.authorize(ticket.actorId, run.mode === "ask" ? "ask" : "write", ticket.policyVersion);
+      if (run.status !== "queued" || run.stopped) throw new RunnerError(409, "That message has already started or ended");
+      // Read before the run ends: ending it is what lets sweepInputs remove them.
+      const images = run.images ? await this.readInputs(key) : undefined;
+      await this.mutate(meta => { Object.assign(meta.runs[key]!, { status: "interrupted", withdrawn: true }); });
+      if (run.images) await this.discardInputs([key]);
+      return { content: run.content, mode: run.mode, ...(images?.length ? { images: images as ChatImage[] } : {}),
+        ...(run.images && !images?.length ? { imagesLost: true as const } : {}) };
+    });
+  }
+
   /** Aborts the conversations of runs whose stop is pending, then lets queued work run again. */
   private async abortStopped(): Promise<void> {
     const generation = this.generation;
@@ -2653,7 +2681,7 @@ export class RunnerSession {
       if (ending) entries.push(ending);
     }
     const agent = await this.#shared.agent(context);
-    const latestWrite = Object.values(state.runs).filter(run => run.mode === "write").sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
+    const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
     // Every shared message ran at some access ("approval" when it named none), so the view says which; only a session
     // without one leaves it out, and the owner's chat box then starts on Auto-approve.
     const access = latestWrite && (latestWrite.options?.access ?? "approval");
@@ -2666,14 +2694,15 @@ export class RunnerSession {
       busy: Object.values(state.runs).some(holdsQueue)
         || Object.values(state.approvals).some(approval => approval.status === "executing") || repositories?.status === "preparing",
       queue: Object.values(state.runs).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
-        .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.inputsLost ? "images lost" : run.status })),
+        .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.status })),
       stoppable: true,
+      withdrawable: true,
       rewindable: true,
       ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
       ...(access ? { access } : {}),
       ...(repositories ? { repositories } : {}),
       activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
-        : sessionActivity(Object.values(state.runs).filter(run => !run.reverted), Object.values(state.approvals),
+        : sessionActivity(Object.values(state.runs).filter(run => !run.reverted && !run.withdrawn), Object.values(state.approvals),
           activityEntry(snapshots.find(snapshot => snapshot.branch.mode === "write")?.entries.at(-1))),
     };
   }

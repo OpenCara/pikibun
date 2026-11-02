@@ -72,7 +72,7 @@ export function useAttachments(unavailable?: string, initial?: () => Blob[]) {
     const ids = new Set(images.map(image => image.id));
     setImages(previous => previous.filter(image => !ids.has(image.id)));
   }
-  return { images, notice, paste, pick, remove, sent };
+  return { images, notice, paste, pick, remove, sent, add };
 }
 export type Attachments = ReturnType<typeof useAttachments>;
 
@@ -124,6 +124,16 @@ export function handedOverImages(sessionId: string): Blob[] {
 }
 export function forgetHandedOverImages(sessionId: string): void {
   handedOver.delete(sessionId);
+}
+
+/** A message's images as its host sent them back (a queued message taken back to edit), to attach to a composer again. */
+export function imageBlobs(images: readonly ChatImage[]): Blob[] {
+  return images.map(image => {
+    const binary = atob(image.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    return new Blob([bytes], { type: image.mimeType });
+  });
 }
 
 const base64Length = (bytes: number) => Math.ceil(bytes / 3) * 4;

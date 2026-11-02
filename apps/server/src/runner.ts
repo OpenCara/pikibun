@@ -9,7 +9,7 @@ import { connectorRequest, ownerActions, requireArchivedAction, type ConnectionP
 const actionPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write',
-  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage',
+  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask',
 };
 
 export async function runnerRequest(c: AppContext, row: SessionRow, action: RunnerAction, suffix = '', body?: unknown, pin?: ConnectionPin): Promise<Response> {
@@ -61,6 +61,7 @@ async function actorRequest(c: AppContext, actorId: string, row: SessionRow, act
     approve: `/v1/sessions/${row.id}/approvals/${encodeURIComponent(suffix)}`, backup: `/v1/sessions/${row.id}/backup`, restart: `/v1/sessions/${row.id}/restart`,
     restore: `/v1/sessions/${row.id}/restore`, stop: `/v1/sessions/${row.id}/stop`, files: `/v1/sessions/${row.id}/files`,
     revert: `/v1/sessions/${row.id}/revert`, fork: `/v1/sessions/${row.id}/fork`, pack: `/v1/sessions/${row.id}/pack`, unpack: `/v1/sessions/${row.id}/unpack`,
+    withdraw: `/v1/sessions/${row.id}/withdraw`,
   };
   const serialized = body === undefined ? '' : JSON.stringify(body);
   const issuedAt = Math.floor(Date.now() / 1000);
