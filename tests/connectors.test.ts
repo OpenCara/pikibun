@@ -3085,12 +3085,17 @@ test('another member\'s extension tool call that ran automatically shows in the 
       entries: [], approvals, conversations: [], busy: false } });
   });
   const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
-  // The workspace doesn't run it automatically (yet): the view still loads, and the record is shown unreviewed.
+  // The workspace doesn't run it automatically (yet): the view still loads, and the record is shown unreviewed, as a plain one.
   approvals = [ran('tool-early')];
-  assert.equal((await present()).get('tool-early')!.reviewHash, undefined);
+  const early = (await present()).get('tool-early')!;
+  assert.deepEqual([early.reviewHash, early.automatic, early.status], [undefined, undefined, 'executed']);
   // The workspace runs its tools automatically and the host's owner allows that: reviewed, and kept so.
   await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'npm:shout@1.0.0', tools: 'automatic' }));
   await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }));
+  // What was shown unconfirmed stays so: a setting that allows it now doesn't vouch for a call that ran before.
+  approvals = [ran('tool-early')];
+  const later = (await present()).get('tool-early')!;
+  assert.deepEqual([later.reviewHash, later.automatic], [undefined, undefined]);
   approvals = [ran('tool-ran')];
   const presented = (await present()).get('tool-ran')!;
   assert.deepEqual([presented.automatic, presented.status, typeof presented.reviewHash], [true, 'executed', 'string']);

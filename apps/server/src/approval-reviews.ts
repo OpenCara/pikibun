@@ -207,6 +207,9 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
   const members = normalized.filter(item => item.approval.automatic && item.approval.requestedBy !== row.owner_id);
   const chosen = await everAutoApproved(c.env.DB, row.id, members.filter(item => item.approval.operation.kind !== 'extension.tool').map(item => item.approval.requestedBy));
   const unconfirmed = new Set<string>();
+  const extensionCalls = members.filter(item => item.approval.operation.kind === 'extension.tool' && !stored.has(item.approval.id)).map(item => item.approval.id);
+  const shownUnconfirmed = new Set(extensionCalls.length ? (await c.env.DB.query<{ approval_id: string }>(`SELECT approval_id FROM approval_unconfirmed_automatic
+    WHERE session_id = ? AND approval_id IN (SELECT value FROM json_each(?))`).bind(row.id, JSON.stringify(extensionCalls)).all()).map(item => item.approval_id) : []);
   const automaticSources = members.some(item => item.approval.operation.kind === 'extension.tool' && !stored.has(item.approval.id))
     ? await automaticExtensionSources(c.env, row) : new Set<string>();
   for (const { approval, admissionId } of members) {
@@ -217,8 +220,18 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       || !admission || admission.actor_id !== approval.requestedBy || admission.mode !== 'write' || admission.session_id !== row.id) {
       fail(502, 'invalid_runner_response', 'The runtime returned an invalid automatic approval.');
     }
-    // One whose leave can't be confirmed (the setting changed since it ran, say) shows unreviewed, as unavailable.
-    if (operation.kind === 'extension.tool' && !stored.has(approval.id) && !automaticSources.has(operation.source)) unconfirmed.add(approval.id);
+    // One whose leave can't be confirmed the first time it is seen (the setting changed since it ran, say) is shown as a
+    // plain record, never as automatic, and never reviewed: the control plane remembers it, so a setting that allows it
+    // later doesn't vouch for it.
+    if (operation.kind === 'extension.tool' && !stored.has(approval.id) && (shownUnconfirmed.has(approval.id) || !automaticSources.has(operation.source))) {
+      unconfirmed.add(approval.id);
+      delete approval.automatic;
+    }
+  }
+  const newlyUnconfirmed = [...unconfirmed].filter(id => !shownUnconfirmed.has(id));
+  if (newlyUnconfirmed.length) {
+    await c.env.DB.query(`INSERT INTO approval_unconfirmed_automatic (session_id, approval_id, created_at)
+      SELECT ?, value, ? FROM json_each(?) WHERE true ON CONFLICT (session_id, approval_id) DO NOTHING`).bind(row.id, now(), JSON.stringify(newlyUnconfirmed)).run();
   }
   for (const { approval, admissionId } of normalized) {
     const kind = approval.operation.kind;

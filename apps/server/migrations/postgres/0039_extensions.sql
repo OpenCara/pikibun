@@ -43,3 +43,12 @@ CREATE TABLE connector_extension_requests (
   finished_at TEXT
 );
 CREATE INDEX connector_extension_requests_pending ON connector_extension_requests (connector_id, status, requested_at);
+-- Another member's extension tool call a host said ran automatically, which the control plane couldn't confirm the first
+-- time it saw it (the workspace didn't run that extension's tools automatically on that host): shown as a plain record,
+-- never reviewed, even once the setting allows it.
+CREATE TABLE approval_unconfirmed_automatic (
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  approval_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, approval_id)
+);

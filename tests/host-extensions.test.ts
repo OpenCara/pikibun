@@ -10,7 +10,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createRegistry, defineExtension, Harness, MemoryStorage, ToolResultEntry, type ToolExecutionResult } from "@earendil-works/pi-durable";
-import { addedPrompt, ExtensionPrompts, SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
+import { addedPrompt, ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import { HostExtensions } from "../apps/runner/src/extensions/host.js";
 import { RunnerService } from "../apps/runner/src/server.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
@@ -364,6 +364,8 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   // Once the host has that version too, the open session runs it, tools and all, in place of the first.
   installed.push({ ...dev!, summary: { ...dev!.summary, source: "npm:shout@2.0.0", dev: false } });
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0", tools: "automatic" }]), automaticTools: true };
+  // The view shows what the next message gets, before it is sent.
+  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@2.0.0", dev: false, tools: ["shout"] }], missing: [] });
   await send("upgraded", "approval");
   await idle();
   const upgraded = (await session.view()).approvals.at(-1)!;
@@ -409,4 +411,10 @@ test("tool name clashes are settled per selection: another version of an extensi
   assert.deepEqual(upgraded.created.map(item => item.name), [upgraded.selected[0]!.extension.name], "its whole Extension is new to the registry");
   assert.deepEqual(extensions.select([two!]).created, [], "and made once");
   assert.ok(warnings.some(message => /tool shout is left out/.test(message)));
+});
+
+test("each extension keeps the tools no earlier one, nor the session, has", () => {
+  assert.deepEqual(settleToolNames([{ source: "a", tools: ["x", "bash"] }, { source: "b", tools: ["x", "y"] }, { source: "c", tools: [] }], ["bash"]), [
+    { source: "a", kept: ["x"], lost: ["bash"] }, { source: "b", kept: ["y"], lost: ["x"] }, { source: "c", kept: [], lost: [] },
+  ]);
 });

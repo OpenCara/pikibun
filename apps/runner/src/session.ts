@@ -18,7 +18,7 @@ import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from
 import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { sessionExtensions, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { ExtensionPrompts, SessionExtensions, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
+import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { ATTACHMENTS_DIRECTORY, fileUploadLimits, parseUploadChunk, type UploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
@@ -2812,9 +2812,11 @@ export class RunnerSession {
       const answer = await config.workspace(this.binding.session.workspaceId);
       const installed = config.installed().map(item => item.summary);
       const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId });
-      const running = chosen.map(item => ({ source: item.source, dev: item.dev,
-        tools: this.#hostExtensions?.get(item.source)?.tools.map(tool => tool.name)
-          ?? installed.find(candidate => candidate.source === item.source)?.modules.flatMap(module => module.tools.map(tool => tool.name)) ?? [] }));
+      // The tools the next message would get of each, settled as that message settles them (SessionExtensions.select).
+      const settled = settleToolNames(chosen.map(item => ({ source: item.source,
+        tools: installed.find(candidate => candidate.source === item.source)?.modules.flatMap(module => module.tools.map(tool => tool.name)) ?? [] })),
+        this.tools.map(tool => tool.name));
+      const running = chosen.map((item, index) => ({ source: item.source, dev: item.dev, tools: settled[index]!.kept }));
       const missing = answer.extensions.filter(item => item.enabled && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
       return running.length || missing.length ? { extensions: { running, missing } } : {};
     } catch { return {}; }

@@ -77,6 +77,19 @@ export function addedPrompt(base: string, final: string): string {
 }
 
 /**
+ * The tools each of `sources` keeps when a message runs with them, in that order: those no earlier one, nor the
+ * session itself (`reserved`), already has. The rule `SessionExtensions.select` applies, and the session's view shows.
+ */
+export function settleToolNames(sources: readonly { source: string; tools: readonly string[] }[], reserved: Iterable<string>): { source: string; kept: string[]; lost: string[] }[] {
+  const taken = new Set(reserved);
+  return sources.map(({ source, tools }) => {
+    const kept = tools.filter(tool => !taken.has(tool));
+    for (const tool of kept) taken.add(tool);
+    return { source, kept, lost: tools.filter(tool => !kept.includes(tool)) };
+  });
+}
+
+/**
  * A session's extensions: one Pi ExtensionRunner per source, opened as the session first runs with it, and the pi-durable
  * Extension each message selects. A tool named like one the session already has (Pikibun's own, or one of an extension
  * earlier in the selection) is left out of that selection only, so a later selection (another version, say) gets it.
@@ -133,22 +146,19 @@ export class SessionExtensions {
    * tools no earlier one (nor the session itself) has. `created` are those made now, for the registry.
    */
   select(sources: readonly string[]): { selected: SessionExtension[]; created: Extension[] } {
-    const taken = new Set(this.#reserved);
+    const opened = sources.flatMap(source => this.#opened.filter(item => item.source === source));
+    const settled = settleToolNames(opened.map(item => ({ source: item.source, tools: item.tools.map(tool => tool.name) })), this.#reserved);
     const selected: SessionExtension[] = [];
     const created: Extension[] = [];
-    for (const source of sources) {
-      const opened = this.#opened.find(item => item.source === source);
-      if (!opened) continue;
-      const tools = opened.tools.filter(tool => {
-        if (!taken.has(tool.name)) return true;
-        const warning = `${source} ${tool.name}`;
-        if (!this.#warned.has(warning)) {
-          this.#warned.add(warning);
-          this.host.warn(source, `tool ${tool.name} is left out: an earlier extension or the session has a tool named so`);
-        }
-        return false;
-      });
-      for (const tool of tools) taken.add(tool.name);
+    for (const { source, kept, lost } of settled) {
+      const opened = this.#opened.find(item => item.source === source)!;
+      for (const name of lost) {
+        const warning = `${source} ${name}`;
+        if (this.#warned.has(warning)) continue;
+        this.#warned.add(warning);
+        this.host.warn(source, `tool ${name} is left out: an earlier extension or the session has a tool named so`);
+      }
+      const tools = opened.tools.filter(tool => kept.includes(tool.name));
       const key = tools.map(tool => tool.name).sort().join("\n");
       let extension = opened.variants.get(key);
       if (!extension) {
