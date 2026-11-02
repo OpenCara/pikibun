@@ -1,5 +1,6 @@
 import type { HostInspection, HostState } from "../../../runner/src/desktop-protocol.js";
 import type { HostView, LogLine, ModelChoice, Outcome, StartInput } from "../shared/bridge.js";
+import type { UploadOutcome } from "../shared/remote-bridge.js";
 import type { HostProcess } from "./host-process.js";
 import { isLoopbackHttp } from "./origin.js";
 import type { SettingsStore } from "./settings.js";
@@ -24,7 +25,7 @@ export interface HostControllerOptions {
 
 export class HostController {
   private state: HostState = "stopped";
-  private running?: { server: string; unsandboxed: boolean };
+  private running?: { server: string; unsandboxed: boolean; connectorId?: string };
   private inspection?: HostInspection;
   private inspecting = 0;
   private error?: string;
@@ -81,11 +82,14 @@ export class HostController {
   }
 
   /** Host process events, already shape-checked by HostProcess. */
-  handleStatus(state: HostState, detail: { server?: string; unsandboxed?: boolean }): void {
+  handleStatus(state: HostState, detail: { server?: string; unsandboxed?: boolean; connectorId?: string }): void {
     const previous = this.state;
     this.state = state;
     if (state === "stopped") this.running = undefined;
-    else if (detail.server !== undefined) this.running = { server: detail.server, unsandboxed: detail.unsandboxed === true };
+    else if (detail.server !== undefined) {
+      this.running = { server: detail.server, unsandboxed: detail.unsandboxed === true,
+        ...(state === "connected" && typeof detail.connectorId === "string" ? { connectorId: detail.connectorId } : {}) };
+    }
     if (state === "connected") this.error = undefined;
     this.changed();
     // A first connection may have just saved a pairing: show it.
@@ -164,6 +168,20 @@ export class HostController {
     this.error = error;
     this.changed();
     return { ok: false, error };
+  }
+
+  /**
+   * Hands the running connector one chunk of a file attached to a message in one of the server's pages, when it is the
+   * host `connectorId` names (LocalConnector.direct). Answers the runner's reply, or why this host can't take it.
+   */
+  async upload(connectorId: string, grant: string, body: string): Promise<UploadOutcome> {
+    if (!this.process?.running || this.state !== "connected" || this.running?.connectorId !== connectorId) {
+      return { ok: false, error: "That session's host isn't running on this computer.", local: false };
+    }
+    const result = await this.process.request({ type: "upload", grant, body });
+    if (!result.ok) return { ok: false, error: result.error.message, local: true };
+    if (!result.reply) return { ok: false, error: "The host could not take the file.", local: true };
+    return { ok: true, status: result.reply.status, body: result.reply.body };
   }
 
   async stop(): Promise<Outcome> {

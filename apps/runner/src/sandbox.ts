@@ -6,6 +6,7 @@ import { chmod, mkdir, open, realpath, rename, rm, writeFile, type FileHandle } 
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { validateUserEnv } from "../../../packages/shared/src/policy.js";
 import { validCloneDirectory } from "../../../packages/shared/src/repositories.js";
+import { ATTACHMENT_CANDIDATES, attachmentCandidate, fileUploadLimits, uploadFileName } from "../../../packages/shared/src/file-uploads.js";
 import { EGRESS_PORT, EGRESS_SOCKET, egressEnvironment } from "./egress.js";
 import type { HostCommandOperation, Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
 import type { ClonePushPreparation } from "./push.js";
@@ -247,6 +248,23 @@ if index < len(args) and args[index] == 'clone':
 os.execv('/usr/bin/git', ['git'] + args)
 `;
 
+/** The sandbox request that imports an attached file, checked before it goes to any helper. */
+export function importRequest(directory: string, name: string, data: Buffer): { kind: "import"; directory: string; name: string; data: string } {
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(directory) || directory.startsWith(".") || !name || uploadFileName(name) !== name
+    || !Buffer.isBuffer(data) || data.length > fileUploadLimits.maxBytes) throw new Error("Invalid file import");
+  return { kind: "import", directory: text(directory, "directory", 64), name, data: data.toString("base64") };
+}
+
+/** The path a helper says it imported a file to: in the requested directory, under a name `attachmentCandidate` makes. */
+export function importedPath(value: unknown, request: { directory: string; name: string }): string {
+  const path = (value as { path?: unknown } | null)?.path;
+  if (typeof path === "string" && path.startsWith(`${request.directory}/`)) {
+    const name = path.slice(request.directory.length + 1);
+    for (let index = 1; index <= ATTACHMENT_CANDIDATES; index++) if (attachmentCandidate(request.name, index) === name) return path;
+  }
+  throw new Error("Invalid sandbox import response");
+}
+
 export interface SnapshotFile {
   /** Relative to the constructor's sandbox root; data is base64, including binary files. */
   path: string;
@@ -287,6 +305,7 @@ type Request =
   | { kind: "initialize" }
   | { kind: "read" | "read-content" | "list" | "browse"; path: string }
   | { kind: "write"; path: string; content: string }
+  | { kind: "import"; directory: string; name: string; data: string }
   | { kind: "snapshot"; clones?: string[]; skipCaches?: true }
   | { kind: "bash"; command: string }
   | { kind: "clone-head"; path: string }
@@ -371,6 +390,8 @@ IMAGE_SIGNATURES = (
     ((0, b'RIFF'), (8, b'WEBP')),
 )
 MAX_SNAPSHOT = 32 * 1024 * 1024
+# Mirrors fileUploadLimits.maxBytes in packages/shared/src/file-uploads.ts.
+MAX_IMPORT = 50 * 1024 * 1024
 MAX_ENTRIES = 10000
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -525,6 +546,56 @@ def browse_file(parent, name):
         return {'type': 'file', 'size': size, 'truncated': truncated, 'text': content}
     finally:
         os.close(fd)
+
+
+def import_candidate(name, index):
+    # Mirrors attachmentCandidate in packages/shared/src/file-uploads.ts.
+    if index <= 1:
+        return name
+    dot = name.rfind('.')
+    return '%s (%d)%s' % (name[:dot], index, name[dot:]) if dot > 0 else '%s (%d)' % (name, index)
+
+
+def import_at(root, request):
+    # A file attached to a message: created under a name not taken yet in its directory, never replacing a file.
+    name, content = request.get('name'), request.get('data')
+    if (not isinstance(name, str) or not name or '/' in name or '\\' in name or name in ('.', '..')
+            or name.lower() == '.git' or any(ord(c) < 32 or ord(c) == 127 for c in name) or len(name.encode('utf-8')) > 240):
+        raise ValueError('invalid file name')
+    if not isinstance(content, str):
+        raise ValueError('invalid file data')
+    data = base64.b64decode(content, validate=True)
+    if len(data) > MAX_IMPORT:
+        raise ValueError('file exceeds size limit')
+    directory = request.get('directory')
+    parts = parts_for(directory, True)
+    # The directory itself, never a symlink to another one in the worktree: the file goes only where it was asked to.
+    if not parts or parts != directory.split('/'):
+        raise ValueError('path component is not a real directory')
+    parent = walk(root, parts, True)
+    try:
+        for index in range(1, 1000):
+            candidate = import_candidate(name, index)
+            try:
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=parent)
+            except FileExistsError:
+                continue
+            try:
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except BaseException:
+                try:
+                    os.unlink(candidate, dir_fd=parent)
+                except FileNotFoundError:
+                    pass
+                raise
+            os.fsync(parent)
+            return '/'.join(parts + [candidate])
+        raise ValueError('too many files with this name')
+    finally:
+        os.close(parent)
 
 
 def write_at(root, parts, content):
@@ -1246,6 +1317,9 @@ def main():
         return
     root = os.open(WORK, DIR_FLAGS)
     try:
+        if kind == 'import':
+            print(json.dumps({'path': import_at(root, request)}, ensure_ascii=True))
+            return
         parts = parts_for(request['path'], kind == 'write')
         if kind == 'write':
             write_at(root, parts, request['content'])
@@ -1645,6 +1719,12 @@ export class Sandbox implements IsolatedWorkspace {
   async writeFile(path: string, content: string, authorize: SandboxAuthorize): Promise<void> {
     if (typeof content !== "string" || Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error("File exceeds size limit");
     await this.#operation({ kind: "write", path: text(path, "path", 1024), content }, false, authorize);
+  }
+
+  /** A file attached to a message, as a new file in `directory`: see SessionWorkspace.importFile. */
+  async importFile(directory: string, name: string, data: Buffer, authorize: SandboxAuthorize): Promise<string> {
+    const request = importRequest(directory, name, data);
+    return importedPath(JSON.parse(await this.#operation(request, false, authorize)), request);
   }
 
   async listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]> {

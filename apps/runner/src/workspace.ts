@@ -19,6 +19,12 @@ export interface SessionWorkspace {
   readFile(path: string, authorize: SandboxAuthorize): Promise<string>;
   readContent(path: string, authorize: SandboxAuthorize): Promise<FileContent>;
   writeFile(path: string, content: string, authorize: SandboxAuthorize): Promise<void>;
+  /**
+   * Writes `data` as a new file named `name` in the worktree's `directory` (made where missing): a file attached to a
+   * message (file-uploads.ts). Where that name is taken, the next of `report (2).pdf`, `report (3).pdf`... that isn't;
+   * it never replaces a file. Answers the file's path relative to the worktree.
+   */
+  importFile(directory: string, name: string, data: Buffer, authorize: SandboxAuthorize): Promise<string>;
   listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]>;
   browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult>;
   execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options?: SandboxExecutionOptions): Promise<string>;

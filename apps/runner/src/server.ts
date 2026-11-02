@@ -325,7 +325,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     const approval = /^approvals\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(route);
     // view/<revision>: what changed since a view this caller already holds.
     const since = /^view\/([0-9a-f]{32})$/.exec(route)?.[1];
-    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", operations: "operations", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw" };
+    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", operations: "operations", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload" };
     const action = approval ? "approve" : since ? "view" : actions[route];
     if (!action) throw new RunnerError(404, "Unknown runner endpoint");
     if (c.req.method !== (action === "view" || action === "events" ? "GET" : "POST")) throw new RunnerError(405, "Method not allowed");
@@ -353,7 +353,8 @@ export function createRunnerApp(service: RunnerService): Hono {
     // A decision needs approve permission, but the host's owner decides a host command with any access to the session:
     // decide() checks which one the card's operation needs.
     await session.authorize(ticket.actorId, action === "approve" ? "read" : permissionFor(action), ticket.policyVersion);
-    if (action === "operations" || action === "restart" || action === "backup") await session.consumeTicket(ticket);
+    // An upload's chunk goes in once: the desktop app hands the host chunks itself, outside the relay's replay checks.
+    if (action === "operations" || action === "restart" || action === "backup" || action === "upload") await session.consumeTicket(ticket);
     if (action === "view") {
       let views = revisions.get(session);
       if (!views) revisions.set(session, views = new ViewRevisions());
@@ -396,6 +397,7 @@ export function createRunnerApp(service: RunnerService): Hono {
         || typeof input.path !== "string" || !input.path || input.path.length > 1024) throw new RunnerError(400, "Invalid file browser request");
       return c.json({ files: await session.browse(ticket, input.path) });
     }
+    if (action === "upload") return c.json(await session.upload(ticket, input));
     if (action === "approve") {
       if (input.approvalId !== approval![1]) throw new RunnerError(403, "Approval ticket path mismatch");
       return c.json({ approval: await session.decide(ticket, approval![1]!, input) });

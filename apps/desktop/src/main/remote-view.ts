@@ -3,7 +3,7 @@ import type { DesktopView } from "../shared/remote-bridge.js";
 import type { AvailableUpdate } from "./updates.js";
 
 // What a server's own web page sees of the app's settings (remote-bridge.ts): every connection and Pikibun on this
-// computer, as This Mac and Settings show them, but the activity logs only of its own server, since they name other
+// computer, as This Mac and Settings show them, but the activity logs (and connected host id) only of its own server, since they name other
 // servers' work. Pikibun on this computer's status goes field by field, by an allowlist: its sign-in link carries the
 // claim secret, and only its own pages, which can claim it anyway, may see it. Pure, so tests run it without Electron.
 
@@ -20,7 +20,9 @@ export function remoteView(input: { title: string; origin: string; primaryServer
   return {
     title: input.title, origin, primaryServer: input.primaryServer, defaultServer: input.defaultServer,
     ...(here ? { connectionHere: here.id } : {}),
-    hosts: { ...hosts, connections: hosts.connections.map(connection => connection.server === origin ? connection : { ...connection, logs: [] }) },
+    // Another server's host id, which only that server's pages hand uploads to, is left out with its logs.
+    hosts: { ...hosts, connections: hosts.connections.map(connection => connection.server === origin ? connection
+      : { ...connection, logs: [], ...(connection.running ? { running: { server: connection.running.server, unsandboxed: connection.running.unsandboxed } } : {}) }) },
     local: local.status.origin === origin ? local : { ...local, status: publicStatus(local.status), logs: [] },
     version: input.version, ...(input.update ? { update: input.update } : {}),
   };

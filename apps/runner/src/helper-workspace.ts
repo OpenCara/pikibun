@@ -13,7 +13,7 @@ import { killTree, privateEntry } from "./platform.js";
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import type { ClonePushPreparation } from "./push.js";
 import {
-  CA_BUNDLE_FILE, MAX_CONTENT_OUTPUT_BYTES, MAX_FILE_BYTES, MAX_SNAPSHOT_OUTPUT_BYTES, OID, PUSH_TIMEOUT_MS, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig,
+  CA_BUNDLE_FILE, importedPath, importRequest, MAX_CONTENT_OUTPUT_BYTES, MAX_FILE_BYTES, MAX_SNAPSHOT_OUTPUT_BYTES, OID, PUSH_TIMEOUT_MS, TIMEOUT_MS, ownerGitConfig, pinOwnerConfig,
   sessionEnvironment, text, type CloneBackup, type SandboxAuthorize, type SandboxExecutionOptions, type SandboxIdentity, type SandboxRequest,
   type SnapshotFile,
 } from "./sandbox.js";
@@ -216,6 +216,12 @@ export class HelperWorkspace implements IsolatedWorkspace {
   async writeFile(path: string, content: string, authorize: SandboxAuthorize): Promise<void> {
     if (typeof content !== "string" || Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error("File exceeds size limit");
     await this.#operation({ kind: "write", path: text(path, "path", 1024), content }, { readOnly: false }, authorize);
+  }
+
+  /** A file attached to a message, as a new file in `directory`: see SessionWorkspace.importFile. */
+  async importFile(directory: string, name: string, data: Buffer, authorize: SandboxAuthorize): Promise<string> {
+    const request = importRequest(directory, name, data);
+    return importedPath(JSON.parse(await this.#operation(request, { readOnly: false }, authorize)), request);
   }
 
   async listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]> {

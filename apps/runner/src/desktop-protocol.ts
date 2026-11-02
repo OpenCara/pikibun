@@ -34,7 +34,16 @@ export interface StartRequest extends DevelopmentOptions {
 
 export interface StopRequest { type: "stop"; id: number }
 
-export type HostRequest = InspectRequest | StartRequest | StopRequest;
+/**
+ * One chunk of a file attached to a message in one of the app's pages, for the running connector to take itself
+ * (LocalConnector.direct): the grant the control plane signed for it, and the chunk's exact request body.
+ */
+export interface UploadRequest { type: "upload"; id: number; grant: string; body: string }
+
+export type HostRequest = InspectRequest | StartRequest | StopRequest | UploadRequest;
+
+/** Upper bounds of an UploadRequest, which the host checks again. */
+export const uploadRequestLimits = { grant: 16_384, body: 1024 * 1024 } as const;
 
 export type HostState = "stopped" | "starting" | "connecting" | "connected" | "disconnected" | "stopping";
 
@@ -61,15 +70,16 @@ export interface HostInspection {
 
 /** Stable reasons a front end may act on; the message is always shown as is. */
 export type HostErrorCode = "invalid-request" | "unsupported" | "consent-required" | "not-paired" | "already-paired"
-  | "server-mismatch" | "already-running" | "lease-busy" | "setup" | "failed";
+  | "server-mismatch" | "already-running" | "lease-busy" | "setup" | "failed" | "not-running";
 
 export interface HostError { code: HostErrorCode; message: string }
 
 export type HostEvent =
   | { type: "ready" }
-  | { type: "result"; id: number; ok: true; inspection?: HostInspection }
+  | { type: "result"; id: number; ok: true; inspection?: HostInspection; reply?: { status: number; body: string } }
   | { type: "result"; id: number; ok: false; error: HostError }
-  | { type: "status"; state: HostState; server?: string; unsandboxed?: boolean }
+  /** `connectorId`, once connected: the host this computer is on that server, which its pages hand uploads to directly. */
+  | { type: "status"; state: HostState; server?: string; unsandboxed?: boolean; connectorId?: string }
   | { type: "log"; level: "info" | "warning" | "error"; message: string }
   /** A started connector failed or stopped without being asked to. */
   | { type: "failed"; error: HostError };

@@ -17,6 +17,7 @@ import type { WorkspaceInviteLink, WorkspaceJoinRequest } from "../../../../pack
 import { memberPerson, userIdFromInput, username, usernameWithId, type WorkspaceMember } from "../../../../packages/client/src/usernames";
 import { NetworkAccess } from "./NetworkAccess";
 import { TranscriptSettings } from "./TranscriptSettings";
+import { AttachmentSettings } from "./AttachmentSettings";
 import { ApprovalSettings } from "./ApprovalSettings";
 import { PushAccess } from "./PushAccess";
 import { WorkspaceDatabaseSection } from "./WorkspaceDatabase";
@@ -89,6 +90,7 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
     <NetworkAccess workspace={workspace} admin={admin} />
     <TranscriptSettings workspace={workspace} admin={admin} />
     <ApprovalSettings workspace={workspace} admin={admin} />
+    <AttachmentSettings workspace={workspace} admin={admin} />
     <WorkspaceDatabaseSection workspace={workspace} owner={role === "owner"} />
     <Members workspace={workspace} admin={admin} owner={role === "owner"} />
     {admin && <DataExport workspace={workspace} />}

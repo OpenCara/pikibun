@@ -156,7 +156,7 @@ test('pairing posts only to the fixed origin and strips extra model/capability s
   assert.equal(request.redirect, 'error');
   assert.equal(request.credentials, 'omit');
   assert.equal(request.headers.get('authorization'), null);
-  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   for (const secret of [providerSecret, credentials.token, 'fixture_pairing_code']) assert.equal(request.url.includes(secret), false);
 });
 
@@ -198,6 +198,7 @@ test('relay accepts exactly the supported action/method/path combinations and lo
     approve: '{}', backup: '{}', restart: '{}', restore: JSON.stringify({ binding: binding() }), stop: '{}',
     files: JSON.stringify({ path: 'src' }), revert: JSON.stringify({ entryId: '1:2' }),
     fork: JSON.stringify({ sourceSessionId: 'other', entryId: '1:2' }), pack: '{}', unpack: '{}', withdraw: JSON.stringify({ submissionId: 'a'.repeat(43) }),
+    upload: JSON.stringify({ uploadId: 'upload-1', name: 'notes.txt', size: 2, offset: 0, data: 'aGk=' }),
   };
   for (const action of Object.keys(bodies) as (keyof typeof bodies)[]) {
     await t.test(action, async () => {
@@ -365,6 +366,8 @@ type FixtureOptions = {
   gpu?: 'dxg' | 'render';
   /** What the host's Pi settings add to its models. */
   piSettings?: Pick<LocalModels, 'compaction' | 'identity'>;
+  /** The control plane's check of a direct-upload grant the desktop app handed the host. */
+  uploadVerify?: (request: Request) => Response | Promise<Response>;
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -425,6 +428,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
       }
       if (request.url === `${origin}/api/connectors/self/git/push/credential` && options.pushCredential) return options.pushCredential(request);
       if ((request.url.startsWith(`${origin}/api/connectors/self/github/`) || request.url === `${origin}/api/connectors/self/sources/read`) && options.github) return options.github(request);
+      if (request.url === `${origin}/api/connectors/self/uploads/verify` && options.uploadVerify) return options.uploadVerify(request);
       assert.fail(`Unexpected fixture Worker request: ${request.url}`);
     },
     onStatus: (status, reason) => {
@@ -519,7 +523,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   socket.welcome();
   const call = await fixture.workerCalls.next();
   assert.equal(call.request.url, `${origin}/api/connectors/self/manifest`);
-  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   assert.equal(call.request.headers.get('x-connection-token'), connectionToken);
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(ready, false);
@@ -548,7 +552,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.deepEqual(fixture.statuses, ['connecting', 'connected', 'stopped']);
 });
 
-const advertisedBase = { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true };
+const advertisedBase = { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, fileBrowser: true, fileUploads: true, web: true, ...hostMigration, hostConfig: true, compactionConfig: true };
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
@@ -666,6 +670,48 @@ test('github reads and merges reach the control plane over the connection, pass 
   // A view that isn't one is refused.
   answer = () => Response.json({ title: 'no id' });
   await assert.rejects(config.sourceRead!(sourceRead));
+});
+
+test('a chunk the desktop app hands the host runs once, as relayed, after the control plane checked its grant', { timeout: 10000 }, async t => {
+  const body = JSON.stringify({ uploadId: 'upload-0001', name: 'a.txt', size: 2, offset: 0, data: 'aGk=' });
+  let verify = async (): Promise<Response> => Response.json({});
+  const fixture = await connectorFixture(t, {
+    uploadVerify: () => verify(),
+    execute: request => request.url.endsWith('/upload') ? Response.json({ received: 2, path: 'attachments/a.txt' }) : Response.json({ ok: true }),
+  });
+  // Not connected yet: nothing is checked or run.
+  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 503);
+  await startFixture(fixture);
+  const granted = (await rpc('upload', body, 'direct-1')).ticket;
+  verify = async () => Response.json({ ticket: granted, size: 2, path: '/v1/sessions/session/upload' });
+  const reply = await fixture.connector.direct({ grant: 'grant', body });
+  assert.deepEqual(JSON.parse(fixture.allCalls.at(-1)!.body), { grant: 'grant' });
+  assert.deepEqual([reply.status, JSON.parse(reply.body)], [200, { received: 2, path: 'attachments/a.txt' }]);
+  const executed = fixture.runtimes[0]!.requests.at(-1)!;
+  assert.equal(new URL(executed.url).pathname, '/v1/sessions/session/upload');
+  assert.equal(await executed.text(), body);
+  const config = fixture.runtimes[0]!.config;
+  assert.deepEqual(await verifyRunnerTicket(executed.headers.get('authorization')!.slice(7), config.sharedSecret, 'upload', 'session', body), granted);
+  // A grant goes in once.
+  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 409);
+  const runs = fixture.runtimes[0]!.requests.length;
+  // The chunk must be the one the grant is for: its body, and the file size the control plane checked.
+  const other = (await rpc('upload', body, 'direct-2')).ticket;
+  verify = async () => Response.json({ ticket: other, size: 3, path: '/v1/sessions/session/upload' });
+  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 400);
+  const changed = (await rpc('upload', body, 'direct-3')).ticket;
+  verify = async () => Response.json({ ticket: changed, size: 2, path: '/v1/sessions/session/upload' });
+  assert.equal((await fixture.connector.direct({ grant: 'grant', body: body.replace('aGk=', 'aGl=') })).status, 400);
+  // Grants for another host, or another action, or that the control plane refuses, run nothing.
+  const foreign = { ...(await rpc('upload', body, 'direct-4')).ticket, connectorId: 'another-host' };
+  verify = async () => Response.json({ ticket: foreign, size: 2, path: '/v1/sessions/session/upload' });
+  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 403);
+  const submit = (await rpc('submit', body, 'direct-5')).ticket;
+  verify = async () => Response.json({ ticket: submit, size: 2, path: '/v1/sessions/session/submit' });
+  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 403);
+  verify = async () => Response.json({ error: 'The upload grant is invalid or has expired.', code: 'invalid_grant' }, { status: 403 });
+  assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 403);
+  assert.equal(fixture.runtimes[0]!.requests.length, runs);
 });
 
 test('malformed welcome never creates a runtime or advertises readiness', { timeout: 10000 }, async t => {

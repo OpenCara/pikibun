@@ -14,6 +14,7 @@ import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommand
 import type { AgentVersion, ApprovalRecord, GitHubIssueView, ModelDefinition, Operation, RunnerBinding, RunnerTicket, SessionRecord, SessionView } from '../packages/shared/src/types.js';
 import { retiredToolNames, toolNames } from '../packages/shared/src/types.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
+import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
@@ -3528,6 +3529,93 @@ test('the Files tab reads the session worktree through its host, for collaborato
   await json(await files('.', s.host));
   assert.equal(requests.at(-1)!.request.ticket.actorId, s.host.user.id);
   assert.equal(requests.length, before + 1);
+});
+
+test('files attached to messages go to the session host in chunks, within the workspace limit its admins set', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  const upload = (chunk: Record<string, unknown>, client = s.creator) => client.request('POST', `/api/sessions/${s.session.id}/uploads`, chunk);
+  const chunk = (data: Buffer, offset: number, size: number, name = 'notes.txt') => ({ uploadId: 'upload-0001', name, size, offset, data: data.toString('base64') });
+  const requests = rpcHub(f, s.connector, envelope => {
+    const body = JSON.parse(envelope.request.body) as { offset: number; size: number; data: string; name: string };
+    const received = body.offset + Buffer.from(body.data, 'base64').length;
+    if (body.name === 'elsewhere.txt') return Response.json({ received, path: '../elsewhere.txt' });
+    return Response.json(received === body.size ? { received, path: `attachments/${body.name}` } : { received });
+  });
+  // A connector that doesn't take uploads isn't asked.
+  await denied(await upload(chunk(Buffer.from('hi'), 0, 2)), 409, 'uploads_unsupported');
+  assert.equal(requests.length, 0);
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, fileUploads: true } }));
+
+  const first = Buffer.alloc(fileUploadLimits.chunkBytes, 1); const rest = Buffer.from('tail');
+  assert.deepEqual(await json(await upload(chunk(first, 0, first.length + rest.length))), { received: first.length });
+  const request = requests.at(-1)!.request;
+  assert.equal(request.path, `/v1/sessions/${s.session.id}/upload`);
+  assert.equal(request.ticket.action, 'upload');
+  assert.equal(request.ticket.actorId, s.creator.user.id);
+  assert.deepEqual(await json(await upload(chunk(rest, first.length, first.length + rest.length))),
+    { received: first.length + rest.length, path: 'attachments/notes.txt' });
+  // The host's answer must be a path in the attachments directory.
+  await denied(await upload(chunk(Buffer.from('x'), 0, 1, 'elsewhere.txt')), 502, 'invalid_runner_response');
+
+  // Malformed chunks never reach the host: a chunk larger than a chunk may be, a name with a path, a range past the file.
+  const before = requests.length;
+  await denied(await upload(chunk(Buffer.alloc(fileUploadLimits.chunkBytes + 3), 0, fileUploadLimits.chunkBytes + 3)), 400, 'invalid_upload');
+  await denied(await upload(chunk(Buffer.from('x'), 0, 1, '../x')), 400, 'invalid_upload');
+  await denied(await upload(chunk(Buffer.from('xy'), 0, 1)), 400, 'invalid_upload');
+  await denied(await upload({ ...chunk(Buffer.from('x'), 0, 1), extra: true }), 400, 'invalid_upload');
+  // Files larger than the workspace allows (10 MB until its admins change it) are refused.
+  await denied(await upload(chunk(Buffer.from('x'), 0, fileUploadLimits.defaultBytes + 1)), 413, 'file_too_large');
+  assert.equal(requests.length, before);
+
+  // Only owners and admins change the limit, within its bounds; every member reads it.
+  const settings = `/api/workspaces/${s.team.id}/attachments`;
+  assert.deepEqual((await json<{ settings: unknown }>(await s.creator.request('GET', settings))).settings, { maxFileBytes: fileUploadLimits.defaultBytes });
+  await denied(await s.creator.request('PUT', settings, { maxFileBytes: 20 * 1024 * 1024 }), 403, 'forbidden');
+  await denied(await s.admin.request('PUT', settings, { maxFileBytes: fileUploadLimits.maxBytes + 1 }), 400, 'invalid_input');
+  await denied(await s.admin.request('PUT', settings, { maxFileBytes: 1024 }), 400, 'invalid_input');
+  assert.deepEqual((await json<{ settings: unknown }>(await s.admin.request('PUT', settings, { maxFileBytes: 20 * 1024 * 1024 }))).settings, { maxFileBytes: 20 * 1024 * 1024 });
+  assert.deepEqual(await json(await upload(chunk(Buffer.from('x'), 0, 15 * 1024 * 1024))), { received: 1 });
+  await denied(await upload(chunk(Buffer.from('x'), 0, 20 * 1024 * 1024 + 1)), 413, 'file_too_large');
+
+  // Uploading writes into the worktree: a viewer can't.
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'viewer' }));
+  await denied(await upload(chunk(Buffer.from('x'), 0, 1), s.host), 403, 'forbidden');
+});
+
+test('a desktop app hands a chunk to the session host on its own computer with a grant only this server signs', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  f.env.SESSION_SECRET = 'connectors-session-secret-not-for-deployment';
+  const direct = (body: Record<string, unknown>, client = s.creator) => client.request('POST', `/api/sessions/${s.session.id}/uploads/direct`, body);
+  const body = JSON.stringify({ uploadId: 'upload-0001', name: 'notes.txt', size: 2, offset: 0, data: 'aGk=' });
+  const declared = { bodyHash: await sha256(body), size: 2 };
+  // Only a host that says the desktop app hands it chunks gets grants.
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, fileUploads: true } }));
+  await denied(await direct(declared), 409, 'uploads_unsupported');
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, fileUploads: true, directUploads: true } }));
+  await denied(await direct({ ...declared, size: fileUploadLimits.defaultBytes + 1 }), 413, 'file_too_large');
+  await denied(await direct({ bodyHash: 'x', size: 2 }), 400, 'invalid_input');
+  const { connectorId, grant } = await json<{ connectorId: string; grant: string }>(await direct(declared));
+  assert.equal(connectorId, s.connector.connectorId);
+
+  // The host has this server check the grant: it answers the ticket the chunk then runs under.
+  const verified = await json<{ ticket: { action: string; actorId: string; sessionId: string; bodyHash: string; connectorId: string }; size: number; path: string }>(
+    await self(f, s.connector, 'uploads/verify', { grant }));
+  assert.deepEqual([verified.ticket.action, verified.ticket.actorId, verified.ticket.sessionId, verified.ticket.bodyHash, verified.ticket.connectorId, verified.size, verified.path],
+    ['upload', s.creator.user.id, s.session.id, declared.bodyHash, s.connector.connectorId, 2, `/v1/sessions/${s.session.id}/upload`]);
+  // A grant changed on the way, or for another host, is refused.
+  const [header, payload, signature] = grant.split('.');
+  const forged = JSON.parse(Buffer.from(payload!, 'base64url').toString()) as { size: number };
+  forged.size = 1;
+  await denied(await self(f, s.connector, 'uploads/verify', { grant: `${header}.${Buffer.from(JSON.stringify(forged)).toString('base64url')}.${signature}` }), 403, 'invalid_grant');
+  const other = await connect(f, s.host);
+  await denied(await self(f, other, 'uploads/verify', { grant }), 403, 'invalid_grant');
+  // A grant stops being good when its actor can no longer write to the session.
+  const viewer = await f.client('viewer');
+  await addMember(s.admin, s.team.id, viewer);
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: viewer.user.id, role: 'collaborator' }));
+  const granted = await json<{ grant: string }>(await direct(declared, viewer));
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: viewer.user.id, role: 'viewer' }));
+  await denied(await self(f, s.connector, 'uploads/verify', { grant: granted.grant }), 403, 'permission_revoked');
 });
 
 test('a host\'s owner starts a session directly on the host only where its configuration accepts that, and its binding says so', async t => {

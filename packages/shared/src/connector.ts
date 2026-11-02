@@ -135,6 +135,18 @@ export interface ConnectorCapabilities {
    */
   fileBrowser?: boolean;
   /**
+   * The connector takes files attached to a message (the `upload` runner action) into the session worktree's
+   * `attachments/` directory, in chunks (file-uploads.ts). Absent on older connectors, which refuse that request, so no
+   * file is attached to their sessions' messages.
+   */
+  fileUploads?: boolean;
+  /**
+   * The connector also takes an upload's chunks straight from the desktop app on its own computer, with a grant the
+   * control plane signed for each (`LocalConnector.direct`), so the file's bytes never leave that computer. Absent on
+   * older connectors and on those a desktop app doesn't run.
+   */
+  directUploads?: boolean;
+  /**
    * The connector carries the agent's web tools: web_fetch, which reads pages on the host as far as the workspace's
    * network access reaches, and web_search, through the control plane's search provider (see web.ts). Absent on older
    * connectors.
