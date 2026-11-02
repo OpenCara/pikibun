@@ -49,6 +49,8 @@ This machine's own setup, when the defaults don't fit:
   --memory-limit MIB       Windows sandbox: memory for each sandboxed step's processes (4096)
   --process-limit N        Windows sandbox: processes per step (256)
   --cpu-limit PERCENT      Windows sandbox: share of this machine's CPU per step (50)
+  --no-remote-installs     Refuse extension installs and removals asked for in Pikibun;
+                           install them here with "pikibun extensions" instead
 
 Development:
   --allow-insecure-loopback  Permit HTTP/WS only on localhost/127.0.0.1/[::1]
@@ -71,7 +73,9 @@ Production bash additionally requires verified per-session aggregate cgroups and
 bounded private filesystem; --resources does not provision these. Missing resource
 limits never enable host shell.
 Pi model/auth configuration is used locally, including Pi's OAuth refresh. Provider
-credentials, private history and personal extensions are not uploaded or shared.
+credentials, private history and personal Pi extensions are not uploaded or shared: sessions
+run only the extensions installed with "pikibun extensions" (or from Pikibun) that their
+workspace chose, in this connector, outside the sandbox.
 Catalogs over 200 models need enabledModels in Pi's settings or --model. Restart to reload config.
 `;
 
@@ -191,7 +195,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     help: { type: "boolean" }, server: { type: "string" }, "pairing-id": { type: "string" }, force: { type: "boolean" },
     "state-dir": { type: "string" }, "pi-agent-dir": { type: "string" }, model: { type: "string", multiple: true },
     resources: { type: "string" }, "allow-insecure-loopback": { type: "boolean" },
-    "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" },
+    "allow-faux": { type: "boolean" }, "allow-test-shell": { type: "boolean" }, "unsafe-no-sandbox": { type: "boolean" }, "no-remote-installs": { type: "boolean" },
     "git-credentials": { type: "boolean" }, "repo-cache": { type: "boolean" }, "repo-cache-scope": { type: "string" },
     "experimental-sandbox": { type: "boolean" }, "memory-limit": { type: "string" }, "process-limit": { type: "string" }, "cpu-limit": { type: "string" },
   } });
@@ -249,6 +253,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   const connector = createConnector({
     dataDir,
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
+    remoteExtensionInstalls: values["no-remote-installs"] !== true,
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
     // Binary presence cannot attest a working namespace or a per-session resource
     // domain. Advertise conservatively; each actual operation verifies isolation.

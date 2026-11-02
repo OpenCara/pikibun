@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Context } from "@earendil-works/chord";
 import { CompactionTask, defineDoc, defineExtension, defineTool, GenerationTask, hook, section, ToolTask, type Extension, type HookRegistration,
   type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
@@ -19,7 +20,8 @@ import { piLoader, type LoadedSource } from "./load.js";
 export interface ExtensionHost {
   /** The session's worktree on the host: the extensions' `cwd`. */
   readonly directory: string;
-  readonly modelRegistry: ModelRegistry;
+  /** The host's Pi model registry, as `ctx.modelRegistry`; without one, extensions that use it fail when they do. */
+  readonly modelRegistry?: ModelRegistry;
   /** The model the session's conversation runs on, as Pi's `ctx.model`. */
   model(): Model<string> | undefined;
   /** Whether `source` applies to the session now, and its settings (flag values). */
@@ -28,7 +30,7 @@ export interface ExtensionHost {
    * Runs one tool call of `source` as the session allows it: refusing it, asking for approval, or running it at once.
    * `execute` runs the extension's code with a signal that aborts when the call stops or reaches its time limit.
    */
-  runTool(call: { source: string; tool: string; arguments: Record<string, unknown>; api: ToolExecutionApi; signal: AbortSignal },
+  runTool(call: { source: string; tool: string; arguments: Record<string, unknown>; api: ToolExecutionApi; signal: AbortSignal; context: Context },
     execute: (signal: AbortSignal) => Promise<ToolExecutionResult>): Promise<ToolExecutionResult>;
   /** How long one event's handlers may take. */
   readonly hookTimeoutMs: number;
@@ -74,42 +76,72 @@ export function addedPrompt(base: string, final: string): string {
   return final.split("\n").filter(line => !lines.has(line)).join("\n").trim();
 }
 
-/** A session's extensions: one Pi ExtensionRunner and one pi-durable Extension per source. */
+/**
+ * A session's extensions: one Pi ExtensionRunner and one pi-durable Extension per source, opened as the session first
+ * runs with each. A tool named like one the session already has (Pikibun's own, or an earlier extension's) is left out.
+ */
 export class SessionExtensions {
-  private constructor(readonly extensions: SessionExtension[], private readonly host: ExtensionHost) {}
+  readonly extensions: SessionExtension[] = [];
+  readonly #taken: Set<string>;
+  #started = false;
 
-  /** Loads `sources` for one session. A source that fails is left out, and logged. */
-  static async open(sources: readonly LoadedSource[], host: ExtensionHost): Promise<SessionExtensions> {
+  /** `taken`: the session's own tool names. */
+  constructor(private readonly host: ExtensionHost, taken: Iterable<string> = []) {
+    this.#taken = new Set(taken);
+  }
+
+  get(source: string): SessionExtension | undefined { return this.extensions.find(item => item.source === source); }
+
+  /**
+   * Opens those of `sources` the session hasn't opened yet, in order, and returns them; once the session started, each
+   * gets `session_start`. A source that fails is left out, and logged.
+   */
+  async ensure(sources: readonly LoadedSource[]): Promise<SessionExtension[]> {
     const { loadExtensions } = await piLoader();
-    const extensions: SessionExtension[] = [];
+    const opened: SessionExtension[] = [];
     for (const loaded of sources) {
       const source = loaded.summary.source;
+      if (this.get(source) || loaded.summary.error) continue;
       try {
         const runtime = createExtensionRuntime();
-        const result = await loadExtensions(loaded.files, host.directory, createEventBus(), runtime);
-        for (const error of result.errors) host.warn(source, error.error);
-        const runner = new ExtensionRunner(result.extensions, runtime, host.directory, SessionManager.inMemory(host.directory), host.modelRegistry);
-        runner.bindCore(noActions(runner, message => host.warn(source, message)), contextActions(host));
-        runner.onError(error => host.warn(source, `${error.event}: ${error.error}`));
-        const allowed = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
-        extensions.push(build(source, loaded.summary.dev, runner, allowed, host));
+        const result = await loadExtensions(loaded.files, this.host.directory, createEventBus(), runtime);
+        for (const error of result.errors) this.host.warn(source, error.error);
+        const runner = new ExtensionRunner(result.extensions, runtime, this.host.directory, SessionManager.inMemory(this.host.directory),
+          this.host.modelRegistry ?? (undefined as never));
+        runner.bindCore(noActions(runner, message => this.host.warn(source, message)), contextActions(this.host));
+        runner.onError(error => this.host.warn(source, `${error.event}: ${error.error}`));
+        const allowed = new Set<string>();
+        for (const name of loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name))) {
+          if (this.#taken.has(name)) { this.host.warn(source, `tool ${name} is left out: the session already has a tool named so`); continue; }
+          allowed.add(name);
+          this.#taken.add(name);
+        }
+        const extension = build(source, loaded.summary.dev, runner, allowed, this.host);
+        this.extensions.push(extension);
+        opened.push(extension);
       } catch (error) {
-        host.warn(source, `didn't load: ${describe(error)}`);
+        this.host.warn(source, `didn't load: ${describe(error)}`);
       }
     }
-    return new SessionExtensions(extensions, host);
+    if (this.#started) for (const extension of opened) await this.one(extension, "session_start", runner => runner.emit({ type: "session_start", reason: "startup" }));
+    return opened;
+  }
+
+  private async one(extension: SessionExtension, event: string, work: (runner: ExtensionRunner, source: string) => Promise<unknown>): Promise<void> {
+    if (!(await applyState(this.host, extension.source, extension.runner))) return;
+    try { await withTimeout(() => work(extension.runner, extension.source), this.host.hookTimeoutMs, `${event}`); }
+    catch (error) { this.host.warn(extension.source, `${event}: ${describe(error)}`); }
   }
 
   /** Runs `event` on every source that applies; one that fails or times out is logged. */
   private async each(event: string, work: (runner: ExtensionRunner, source: string) => Promise<unknown>): Promise<void> {
-    for (const extension of this.extensions) {
-      if (!(await applyState(this.host, extension.source, extension.runner))) continue;
-      try { await withTimeout(() => work(extension.runner, extension.source), this.host.hookTimeoutMs, `${event}`); }
-      catch (error) { this.host.warn(extension.source, `${event}: ${describe(error)}`); }
-    }
+    for (const extension of this.extensions) await this.one(extension, event, work);
   }
 
-  sessionStart(): Promise<void> { return this.each("session_start", runner => runner.emit({ type: "session_start", reason: "startup" })); }
+  sessionStart(): Promise<void> {
+    this.#started = true;
+    return this.each("session_start", runner => runner.emit({ type: "session_start", reason: "startup" }));
+  }
 
   /** At a message's start: `agent_start`, then `before_agent_start` with its prompt; returns what each source adds to the system prompt. */
   async beforeAgentStart(prompt: string, images: ImageContent[] | undefined): Promise<Record<string, string>> {
@@ -197,7 +229,7 @@ function build(source: string, dev: boolean, runner: ExtensionRunner, allowed: S
     ...(definition.prepareArguments ? { prepareArguments: definition.prepareArguments } : {}),
     execute: async (args, api, call) => {
       if (!(await active())) throw new Error(`This extension (${source}) no longer applies to this session; ${definition.name} didn't run.`);
-      return host.runTool({ source, tool: definition.name, arguments: args as Record<string, unknown>, api, signal: call.abortSignal ?? new AbortController().signal },
+      return host.runTool({ source, tool: definition.name, arguments: args as Record<string, unknown>, api, signal: call.abortSignal ?? new AbortController().signal, context: call },
         async signal => toResult(await definition.execute(api.callId, args, signal, undefined, runner.createToolContext(api.callId, signal))));
     },
   }));

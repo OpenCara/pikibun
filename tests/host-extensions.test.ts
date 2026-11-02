@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createRegistry, defineExtension, Harness, MemoryStorage, ToolResultEntry, type ToolExecutionResult } from "@earendil-works/pi-durable";
 import { addedPrompt, ExtensionPrompts, SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
+import { HostExtensions } from "../apps/runner/src/extensions/host.js";
+import { RunnerService } from "../apps/runner/src/server.js";
+import { sha256 } from "../packages/shared/src/crypto.js";
+import type { ApprovalRecord, RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { extensionAvailability, extensionPackageKey, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
@@ -140,7 +146,8 @@ async function session(t: test.TestContext, source: string, root: string, option
     runTool: async (call, execute): Promise<ToolExecutionResult> => { ran.push(`${call.tool} ${JSON.stringify(call.arguments)}`); return execute(call.signal); },
     hookTimeoutMs: 2000, warn: (_source, message) => { warnings.push(message); },
   };
-  const extensions = await SessionExtensions.open(loaded, host);
+  const extensions = new SessionExtensions(host, ["bash", "read_file"]);
+  await extensions.ensure(loaded);
   t.after(() => extensions.shutdown());
   const prompts: string[] = [];
   const faux = fauxProvider({ models: [{ id: "faux-1", name: "faux" }] });
@@ -230,4 +237,128 @@ test("an extension's handler that fails is skipped, except a tool_call guard, wh
   assert.match(JSON.stringify(await s.answer("go")), /guard broke/);
   assert.deepEqual(s.ran, []);
   assert.ok(s.warnings.some(warning => /prompt broke/.test(warning)));
+});
+
+test("a host carries out the installs its owner asks for in Pikibun, unless it refuses them, and caches each workspace's choice", async t => {
+  const { store } = await storeWith(t, {
+    "pi-a": { "package.json": JSON.stringify({ name: "pi-a", version: "1.0.0", pi: { extensions: ["./index.js"] } }), "index.js": "export default function () {}" },
+  });
+  const host = new HostExtensions(store, { remoteInstalls: true });
+  await host.load();
+  assert.deepEqual(host.report(), { installed: [], remoteInstalls: true });
+  assert.deepEqual(await host.apply([{ id: "r1", action: "install", source: "npm:pi-a@1.0.0" }, { id: "r2", action: "install", source: "npm:missing@1.0.0" }]),
+    [{ id: "r1", ok: true }, { id: "r2", ok: false, error: "no package missing" }]);
+  assert.deepEqual(host.report().installed.map(item => item.source), ["npm:pi-a@1.0.0"]);
+  assert.deepEqual(await host.apply([{ id: "r3", action: "install", source: "npm:pi-a@1.0.0" }]), [{ id: "r3", ok: true }], "already installed is done");
+  assert.deepEqual(await host.apply([{ id: "r4", action: "remove", source: "npm:pi-a@1.0.0" }, { id: "r5", action: "remove", source: "npm:pi-a@1.0.0" }]),
+    [{ id: "r4", ok: true }, { id: "r5", ok: true }]);
+  assert.deepEqual(host.report().installed, []);
+  const refusing = new HostExtensions(store, { remoteInstalls: false });
+  assert.match((await refusing.apply([{ id: "r6", action: "install", source: "npm:pi-a@1.0.0" }]))[0]!.error!, /--no-remote-installs/);
+
+  let now = 0;
+  let answer: unknown = { extensions: [{ source: "npm:pi-a@1.0.0" }], automaticTools: false };
+  let asked = 0;
+  const cached = new HostExtensions(store, { remoteInstalls: true, now: () => now });
+  const fetch = async () => { asked++; if (answer instanceof Error) throw answer; return answer; };
+  assert.equal((await cached.workspace("w", fetch)).extensions[0]!.source, "npm:pi-a@1.0.0");
+  now = 29_000;
+  await cached.workspace("w", fetch);
+  assert.equal(asked, 1, "asked again only after 30 seconds");
+  answer = new Error("offline");
+  now = 31_000;
+  assert.equal((await cached.workspace("w", fetch)).extensions.length, 1, "a brief outage keeps the last answer");
+  now = 6 * 60_000;
+  assert.deepEqual(await cached.workspace("w", fetch), { extensions: [], automaticTools: false }, "a long one runs without extensions");
+});
+
+test("an extension's tool waits for the host owner's decision, never runs in a Read-only message, and runs at once where the workspace and host allow it", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+  const root = await realpath(await directory(t));
+  await writeFile(join(root, "shout.ts"), `import { Type } from "typebox";
+    export default function (pi) {
+      pi.registerTool({ name: "shout", label: "Shout", description: "Shout text.", parameters: Type.Object({ text: Type.String() }),
+        async execute(_id, params) { return { content: [{ type: "text", text: params.text.toUpperCase() + "!" }], details: undefined }; } });
+    }`);
+  const store = new ExtensionStore(join(root, "state"));
+  await store.add(parseExtensionSource(join(root, "shout.ts")));
+  const [dev] = await loadInstalled(store);
+  // The same code, as an npm extension the workspace chose.
+  const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
+  let answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  const respond: FauxResponseFactory = async request => {
+    faux.appendResponses([respond]);
+    const last = request.messages.findLast(message => message.role !== "system");
+    if (last?.role === "toolResult") return fauxAssistantMessage(`done: ${last.content.map(part => part.type === "text" ? part.text : "").join("")}`);
+    return fauxAssistantMessage(fauxToolCall("shout", { text: typeof last?.content === "string" ? last.content : "" }), { stopReason: "toolUse" });
+  };
+  faux.setResponses([respond]);
+  const models = createModels(); models.setProvider(faux.provider);
+  const target: RunnerBinding = {
+    session: { id: "extension-session", workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Extensions", policyVersion: 1, status: "ready",
+      createdAt: "2026-01-01T00:00:00Z", repositories: [], repositoryMode: "clone", connectorId: "host-connector", connectorOwnerId: "test:bob" },
+    owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice", gitEmail: "alice@example.test", env: {}, githubConnected: false },
+    agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["read_file"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId: "faux-1", connectorId: "host-connector", connectorOwnerId: "test:bob" },
+  };
+  const service = new RunnerService({
+    dataDir: join(root, "runner"), sharedSecret: "extension-test-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787",
+    connectorId: "host-connector", allowFaux: true, unsandboxed: true,
+    authorize: async input => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => installed, workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const claims = async (action: RunnerAction, actorId = "test:alice", body = "") => {
+    const now = Math.floor(Date.now() / 1000);
+    return { aud: "runner" as const, sessionId: target.session.id, actorId, ownerId: "test:alice", action, policyVersion: 1, iat: now, exp: now + 60,
+      jti: randomUUID(), bodyHash: await sha256(body), connectorId: "host-connector" };
+  };
+  const session = await service.provision(target, await claims("create"));
+  const send = async (content: string, access: "read" | "approval" | "auto") =>
+    session.submit(await claims("submit"), { content, requestId: content, admissionId: await sha256(content), options: { access } }, "write");
+  const idle = async () => {
+    for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
+  };
+  const results = async () => (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
+
+  await send("hello", "approval");
+  let card: ApprovalRecord | undefined;
+  for (let count = 0; count < 500 && !card; count++) { card = (await session.view()).approvals.find(item => item.status === "pending"); await delay(20); }
+  assert.deepEqual(card!.operation, { kind: "extension.tool", source: "npm:shout@1.0.0", tool: "shout", arguments: '{"text":"hello"}',
+    digest: createHash("sha256").update('{"text":"hello"}').digest("hex") });
+  // Decided like a host command: the session's owner can't, the host's owner can.
+  await assert.rejects(session.decide(await claims("approve"), card!.id, { decision: "approve", operation: card!.operation }), /host owner/);
+  await session.decide(await claims("approve", "test:bob"), card!.id, { decision: "approve", operation: card!.operation });
+  await idle();
+  const decided = (await session.view()).approvals.find(item => item.id === card!.id)!;
+  assert.deepEqual([decided.status, decided.decidedBy, decided.result], ["executed", "test:bob", "HELLO!"]);
+  assert.match((await results()).at(-1)!, /HELLO!/);
+
+  await send("quietly", "read");
+  await idle();
+  assert.match((await results()).at(-1)!, /Read-only message doesn't run it/);
+
+  // The workspace runs its tools automatically, but the host's owner hasn't allowed that: still a card.
+  answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0", tools: "automatic" }]), automaticTools: false };
+  await send("again", "approval");
+  card = undefined;
+  for (let count = 0; count < 500 && !card; count++) { card = (await session.view()).approvals.find(item => item.status === "pending"); await delay(20); }
+  await session.decide(await claims("approve", "test:bob"), card!.id, { decision: "deny", operation: card!.operation });
+  await idle();
+  assert.match((await results()).at(-1)!, /wasn't approved/);
+
+  answer = { ...answer, automaticTools: true };
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await send("now", "approval");
+  await idle();
+  const automatic = (await session.view()).approvals.at(-1)!;
+  assert.deepEqual([automatic.status, automatic.automatic, automatic.result], ["executed", true, "NOW!"]);
+
+  // Turned off: its tool is no longer offered.
+  answer = { extensions: [], automaticTools: true };
+  await send("gone", "approval");
+  await idle();
+  assert.doesNotMatch((await results()).at(-1)!, /GONE!/);
 });

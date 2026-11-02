@@ -85,8 +85,12 @@ side and a new one loads without restarting the connector (Node caches modules b
 installs no peer dependencies (the loader provides `pi-coding-agent`, `pi-ai`, `pi-tui` and `typebox`, as Pi does), and
 fetches no Git dependencies of the extension's own; `package-lock.json` keeps the integrity of what was installed.
 
-From Pikibun, the host's owner's **Install** goes `POST /api/connectors/:id/extensions` → the connector, which installs,
-reloads the extensions it reports and answers with the outcome. `pikibun connect --no-remote-installs` refuses them.
+From Pikibun, the host's owner's **Install** (or **Update**, **Remove**) is recorded as a request for the host. The
+connector syncs every 30 seconds (`POST /api/connectors/self/extensions`): it reports what is installed and how its last
+requests went, and the answer lists the requests still to carry out, which it does at once and reports again. So nothing
+reaches the host over its connection but its own sync, and a request made while it is offline waits for it.
+`pikibun connect --no-remote-installs` refuses them; installs made with `pikibun extensions` meanwhile are picked up at
+the next sync.
 The connector already takes the control plane's word on who approved a host command, so an install the host's owner
 starts in Pikibun asks for the same trust; it is recorded in the audit log.
 
@@ -107,12 +111,13 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
   (`npm:<name>` or `git:<url>`, unique per workspace), enabled, tools mode, settings JSON, who changed it and when.
 - `connectors.extensions_json`: what the connector last reported (installed sources and their loaded extensions).
 - `connector_configs.extension_tools_automatic`: the host owner's switch.
-- Connector → control plane: `POST /api/connectors/self/extensions` reports what is installed (on connect and after each
-  change); `POST /api/connectors/self/extensions/workspace` returns one workspace's enabled extensions, asked at most
-  every 30 seconds per workspace, so changes reach running sessions from their next message.
+- `connector_extension_requests`: the host owner's install and remove requests, with their outcome once reported.
+- Connector → control plane: `POST /api/connectors/self/extensions` (ExtensionsSync: the report and request results;
+  the answer lists pending requests), on connect and every 30 seconds; `POST /api/connectors/self/extensions/workspace`
+  (WorkspaceExtensionsAnswer: one workspace's extensions and the host owner's switch), asked at most every 30 seconds
+  per workspace, so changes reach running sessions from their next message.
 - Apps → control plane: `GET`/`PUT`/`DELETE /api/workspaces/:id/extensions…` (owners and admins write),
   `POST`/`DELETE /api/connectors/:id/extensions` (host owner), the host config switch.
-- Control plane → connector: install and remove, as host operations over its connection.
 
 ## In the runner
 
@@ -130,8 +135,8 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 
 | Part | State |
 |---|---|
-| Install store, loader and adapter through Pi's loader, `pikibun extensions` | In progress |
-| Sessions: selection, `before_agent_start`, lifecycle events, `extension.tool` cards | Next |
+| Install store, loader and adapter through Pi's loader, `pikibun extensions` | Done |
+| Sessions: selection, `before_agent_start`, lifecycle events, `extension.tool` cards; connector sync and installs | Done (`session.ts`, `extensions/host.ts`, `connector.ts`) |
 | Control plane: tables, routes, owner/admin rules, connector reports, remote installs, audit | Next |
 | Web and mobile: workspace and host sections, install buttons, session list, approval card | Next |
 

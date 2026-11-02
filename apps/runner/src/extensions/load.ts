@@ -98,7 +98,7 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 
 /**
  * What one source's Pi extensions offer Pikibun, from what loading them registered. A tool named like one of Pikibun's
- * own, or like one an earlier source offers (`taken`), is ignored.
+ * own (not a retired one), or like one an earlier module of the source offers (`taken`), is ignored.
  */
 export function summarizeModules(root: string, files: string[], result: LoadExtensionsResult, taken: Set<string>): ExtensionModuleSummary[] {
   const modules: ExtensionModuleSummary[] = [];
@@ -118,7 +118,7 @@ export function summarizeModules(root: string, files: string[], result: LoadExte
     const ignored: string[] = [];
     for (const [name, tool] of extension.tools) {
       if ((toolNames as readonly string[]).includes(name) && !(retiredToolNames as readonly string[]).includes(name)) { ignored.push(`tool ${name} (one of Pikibun's own)`); continue; }
-      if (taken.has(name)) { ignored.push(`tool ${name} (another extension's)`); continue; }
+      if (taken.has(name)) { ignored.push(`tool ${name} (another module's)`); continue; }
       if (tools.length >= extensionLimits.toolsPerModule) { ignored.push(`tool ${name} (too many tools)`); continue; }
       taken.add(name);
       tools.push({ name, description: String(tool.definition.description ?? "").slice(0, extensionLimits.toolDescription) });
@@ -152,7 +152,6 @@ export async function loadInstalled(store: ExtensionStore): Promise<LoadedSource
   }
   const { loadExtensions } = await piLoader();
   const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
-  const taken = new Set<string>();
   try {
     for (const source of installed) {
       const dev = source.source.startsWith("local:");
@@ -169,7 +168,8 @@ export async function loadInstalled(store: ExtensionStore): Promise<LoadedSource
         } else if (await isFile(location) && ENTRY.test(location)) files = [location];
         else throw new Error(`${location} is not an extension file or package`);
         const result = await loadExtensions(files, cwd, undefined, createExtensionRuntime());
-        summary.modules = summarizeModules(root, files, result, taken);
+        // Tools of different sources may share a name: a session that runs both keeps the first (SessionExtensions).
+        summary.modules = summarizeModules(root, files, result, new Set());
       } catch (error) {
         summary.error = message(error);
       }

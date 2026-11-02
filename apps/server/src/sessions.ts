@@ -408,7 +408,7 @@ function sessionVisibility(value: unknown): 'private' | 'workspace' {
 async function requireDecider(c: AppContext, sessionId: string, operation?: Operation): Promise<SessionRow> {
   const { row, permissions: held } = await requireSession(c, sessionId, 'read');
   if (!hasPermission(held, 'approve')) {
-    const hostCommand = operation === undefined || operation.kind === 'host.bash';
+    const hostCommand = operation === undefined || operation.kind === 'host.bash' || operation.kind === 'extension.tool';
     if (!hostCommand || !await hostOwnerDecides(c.env, row, c.get('auth').userId)) fail(403, 'forbidden', 'Session approve permission is required.');
   }
   await requireActiveSession(c.env, row);
@@ -690,6 +690,7 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
     const hostSession = hostCommandSession(row);
     if (decidedAsHostCommand(operation, hostSession, approval.unbounded === true) && (!row.connector_id || !await mayDecideHostCommands(c.env, row, c.get('auth').userId))) {
       fail(403, 'host_owner_required', operation.kind === 'host.bash' ? 'Only the host owner, or a member granted host commands on this host, can decide host commands.'
+        : operation.kind === 'extension.tool' ? 'An extension\'s tool runs on the host, outside the sandbox: only the host owner, or a member granted host commands on this host, decides it.'
         : hostSession.hostEnvironment ? 'This session runs directly on its host: only the host owner, or a member granted host commands on this host, decides its commands.'
         : 'This command runs without the resource limits its host lacks: only the host owner, or a member granted host commands on this host, decides it.');
     }

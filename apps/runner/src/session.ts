@@ -1,21 +1,25 @@
-import type { HostCommandOperation } from "../../../packages/shared/src/types.js";
-import { randomBytes, randomUUID } from "node:crypto";
+import type { ExtensionToolOperation, HostCommandOperation } from "../../../packages/shared/src/types.js";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { awaitWithContext, BACKGROUND_CONTEXT as context, type Context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, StringEnum, Type, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
-import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Storage, type SubmissionId, type ToolExecutionApi, type ToolRegistration } from "@earendil-works/pi-durable";
+import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, PermissionNeed, PermissionRequest, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, HostCommandLevel, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, ToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
-import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
+import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../../../packages/shared/src/cron.js";
 import { crossSessionLimits, sessionsToolActions, sessionsToolTarget, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import type { CompactionFailure } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
+import { sessionExtensions, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { ExtensionPrompts, SessionExtensions, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
+import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { ATTACHMENTS_DIRECTORY, fileUploadLimits, parseUploadChunk, type UploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
@@ -169,6 +173,13 @@ function tellsActivity(run: Run): boolean {
 }
 
 /** Whether `run` keeps the session busy: it is queued or at work, or a stop of it is still ending its work. */
+/**
+ * Whether the tool call waiting on `approval` goes on: once it settled, or, for an extension's tool call, which runs it
+ * itself, once it is approved.
+ */
+function answered(approval: ApprovalRecord): boolean {
+  return settled(approval) || (approval.operation.kind === "extension.tool" && approval.status === "approved");
+}
 function holdsQueue(run: Run): boolean {
   return ["queued", "running", "admitting"].includes(run.status) || run.stopped?.pending === true;
 }
@@ -259,6 +270,15 @@ export type RunnerConfig = {
    * each shell command: its time limit and GPU. Without it, the defaults.
    */
   hostConfig?: () => Promise<HostConfig>;
+  /**
+   * The host's extensions and the workspace's choice of them (docs/design/host-extensions.md); without it, sessions run
+   * none. `workspace` is asked often: the connector caches its answers.
+   */
+  extensions?: {
+    installed(): readonly LoadedSource[];
+    workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>;
+    modelRegistry?: ModelRegistry;
+  };
 };
 
 /** How long the relay's word that a session's owner may read a repository lets the session borrow from its mirror. */
@@ -339,6 +359,10 @@ export class RunnerSession {
   #shared!: Conversation;
   /** The session's tools as one extension, for a shared conversation started afresh (see `revert`). */
   #extension!: Extension;
+  /** The harness's registry, where the session's extensions are installed as it first runs with each. */
+  #registry?: Registry;
+  /** The session's Pi extensions (docs/design/host-extensions.md), where the host has any. */
+  #hostExtensions?: SessionExtensions;
   private tools: ToolRegistration[] = [];
   private lock: Promise<unknown> = Promise.resolve();
   private generation = 0;
@@ -945,6 +969,12 @@ export class RunnerSession {
     const extension = defineExtension({ name: "workspace-tools", tools: this.tools });
     this.#extension = extension;
     registry.install(extension);
+    this.#registry = registry;
+    if (this.config.extensions && !this.#packed) {
+      this.#hostExtensions = new SessionExtensions(this.extensionHost(), this.tools.map(tool => tool.name));
+      // Installed before the harness opens, so a call of an extension's tool it resumes finds its tool.
+      await this.chosenExtensions().catch(() => []);
+    }
     const resolved = this.config.resolveModels ? await this.config.resolveModels(this.binding.model)
       : { models: runnerModels(this.binding.model, this.config.allowFaux), provider: this.binding.model.provider, modelId: this.binding.model.modelId };
     this.modelRef = { provider: resolved.provider, modelId: resolved.modelId };
@@ -1000,6 +1030,7 @@ export class RunnerSession {
     this.#shared = await this.sharedConversation();
     this.closing = false;
     this.#opened = true;
+    void this.#hostExtensions?.sessionStart().catch(() => {});
     // Recovered and queued work waits for repositories prepared in the background: their preparation resumes it once
     // they are ready, and a failure leaves it all suspended, harness included, until the session restarts. Nothing
     // resumes in a read-only session.
@@ -1045,7 +1076,7 @@ export class RunnerSession {
           await this.endLostInputs(run.key);
           continue;
         }
-        await this.applyOptions(conversation, run);
+        await this.applyOptions(conversation, run, content);
         submission = await conversation.submit({ type: "input", content, requestId: run.key }, context);
       } else submission = await this.harness.submission(run.submissionId as SubmissionId, context);
       if (submission) {
@@ -1143,7 +1174,7 @@ export class RunnerSession {
     if (committed && this.#approvalWaiters.size) {
       for (const [id, waiter] of this.#approvalWaiters) {
         const approval = committed.approvals[id];
-        if (!approval || !settled(approval)) continue;
+        if (!approval || !answered(approval)) continue;
         this.#approvalWaiters.delete(id);
         waiter.resolve(approval);
       }
@@ -1163,7 +1194,7 @@ export class RunnerSession {
   private async awaitCard(id: string, waiting: Context, deadline: number): Promise<ApprovalRecord> {
     const waiter = this.waiter(id);
     const current = (await this.metadata()).approvals[id];
-    if (current && settled(current)) {
+    if (current && answered(current)) {
       this.#approvalWaiters.delete(id);
       return current;
     }
@@ -1185,7 +1216,7 @@ export class RunnerSession {
 
   /** What an operation a tool call requested came to: the call waits until it is decided and has run. */
   private async operationOutcome(approval: ApprovalRecord, waiting: Context): Promise<ApprovalRecord> {
-    if (settled(approval)) {
+    if (answered(approval)) {
       this.#approvalWaiters.delete(approval.id);
       return this.whole(approval);
     }
@@ -1277,6 +1308,7 @@ export class RunnerSession {
       const settled = await submission.wait(context);
       // Placement is not completion: serialize through the last model/tool task.
       if (generation !== this.generation || this.closing) return;
+      void this.#hostExtensions?.agentEnd([], settled.status !== "done").catch(() => {});
       const state = await this.metadata();
       const conversation = await harness.conversation(state.runs[key]!.conversationId as ConversationId, context);
       await conversation?.waitForIdle(context);
@@ -1329,7 +1361,7 @@ export class RunnerSession {
           meta.runs[run.key]!.started = true;
           meta.runs[run.key]!.startEntry = transcript.entries.at(-1)?.id ?? 0;
         });
-        await this.applyOptions(conversation, run);
+        await this.applyOptions(conversation, run, content);
         const submission = await conversation.submit({ type: "input", content, requestId: run.key }, context);
         await this.mutate(meta => {
           meta.runs[run.key]!.submissionId = submission.id;
@@ -1344,21 +1376,111 @@ export class RunnerSession {
       .finally(() => { this.draining = false; });
   }
 
-  /** Applies a run's model, reasoning and access before its input is admitted; the conversation is idle here. */
-  private async applyOptions(conversation: Conversation, run: Run): Promise<void> {
+  /**
+   * Applies a run's model, reasoning and access before its input is admitted; the conversation is idle here. A shared
+   * run also states its extensions: those that apply to the session now, with their tools, and what their
+   * `before_agent_start` handlers add to the system prompt for `content`.
+   */
+  private async applyOptions(conversation: Conversation, run: Run, content?: string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]): Promise<void> {
     const options = run.options ?? {};
     const access = options.access ?? "approval";
+    const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     const change: AgentChange = {
       ...(options.model ? { model: { provider: options.model.provider, modelId: options.model.modelId } } : {}),
       ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       // Every shared run states its toolset and instructions, so a read-only request never leaks into the next one. All
       // tools are offered: a call the session doesn't allow asks the owner instead of failing.
       ...(run.mode === "write" ? {
-        tools: this.tools,
+        tools: [...this.tools, ...extensions.flatMap(extension => extension.tools)],
+        extensions: [this.#extension, ...extensions.map(extension => extension.extension)],
         instructions: this.agentInstructions(access === "read" ? "read" : "write"),
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
+    if (run.mode !== "write" || !this.#hostExtensions?.extensions.length) return;
+    const text = typeof content === "string" ? content : (content ?? []).flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
+    const images = typeof content === "string" ? [] : (content ?? []).flatMap(part => part.type === "image" ? [{ type: "image" as const, data: part.data, mimeType: part.mimeType }] : []);
+    const prompts = extensions.length ? await this.#hostExtensions.beforeAgentStart(text, images.length ? images : undefined).catch(() => ({})) : {};
+    await conversation.commit(async tx => { (await tx.doc(ExtensionPrompts, conversation.id)).prompts = prompts; }, context);
+  }
+
+  /**
+   * The workspace's extensions this session runs with now (docs/design/host-extensions.md): its enabled ones the host
+   * has at that version, then, in the host owner's own sessions, the host's dev extensions.
+   */
+  private async extensionChoice(): Promise<{ chosen: ReturnType<typeof sessionExtensions>; automaticTools: boolean }> {
+    const config = this.config.extensions;
+    if (!config) return { chosen: [], automaticTools: false };
+    const answer = await config.workspace(this.binding.session.workspaceId).catch(() => ({ extensions: [], automaticTools: false }));
+    return { chosen: sessionExtensions(answer.extensions, config.installed().map(item => item.summary),
+      { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }), automaticTools: answer.automaticTools };
+  }
+
+  /** The extensions this session runs with now, opened (and installed in the registry) as it first runs with each. */
+  private async chosenExtensions(): Promise<SessionExtension[]> {
+    const host = this.#hostExtensions;
+    const config = this.config.extensions;
+    if (!host || !config) return [];
+    const { chosen } = await this.extensionChoice();
+    const installed = config.installed();
+    const loaded = chosen.flatMap(item => installed.filter(candidate => candidate.summary.source === item.source));
+    for (const opened of await host.ensure(loaded)) this.#registry?.install(opened.extension);
+    return chosen.flatMap(item => host.get(item.source) ?? []);
+  }
+
+  /** What the session gives its extensions: its worktree, their state and settings, and the gate of their tool calls. */
+  private extensionHost(): ExtensionHost {
+    return {
+      directory: this.sandbox.worktree,
+      ...(this.config.extensions?.modelRegistry ? { modelRegistry: this.config.extensions.modelRegistry } : {}),
+      model: () => this.modelRef && this.config.extensions?.modelRegistry?.find(this.modelRef.provider, this.modelRef.modelId) as never,
+      state: async source => {
+        const item = (await this.extensionChoice()).chosen.find(candidate => candidate.source === source);
+        return { active: !!item, settings: item?.workspace?.settings ?? {} };
+      },
+      runTool: (call, execute) => this.runExtensionTool(call, execute),
+      hookTimeoutMs: 30_000,
+      warn: (source, message) => { process.stderr.write(`Session ${this.binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
+    };
+  }
+
+  /**
+   * One call of an extension's tool. It runs in the connector, outside the sandbox, so it is decided like a host command
+   * (an `extension.tool` card), unless the workspace runs the extension's tools automatically and the host's owner lets
+   * workspaces do that; never in a Read-only message. It stops at the host's command time limit.
+   */
+  private async runExtensionTool(call: Parameters<ExtensionHost["runTool"]>[0], execute: Parameters<ExtensionHost["runTool"]>[1]): Promise<ToolExecutionResult> {
+    const attribution = await this.toolActor(call.api, true);
+    const state = await this.metadata();
+    const run = state.runs[state.toolActors[String(call.api.taskId)]!.runKey]!;
+    if (run.options?.access === "read") {
+      throw new RunnerError(403, `${call.tool} comes from an extension, which runs outside the sandbox: a Read-only message doesn't run it. Nothing ran.`);
+    }
+    const { chosen, automaticTools } = await this.extensionChoice();
+    const item = chosen.find(candidate => candidate.source === call.source);
+    if (!item) throw new RunnerError(403, `This extension (${call.source}) no longer applies to this session; ${call.tool} didn't run.`);
+    const json = JSON.stringify(call.arguments);
+    const operation: ExtensionToolOperation = { kind: "extension.tool", source: call.source, tool: call.tool,
+      arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
+      digest: createHash("sha256").update(json).digest("hex") };
+    let approval = await this.createApproval(attribution.initiatedBy, operation, String(call.api.taskId),
+      { permitted: true, automatic: item.workspace?.tools === "automatic" && automaticTools });
+    if (approval.status === "pending") approval = await this.operationOutcome(approval, call.context);
+    if (approval.status === "denied") throw new RunnerError(403, `${call.tool} wasn't approved. Nothing ran.`);
+    if (approval.status !== "approved" && approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
+    const id = approval.id;
+    await this.mutate(meta => { const card = meta.approvals[id]; if (card?.status === "approved") card.status = "executing"; });
+    await this.recheckTool(attribution);
+    const limits = commandLimits((await this.hostConfig()).commandTimeoutSeconds);
+    try {
+      const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
+      const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
+      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: this.kept(id, shown || "(no output)") }); });
+      return result;
+    } catch (error) {
+      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
+      throw error;
+    }
   }
 
   /** Validates per-message choices against this host's models and the actor's rights. */
@@ -2176,7 +2298,11 @@ export class RunnerSession {
    * resource limits this host lacks, as the host's owner allowed in their own session, or on the strength of a host
    * command grant in a member's (see grantedShell).
    */
-  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
+  /**
+   * `consent.automatic`: an extension's tool call that runs without approval, as its workspace set it and its host's
+   * owner allows (see runExtensionTool).
+   */
+  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
     this.requireUnfrozen();
     const operation = validateOperation(input);
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");
@@ -2185,16 +2311,18 @@ export class RunnerSession {
       throw new RunnerError(400, "Commit and switch branches with git in bash; a push names a clone's directory");
     }
     this.requireShellCapability(operation, consent.unbounded);
-    if (operation.kind === "host.bash" && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
+    if ((operation.kind === "host.bash" || operation.kind === "extension.tool") && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
       throw new RunnerError(403, "Host commands require a connected host with a known owner");
     }
+    // Only the session's own extension tools ask for these, each from its call.
+    if (operation.kind === "extension.tool" && (!consent.permitted || toolTaskId === undefined)) throw new RunnerError(400, "Extension tool calls come only from their tools");
     if (operation.kind === "git.push" && !this.#clone) throw new RunnerError(400, "Only clone sessions push a clone's directory");
     // On a host without the sandbox the agent pushes with the host's own Git: an approved push would only fail.
     if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with git in bash");
-    const toolName = ({ "git.commit": "git_commit", bash: "bash", "github.comment": "github_comment", "github.merge": "github_merge", "github.issue": "github_issue", "git.push": "git_push", "git.repin": "git_repin", "host.bash": "host_bash" } as const)[operation.kind];
+    const toolName = operation.kind === "extension.tool" ? undefined : ({ "git.commit": "git_commit", bash: "bash", "github.comment": "github_comment", "github.merge": "github_merge", "github.issue": "github_issue", "git.push": "git_push", "git.repin": "git_repin", "host.bash": "host_bash" } as const)[operation.kind];
     // Host commands never take a session grant (see `permit`), so a session-wide one left from before doesn't enable them.
-    if (!consent.permitted && !this.binding.agent.tools.includes(toolName)
-      && !(toolName !== "host_bash" && (await this.metadata()).grants?.tools.includes(toolName))) {
+    if (!consent.permitted && (toolName === undefined || (!this.binding.agent.tools.includes(toolName)
+      && !(toolName !== "host_bash" && (await this.metadata()).grants?.tools.includes(toolName))))) {
       throw new RunnerError(403, "Operation not enabled by pinned agent version");
     }
     await this.authorize(actorId, "write");
@@ -2217,7 +2345,7 @@ export class RunnerSession {
       // A tool the owner allowed for the rest of the session runs their calls of it as Auto-approve would; host commands
       // never take a session grant, so each one still asks unless the owner holds automatic host commands on this host.
       const github = operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
-      const sessionGranted = operation.kind !== "host.bash" && !github && state.grants?.tools.includes(toolName) === true;
+      const sessionGranted = toolName !== undefined && operation.kind !== "host.bash" && !github && state.grants?.tools.includes(toolName) === true;
       automatic = (run.options?.access === "auto" || sessionGranted) && run.initiatedBy === this.binding.owner.id
         && (!github || (admissionId !== undefined && (operation.kind !== "github.merge" || run.options?.autoMerge === true)))
         && (operation.kind !== "git.push" || admissionId !== undefined)
@@ -2226,6 +2354,8 @@ export class RunnerSession {
         // commands on this host.
         && (!decidedAsHostCommand(operation, this.hostCommandSession(), consent.unbounded === true)
           || await this.hostCommandLevel(this.binding.owner.id, "write") === "auto");
+      // An extension's tools the workspace runs automatically, where the host's owner lets it, run for every message.
+      if (operation.kind === "extension.tool" && consent.automatic === true) automatic = true;
       // Another member's sandboxed command, push, or GitHub comment or issue (requesterAutoApproves) runs without asking
       // while the session's owner auto-approves their requests, as the control plane reports it now; its brokers check
       // that again, with the message's admission, before a push or GitHub effect.
@@ -2258,6 +2388,8 @@ export class RunnerSession {
     const operation = approval.operation;
     let status: ApprovalRecord["status"];
     let result: string;
+    // Its tool call runs it (runExtensionTool), with the call's own signal and output.
+    if (operation.kind === "extension.tool") return approval;
     if (operation.kind === "host.bash") {
       await this.startHostOperation(id, operation, { actorId, admissionId: approval.admissionId }, async () => { await this.authorize(actorId, "write"); });
       return (await this.metadata()).approvals[id]!;
@@ -2320,7 +2452,7 @@ export class RunnerSession {
    */
   private decisionPermission(actorId: string, operation: Pick<Operation, "kind"> | undefined): Permission {
     const hostOwner = this.binding.session.connectorOwnerId;
-    return operation?.kind === "host.bash" && !!hostOwner && actorId === hostOwner ? "read" : "approve";
+    return (operation?.kind === "host.bash" || operation?.kind === "extension.tool") && !!hostOwner && actorId === hostOwner ? "read" : "approve";
   }
 
   /** `scope` applies to permission requests: allow the one call (default), or the same need for the rest of the session. */
@@ -2381,6 +2513,12 @@ export class RunnerSession {
       }
       if (input.decision === "deny") {
         await this.mutate(meta => { record(meta, { status: "denied", decidedBy: ticket.actorId }); });
+        return (await this.metadata()).approvals[id]!;
+      }
+      // An extension's tool call waits on its card and runs once it is approved (runExtensionTool).
+      if (approval.operation.kind === "extension.tool") {
+        await this.authorize(approval.requestedBy, "write");
+        await this.mutate(meta => { record(meta, { status: "approved", decidedBy: ticket.actorId }); });
         return (await this.metadata()).approvals[id]!;
       }
       // Approved operations run in the sandbox, so they wait for the repositories like runs do.
@@ -2915,6 +3053,9 @@ export class RunnerSession {
       await Promise.allSettled([...this.pushes].map(push => push.done));
     }
     this.generation++;
+    const extensions = this.#hostExtensions;
+    this.#hostExtensions = undefined;
+    await extensions?.shutdown().catch(() => {});
     // Calls still waiting on a card end with the harness; their cards are marked interrupted on reopen.
     this.#approvalWaiters.clear();
     // A Session that already failed on a storage error has closed itself, and closing again only repeats that error.

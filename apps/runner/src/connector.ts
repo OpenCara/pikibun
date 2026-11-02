@@ -28,9 +28,16 @@ import { recoverResourceOrphans } from "./resources.js";
 import { RepositoryCache } from "./repo-cache.js";
 import { RunnerService, createRunnerApp } from "./server.js";
 import type { RunnerConfig } from "./session.js";
+import { HostExtensions } from "./extensions/host.js";
+import { ExtensionStore } from "./extensions/store.js";
+import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 
 const STATE_FILE = "connector.json";
 const CALLBACK_LIMIT = 64 * 1024;
+/** How often the connector reports its extensions and asks for installs its owner made in Pikibun. */
+const EXTENSION_SYNC_MS = 30_000;
+/** A workspace's extensions: at most 32, each with up to 16 KB of settings. */
+const WORKSPACE_EXTENSIONS_LIMIT = 1024 * 1024;
 /** A github_read result; the control plane keeps its view within 96 KiB of JSON. */
 const GITHUB_READ_LIMIT = 128 * 1024;
 /**
@@ -312,6 +319,12 @@ export interface ConnectorOptions {
   runtimeFactory?: (config: RunnerConfig) => Promise<ConnectorRuntime>;
   acquireLease?: typeof acquireRunnerLease;
   reconnectDelayMs?: number;
+  /**
+   * The host's extensions (docs/design/host-extensions.md); by default those installed in the state directory, which
+   * its owner may install and remove from Pikibun unless `remoteExtensionInstalls` is false (`--no-remote-installs`).
+   */
+  extensions?: HostExtensions;
+  remoteExtensionInstalls?: boolean;
   /** With "disconnected", why the last connection ended, in fixed connector text, when it is known. */
   onStatus?: (status: "connecting" | "connected" | "disconnected" | "stopped", reason?: string) => void;
   onWarning?: (warning: "resources-unavailable") => void;
@@ -382,6 +395,7 @@ export class LocalConnector {
   /** This host's repository caches, one per scope its configuration has chosen, each opened once and kept. */
   private readonly repositoryCaches = new Map<Exclude<RepositoryCacheMode, "off">, RepositoryCache>();
   private readonly gpu?: GpuKind;
+  private hostExtensions?: HostExtensions;
 
   constructor(private readonly options: ConnectorOptions) {
     this.ready = this.readiness.promise;
@@ -418,6 +432,10 @@ export class LocalConnector {
     if (!this.options.runtimeFactory && process.platform !== "linux" && !this.options.unsandboxed && !this.options.sandboxBackend)
       throw new Error("This platform has no sandbox unless one is chosen (sandboxBackend); no host-shell fallback");
     this.directory = await privateDirectory(this.options.dataDir);
+    this.hostExtensions = this.options.extensions
+      ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false });
+    // Each installed extension's factory runs once here, as Pi runs them when it starts.
+    await this.hostExtensions.load();
     this.releaseLease = await (this.options.acquireLease ?? acquireRunnerLease)(this.directory, () => {
       this.lifetime.abort();
       this.disconnect(this.generation, "Runner lease lost");
@@ -531,6 +549,7 @@ export class LocalConnector {
         capabilities: { ...withHostToolCapabilities(advertised), ...(this.options.directUploads ? { directUploads: true } : {}) } });
       this.requireGeneration(generation);
       generation.runtimeReady.resolve();
+      void this.syncExtensions(generation);
       this.options.onStatus?.("connected");
       this.readiness.resolve();
       // Once per runner, connected: what was at work when the runner last stopped goes on without anyone opening it.
@@ -552,6 +571,30 @@ export class LocalConnector {
       // runner stays open: its sessions' work carries on across the reconnect.
       await Promise.allSettled([...generation.active]);
       if (this.generation === generation) this.generation = undefined;
+    }
+  }
+
+  /**
+   * While `generation` lasts: reports what extensions are installed, every 30 seconds, and carries out the installs and
+   * removals its owner asked for in Pikibun, reporting how they went. An installation the CLI changed meanwhile is
+   * loaded again first. A control plane that predates extensions refuses the report; it is tried again later.
+   */
+  private async syncExtensions(generation: Generation): Promise<void> {
+    const extensions = this.hostExtensions;
+    if (!extensions) return;
+    let results: ExtensionRequestResult[] = [];
+    const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
+    while (!signal.aborted) {
+      try {
+        await extensions.refreshIfChanged();
+        const answer = parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions", { report: extensions.report(), results }));
+        results = [];
+        if (answer.requests.length) {
+          results = await extensions.apply(answer.requests);
+          continue;
+        }
+      } catch { /* Tried again at the next round. */ }
+      await delay(EXTENSION_SYNC_MS, undefined, { signal }).catch(() => {});
     }
   }
 
@@ -611,6 +654,16 @@ export class LocalConnector {
     }
   }
 
+  /** What sessions get of the host's extensions: what is installed, and each workspace's choice, asked through the control plane. */
+  private runnerExtensions(extensions: HostExtensions): NonNullable<RunnerConfig["extensions"]> {
+    return {
+      installed: () => extensions.loaded,
+      workspace: workspaceId => extensions.workspace(workspaceId, async () =>
+        this.callback(await this.connection(), "/api/connectors/self/extensions/workspace", { workspaceId }, WORKSPACE_EXTENSIONS_LIMIT)),
+      ...(this.options.localModels.modelRegistry ? { modelRegistry: this.options.localModels.modelRegistry } : {}),
+    };
+  }
+
   private runnerConfig(repositoryCache: RepositoryCache | undefined): RunnerConfig {
     const state = this.state!;
     const hostConfig = this.hostConfig;
@@ -625,6 +678,7 @@ export class LocalConnector {
         return this.options.localModels.resolve(model);
       },
       compaction: this.options.localModels.compaction, identity: this.options.localModels.identity,
+      ...(this.hostExtensions ? { extensions: this.runnerExtensions(this.hostExtensions) } : {}),
       authorize: async request => this.authorize(await this.connection(), request),
       reportActivity: async (sessionId, activity) => this.reportActivity(await this.connection(), sessionId, activity),
       reportBranches: async (sessionId, branches) => this.reportBranches(await this.connection(), sessionId, branches),

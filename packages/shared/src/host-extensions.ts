@@ -251,3 +251,64 @@ export function sessionExtensions(workspace: readonly WorkspaceExtension[], inst
   }
   return chosen;
 }
+
+/** An install or removal the host's owner asked for in Pikibun, which the connector carries out when it next syncs. */
+export interface ExtensionRequest {
+  id: string;
+  action: "install" | "remove";
+  /** Normalized npm or Git source. */
+  source: string;
+}
+
+/** How a request went: done, or why not. */
+export interface ExtensionRequestResult {
+  id: string;
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Connector → control plane (`POST /api/connectors/self/extensions`): what is installed, and how the requests it was
+ * last given went. The answer lists the requests still to carry out.
+ */
+export interface ExtensionsSync {
+  report: HostExtensionsReport;
+  results: ExtensionRequestResult[];
+}
+export interface ExtensionsSyncAnswer {
+  requests: ExtensionRequest[];
+}
+
+/** Connector → control plane (`POST /api/connectors/self/extensions/workspace`): one workspace's extensions, for its sessions. */
+export interface WorkspaceExtensionsAnswer {
+  extensions: WorkspaceExtension[];
+  /** The host's owner lets workspaces run extension tools without approval on this host (rule 5). */
+  automaticTools: boolean;
+}
+
+const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function parseExtensionsSyncAnswer(value: unknown): ExtensionsSyncAnswer {
+  if (!isPlainObject(value) || !Array.isArray(value.requests) || value.requests.length > extensionLimits.installed) throw new Error("Invalid extensions answer");
+  return { requests: value.requests.map(item => {
+    if (!isPlainObject(item) || Object.keys(item).sort().join() !== "action,id,source" || typeof item.id !== "string" || !REQUEST_ID.test(item.id)
+      || (item.action !== "install" && item.action !== "remove") || typeof item.source !== "string") throw new Error("Invalid extension request");
+    return { id: item.id, action: item.action, source: normalizeExtensionSource(item.source) };
+  }) };
+}
+
+export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensionsAnswer {
+  if (!isPlainObject(value) || typeof value.automaticTools !== "boolean") throw new Error("Invalid workspace extensions");
+  return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools };
+}
+
+export function parseExtensionsSync(value: unknown): ExtensionsSync {
+  if (!isPlainObject(value) || Object.keys(value).sort().join() !== "report,results" || !Array.isArray(value.results) || value.results.length > extensionLimits.installed) {
+    throw new Error("Invalid extensions sync");
+  }
+  return { report: parseHostExtensionsReport(value.report), results: value.results.map(item => {
+    if (!isPlainObject(item) || typeof item.id !== "string" || !REQUEST_ID.test(item.id) || typeof item.ok !== "boolean"
+      || Object.keys(item).some(key => !["id", "ok", "error"].includes(key)) || (item.error !== undefined && !text(item.error, extensionLimits.text))) throw new Error("Invalid extension result");
+    return { id: item.id, ok: item.ok, ...(item.error !== undefined ? { error: item.error as string } : {}) };
+  }) };
+}

@@ -14,7 +14,7 @@ type ReviewRow = {
 type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; auto_merge?: number; expires_at: number };
 /** What decides whether an admission is the session owner's Auto-approve message. */
 type AdmissionAccess = Pick<AdmissionRow, 'session_id' | 'actor_id' | 'mode' | 'access'>;
-const operationTools: Record<Exclude<Operation['kind'], 'permission'>, ToolName> = {
+const operationTools: Record<Exclude<Operation['kind'], 'permission' | 'extension.tool'>, ToolName> = {
   'github.comment': 'github_comment', 'github.merge': 'github_merge', 'github.issue': 'github_issue', 'git.commit': 'git_commit', bash: 'bash', 'git.push': 'git_push', 'git.repin': 'git_repin', 'host.bash': 'host_bash',
 };
 const statuses: readonly string[] = ['pending', 'approved', 'denied', 'executing', 'executed', 'interrupted', 'failed'];
@@ -55,6 +55,9 @@ async function sessionTools(env: Env, row: SessionRow): Promise<(operation: Oper
   const grants = await env.DB.query<{ tool: string; call_id: string }>('SELECT tool, call_id FROM session_tool_grants WHERE session_id = ?').bind(row.id).all();
   return (operation, approvalId, admission) => {
     if (operation.kind === 'permission') return permissionCall(approvalId) !== undefined;
+    // An extension's tool comes from the session's extensions, which its host runs as its workspace chose them, never
+    // from the pinned agent; each card is its own call's.
+    if (operation.kind === 'extension.tool') return approvalId.startsWith('tool-');
     const tool = operationTools[operation.kind];
     const call = approvalId.startsWith('tool-') ? approvalId.slice('tool-'.length) : undefined;
     // Host commands never take a session grant: each one is allowed for its own call.

@@ -152,6 +152,11 @@ export interface ConnectorCapabilities {
    */
   web?: boolean;
   /**
+   * The connector runs the extensions its workspaces choose and it has installed (docs/design/host-extensions.md),
+   * reports them, and takes installs its owner asks for. Absent on older connectors, whose sessions run none.
+   */
+  extensions?: boolean;
+  /**
    * The connector runs as its owner and admins configure it in Pikibun (HostConfig: command time limit, GPU, Git
    * credentials, repository cache), read from the control plane, rather than by connect options. Absent on older
    * connectors, which keep their options.

@@ -413,6 +413,20 @@ export interface HostCommandOperation {
   command: string;
   timeoutSeconds: number;
 }
+/**
+ * A call of a tool one of the session's extensions offers (docs/design/host-extensions.md). It runs in the connector,
+ * outside the sandbox, so it is decided like a host command. `arguments` are the call's arguments as JSON, cut to
+ * EXTENSION_ARGUMENTS_SHOWN characters for the card; `digest` is the SHA-256 of the whole JSON, which is what runs.
+ * Key order is canonical: kind, source, tool, arguments, digest.
+ */
+export interface ExtensionToolOperation {
+  kind: "extension.tool";
+  source: string;
+  tool: string;
+  arguments: string;
+  digest: string;
+}
+export const EXTENSION_ARGUMENTS_SHOWN = 8000;
 /** Creates a private successor session; never replaces the source worktree or its history. */
 export interface GitRepinOperation {
   kind: "git.repin";
@@ -433,6 +447,7 @@ export interface RepinResult {
   repositories: SessionRepository[];
 }
 export type Operation =
+  | ExtensionToolOperation
   | { kind: "git.commit"; message: string }
   | { kind: "bash"; command: string }
   | { kind: "github.comment"; repository: string; issue: number; body: string }
