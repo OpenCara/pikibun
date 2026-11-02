@@ -53,6 +53,11 @@ export interface LocalState {
   github?: GitHubOAuthApp;
   /** Saved once the owner has shared it; kept while it runs for the owner alone, so sharing again needs nothing new. */
   shared?: SharedConfig;
+  /**
+   * Its owner (github:<id>), pinned once its data has served others: from then its first GitHub user may be a teammate,
+   * so running for its owner alone admits this account only (the server's LOCAL_OWNER_ID).
+   */
+  owner?: string;
 }
 
 const secret = () => randomBytes(32).toString('base64url');
@@ -67,6 +72,7 @@ export function validPort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1024 && value <= 65535;
 }
 
+const OWNER_ID = /^github:[1-9][0-9]{0,19}$/;
 const ADMIN_ID = /^(?:github:[1-9][0-9]{0,19}|password:[a-z0-9][a-z0-9_-]{2,38})$/;
 const SIGNUPS: readonly SharedConfig['signup'][] = ['open', 'invite', 'off'];
 
@@ -109,12 +115,13 @@ function copyShared(config: SharedConfig): SharedConfig {
 function parseState(value: unknown): LocalState {
   const state = value as Partial<LocalState> | null;
   if (!state || typeof state !== 'object' || state.version !== 1 || ![state.sessionSecret, state.vaultKey, state.claimSecret].every(item => typeof item === 'string' && SECRET.test(item))
-    || !validPort(state.port) || (state.github !== undefined && !validGitHubApp(state.github)) || (state.shared !== undefined && sharedConfigError(state.shared) !== undefined)) {
+    || !validPort(state.port) || (state.github !== undefined && !validGitHubApp(state.github)) || (state.shared !== undefined && sharedConfigError(state.shared) !== undefined)
+    || (state.owner !== undefined && (typeof state.owner !== 'string' || !OWNER_ID.test(state.owner)))) {
     throw new LocalStateError('The local server state is damaged or from another version.');
   }
   return { version: 1, sessionSecret: state.sessionSecret!, vaultKey: state.vaultKey!, claimSecret: state.claimSecret!, port: state.port!,
     ...(state.github ? { github: { clientId: state.github.clientId, clientSecret: state.github.clientSecret } } : {}),
-    ...(state.shared ? { shared: copyShared(state.shared) } : {}) };
+    ...(state.shared ? { shared: copyShared(state.shared) } : {}), ...(state.owner ? { owner: state.owner } : {}) };
 }
 
 /** The state directory, created owner-only; refused when it is a symlink, someone else's, or open to others. */
@@ -218,6 +225,17 @@ export async function openLocalState(directory: string, changes: LocalStateChang
     await release();
     throw error;
   }
+}
+
+/**
+ * Pins the state's owner while its server runs: the caller holds the lease (openLocalState), so nothing else writes the
+ * state meanwhile. Returns the state as saved.
+ */
+export async function pinLocalOwner(directory: string, state: LocalState, owner: string): Promise<LocalState> {
+  if (!OWNER_ID.test(owner)) throw new LocalStateError('The owner must be a GitHub user ID such as github:12345.');
+  const next = { ...state, owner };
+  await writeState(await privateStateDirectory(directory), next);
+  return next;
 }
 
 /** openLocalState, released at once: for changes made while no server runs. */

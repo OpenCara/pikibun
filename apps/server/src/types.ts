@@ -72,6 +72,11 @@ export interface Env {
   LOCAL_MODE?: string;
   /** The local server's claim secret (base64url, 32 bytes): a sign-in carrying it may claim an unclaimed local server. */
   LOCAL_CLAIM_SECRET?: string;
+  /**
+   * The local server's owner (github:<id>), when its data has also served others (`pikibun serve --share`): then its
+   * first GitHub user may be someone else, and every other account's sign-ins and hosts are refused while it runs locally.
+   */
+  LOCAL_OWNER_ID?: string;
   /** `true` lets people sign up and sign in with a username and password (password-auth.ts), next to GitHub. */
   PASSWORD_AUTH?: string;
   /** Who may create an account (http.ts signupMode): `open`, `invite` or `off`; unset, GitHub is open and passwords invite. */

@@ -7,7 +7,7 @@ import type { NativeSignIn, SignedInDevice } from '../../../packages/shared/src/
 import { isInstanceAdmin } from './admin.js';
 import { getUser, userProfile } from './db.js';
 import type { Database, Query, SqlValue } from './db/types.js';
-import { appOrigin, fail, id, identifier, jsonObject, localMode, now, passwordAuthEnabled, randomToken, requireOrigin, signupMode, testMode, text } from './http.js';
+import { appOrigin, fail, id, identifier, jsonObject, localMode, localOwnerQuery, now, passwordAuthEnabled, randomToken, requireOrigin, signupMode, testMode, text } from './http.js';
 import type { AppContext, AuthIdentity, Env, UserRow, WorkerEnv } from './types.js';
 import { assertVaultConfigured, encryptToken } from './vault.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './workspace-invites.js';
@@ -70,6 +70,12 @@ export const authenticate: MiddlewareHandler<WorkerEnv> = async (c, next) => {
       (session.auth_kind !== 'password' && session.user_id.startsWith('password:')) ||
       // Turning PASSWORD_AUTH off ends password sign-ins at once, not when they expire.
       (session.auth_kind === 'password' && (!passwordAuthEnabled(c.env) || !session.user_id.startsWith('password:')))) {
+    if (client === 'browser') expireCookie(c, 'auth');
+    fail(401, 'unauthorized', 'Authentication is required.');
+  }
+  // A local server admits its owner alone, even where the same data has served others (pikibun serve --share): their
+  // sign-ins from then stay refused until it is shared again. Test sign-ins (test mode only) are development's own.
+  if (localMode(c.env) && session.auth_kind !== 'test' && (await localOwner(c.env))?.id !== session.user_id) {
     if (client === 'browser') expireCookie(c, 'auth');
     fail(401, 'unauthorized', 'Authentication is required.');
   }
@@ -443,10 +449,13 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
     .bind(user.id, ciphertext, now()) };
 }
 
-/** The GitHub account that claimed this local server, or null while nobody has: its first GitHub user. */
+/**
+ * The GitHub account that claimed this local server, or null while nobody has: its first GitHub user, or the one
+ * LOCAL_OWNER_ID pins once the same data has served others.
+ */
 export async function localOwner(env: Env): Promise<{ id: string; github_id: string } | null> {
-  return await dbResult(env.DB.query<{ id: string; github_id: string }>(
-    `SELECT id, github_id FROM users WHERE auth_kind = 'github' AND github_id IS NOT NULL ORDER BY created_at, id LIMIT 1`).first()) ?? null;
+  const owner = localOwnerQuery(env);
+  return await dbResult(env.DB.query<{ id: string; github_id: string }>(owner.sql).bind(...owner.params).first()) ?? null;
 }
 
 /**

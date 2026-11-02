@@ -278,15 +278,20 @@ test("a server's Settings page sees the app's settings, but only its own activit
   const log = [{ time: 1, level: "info" as const, message: "Connected." }];
   const connection = (id: string, server: string, primary = false) => ({ id, primary, server, state: "connected" as const, inspecting: false, logs: log, command: "" });
   const hosts = { title: "This Mac", fixtureModels: false, connections: [connection("default", "https://pikibun.com", true), connection("0123456789ab", "https://team.example")] };
-  const local = { enabled: true, mode: "local" as const, status: { state: "running" as const, origin: "http://127.0.0.1:7878", host: "connected" as const }, logs: log };
+  const local = { enabled: true, mode: "local" as const, status: { state: "running" as const, origin: "http://127.0.0.1:7878", host: "connected" as const, claimUrl: `http://127.0.0.1:7878/api/auth/local/claim?token=${"c".repeat(43)}` }, logs: log };
   const base = { title: "This Mac", primaryServer: "https://pikibun.com", defaultServer: "https://pikibun.com", hosts, local };
   const team = remoteView({ ...base, origin: "https://team.example" });
   assert.equal(team.connectionHere, "0123456789ab");
   assert.deepEqual(team.hosts.connections.map(entry => entry.logs.length), [0, 1]);
   assert.equal(team.local.logs.length, 0);
+  // The claim link carries the claim secret: only Pikibun on this computer's own pages see it.
+  assert.equal(team.local.status.claimUrl, undefined);
+  assert.deepEqual(team.local.status, { state: "running", origin: "http://127.0.0.1:7878", host: "connected" });
+  assert.ok(!JSON.stringify(team).includes("c".repeat(43)));
   const own = remoteView({ ...base, origin: "http://127.0.0.1:7878" });
   assert.equal(own.connectionHere, undefined);
   assert.deepEqual([own.hosts.connections.map(entry => entry.logs.length), own.local.logs.length], [[0, 0], 1]);
+  assert.match(own.local.status.claimUrl ?? "", /token=/);
 
   assert.deepEqual(parsePairHere({ pairing: { id: pairingId, code }, replacePairing: false }), { ok: true, value: { pairing: { id: pairingId, code }, replacePairing: false } });
   for (const value of [{ replacePairing: false }, { pairing: { id: pairingId, code }, replacePairing: false, id: "0123456789ab" }, { pairing: { id: "x", code }, replacePairing: false }]) {

@@ -8,7 +8,7 @@ import { loadConfig } from '../config.js';
 import { PasswordCommandError, runPasswordCommand } from '../password-accounts-cli.js';
 import { startServer } from '../serve.js';
 import type { Env } from '../types.js';
-import type { LocalState } from './state.js';
+import { pinLocalOwner, type LocalState } from './state.js';
 
 // A Pikibun server on its owner's computer: SQLite and backups in its state directory. For one person (the default) it
 // listens on 127.0.0.1 only and admits only the GitHub account that claims it with the sign-in link it prints (auth.ts).
@@ -93,13 +93,15 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
     DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STORAGE_URL: pathToFileURL(backups).href, STATIC_DIR: staticDir,
     SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey,
   };
+  // Once its data has served others, running for its owner alone admits only the owner pinned then (see pinnedOwner).
+  const owner = shared ? undefined : await pinnedOwner(options, stateDir, staticDir);
   const settings: Record<string, string> = shared ? {
     ...common, TRUST_PROXY: String(shared.trustProxy), LOCAL_MODE: 'false', SIGNUP: shared.signup, PASSWORD_AUTH: String(shared.passwordAuth),
     ADMIN_USER_IDS: shared.admins.join(','),
     ...(shared.github ? { GITHUB_CLIENT_ID: shared.github.clientId, GITHUB_CLIENT_SECRET: shared.github.clientSecret } : {}),
     ...options.extraEnv,
   } : {
-    ...common, TRUST_PROXY: 'false', LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: state.claimSecret,
+    ...common, TRUST_PROXY: 'false', LOCAL_MODE: 'true', LOCAL_CLAIM_SECRET: state.claimSecret, ...(owner ? { LOCAL_OWNER_ID: owner } : {}),
     ...(state.github ? { GITHUB_CLIENT_ID: state.github.clientId, GITHUB_CLIENT_SECRET: state.github.clientSecret } : {}),
     ...options.extraEnv,
   };
@@ -114,6 +116,12 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   }
   const { env } = config;
   const admins = [...instanceAdmins(env)];
+  // Shared for the first time: whoever claimed it for themselves (its first GitHub user, before anyone else could sign
+  // in) is pinned as its owner, for when it runs for them alone again.
+  if (shared && !state.owner) {
+    const first = await firstGitHubUser(env);
+    if (first) await pinLocalOwner(stateDir, state, first).catch(() => {});
+  }
   return {
     mode, origin, env, address: `http://${listenHost}:${state.port}`,
     async owner() {
@@ -143,6 +151,38 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
       try { await server.close(); } finally { await options.release?.(); }
     },
   };
+}
+
+async function firstGitHubUser(env: Env): Promise<string | undefined> {
+  return (await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE auth_kind = 'github' AND github_id IS NOT NULL ORDER BY created_at, id LIMIT 1`).first())?.id;
+}
+
+/**
+ * The owner to admit alone where the data has served others: the one pinned when it was first shared, else (shared
+ * before anyone claimed it) the first of its GitHub administrators with an account, pinned now. Never shared, nothing is
+ * pinned: its first GitHub user is its owner, as ever.
+ */
+async function pinnedOwner(options: LocalServerOptions, stateDir: string, staticDir: string): Promise<string | undefined> {
+  const { state } = options;
+  if (state.owner) return state.owner;
+  if (!state.shared) return undefined;
+  // Read from the data before anything serves it, with the server's own migrations applied.
+  const config = await loadConfig({ APP_ORIGIN: `http://${LOCAL_ORIGIN_HOST}:${state.port}`, SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey,
+    DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STATIC_DIR: staticDir });
+  try {
+    await config.env.DB.migrate();
+    const admins = state.shared.admins.filter(id => id.startsWith('github:'));
+    const rows = admins.length ? await config.env.DB.query<{ id: string }>(`SELECT id FROM users WHERE auth_kind = 'github' AND id IN (${admins.map(() => '?').join(',')})`).bind(...admins).all() : [];
+    const owner = admins.find(id => rows.some(row => row.id === id));
+    if (!owner) {
+      if (!await firstGitHubUser(config.env)) return undefined;
+      throw new LocalServerError('This Pikibun has served others: share it again and sign in as one of its GitHub administrators first, so it knows whose it is when it runs for you alone.');
+    }
+    await pinLocalOwner(stateDir, state, owner);
+    return owner;
+  } finally {
+    await config.env.DB.close?.();
+  }
 }
 
 /** What to register at https://github.com/settings/applications/new for a local server on any port. */
