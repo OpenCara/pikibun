@@ -31,6 +31,11 @@ its host has.
 8. **Settings per workspace.** An extension's settings are its Pi flags (`registerFlag`); the workspace sets their values.
    Secrets never go there: the extension reads them on the host (its environment, files, or Pi's `auth.json`), which the
    host's owner sets up.
+9. **Web tools are extensions.** Pikibun's own `web_fetch` and `web_search` are retired (`retiredToolNames`): no session
+   offers them, the server's `WEB_SEARCH` provider and the workspace's **Web search** setting are gone, and older
+   connectors' searches are refused (410). An extension may register tools with retired names, so a Pi web search
+   extension provides `web_search` as it does in Pi. Unlike `web_fetch`, an extension's requests aren't confined by the
+   workspace's network access: they run in the connector, approved like host commands unless automatic.
 
 ## Compatibility
 
@@ -39,7 +44,7 @@ the session's own, then maps what it registered:
 
 | Pi | In Pikibun |
 |---|---|
-| `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), behind the approval of rule 5. `onUpdate` is ignored |
+| `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), behind the approval of rule 5. `onUpdate` is ignored. A tool named like one of Pikibun's own is ignored, unless that one is retired (`web_fetch`, `web_search`, …) |
 | `before_agent_start` | Run once per message with its prompt; a returned `systemPrompt` (appended to the empty base it gets) and `message` become a prompt section |
 | `context` | `GenerationHooks.beforeRequest` |
 | `tool_call` | `ToolHooks.beforeTool`: `block`/`reason`, and changes made to `event.input` |

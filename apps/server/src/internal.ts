@@ -16,7 +16,7 @@ import { legacyRestoreDownload } from './restore-routes.js';
 import { pushComplete, pushCredential } from './push/broker.js';
 import { egressGrant, gitDirect, gitRelay } from './network.js';
 import { apiCredential } from './api-access.js';
-import { webSearch } from './web-search.js';
+import { webSearchRetired } from './connectors.js';
 import { hostAuthority } from './host-access.js';
 
 const internalAuthentication: MiddlewareHandler<WorkerEnv> = async (c, next) => {
@@ -39,7 +39,7 @@ export function registerInternal(app: Hono<WorkerEnv>): void {
   app.post('/api/internal/sources/read', c => sourceRead(c, null));
   app.post('/api/internal/schedules', c => agentSchedules(c, null));
   app.post('/api/internal/sessions', c => agentSessions(c, null));
-  app.post('/api/internal/web/search', c => webSearch(c, null));
+  app.post('/api/internal/web/search', () => webSearchRetired());
   app.post('/api/internal/git/push/credential', c => pushCredential(c, null));
   app.post('/api/internal/git/push/complete', c => pushComplete(c, null));
   app.post('/api/internal/restores/:restoreId/download', legacyRestoreDownload);

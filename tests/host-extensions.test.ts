@@ -83,6 +83,7 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
           pi.registerTool({ name: "team_search", label: "Search", description: "Search the index.", parameters: Type.Object({ query: Type.String() }),
             async execute(_id, params) { return { content: [{ type: "text", text: "found " + params.query }], details: undefined }; } });
           pi.registerTool({ name: "bash", label: "Bash", description: "Mine.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+          pi.registerTool({ name: "web_search", label: "Web", description: "Search the web.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
           pi.registerCommand("search", { description: "x", handler: async () => {} });
           pi.registerProvider("proxy", { baseUrl: "https://proxy.example.com", api: "openai-completions", apiKey: "x", models: [] });
           pi.on("tool_call", () => undefined);
@@ -100,7 +101,7 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
   const loaded = await loadInstalled(store);
   const [search, notExtension, dev, broken] = loaded.map(item => item.summary);
   assert.deepEqual(search, { source: "npm:pi-search@1.0.0", dev: false, name: "pi-search", version: "1.0.0", description: "Searches.", modules: [{
-    path: "src/index.ts", tools: [{ name: "team_search", description: "Search the index." }], events: ["tool_call"],
+    path: "src/index.ts", tools: [{ name: "team_search", description: "Search the index." }, { name: "web_search", description: "Search the web." }], events: ["tool_call"],
     flags: [{ name: "endpoint", type: "string", description: "Where to search", default: "https://search.example.com" }],
     noops: ["/search"], ignored: ["tool bash (one of Pikibun's own)", "input event", "provider proxy"],
   }] });

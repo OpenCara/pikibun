@@ -147,9 +147,8 @@ export interface ConnectorCapabilities {
    */
   directUploads?: boolean;
   /**
-   * The connector carries the agent's web tools: web_fetch, which reads pages on the host as far as the workspace's
-   * network access reaches, and web_search, through the control plane's search provider (see web.ts). Absent on older
-   * connectors.
+   * Retired: connectors from before extensions carried the web tools (web_fetch, web_search), which extensions provide
+   * now. The control plane accepts the flag from them and offers neither tool.
    */
   web?: boolean;
   /**

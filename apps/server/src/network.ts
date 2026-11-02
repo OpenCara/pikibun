@@ -20,27 +20,25 @@ import { requireBinding } from './push/broker.js';
 import { mintPushToken, mintRepositoryReadToken, type MintedToken } from './push/mint.js';
 import { sessionApis } from './api-access.js';
 import { sourceReadAs, workspaceAccess, workspaceGitAccess } from './workspace-connections.js';
-import { webSearchProvider } from './web-search.js';
 
 /** Owner/admin authority, re-checked inside the write (binds workspace id, user id). */
 const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
 /** A fetch request lists the objects wanted and had; even huge repositories stay far below this. */
 const uploadRequestBytes = 64 * 1024 * 1024;
 
-interface PolicyRow { mode: NetworkPolicy['mode']; domains_json: string; package_registries: number; web_search: number }
+interface PolicyRow { mode: NetworkPolicy['mode']; domains_json: string; package_registries: number }
 
-/** The workspace's network access, with its web search setting always named. */
-export async function workspaceNetworkPolicy(db: Database, workspaceId: string): Promise<NetworkPolicy & { webSearch: boolean }> {
-  const row = await db.query<PolicyRow>('SELECT mode, domains_json, package_registries, web_search FROM workspace_network_policies WHERE workspace_id = ?')
+/** The workspace's network access. (Its `web_search` column is the retired web_search tool's setting, no longer read.) */
+export async function workspaceNetworkPolicy(db: Database, workspaceId: string): Promise<NetworkPolicy> {
+  const row = await db.query<PolicyRow>('SELECT mode, domains_json, package_registries FROM workspace_network_policies WHERE workspace_id = ?')
     .bind(workspaceId).first();
-  if (!row) return { ...defaultNetworkPolicy, domains: [], webSearch: false };
-  return { mode: row.mode, domains: JSON.parse(row.domains_json) as string[], packageRegistries: Number(row.package_registries) === 1,
-    webSearch: Number(row.web_search) === 1 };
+  if (!row) return { ...defaultNetworkPolicy, domains: [] };
+  return { mode: row.mode, domains: JSON.parse(row.domains_json) as string[], packageRegistries: Number(row.package_registries) === 1 };
 }
 
-/** What the network access page shows besides the policy: the allowlist's registries, and the server's search provider. */
-function policyResponse(env: Env, policy: NetworkPolicy) {
-  return { policy, packageRegistryDomains, webSearchProvider: webSearchProvider(env)?.name ?? null };
+/** What the network access page shows besides the policy: the allowlist's registries. */
+function policyResponse(policy: NetworkPolicy) {
+  return { policy, packageRegistryDomains };
 }
 
 export function registerNetworkPolicies(app: Hono<WorkerEnv>): void {
@@ -48,25 +46,23 @@ export function registerNetworkPolicies(app: Hono<WorkerEnv>): void {
   app.get('/api/workspaces/:id/network-policy', async c => {
     const workspaceId = identifier(c.req.param('id'));
     await requireMember(c.env, workspaceId, c.get('auth').userId);
-    return c.json(policyResponse(c.env, await workspaceNetworkPolicy(c.env.DB, workspaceId)));
+    return c.json(policyResponse(await workspaceNetworkPolicy(c.env.DB, workspaceId)));
   });
   app.put('/api/workspaces/:id/network-policy', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    let parsed: NetworkPolicy;
-    try { parsed = parseNetworkPolicy(await jsonObject(c, 16 * 1024)); }
+    let policy: NetworkPolicy;
+    try { policy = parseNetworkPolicy(await jsonObject(c, 16 * 1024)); }
     catch (error) { return fail(400, 'invalid_network_policy', error instanceof Error ? error.message : 'Invalid network policy.'); }
-    // A client that predates web search names no setting for it, which keeps the saved one.
-    const policy = { ...parsed, webSearch: parsed.webSearch ?? (await workspaceNetworkPolicy(c.env.DB, workspaceId)).webSearch };
-    const saved = await c.env.DB.query(`INSERT INTO workspace_network_policies (workspace_id, mode, domains_json, package_registries, web_search, updated_by, updated_at)
-      SELECT ?,?,?,?,?,?,? WHERE ${adminSql}
+    const saved = await c.env.DB.query(`INSERT INTO workspace_network_policies (workspace_id, mode, domains_json, package_registries, updated_by, updated_at)
+      SELECT ?,?,?,?,?,? WHERE ${adminSql}
       ON CONFLICT (workspace_id) DO UPDATE SET mode = excluded.mode, domains_json = excluded.domains_json,
-        package_registries = excluded.package_registries, web_search = excluded.web_search, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+        package_registries = excluded.package_registries, updated_by = excluded.updated_by, updated_at = excluded.updated_at
       RETURNING workspace_id`)
-      .bind(workspaceId, policy.mode, JSON.stringify(policy.domains), policy.packageRegistries ? 1 : 0, policy.webSearch ? 1 : 0, actor, now(), workspaceId, actor).first();
+      .bind(workspaceId, policy.mode, JSON.stringify(policy.domains), policy.packageRegistries ? 1 : 0, actor, now(), workspaceId, actor).first();
     if (!saved) fail(403, 'forbidden', 'Workspace administrator access is required.');
     await auditStatement(c.env, actor, 'workspace.network_policy.updated', workspaceId, null, { ...policy }).run();
-    return c.json(policyResponse(c.env, policy));
+    return c.json(policyResponse(policy));
   });
 }
 

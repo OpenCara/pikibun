@@ -5,7 +5,7 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { createExtensionRuntime, type Extension as PiExtension, type ExtensionRuntime, type LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { extensionLimits, type ExtensionModuleSummary, type InstalledExtension } from "../../../../packages/shared/src/host-extensions.js";
-import { toolNames } from "../../../../packages/shared/src/types.js";
+import { retiredToolNames, toolNames } from "../../../../packages/shared/src/types.js";
 import type { ExtensionStore, InstalledSource } from "./store.js";
 
 /*
@@ -117,7 +117,7 @@ export function summarizeModules(root: string, files: string[], result: LoadExte
     const tools: ExtensionModuleSummary["tools"] = [];
     const ignored: string[] = [];
     for (const [name, tool] of extension.tools) {
-      if ((toolNames as readonly string[]).includes(name)) { ignored.push(`tool ${name} (one of Pikibun's own)`); continue; }
+      if ((toolNames as readonly string[]).includes(name) && !(retiredToolNames as readonly string[]).includes(name)) { ignored.push(`tool ${name} (one of Pikibun's own)`); continue; }
       if (taken.has(name)) { ignored.push(`tool ${name} (another extension's)`); continue; }
       if (tools.length >= extensionLimits.toolsPerModule) { ignored.push(`tool ${name} (too many tools)`); continue; }
       taken.add(name);

@@ -1,6 +1,5 @@
 import { egressGrant, gitDirect, gitRelay } from './network.js';
 import { apiCredential } from './api-access.js';
-import { webSearch } from './web-search.js';
 import { withHostToolCapabilities } from './host-capabilities.js';
 import { verifyDirectUpload } from './file-uploads.js';
 import type { Hono } from 'hono';
@@ -35,6 +34,14 @@ export interface ConnectorRow {
 function onlyFields(value: Record<string, unknown>, fields: string[]): void {
   if (Object.keys(value).some(key => !fields.includes(key))) fail(400, 'invalid_metadata', 'Only model and capability metadata is accepted.');
 }
+/**
+ * The answer to the retired web_search tool's searches from connectors that still carry it: web search comes from
+ * extensions now (docs/design/host-extensions.md). Older connectors pass the reason on to the agent.
+ */
+export function webSearchRetired(): never {
+  fail(410, 'web_search_retired', 'Pikibun no longer searches the web itself: web search comes from extensions now. A workspace\'s owners and admins add one under Settings → Workspaces → the workspace → Extensions.');
+}
+
 export function parseManifest(input: Record<string, unknown>, env: Env): { models: LocalModelSummary[]; capabilities: ConnectorCapabilities } {
   if (!Array.isArray(input.models) || input.models.length > 200) fail(400, 'invalid_manifest', 'At most 200 models may be advertised.');
   const seen = new Set<string>();
@@ -401,7 +408,8 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
   app.post('/api/connectors/self/sources/read', async c => sourceRead(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/schedules', async c => agentSchedules(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sessions', async c => agentSessions(c, (await authenticateConnector(c)).id));
-  app.post('/api/connectors/self/web/search', async c => webSearch(c, (await authenticateConnector(c)).id));
+  // The retired web_search tool's searches (web tools come from extensions now), from connectors that still carry it.
+  app.post('/api/connectors/self/web/search', async c => { await authenticateConnector(c); return webSearchRetired(); });
   app.post('/api/connectors/self/git/push/credential', async c => pushCredential(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/git/push/complete', async c => pushComplete(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/restores/:restoreId/download', async c => connectorRestoreDownload(c, (await authenticateConnector(c)).id));

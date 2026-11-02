@@ -124,12 +124,7 @@ The sandbox has no network, so `gh` and `curl` inside it can't reach GitHub. Age
 
 ## Web pages and search
 
-Agents read web pages with `web_fetch` and search the web with `web_search` (connector newer than 0.9.0).
-
-- `web_fetch` reads one `https://` page from this host, as far as the workspace's network access lets the session's sandbox reach, and never at an address in this host's own networks. It sends no cookies or credentials and only reads; HTML comes back as text, images as images. It needs no approval, during a shared message. On a host running without the sandbox it still follows the workspace's network access.
-- `web_search` asks Pikibun, which searches with the provider its operator configured, where the workspace turned web search on. The provider's key never reaches this host.
-
-What they return is untrusted input, like any repository content.
+Pikibun's own `web_fetch` and `web_search` tools are retired: web search and page reading come from extensions a workspace chooses and its hosts install (`pikibun extensions --help`). They run in the connector, as this machine's user, outside the sandbox.
 
 ## Chat options
 
