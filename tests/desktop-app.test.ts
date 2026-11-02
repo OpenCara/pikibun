@@ -314,6 +314,10 @@ test("a newer desktop release on GitHub is offered: never another release line, 
   }
   assert.equal(compareVersions("1.2.3", "1.2.3"), 0);
   assert.equal(compareVersions("1.2", "1.2.3"), undefined);
+  for (const valid of ["0.0.0", "1.2.3-0", "1.2.3-x-y.0a", "1.2.3-beta.1"]) assert.equal(compareVersions(valid, valid), 0, valid);
+  for (const malformed of ["01.2.3", "1.02.3", "1.2.03", "1.2.3-alpha..1", "1.2.3-01", "1.2.3-", "1.2.3-beta.1.", "1x2.3", "1.2.3+build"]) {
+    assert.equal(compareVersions(malformed, "1.0.0"), undefined, malformed);
+  }
 
   const release = (tag: string, extra: Record<string, unknown> = {}) => ({ tag_name: tag, draft: false, prerelease: tag.includes("-", 10), html_url: "https://evil.example/", ...extra });
   const releases = [release("server-v9.0.0"), release("cli-v9.0.0"), release("v9.0.0"), release("desktop-v1.3.0", { draft: true }), release("desktop-v1.4.0-beta.1"),
@@ -326,13 +330,17 @@ test("a newer desktop release on GitHub is offered: never another release line, 
   assert.equal(newerRelease([...releases, release("desktop-v1.4.0")], "1.4.0-beta.1")?.version, "1.4.0");
   assert.equal(newerRelease({ message: "API rate limit exceeded" }, "1.0.0"), undefined);
   assert.equal(newerRelease(releases, "not a version"), undefined);
+  // A prerelease by its version, even without GitHub's flag, never reaches a release; malformed tags never count.
+  assert.equal(newerRelease([release("desktop-v1.5.0-beta.1", { prerelease: false }), release("desktop-v1.2.0")], "1.1.0")?.version, "1.2.0");
+  assert.equal(newerRelease([release("desktop-v1.5.0-beta.1", { prerelease: false })], "1.5.0-alpha")?.version, "1.5.0-beta.1");
+  assert.equal(newerRelease([release("desktop-v01.5.0"), release("desktop-v1.5.0-alpha..1", { prerelease: false })], "1.0.0"), undefined);
 
   let answer: unknown = [release("desktop-v1.0.0")];
   let fail = false;
   const changes: (string | undefined)[] = [];
   const checker = new UpdateChecker({
     current: "1.0.0", onChange: update => changes.push(update?.version),
-    fetch: async url => { assert.match(url, /^https:\/\/api\.github\.com\/repos\/OpenCara\/pikibun\/releases/); if (fail) throw new Error("offline"); return { ok: true, json: async () => answer }; },
+    fetch: async (url, init) => { assert.equal(init.headers["User-Agent"], "Pikibun-Desktop"); assert.match(url, /^https:\/\/api\.github\.com\/repos\/OpenCara\/pikibun\/releases/); if (fail) throw new Error("offline"); return { ok: true, json: async () => answer }; },
   });
   // A getter TypeScript would narrow after the first assertion.
   const available = () => checker.available;

@@ -6,8 +6,9 @@
 
 export const RELEASES_API = "https://api.github.com/repos/OpenCara/pikibun/releases?per_page=50";
 const RELEASE_PAGE = "https://github.com/OpenCara/pikibun/releases/tag/";
-const TAG = /^desktop-v([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$/;
-const VERSION = /^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?$/;
+// Semantic versions, strictly: no leading zeros in numbers, and no empty prerelease identifiers.
+const VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?$/;
+const TAG = /^desktop-v(.*)$/;
 
 export interface AvailableUpdate {
   /** The release's version, such as 1.2.3. */
@@ -43,19 +44,24 @@ export function compareVersions(a: string, b: string): number | undefined {
   return 0;
 }
 
+/** Whether a (valid) version is a prerelease, such as 1.2.3-beta.1. */
+const isPrerelease = (version: string) => VERSION.exec(version)?.[4] !== undefined;
+
 /**
  * The newest published desktop release in GitHub's release list, if it is newer than `current`. Other release lines
  * (server-v, cli-v) and drafts never count; prereleases count only while the app itself runs one.
  */
 export function newerRelease(releases: unknown, current: string): AvailableUpdate | undefined {
   if (!Array.isArray(releases) || compareVersions(current, current) === undefined) return undefined;
-  const prereleases = current.includes("-");
+  const prereleases = isPrerelease(current);
   let best: string | undefined;
   for (const release of releases) {
     if (!release || typeof release !== "object") continue;
     const { tag_name: tag, draft, prerelease } = release as Record<string, unknown>;
     const version = typeof tag === "string" ? TAG.exec(tag)?.[1] : undefined;
-    if (!version || draft !== false || (prerelease !== false && !prereleases)) continue;
+    if (!version || !VERSION.test(version) || draft !== false) continue;
+    // A prerelease by its version too, should a release go out without GitHub's flag.
+    if ((prerelease !== false || isPrerelease(version)) && !prereleases) continue;
     if (!best || compareVersions(version, best) === 1) best = version;
   }
   if (!best || compareVersions(best, current) !== 1) return undefined;
@@ -82,7 +88,7 @@ export class UpdateChecker {
   async check(): Promise<boolean> {
     let releases: unknown;
     try {
-      const response = await this.options.fetch(RELEASES_API, { headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" } });
+      const response = await this.options.fetch(RELEASES_API, { headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Pikibun-Desktop" } });
       if (!response.ok) return false;
       releases = await response.json();
     } catch {
