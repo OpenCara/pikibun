@@ -101,7 +101,7 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
     // The card is the prompt: it shows the exact operation, who it runs as, its resource limits and any unsandboxed-host warning, so a tap decides at once.
     const notice = approval.operation.kind === "permission"
       ? decision === "deny" ? "Not allowed" : scope === "session" ? "Allowed for the rest of the session" : "Allowed for this call"
-      : always ? `Approved. ${username(people.person(approval.requestedBy))}'s requests here now run without asking; the owner can stop it on the web, under Details › People.`
+      : always ? `Approved. ${username(people.person(approval.requestedBy))}'s requests here now run without asking; stop it under Approvals.`
       : decision === "approve" ? "Approval decision recorded" : "Operation denied";
     await approvalAction.run(async () => {
       await api(`/api/sessions/${segment(id)}/approvals/${segment(approval.id)}`, { method: "POST", body: { decision, reviewHash: approval.reviewHash, ...(scope ? { scope } : {}), ...(always ? { alwaysApprove: true } : {}) } });
@@ -209,7 +209,7 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
           <Feedback error={approvalAction.error} notice={approvalAction.notice} />
         </>} />}
     <ApprovalsSheet visible={approvalsOpen} approvals={approvals} olderApprovals={view?.olderApprovals} onClose={() => setApprovalsOpen(false)}
-      onOpenSession={target => { refreshSessions(); openSession(target); }} />
+      onOpenSession={target => { refreshSessions(); openSession(target); }} session={session} onChanged={live.refresh} />
   </KeyboardAvoidingView></PeopleProvider>;
 }
 
@@ -232,8 +232,21 @@ const AUTO_APPROVED_NOTE = "Commands that ran under auto-approve are marked on t
  * Every approval of the session, pending first, with what each decided one did. On iOS a repinned session opens once
  * the sheet has gone, so the navigation is not hidden behind (or dropped by) the closing modal.
  */
-function ApprovalsSheet({ visible, approvals, olderApprovals, onClose, onOpenSession }: { visible: boolean; approvals: ApprovalRecord[]; olderApprovals?: number; onClose: () => void; onOpenSession: (id: string) => void }) {
+function ApprovalsSheet({ visible, approvals, olderApprovals, onClose, onOpenSession, session, onChanged }: { visible: boolean; approvals: ApprovalRecord[]; olderApprovals?: number; onClose: () => void; onOpenSession: (id: string) => void;
+  session: SessionRecord | null | undefined; onChanged: () => void }) {
   const palette = usePalette();
+  const { user, api } = useSession();
+  const name = useUsername();
+  const stopping = useAction();
+  const always = session?.autoApprovedRequesters ?? [];
+  /** The owner stops auto-approving `requester`'s requests (chosen with Always approve on one of their cards). */
+  function stop(requester: string) {
+    if (!session || stopping.busy) return;
+    void stopping.run(async () => {
+      await api(`/api/sessions/${segment(session.id)}/auto-approved-requesters/${segment(requester)}`, { method: "DELETE" });
+      onChanged();
+    }, `${name(requester)}'s requests ask again.`);
+  }
   const opening = useRef<string | null>(null);
   const sorted = [...approvals].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending"));
   function open(target: string) {
@@ -252,6 +265,15 @@ function ApprovalsSheet({ visible, approvals, olderApprovals, onClose, onOpenSes
         <Text style={[styles.paneTitle, { color: palette.text }]}>Approvals</Text>
         <Button small variant="ghost" label="Done" onPress={onClose} />
       </View>
+      {session && always.length > 0 && <View style={styles.sheetList}>
+        {always.map(requester => <View key={requester} style={ui.inline}>
+          <Text style={[ui.small, ui.flex, { color: palette.text }]}>
+            {`Always approves ${name(requester, true)}: ${session.requesterAutoApprove ? "their commands, pushes, and GitHub comments and issues run without asking" : "paused while the workspace doesn't allow it"}`}
+          </Text>
+          {session.ownerId === user.id && <Button small label="Stop" disabled={stopping.busy} onPress={() => stop(requester)} />}
+        </View>)}
+        <Feedback error={stopping.error} notice={stopping.notice} />
+      </View>}
       {sorted.length ? <ScrollView contentContainerStyle={styles.sheetList}>
         {sorted.map(approval => <ApprovalCard key={approval.id} approval={approval} onOpenSession={open} />)}
         {!!olderApprovals && <Text style={[ui.small, { color: palette.muted }]}>{`${olderApprovals} older settled ${olderApprovals === 1 ? "approval isn't" : "approvals aren't"} listed. ${AUTO_APPROVED_NOTE}`}</Text>}
