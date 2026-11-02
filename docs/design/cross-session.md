@@ -15,7 +15,7 @@ call as if the person behind it had made it themselves. Shared types, limits and
 | `ask` | A side ask (read-only thread) | ask | any |
 | `send` | A shared message, access `approval` (default), `read` or `auto` | write; refused while the target is working or waiting on a card | Read only needs the owner's permission |
 | `wait` | The runner reads one message's outcome every 3 seconds until it is done (default 300 s, at most 1800 s) | read | any |
-| `create` | A new session as the actor, linked to this one (`parent_session_id`), with an optional opening message | creating sessions in the workspace | Read only needs the owner's permission |
+| `create` | A new session as the actor, linked to this one (`parent_session_id`), with an optional opening message, on a model and reasoning level of the agent's choice (see below) | creating sessions in the workspace | Read only needs the owner's permission |
 | `stop` | Stops the other session's work | write | Read only needs the owner's permission |
 | `archive` | Archives a session the actor owns or, as the workspace's owner or an admin, any session of the workspace | owner, or the workspace's owner or an admin | Read only needs the owner's permission |
 
@@ -46,6 +46,27 @@ with approve permission there decide. A read shows pending cards (their kind and
 New sessions run as the actor, with their Git accounts, on a model's host: the actor's own host, or the origin's host
 when the actor owns the origin (they trusted that host when they started it). Any other host they must acknowledge
 themselves, in the apps.
+
+## Models and reasoning of new sessions
+
+`create` takes `model` (a workspace model id, one `list` returns) and `thinking` (a reasoning level), so an agent runs
+each sub-task on what suits it. `list` returns, with the models, the reasoning levels each one's host offers it at
+(`thinkingLevels`) and whether the workspace lets agents choose (`childModels`).
+
+- The reasoning level is the opening message's (`ChatOptions.thinkingLevel`), which the new session's conversation
+  keeps until someone picks another; `thinking` without a message is refused. The model's host must take a message's
+  reasoning level (`chatOptions`) and offer the model at that level; otherwise nothing starts.
+- What the agent leaves out is the origin's **current** model and reasoning level, as its host reports them for the
+  shared conversation (`parentModel`), where that model is one of the workspace's the actor may use on the origin's
+  host; otherwise the model the origin started on, at the level its host starts it at. An inherited level is passed on
+  only where the new session's model runs at it.
+- A workspace's owners and admins decide whether agents choose at all: `workspace_child_session_settings.child_models`
+  (`GET`/`PUT /api/workspaces/:id/child-sessions`, `{ childModels }`, on by default, audited as
+  `workspace.child_sessions.updated`), under **Settings → Workspaces → Sub-task sessions**. Off, a `create` that names
+  `model` or `thinking` is refused (`child_models_disabled`), and every new session runs on its parent's current model
+  and reasoning level.
+- The permission card shows the choice (`create · model <id> · thinking <level> · …`), the result names the model and
+  level the new session got, and `session.cross_session.created` records them.
 
 ## Who can see what
 
@@ -103,6 +124,8 @@ after it and no card waits.
 - `sessions.parent_session_id`: the session whose agent started this one. It is control-plane state, not part of
   the runner binding.
 - `session_tool_grants` rows `sessions:write` and `sessions:audience`: the owner's permissions above.
+- `workspace_child_session_settings`: whether the workspace's agents choose the model and reasoning level of sessions
+  they start; no row: they do.
 
 ## Audit
 

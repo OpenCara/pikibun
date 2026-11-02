@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
-import { accessModes, type AccessMode, type SessionView, type SubmitResult, type WorkspaceRole } from '../../../packages/shared/src/types.js';
+import { accessModes, thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type SubmitResult, type ThinkingLevel, type WorkspaceRole } from '../../../packages/shared/src/types.js';
+import type { ConnectorCapabilities, LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { hasPermission, workspaceSessionPermissions } from '../../../packages/shared/src/policy.js';
 import {
   audienceTarget, crossSessionHeader, crossSessionLimits, cut, messageOutcome, sessionsBrokerActions, sessionsToolTarget, sessionsWriteActions,
@@ -14,7 +15,8 @@ import { archiveSession, createSession, stopSession, submitMessage } from './ses
 import { isLinkShared } from './session-links.js';
 import { sessionView, transcriptDisplay } from './view-feed.js';
 import { usableModels } from './catalog.js';
-import type { AppContext, Env, SessionAccess, SessionRow, WorkerEnv } from './types.js';
+import { workspaceChildSessionSettings } from './child-session-settings.js';
+import type { AppContext, Env, ModelRow, SessionAccess, SessionRow, WorkerEnv } from './types.js';
 
 /**
  * Cross-session communication: the sessions tool (packages/shared/src/cross-session.ts), with which a session's agent
@@ -33,6 +35,9 @@ import type { AppContext, Env, SessionAccess, SessionRow, WorkerEnv } from './ty
  * - Each delivered message names its origin, its sender and its hop in its first line, and is recorded here
  *   (`session_messages`), where people see it (the session panel) and chains are bounded: a message at
  *   `crossSessionLimits.maxHops` sends nothing further, and none goes back to a session it came through.
+ * - A session an agent starts runs on the model and reasoning level the agent chose for its sub-task, where the
+ *   workspace lets agents choose (`ChildSessionSettings.childModels`, on by default); otherwise, or for what it leaves
+ *   out, on its parent's current ones (`parentModel`).
  * - A message may ask for a notification: once its target finished it, a sweep (`runCrossSessionNotifications`) sends
  *   its outcome back to the origin, as the same person, while the origin is idle.
  */
@@ -105,11 +110,11 @@ async function audienceCovered(env: Env, self: Party, other: Party, direction: '
   return true;
 }
 
-const inputFields = ['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'targetSessionId', 'message', 'access', 'notify', 'title', 'modelId', 'visibility', 'messageId', 'limit'];
+const inputFields = ['sessionId', 'actorId', 'admissionId', 'callId', 'action', 'targetSessionId', 'message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'visibility', 'messageId', 'limit'];
 /** Which actions take which fields, beyond the call's own. */
 const actionFields: Record<SessionsBrokerAction, readonly string[]> = {
   list: [], read: ['targetSessionId', 'messageId', 'limit'], ask: ['targetSessionId', 'message', 'notify'], send: ['targetSessionId', 'message', 'access', 'notify'],
-  create: ['message', 'access', 'notify', 'title', 'modelId', 'visibility'], stop: ['targetSessionId'], archive: ['targetSessionId'],
+  create: ['message', 'access', 'notify', 'title', 'modelId', 'thinkingLevel', 'visibility'], stop: ['targetSessionId'], archive: ['targetSessionId'],
 };
 
 interface Call {
@@ -150,6 +155,10 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   const title = sentTitle?.trim();
   if (title !== undefined && (!title || /[\r\n]/.test(title))) fail(400, 'invalid_input', 'The title is one non-empty line.');
   const modelId = input.modelId === undefined ? undefined : identifier(input.modelId, 'modelId');
+  if (input.thinkingLevel !== undefined && !thinkingLevels.includes(input.thinkingLevel as ThinkingLevel)) fail(400, 'invalid_input', `Thinking is ${thinkingLevels.join(', ')}.`);
+  const thinkingLevel = input.thinkingLevel as ThinkingLevel | undefined;
+  // The level is the opening message's: a session keeps the one its conversation last ran at.
+  if (thinkingLevel !== undefined && message === undefined) fail(400, 'invalid_input', 'A reasoning level goes with the opening message: send one, or leave thinking out.');
   if (input.visibility !== undefined && input.visibility !== 'private' && input.visibility !== 'workspace') fail(400, 'invalid_input', 'Visibility is private or workspace.');
   const visibility = input.visibility as 'private' | 'workspace' | undefined;
   const messageId = input.messageId === undefined ? undefined : identifier(input.messageId, 'messageId');
@@ -158,7 +167,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   }
   const limit = (input.limit as number | undefined) ?? crossSessionLimits.defaultEntries;
   // What the permission card showed the owner, built from the call's own fields, as the runner does.
-  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, visibility, messageId });
+  const target = sessionsToolTarget({ action, targetSessionId, message, access, notify, title: sentTitle, modelId, thinkingLevel, visibility, messageId });
 
   const originAccess = await sessionAccess(c.env, sessionId, actorId);
   if (!originAccess || originAccess.row.status === 'archived' || !hasPermission(originAccess.permissions, 'write')) {
@@ -192,7 +201,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
     if (consent) return c.json(consent);
     return c.json({ message: await deliver(call, other, action, message!, access, notify) } satisfies SessionsToolResult, 202);
   }
-  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, visibility });
+  if (action === 'create') return createChild(call, { message, access, notify, title, modelId, thinkingLevel, visibility });
   const other = await requireOther(call, targetSessionId!, action === 'stop' ? 'write' : 'manage');
   const audit = { crossSession: true, originSessionId: origin.id, callId };
   if (action === 'stop') {
@@ -232,8 +241,15 @@ async function audienceConsent(call: Call, other: (SessionRow & Party) | { id: n
 async function list(call: Call): Promise<SessionsToolResult> {
   const { c, origin, actorId } = call;
   const sessions = (await workspaceSessionAccess(c.env, origin.workspace_id, actorId)).slice(0, 200).map(access => summary(access, origin.id));
-  const models = (await usableModels(c.env, origin.workspace_id, actorId)).map(model => ({ id: model.id, name: model.name, provider: model.provider, modelId: model.model_id }));
-  return { sessions, models };
+  const usable = await usableModels(c.env, origin.workspace_id, actorId);
+  const offers = new Map<string, HostOffer | null>();
+  const models = [];
+  for (const model of usable) {
+    const levels = (await advertised(c.env, model, offers))?.thinkingLevels;
+    models.push({ id: model.id, name: model.name, provider: model.provider, modelId: model.model_id, ...(levels?.length ? { thinkingLevels: levels } : {}) });
+  }
+  const { childModels } = await workspaceChildSessionSettings(c.env.DB, origin.workspace_id);
+  return { sessions, models, childModels };
 }
 
 async function read(call: Call, targetId: string, messageId: string | undefined, limit: number): Promise<SessionsToolResult> {
@@ -279,7 +295,8 @@ function perMessageLimit(): never {
 }
 
 /** Sends `message` to `target` as the actor, opened by the line naming its origin (crossSessionHeader), and records it. */
-async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'create', message: string, access: AccessMode | undefined, notify: boolean): Promise<CrossSessionMessage> {
+async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'create', message: string, access: AccessMode | undefined, notify: boolean,
+  thinkingLevel?: ThinkingLevel): Promise<CrossSessionMessage> {
   const { c, origin, actorId, admission, callId, chain } = call;
   await requireSendable(call, target.id);
   // Auto-approve is the owner's alone, there as here.
@@ -307,8 +324,9 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
       if (kind !== 'ask' && busyActivities.includes(row.activity ?? '')) {
         fail(409, 'session_busy', 'That session is working or waiting on an approval. Read it, or try again once it is done.');
       }
+      const options: ChatOptions = { ...(access && access !== 'approval' ? { access } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
       return submitMessage(inner, row, kind === 'ask' ? 'ask' : 'submit', {
-        content, requestId: `xs:${messageId}`, ...(access && access !== 'approval' ? { options: { access } } : {}),
+        content, requestId: `xs:${messageId}`, ...(Object.keys(options).length ? { options } : {}),
       }, { crossSession: messageId, originSessionId: origin.id }, { currentModel: true });
     });
   } catch (error) {
@@ -330,7 +348,8 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
   return messageRecord(row);
 }
 
-async function createChild(call: Call, options: { message?: string; access?: AccessMode; notify: boolean; title?: string; modelId?: string; visibility?: 'private' | 'workspace' }): Promise<Response> {
+async function createChild(call: Call, options: { message?: string; access?: AccessMode; notify: boolean; title?: string; modelId?: string; thinkingLevel?: ThinkingLevel;
+  visibility?: 'private' | 'workspace' }): Promise<Response> {
   const { c, origin, actorId } = call;
   await requireSessionCreator(c.env, origin.workspace_id, actorId);
   // One message's calls run one at a time on the host (the tool is sequential) and a session runs one message at a time,
@@ -343,11 +362,19 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const parentVisibility = origin.visibility ?? 'private';
   const visibility = options.visibility ?? parentVisibility;
   if (visibility === 'workspace' && parentVisibility === 'private') fail(403, 'visibility_wider', 'A private session starts only private sessions.');
-  const modelId = options.modelId ?? (await c.env.DB.query<{ model_id: string }>('SELECT model_id FROM agent_versions WHERE id = ?').bind(origin.agent_version_id).first())?.model_id;
+  // The agent picks the model and reasoning level for its sub-task only where the workspace lets it; otherwise, and for
+  // what it leaves out, the new session runs on this one's current model, at its reasoning level.
+  const { childModels } = await workspaceChildSessionSettings(c.env.DB, origin.workspace_id);
+  if (!childModels && (options.modelId !== undefined || options.thinkingLevel !== undefined)) {
+    fail(403, 'child_models_disabled', 'This workspace runs the sessions agents start on their parent\'s model and reasoning level. Leave out model and thinking.');
+  }
+  const parent = options.modelId === undefined ? await parentModel(call) : undefined;
+  const modelId = options.modelId ?? parent?.modelId;
   if (!modelId) fail(409, 'invalid_binding', 'This session\'s model is unavailable; name a model that list returns.');
-  const model = await c.env.DB.query<{ connector_id: string | null; connector_owner_id: string | null }>('SELECT connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?')
-    .bind(modelId, origin.workspace_id).first();
+  const model = await c.env.DB.query<Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>>(
+    'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(modelId, origin.workspace_id).first();
   if (!model) fail(404, 'not_found', 'Model not found.');
+  const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, options.message === undefined ? undefined : parent?.thinkingLevel);
   // The new session runs as the actor, with their Git accounts, on the model's host: one they own, or this session's
   // own host when it is theirs to trust (they started this session there). Any other host they acknowledge themselves.
   const trusted = model.connector_id && (model.connector_owner_id === actorId || (model.connector_id === origin.connector_id && actorId === origin.owner_id));
@@ -367,12 +394,77 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const title = options.title ?? cut(`${origin.title} · sub-task`, 190).split('\n')[0]!;
   const { row } = await asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, visibility, modelId,
     ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}) }, { parentSessionId: origin.id }));
-  await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId }).run();
+  await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId, modelId,
+    ...(thinkingLevel ? { thinkingLevel } : {}), ...(parent ? { inherited: true } : {}) }).run();
   const created = await sessionAccess(c.env, row.id, actorId);
   if (!created) fail(409, 'policy_changed', 'The new session is no longer available.');
-  const message = options.message === undefined ? undefined : await deliver(call, created.row, 'create', options.message, options.access, options.notify);
-  return c.json({ session: summary(created), ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
+  const message = options.message === undefined ? undefined : await deliver(call, created.row, 'create', options.message, options.access, options.notify, thinkingLevel);
+  return c.json({ session: summary(created), model: { id: modelId, provider: model.provider, modelId: model.model_id, ...(thinkingLevel ? { thinkingLevel } : {}) },
+    ...(message ? { message } : {}) } satisfies SessionsToolResult, 201);
 }
+
+/** What a host offers: whether it takes a message's model and reasoning level, and its advertised models. */
+type HostOffer = { chatOptions: boolean; models: LocalModelSummary[] };
+
+/**
+ * How `model`'s host advertises it, or null without a host, or where the host can't set a message's reasoning level;
+ * `offers` caches hosts across calls.
+ */
+async function advertised(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, offers = new Map<string, HostOffer | null>()): Promise<LocalModelSummary | null> {
+  if (!model.connector_id) return null;
+  if (!offers.has(model.connector_id)) {
+    const host = await env.DB.query<{ models_json: string; capabilities_json: string }>('SELECT models_json, capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
+      .bind(model.connector_id).first();
+    let offer: HostOffer | null = null;
+    try {
+      if (host) offer = { chatOptions: (JSON.parse(host.capabilities_json) as ConnectorCapabilities).chatOptions === true, models: JSON.parse(host.models_json) as LocalModelSummary[] };
+    } catch { offer = null; }
+    offers.set(model.connector_id, offer);
+  }
+  const offer = offers.get(model.connector_id);
+  if (!offer?.chatOptions) return null;
+  return offer.models.find(item => item.provider === model.provider && item.modelId === model.model_id) ?? { provider: model.provider, modelId: model.model_id, name: model.model_id };
+}
+
+/**
+ * The reasoning level a new session's opening message runs at: the one the agent chose, which the model's host must
+ * offer it at, or else this session's own (`inherited`) where the new session's model runs at it; none leaves it to
+ * the host, which starts the model at its own level.
+ */
+async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
+  inherited: ThinkingLevel | undefined): Promise<ThinkingLevel | undefined> {
+  if (chosen === undefined && inherited === undefined) return undefined;
+  const offered = await advertised(env, model);
+  const supports = (level: ThinkingLevel) => !!offered && (!offered.thinkingLevels?.length || offered.thinkingLevels.includes(level));
+  if (chosen === undefined) return supports(inherited!) ? inherited : undefined;
+  if (!offered) fail(409, 'thinking_unsupported', 'That model\'s host can\'t set a reasoning level. Leave out thinking.');
+  if (!supports(chosen)) fail(400, 'thinking_unsupported', `That model runs at ${offered.thinkingLevels!.join(', ')}. Choose one of those.`);
+  return chosen;
+}
+
+/**
+ * The model this session runs on now, as a model of the workspace the actor may use, and its reasoning level: what
+ * its host reports for the shared conversation; before that, or where that model isn't one the actor may use here,
+ * the model it started on, leaving the reasoning level to its host.
+ */
+async function parentModel(call: Call): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
+  const { c, origin, actorId } = call;
+  let agent: SessionView['agent'];
+  try {
+    agent = (await asActor(c.env, actorId, inner => sessionView(inner, origin))).view.agent;
+  } catch {
+    // A host that can't show the session now: the model it started on still names one.
+    agent = undefined;
+  }
+  if (agent) {
+    const current = (await usableModels(c.env, origin.workspace_id, actorId))
+      .find(model => (model.connector_id ?? null) === (origin.connector_id ?? null) && model.provider === agent.provider && model.model_id === agent.modelId);
+    if (current) return { modelId: current.id, ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) };
+  }
+  const started = await c.env.DB.query<{ model_id: string }>('SELECT model_id FROM agent_versions WHERE id = ?').bind(origin.agent_version_id).first();
+  return started ? { modelId: started.model_id } : {};
+}
+
 
 /** What one pending notification did, for tests and logs. */
 export type NotificationOutcome = { messageId: string; delivered: string } | { messageId: string; waiting: string } | { messageId: string; failed: string };

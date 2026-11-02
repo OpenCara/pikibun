@@ -440,3 +440,65 @@ test('lists nest the sessions an agent started under the session that started th
     { id: 'x', parentSessionId: 'y' }, { id: 'y', parentSessionId: 'x' }];
   assert.deepEqual(nestSessions(sessions).map(({ session, depth }) => `${session.id}${depth}`), ['b0', 'a0', 'c1', 'd2', 'e0', 'x0', 'y1']);
 });
+
+test('a session an agent starts runs on the model and reasoning level it chose, where the workspace allows that, and else on its parent\'s current ones', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const path = `/api/workspaces/${f.workspace.id}/child-sessions`;
+  f.allow('session-a', 'sessions');
+  const childModel = (sessionId: string) => f.sqlite.prepare('SELECT a.model_id FROM sessions s JOIN agent_versions a ON a.id = s.agent_version_id WHERE s.id = ?').get(sessionId)!.model_id;
+
+  // On by default; every member sees it, and only owners and admins change it.
+  assert.deepEqual(await (await f.collaborator.request('GET', path)).json(), { settings: { childModels: true } });
+  assert.equal((await f.collaborator.request('PUT', path, { childModels: false })).status, 403);
+  assert.equal((await f.owner.request('PUT', path, { childModels: 'no' })).status, 400);
+  assert.equal((await f.owner.request('PUT', path, { childModels: false, other: 1 })).status, 400);
+
+  // The parent has switched to another of the workspace's models, at its own reasoning level.
+  const deep = (await (await f.owner.request('POST', `/api/workspaces/${f.workspace.id}/models`, { name: 'deep', provider: 'faux', modelId: 'faux-2' })).json() as { model: { id: string } }).model;
+  f.fake('session-a').view.agent = { provider: 'faux', modelId: 'faux-2', thinkingLevel: 'high' };
+  const write = f.admit('session-a', ownerId);
+  const listed = await f.tool('session-a', ownerId, write, { action: 'list' });
+  assert.equal(listed.body.childModels, true);
+  assert.deepEqual((listed.body.models as { id: string }[]).map(model => model.id).sort(), [f.model.id, deep.id].sort());
+
+  // What the agent leaves out is its parent's current model, rather than the one the parent started on.
+  const inherited = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Inherits', message: 'Go' });
+  assert.equal(inherited.status, 201, JSON.stringify(inherited.body));
+  const inheritedId = (inherited.body.session as CrossSessionSummary).id;
+  assert.equal(childModel(inheritedId), deep.id);
+  // A host that can't set reasoning gets none: the opening message names no level.
+  assert.deepEqual(inherited.body.model, { id: deep.id, provider: 'faux', modelId: 'faux-2' });
+  assert.equal((f.fake(inheritedId).submitted[0]!.body.options as Record<string, unknown> | undefined)?.thinkingLevel, undefined);
+
+  // The agent picks the model for its sub-task, with the level on its card.
+  const chosen = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Chosen', modelId: f.model.id });
+  assert.equal(chosen.status, 201, JSON.stringify(chosen.body));
+  assert.equal(childModel((chosen.body.session as CrossSessionSummary).id), f.model.id);
+  assert.equal(sessionsToolTarget({ action: 'create', modelId: 'm', thinkingLevel: 'low', message: 'Go' }), 'create · model m · thinking low · message:\nGo');
+  // A reasoning level is the opening message's, from the levels the model's host offers; nothing starts otherwise.
+  const before = f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
+  await f.refused(f.tool('session-a', ownerId, write, { action: 'create', thinkingLevel: 'low' }), 400, 'invalid_input');
+  await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'huge' }), 400, 'invalid_input');
+  await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'low' }), 409, 'thinking_unsupported');
+  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run('levels-host', ownerId, 'Levels', 'h'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, chatOptions: true }),
+      JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3', thinkingLevels: ['off', 'low'], thinkingLevel: 'low' }]), new Date().toISOString());
+  f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run('hosted-model', f.workspace.id, 'Faux 3', 'faux', 'faux-3', new Date().toISOString(), 'levels-host', ownerId);
+  const unsupported = await f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', modelId: 'hosted-model', thinkingLevel: 'high' });
+  assert.deepEqual([unsupported.status, unsupported.body.code], [400, 'thinking_unsupported']);
+  assert.match(String((unsupported.body as { message?: string }).message ?? JSON.stringify(unsupported.body)), /off, low/);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, before);
+
+  // Turned off, agents choose neither, and every session they start runs on its parent's current model.
+  const off = await f.owner.request('PUT', path, { childModels: false });
+  assert.deepEqual(await off.json(), { settings: { childModels: false } });
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.child_sessions.updated'").get()!.n, 1);
+  assert.equal((await f.tool('session-a', ownerId, write, { action: 'list' })).body.childModels, false);
+  await f.refused(f.tool('session-a', ownerId, write, { action: 'create', modelId: f.model.id }), 403, 'child_models_disabled');
+  await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'low' }), 403, 'child_models_disabled');
+  const parentOnly = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Parent only' });
+  assert.equal(parentOnly.status, 201, JSON.stringify(parentOnly.body));
+  assert.equal(childModel((parentOnly.body.session as CrossSessionSummary).id), deep.id);
+});

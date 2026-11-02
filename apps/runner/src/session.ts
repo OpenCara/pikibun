@@ -145,12 +145,12 @@ const readOnlyTools = ["identity", "read_file", "list_files"];
 /** How often a sessions tool wait reads its message's outcome. */
 const WAIT_POLL_MS = 3000;
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
-  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent) and the models create can use. "
+  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
   + "read {session, limit?, message_id?}: a session's latest shared-conversation entries and pending approvals; with message_id, also the outcome of a message this session sent it (status, done, reply). "
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access approval, the default: its commands wait for people there; read: inspect only; auto: only in a message the session owner sent with auto-approve, to a session they own); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
-  + "create {message?, title?, model?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, on this session's model unless model names one list returns, and send it message. "
+  + "create {message?, title?, model?, thinking?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
   + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
   + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
   + "chains of messages stop after 3 hops and never loop back to a session they came from; approvals in another session are decided only by people there. "
@@ -2124,13 +2124,13 @@ export class RunnerSession {
         executionMode: "sequential", parameters: Type.Object({
         action: StringEnum(sessionsToolActions), session: Type.Optional(Type.String()), message: Type.Optional(Type.String()),
         access: Type.Optional(StringEnum(accessModes)), notify: Type.Optional(Type.Boolean()), title: Type.Optional(Type.String()), model: Type.Optional(Type.String()),
-        visibility: Type.Optional(StringEnum(["private", "workspace"] as const)), message_id: Type.Optional(Type.String()),
+        thinking: Type.Optional(StringEnum(thinkingLevels)), visibility: Type.Optional(StringEnum(["private", "workspace"] as const)), message_id: Type.Optional(Type.String()),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.readEntries })),
         timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
       }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-          modelId: args.model, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
+          modelId: args.model, thinkingLevel: args.thinking, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
           Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
         if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");
         const wait = args.action === "wait";
