@@ -567,9 +567,11 @@ def import_at(root, request):
     data = base64.b64decode(content, validate=True)
     if len(data) > MAX_IMPORT:
         raise ValueError('file exceeds size limit')
-    parts = parts_for(request.get('directory'), True)
-    if not parts:
-        raise ValueError('a directory is required')
+    directory = request.get('directory')
+    parts = parts_for(directory, True)
+    # The directory itself, never a symlink to another one in the worktree: the file goes only where it was asked to.
+    if not parts or parts != directory.split('/'):
+        raise ValueError('path component is not a real directory')
     parent = walk(root, parts, True)
     try:
         for index in range(1, 1000):

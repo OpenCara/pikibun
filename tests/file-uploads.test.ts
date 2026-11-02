@@ -106,6 +106,11 @@ async function imports(workspace: SessionWorkspace): Promise<void> {
   assert.equal(await workspace.importFile("attachments", "large.bin", large, allow), "attachments/large.bin");
   assert.equal((await readFile(join(workspace.worktree, "attachments", "large.bin"))).length, large.length);
   await assert.rejects(workspace.importFile("attachments", "../escape", data, allow), /Invalid file import/);
+  // A directory that is a symlink, even to another directory in the worktree, gets nothing: no stray file is left there.
+  await mkdir(join(workspace.worktree, "src"));
+  await symlink("src", join(workspace.worktree, "linked"));
+  await assert.rejects(workspace.importFile("linked", "a.txt", data, allow), /not a real directory/);
+  assert.deepEqual(await readdir(join(workspace.worktree, "src")), []);
 }
 
 test("the unsandboxed host imports attached files into the worktree, never over a file or through a symlink", hostMode, async t => {
@@ -191,4 +196,14 @@ test("a session takes an attached file in order, one chunk per ticket, and write
   // The same file again goes beside it.
   const again = await send({ uploadId: "upload-0002", name: "data.bin", size: 2, offset: 0, data: "aGk=" });
   assert.deepEqual(again.body, { received: 2, path: "attachments/data (2).bin" });
+
+  // Unfinished uploads count the whole size they declared from their first chunk, so several started small can't grow
+  // past what the host holds at once (four files of the largest size).
+  const big = (index: number) => ({ uploadId: `upload-big-${index}`, name: `big-${index}.bin`, size: fileUploadLimits.maxBytes, offset: 0, data: "aGk=" });
+  for (let index = 0; index < 4; index++) assert.deepEqual((await send(big(index))).body, { received: 2 });
+  const refused = await send(big(4));
+  assert.equal(refused.status, 429);
+  assert.equal((await readdir(join(session.directory, "uploads"))).length, 4);
+  // Starting the same upload again doesn't count it twice.
+  assert.equal((await send(big(3))).status, 200);
 });

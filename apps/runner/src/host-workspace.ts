@@ -143,7 +143,8 @@ export class HostWorkspace implements SessionWorkspace {
     const request = importRequest(directory, name, data);
     return this.#operation(authorize, async () => {
       const parts = await this.#parts(request.directory, true);
-      if (!parts.length) throw hostError("a directory is required");
+      // The directory itself, never a symlink to another one in the worktree: the file goes only where it was asked to.
+      if (!parts.length || parts.join("/") !== request.directory) throw hostError("path component is not a real directory");
       const parent = await directoryAt(this.worktree, parts, true);
       for (let index = 1; index <= ATTACHMENT_CANDIDATES; index++) {
         const candidate = attachmentCandidate(name, index);

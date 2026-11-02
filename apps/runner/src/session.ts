@@ -136,6 +136,8 @@ type InputImage = { mimeType: string; data: string };
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
 /** Bytes of a session's uploads (file-uploads.ts) its host holds at once, until each is complete and in the worktree. */
 const MAX_STAGED_UPLOAD_BYTES = 4 * fileUploadLimits.maxBytes;
+/** Unfinished uploads a session's host holds at once: a message's files, and some to spare. */
+const MAX_STAGED_UPLOADS = 2 * fileUploadLimits.count;
 /** An upload no chunk has reached for this long is abandoned, and the next one to start removes it. */
 const STALE_UPLOAD_MS = 60 * 60 * 1000;
 /** Tools that never change files or run commands: the whole toolset of side asks. */
@@ -2901,10 +2903,11 @@ export class RunnerSession {
   private async receiveChunk(ticket: RunnerTicket, chunk: UploadChunk): Promise<UploadResult> {
     // One upload is one actor's one file: its chunks name the same file and size, or they are another upload.
     const key = (await sha256(stableJson({ actor: ticket.actorId, uploadId: chunk.uploadId, name: chunk.name, size: chunk.size }))).slice(0, 43);
-    const part = join(this.uploadsDirectory, `${key}.part`);
+    // Named with the size it declared, which counts against the session's staged bytes from its first chunk on.
+    const part = join(this.uploadsDirectory, `${key}-${chunk.size}.part`);
     const data = Buffer.from(chunk.data, "base64");
     await mkdir(this.uploadsDirectory, { recursive: true, mode: 0o700 });
-    if (chunk.offset === 0) await this.sweepUploads(chunk.size);
+    if (chunk.offset === 0) await this.sweepUploads(`${key}-${chunk.size}.part`, chunk.size);
     else {
       let staged: number;
       try { staged = (await lstat(part)).size; }
@@ -2942,23 +2945,31 @@ export class RunnerSession {
   }
 
   /**
-   * Before a new upload starts: removes uploads left unfinished for an hour, then refuses one that would hold more than
-   * MAX_STAGED_UPLOAD_BYTES of the session's uploads, finished or not, on the host at once.
+   * Before upload `own` (of `size` bytes) starts: removes uploads left unfinished for an hour, and anything else that
+   * isn't an upload, then refuses one that would make the session's unfinished uploads more than MAX_STAGED_UPLOADS, or
+   * declare more than MAX_STAGED_UPLOAD_BYTES between them. Each counts the whole size it declared, not what has
+   * arrived of it, so uploads started small can't grow past the limit later; chunks are taken one at a time, so no
+   * other upload starts between this check and its first chunk.
    */
-  private async sweepUploads(size: number): Promise<void> {
+  private async sweepUploads(own: string, size: number): Promise<void> {
     let names: string[];
     try { names = await readdir(this.uploadsDirectory); }
     catch { return; }
-    let staged = 0;
+    let declared = 0;
+    let uploads = 0;
     for (const name of names) {
+      if (name === own) continue;
       const path = join(this.uploadsDirectory, name);
+      const match = /^[A-Za-z0-9_-]{43}-(\d{1,12})\.part$/.exec(name);
       try {
         const info = await lstat(path);
-        if (!info.isFile() || Date.now() - info.mtimeMs > STALE_UPLOAD_MS) await rm(path, { force: true, recursive: true });
-        else staged += info.size;
+        if (!match || !info.isFile() || Date.now() - info.mtimeMs > STALE_UPLOAD_MS) await rm(path, { force: true, recursive: true });
+        else { declared += Number(match[1]); uploads++; }
       } catch { /* Gone meanwhile. */ }
     }
-    if (staged + size > MAX_STAGED_UPLOAD_BYTES) throw new RunnerError(429, "Too many files are being uploaded to this session at once. Try again shortly");
+    if (uploads + 1 > MAX_STAGED_UPLOADS || declared + size > MAX_STAGED_UPLOAD_BYTES) {
+      throw new RunnerError(429, "Too many files are being uploaded to this session at once. Try again shortly");
+    }
   }
 
   async close({ abortPushes = true }: { abortPushes?: boolean } = {}): Promise<void> {

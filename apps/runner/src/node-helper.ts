@@ -284,7 +284,8 @@ function importAt(request) {
   const data = Buffer.from(request.data, "base64");
   if (data.length > MAX_IMPORT) refuse("file exceeds size limit");
   const parts = partsFor(request.directory, true);
-  if (!parts.length) refuse("a directory is required");
+  // The directory itself, never a symlink to another one in the worktree: the file goes only where it was asked to.
+  if (!parts.length || parts.join("/") !== request.directory) refuse("path component is not a real directory");
   const parent = directoryAt(parts, true);
   for (let index = 1; index < 1000; index++) {
     const candidate = importCandidate(name, index);
