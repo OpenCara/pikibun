@@ -1,5 +1,5 @@
 import type { AvailableUpdate } from "../main/updates.js";
-import type { HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome } from "./bridge.js";
+import type { HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome, SandboxChoice } from "./bridge.js";
 
 // What the desktop app offers the web app it shows, as `window.pikibunDesktop`: the app's settings, inside the server's
 // own Settings page (Settings › This Mac). The main process honors calls only from the main frame of its Pikibun
@@ -8,7 +8,7 @@ import type { HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome } 
 // administrators' passwords) are never entered here: the app's own Settings window takes them. Types only, so the web
 // app's bundle imports nothing from the desktop app.
 
-export type { AvailableUpdate, HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome };
+export type { AvailableUpdate, HostsView, LocalSharedSettings, LocalView, ModelChoice, Outcome, SandboxChoice };
 
 export const remoteChannels = {
   view: "desktop:view",
@@ -21,6 +21,7 @@ export const remoteChannels = {
   hostRemove: "desktop:host-remove",
   hostOpen: "desktop:host-open",
   hostModels: "desktop:host-models",
+  hostSandbox: "desktop:host-sandbox",
   openAtLogin: "desktop:open-at-login",
   server: "desktop:server",
   localStart: "desktop:local-start",
@@ -76,6 +77,11 @@ export interface DesktopBridge {
     remove(id: string): Promise<Outcome>;
     open(id: string): Promise<Outcome>;
     setModels(id: string, models: ModelChoice[] | null): Promise<Outcome>;
+    /**
+     * Windows only: where the host's sessions run (WSL2 or native Windows), from its next start; the app asks the owner
+     * first. Absent from apps that predate it.
+     */
+    setSandbox?(id: string, choice: SandboxChoice): Promise<Outcome>;
   };
   setOpenAtLogin(enabled: boolean): Promise<Outcome>;
   /** The primary server: what the main Pikibun window opens. */

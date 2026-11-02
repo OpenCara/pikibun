@@ -26,6 +26,8 @@ const pair = element<HTMLButtonElement>("pair");
 const modelsSave = element<HTMLButtonElement>("models-save");
 const modelsPi = element<HTMLButtonElement>("models-pi");
 const openAtLogin = element<HTMLInputElement>("open-at-login");
+const sandboxSelect = element<HTMLSelectElement>("sandbox");
+const distroSelect = element<HTMLSelectElement>("distro");
 let busy = false;
 let current: HostsView | undefined;
 /** The connection the page shows; the primary one until the owner picks another. */
@@ -44,6 +46,56 @@ function item(text: string, detail?: string, mark?: "ok" | "missing"): HTMLLIEle
   li.appendChild(document.createElement("span")).textContent = text;
   if (detail) { const small = li.appendChild(document.createElement("span")); small.className = "muted"; small.textContent = detail; }
   return li;
+}
+
+/** How the host's sessions are isolated: as it runs, else as it would start. */
+function isolationText(view: HostView): string {
+  const inspection = view.inspection;
+  if (inspection?.unsupported) return inspection.unsupported;
+  const mode = view.running ? (view.running.unsandboxed ? "unsandboxed" : "sandboxed") : inspection?.mode;
+  const sandbox = view.running ? view.running.sandbox : inspection?.sandbox;
+  const wsl = view.windows?.sandbox === "wsl2";
+  if (mode === "sandboxed") {
+    if (sandbox === "windows") return "Sandboxed (experimental): agent work runs in Windows' own process containers, through Microsoft's MXC SDK.";
+    if (sandbox === "seatbelt") return "Sandboxed (experimental): agent work runs in macOS's Seatbelt sandbox.";
+    return wsl ? "Sandboxed: agent work runs in WSL2's bubblewrap sandbox, verified per session." : "Sandboxed: agent work runs in bubblewrap, verified per session.";
+  }
+  if (mode === "unsandboxed") return `Unsandboxed: agent work runs directly as you ${wsl ? "in WSL2" : "on this computer"}, after your consent.`;
+  return "…";
+}
+
+/** Windows: where the host's sessions run, WSL2 (in which distribution) or native Windows. */
+function renderSandbox(view: HostsView, connection: HostView): void {
+  const choice = connection.windows;
+  element("sandbox-row").hidden = !choice;
+  if (!choice) return;
+  const stopped = connection.state === "stopped";
+  if (document.activeElement !== sandboxSelect) sandboxSelect.value = choice.sandbox;
+  sandboxSelect.disabled = busy || !stopped;
+  const distros = view.wsl?.distros ?? [];
+  element("distro-row").hidden = choice.sandbox !== "wsl2";
+  const fallback = distros.find(distro => distro.default && distro.version === 2) ?? distros.find(distro => distro.version === 2);
+  const options: [string, string, boolean][] = [["", fallback ? `WSL's default (${fallback.name})` : "WSL's default", false],
+    ...distros.map(distro => [distro.name, `${distro.name}${distro.version === 2 ? "" : " (WSL 1: no sandbox)"}`, distro.version !== 2] as [string, string, boolean])];
+  // A chosen distribution this computer no longer lists stays visible, so the choice isn't silently changed.
+  const chosen = choice.sandbox === "wsl2" ? choice.distro : undefined;
+  if (chosen && !distros.some(distro => distro.name === chosen)) options.push([chosen, `${chosen} (not found)`, true]);
+  const key = JSON.stringify(options);
+  if (distroSelect.dataset.options !== key) {
+    distroSelect.dataset.options = key;
+    distroSelect.replaceChildren(...options.map(([value, text, disabled]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      option.disabled = disabled && value !== chosen;
+      return option;
+    }));
+  }
+  if (document.activeElement !== distroSelect) distroSelect.value = chosen ?? "";
+  distroSelect.disabled = busy || !stopped;
+  setText(element("sandbox-note"), choice.sandbox === "wsl2"
+    ? "Sessions run in WSL2's bubblewrap sandbox, using Node.js, Pi's models and the connector's pairing inside that distribution, as `pikibun connect` run there does. Pikibun copies its connector into WSL2 at the first start."
+    : "Sessions run in Windows' own sandbox (experimental: Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32 and Microsoft's MXC SDK; Prerequisites below lists what is missing), or, while it isn't ready, without one after your consent. Native Windows uses Pi's models and the connector's pairing in your Windows profile.");
 }
 
 function label(view: HostView): string {
@@ -130,11 +182,9 @@ function render(view: HostsView): void {
   setText(element("server"), connection.server);
   const paired = inspection?.pairedServer;
   setText(element("paired"), inspection ? paired ?? inspection.pairingError ?? "Not paired yet" : "…");
-  const isolation = connection.running ? (connection.running.unsandboxed ? "unsandboxed" : "sandboxed") : inspection?.mode;
-  setText(element("isolation"), inspection?.unsupported ?? (isolation === "sandboxed"
-    ? "Sandboxed: agent work runs in bubblewrap, verified per session."
-    : isolation === "unsandboxed" ? "Unsandboxed: agent work runs directly as you on this computer, after your consent." : "…"));
-  setText(element("state-dir"), inspection?.stateDir ?? "…");
+  setText(element("isolation"), isolationText(connection));
+  setText(element("state-dir"), inspection?.stateDir || (inspection ? "—" : "…"));
+  renderSandbox(view, connection);
   setText(element("command"), connection.command);
 
   start.disabled = busy || !stopped || !inspection || !paired || !!inspection.unsupported;
@@ -232,6 +282,12 @@ modelsSave.addEventListener("click", () => {
 });
 modelsPi.addEventListener("click", () => { void act(() => bridge.setModels(id(), null)).then(() => { modelDraft = undefined; }); });
 openAtLogin.addEventListener("change", () => { void act(() => bridge.setOpenAtLogin(openAtLogin.checked)); });
+const chooseSandbox = () => {
+  const choice = sandboxSelect.value === "native" ? { sandbox: "native" as const } : { sandbox: "wsl2" as const, ...(distroSelect.value ? { distro: distroSelect.value } : {}) };
+  void act(() => bridge.setSandbox(id(), choice));
+};
+sandboxSelect.addEventListener("change", chooseSandbox);
+distroSelect.addEventListener("change", chooseSandbox);
 
 bridge.onUpdate(view => { if (!busy) render(view); else current = view; });
 void bridge.view().then(render);

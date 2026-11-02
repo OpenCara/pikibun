@@ -110,15 +110,34 @@ export async function loadConnectorModels(choice: ModelChoice): Promise<LocalMod
   return localModels;
 }
 
-/** The control-plane origin this state directory is paired with, if any. */
-/** Sandboxed only on Linux with every sandbox prerequisite; anything else runs unsandboxed after explicit consent. */
-export async function hostIsolation(): Promise<{ mode: "sandboxed" | "unsandboxed"; sandboxPrerequisites?: Prerequisite[]; prerequisites: Prerequisite[] }> {
-  if (process.platform !== "linux") return { mode: "unsandboxed", prerequisites: await checkPrerequisites(true) };
-  const sandboxPrerequisites = await checkPrerequisites(false);
+/** The sandbox a host's sessions run in: bubblewrap (Linux, WSL2), or macOS's or Windows' own (experimental). */
+export type SandboxKind = "bubblewrap" | "seatbelt" | "windows";
+
+export interface HostIsolation {
+  mode: "sandboxed" | "unsandboxed";
+  /** Set when sandboxed. */
+  sandbox?: SandboxKind;
+  /** The sandbox's own prerequisites, present even when some are missing. */
+  sandboxPrerequisites?: Prerequisite[];
+  /** The chosen mode's prerequisites. */
+  prerequisites: Prerequisite[];
+}
+
+/**
+ * Sandboxed on Linux with every sandbox prerequisite and, with `experimental`, on macOS and native Windows with every
+ * prerequisite of their own sandbox; anything else runs unsandboxed after explicit consent.
+ */
+export async function hostIsolation(experimental?: { stateDir: string }): Promise<HostIsolation> {
+  const native = process.platform === "darwin" || process.platform === "win32";
+  if (process.platform !== "linux" && !(native && experimental)) return { mode: "unsandboxed", prerequisites: await checkPrerequisites(true) };
+  const sandboxPrerequisites = await checkPrerequisites(false, process.platform === "linux" ? undefined : experimental);
+  const sandbox: SandboxKind = process.platform === "linux" ? "bubblewrap" : process.platform === "darwin" ? "seatbelt" : "windows";
   return sandboxPrerequisites.every(item => item.ok)
-    ? { mode: "sandboxed", sandboxPrerequisites, prerequisites: sandboxPrerequisites }
+    ? { mode: "sandboxed", sandbox, sandboxPrerequisites, prerequisites: sandboxPrerequisites }
     : { mode: "unsandboxed", sandboxPrerequisites, prerequisites: await checkPrerequisites(true) };
 }
+
+/** The control-plane origin this state directory is paired with, if any. */
 
 export async function savedPairing(dataDir: string, allowInsecureLoopback = false): Promise<string | undefined> {
   return (await readConnectorState(dataDir, undefined, allowInsecureLoopback))?.controlPlaneUrl;

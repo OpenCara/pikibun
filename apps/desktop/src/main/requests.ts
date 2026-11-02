@@ -1,6 +1,6 @@
 import { pairingCodePattern, pairingIdPattern, uploadRequestLimits } from "../../../runner/src/desktop-protocol.js";
 import type { GitHubApp, LocalSharedSettings, LocalStartInput, ModelChoice, StartInput } from "../shared/bridge.js";
-import { isConnectionId, isModelChoice, MAX_MODELS } from "./settings.js";
+import { isConnectionId, isModelChoice, MAX_MODELS, parseSandboxChoice, type SandboxChoice } from "./settings.js";
 
 // Validation of every payload a local page sends the main process; pure, so tests run it without Electron.
 
@@ -125,6 +125,12 @@ export function parseModels(value: unknown): Parsed<ModelChoice[] | null> {
   if (!value.length) return { ok: false, error: "Offer at least one model, or let Pi choose." };
   const unique = new Map(value.map(model => [`${model.provider}/${model.modelId}`, { provider: model.provider, modelId: model.modelId }]));
   return { ok: true, value: [...unique.values()] };
+}
+
+/** Where a Windows host's sessions run, as a page chose it: WSL2 (in a named distribution, or WSL's default) or native. */
+export function parseSandbox(value: unknown): Parsed<SandboxChoice> {
+  const choice = parseSandboxChoice(value);
+  return choice ? { ok: true, value: choice } : { ok: false, error: "Invalid request." };
 }
 
 export function parseBoolean(value: unknown): Parsed<boolean> {

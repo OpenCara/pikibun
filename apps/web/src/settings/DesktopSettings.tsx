@@ -27,7 +27,45 @@ function isolation(view: HostView): string {
   const inspection = view.inspection;
   if (inspection?.unsupported) return inspection.unsupported;
   const mode = view.running ? (view.running.unsandboxed ? "unsandboxed" : "sandboxed") : inspection?.mode;
-  return mode === "sandboxed" ? "Sandboxed (bubblewrap)" : mode === "unsandboxed" ? "Unsandboxed, after your consent in the app" : "Checking...";
+  const sandbox = view.running ? view.running.sandbox : inspection?.sandbox;
+  const wsl = view.windows?.sandbox === "wsl2";
+  if (mode === "sandboxed") {
+    return sandbox === "windows" ? "Sandboxed (Windows process containers, experimental)" : sandbox === "seatbelt" ? "Sandboxed (macOS Seatbelt, experimental)"
+      : wsl ? "Sandboxed (bubblewrap in WSL2)" : "Sandboxed (bubblewrap)";
+  }
+  return mode === "unsandboxed" ? `Unsandboxed${wsl ? " in WSL2" : ""}, after your consent in the app` : "Checking...";
+}
+
+/**
+ * Windows: where a host's sessions run, WSL2 (in which distribution) or native Windows. The app asks the owner before
+ * it changes, and only while the host is stopped. Absent from apps that predate the choice.
+ */
+function SandboxField({ connection, view, bridge }: { connection: HostView; view: DesktopView; bridge: DesktopBridge }) {
+  const action = useAction();
+  const choice = connection.windows;
+  const setSandbox = bridge.host.setSandbox;
+  if (!choice || !setSandbox) return null;
+  const stopped = connection.state === "stopped";
+  const distros = view.hosts.wsl?.distros ?? [];
+  const fallback = distros.find(distro => distro.default && distro.version === 2) ?? distros.find(distro => distro.version === 2);
+  const chosen = choice.sandbox === "wsl2" ? choice.distro : undefined;
+  const change = (next: { sandbox: "wsl2"; distro?: string } | { sandbox: "native" }) => void action.run(() => check(setSandbox(connection.id, next)));
+  return <Field label="Sandbox" hint={choice.sandbox === "wsl2"
+    ? "Sessions run in WSL2's bubblewrap sandbox, with Node.js, Pi's models and the host's pairing inside that distribution, as `pikibun connect` run there does."
+    : "Sessions run in Windows' own sandbox, which is experimental (Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32 and Microsoft's MXC SDK), or without one, after your consent, while it isn't ready. Pi's models and the host's pairing are your Windows profile's."}>
+    <div className="stack">
+      <SegmentedControl label="Sandbox" value={choice.sandbox} onChange={sandbox => change(sandbox === "native" ? { sandbox: "native" } : { sandbox: "wsl2" })}
+        options={[{ value: "wsl2", label: "WSL2", hint: "bubblewrap in a WSL2 distribution" }, { value: "native", label: "Native Windows", hint: "Windows' own sandbox (experimental)" }]} />
+      {choice.sandbox === "wsl2" && <select className="select" aria-label="WSL distribution" value={chosen ?? ""} disabled={action.busy || !stopped}
+        onChange={event => change(event.target.value ? { sandbox: "wsl2", distro: event.target.value } : { sandbox: "wsl2" })}>
+        <option value="">{fallback ? `WSL's default (${fallback.name})` : "WSL's default"}</option>
+        {distros.map(distro => <option key={distro.name} value={distro.name} disabled={distro.version !== 2}>{distro.name}{distro.version === 2 ? "" : " (WSL 1: no sandbox)"}</option>)}
+        {chosen && !distros.some(distro => distro.name === chosen) && <option value={chosen} disabled>{chosen} (not found)</option>}
+      </select>}
+      {!stopped && <span className="small muted">Stop the host to change where its sessions run.</span>}
+      <Feedback {...action} />
+    </div>
+  </Field>;
 }
 
 export function DesktopSettings() {
@@ -80,6 +118,7 @@ function ThisServerSection({ view, bridge }: { view: DesktopView; bridge: Deskto
         <span className="small muted">{otherPairing
           ? `${view.title}'s connection to this server is paired elsewhere (${here?.inspection?.pairedServer ?? "an unreadable pairing"}). Pairing again replaces it; the old host stays in that Pikibun, offline, until you remove it there.`
           : `Pair ${view.title} with ${server} as your host in one step: no code to copy.${here ? "" : " The app asks before it adds this server to its list."}`}</span>
+        {here && <SandboxField connection={here} view={view} bridge={bridge} />}
         <Field label="Host name"><input className="input" required maxLength={120} autoComplete="off" value={name} onChange={event => setName(event.target.value)} /></Field>
         <div className="inline"><Button type="submit" variant="default" disabled={action.busy || !name.trim()}>{action.busy ? "Pairing..." : `Pair ${view.title}`}</Button></div>
         <Feedback {...action} />
@@ -93,7 +132,7 @@ function ServersSection({ view, bridge }: { view: DesktopView; bridge: DesktopBr
   const action = useAction();
   function add(event: FormEvent) {
     event.preventDefault();
-    void action.run(async () => { await check(bridge.host.add(server)); setServer(""); }, "Added. Pair it from that server's Settings, or in the app's This Mac window.");
+    void action.run(async () => { await check(bridge.host.add(server)); setServer(""); }, `Added. Pair it from that server's Settings, or in the app's ${view.title} window.`);
   }
   return <Section title="Servers" info={`${view.title} can run sessions for several Pikibun servers at once, each with its own pairing and host, as one \`pikibun connect\` per server would. The primary server is the one the Pikibun window opens.`}>
     {view.hosts.connections.map(connection => <ConnectionRow key={connection.id} connection={connection} view={view} bridge={bridge} />)}
@@ -124,7 +163,8 @@ function ConnectionRow({ connection, view, bridge }: { connection: HostView; vie
     <div className="stack">
       {connection.error && <Alert variant="error" title="The host stopped">{connection.error}</Alert>}
       <Field label="Server"><span>{connection.server}</span></Field>
-      {inspection && <Field label="State directory"><span className="small">{inspection.stateDir}</span></Field>}
+      {inspection?.stateDir && <Field label="State directory"><span className="small">{inspection.stateDir}</span></Field>}
+      <SandboxField connection={connection} view={view} bridge={bridge} />
       <Field label="The same connection in a terminal"><CopyField value={connection.command} label="Copy command" /></Field>
       <div className="inline">
         {connection.state === "stopped"
@@ -134,7 +174,7 @@ function ConnectionRow({ connection, view, bridge }: { connection: HostView; vie
         <Button variant="ghost" size="sm" icon="refresh" disabled={connection.inspecting} onClick={() => run(() => bridge.host.refresh(connection.id))}>Refresh</Button>
         {!connection.primary && <Button variant="ghost" size="sm" icon="trash" disabled={action.busy} onClick={() => run(() => bridge.host.remove(connection.id))}>Remove</Button>}
       </div>
-      {!inspection?.pairedServer && !here && <span className="small muted">Pair it from {hostOf(connection.server)}'s own Settings › {view.title} (Open, then Settings), or with a pairing code in the app's This Mac window.</span>}
+      {!inspection?.pairedServer && !here && <span className="small muted">Pair it from {hostOf(connection.server)}'s own Settings › {view.title} (Open, then Settings), or with a pairing code in the app's {view.title} window.</span>}
       {available.length > 0 && <Field label="Models offered" hint={connection.models ? "Only the checked models; a change applies from the host's next start." : "Pi chooses: its enabledModels setting, or every model with configured authentication. Uncheck some to offer only the rest."}>
         <div className="stack">
           {available.map(model => <label key={key(model)} className="check-row">

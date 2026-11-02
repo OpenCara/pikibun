@@ -1,7 +1,7 @@
 // Bundles the main process, the preload, the local pages, the connector host and the local server into dist;
 // electron-builder packages dist/app, and stage-connector.mjs stages dist/host with the connector's production
 // dependencies.
-import { copyFileSync, cpSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -39,3 +39,6 @@ for (const file of ["host.html", "settings.html", "style.css"]) copyFileSync(joi
 // The local server applies the server's migrations from beside its bundle; its web app is the repository's dist/web
 // (`pnpm build`), which stage-connector.mjs copies in for packaging.
 cpSync(join(root, "../server/migrations"), join(hostOut, "migrations"), { recursive: true });
+// The Windows app starts its WSL2 hosts with this script, which runs in WSL2's /bin/sh: line feeds only, whatever a
+// Windows checkout did to the file.
+writeFileSync(join(hostOut, "wsl-host.sh"), readFileSync(join(root, "src/wsl/wsl-host.sh"), "utf8").replace(/\r\n/g, "\n"));
