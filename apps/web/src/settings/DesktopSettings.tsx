@@ -232,7 +232,7 @@ function ConnectionRow({ connection, view, bridge }: { connection: HostView; vie
           </div>
         </div>
       </Field>}
-      {inspection?.prerequisitesError && <Alert variant="warning" title="Prerequisites">{inspection.prerequisitesError}</Alert>}
+      <SetupAlert connection={connection} view={view} bridge={bridge} />
       {connection.logs.length > 0 && <Collapsible plain title="Recent activity">
         <ol className="small mono desktop-logs">{connection.logs.slice(-30).reverse().map((line, index) => <li key={index} className={line.level === "error" ? "danger" : line.level === "warning" ? "muted" : undefined}>
           {new Date(line.time).toLocaleTimeString()} {line.message}
@@ -241,6 +241,30 @@ function ConnectionRow({ connection, view, bridge }: { connection: HostView; vie
       <Feedback {...action} />
     </div>
   </Collapsible>;
+}
+
+/**
+ * What this computer lacks to host, with what to do about each. Installing and signing Pi in happen in the app's own
+ * window (it starts installers and takes API keys, which a web page never does), so this links there.
+ */
+function SetupAlert({ connection, view, bridge }: { connection: HostView; view: DesktopView; bridge: DesktopBridge }) {
+  const inspection = connection.inspection;
+  if (!inspection) return null;
+  const missing = inspection.prerequisites.filter(item => !item.ok);
+  const fixes = [...new Map(missing.flatMap(item => item.fix ? [[JSON.stringify(item.fix), item.fix] as const] : [])).values()];
+  if (inspection.unsupportedFix) fixes.unshift(inspection.unsupportedFix);
+  const noModels = !inspection.unsupported && !inspection.models.length && inspection.modelsError;
+  if (!missing.length && !inspection.prerequisitesError && !inspection.unsupportedFix && !noModels) return null;
+  return <Alert variant="warning" title={`Set up ${view.title === "This Mac" ? "this Mac" : "this computer"} to host`}>
+    <div className="stack">
+      {inspection.prerequisitesError && <span>{inspection.prerequisitesError}</span>}
+      {fixes.map(fix => <span key={fix.text}>{fix.text}{fix.command && <> <code>{fix.command}</code></>}</span>)}
+      {noModels && <span>{inspection.modelsError} Sign Pi in to your provider in the {view.title} window: no separate Pi install is needed.</span>}
+      <div className="inline">
+        <Button size="sm" variant="outline" onClick={() => void bridge.openWindow("host")}>{fixes.some(fix => fix.action) || noModels ? `Set up in ${view.title}…` : `Open ${view.title}…`}</Button>
+      </div>
+    </div>
+  </Alert>;
 }
 
 const emptyShared: Shared = { origin: "", listen: "loopback", trustProxy: true, signup: "invite", passwordAuth: true, admins: [] };

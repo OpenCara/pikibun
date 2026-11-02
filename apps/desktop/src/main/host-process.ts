@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { STDIO_FRAME, type HostEvent, type HostRequest } from "../../../runner/src/desktop-protocol.js";
+import { STDIO_FRAME, type HostEvent, type HostRequest, type PrerequisiteFix } from "../../../runner/src/desktop-protocol.js";
 
 // Runs a connector host and talks to it: dist/host/desktop-host.mjs (see scripts/build.mjs) in an Electron utility
 // process (utility-host.ts), or, on Windows, the same host inside WSL2 through wsl.exe, over its stdin and stdout
@@ -9,15 +9,23 @@ import { STDIO_FRAME, type HostEvent, type HostRequest } from "../../../runner/s
 type Request = HostRequest extends infer R ? R extends HostRequest ? Omit<R, "id"> : never : never;
 export type HostResult = Extract<HostEvent, { type: "result" }>;
 
-const eventTypes: Record<HostEvent["type"], true> = { ready: true, result: true, status: true, log: true, failed: true };
+const eventTypes: Record<HostEvent["type"], true> = { ready: true, result: true, status: true, log: true, failed: true, login: true };
 const isHostEvent = (value: unknown): value is HostEvent => typeof value === "object" && value !== null
   && "type" in value && typeof value.type === "string" && Object.hasOwn(eventTypes, value.type);
 
-/** A line a launcher writes to stderr about what this computer lacks (wsl-host.sh): shown to the owner as is. */
-export const SETUP_PREFIX = "pikibun-setup: ";
+/**
+ * A line a launcher writes to stderr about what this computer lacks (wsl-host.sh): `pikibun-setup: MESSAGE`, shown to
+ * the owner as is, or `pikibun-setup[CODE]: MESSAGE`, whose fix `setupFixes` names.
+ */
+export const SETUP_LINE = /^pikibun-setup(?:\[([a-z0-9-]{1,40})\])?: (.*)$/;
 
-/** Why a host could not be launched at all (WSL2 missing, say): its message is shown to the owner as is. */
-export class HostLaunchError extends Error {}
+/** Why a host could not be launched at all (WSL2 missing, say): its message is shown to the owner as is, with its fix. */
+export class HostLaunchError extends Error {
+  constructor(message: string, readonly fix?: PrerequisiteFix) { super(message); }
+}
+
+/** Why the latest launch failed, as the requests that waited on it report it. */
+interface LaunchFailure { message: string; fix?: PrerequisiteFix }
 
 /** A launch a shutdown overtook (its sandbox changed meanwhile, say): its process is ended and a fresh one launched. */
 class StaleLaunch extends Error {}
@@ -105,6 +113,8 @@ export interface HostProcessOptions {
   /** Lines the host process printed outside the protocol, e.g. library warnings. */
   onOutput(line: string): void;
   onExit(code: number, expected: boolean): void;
+  /** Fixes of a launcher's coded setup problems (SETUP_LINE); unknown codes are shown without one. */
+  setupFixes?: Readonly<Record<string, PrerequisiteFix>>;
 }
 
 export class HostProcess {
@@ -114,7 +124,7 @@ export class HostProcess {
   private nextId = 1;
   private stopping = false;
   /** Why the latest launch failed, for the requests that waited on it. */
-  private launchFailure?: string;
+  private launchFailure?: LaunchFailure;
   /** Moves on with every shutdown: a launch begun under an earlier one is stale once it resolves. */
   private generation = 0;
 
@@ -129,7 +139,7 @@ export class HostProcess {
     try { child = await this.options.launch(); }
     catch (error) {
       if (generation !== this.generation) throw new StaleLaunch();
-      this.launchFailure = error instanceof HostLaunchError ? error.message : "The host process could not start.";
+      this.launchFailure = error instanceof HostLaunchError ? { message: error.message, ...(error.fix ? { fix: error.fix } : {}) } : { message: "The host process could not start." };
       throw error;
     }
     // Launched as configured before a shutdown (a change of sandbox or distribution): never used.
@@ -141,10 +151,12 @@ export class HostProcess {
     const ready = Promise.withResolvers<void>();
     this.child = child;
     this.stopping = false;
-    let setup: string | undefined;
+    let setup: LaunchFailure | undefined;
     child.onOutput(line => {
-      if (line.startsWith(SETUP_PREFIX)) setup = line.slice(SETUP_PREFIX.length);
-      else this.options.onOutput(line);
+      const match = SETUP_LINE.exec(line);
+      if (!match) { this.options.onOutput(line); return; }
+      const fix = match[1] && Object.hasOwn(this.options.setupFixes ?? {}, match[1]) ? this.options.setupFixes![match[1]] : undefined;
+      setup = { message: match[2]!, ...(fix ? { fix } : {}) };
     });
     child.onMessage(value => {
       if (!isHostEvent(value)) return;
@@ -154,7 +166,7 @@ export class HostProcess {
       this.pending.delete(value.id);
       settle?.(value);
     });
-    child.onError(detail => { setup ??= detail; this.options.onOutput(detail); });
+    child.onError(detail => { setup ??= { message: detail }; this.options.onOutput(detail); });
     child.onceExit(code => {
       if (this.child !== child) return;
       this.child = undefined;
@@ -168,7 +180,8 @@ export class HostProcess {
     return ready.promise;
   }
 
-  async request(message: Request): Promise<HostResult> {
+  /** Sends `message` once the host is ready; `sent` learns its id first (a sign-in's, which its answers name). */
+  async request(message: Request, sent?: (id: number) => void): Promise<HostResult> {
     for (;;) {
       this.ready ??= this.spawn();
       const starting = this.ready;
@@ -178,13 +191,14 @@ export class HostProcess {
         // A launch a shutdown overtook: wait for one as now configured instead.
         if (error instanceof StaleLaunch) continue;
         const failure = this.launchFailure;
-        return { type: "result", id: 0, ok: false, error: failure ? { code: "unsupported", message: failure } : { code: "failed", message: "The host process could not start." } };
+        return { type: "result", id: 0, ok: false, error: failure ? { code: "unsupported", ...failure } : { code: "failed", message: "The host process could not start." } };
       }
     }
     const child = this.child!;
     const id = this.nextId++;
     const result = Promise.withResolvers<HostResult>();
     this.pending.set(id, result.resolve);
+    sent?.(id);
     child.postMessage({ ...message, id });
     return result.promise;
   }

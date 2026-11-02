@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,7 +20,8 @@ import { PRIMARY_CONNECTION, SettingsStore, type ConnectionSettings, type Sandbo
 import { UpdateChecker } from "./updates.js";
 import { utilityHost } from "./utility-host.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
-import { chooseDistro, wslExe, wslHostArgs, wslStateDir, wslStatus } from "./wsl.js";
+import { chooseDistro, setupFixes, wslExe, wslHostArgs, wslStateDir, wslStatus } from "./wsl.js";
+import { parseSetupAction, setupPlan, type SetupAction } from "./setup-actions.js";
 import type { WslStatus } from "../shared/bridge.js";
 
 const mac = process.platform === "darwin";
@@ -140,6 +142,9 @@ function main(): void {
     const controller = new HostController({
       id, settings, fixtureModels, command: server => connectCommandFor(id, server, sandbox()),
       ...(windowsHost || mac ? { sandbox } : {}),
+      runSetup: action => runSetup(sandbox(), action),
+      canSetup: action => !("error" in setupPlan(action, setupContext(sandbox()))),
+      openBrowser: url => { void shell.openExternal(url).catch(() => {}); },
       confirmUnsandboxed: (warning, server, missing) => confirm(hostWindow, {
         type: "warning", buttons: ["Cancel", "Run Unsandboxed"], defaultId: 0, cancelId: 0, noLink: true,
         title: "Run without a sandbox?",
@@ -156,7 +161,7 @@ function main(): void {
       const choice = sandbox();
       if (choice?.sandbox !== "wsl2") return utilityHost(hostEntry, directory ? ["--state-dir", directory] : [], nativeEnv);
       const distro = chooseDistro(await refreshWsl(), choice.distro);
-      if (!distro.ok) throw new HostLaunchError(distro.error);
+      if (!distro.ok) throw new HostLaunchError(distro.error, distro.fix);
       if (!existsSync(join(wslConnector, "dist", "desktop-host.mjs")) || !existsSync(join(wslConnector, "node_modules"))) {
         throw new HostLaunchError(app.isPackaged ? "Pikibun's connector is missing from this installation: reinstall Pikibun." : "WSL2 hosts run the staged connector: run `pnpm build`, then `node scripts/stage-connector.mjs` in apps/desktop.");
       }
@@ -168,8 +173,10 @@ function main(): void {
       onEvent: event => {
         if (event.type === "status") controller.handleStatus(event.state, event);
         else if (event.type === "log") controller.log(event.level, event.message);
+        else if (event.type === "login") controller.handleLogin(event.login, event.event);
         else controller.handleFailure(event.error.message);
       },
+      setupFixes,
       onOutput: line => controller.log("warning", line),
       onExit: (code, expected) => controller.handleExit(code, expected),
     });
@@ -178,6 +185,33 @@ function main(): void {
     const host = { controller, process };
     hosts.set(id, host);
     return host;
+  };
+  /**
+   * A missing prerequisite's fix, done for the owner: what setup-actions.ts plans for it here (for a WSL2 host, in its
+   * distribution), once they confirm in a native dialog. It runs where they see it, and Refresh shows what changed.
+   */
+  /** Where a host's setup runs: this computer, and for a WSL2 host the distribution as WSL last listed it. */
+  const setupContext = (choice: SandboxChoice | undefined, status = wsl) => {
+    const chosen = choice?.sandbox === "wsl2" && status ? chooseDistro(status, choice.distro) : undefined;
+    return { platform: process.platform, ...(chosen?.ok ? { distro: chosen.name } : {}), ...(nativeEnv?.PIKIBUN_MXC_RUNTIME ? { mxcRuntime: nativeEnv.PIKIBUN_MXC_RUNTIME } : {}) };
+  };
+  const runSetup = async (choice: SandboxChoice | undefined, action: SetupAction): Promise<Outcome> => {
+    const plan = setupPlan(action, setupContext(choice, choice?.sandbox === "wsl2" ? wsl ?? await refreshWsl() : wsl));
+    if ("error" in plan) return { ok: false, error: plan.error };
+    if (!await confirm(hostWindow, { type: "question", buttons: ["Cancel", "Continue"], defaultId: 1, cancelId: 0, noLink: true, title: "Pikibun", message: plan.title, detail: plan.detail })) {
+      return { ok: false, error: "Not started." };
+    }
+    const step = plan.step;
+    if (step.type === "open") {
+      try { await shell.openExternal(step.url); } catch { return { ok: false, error: "Settings could not be opened." }; }
+      return { ok: true };
+    }
+    // Its own window (a console on Windows, Apple's installer on macOS), which outlives the app if it must.
+    return await new Promise<Outcome>(resolve => {
+      const child = spawn(step.file, step.args, { detached: true, stdio: "ignore", windowsHide: !step.console });
+      child.once("error", () => resolve({ ok: false, error: `${step.file} could not be started.` }));
+      child.once("spawn", () => { child.unref(); resolve({ ok: true }); });
+    });
   };
   for (const connection of settings.get().connections) createHost(connection.id);
   const primaryHost = () => hosts.get(PRIMARY_CONNECTION)!.controller;
@@ -358,6 +392,30 @@ function main(): void {
   handle(channels.hostSandbox, "host.html", host, forConnection(["choice"], (target, call) => {
     const choice = parseSandbox(call.choice);
     return choice.ok ? target.controller.setSandbox(choice.value) : choice;
+  }));
+  // Getting this computer ready to host: Pi's sign-in and the prerequisites' fixes, only from the app's own window,
+  // which alone takes secrets (an API key) and starts installers.
+  handle(channels.hostProviders, "host.html", host, forConnection([], target => target.controller.loadProviders()));
+  handle(channels.hostSignIn, "host.html", host, forConnection(["provider", "method"], (target, call) => {
+    const provider = parseString(call.provider, 128);
+    if (!provider.ok || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(provider.value) || (call.method !== "oauth" && call.method !== "api_key")) return refused;
+    return target.controller.startSignIn(provider.value, call.method);
+  }));
+  handle(channels.hostSignInAnswer, "host.html", host, forConnection(["prompt", "value"], (target, call) => {
+    const value = parseString(call.value, 8192);
+    if (!value.ok || typeof call.prompt !== "number" || !Number.isSafeInteger(call.prompt) || call.prompt < 1) return refused;
+    return target.controller.answerSignIn(call.prompt, value.value);
+  }));
+  handle(channels.hostSignInCancel, "host.html", host, forConnection([], target => target.controller.cancelSignIn()));
+  handle(channels.hostSetup, "host.html", host, forConnection(["action"], (target, call) => {
+    const action = parseSetupAction(call.action);
+    return action ? target.controller.setup(action) : refused;
+  }));
+  handle(channels.hostLink, "host.html", host, forConnection(["url"], (target, call) => {
+    const url = parseString(call.url, 8192);
+    if (!url.ok || !target.controller.knownLink(url.value)) return refused;
+    void shell.openExternal(url.value).catch(() => {});
+    return { ok: true as const };
   }));
   // The changes both the app's own pages and the servers' Settings pages make.
   /** Adds a server; `confirm` asks the owner first (a web page's request). */

@@ -1,4 +1,4 @@
-import { stateLabels, type HostsView, type HostView, type ModelChoice, type Outcome, type PikibunBridge, type SandboxChoice } from "../shared/bridge.js";
+import { stateLabels, type HostsView, type HostView, type LoginMethodType, type ModelChoice, type Outcome, type PikibunBridge, type PrerequisiteFix, type SandboxChoice, type SetupAction, type SignInView } from "../shared/bridge.js";
 import { element, setText } from "./dom.js";
 
 declare global { interface Window { pikibun: PikibunBridge } }
@@ -28,7 +28,18 @@ const modelsPi = element<HTMLButtonElement>("models-pi");
 const openAtLogin = element<HTMLInputElement>("open-at-login");
 const sandboxSelect = element<HTMLSelectElement>("sandbox");
 const distroSelect = element<HTMLSelectElement>("distro");
+const signInProvider = element<HTMLSelectElement>("sign-in-provider");
+const signInMethod = element<HTMLSelectElement>("sign-in-method");
+const signInStart = element<HTMLButtonElement>("sign-in-start");
+const signInPrompt = element<HTMLFormElement>("sign-in-prompt");
+const signInAnswer = element<HTMLInputElement>("sign-in-answer");
+const signInChoice = element<HTMLSelectElement>("sign-in-choice");
+const signInCancel = element<HTMLButtonElement>("sign-in-cancel");
 let busy = false;
+/** Connections whose Pi providers this page has asked for, once each. */
+const providersAsked = new Set<string>();
+/** The sign-in question the form shows, so a re-render keeps what the owner is typing. */
+let shownPrompt: number | undefined;
 let current: HostsView | undefined;
 /** The connection the page shows; the primary one until the owner picks another. */
 let selected: string | undefined;
@@ -126,6 +137,143 @@ function renderSandbox(view: HostsView, connection: HostView): void {
     : "Sessions run in Windows' own sandbox (experimental: Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32 and Microsoft's MXC SDK; Prerequisites below lists what is missing), or, while it isn't ready, without one after your consent. Native Windows uses Pi's models and the connector's pairing in your Windows profile.");
 }
 
+const actionLabels: Record<SetupAction["kind"], string> = {
+  "xcode-tools": "Install Developer Tools", "git-for-windows": "Install Git", "mxc-sdk": "Install MXC SDK",
+  "windows-update": "Open Windows Update", "wsl-install": "Install WSL", "wsl-node": "Install Node.js 24", apt: "Install Packages",
+};
+
+function button(text: string, className: string, click: () => void): HTMLButtonElement {
+  const made = document.createElement("button");
+  made.type = "button";
+  made.className = className;
+  made.textContent = text;
+  made.disabled = busy;
+  made.addEventListener("click", click);
+  return made;
+}
+
+/** How to get something missing: what to do, its command to copy, and what Pikibun can do (after asking) or open. */
+function fixBlock(fix: PrerequisiteFix): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "fix";
+  const text = box.appendChild(document.createElement("span"));
+  text.className = "muted";
+  text.textContent = fix.text;
+  if (fix.command) {
+    const command = box.appendChild(document.createElement("code"));
+    command.className = "command";
+    command.textContent = fix.command;
+  }
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const action = fix.action;
+  if (action) actions.appendChild(button(actionLabels[action.kind], "primary", () => { void act(() => bridge.setup(id(), action)); }));
+  const url = fix.url;
+  if (url) actions.appendChild(button("Open Page", "ghost", () => { void act(() => bridge.openLink(id(), url)); }));
+  if (actions.childElementCount) box.appendChild(actions);
+  return box;
+}
+
+/** The prerequisites, each missing one with its fix; a fix shared by several (Linux packages) is shown once. */
+function renderPrerequisites(connection: HostView): void {
+  const inspection = connection.inspection;
+  const shown = new Set<string>();
+  element("prerequisites").replaceChildren(...(inspection?.prerequisites ?? []).map(entry => {
+    const li = item(entry.name, undefined, entry.ok ? "ok" : "missing");
+    const key = entry.fix && JSON.stringify(entry.fix);
+    if (!entry.ok && entry.fix && key && !shown.has(key)) { shown.add(key); li.appendChild(fixBlock(entry.fix)); }
+    return li;
+  }));
+  const unsupported = element("unsupported-fix");
+  unsupported.hidden = !inspection?.unsupportedFix;
+  unsupported.replaceChildren(...(inspection?.unsupportedFix ? [fixBlock(inspection.unsupportedFix)] : []));
+}
+
+/** A select's options, replaced only when they change, so an open select isn't reset by a re-render. */
+function setOptions(select: HTMLSelectElement, options: [value: string, text: string][]): void {
+  const key = JSON.stringify(options);
+  if (select.dataset.options === key) return;
+  select.dataset.options = key;
+  const previous = select.value;
+  select.replaceChildren(...options.map(([value, text]) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    return option;
+  }));
+  if (options.some(([value]) => value === previous)) select.value = previous;
+}
+
+function signInStatus(signIn: SignInView): string {
+  if (signIn.state === "running") return `Signing in to ${signIn.name}…`;
+  if (signIn.state === "done") return `Pi is signed in to ${signIn.name} on this computer. Its models are listed above.`;
+  if (signIn.state === "cancelled") return "Sign-in cancelled.";
+  return signIn.error ?? "Sign-in failed.";
+}
+
+function notice(entry: SignInView["notices"][number]): HTMLLIElement {
+  const li = document.createElement("li");
+  const text = (value: string, className = "") => { const span = li.appendChild(document.createElement("span")); span.className = className; span.textContent = value; };
+  const open = (url: string, title: string) => { const actions = li.appendChild(document.createElement("div")); actions.className = "actions"; actions.appendChild(button(title, "ghost", () => { void bridge.openLink(id(), url); })); };
+  if (entry.kind === "auth-url") {
+    text(entry.instructions ?? "Sign in on the page that opened in your browser.");
+    if (URL.parse(entry.url)?.protocol === "https:") open(entry.url, "Open Sign-In Page Again");
+    else text(entry.url, "muted");
+  } else if (entry.kind === "device-code") {
+    text("Enter this code on the page that opened in your browser:");
+    text(entry.userCode, "device-code");
+    open(entry.verificationUri, "Open Page Again");
+  } else {
+    text(entry.message, entry.kind === "progress" ? "muted" : "");
+    if (entry.kind === "info") for (const link of entry.links ?? []) open(link.url, link.label ?? "Open Page");
+  }
+  return li;
+}
+
+/** Pi's sign-in to a provider on this host: which one and how, then what the flow shows and asks. */
+function renderSignIn(connection: HostView): void {
+  if (!connection.providers && !providersAsked.has(connection.id)) {
+    providersAsked.add(connection.id);
+    void bridge.providers(connection.id);
+  }
+  const providers = connection.providers ?? [];
+  const signIn = connection.signIn;
+  const running = signIn?.state === "running";
+  setOptions(signInProvider, providers.map(provider => [provider.id, `${provider.name}${provider.signedIn ? " (signed in)" : ""}`]));
+  const chosen = providers.find(provider => provider.id === signInProvider.value) ?? providers[0];
+  setOptions(signInMethod, (chosen?.methods ?? []).map(method => [method.type, `${method.name}${method.subscription ? " (subscription)" : ""}`]));
+  for (const control of [signInProvider, signInMethod]) control.disabled = running || !providers.length;
+  signInStart.disabled = running || !chosen;
+  setText(element("sign-in-note"), connection.providers && !providers.length
+    ? "Pi on this computer offers no provider to sign in to."
+    : "Pikibun runs Pi's own sign-in here, as Pi's /login does: the credential is saved in Pi's configuration on this computer and never sent to Pikibun. No separate Pi install is needed.");
+
+  element("sign-in-flow").hidden = !signIn;
+  signInCancel.hidden = !running;
+  if (!signIn) return;
+  setText(element("sign-in-status"), signInStatus(signIn));
+  element("sign-in-notices").replaceChildren(...(running ? signIn.notices : []).map(notice));
+  const prompt = signIn.prompt;
+  signInPrompt.hidden = !prompt;
+  if (!prompt) { shownPrompt = undefined; return; }
+  if (shownPrompt === prompt.id) return;
+  // A new question: an empty field (or the first option) and the owner's attention.
+  shownPrompt = prompt.id;
+  const detail = prompt.detail;
+  setText(element("sign-in-question"), detail.message);
+  signInAnswer.hidden = detail.type === "select";
+  signInChoice.hidden = detail.type !== "select";
+  if (detail.type === "select") {
+    setOptions(signInChoice, detail.options.map(option => [option.id, option.description ? `${option.label} — ${option.description}` : option.label]));
+    signInChoice.focus();
+  } else {
+    signInAnswer.value = "";
+    signInAnswer.type = detail.type === "secret" ? "password" : "text";
+    signInAnswer.placeholder = detail.placeholder ?? "";
+    signInAnswer.focus();
+  }
+}
+
 function label(view: HostView): string {
   return view.error && view.state === "stopped" ? "Stopped (error)" : stateLabels[view.state];
 }
@@ -176,7 +324,7 @@ function renderModels(connection: HostView): void {
     return li;
   }));
   const missing = connection.models?.filter(model => !available.some(entry => modelKey(entry) === modelKey(model))) ?? [];
-  setText(note, !inspection ? "Checking Pi's models…" : inspection.modelsError ?? (available.length
+  setText(note, !inspection ? "Checking Pi's models…" : inspection.modelsError ? `${inspection.modelsError} Sign Pi in to a provider below.` : (available.length
     ? `${connection.models ? `Offering only the checked models to ${hostOf(connection.server)}${missing.length ? ` (${missing.map(modelKey).join(", ")} no longer configured in Pi)` : ""}.` : "Pi chooses: its enabledModels setting, or every model with configured authentication."} Pikibun never receives your provider credentials. A change applies from the host's next start.`
     : ""));
   element("models-actions").hidden = !available.length;
@@ -231,12 +379,12 @@ function render(view: HostsView): void {
 
   renderModels(connection);
 
-  const prerequisites = element("prerequisites");
   const prerequisitesNote = element("prerequisites-note");
   const sandboxMissing = inspection?.sandboxPrerequisites?.filter(entry => !entry.ok).map(entry => entry.name);
   prerequisitesNote.hidden = !sandboxMissing?.length && !inspection?.prerequisitesError;
   setText(prerequisitesNote, inspection?.prerequisitesError ?? (sandboxMissing?.length ? `The isolated sandbox needs ${sandboxMissing.join(", ")}; without it the host runs unsandboxed.` : ""));
-  prerequisites.replaceChildren(...(inspection?.prerequisites ?? []).map(entry => item(entry.name, undefined, entry.ok ? "ok" : "missing")));
+  renderPrerequisites(connection);
+  renderSignIn(connection);
 
   const logs = element("logs");
   logs.replaceChildren(...connection.logs.slice(-100).reverse().map(line => {
@@ -316,6 +464,24 @@ const chooseSandbox = () => {
     : { sandbox: "wsl2", ...(distroSelect.value ? { distro: distroSelect.value } : {}) };
   void act(() => bridge.setSandbox(id(), choice));
 };
+signInProvider.addEventListener("change", () => { if (current) render(current); });
+signInStart.addEventListener("click", () => {
+  const method = signInMethod.value as LoginMethodType;
+  localError = undefined;
+  // Not through act(): the sign-in lasts until the owner finishes it in the browser, and answering must stay possible.
+  void bridge.signIn(id(), signInProvider.value, method);
+});
+signInPrompt.addEventListener("submit", event => {
+  event.preventDefault();
+  const prompt = current?.connections.find(entry => entry.id === id())?.signIn?.prompt;
+  if (!prompt) return;
+  const value = prompt.detail.type === "select" ? signInChoice.value : signInAnswer.value;
+  signInAnswer.value = "";
+  void bridge.answerSignIn(id(), prompt.id, value).then(outcome => {
+    if (!outcome.ok) { localError = outcome.error; if (current) render(current); }
+  });
+});
+signInCancel.addEventListener("click", () => { void bridge.cancelSignIn(id()); });
 sandboxSelect.addEventListener("change", chooseSandbox);
 distroSelect.addEventListener("change", chooseSandbox);
 

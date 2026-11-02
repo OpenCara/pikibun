@@ -1,5 +1,5 @@
-import type { HostInspection, HostState } from "../../../runner/src/desktop-protocol.js";
-import type { HostView, LogLine, ModelChoice, Outcome, StartInput } from "../shared/bridge.js";
+import type { HostInspection, HostState, LoginEvent, LoginMethodType, LoginProvider, PrerequisiteFix, SetupAction } from "../../../runner/src/desktop-protocol.js";
+import type { HostView, LogLine, ModelChoice, Outcome, SignInView, StartInput } from "../shared/bridge.js";
 import type { UploadOutcome } from "../shared/remote-bridge.js";
 import type { HostProcess } from "./host-process.js";
 import { isLoopbackHttp } from "./origin.js";
@@ -31,7 +31,17 @@ export interface HostControllerOptions {
    * whose sandbox is bubblewrap where it is installed).
    */
   sandbox?(): SandboxChoice | undefined;
+  /** Does a setup action once the owner confirms it in a native dialog (index.ts, setup-actions.ts). */
+  runSetup?(action: SetupAction): Promise<Outcome>;
+  /** Whether this computer can do `action` (apt on Linux opens no terminal, say); others show only how to do it. */
+  canSetup?(action: SetupAction): boolean;
+  /** Opens an https page in the owner's browser. */
+  openBrowser?(url: string): void;
 }
+
+const NOTICES = 20;
+const sameAction = (a: SetupAction, b: SetupAction) => JSON.stringify(a) === JSON.stringify(b);
+const isHttps = (url: string) => URL.parse(url)?.protocol === "https:";
 
 export class HostController {
   private state: HostState = "stopped";
@@ -43,6 +53,9 @@ export class HostController {
   private readonly logs: LogLine[] = [];
   private readonly listeners = new Set<() => void>();
   private process?: HostProcess;
+  private providers?: LoginProvider[];
+  /** The latest sign-in, and while it runs, its request's id, which its events and answers name. */
+  private signIn?: SignInView & { login?: number };
 
   constructor(private readonly options: HostControllerOptions) {
     this.lastServer = this.connection?.server ?? "";
@@ -83,8 +96,13 @@ export class HostController {
     const sandbox = this.options.sandbox?.();
     if (sandbox && isWindowsChoice(sandbox)) view.windows = { ...sandbox };
     else if (sandbox) view.mac = { ...sandbox };
-    if (this.inspection) view.inspection = this.inspection;
+    if (this.inspection) view.inspection = this.offered(this.inspection);
     if (this.error) view.error = this.error;
+    if (this.providers) view.providers = this.providers.map(provider => ({ ...provider, methods: provider.methods.map(method => ({ ...method })) }));
+    if (this.signIn) {
+      const { login: _login, ...signIn } = this.signIn;
+      view.signIn = { ...signIn, notices: [...signIn.notices], ...(signIn.prompt ? { prompt: { ...signIn.prompt } } : {}) };
+    }
     return view;
   }
 
@@ -146,7 +164,10 @@ export class HostController {
       const result = await this.process.request({ type: "inspect", ...this.isolationOptions(), ...this.developmentOptions(this.server) });
       if (result.ok && result.inspection) this.inspection = result.inspection;
       // A host that can't be launched here as configured (no WSL2, no Node.js in it) says what to do instead.
-      else if (!result.ok && result.error.code === "unsupported") this.inspection = { platform: process.platform, stateDir: "", unsupported: result.error.message, mode: "unsandboxed", prerequisites: [], models: [] };
+      else if (!result.ok && result.error.code === "unsupported") {
+        this.inspection = { platform: process.platform, stateDir: "", unsupported: result.error.message, mode: "unsandboxed", prerequisites: [], models: [],
+          ...(result.error.fix ? { unsupportedFix: result.error.fix } : {}) };
+      }
       else if (!result.ok) this.error = result.error.message;
       return this.inspection;
     } finally {
@@ -270,6 +291,114 @@ export class HostController {
     await this.process?.shutdown(10_000);
     void this.refresh();
     return { ok: true };
+  }
+
+  /** A fix as offered here: without an action this computer can't do. */
+  private offeredFix(fix: PrerequisiteFix): PrerequisiteFix {
+    if (!fix.action || (this.options.runSetup && (this.options.canSetup?.(fix.action) ?? true))) return fix;
+    const { action: _action, ...rest } = fix;
+    return rest;
+  }
+
+  /** The inspection as the window shows it: every fix as offered here. */
+  private offered(inspection: HostInspection): HostInspection {
+    const prerequisites = (items: HostInspection["prerequisites"]) => items.map(item => item.fix ? { ...item, fix: this.offeredFix(item.fix) } : item);
+    return { ...inspection, prerequisites: prerequisites(inspection.prerequisites),
+      ...(inspection.sandboxPrerequisites ? { sandboxPrerequisites: prerequisites(inspection.sandboxPrerequisites) } : {}),
+      ...(inspection.unsupportedFix ? { unsupportedFix: this.offeredFix(inspection.unsupportedFix) } : {}) };
+  }
+
+  /** The fixes the latest inspection offers here: of the missing prerequisites, and of what keeps this computer from hosting. */
+  private fixes(): PrerequisiteFix[] {
+    const inspection = this.inspection && this.offered(this.inspection);
+    if (!inspection) return [];
+    return [...(inspection.unsupportedFix ? [inspection.unsupportedFix] : []),
+      ...[...inspection.prerequisites, ...(inspection.sandboxPrerequisites ?? [])].filter(item => !item.ok && item.fix).map(item => item.fix!)];
+  }
+
+  /**
+   * Does what a missing prerequisite's fix offers, once the owner confirms: only an action this host's latest inspection
+   * offers, so a page can't ask for one this computer doesn't need. Refresh afterwards shows what changed.
+   */
+  async setup(action: SetupAction): Promise<Outcome> {
+    if (!this.options.runSetup) return { ok: false, error: "This computer can't do that from Pikibun: follow its description instead." };
+    if (!this.fixes().some(fix => fix.action && sameAction(fix.action, action))) return { ok: false, error: "This computer doesn't need that now: choose Refresh." };
+    const outcome = await this.options.runSetup(action);
+    if (outcome.ok) this.log("info", "Setup started outside Pikibun. When it has finished, choose Refresh.");
+    return outcome;
+  }
+
+  /** Whether `url` is a page this host offered: a fix's, or one its sign-in showed. */
+  knownLink(url: string): boolean {
+    const links = [...this.fixes().map(fix => fix.url), ...(this.signIn?.notices ?? []).flatMap(notice =>
+      notice.kind === "auth-url" ? [notice.url] : notice.kind === "device-code" ? [notice.verificationUri] : notice.kind === "info" ? (notice.links ?? []).map(item => item.url) : [])];
+    return isHttps(url) && links.includes(url);
+  }
+
+  /** Lists Pi's providers this host can sign in to. */
+  async loadProviders(): Promise<Outcome> {
+    if (!this.process) return { ok: false, error: "The host is unavailable." };
+    const result = await this.process.request({ type: "providers" });
+    if (!result.ok) return { ok: false, error: result.error.message };
+    this.providers = result.providers ?? [];
+    this.changed();
+    return { ok: true };
+  }
+
+  /**
+   * Signs Pi in to a provider on this host, as `pi`'s /login does; settles once it ends. The page it shows opens in the
+   * owner's browser; its questions wait in the view for answers. Afterwards the models are listed again.
+   */
+  async startSignIn(provider: string, method: LoginMethodType): Promise<Outcome> {
+    if (!this.process) return { ok: false, error: "The host is unavailable." };
+    if (this.signIn?.state === "running") return { ok: false, error: "A sign-in is under way: finish or cancel it first." };
+    const name = this.providers?.find(entry => entry.id === provider)?.name ?? provider;
+    const current: SignInView & { login?: number } = { provider, name, method, state: "running", notices: [] };
+    this.signIn = current;
+    this.changed();
+    const result = await this.process.request({ type: "login", provider, method }, id => { current.login = id; });
+    current.login = undefined;
+    current.prompt = undefined;
+    current.state = result.ok ? "done" : result.error.code === "cancelled" ? "cancelled" : "failed";
+    if (!result.ok && result.error.code !== "cancelled") current.error = result.error.message;
+    this.changed();
+    if (!result.ok) return { ok: false, error: result.error.message };
+    this.log("info", `Pi is signed in to ${name} on this computer.${this.state === "stopped" ? "" : " Its models are offered from the host's next start."}`);
+    await Promise.all([this.loadProviders(), this.refresh()]);
+    return { ok: true };
+  }
+
+  /** What the running sign-in shows or asks (HostProcess events); events of an earlier one are ignored. */
+  handleLogin(login: number, event: LoginEvent): void {
+    const current = this.signIn;
+    if (!current || current.state !== "running" || current.login !== login) return;
+    if (event.kind === "prompt") current.prompt = { id: event.prompt, detail: event.detail };
+    else if (event.kind === "prompt-closed") { if (current.prompt?.id === event.prompt) current.prompt = undefined; }
+    else {
+      current.notices.push(event);
+      if (current.notices.length > NOTICES) current.notices.splice(0, current.notices.length - NOTICES);
+      // As `pi` does: the page to sign in on opens in the browser by itself.
+      const page = event.kind === "auth-url" ? event.url : event.kind === "device-code" ? event.verificationUri : undefined;
+      if (page && isHttps(page)) this.options.openBrowser?.(page);
+    }
+    this.changed();
+  }
+
+  async answerSignIn(prompt: number, value: string): Promise<Outcome> {
+    const current = this.signIn;
+    if (!this.process || current?.state !== "running" || current.login === undefined || current.prompt?.id !== prompt) return { ok: false, error: "That question has been answered or has closed." };
+    if (current.prompt.detail.type === "select" && !current.prompt.detail.options.some(option => option.id === value)) return { ok: false, error: "Choose one of the options." };
+    current.prompt = undefined;
+    this.changed();
+    const result = await this.process.request({ type: "login-answer", login: current.login, prompt, value });
+    return result.ok ? { ok: true } : { ok: false, error: result.error.message };
+  }
+
+  async cancelSignIn(): Promise<Outcome> {
+    const current = this.signIn;
+    if (!this.process || current?.state !== "running" || current.login === undefined) return { ok: true };
+    const result = await this.process.request({ type: "login-cancel", login: current.login });
+    return result.ok ? { ok: true } : { ok: false, error: result.error.message };
   }
 
   /** The models to offer from the next start; null leaves the choice to Pi, as `pikibun connect` without --model. */
