@@ -7,7 +7,8 @@ const USAGE = `Usage: pikibun <command> [options]
 
 Commands:
   connect     Connect this Linux or WSL2 Pi host to a Pikibun workspace
-  serve       Run Pikibun on this computer, for yourself, with it as the host
+  serve       Run Pikibun on this computer, for yourself with it as the host,
+              or shared with others (--share)
   cache       List or prune this host's repository cache
 
 Options:

@@ -256,3 +256,74 @@ test("pikibun serve's server pairs this computer as its owner's host once claime
   await again.started;
   assert.deepEqual((await connectors()).map(row => row.id), [paired!.id]);
 });
+
+const sharedBase = { origin: "https://pikibun.example.test", listen: "loopback" as const, trustProxy: true, signup: "invite" as const, passwordAuth: true, admins: ["password:admin", "github:4242"] };
+
+test("sharing settings are checked field by field, saved with the state, and keep their GitHub OAuth app until replaced", async t => {
+  const stateDir = join(await directory(t), "server");
+  const first = await loadLocalState(stateDir);
+  for (const [shared, message] of [
+    [{ ...sharedBase, origin: "http://pikibun.example.test" }, /HTTPS/],
+    [{ ...sharedBase, origin: "https://pikibun.example.test/app" }, /origin/],
+    [{ ...sharedBase, admins: [] }, /at least one administrator/],
+    [{ ...sharedBase, admins: ["octocat"] }, /user IDs/],
+    [{ ...sharedBase, admins: ["github:1", "github:1"] }, /twice/],
+    [{ ...sharedBase, passwordAuth: false }, /way to sign in/],
+    [{ ...sharedBase, signup: "anyone" }, /create an account/],
+    [{ ...sharedBase, listen: "lan" }, /listens/],
+    [{ ...sharedBase, extra: 1 }, /unknown/],
+  ] as const) {
+    await assert.rejects(loadLocalState(stateDir, { shared: shared as never }), message, JSON.stringify(shared));
+  }
+  assert.deepEqual(await loadLocalState(stateDir), first);
+  const github = { clientId: "Ov23liShared", clientSecret: "0123456789abcdef0123456789abcdef01234567" };
+  const saved = await loadLocalState(stateDir, { shared: { ...sharedBase, passwordAuth: false, admins: ["github:4242"], github } });
+  assert.deepEqual(saved.shared, { ...sharedBase, passwordAuth: false, admins: ["github:4242"], github });
+  // The loopback GitHub app and the secrets are untouched; a later change without an app keeps the saved one.
+  assert.deepEqual({ ...saved, shared: undefined }, { ...first, shared: undefined });
+  const changed = await loadLocalState(stateDir, { shared: { ...sharedBase, signup: "open" } });
+  assert.deepEqual(changed.shared, { ...sharedBase, signup: "open", github });
+  assert.deepEqual(await peekLocalState(stateDir), changed);
+});
+
+test("shared, the same state serves others at its public origin: no claim link, its administrators own this computer's host", async t => {
+  const stateDir = join(await directory(t), "server");
+  const port = await freePort();
+  await loadLocalState(stateDir, { port });
+  const web = await directory(t);
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
+  await mkdir(join(web, "assets"));
+  await assert.rejects(startLocalServer({ stateDir, state: await loadLocalState(stateDir), staticDir: web, mode: "shared" }), /Set up sharing first/);
+  const state = await loadLocalState(stateDir, { shared: sharedBase });
+  const server = await startLocalServer({ stateDir, state, staticDir: web, mode: "shared" });
+  t.after(() => server.close());
+  assert.equal(server.mode, "shared");
+  assert.equal(server.origin, "https://pikibun.example.test");
+  assert.equal(server.address, `http://127.0.0.1:${port}`);
+  assert.equal(await server.claimUrl(), null);
+  const health = await (await fetch(`${server.address}/api/health`)).json() as Record<string, unknown>;
+  assert.deepEqual([health.passwordAuth, health.githubSignup, health.passwordSignup, health.localServer], [true, "invite", "invite", undefined]);
+
+  // Nobody has an account yet: this computer's host waits. The first listed administrator with one owns it.
+  assert.equal(await server.owner(), null);
+  await server.env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
+    VALUES ('github:4242', '4242', 'octo', 'Octo', 'Octo', 'octo@example.test', '{}', 'github', ?)`).bind(new Date().toISOString()).run();
+  assert.deepEqual(await server.owner(), { id: "github:4242" });
+  await assert.rejects(server.createAdmin("someone", "a long enough password"), /administrators/);
+  await assert.rejects(server.createAdmin("admin", "short"), /12/);
+  assert.match(await server.createAdmin("Admin", "a long enough password"), /Created the administrator password:admin: sign in at https:\/\/pikibun.example.test with the username admin/);
+  await assert.rejects(server.createAdmin("admin", "a long enough password"), /exists already/);
+  assert.deepEqual(await server.owner(), { id: "password:admin" });
+});
+
+test("pikibun serve --share takes its settings from the options once, then from the saved state", async () => {
+  const { sharedSettings } = await import("../apps/server/src/local/cli.js");
+  assert.throws(() => sharedSettings(undefined, {}), /--public-origin/);
+  assert.throws(() => sharedSettings(undefined, { "public-origin": "https://pikibun.example.test" }), /--admin/);
+  assert.throws(() => sharedSettings(undefined, { "public-origin": "http://pikibun.example.test", admin: ["github:1"] }), /HTTPS/);
+  assert.throws(() => sharedSettings(undefined, { "public-origin": "https://pikibun.example.test", admin: ["github:1"], listen: "lan" }), /--listen/);
+  const first = sharedSettings(undefined, { "public-origin": "https://pikibun.example.test/", admin: ["github:1"] });
+  assert.deepEqual(first, { origin: "https://pikibun.example.test", admins: ["github:1"], listen: "loopback", signup: "invite", trustProxy: false, passwordAuth: false });
+  assert.deepEqual(sharedSettings({ ...first, signup: "open", passwordAuth: true }, { listen: "all" }),
+    { ...first, signup: "open", passwordAuth: true, listen: "all" });
+});

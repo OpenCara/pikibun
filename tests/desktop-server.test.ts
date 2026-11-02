@@ -116,3 +116,47 @@ test("the desktop app's local server refuses malformed requests, needs a GitHub 
   // Stopped, it no longer holds the state's lease.
   assert.equal((await loadLocalState(stateDir)).claimSecret, state.claimSecret);
 });
+
+test("the desktop app's local server shares the same data with others: saved settings, a public origin, and administrators it creates", async t => {
+  const parent = await realpath(await mkdtemp(join(tmpdir(), "pikibun-desktop-shared-")));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const stateDir = join(parent, "server");
+  const port = await freePort();
+  await loadLocalState(stateDir, { port });
+  const web = join(parent, "web");
+  await mkdir(join(web, "assets"), { recursive: true });
+  await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
+  const server = await launch(stateDir, web);
+  t.after(() => server.close());
+
+  const unset = await server.request({ type: "start", mode: "shared" });
+  assert.equal(unset.type === "result" && !unset.ok && unset.error.message, "Set up sharing first: its public HTTPS address, sign-in and administrators.");
+  const shared = { origin: "https://pikibun.example.test", listen: "loopback", trustProxy: true, signup: "invite", passwordAuth: true, admins: ["password:admin"] };
+  const plain = await server.request({ type: "start", mode: "shared", shared: { ...shared, origin: "http://pikibun.example.test" } });
+  assert.match(plain.type === "result" && !plain.ok ? plain.error.message : "", /HTTPS/);
+
+  const count = server.events.length;
+  const started = await server.request({ type: "start", mode: "shared", shared });
+  assert.equal(started.type === "result" && started.ok, true);
+  const running = await server.next(event => event.type === "status" && event.state === "running", count);
+  assert.ok(running.type === "status");
+  assert.deepEqual([running.mode, running.origin, running.address, running.claimUrl], ["shared", "https://pikibun.example.test", `http://127.0.0.1:${port}`, undefined]);
+  const inspected = await server.request({ type: "inspect" });
+  assert.deepEqual(inspected.type === "result" && inspected.ok && inspected.inspection?.shared, shared);
+  const health = await (await fetch(`${running.address}/api/health`)).json() as { passwordAuth: boolean };
+  assert.equal(health.passwordAuth, true);
+
+  const password = "correct horse battery staple";
+  const refused = await server.request({ type: "create-admin", username: "mallory", password });
+  assert.match(refused.type === "result" && !refused.ok ? refused.error.message : "", /administrators/);
+  const created = await server.request({ type: "create-admin", username: "admin", password });
+  assert.equal(created.type === "result" && created.ok && created.message, "Created the administrator password:admin: sign in at https://pikibun.example.test with the username admin.");
+  assert.ok(!JSON.stringify(server.events).includes(password));
+
+  const stopped = await server.request({ type: "stop" });
+  assert.equal(stopped.type === "result" && stopped.ok, true);
+  // The settings stay saved: sharing again needs none of them, and running for its owner alone is unchanged.
+  assert.deepEqual((await peekLocalState(stateDir))?.shared, shared);
+  const notShared = await server.request({ type: "create-admin", username: "admin", password });
+  assert.match(notShared.type === "result" && !notShared.ok ? notShared.error.message : "", /Share Pikibun first/);
+});

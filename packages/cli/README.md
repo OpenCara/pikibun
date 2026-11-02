@@ -160,3 +160,11 @@ npx pikibun@latest serve
 runs the Pikibun server and its web app on `http://127.0.0.1:7878`, reachable from this computer only, with this computer as the host that runs your sessions. You sign in with GitHub through an OAuth app of your own: register one once at <https://github.com/settings/applications/new> with the homepage `http://127.0.0.1` and the callback URL `http://127.0.0.1/api/auth/github/callback`, and the first run asks for its client ID and secret (hidden). It then prints a sign-in link: the GitHub account that signs in through it becomes the owner, and the only account that can sign in. Once you have, this computer pairs itself as your host, sandboxed as with `connect` (or with `--unsafe-no-sandbox`; `--no-host` serves without it).
 
 Everything is kept in `~/.local/share/pikibun/server` (`--state-dir`), apart from `connect`'s own state, so later runs need no options. Run `npx pikibun serve --help` for the rest.
+
+### Sharing it with others
+
+```sh
+npx pikibun@latest serve --share --public-origin https://pikibun.example.com --admin github:12345 --password-auth --create-admin admin
+```
+
+runs the same server from the same data as a full multi-user Pikibun: people sign in at the public HTTPS address, create workspaces, and pair their own machines with `connect`. It still serves plain HTTP on `127.0.0.1:7878` (`--listen all` for every interface); a TLS proxy or tunnel you run (`tailscale serve`, Cloudflare Tunnel, Caddy) serves the public address and forwards to it, with `--trust-proxy` if it sets `X-Forwarded-Proto`/`-Host`. `--admin` lists the administrators by user ID (repeatable; `https://api.github.com/users/<login>` shows a GitHub account's numeric ID), and the first of them with an account owns this computer's host. `--signup` decides who may create an account (`invite`, the default, `open` or `off`). People sign in with GitHub through an OAuth app whose callback is `<public origin>/api/auth/github/callback` (`--github-client-id`, its secret as before), with usernames and passwords (`--password-auth`), or both; `--create-admin USERNAME` makes a listed `password:` administrator's account, asking for its password at a hidden prompt. The settings are remembered, so later runs need only `--share`; without it, the same data serves you alone again.

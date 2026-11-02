@@ -19,7 +19,8 @@ export interface LocalHost {
   stop(): Promise<void>;
 }
 
-export const localHostStateDir = (stateDir: string): string => join(stateDir, 'connector');
+/** Shared, this computer has a pairing of its own (with the public origin), so switching back and forth reuses both. */
+export const localHostStateDir = (stateDir: string, mode: LocalServer['mode'] = 'local'): string => join(stateDir, mode === 'shared' ? 'connector-shared' : 'connector');
 
 export function startLocalHost(server: LocalServer, stateDir: string, options: LocalHostOptions & { onWaiting?(): void; pollMs?: number }): LocalHost {
   const stopped = new AbortController();
@@ -32,7 +33,7 @@ export function startLocalHost(server: LocalServer, stateDir: string, options: L
       owner = await server.owner();
     }
     stopped.signal.throwIfAborted();
-    const dataDir = localHostStateDir(stateDir);
+    const dataDir = localHostStateDir(stateDir, server.mode);
     // Paired with this server before: reuse it. Paired with this server on another port, or never: pair (again).
     const saved = await savedPairing(dataDir, true);
     const pairing = saved === server.origin ? undefined : await createPairing(server.env, owner.id, hostname().slice(0, 120) || 'This computer');

@@ -3,14 +3,24 @@ import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "e
 import type { HostState } from "../../../runner/src/desktop-protocol.js";
 import { stateLabels } from "../shared/bridge.js";
 
+/** A server the app can open: each connection's, and Pikibun on this computer while it runs. */
+export interface ServerEntry { label: string; open(): void }
+
+/** One connection's host, for the tray. */
+export interface HostEntry { server: string; state: HostState; error?: string; start(): void; stop(): void }
+
 export interface MenuActions {
   hostTitle: string;
   openMain(): void;
+  /** Another window of the focused Pikibun window's server, else of the primary one. */
+  newWindow(): void;
   openHost(): void;
   openSettings(): void;
-  startHost(): void;
-  stopHost(): void;
+  servers(): ServerEntry[];
+  hosts(): HostEntry[];
 }
+
+const host = (origin: string) => URL.parse(origin)?.host ?? origin;
 
 /** Standard app, edit, view and window menus; macOS keeps app-level items in the app menu, others in File. */
 export function installAppMenu(actions: MenuActions): void {
@@ -20,6 +30,7 @@ export function installAppMenu(actions: MenuActions): void {
     { label: "Settings…", accelerator: "CommandOrControl+,", click: actions.openSettings },
     { label: ellipsis, click: actions.openHost },
   ];
+  const servers = actions.servers();
   const template: MenuItemConstructorOptions[] = [
     ...(mac ? [{ role: "appMenu" as const, submenu: [
       { role: "about" as const }, { type: "separator" as const }, ...appItems, { type: "separator" as const },
@@ -28,6 +39,8 @@ export function installAppMenu(actions: MenuActions): void {
     ] }] : []),
     { label: "File", submenu: [
       { label: "Open Pikibun", accelerator: "CommandOrControl+N", click: actions.openMain },
+      { label: "New Window", accelerator: "CommandOrControl+Shift+N", click: actions.newWindow },
+      ...(servers.length > 1 ? [{ label: "Open Server", submenu: servers.map(server => ({ label: server.label, click: server.open })) }] : []),
       ...(mac ? [] : [{ type: "separator" as const }, ...appItems]),
       { type: "separator" }, mac ? { role: "close" } : { role: "quit" },
     ] },
@@ -39,6 +52,17 @@ export function installAppMenu(actions: MenuActions): void {
     { role: "windowMenu" },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+/** What the tray says of every host: the one's state, or how many are online. */
+export function hostSummary(hosts: readonly Pick<HostEntry, "state" | "error">[]): string {
+  if (hosts.length === 1) {
+    const [only] = hosts;
+    return `Host: ${only!.error && only!.state === "stopped" ? "Stopped (error)" : stateLabels[only!.state]}`;
+  }
+  const online = hosts.filter(entry => entry.state === "connected").length;
+  const failed = hosts.some(entry => entry.error && entry.state === "stopped");
+  return `Hosts: ${online} of ${hosts.length} online${failed ? " (error)" : ""}`;
 }
 
 /** The menu bar (macOS) or notification-area item: host status and the few actions that need no window. */
@@ -54,16 +78,25 @@ export class HostTray {
     if (process.platform === "win32") this.tray.on("click", () => this.tray.popUpContextMenu());
   }
 
-  update(state: HostState, error: string | undefined): void {
-    const stopped = state === "stopped";
-    const status = `Host: ${error && stopped ? "Stopped (error)" : stateLabels[state]}`;
+  update(): void {
+    const hosts = this.actions.hosts();
+    const status = hostSummary(hosts);
+    const control = (entry: HostEntry, label: string): MenuItemConstructorOptions => entry.state === "stopped"
+      ? { label: `Start ${label}`, click: entry.start }
+      : { label: `Stop ${label}`, enabled: entry.state !== "stopping", click: entry.stop };
+    const controls: MenuItemConstructorOptions[] = hosts.length === 1
+      ? [control(hosts[0]!, "Host")]
+      : hosts.map(entry => ({ label: `${host(entry.server)} — ${entry.error && entry.state === "stopped" ? "Stopped (error)" : stateLabels[entry.state]}`,
+        submenu: [control(entry, "Host")] }));
+    const servers = this.actions.servers();
     this.tray.setToolTip(`Pikibun — ${status}`);
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: status, enabled: false },
       { type: "separator" },
       { label: "Open Pikibun", click: this.actions.openMain },
+      ...(servers.length > 1 ? [{ label: "Open Server", submenu: servers.map(server => ({ label: server.label, click: server.open })) }] : []),
       { label: `${this.actions.hostTitle}…`, click: this.actions.openHost },
-      stopped ? { label: "Start Host", click: this.actions.startHost } : { label: "Stop Host", enabled: state !== "stopping", click: this.actions.stopHost },
+      ...controls,
       { type: "separator" },
       { label: `Quit ${app.name}`, role: "quit" },
     ]));

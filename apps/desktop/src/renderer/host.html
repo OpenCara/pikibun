@@ -12,28 +12,48 @@
     <main>
       <header class="title">
         <h1 id="title">This Mac</h1>
-        <span id="status" class="pill" role="status">Stopped</span>
+        <span id="summary" class="pill" role="status"></span>
       </header>
-      <p id="error" class="banner error" role="alert" hidden></p>
       <p id="development" class="banner note" hidden>Development build: the host offers fixture models instead of Pi's.</p>
 
+      <section aria-labelledby="servers-heading">
+        <h2 id="servers-heading">Servers</h2>
+        <p class="muted">This computer runs sessions for each Pikibun server below as one of its hosts, as <code>pikibun connect</code> does, once per server. Choose one to pair, start or stop it.</p>
+        <ul id="servers" class="servers"></ul>
+        <form id="add-form" class="inline" autocomplete="off" novalidate>
+          <label>Add a server
+            <input id="add-server" type="url" spellcheck="false" autocapitalize="off" placeholder="https://pikibun.example.com" />
+          </label>
+          <button id="add" type="submit">Add</button>
+        </form>
+      </section>
+
+      <p id="error" class="banner error" role="alert" hidden></p>
+
       <section aria-labelledby="connection-heading">
-        <h2 id="connection-heading">Host</h2>
+        <header class="title">
+          <h2 id="connection-heading">Host</h2>
+          <span id="status" class="pill" role="status">Stopped</span>
+        </header>
         <dl class="facts">
           <dt>Server</dt><dd id="server"></dd>
           <dt>Paired with</dt><dd id="paired"></dd>
           <dt>Isolation</dt><dd id="isolation"></dd>
+          <dt>State</dt><dd id="state-dir"></dd>
+          <dt>In a terminal</dt><dd><code id="command" class="command"></code></dd>
         </dl>
         <div class="actions">
           <button id="start" class="primary" type="button">Start Host</button>
           <button id="stop" type="button">Stop Host</button>
+          <button id="open" type="button">Open in Window</button>
           <button id="refresh" class="ghost" type="button">Refresh</button>
+          <button id="remove" class="ghost" type="button">Remove Server</button>
         </div>
       </section>
 
       <section aria-labelledby="pair-heading">
         <h2 id="pair-heading">Pair with Pikibun</h2>
-        <p class="muted">In Pikibun, open Settings › Hosts and create a pairing code. Enter its pairing ID and single-use code here: the code goes only to the host on this computer, never to a file or log.</p>
+        <p class="muted" id="pair-note">In Pikibun, open Settings › Hosts and create a pairing code. Enter its pairing ID and single-use code here: the code goes only to the host on this computer, never to a file or log.</p>
         <form id="pair-form" autocomplete="off" novalidate>
           <label>Pairing ID
             <input id="pairing-id" name="pairing-id" spellcheck="false" autocapitalize="off" placeholder="1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed" />
@@ -52,19 +72,23 @@
         </form>
       </section>
 
-      <section aria-labelledby="options-heading">
-        <h2 id="options-heading">Options</h2>
-        <p class="muted">How this computer runs sessions (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings › Hosts › this computer.</p>
-        <label class="check" id="login-row">
-          <input id="open-at-login" type="checkbox" />
-          <span>Open Pikibun at login <span class="muted">— a host left running when Pikibun quits starts again when it opens.</span></span>
-        </label>
-      </section>
-
       <section aria-labelledby="models-heading">
         <h2 id="models-heading">Models offered</h2>
         <p id="models-note" class="muted"></p>
-        <ul id="models" class="list"></ul>
+        <ul id="models" class="list models"></ul>
+        <div class="actions" id="models-actions">
+          <button id="models-save" type="button">Offer Only Checked</button>
+          <button id="models-pi" class="ghost" type="button">Let Pi Choose</button>
+        </div>
+      </section>
+
+      <section aria-labelledby="options-heading">
+        <h2 id="options-heading">Options</h2>
+        <p class="muted">How this computer runs sessions (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings › Hosts › this computer, on each server.</p>
+        <label class="check" id="login-row">
+          <input id="open-at-login" type="checkbox" />
+          <span>Open Pikibun at login <span class="muted">— hosts left running when Pikibun quits start again when it opens.</span></span>
+        </label>
       </section>
 
       <section aria-labelledby="prerequisites-heading">

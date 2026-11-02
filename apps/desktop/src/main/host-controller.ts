@@ -1,22 +1,25 @@
 import type { HostInspection, HostState } from "../../../runner/src/desktop-protocol.js";
-import type { HostView, LogLine, Outcome, StartInput } from "../shared/bridge.js";
+import type { HostView, LogLine, ModelChoice, Outcome, StartInput } from "../shared/bridge.js";
 import type { HostProcess } from "./host-process.js";
 import { isLoopbackHttp } from "./origin.js";
 import type { SettingsStore } from "./settings.js";
 
-// The app's view of its connector host: what the host process reports, the owner's host settings, and the start flow
-// with the native unsandboxed consent. Windows and the tray render from `view()` and re-render on every change.
+// The app's view of one connector host, this computer as a host of one server (one connection, one `pikibun connect`):
+// what its host process reports, the owner's settings for it, and the start flow with the native unsandboxed consent.
+// Windows and the tray render from `view()` and re-render on every change.
 
 const LOG_LIMIT = 200;
 
 export interface HostControllerOptions {
-  title: string;
+  /** The connection in `settings` this host serves. */
+  id: string;
   settings: SettingsStore;
+  /** The same connection from a terminal (`pikibun connect ...`), shown for reference. */
+  command(server: string): string;
   /** Fixture models instead of Pi's: development builds only. */
   fixtureModels: boolean;
   /** Shows the CLI's warning in a native dialog; resolves true only when the owner accepts it. */
-  confirmUnsandboxed(warning: string): Promise<boolean>;
-  loginItem?: { get(): boolean; set(enabled: boolean): void };
+  confirmUnsandboxed(warning: string, server: string): Promise<boolean>;
 }
 
 export class HostController {
@@ -25,11 +28,14 @@ export class HostController {
   private inspection?: HostInspection;
   private inspecting = 0;
   private error?: string;
+  private lastServer = "";
   private readonly logs: LogLine[] = [];
   private readonly listeners = new Set<() => void>();
   private process?: HostProcess;
 
-  constructor(private readonly options: HostControllerOptions) {}
+  constructor(private readonly options: HostControllerOptions) {
+    this.lastServer = this.connection?.server ?? "";
+  }
 
   attach(process: HostProcess): void { this.process = process; }
 
@@ -41,17 +47,30 @@ export class HostController {
   private changed(): void { for (const listener of this.listeners) listener(); }
 
   get hostState(): HostState { return this.state; }
+  get id(): string { return this.options.id; }
+  /** The connection's server; a removed connection keeps the last one it had while it shuts down. */
+  get server(): string {
+    const server = this.connection?.server;
+    if (server) this.lastServer = server;
+    return this.lastServer;
+  }
+
+  private get connection() { return this.options.settings.connection(this.options.id); }
+
+  private setResume(resumeHost: { unsandboxedConsent: boolean } | undefined): void {
+    if (this.connection) this.options.settings.updateConnection(this.options.id, { resumeHost });
+  }
 
   view(): HostView {
-    const settings = this.options.settings.get();
+    const connection = this.connection;
     const view: HostView = {
-      title: this.options.title, server: settings.server, state: this.state, inspecting: this.inspecting > 0,
-      logs: [...this.logs], fixtureModels: this.options.fixtureModels,
+      id: this.options.id, primary: this.options.settings.get().connections[0]?.id === this.options.id, server: this.server, state: this.state,
+      inspecting: this.inspecting > 0, logs: [...this.logs], command: this.options.command(this.server),
     };
+    if (connection?.models) view.models = connection.models.map(model => ({ ...model }));
     if (this.running) view.running = { ...this.running };
     if (this.inspection) view.inspection = this.inspection;
     if (this.error) view.error = this.error;
-    if (this.options.loginItem) view.openAtLogin = this.options.loginItem.get();
     return view;
   }
 
@@ -75,7 +94,7 @@ export class HostController {
 
   /** A started host failed or stopped by itself: it is not running, so the next launch must not resume it. */
   handleFailure(message: string): void {
-    if (this.options.settings.get().resumeHost) this.options.settings.update({ resumeHost: undefined });
+    if (this.connection?.resumeHost) this.setResume(undefined);
     this.error = message;
     this.log("error", message);
   }
@@ -97,7 +116,7 @@ export class HostController {
     this.inspecting++;
     this.changed();
     try {
-      const result = await this.process.request({ type: "inspect", ...this.developmentOptions(this.options.settings.get().server) });
+      const result = await this.process.request({ type: "inspect", ...this.developmentOptions(this.server) });
       if (result.ok && result.inspection) this.inspection = result.inspection;
       else if (!result.ok) this.error = result.error.message;
       return this.inspection;
@@ -112,29 +131,31 @@ export class HostController {
    * hands the request to the host. `resume` replays consent recorded at the owner's last start instead of asking.
    */
   async start(input: StartInput, resume?: { unsandboxedConsent: boolean }): Promise<Outcome> {
-    if (!this.process) return { ok: false, error: "The host is unavailable." };
+    if (!this.process || !this.connection) return { ok: false, error: "The host is unavailable." };
     if (this.state !== "stopped") return { ok: false, error: "The host is already running." };
     const inspection = await this.refresh();
     if (!inspection) return { ok: false, error: this.error ?? "This computer could not be inspected." };
     const failure = inspection.unsupported ?? inspection.prerequisitesError
-      ?? (!input.pairing && !inspection.pairedServer ? inspection.pairingError ?? "This computer is not paired yet. In Pikibun, open Settings › Hosts, create a pairing code, then enter its pairing ID and code here." : undefined);
+      ?? (!input.pairing && !inspection.pairedServer ? inspection.pairingError ?? `This computer is not paired with ${this.server} yet. There, open Settings › Hosts, create a pairing code, then enter its pairing ID and code here.` : undefined);
     if (failure) return this.refuse(failure);
     let unsandboxedConsent = false;
     if (inspection.mode === "unsandboxed") {
-      unsandboxedConsent = resume ? resume.unsandboxedConsent : await this.options.confirmUnsandboxed(inspection.unsandboxedWarning ?? "");
+      unsandboxedConsent = resume ? resume.unsandboxedConsent : await this.options.confirmUnsandboxed(inspection.unsandboxedWarning ?? "", this.server);
       if (!unsandboxedConsent) return this.refuse(resume ? "Hosting was not resumed: this computer now runs agent work unsandboxed, which needs your consent. Start the host to review it." : "Unsandboxed mode was not confirmed; nothing was started.");
     }
-    const server = this.options.settings.get().server;
+    const server = this.server;
+    const models = this.connection?.models;
     this.error = undefined;
     if (input.pairing) this.log("info", input.replacePairing ? `Replacing this computer's pairing with one for ${server}.` : `Pairing this computer with ${server}.`);
     const result = await this.process.request({
       type: "start", server,
       ...(input.pairing ? { pairing: input.pairing, replacePairing: input.replacePairing } : {}),
       ...(unsandboxedConsent ? { unsandboxedConsent: true } : {}),
+      ...(models ? { models: models.map(model => ({ ...model })) } : {}),
       ...this.developmentOptions(server),
     });
     if (!result.ok) return this.refuse(result.error.message);
-    this.options.settings.update({ resumeHost: { unsandboxedConsent } });
+    this.setResume({ unsandboxedConsent });
     this.changed();
     return { ok: true };
   }
@@ -147,7 +168,7 @@ export class HostController {
 
   async stop(): Promise<Outcome> {
     // The owner's stop also ends resuming: the next launch leaves the host stopped.
-    this.options.settings.update({ resumeHost: undefined });
+    this.setResume(undefined);
     if (!this.process?.running || this.state === "stopped") { this.changed(); return { ok: true }; }
     const result = await this.process.request({ type: "stop" });
     return result.ok ? { ok: true } : this.refuse(result.error.message);
@@ -155,16 +176,18 @@ export class HostController {
 
   /** At launch: start again if the owner left the host running, without asking for consent they already gave. */
   async resume(): Promise<void> {
-    const resume = this.options.settings.get().resumeHost;
+    const resume = this.connection?.resumeHost;
     if (!resume) return;
     const outcome = await this.start({ replacePairing: false }, resume);
-    if (!outcome.ok) this.options.settings.update({ resumeHost: undefined });
+    if (!outcome.ok) this.setResume(undefined);
   }
 
-  setOpenAtLogin(enabled: boolean): Outcome {
-    if (!this.options.loginItem) return { ok: false, error: "Open at login is not available on this system." };
-    this.options.loginItem.set(enabled);
+  /** The models to offer from the next start; null leaves the choice to Pi, as `pikibun connect` without --model. */
+  setModels(models: ModelChoice[] | null): Outcome {
+    if (!this.connection) return { ok: false, error: "That server is no longer in the list." };
+    this.options.settings.updateConnection(this.options.id, { models: models ?? undefined });
+    if (this.state !== "stopped") this.log("info", "The model choice applies from the host's next start.");
     this.changed();
-    return this.options.loginItem.get() === enabled ? { ok: true } : { ok: false, error: "The system did not accept the login item. Check System Settings › General › Login Items." };
+    return { ok: true };
   }
 }

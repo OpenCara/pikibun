@@ -1,33 +1,56 @@
 # Pikibun for the desktop
 
-An Electron app with two jobs: the **Pikibun window** shows your Pikibun server (https://pikibun.com by default), and
-**This Mac** runs the `pikibun` connector on this computer, so it hosts Pi agent sessions without a terminal. **Settings
-→ Pikibun on this computer** can also run Pikibun itself here, as `pikibun serve` does. macOS builds ship today; the
-Linux and Windows targets are declared for later.
+An Electron app with three jobs, each the full version of what the command line and the website do:
 
-- The Pikibun window loads the configured server with no preload and no Node, in its own persistent session. It
-  navigates only within the server and GitHub (for sign-in); other links open in your default browser.
+- **Pikibun windows** show a Pikibun server's web app, as a browser does (https://pikibun.com by default). Links of the
+  same server that ask for a new window (a session opened with ⌘-click or a middle click, **Open Link in New Window**
+  in the right-click menu, **File → New Window**) open in another Pikibun window, so sessions can sit side by side.
+  **File → Open Server** opens any server this computer connects to.
+- **This Mac** runs the `pikibun` connector here, so this computer hosts Pi agent sessions without a terminal, for one
+  server or several at once (**Add a server**), each with its own pairing, host process and model choice, as one
+  `pikibun connect` per server would.
+- **Settings → Pikibun on this computer** runs Pikibun itself here, as `pikibun serve` does: **Just for Me**, on
+  loopback for your GitHub account alone, or **Share with Others**, as `pikibun serve --share`, a full multi-user server
+  at a public HTTPS address that others sign in to and pair their own hosts with.
+
+macOS builds ship today; the Linux and Windows targets are declared for later.
+
+- Pikibun windows load their server with no preload and no Node, in their own persistent session. Each navigates only
+  within its server and GitHub (for sign-in); other links open in your default browser. The main window follows
+  Pikibun on this computer while it runs, else shows the primary server (Settings); others stay on the server they
+  opened.
 - This Mac and Settings are pages bundled with the app (served by its own `pikibun-app:` scheme under a strict CSP).
   Their preload exposes a small typed bridge (`src/shared/bridge.ts`); the main process checks the sender and
   validates every call.
-- The connector runs in an Electron utility process (Electron's own Node.js 24): `dist/host/desktop-host.mjs`, which
-  `scripts/build.mjs` bundles from `apps/runner/src/desktop-host.ts`. It uses the CLI's private state
-  (`~/.local/share/pikibun/connector`), so a computer paired with `pikibun connect` is adopted as is; only one of the
-  two can run at a time, and the app says so when the CLI holds the pairing. Pairing codes travel only over the IPC
-  channel: never argv, environment, files or logs.
+- Each server's connector runs in an Electron utility process of its own (Electron's own Node.js 24):
+  `dist/host/desktop-host.mjs`, which `scripts/build.mjs` bundles from `apps/runner/src/desktop-host.ts`. The primary
+  server's uses the CLI's private state (`~/.local/share/pikibun/connector`), so a computer paired with
+  `pikibun connect` is adopted as is; only one of the two can run at a time, and the app says so when the CLI holds the
+  pairing. Every other server's has its own (`~/.local/share/pikibun/connections/<id>`), and This Mac shows the
+  `pikibun connect --state-dir` command that runs the same connection from a terminal. Removing a server stops its host
+  and leaves its state directory alone. Pairing codes travel only over the IPC channel: never argv, environment, files
+  or logs.
 - macOS has no isolated sandbox, so starting the host asks for consent in a native dialog showing the CLI's own
   `--unsafe-no-sandbox` warning. Linux uses the bubblewrap sandbox when its prerequisites are installed and asks the
   same consent otherwise; native Windows gets the CLI's WSL2 instructions.
 - Pikibun on this computer runs the local server (`dist/host/desktop-server.mjs`, bundled from
   `apps/server/src/local/desktop.ts`) in a second utility process, with `pikibun serve`'s state
   (`~/.local/share/pikibun/server`), so the two share their data; a kernel lease on that directory (flock or lockf, as
-  the connector's) lets only one of them run at a time. The GitHub OAuth app's secret travels only over the IPC channel into that state. While it runs, the Pikibun window shows
-  it instead of the configured server, opening its sign-in link while nobody has claimed it; this computer becomes its
-  host once the owner has signed in, after the same unsandboxed consent where there is no sandbox. It starts again at
-  launch while it is on, and stopping it in Settings returns the window to the configured server.
+  the connector's) lets only one of them run at a time. The GitHub OAuth apps' secrets and administrators' passwords
+  travel only over the IPC channel. While it runs, the main Pikibun window shows it instead of the primary server,
+  opening its sign-in link while nobody has claimed it; this computer becomes its host once the owner (shared, the first
+  listed administrator with an account) has signed in, after the same unsandboxed consent where there is no sandbox. It
+  starts again at launch while it is on, the way it ran, and stopping it in Settings returns the window to the primary
+  server.
+- Shared, it needs a public HTTPS address served by a TLS proxy or tunnel you run (`tailscale serve`, Cloudflare
+  Tunnel, Caddy) that forwards to the address Settings shows (`http://127.0.0.1:7878`, or every interface). Settings
+  takes its administrators as GitHub logins (looked up on api.github.com), `github:12345` or `password:alice`, who may
+  create an account, whether usernames and passwords sign in, and a GitHub OAuth app whose callback is on the public
+  address; **Create Administrator** makes a listed password administrator's account on the running server. The
+  settings are saved with the server's state, which `pikibun serve --share` reads too.
 - A host left running when Pikibun quits starts again the next time it opens, with the consent given at its start;
-  stopping the host, or a host failure, ends that. With the host running, closing every window keeps Pikibun in the
-  menu bar.
+  stopping the host, or a host failure, ends that, for each server on its own. With a host running, closing every
+  window keeps Pikibun in the menu bar, whose menu starts and stops each server's host.
 
 ## Develop
 
@@ -41,7 +64,7 @@ Development switches, honored only when the app runs unpackaged:
 | Variable | Effect |
 | --- | --- |
 | `PIKIBUN_DESKTOP_ALLOW_FAUX=1` | The host offers the deterministic fixture model instead of Pi's (needs a test-mode server) |
-| `PIKIBUN_DESKTOP_STATE_DIR=/path` | Connector state other than the CLI's, so your real pairing is untouched |
+| `PIKIBUN_DESKTOP_STATE_DIR=/path` | Connector state other than the CLI's, so your real pairing is untouched; other servers' go in `connections/` beside it |
 | `PIKIBUN_DESKTOP_SERVER_STATE_DIR=/path` | Local server state other than `pikibun serve`'s (with `PIKIBUN_DESKTOP_ALLOW_FAUX=1` it runs in test mode with the fixture model) |
 | `PIKIBUN_DESKTOP_USER_DATA=/path` | A separate app profile (settings, window bounds, Pikibun session) |
 

@@ -760,7 +760,7 @@ While both hosts are connected, a session's owner can move it to a model on anot
 ### iPhone, iPad and Mac apps
 
 - **iPhone and iPad** ([`apps/mobile`](apps/mobile/README.md), Expo): your sessions grouped by workspace with their status; a session opens live with its transcript, queue, pending approvals to decide, and the chat box for shared messages and side asks; new sessions start from the app. It isn't on the App Store or TestFlight yet: build it from source as a development build.
-- **macOS** ([`apps/desktop`](apps/desktop/README.md), Electron): Pikibun in its own window, plus **This Mac**, which runs the `pikibun` connector on the Mac without a terminal. Pair it with a pairing ID and code from **Settings → Hosts**. It shares the command-line connector's state, so a Mac paired with `pikibun connect` is adopted as is, and only one of the two can run at a time. macOS has no sandbox, so starting the host asks for the same consent as `--unsafe-no-sandbox`. **Settings → Pikibun on this computer** runs Pikibun itself on the Mac instead of using a server (see [Running Pikibun on your own computer](#running-pikibun-on-your-own-computer)).
+- **macOS** ([`apps/desktop`](apps/desktop/README.md), Electron): Pikibun in its own windows, as on the web (a session can open in a window of its own), plus **This Mac**, which runs the `pikibun` connector on the Mac without a terminal, for one server or several at once, each with its own host and pairing. Pair each with a pairing ID and code from its **Settings → Hosts**. The primary server shares the command-line connector's state, so a Mac paired with `pikibun connect` is adopted as is, and only one of the two can run at a time. macOS has no sandbox, so starting a host asks for the same consent as `--unsafe-no-sandbox`. **Settings → Pikibun on this computer** runs Pikibun itself on the Mac instead of using a server, for you alone or shared with others (see [Running Pikibun on your own computer](#running-pikibun-on-your-own-computer)).
 
 The iPhone and iPad app signs in with GitHub through the server's GitHub OAuth app; nothing else needs configuring. It doesn't offer username and password sign-in yet. Each of its sign-ins lasts 30 days and appears under **Settings → Profile → Signed-in apps**, where you can sign it out. The Mac app shows the server's own sign-in page, so it signs in as a browser does: with GitHub or, where the server allows it, a username and password, for 7 days. Neither app opens invite links (the Mac app sends links to your default browser): where `SIGNUP=invite`, a new person creates their account through the link in a browser, then signs in on the app.
 
@@ -781,6 +781,16 @@ Or, in the Mac app, **Settings → Pikibun on this computer → Run on This Comp
 - **Its data** (the SQLite database, session backups, the secrets it was set up with, and this computer's pairing) is in `~/.local/share/pikibun/server` (`--state-dir` chooses another), private to your user. It is separate from `pikibun connect`'s, so a computer connected to a team's server stays connected. One Pikibun at a time runs from it: `pikibun serve` and the Mac app share it, and whichever starts second says the other is running.
 
 Run `npx pikibun serve --help` for every option. The server is the one [Running the server](#running-the-server) describes, started with `LOCAL_MODE` (see [Configuration](#configuration)).
+
+### Sharing it with others
+
+The same Pikibun, from the same data, can also serve a team: `pikibun serve --share`, or in the desktop app **Settings → Pikibun on this computer → Share with Others**. It then runs as a full server rather than with `LOCAL_MODE`: people sign in, create workspaces and pair their own hosts, and it has administrators and a sign-up policy like any other.
+
+- **A public HTTPS address.** Sign-in cookies need HTTPS, so Pikibun still serves plain HTTP on this computer (`127.0.0.1:7878`, or every interface with `--listen all`), and a TLS proxy or tunnel you run serves the public address and forwards to it: `tailscale serve` or Funnel, Cloudflare Tunnel, Caddy. Give that address with `--public-origin https://…`, and `--trust-proxy` if the proxy sets `X-Forwarded-Proto`/`-Host`.
+- **Administrators** (`--admin`, repeatable): user IDs such as `github:12345` or `password:alice`; the desktop app also takes GitHub logins and looks up their IDs. The first with an account owns this computer's host, which pairs itself once they have signed in (with a pairing of its own, so going back to running Pikibun for yourself reuses the other).
+- **Sign-in and sign-up**: GitHub through an OAuth app whose callback is `<public address>/api/auth/github/callback` (not the `127.0.0.1` one), usernames and passwords (`--password-auth`), or both; `--signup` is `invite` (the default), `open` or `off`, as [Who can create an account](#who-can-create-an-account) describes. `--create-admin USERNAME`, or the app's **Create Administrator**, makes a listed password administrator's account.
+
+The settings are kept with the state, so later runs need only `--share`; without it, the same data serves you alone again.
 
 ## Running the server
 

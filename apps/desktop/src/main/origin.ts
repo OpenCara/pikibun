@@ -33,7 +33,13 @@ export function navigationDecision(target: string, server: string): NavigationDe
   return url.protocol === "https:" || url.protocol === "http:" || url.protocol === "mailto:" ? "external" : "deny";
 }
 
-/** New windows never open inside the app: web links go to the default browser. */
+/** A link of a window's own server, which opens in another Pikibun window rather than the browser. */
+export function sameServerLink(target: string, server: string): boolean {
+  const url = URL.parse(target);
+  return !!url && !url.username && !url.password && url.origin === server && (url.protocol === "https:" || url.protocol === "http:");
+}
+
+/** New windows of other sites never open inside the app: web links go to the default browser. */
 export function windowOpenDecision(target: string): "external" | "deny" {
   let url: URL;
   try { url = new URL(target); } catch { return "deny"; }
