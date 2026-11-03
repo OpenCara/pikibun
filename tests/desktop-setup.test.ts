@@ -19,7 +19,7 @@ import { NVM_INSTALL } from "../apps/desktop/src/main/wsl.js";
 // signing Pi in to a provider through Pi's own sign-in, so no separate Pi install or terminal is needed.
 
 test("a fix's action is one the app knows, apt naming only the sandbox's packages", () => {
-  for (const kind of ["xcode-tools", "git-for-windows", "mxc-sdk", "windows-update", "wsl-install", "wsl-node"]) assert.deepEqual(parseSetupAction({ kind }), { kind });
+  for (const kind of ["xcode-tools", "git-for-windows", "node-for-windows", "mxc-sdk", "windows-update", "wsl-install", "wsl-node"]) assert.deepEqual(parseSetupAction({ kind }), { kind });
   assert.deepEqual(parseSetupAction({ kind: "apt", packages: ["bubblewrap", "git", "git"] }), { kind: "apt", packages: ["bubblewrap", "git"] });
   for (const value of [undefined, "xcode-tools", { kind: "xcode-tools", extra: 1 }, { kind: "brew" }, { kind: "apt", packages: [] },
     { kind: "apt", packages: ["curl"] }, { kind: "apt", packages: ["git; rm -rf /"] }, { kind: "apt" }]) {
@@ -41,6 +41,13 @@ test("each action runs where its owner sees it, on its own platform only, from a
   assert.match(git.step.args.at(-1)!, /^winget install --id Git\.Git -e --source winget/);
   assert.ok(git.step.args.includes("-NoExit"), "the window stays open with its output");
 
+  // Node.js for the Windows sandbox's steps, which a desktop app's own (Electron) Node can't run.
+  assert.ok("error" in setupPlan({ kind: "node-for-windows" }, { platform: "darwin" }));
+  const nodeJs = setupPlan({ kind: "node-for-windows" }, { platform: "win32" });
+  assert.ok(!("error" in nodeJs) && nodeJs.step.type === "run" && nodeJs.step.console);
+  assert.match(nodeJs.step.args.at(-1)!, /^winget install --id OpenJS\.NodeJS\.LTS -e --source winget/);
+  assert.deepEqual(fixes.nodeForWindows.action, { kind: "node-for-windows" });
+
   const update = setupPlan({ kind: "windows-update" }, { platform: "win32" });
   assert.ok(!("error" in update));
   assert.deepEqual(update.step, { type: "open", url: "ms-settings:windowsupdate" });
@@ -61,7 +68,7 @@ test("each action runs where its owner sees it, on its own platform only, from a
   assert.ok(!("error" in node) && node.step.type === "run");
   assert.ok(node.step.args.at(-1)!.includes(`bash -lc '${NVM_INSTALL}'`));
   assert.throws(() => setupPlan({ kind: "wsl-node" }, { platform: "win32", distro: "Ubuntu --exec rm" }));
-  for (const plan of [git, mxc, apt, node]) assert.ok(!("error" in plan) && plan.step.type === "run" && !plan.step.args.some(arg => arg.includes("\"")));
+  for (const plan of [git, nodeJs, mxc, apt, node]) assert.ok(!("error" in plan) && plan.step.type === "run" && !plan.step.args.some(arg => arg.includes("\"")));
 });
 
 test("missing Linux packages share one fix, with apt where the system has it", () => {

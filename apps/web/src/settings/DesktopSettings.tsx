@@ -89,7 +89,7 @@ function WindowsSandboxField({ connection, view, bridge }: { connection: HostVie
   };
   return <Field label="Sandbox" hint={choice.sandbox === "wsl2"
     ? "Sessions run in WSL2's bubblewrap sandbox, with Node.js, Pi's models and the host's pairing inside that distribution, as `pikibun connect` run there does."
-    : "Sessions run in Windows' own sandbox, which is experimental (Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32 and Microsoft's MXC SDK), or without one, after your consent, while it isn't ready. Pi's models and the host's pairing are your Windows profile's."}>
+    : "Sessions run in Windows' own sandbox, which is experimental (Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32, Node.js 24 or newer and Microsoft's MXC SDK), or without one, after your consent, while it isn't ready. Pi's models and the host's pairing are your Windows profile's."}>
     <div className="stack">
       <fieldset className="stack" disabled={action.busy || !stopped}>
         <SegmentedControl label="Sandbox" value={choice.sandbox} onChange={sandbox => change(sandbox === "native" ? { sandbox: "native" } : { sandbox: "wsl2" })}

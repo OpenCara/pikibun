@@ -191,11 +191,14 @@ choice changes only while that host is stopped, and applies from its next start:
   one `~/.local/share/pikibun/connections/<id>`), and only one of the two can run at a time.
 - **Native Windows**: the host runs in the app, as on macOS, and its sessions run in Windows' own process containers
   (`pikibun connect --experimental-sandbox`: Windows 11 24H2 or later with the October 2026 update, Git for Windows,
-  busybox-w32 and Microsoft's MXC SDK; experimental, see `docs/design/windows-sandbox.md`). Every native host shares
-  one MXC SDK install, beside the primary connection's state (`%USERPROFILE%\.local\share\pikibun\connector\mxc`,
-  or `PIKIBUN_MXC_RUNTIME`); its prerequisite shows the command that installs it. While the sandbox isn't ready, the
-  host offers to run unsandboxed instead, after the same consent as `--unsafe-no-sandbox`, which needs only Git for
-  Windows. Pi's configuration and the connector's state are your Windows profile's.
+  busybox-w32, Node.js 24 or newer and Microsoft's MXC SDK; experimental, see `docs/design/windows-sandbox.md`).
+  Every native host shares one MXC SDK install, beside the primary connection's state
+  (`%USERPROFILE%\.local\share\pikibun\connector\mxc`, or `PIKIBUN_MXC_RUNTIME`); its prerequisite shows the
+  command that installs it. Each sandboxed step runs on Node.js for Windows (on PATH, in `%ProgramFiles%\nodejs`, or
+  `PIKIBUN_SANDBOX_NODE`), resolved through launchers such as Scoop's or Volta's to `node.exe` itself: the app's
+  own executable is Electron, which can't run as Node (its RunAsNode fuse is off), so it can't run them. While the
+  sandbox isn't ready, the host offers to run unsandboxed instead, after the same consent as `--unsafe-no-sandbox`,
+  which needs only Git for Windows. Pi's configuration and the connector's state are your Windows profile's.
 
 The two are separate hosts with separate pairings, so switching a server's host from one to the other shows the other's
 pairing, if it has one. Different servers can use different ones: a team's server in WSL2 and another natively, say.
