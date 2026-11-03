@@ -7,7 +7,7 @@ import { AttachButton, AttachmentStrip, encodeImages, handOverFiles, handOverIma
 import {
   autoApproveConfirmed, ChatOptionsBar, chatOptionsBody, confirmAutoApprove, mustConfirmAutoApprove, preferredSelection, readChatPreference, rememberChat, type ChatSelection,
 } from "./chat-options";
-import { writeDraft } from "./drafts";
+import { forgetSentDraft, newSessionDraftId, useDraft, writeDraft } from "./drafts";
 import { ConnectionStatus, HostCapabilities, useConnections } from "./hosts";
 import { Icon } from "./icons";
 import { useWorkspacePeople } from "./people";
@@ -78,7 +78,9 @@ function Composer({ workspace }: { workspace: Workspace }) {
   const [lastChat] = useState(readChatPreference);
 
   const [choice, setChoice] = useState("");
-  const [content, setContent] = useState("");
+  // Remembered per workspace, so switching to another session and back finds the unsent first message where it was.
+  const draftId = newSessionDraftId(workspace.id);
+  const [content, setContent] = useDraft(draftId);
   const [visibility, setVisibility] = useState<Visibility>("workspace");
   const [trustedHost, setTrustedHost] = useState("");
   // Where the session runs: in the sandbox, or directly on the host, which only its owner, or a member they granted that,
@@ -141,6 +143,7 @@ function Composer({ workspace }: { workspace: Workspace }) {
   async function start(event?: FormEvent) {
     event?.preventDefault();
     if (!canStart || !model || !host || confirming.current) return;
+    const typed = content;
     const message = content.trim();
     const pasted = attachments.images;
     const attached = attachments.files;
@@ -173,6 +176,9 @@ function Composer({ workspace }: { workspace: Workspace }) {
           handOverFiles(sessionId, attached);
         }
       }
+      // The session took the message (or its own draft holds it now): the new-session screen starts empty next time,
+      // unless the text was edited meanwhile.
+      forgetSentDraft(draftId, typed);
       refreshSessions();
       navigate({ name: "session", sessionId });
     });
