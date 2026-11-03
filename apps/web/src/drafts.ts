@@ -7,6 +7,12 @@ import { useEffect, useState } from "react";
  */
 const key = (sessionId: string) => `pikibun.draft.${sessionId}`;
 
+/**
+ * The draft of a workspace's new-session screen, kept like a session's under an ID no session has (session IDs are
+ * UUIDs), so a first message typed there survives opening another session and coming back.
+ */
+export const newSessionDraftId = (workspaceId: string) => `new-session:${workspaceId}`;
+
 /** Chat boxes open in this tab, told when a draft of theirs was sent and forgotten. */
 const listeners = new Map<string, Set<(sent: string) => void>>();
 
