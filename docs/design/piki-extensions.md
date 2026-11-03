@@ -133,7 +133,9 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
 21. **Search and line ranges, without a shell.** The `search` tool and `read_file`'s `offset`/`limit` replace the grep,
     find, sed -n, cat and head that took a third of sessions' shell commands, each approved. Like `read_file`, they need
     no approval and stay in the worktree: `search` never follows links, skips hard-linked, binary and over-1 MB files,
-    and never searches `.git` (nor `node_modules` unless `all`). Every backend runs the same search
+    and skips `.git` directories as it walks (nor `node_modules` unless `all`); a `path` inside `.git` searches it, as
+    `read_file` reads it. Stopping at `max_results` with anything left unsearched is `truncated`, and an answer holds at
+    most 256K characters of lines, within the helpers' 4 MB of output. Every backend runs the same search
     (`apps/runner/src/search.ts`): the Python helper in the Linux and macOS sandboxes, and `SEARCH_CORE` in the Windows
     Node helper and, on unsandboxed hosts, in a worker thread, so a pattern that backtracks without end stops the worker
     (after 30 seconds) rather than the connector. Each search stops itself after 10 seconds, 20,000 files or 64 MB and

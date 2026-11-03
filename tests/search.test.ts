@@ -25,6 +25,7 @@ test("read_file's line ranges: the lines asked for, with their endings, and wher
   assert.deepEqual(lineRange(text, undefined, 1), { content: "one\n", lines: { from: 1, to: 1, total: 4 } });
   assert.deepEqual(lineRange(text, 9, 3), { content: "", lines: { from: 5, to: 4, total: 4 } }, "past the end: nothing, and how many lines there are");
   assert.deepEqual(lineRange("a\n", 1, 5), { content: "a\n", lines: { from: 1, to: 1, total: 1 } });
+  assert.deepEqual(lineRange("", 1, 5), { content: "", lines: { from: 1, to: 0, total: 0 } }, "an empty file has no lines (review of #170)");
 });
 
 test("search on an unsandboxed host: a pattern that backtracks without end stops its worker, never the connector", async t => {

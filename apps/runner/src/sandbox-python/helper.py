@@ -968,6 +968,7 @@ SEARCH_FILES = 20000
 SEARCH_BYTES = 64 * 1024 * 1024
 SEARCH_LINE_TEXT = 300
 SEARCH_SECONDS = 10
+SEARCH_TEXT = 256 * 1024
 
 
 def glob_expression(glob):
@@ -1006,13 +1007,16 @@ def search(root, request):
     glob_match = None if glob is None else glob_expression(glob)
     glob_path = glob is not None and '/' in glob
     deadline = time.monotonic() + SEARCH_SECONDS
-    matches, state = [], {'files': 0, 'bytes': 0, 'truncated': False}
+    matches, state = [], {'files': 0, 'bytes': 0, 'characters': 0, 'truncated': False}
 
     def shown(line):
         return line[:SEARCH_LINE_TEXT] + '\u2026' if len(line) > SEARCH_LINE_TEXT else line
 
     def done():
-        return state['truncated'] or len(matches) >= max_results
+        # Stopping with results to spare is stopping early: what lies beyond may hold more matches.
+        if len(matches) >= max_results:
+            state['truncated'] = True
+        return state['truncated']
 
     def search_file(parent, name, relative, size):
         if size > SEARCH_FILE_BYTES:
@@ -1045,6 +1049,11 @@ def search(root, request):
             if context > 0:
                 match['before'] = [shown(item) for item in lines[max(0, index - context):index]]
                 match['after'] = [shown(item) for item in lines[index + 1:index + 1 + context]]
+            size = sum(len(item) for item in [match['text'], *match.get('before', []), *match.get('after', [])])
+            if state['characters'] + size > SEARCH_TEXT:
+                state['truncated'] = True
+                return
+            state['characters'] += size
             matches.append(match)
 
     def visit(directory, prefix):

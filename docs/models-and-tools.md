@@ -8,7 +8,7 @@ The tools an agent can use:
 |---|---|---|
 | `identity` | Tells the agent the session owner's identity and `APP_` environment | Nothing |
 | `list_files`, `read_file` | List and read session files; images (PNG, JPEG, GIF, WebP) go to the model as images. `read_file` with `offset` and `limit` reads only those lines of a text file | Nothing |
-| `search` | Search the worktree's text files for a regular expression or literal text, like `grep -rn`: narrowed by `path` and `glob`, with up to 5 lines of `context` and up to 500 results. It never searches `.git` or follows links, and skips `node_modules` unless `all` is set, plus binary files and files over 1 MB | Nothing |
+| `search` | Search the worktree's text files for a regular expression or literal text, like `grep -rn`: narrowed by `path` and `glob`, with up to 5 lines of `context` and up to 500 results. It never follows links, skips `.git` directories as it walks (a `path` inside `.git` reads it, as `read_file` can), skips `node_modules` unless `all` is set, and skips binary files and files over 1 MB | Nothing |
 | `write_file`, `edit_file` | Write a whole file, or replace exact text in place | Permission in **Read only** messages |
 | `bash` | Run a shell command in the sandbox | Approval |
 | `git_push` | Push a clone's checked-out commit to a branch, optionally opening a pull request, or tag a commit already on a branch | Approval |

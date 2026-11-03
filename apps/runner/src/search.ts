@@ -26,6 +26,11 @@ export const searchLimits = Object.freeze({
   bytes: 64 * 1024 * 1024,
   /** It stops here and answers what it found, as truncated, within the helpers' 30-second operations. */
   seconds: 10,
+  /**
+   * The characters (code points) of matched and context lines one answer holds: within the helpers' 4 MB of output even
+   * where the Python helper escapes each as 12 bytes of JSON (a character outside the BMP).
+   */
+  text: 256 * 1024,
 });
 
 export interface SearchRequest {
@@ -39,7 +44,7 @@ export interface SearchRequest {
   glob?: string;
   context: number;
   maxResults: number;
-  /** Also search dependency directories (node_modules), which are skipped by default; `.git` never is searched. */
+  /** Also search dependency directories (node_modules), which are skipped by default; `.git` directories are always skipped as it walks. */
   all: boolean;
 }
 
@@ -55,7 +60,7 @@ export interface SearchResult {
   matches: SearchMatch[];
   /** Text files searched. */
   files: number;
-  /** It stopped early: at `maxResults`, or at a limit on files, bytes or time. */
+  /** It stopped early: at `maxResults` with files or lines left unsearched, or at a limit on files, bytes, text or time. */
   truncated: boolean;
 }
 
@@ -95,7 +100,7 @@ export function checkedSearch(value: unknown): SearchResult {
  */
 export const SEARCH_CORE = String.raw`
 function searchTree(fs, start, startPath, request) {
-  const LIMITS = { fileBytes: ${searchLimits.fileBytes}, files: ${searchLimits.files}, bytes: ${searchLimits.bytes}, lineText: ${searchLimits.lineText}, seconds: ${searchLimits.seconds} };
+  const LIMITS = { fileBytes: ${searchLimits.fileBytes}, files: ${searchLimits.files}, bytes: ${searchLimits.bytes}, lineText: ${searchLimits.lineText}, seconds: ${searchLimits.seconds}, text: ${searchLimits.text} };
   const deadline = Date.now() + LIMITS.seconds * 1000;
   let expression;
   try {
@@ -104,10 +109,12 @@ function searchTree(fs, start, startPath, request) {
   } catch { throw new SearchRefusal("invalid regular expression"); }
   const glob = request.glob === undefined ? undefined : globExpression(request.glob);
   const matches = [];
-  let files = 0, bytes = 0, truncated = false;
+  let files = 0, bytes = 0, characters = 0, truncated = false;
   const shown = line => { const chars = Array.from(line); return chars.length > LIMITS.lineText ? chars.slice(0, LIMITS.lineText).join("") + "\u2026" : line; };
+  const length = line => Array.from(line).length;
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-  const done = () => truncated || matches.length >= request.maxResults;
+  // Stopping with results to spare is stopping early: what lies beyond may hold more matches.
+  const done = () => { if (matches.length >= request.maxResults) truncated = true; return truncated; };
   function searchFile(path, relative, size) {
     if (size > LIMITS.fileBytes) return;
     if (files >= LIMITS.files || bytes + size > LIMITS.bytes || Date.now() > deadline) { truncated = true; return; }
@@ -128,6 +135,9 @@ function searchTree(fs, start, startPath, request) {
         match.before = lines.slice(Math.max(0, index - request.context), index).map(shown);
         match.after = lines.slice(index + 1, index + 1 + request.context).map(shown);
       }
+      const size = [match.text, ...(match.before || []), ...(match.after || [])].reduce((total, line) => total + length(line), 0);
+      if (characters + size > LIMITS.text) { truncated = true; return; }
+      characters += size;
       matches.push(match);
     }
   }

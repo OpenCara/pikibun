@@ -127,12 +127,19 @@ const cases: Case[] = [
     { ok: { matches: [{ path: "src/app.ts", line: 3, text: "  return \"hi\";", before: ["export function hello() {"], after: ["}"] }], files: 1, truncated: false } }],
   ["stops at max_results, and says so", find({ pattern: "e", path: "src", max_results: 1 }),
     { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 1, truncated: true } }],
+  ["says it stopped at max_results with files left, though no more matches were seen (review of #170)", find({ pattern: "hello", ignore_case: true, path: "src", max_results: 1 }),
+    { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 1, truncated: true } }],
+  ["stops at its text budget, and says so", async workspace => {
+    for (let index = 0; index < 10; index++) await workspace.writeFile(`wide/${index}.txt`, `${"\u{1F600}".repeat(300)}\n`.repeat(100), allow);
+    const result = await workspace.search(searchRequest({ pattern: ".", path: "wide", max_results: 500, context: 5 }), allow);
+    return { matches: result.matches.length, truncated: result.truncated };
+  }, { ok: { matches: 80, truncated: true } }],  // 256K characters: 301 per line, 6 to 11 lines a match
   ["shortens a long line", found({ pattern: "needle", path: "long.txt" }), { ok: [{ path: "long.txt", line: 1, text: `${"x".repeat(300)}\u2026` }] }],
   ["skips node_modules", find({ pattern: "dep", glob: "*.js" }), { ok: { matches: [], files: 0, truncated: false } }],
   ["searches node_modules with all", found({ pattern: "dep", glob: "*.js", all: true }), { ok: [{ path: "node_modules/dep/index.js", line: 1, text: "hello dep" }] }],
   ["skips binary files", find({ pattern: "needle", glob: "bin.dat" }), { ok: { matches: [], files: 0, truncated: false } }],
   ["never finds what lies outside, through links or a hard link", found({ pattern: "secret" }), { ok: [] }],
-  ["never searches .git", found({ pattern: "HEAD|ref", path: "." }), { ok: [] }],
+  ["skips .git as it walks", found({ pattern: "HEAD|ref", path: "." }), { ok: [] }],
   ["refuses searching above the worktree", find({ pattern: "secret", path: "../outside" }), { refused: TRAVERSAL }],
   ["refuses searching through a link outside", find({ pattern: "secret", path: "out-dir" }), { refused: ESCAPES }],
   ["refuses an invalid regular expression", find({ pattern: "(", path: "src" }), { refused: /invalid regular expression/ }],

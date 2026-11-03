@@ -42,7 +42,7 @@ export function applyEdits(content: string, edits: readonly TextEdit[], path: st
  * lines, and says how many the file has.
  */
 export function lineRange(content: string, offset = 1, limit?: number): { content: string; lines: { from: number; to: number; total: number } } {
-  const lines = content.split(/(?<=\n)/);
+  const lines = content === "" ? [] : content.split(/(?<=\n)/);
   const total = lines.length;
   const from = Math.min(offset, total + 1);
   const to = limit === undefined ? total : Math.min(total, from + limit - 1);
