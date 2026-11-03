@@ -416,6 +416,8 @@ export class Sandbox implements IsolatedWorkspace {
 
   get home(): string { return this.#identity.home; }
   get worktree(): string { return this.#identity.worktree; }
+  /** Where the worktree is on the host; `worktree` is where it is mounted in the sandbox, a path the host doesn't have. */
+  get hostWorktree(): string { return resolve(this.#root, "worktree"); }
 
   async identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
@@ -621,7 +623,7 @@ export class Sandbox implements IsolatedWorkspace {
       this.#cancelActive = cancel;
       try {
         return await runHostShell(operation, {
-          worktree: resolve(this.#root, "worktree"), git: resolve(this.#root, "git"), gitConfig: resolve(this.#root, "owner.gitconfig"),
+          worktree: this.hostWorktree, git: resolve(this.#root, "git"), gitConfig: resolve(this.#root, "owner.gitconfig"),
           gitName: this.#identity.gitName, gitEmail: this.#identity.gitEmail,
           signal: AbortSignal.any([signal, controller.signal]),
         });

@@ -1351,7 +1351,8 @@ export class RunnerSession {
   /** What the session gives its extensions: its worktree, their state and settings, and the gate of their tool calls. */
   private extensionHost(): ExtensionHost {
     return {
-      directory: this.sandbox.worktree,
+      // Extensions run in the runner, on the host: the Linux sandbox's worktree path doesn't exist there.
+      directory: this.sandbox.hostWorktree,
       ...(this.config.extensions?.modelRegistry ? { modelRegistry: this.config.extensions.modelRegistry } : {}),
       model: () => {
         const current = this.#currentModel ?? this.modelRef;

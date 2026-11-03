@@ -13,7 +13,13 @@ export interface SessionWorkspace {
   /** False for the host's own environment, where only path checks confine the file tools. */
   readonly isolated: boolean;
   readonly home: string;
+  /** The worktree as the session's commands see it: inside the Linux sandbox, a path that exists only there. */
   readonly worktree: string;
+  /**
+   * The worktree's path on the host, where the runner's own code finds it: the `cwd` of the session's Pi extensions,
+   * which run in the runner. The same as `worktree` except in the Linux sandbox, which mounts it at another path.
+   */
+  readonly hostWorktree: string;
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>>;
   initialize(): Promise<void>;
   readFile(path: string, authorize: SandboxAuthorize): Promise<string>;

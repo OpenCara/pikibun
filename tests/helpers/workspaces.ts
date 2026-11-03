@@ -71,8 +71,8 @@ export interface WorkspaceKind {
   /** Why it can't run here, if it can't: its tests are skipped with this reason. */
   missing?: string;
   /**
-   * Opens one, and says where its worktree is on this machine, for a test to set up files in. The Linux sandbox's own
-   * `worktree` is the path its commands see inside the sandbox, not this one.
+   * Opens one, and says where its worktree is on this machine (its `hostWorktree`), for a test to set up files in. The
+   * Linux sandbox's own `worktree` is the path its commands see inside the sandbox, not this one.
    */
   open(t: TestContext): Promise<{ workspace: SessionWorkspace; worktree: string }>;
 }
@@ -83,10 +83,10 @@ async function scratch(t: TestContext, prefix: string): Promise<string> {
   return directory;
 }
 
-async function opened(t: TestContext, workspace: SessionWorkspace, worktree: string): Promise<{ workspace: SessionWorkspace; worktree: string }> {
+async function opened(t: TestContext, workspace: SessionWorkspace): Promise<{ workspace: SessionWorkspace; worktree: string }> {
   t.after(() => workspace.close());
   await workspace.initialize();
-  return { workspace, worktree };
+  return { workspace, worktree: workspace.hostWorktree };
 }
 
 /** Each implementation of a session's files, and why it can't run here, if it can't. */
@@ -94,29 +94,25 @@ export const workspaceKinds: readonly WorkspaceKind[] = [
   {
     name: "the Linux sandbox (bubblewrap, Python helper)", missing: linuxSandboxMissing(),
     open: async t => {
-      const root = join(await scratch(t, "conformance-linux-"), "session");
-      return opened(t, new Sandbox(binding("conformance-linux"), root), join(root, "worktree"));
+      return opened(t, new Sandbox(binding("conformance-linux"), join(await scratch(t, "conformance-linux-"), "session")));
     },
   },
   {
     name: "the Python helper, as the macOS sandbox runs it", missing: !posix ? "needs a POSIX host with git and bash" : !python ? "python3 is not installed" : undefined,
     open: async t => {
-      const workspace = new HelperWorkspace(binding("conformance-python"), join(await scratch(t, "conformance-python-"), "sandbox"), new Unconfined("python", true, "python"));
-      return opened(t, workspace, workspace.worktree);
+      return opened(t, new HelperWorkspace(binding("conformance-python"), join(await scratch(t, "conformance-python-"), "sandbox"), new Unconfined("python", true, "python")));
     },
   },
   {
     name: "the Node helper, as the Windows sandbox runs it", missing: !posix ? "needs a POSIX host with git and bash" : undefined,
     open: async t => {
-      const workspace = new HelperWorkspace(binding("conformance-node"), join(await scratch(t, "conformance-node-"), "sandbox"), new Unconfined("node", true, "node"));
-      return opened(t, workspace, workspace.worktree);
+      return opened(t, new HelperWorkspace(binding("conformance-node"), join(await scratch(t, "conformance-node-"), "sandbox"), new Unconfined("node", true, "node")));
     },
   },
   {
     name: "the unsandboxed host's workspace", missing: !posix ? "needs a POSIX host with git and bash" : undefined,
     open: async t => {
-      const workspace = new HostWorkspace(binding("conformance-host"), join(await scratch(t, "conformance-host-"), "session"));
-      return opened(t, workspace, workspace.worktree);
+      return opened(t, new HostWorkspace(binding("conformance-host"), join(await scratch(t, "conformance-host-"), "session")));
     },
   },
 ];

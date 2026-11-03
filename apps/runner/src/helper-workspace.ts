@@ -128,6 +128,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
 
   get home(): string { return this.#identity.home; }
   get worktree(): string { return this.#identity.worktree; }
+  get hostWorktree(): string { return this.worktree; }
   /** Where the session's files are; the backends' tests and the session's own steps use it. */
   get layout(): Readonly<HelperLayout> { return this.#layout; }
 
