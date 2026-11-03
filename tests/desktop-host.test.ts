@@ -133,3 +133,36 @@ test("starting needs consent where unsandboxed, a pairing, and the paired server
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test("the desktop host lists Pi's providers to sign in to, and answers only the sign-in under way", async () => {
+  const stateDir = await realpath(await mkdtemp(join(tmpdir(), "pikibun-desktop-host-login-")));
+  const host = await launch(stateDir);
+  try {
+    for (const malformed of [
+      { type: "providers", id: 11, extra: true },
+      { type: "login", id: 12, provider: "../anthropic", method: "oauth" },
+      { type: "login", id: 13, provider: "anthropic", method: "password" },
+      { type: "login-answer", id: 14, login: 1, prompt: 1 },
+      { type: "login-cancel", id: 15 },
+    ]) {
+      host.send(malformed);
+      assert.deepEqual(await host.next(event => event.type === "result" && event.id === malformed.id),
+        { type: "result", id: malformed.id, ok: false, error: { code: "invalid-request", message: "The host refused a malformed request." } });
+    }
+    // A fresh Pi configuration (HOME is the state directory): providers to sign in to, none signed in yet.
+    const listed = await host.request({ type: "providers" });
+    assert.ok(listed.type === "result" && listed.ok && listed.providers, JSON.stringify(listed));
+    assert.ok(listed.providers.length > 0);
+    assert.ok(listed.providers.every(provider => !provider.signedIn && provider.methods.length > 0 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(provider.id)));
+    // Nothing to answer or cancel while nothing signs in; a provider without that sign-in is refused before it starts.
+    for (const message of [{ type: "login-answer", login: 1, prompt: 1, value: "x" }, { type: "login-cancel", login: 1 }]) {
+      const result = await host.request(message);
+      assert.ok(result.type === "result" && !result.ok && result.error.code === "not-running", JSON.stringify(result));
+    }
+    const unknown = await host.request({ type: "login", provider: "no-such-provider", method: "oauth" });
+    assert.deepEqual(unknown.type === "result" && !unknown.ok && unknown.error, { code: "failed", message: "This provider can't sign in that way here." });
+  } finally {
+    await host.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

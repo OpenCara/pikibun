@@ -19,6 +19,7 @@ import { NetworkAccess } from "./NetworkAccess";
 import { WorkspaceExtensions } from "./WorkspaceExtensions";
 import { TranscriptSettings } from "./TranscriptSettings";
 import { AttachmentSettings } from "./AttachmentSettings";
+import { ChildSessionSettings } from "./ChildSessionSettings";
 import { ApprovalSettings } from "./ApprovalSettings";
 import { PushAccess } from "./PushAccess";
 import { WorkspaceDatabaseSection } from "./WorkspaceDatabase";
@@ -92,6 +93,7 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
     <WorkspaceExtensions workspace={workspace} userId={user.id} />
     <TranscriptSettings workspace={workspace} admin={admin} />
     <ApprovalSettings workspace={workspace} admin={admin} />
+    <ChildSessionSettings workspace={workspace} admin={admin} />
     <AttachmentSettings workspace={workspace} admin={admin} />
     <WorkspaceDatabaseSection workspace={workspace} owner={role === "owner"} />
     <Members workspace={workspace} admin={admin} owner={role === "owner"} />

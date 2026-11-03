@@ -1,7 +1,7 @@
 import type { ExtensionToolOperation, HostCommandOperation } from "../../../packages/shared/src/types.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
+import { lstat, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { awaitWithContext, BACKGROUND_CONTEXT as context, type Context } from "@earendil-works/chord/context";
@@ -16,12 +16,14 @@ import type { CompactionFailure } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
-import { sessionExtensions, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
+import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
+import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
+import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
+import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
-import { ATTACHMENTS_DIRECTORY, fileUploadLimits, parseUploadChunk, type UploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
+import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
@@ -31,14 +33,19 @@ import { HelperWorkspace } from "./helper-workspace.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { reportedBranches } from "./clone-branches.js";
+import { answered, ApprovalWaits } from "./session/approval-waits.js";
+import { endView, entryView, refusedView } from "./session/entries.js";
+import { MessageInputs, prepareMessageImages, type InputImage } from "./session/inputs.js";
+import { refused, SessionMirrors } from "./session/mirrors.js";
+import { SessionUploads } from "./session/uploads.js";
 import {
-  hostGitLfs, MIRROR_ROOT, Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
+  hostGitLfs, Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
 } from "./sandbox.js";
-import { IMAGE_BUSY, IMAGE_ERROR, imageType, prepareImage } from "./images.js";
+import { prepareImage } from "./images.js";
 import { performClonePush, PushError, pushSummary, type PushResult } from "./push.js";
-import { HostCredentialError, hostGitAuthorization } from "./git-credentials.js";
-import { GitRemote, GitRemoteError } from "./git-remote.js";
-import { mirrorPath, type MirrorRepository, type RepositoryCache } from "./repo-cache.js";
+import { HostCredentialError } from "./git-credentials.js";
+import type { GitRemote } from "./git-remote.js";
+import type { RepositoryCache } from "./repo-cache.js";
 import type { RepositoryPreparationItem, RepositoryPreparationView } from "../../../packages/shared/src/types.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
@@ -46,17 +53,17 @@ import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { applyEdits } from "./edits.js";
 import { compactionFailure, configuredCompaction, hostCompaction } from "./compaction.js";
 import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
-import { autoApprovedCalls, settled, viewApprovals, type StoredApproval } from "./approval-view.js";
-import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayFetch, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
+import { autoApprovedCalls, viewApprovals, type StoredApproval } from "./approval-view.js";
+import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
-import { egressReadServices, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
+import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import { documentKindNames, validSourceItem, type GrantSource, type SourceReadRequest, type SourceReadView } from "../../../packages/shared/src/sources.js";
-import { defaultHostConfig, type HostCompaction, type HostConfig } from "../../../packages/shared/src/host-config.js";
+import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
 import { requesterAutoApproves, decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
 
-type Run = {
+export type Run = {
   key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
   conversationId: number; content: string; contentHash: string; submissionId?: number;
   status: "queued" | "admitting" | "running" | "settled" | "interrupted"; startEntry: number;
@@ -80,6 +87,13 @@ type Run = {
   stopped?: { by: string; pending?: true };
   /** Pi parked its work after host crashes cut it off again and again, so it ended (see endParkedRuns). */
   crashed?: true;
+  /**
+   * Extensions' input handlers are still to see it (see `screen`): it is queued, but neither it nor anything behind it
+   * starts until they have.
+   */
+  screening?: true;
+  /** An extension's input handler took it (see `screen`), so it ended without reaching Pi; `notice` is what the sender is told. */
+  refused?: { by: string; notice: string };
   /** Someone went back to before this shared message (see `revert`): it no longer says what the session is doing. */
   reverted?: true;
   /** Its sender took it back before it ran, to edit it (see `withdraw`): it never reached Pi, and says nothing of the session. */
@@ -130,27 +144,19 @@ type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Record<strin
   forkedFrom?: { sessionId: string; entryId: string } };
 /** One JSON string that every change replaces, so each change is stored whole: a delta would be as large and only lengthen replay. */
 const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", version: 1, scope: "session", initial: () => ({ json: "" }), checkpointWhen: () => true });
-/** A message's image as the model gets it: prepared by `prepareImage`, base64. */
-type InputImage = { mimeType: string; data: string };
 /** Prepared images of queued messages that a session holds on disk at once, until their messages reach Pi. */
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
-/** Bytes of a session's uploads (file-uploads.ts) its host holds at once, until each is complete and in the worktree. */
-const MAX_STAGED_UPLOAD_BYTES = 4 * fileUploadLimits.maxBytes;
-/** Unfinished uploads a session's host holds at once: a message's files, and some to spare. */
-const MAX_STAGED_UPLOADS = 2 * fileUploadLimits.count;
-/** An upload no chunk has reached for this long is abandoned, and the next one to start removes it. */
-const STALE_UPLOAD_MS = 60 * 60 * 1000;
 /** Tools that never change files or run commands: the whole toolset of side asks. */
 const readOnlyTools = ["identity", "read_file", "list_files"];
 /** How often a sessions tool wait reads its message's outcome. */
 const WAIT_POLL_MS = 3000;
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
-  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent) and the models create can use. "
+  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
   + "read {session, limit?, message_id?}: a session's latest shared-conversation entries and pending approvals; with message_id, also the outcome of a message this session sent it (status, done, reply). "
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access approval, the default: its commands wait for people there; read: inspect only; auto: only in a message the session owner sent with auto-approve, to a session they own); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
-  + "create {message?, title?, model?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, on this session's model unless model names one list returns, and send it message. "
+  + "create {message?, title?, model?, thinking?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
   + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
   + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
   + "chains of messages stop after 3 hops and never loop back to a session they came from; approvals in another session are decided only by people there. "
@@ -173,24 +179,8 @@ function tellsActivity(run: Run): boolean {
 }
 
 /** Whether `run` keeps the session busy: it is queued or at work, or a stop of it is still ending its work. */
-/**
- * Whether the tool call waiting on `approval` goes on: once it settled, or, for an extension's tool call, which runs it
- * itself, once it is approved.
- */
-function answered(approval: ApprovalRecord): boolean {
-  return settled(approval) || (approval.operation.kind === "extension.tool" && approval.status === "approved");
-}
 function holdsQueue(run: Run): boolean {
   return ["queued", "running", "admitting"].includes(run.status) || run.stopped?.pending === true;
-}
-/**
- * The control plane rejects approval results above 8192 characters, so the approval record keeps the start and the
- * (usually decisive) end of a longer one. The tool call waiting on it still returns the whole output to the agent
- * (see `RunnerSession.#wholeResults`).
- */
-function boundedResult(value: string): string {
-  if (value.length <= 8000) return value;
-  return `${value.slice(0, 2000)}\n… ${value.length - 7500} characters omitted …\n${value.slice(-5500)}`;
 }
 export type RunnerConfig = {
   dataDir: string; controlPlaneUrl: string; sharedSecret: string; allowFaux: boolean; allowTestShell?: boolean; fetch?: typeof fetch;
@@ -241,6 +231,12 @@ export type RunnerConfig = {
   resources?: ResourceConfig;
   /** Owner-consented host mode: no isolation, so bash needs only per-command approval. */
   unsandboxed?: boolean;
+  /**
+   * Whether Pikibun extensions' commands (piki:gh, ...) run on the host with the host's own sign-in in the host owner's
+   * own sessions, as the host's owner chose (PIKIBUN_PIKI_HOST_SIGN_IN=1); otherwise they run in the sandbox, as the
+   * session owner. Other members' sessions never get the host's sign-in.
+   */
+  pikiHostSignIn?: boolean;
   /** The sandbox of a macOS or native Windows host (see sandbox-backend.ts); Linux hosts use bubblewrap without it. */
   sandboxBackend?: SandboxBackendConfig;
   /** Opens a session's Pi storage; defaults to the SQLite file in its directory. */
@@ -264,12 +260,17 @@ export type RunnerConfig = {
    * A session's credential for a credentialed API host (ApiCredentialGrant, see api-access.ts), through the connector;
    * without it, the control plane's internal route. The session's egress proxy adds it to the API requests it answers.
    */
-  apiCredential?: (sessionId: string, host: string) => Promise<unknown>;
+  apiCredential?: (sessionId: string, host: string, access: ApiAccessKind) => Promise<unknown>;
   /**
    * How the host runs its sessions, as its owner and admins set it in Pikibun (the connector caches it briefly). Read for
    * each shell command: its time limit and GPU. Without it, the defaults.
    */
   hostConfig?: () => Promise<HostConfig>;
+  /**
+   * The extensions the host's owner requires of every session (HostConfig.requiredExtensions), as the connector last
+   * heard them, however long ago; undefined until it has heard. Without it, those of `hostConfig`.
+   */
+  requiredExtensions?: () => Promise<RequiredExtension[] | undefined>;
   /**
    * The host's extensions and the workspace's choice of them (docs/design/host-extensions.md); without it, sessions run
    * none. `workspace` is asked often: the connector caches its answers.
@@ -281,44 +282,6 @@ export type RunnerConfig = {
   };
 };
 
-/** How long the relay's word that a session's owner may read a repository lets the session borrow from its mirror. */
-const MIRROR_CONFIRM_MS = 10 * 60 * 1000;
-/** How long a clone waits for the refresh of a mirror filled before; then it borrows the mirror as it is (see mirror). */
-const MIRROR_REFRESH_WAIT_MS = 10_000;
-/** Pauses before the relay is asked again for a repository's refs, after a quick failure another attempt may get past. */
-const OWNER_REFS_RETRY_MS = [500, 2_000];
-/** How long one listing of a repository's refs through the relay may take. */
-const OWNER_REFS_TIMEOUT_MS = 30_000;
-
-/**
- * A definite refusal from the control plane or the provider: a 4xx other than a timeout or rate limit, as a RunnerError
- * from the relay or a GitRemoteError status (relayFetch turns the relay's refusals into HTTP statuses).
- */
-function refused(error: unknown): boolean {
-  const status = error instanceof RunnerError ? error.status : error instanceof GitRemoteError ? error.status : undefined;
-  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
-}
-
-/** A grant's repository as the cache keys it; an older control plane that names no provider id offers no mirror. */
-function mirrorRepository(repository: EgressRepository): MirrorRepository & { bindingId: string } {
-  if (repository.repositoryId === undefined) throw new RunnerError(409, "Update the Pikibun server to cache this repository on the host");
-  return { bindingId: repository.bindingId, provider: repository.provider, host: repository.host, repositoryId: repository.repositoryId, fullName: repository.fullName };
-}
-
-/**
- * Why the host couldn't fill its mirror of `repository`, as the clone waiting for it is told (see GIT_SHIM): 503 for a
- * failure another attempt may get past, after the cache's own attempts, so the clone asks again or stops to be run again
- * rather than downloading the repository without the cache; any other status lets it go ahead without the cache.
- */
-function cacheFailure(error: unknown, repository: EgressRepository): RunnerError {
-  if (error instanceof RunnerError) return error;
-  if (error instanceof GitRemoteError && error.status !== undefined && [401, 403, 404].includes(error.status)) {
-    return new RunnerError(502, `This host's Git credentials can't read ${repository.fullName}; its owner can set one up for ${repository.host} on it, for example with gh auth setup-git`);
-  }
-  const reason = error instanceof Error && /^[\x20-\x7e]{1,300}$/.test(error.message) ? error.message : "The repository could not be cached";
-  return new RunnerError(error instanceof GitRemoteError && error.retryable ? 503 : 502, reason);
-}
-
 function preparationFailure(reason: string): string {
   return `${reason.replace(/\.$/, "")}. Restart the session to try again.`;
 }
@@ -328,8 +291,14 @@ type RepositoryPreparation = { status: "ready" }
   | { status: "failed"; reason: string; items: RepositoryPreparationItem[] };
 type ProgressUpdate = (path: string, change: Partial<Omit<RepositoryPreparationItem, "path">>) => void;
 
-/** What the transcript says after a run that the host's crashes ended (see endParkedRuns). */
-const CRASHED_TEXT = "Stopped: the host crashed repeatedly while working on this message. Send it again to retry.";
+/** Why a message isn't run while what the host's owner requires can't be: plain text the control plane passes on (422). */
+const REQUIRED_UNKNOWN = "This host can't learn from Pikibun which extensions its owner requires right now, so no message is sent. Try again shortly";
+const REQUIRED_MISSING = "This host's owner requires an extension its connector can't run now, so no message is sent. Ask them to look at the host's extensions";
+/** What a message's sender is told when extensions' input handlers ended it otherwise than by a notice of their own. */
+const REFUSED = "An extension on this host refused this message.";
+const INPUT_FAILED = "This host couldn't check this message with its extensions, so it was not sent. Try again shortly.";
+const INPUT_EMPTY = "An extension on this host left this message empty or too long, so it was not sent.";
+const INPUT_IMAGES = "An extension on this host changed this message's images into ones that can't be sent.";
 
 /**
  * Beside a session's storage while its agent is working or waiting on a decision, and gone once it isn't: a runner that
@@ -347,6 +316,16 @@ function activityEntry(entry: EntryRecord | undefined): ActivityEntry | undefine
   return entry && { id: Number(entry.id), failed: modelFailed(entry) };
 }
 
+/**
+ * One session on this host: its Pi harness and ledger, its runs and their queue, its tools and their approvals. Parts
+ * with state of their own live in apps/runner/src/session/, each with its own tests (tests/runner-session-parts.test.ts),
+ * and the session coordinates them:
+ * - SessionUploads: files attached to messages, chunk by chunk, until each is whole in the worktree;
+ * - MessageInputs: queued messages' prepared images, until their messages reach Pi;
+ * - SessionMirrors: the host repository cache's mirrors a clone session borrows from;
+ * - ApprovalWaits: tool calls waiting on their cards, and operations' whole results;
+ * - entries.ts: how the transcript shows entries and runs' ends.
+ */
 export class RunnerSession {
   readonly sandbox: SessionWorkspace;
   readonly sqlitePath: string;
@@ -361,6 +340,18 @@ export class RunnerSession {
   #extension!: Extension;
   /** The harness's registry, where the session's extensions are installed as it first runs with each. */
   #registry?: Registry;
+  /** Queued messages' prepared images, outside the sandbox and the backups, until their messages reach Pi. */
+  readonly #inputs: MessageInputs;
+  /** Files attached to messages, chunk by chunk, until each is whole and in the worktree. */
+  readonly #uploads: SessionUploads;
+  /** The host cache's mirrors this clone session borrows from, on a host with a repository cache. */
+  readonly #mirrors: SessionMirrors | undefined;
+  /**
+   * The extension tool calls running now (runExtensionTool), by call id: only these run a Pikibun extension's command in
+   * the sandbox, and `write` says whether a person (or the owner's Auto-approve) approved the call, which lets it write
+   * through the forge's API as the session owner.
+   */
+  readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" } }>();
   /** The session's Pi extensions (docs/design/host-extensions.md), where the host has any. */
   #hostExtensions?: SessionExtensions;
   /**
@@ -368,11 +359,20 @@ export class RunnerSession {
    * opens and when each shared message starts, which may switch them.
    */
   #currentModel?: { provider: string; modelId: string; thinkingLevel?: string };
+  /** The extensions being opened now (openExtensions): one opening at a time, so none is opened twice. */
+  #opening: Promise<void> = Promise.resolve();
+  /** Pi's built-in extensions (HostConfig.builtinExtensions), installed in the registry; each message selects those the host's configuration turns on. */
+  #builtins?: SessionBuiltins;
   private tools: ToolRegistration[] = [];
   private lock: Promise<unknown> = Promise.resolve();
   private generation = 0;
   private closing = false;
   private draining = false;
+  /**
+   * A drain was asked for while one ran (a screening that just ended, say): that pass may have read the queue before the
+   * change, so one more follows it. Only such asks set it, so a pass that stops at a message still screened doesn't loop.
+   */
+  #drainAgain = false;
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   /** Pushes (approved ones settle after decide() returns; automatic ones inline); close() aborts and awaits them. */
@@ -381,14 +381,8 @@ export class RunnerSession {
   #failed = false;
   /** The reopen in progress, which every request waits for instead of reaching a half-open session. */
   #recovery: Promise<void> | undefined;
-  /** Tool calls waiting on a card, by approval id, until it settles (see `settled`); `mutate` hands them the card. */
-  #approvalWaiters = new Map<string, PromiseWithResolvers<ApprovalRecord>>();
-  /**
-   * The whole result of an operation whose record keeps only an excerpt, by approval id, until the tool call waiting
-   * on it returns it to the agent. Held in memory only: backups, views and the control plane get the bounded record,
-   * and a call that outlives its runner process is interrupted anyway.
-   */
-  #wholeResults = new Map<string, string>();
+  /** Tool calls waiting on their cards, and the whole results of operations their records keep an excerpt of. */
+  readonly #waits = new ApprovalWaits();
   /**
    * Cloning a restored session's clones again can take minutes, far longer than the control plane waits for `create`.
    * It runs in the background; runs are held until it is done (see drainQueue).
@@ -451,20 +445,20 @@ export class RunnerSession {
    * configuration refresh (HostConfigSource, 30 seconds).
    */
   #configuredCompaction: HostCompaction | undefined;
-  /**
-   * The host cache's mirrors this clone session may borrow from, by sandbox path, and when the relay last let its owner
-   * read each (0: not yet in this open). Mounted only while confirmed in the last MIRROR_CONFIRM_MS (see mirrorMounts).
-   */
-  private readonly mirrors = new Map<string, { mount: MirrorMount; repository: MirrorRepository & { bindingId: string }; confirmedAt: number }>();
 
   constructor(readonly binding: RunnerBinding, readonly directory: string, readonly config: RunnerConfig) {
     if (binding.session.connectorId !== config.connectorId || binding.model.connectorId !== config.connectorId)
       throw new RunnerError(403, "Session connector mismatch");
     this.sqlitePath = join(directory, "session.sqlite");
-    const cache = config.repositoryCache;
     this.#clone = binding.session.repositoryMode === "clone";
     this.#frozen = !this.#clone && (binding.session.repositories ?? []).length > 0;
     this.#hostSession = binding.session.hostEnvironment === true && config.unsandboxed !== true;
+    this.#inputs = new MessageInputs(join(directory, "inputs"));
+    // Its grant is the egress proxy's, made below: asked for only once a step runs.
+    this.#mirrors = this.#clone && config.repositoryCache ? new SessionMirrors({
+      cache: config.repositoryCache, ownerId: binding.owner.id, sessionId: binding.session.id, relay: request => this.relay(request),
+      grant: () => this.#egress!.grant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
+    }) : undefined;
     this.#onHost = config.unsandboxed === true || this.#hostSession;
     // Only sessions of the host's owner, or of a member they granted that, run on the host itself: the control plane
     // admits no other, and the host checks a member's grant again before each of their commands
@@ -495,8 +489,9 @@ export class RunnerSession {
       this.#egress = this.egressProxy(egressSocketPath(binding.session.id, directory));
       this.sandbox = new Sandbox(binding, join(directory, "sandbox"), config.resources, { egressSocket: this.#egress.socketPath,
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
-        ...(this.#clone && cache ? { mirrors: () => this.mirrorMounts() } : {}) });
+        ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
+    this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
     const report = config.reportActivity;
     // Once the agent stops working, its clones are as it left them: a session on the host reports their branches then.
     this.#activity = report && new ActivityReporter(() => this.activity(), async activity => {
@@ -528,8 +523,8 @@ export class RunnerSession {
       ...(token ? { tcp: { token } } : {}),
       grant: () => this.requestGrant(),
       relay: request => this.relay(request),
-      apiCredential: host => this.config.apiCredential ? this.config.apiCredential(this.binding.session.id, host)
-        : this.controlPlane("/api/internal/api/credential", { sessionId: this.binding.session.id, host }),
+      apiCredential: (host, access) => this.config.apiCredential ? this.config.apiCredential(this.binding.session.id, host, access)
+        : this.controlPlane("/api/internal/api/credential", { sessionId: this.binding.session.id, host, ...(access === "write" ? { access } : {}) }),
       ...(this.#clone && this.config.repositoryCache ? { mirror: (repository: EgressRepository, onProgress: (progress: MirrorProgress) => void) => this.mirror(repository, onProgress) } : {}),
       ...(this.#clone ? { sessionBranch: sessionBranch(this.binding.session) } : {}),
     });
@@ -550,132 +545,20 @@ export class RunnerSession {
           { authorization: `Bearer ${this.config.sharedSecret}` }, request, AbortSignal.timeout(60 * 60 * 1000)));
     } catch (error) {
       // Only a refused Git read means the owner lost the repository: a push or a Git LFS download can be refused by policy alone.
-      if (egressReadServices.includes(request.service) && refused(error)) for (const [target, entry] of this.mirrors) if (entry.repository.bindingId === request.bindingId) this.mirrors.delete(target);
+      if (egressReadServices.includes(request.service) && refused(error)) this.#mirrors?.forget(request.bindingId);
       throw error;
     }
   }
 
-  /**
-   * A workspace repository read through the relay, where the relay itself adds the owner's credential: how this session
-   * confirms that its owner may read a repository before it borrows the host's mirror of it. Mirrors are never filled so.
-   */
-  private relayRemote(repository: EgressRepository, signal?: AbortSignal): GitRemote {
-    return new GitRemote({ url: bindingRemote(repository), authorization: "Bearer relay", fetch: relayFetch(repository.bindingId, request => this.relay(request)), signal });
-  }
-
-  /**
-   * Makes the host's mirror of `repository` ready and lets this session's shell commands borrow from it. The relay first
-   * lists the repository's branches and tags with the session owner's own account, which confirms they may read it; then
-   * the mirror fetches those tips straight from the provider with this host's own Git credentials (cacheRemote), never
-   * through the relay. A mirror no fill has completed yet is waited for, however long its first fill takes; a filled one
-   * for at most MIRROR_REFRESH_WAIT_MS, then it is borrowed as it is while its refresh goes on.
-   */
-  private async mirror(value: EgressRepository, onProgress?: (progress: MirrorProgress) => void): Promise<string> {
-    const repository = mirrorRepository(value);
-    const refs = await this.ownerRefs(value);
-    const confirmedAt = Date.now();
-    try {
-      const target = { repository, ownerId: this.binding.owner.id, sessionId: this.binding.session.id, remote: await this.cacheRemote(value), refs };
-      await this.config.repositoryCache!.ready(target, { ...(onProgress ? { onProgress } : {}), wait: MIRROR_REFRESH_WAIT_MS });
-    } catch (error) {
-      throw cacheFailure(error, value);
-    }
-    return this.allowMirror(repository, confirmedAt);
-  }
-
-  /**
-   * `repository`'s branches and tags as the session owner's own account lists them, through the relay (which checks the
-   * repository's identity too): what confirms that the session may borrow its mirror, and what the mirror mirrors.
-   * - A refusal is final (403).
-   * - A failure another attempt may get past (the relay busy or failing, its connection failing or breaking off, or the
-   *   listing running out of its time) ends in 503, which the clone asks again: a quick one only once the relay was asked
-   *   again (OWNER_REFS_RETRY_MS), one that ran out of its time at once.
-   * - Anything else will fail again just the same: 502, so the clone goes ahead without the cache, through the relay,
-   *   where Git says what is wrong.
-   */
-  private async ownerRefs(value: EgressRepository): Promise<Map<string, string>> {
-    for (let failures = 0; ; failures++) {
-      const timeout = AbortSignal.timeout(OWNER_REFS_TIMEOUT_MS);
-      try { return await this.relayRemote(value, timeout).listRefs(); }
-      catch (error) {
-        // A refused read already ended borrowing for this open (see relay).
-        if (refused(error)) throw new RunnerError(403, `Pikibun did not confirm that this session's owner can read ${value.fullName}`);
-        // GitRemote calls a request its caller's signal aborted final; here that signal is the listing's own time limit.
-        if (!timeout.aborted && !(error instanceof GitRemoteError && error.retryable)) {
-          throw new RunnerError(502, `Pikibun could not list ${value.fullName} for this session's owner`);
-        }
-        const pause = timeout.aborted ? undefined : OWNER_REFS_RETRY_MS[failures];
-        if (pause === undefined) throw new RunnerError(503, `Pikibun could not confirm right now that this session's owner can read ${value.fullName}`);
-        await sleep(pause);
-      }
-    }
-  }
-
-  /** How the host's repository cache reads `repository` (see RunnerConfig.cacheRemote). */
-  private async cacheRemote(repository: EgressRepository): Promise<GitRemote> {
-    if (this.config.cacheRemote) return this.config.cacheRemote(repository);
-    const url = bindingRemote(repository);
-    let authorization: string | undefined;
-    // A host with no credential for the provider still fills public repositories.
-    try { authorization = await hostGitAuthorization(url); }
-    catch (error) { if (!(error instanceof HostCredentialError)) throw error; }
-    return new GitRemote({ url, ...(authorization ? { authorization } : {}) });
-  }
-
-  private allowMirror(repository: MirrorRepository & { bindingId: string }, confirmedAt: number): string {
-    // The cache's own layout, at a path every session sees the same way.
-    const mount = { source: this.config.repositoryCache!.mirrorDirectory(repository, this.binding.owner.id), target: `${MIRROR_ROOT}/${mirrorPath(repository)}` };
-    this.mirrors.set(mount.target, { mount, repository, confirmedAt });
-    return mount.target;
-  }
-
-  /**
-   * The mirrors a step that runs Git in a clone gets: those of repositories still in the workspace's grant, each read
-   * through the relay with the owner's access in the last MIRROR_CONFIRM_MS (older ones are confirmed again first, and
-   * their keep refs marked used). A repository the grant or the relay no longer allows is dropped for this open.
-   */
+  /** The mirrors a step that runs Git in a clone mounts now (SessionMirrors.mounts): none on a host without a cache. */
   private async mirrorMounts(): Promise<MirrorMount[]> {
-    let repositories: EgressRepository[];
-    try { repositories = (await this.#egress!.grant()).repositories; }
-    catch (error) {
-      if (refused(error)) this.mirrors.clear();
-      return [];
-    }
-    const granted = new Set(repositories.map(repository => repository.bindingId));
-    for (const [target, entry] of this.mirrors) if (!granted.has(entry.repository.bindingId)) this.mirrors.delete(target);
-    const stale = [...this.mirrors.values()].filter(entry => Date.now() - entry.confirmedAt > MIRROR_CONFIRM_MS);
-    await Promise.all(stale.map(async entry => {
-      try {
-        await this.relayRemote(entry.repository, AbortSignal.timeout(15_000)).listRefs();
-        entry.confirmedAt = Date.now();
-        await this.config.repositoryCache!.touch(entry.repository, this.binding.owner.id, this.binding.session.id).catch(() => {});
-      } catch (error) {
-        // A refusal ends borrowing for this open; anything else (a timeout, a rate limit, an outage) only skips this step,
-        // and the next one asks again.
-        if (refused(error)) this.mirrors.delete(entry.mount.target);
-      }
-    }));
-    return [...this.mirrors.values()].filter(entry => Date.now() - entry.confirmedAt <= MIRROR_CONFIRM_MS).map(entry => entry.mount);
+    return this.#mirrors ? this.#mirrors.mounts() : [];
   }
 
-  /**
-   * Lists the mirror of every workspace repository for this open, creating the ones this host doesn't have yet, empty:
-   * each is mounted only once the relay confirms the owner can read its repository (see mirrorMounts). Created before any
-   * command runs, so the command that first clones a repository already mounts the mirror its clone waits to fill (see
-   * GIT_SHIM), and clones made earlier still borrow from theirs after a reopen.
-   */
-  private async restoreMirrors(repositories: readonly EgressRepository[]): Promise<void> {
-    const cache = this.config.repositoryCache;
-    if (!this.#clone || !cache) return;
-    this.mirrors.clear();
-    for (const value of repositories) {
-      if (value.repositoryId === undefined) continue;
-      const repository = mirrorRepository(value);
-      // A cache root that isn't private can't be used; the clone hears why when it asks for the mirror.
-      try { await cache.prepare(repository, this.binding.owner.id); }
-      catch { continue; }
-      this.allowMirror(repository, 0);
-    }
+  /** The host's mirror of `repository`, ready for this session to borrow from (SessionMirrors.mirror): its sandbox path. */
+  private mirror(repository: EgressRepository, onProgress?: (progress: MirrorProgress) => void): Promise<string> {
+    if (!this.#mirrors) throw new RunnerError(409, "This host keeps no repository cache");
+    return this.#mirrors.mirror(repository, onProgress);
   }
 
   private assertTicket(ticket: RunnerTicket): void {
@@ -959,7 +842,7 @@ export class RunnerSession {
       this.#sources = grant?.sources ?? [];
       this.#cloneRepositories = repositories.map(repository => bindingRemote(repository));
       this.#lfsRepositories = repositories.filter(repository => repository.lfs).map(repository => bindingRemote(repository));
-      await this.restoreMirrors(repositories);
+      await this.#mirrors?.restore(repositories);
       // A restored or moved session clones its clones again before its work resumes.
       this.#cloneFailures = [];
       // Only a restore writes the list (in the worktree's .git, which shell commands can't change), so a session that
@@ -975,6 +858,11 @@ export class RunnerSession {
     this.#extension = extension;
     registry.install(extension);
     this.#registry = registry;
+    if (!this.#packed) {
+      // Installed whether or not the host's configuration turns them on now, so a script it resumes finds its tool.
+      this.#builtins = new SessionBuiltins({ outputs: api => this.codemodeOutputs(api) });
+      for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
+    }
     if (this.config.extensions && !this.#packed) {
       this.#hostExtensions = new SessionExtensions(this.extensionHost(), this.tools.map(tool => tool.name));
       // Installed before the harness opens, so a call of an extension's tool it resumes finds its tool.
@@ -1052,6 +940,10 @@ export class RunnerSession {
         }
       });
       await this.sweepInputs();
+    }
+    // Messages whose screening the previous open didn't finish are screened again (see screen).
+    if (!this.#frozen && !this.#packed) {
+      for (const run of Object.values((await this.metadata()).runs)) if (run.screening && run.status === "queued") void this.screen(run.key);
     }
     // Reported while its repositories are still being prepared too; reopening is also how a report lost with a previous
     // connection or process gets through.
@@ -1177,20 +1069,7 @@ export class RunnerSession {
     }, context);
     // Every run and approval status changes here, so this is where the activity can change and waiting calls go on.
     this.#activity?.changed();
-    if (committed && this.#approvalWaiters.size) {
-      for (const [id, waiter] of this.#approvalWaiters) {
-        const approval = committed.approvals[id];
-        if (!approval || !answered(approval)) continue;
-        this.#approvalWaiters.delete(id);
-        waiter.resolve(approval);
-      }
-    }
-  }
-
-  private waiter(id: string): PromiseWithResolvers<ApprovalRecord> {
-    let waiter = this.#approvalWaiters.get(id);
-    if (!waiter) this.#approvalWaiters.set(id, waiter = Promise.withResolvers<ApprovalRecord>());
-    return waiter;
+    if (committed) this.#waits.settle(committed.approvals);
   }
 
   /**
@@ -1198,10 +1077,10 @@ export class RunnerSession {
    * its message's write admission ends) or when the call stops is marked interrupted, so no card outlives its call.
    */
   private async awaitCard(id: string, waiting: Context, deadline: number): Promise<ApprovalRecord> {
-    const waiter = this.waiter(id);
+    const waiter = this.#waits.waiter(id);
     const current = (await this.metadata()).approvals[id];
     if (current && answered(current)) {
-      this.#approvalWaiters.delete(id);
+      this.#waits.forget(id);
       return current;
     }
     // decide() records a decision only on a card still pending, so an interrupted card never runs.
@@ -1214,7 +1093,7 @@ export class RunnerSession {
     expiry.unref();
     try { return await awaitWithContext(waiter.promise, waiting); }
     catch (error) {
-      this.#approvalWaiters.delete(id);
+      this.#waits.forget(id);
       await interrupt("The tool call stopped before a decision.").catch(() => {});
       throw error;
     } finally { clearTimeout(expiry); }
@@ -1223,29 +1102,13 @@ export class RunnerSession {
   /** What an operation a tool call requested came to: the call waits until it is decided and has run. */
   private async operationOutcome(approval: ApprovalRecord, waiting: Context): Promise<ApprovalRecord> {
     if (answered(approval)) {
-      this.#approvalWaiters.delete(approval.id);
-      return this.whole(approval);
+      this.#waits.forget(approval.id);
+      return this.#waits.whole(approval);
     }
     const state = await this.metadata();
     const actor = state.toolActors[approval.id.slice("tool-".length)];
     const run = actor && state.runs[actor.runKey];
-    return this.whole(await this.awaitCard(approval.id, waiting, (run?.submittedAt ?? Date.now()) + DECISION_WAIT_MS));
-  }
-
-  /** `result` as the approval record keeps it; the whole of a longer one waits for the tool call (see `whole`). */
-  private kept(id: string, result: string): string {
-    const bounded = boundedResult(result);
-    if (bounded === result) this.#wholeResults.delete(id);
-    else this.#wholeResults.set(id, result);
-    return bounded;
-  }
-
-  /** `approval` with its whole result, for the tool call returning it to the agent; the result is then let go. */
-  private whole(approval: ApprovalRecord): ApprovalRecord {
-    const result = this.#wholeResults.get(approval.id);
-    if (result === undefined || !settled(approval)) return approval;
-    this.#wholeResults.delete(approval.id);
-    return { ...approval, result };
+    return this.#waits.whole(await this.awaitCard(approval.id, waiting, (run?.submittedAt ?? Date.now()) + DECISION_WAIT_MS));
   }
 
   /**
@@ -1337,8 +1200,10 @@ export class RunnerSession {
 
   private drainQueue(): void {
     // Runs wait for repositories prepared in the background; their preparation drains the queue when it is done.
-    if (this.draining || this.closing || this.#repositories.status !== "ready") return;
+    if (this.draining) { this.#drainAgain = true; return; }
+    if (this.closing || this.#repositories.status !== "ready") return;
     this.draining = true;
+    this.#drainAgain = false;
     void this.exclusive(async () => {
       while (!this.closing) {
         const state = await this.metadata();
@@ -1346,12 +1211,22 @@ export class RunnerSession {
           || Object.values(state.approvals).some(approval => approval.status === "executing")) return;
         const run = Object.values(state.runs).filter(candidate => candidate.status === "queued")
           .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))[0];
-        if (!run) return;
+        // The next message waits for extensions' input handlers to screen it, and everything behind it waits too, in order;
+        // its screening drains the queue again once it is done (see screen).
+        if (!run || run.screening) return;
         try { await this.authorize(run.initiatedBy, run.mode === "ask" ? "ask" : "write"); }
         catch {
           // Its images go first, as in endLostInputs: once the ledger ends the run, nothing of it is left on the host.
-          if (run.images) await this.discardInputs([run.key]);
+          if (run.images) await this.#inputs.discard([run.key]);
           await this.mutate(meta => { meta.runs[run.key]!.status = "interrupted"; });
+          continue;
+        }
+        // What the host's owner requires, once more as the message starts: a tool-call guard among them never drops out
+        // between its being accepted and its running.
+        const refusal = await this.requiredRefusal(true).catch(() => INPUT_FAILED);
+        if (refusal) {
+          if (run.images) await this.#inputs.discard([run.key]);
+          await this.mutate(meta => { Object.assign(meta.runs[run.key]!, { status: "interrupted", refused: { by: "", notice: refusal } }); });
           continue;
         }
         const content = await this.runInput(run);
@@ -1374,12 +1249,15 @@ export class RunnerSession {
           meta.runs[run.key]!.status = "running";
         });
         // Pi's transcript holds its images now.
-        if (run.images) await this.discardInputs([run.key]);
+        if (run.images) await this.#inputs.discard([run.key]);
         this.observeRun(run.key, submission.id);
         return;
       }
     }).catch(() => { /* Admission is durable even when activation fails; restart reconciles it. */ })
-      .finally(() => { this.draining = false; });
+      .finally(() => {
+        this.draining = false;
+        if (this.#drainAgain) { this.#drainAgain = false; this.drainQueue(); }
+      });
   }
 
   /**
@@ -1391,14 +1269,18 @@ export class RunnerSession {
     const options = run.options ?? {};
     const access = options.access ?? "approval";
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
+    // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
+    const builtins = run.mode === "write" && this.#builtins
+      ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
+      : [];
     const change: AgentChange = {
       ...(options.model ? { model: { provider: options.model.provider, modelId: options.model.modelId } } : {}),
       ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       // Every shared run states its toolset and instructions, so a read-only request never leaks into the next one. All
       // tools are offered: a call the session doesn't allow asks the owner instead of failing.
       ...(run.mode === "write" ? {
-        tools: [...this.tools, ...extensions.flatMap(extension => extension.tools)],
-        extensions: [this.#extension, ...extensions.map(extension => extension.extension)],
+        tools: [...this.tools, ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
+        extensions: [this.#extension, ...extensions.map(extension => extension.extension), ...builtins],
         instructions: this.agentInstructions(access === "read" ? "read" : "write"),
       } : {}),
     };
@@ -1421,12 +1303,16 @@ export class RunnerSession {
    * The workspace's extensions this session runs with now (docs/design/host-extensions.md): its enabled ones the host
    * has at that version, then, in the host owner's own sessions, the host's dev extensions.
    */
-  private async extensionChoice(): Promise<{ chosen: ReturnType<typeof sessionExtensions>; automaticTools: boolean }> {
+  private async extensionChoice(): Promise<{ chosen: ChosenExtension[]; automaticTools: boolean; missingRequired: string[]; unknownRequired: boolean }> {
     const config = this.config.extensions;
-    if (!config) return { chosen: [], automaticTools: false };
+    if (!config) return { chosen: [], automaticTools: false, missingRequired: [], unknownRequired: false };
     const answer = await config.workspace(this.binding.session.workspaceId).catch(() => ({ extensions: [], automaticTools: false }));
-    return { chosen: sessionExtensions(answer.extensions, config.installed().map(item => item.summary),
-      { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }), automaticTools: answer.automaticTools };
+    // Those the host's owner requires, as the connector last heard them; none it can run while it hasn't heard.
+    const known = await this.requiredExtensions();
+    const required = known ?? [];
+    const installed = config.installed().map(item => item.summary);
+    return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
+      automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
   }
 
   /** The extensions this session runs with now, opened (and installed in the registry) as it first runs with each. */
@@ -1435,13 +1321,23 @@ export class RunnerSession {
     const config = this.config.extensions;
     if (!host || !config) return [];
     const { chosen } = await this.extensionChoice();
-    const installed = config.installed();
-    const loaded = chosen.flatMap(item => installed.filter(candidate => candidate.summary.source === item.source));
-    await host.ensure(loaded);
+    await this.openExtensions(chosen.map(item => item.source));
     // Tool name clashes are settled among the extensions this message runs with, in the workspace's order.
     const { selected, created } = host.select(chosen.map(item => item.source));
     for (const extension of created) this.#registry?.install(extension);
     return selected;
+  }
+
+  /**
+   * Where a code mode call saves its full output: files in the worktree, written as the message's sender, which read_file
+   * reads; none in a Read-only message, whose result then says it couldn't be saved.
+   */
+  private async codemodeOutputs(api: ToolExecutionApi): Promise<OutputFiles | undefined> {
+    const attribution = await this.toolActor(api, true);
+    const state = await this.metadata();
+    const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
+    if (run.options?.access === "read") return undefined;
+    return { writeFile: (path, content) => this.sandbox.writeFile(path, content, async () => { await this.recheckTool(attribution); }) };
   }
 
   /** What the session gives its extensions: its worktree, their state and settings, and the gate of their tool calls. */
@@ -1456,12 +1352,58 @@ export class RunnerSession {
       thinkingLevel: () => this.#currentModel?.thinkingLevel,
       state: async source => {
         const item = (await this.extensionChoice()).chosen.find(candidate => candidate.source === source);
-        return { active: !!item, settings: item?.workspace?.settings ?? {} };
+        return { active: !!item, settings: item?.required?.settings ?? item?.workspace?.settings ?? {} };
       },
       runTool: (call, execute) => this.runExtensionTool(call, execute),
+      piki: this.pikiSession(),
       hookTimeoutMs: 30_000,
+      // A queued message waits for its input handlers (see screen), and the messages behind it with it.
+      inputTimeoutMs: 60_000,
       warn: (source, message) => { process.stderr.write(`Session ${this.binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
     };
+  }
+
+  /**
+   * Where this session runs its Pikibun extensions' commands (docs/design/piki-extensions.md): on the host with the
+   * host's own sign-in where the session itself runs on its host, or in the host owner's own sessions where its owner
+   * allows that; otherwise in its sandbox, as the session owner, where it has one with an egress proxy.
+   */
+  private pikiSession(): PikiSession {
+    const hostOwner = this.binding.session.connectorOwnerId;
+    const ownSession = !!hostOwner && hostOwner === this.binding.owner.id;
+    return {
+      hostSignIn: this.#onHost || (ownSession && this.config.pikiHostSignIn === true),
+      ...(this.#egress && !this.#onHost ? { sandbox: (run: PikiSandboxRun) => this.runPikiCommand(run) } : {}),
+    };
+  }
+
+  /**
+   * A Pikibun extension's command in the sandbox, for a call runExtensionTool admitted. A call a person approved (or the
+   * owner's Auto-approve), outside the workspace's read-only setting, gets a write lease from the egress proxy for as
+   * long as it runs: its API requests may then write as the session owner, where the control plane gives this host the
+   * owner's credential (only the owner's own hosts). Sandbox operations run one at a time, so no other command of the
+   * session runs while the lease holds.
+   */
+  private async runPikiCommand(run: PikiSandboxRun): Promise<CliRun> {
+    const call = this.#pikiCalls.get(run.callId);
+    if (!call) throw new RunnerError(403, `${run.command} runs only in a call of its tool this session admitted. Nothing ran.`);
+    const lease = call.write && !run.readOnly ? this.#egress?.apiLease() : undefined;
+    try {
+      const env = { ...run.env };
+      if (lease) for (const name of run.tokenEnv) env[name] = lease.token;
+      const command = sandboxShellCommand(run.command, run.args, env, run.directory);
+      // Its call was decided as a host command is (or the host's owner lets the workspace run it automatically), which
+      // is what lets a command run without the limits this host may lack.
+      const output = await this.sandbox.execute({ kind: "bash", command }, run.readOnly, () => this.recheckTool(call.attribution), {
+        unbounded: true, ...await this.commandOptions(), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
+      return { exitCode: 0, signal: null, output };
+    } catch (error) {
+      if (!(error instanceof SandboxProcessError)) throw error;
+      const output = [error.stdout, error.stderr].filter(Boolean).join("\n");
+      return { exitCode: error.exitCode, signal: error.signal, output, ...(error.exitCode === null && !error.signal ? { failure: error.message } : {}) };
+    } finally {
+      lease?.release();
+    }
   }
 
   /**
@@ -1492,14 +1434,20 @@ export class RunnerSession {
     await this.mutate(meta => { const card = meta.approvals[id]; if (card?.status === "approved") card.status = "executing"; });
     await this.recheckTool(attribution);
     const limits = commandLimits((await this.hostConfig()).commandTimeoutSeconds);
+    // A Pikibun extension's command may write as the session owner only where a person decided the call: never where
+    // the workspace runs the extension's tools automatically.
+    const callId = String(call.api.callId);
+    this.#pikiCalls.set(callId, { write: !(item.workspace?.tools === "automatic" && automaticTools), attribution });
     try {
       const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
       const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: this.kept(id, shown || "(no output)") }); });
+      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: this.#waits.kept(id, shown || "(no output)") }); });
       return result;
     } catch (error) {
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
+      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.#waits.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
       throw error;
+    } finally {
+      this.#pikiCalls.delete(callId);
     }
   }
 
@@ -1549,20 +1497,137 @@ export class RunnerSession {
     return Object.keys(options).length ? options : undefined;
   }
 
-  /** Decodes a message's images and fits them to what the model gets of an image, as read_file does for image files. */
-  private async prepareImages(images: readonly ChatImage[]): Promise<InputImage[]> {
-    const prepared: InputImage[] = [];
-    for (const image of images) {
-      const bytes = Buffer.from(image.data, "base64");
-      // The sender names the type, and an image passed through to a provider under another type than its bytes would
-      // fail every later turn of the conversation: the bytes' signature must say the same.
-      if (imageType(bytes) !== image.mimeType) throw new RunnerError(422, IMAGE_ERROR);
-      const result = await prepareImage(bytes, image.mimeType);
-      // 422 carries this fixed, runner-authored reason through the Worker to the sender.
-      if ("error" in result) throw new RunnerError(422, result.error === IMAGE_BUSY ? "Too many images are being prepared at once. Send the message again shortly" : result.error);
-      prepared.push({ mimeType: result.image.mimeType, data: result.image.data });
+  /**
+   * What the host's owner requires of every session here (HostConfig.requiredExtensions): as the connector last heard it
+   * from the control plane, which it keeps through outages (HostConfigSource.required); undefined until it has heard.
+   */
+  private async requiredExtensions(): Promise<RequiredExtension[] | undefined> {
+    if (this.config.requiredExtensions) return this.config.requiredExtensions();
+    return (await this.hostConfig()).requiredExtensions;
+  }
+
+  /**
+   * Why a message can't run with what the host's owner requires now, or undefined when it can: the connector hasn't heard
+   * what is required, the host lacks one or can't load it, or (with `open`) the session couldn't open one. A guard the
+   * owner counts on never silently drops out.
+   */
+  private async requiredRefusal(open: boolean): Promise<string | undefined> {
+    const host = this.#hostExtensions;
+    if (!host || !this.config.extensions) return undefined;
+    const { chosen, missingRequired, unknownRequired } = await this.extensionChoice();
+    const log = (line: string) => { process.stderr.write(`Session ${this.binding.session.id}: ${line.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 500)}\n`); };
+    if (unknownRequired) {
+      log("refused a message: the connector hasn't heard from Pikibun which extensions this host's owner requires");
+      return REQUIRED_UNKNOWN;
     }
-    return prepared;
+    if (missingRequired.length) {
+      log(`refused a message: this host requires ${missingRequired.join(", ")}, which it can't run`);
+      return REQUIRED_MISSING;
+    }
+    if (!open) return undefined;
+    await this.openExtensions(chosen.map(item => item.source));
+    const closed = chosen.filter(item => item.required && !host.isOpen(item.source)).map(item => item.source);
+    if (!closed.length) return undefined;
+    log(`refused a message: this session couldn't open ${closed.join(", ")}, which this host requires`);
+    return REQUIRED_MISSING;
+  }
+
+  /**
+   * Checks a message against what the host's owner requires before it is accepted, refusing it at once, and says whether
+   * extensions' input handlers must screen it first: those of an extension the session runs that handles input.
+   */
+  private async extensionGate(): Promise<{ screen: boolean }> {
+    const config = this.config.extensions;
+    if (!this.#hostExtensions || !config) return { screen: false };
+    const refusal = await this.requiredRefusal(false);
+    if (refusal) throw new RunnerError(422, refusal);
+    const { chosen } = await this.extensionChoice();
+    const installed = config.installed();
+    return { screen: chosen.some(item => installed.some(candidate => candidate.summary.source === item.source && candidate.summary.modules.some(module => module.events.includes("input")))) };
+  }
+
+  /**
+   * Runs the extensions' `input` handlers on a queued message (SessionExtensions.input): those the host's owner requires
+   * first, then the workspace's, in side asks too. They run beside the session's work, never in a request the connector
+   * waits on, as an audit asking a model takes seconds and the connector answers one request at a time; the message and
+   * everything queued behind it wait for them. What they leave of it is what runs; one that takes it ends it refused, with
+   * what it told the sender. A host's crash or restart while they run screens it again when the session opens.
+   */
+  private async screen(key: string): Promise<void> {
+    const generation = this.generation;
+    let outcome: InputOutcome | { action: "skip" };
+    try { outcome = await this.screenInput(key); }
+    catch (error) {
+      process.stderr.write(`Session ${this.binding.session.id}: couldn't screen a message, so it was refused: ${String(error instanceof Error ? error.message : error).slice(0, 300)}\n`);
+      outcome = { action: "refused", by: "", notice: INPUT_FAILED };
+    }
+    if (generation !== this.generation || this.closing) return;
+    let images: InputImage[] | undefined;
+    if (outcome.action === "continue") {
+      const run = (await this.metadata()).runs[key];
+      const before = run?.images ? await this.#inputs.read(key) ?? [] : [];
+      const changed = outcome.images.length !== before.length || outcome.images.some((image, index) => image.data !== before[index]!.data);
+      if (outcome.text.length > 100_000 || (!outcome.text.trim() && !outcome.images.length)) outcome = { action: "refused", by: "", notice: INPUT_EMPTY };
+      else if (changed) {
+        const parsed = parseChatImages(outcome.images.map(image => ({ mimeType: image.mimeType, data: image.data })));
+        images = "error" in parsed ? undefined : parsed.images.length ? await prepareMessageImages(parsed.images).catch(() => undefined) : [];
+        if (!images) outcome = { action: "refused", by: "", notice: INPUT_IMAGES };
+        else if (images.length) await this.#inputs.write(key, images);
+        else await this.#inputs.discard([key]);
+      }
+    }
+    const result = outcome;
+    let refused = false;
+    await this.mutate(meta => {
+      const run = meta.runs[key];
+      // Stopped, taken back or already started meanwhile: it is no longer this screening's to settle.
+      if (!run?.screening || run.status !== "queued" || run.stopped || run.withdrawn) return;
+      delete run.screening;
+      if (result.action === "refused") {
+        Object.assign(run, { status: "interrupted", refused: { by: result.by, notice: result.notice ?? REFUSED } });
+        refused = true;
+      } else if (result.action === "continue") {
+        run.content = result.text;
+        if (images) {
+          if (images.length) run.images = { count: images.length, bytes: images.reduce((total, image) => total + image.data.length, 0) };
+          else delete run.images;
+        }
+      }
+    });
+    if (refused) await this.#inputs.discard([key]);
+    this.drainQueue();
+  }
+
+  /** What the extensions' input handlers make of queued message `key`; `skip` when there is nothing to screen. */
+  private async screenInput(key: string): Promise<InputOutcome | { action: "skip" }> {
+    const host = this.#hostExtensions;
+    const run = (await this.metadata()).runs[key];
+    if (!host || !run?.screening || run.status !== "queued") return { action: "skip" };
+    const refusal = await this.requiredRefusal(true);
+    if (refusal) return { action: "refused", by: "", notice: refusal };
+    const images = run.images ? await this.#inputs.read(key) : [];
+    // Its images are gone: it never runs, as drainQueue finds (endLostInputs).
+    if (!images) return { action: "skip" };
+    const { chosen } = await this.extensionChoice();
+    const hostOwner = this.binding.session.connectorOwnerId;
+    const outcome = await host.input(chosen.map(item => item.source), run.content, images.map(image => ({ type: "image" as const, ...image })),
+      hostOwner && run.initiatedBy === hostOwner ? "interactive" : "rpc");
+    if (outcome.action !== "refused") return outcome;
+    // What it told the sender, as one plain line; or which extension took it.
+    const notice = outcome.notice?.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 300);
+    process.stderr.write(`Session ${this.binding.session.id}: ${outcome.by} refused a message${notice ? `: ${notice}` : ""}\n`);
+    return { action: "refused", by: outcome.by, notice: notice || `An extension on this host (${outcome.by}) refused this message.` };
+  }
+
+  /** Opens those of `sources` the host has loaded that the session hasn't opened yet, one opening at a time. */
+  private openExtensions(sources: readonly string[]): Promise<void> {
+    const host = this.#hostExtensions;
+    const config = this.config.extensions;
+    if (!host || !config) return Promise.resolve();
+    const installed = config.installed();
+    const open = this.#opening.then(() => host.ensure(sources.flatMap(source => installed.filter(candidate => candidate.summary.source === source))));
+    this.#opening = open.catch(() => {});
+    return open;
   }
 
   /** Images go only to a model that takes them; one that doesn't would answer the text without ever seeing them. */
@@ -1573,61 +1638,16 @@ export class RunnerSession {
     if (model && Array.isArray(model.input) && !model.input.includes("image")) throw new RunnerError(422, "The model doesn't accept images");
   }
 
-  /** Where queued messages' prepared images wait, outside the sandbox and the backups, until their messages reach Pi. */
-  private get inputsDirectory(): string {
-    return join(this.directory, "inputs");
-  }
-
-  /** A run's images, by its key: the hash `requestKey` makes, so always a plain file name. */
-  private inputPath(key: string): string {
-    return join(this.inputsDirectory, `${key}.json`);
-  }
-
-  /** Keeps a queued run's prepared images, whole or not at all, until it reaches Pi. */
-  private async writeInputs(key: string, images: readonly InputImage[]): Promise<void> {
-    await mkdir(this.inputsDirectory, { recursive: true, mode: 0o700 });
-    const temporary = join(this.inputsDirectory, `.${key}.${randomUUID()}.tmp`);
-    try {
-      const file = await open(temporary, "wx", 0o600);
-      try {
-        await file.writeFile(JSON.stringify({ images }));
-        await file.sync();
-      } finally { await file.close(); }
-      await rename(temporary, this.inputPath(key));
-    } catch (error) {
-      await rm(temporary, { force: true });
-      throw error;
-    }
-  }
-
-  /** A run's prepared images; undefined when they are gone or unreadable. */
-  private async readInputs(key: string): Promise<InputImage[] | undefined> {
-    try {
-      const images = (JSON.parse(await readFile(this.inputPath(key), "utf8")) as { images?: unknown }).images;
-      if (!Array.isArray(images) || !images.length
-        || images.some(image => typeof image?.mimeType !== "string" || typeof image.data !== "string")) return undefined;
-      return images as InputImage[];
-    } catch { return undefined; }
-  }
-
-  private async discardInputs(keys: readonly string[]): Promise<void> {
-    await Promise.all(keys.map(key => rm(this.inputPath(key), { force: true }).catch(() => {})));
-  }
-
   /**
    * Removes the images of every run that no longer waits to reach Pi, and those a run that never committed left. Called
    * only where no submission can be writing its images: in the session's turn, or while it opens.
    */
   private async sweepInputs(): Promise<void> {
-    let names: string[];
-    try { names = await readdir(this.inputsDirectory); }
-    catch { return; }
     const runs = (await this.metadata()).runs;
-    const waiting = (name: string) => {
-      const run = name.endsWith(".json") ? runs[name.slice(0, -".json".length)] : undefined;
+    await this.#inputs.sweep(key => {
+      const run = runs[key];
       return run !== undefined && run.submissionId === undefined && ["queued", "admitting", "running"].includes(run.status);
-    };
-    await Promise.all(names.filter(name => !waiting(name)).map(name => rm(join(this.inputsDirectory, name), { force: true }).catch(() => {})));
+    });
   }
 
   /**
@@ -1636,7 +1656,7 @@ export class RunnerSession {
    * that stops in between finds the run still queued without its images when it reopens, and ends it here again.
    */
   private async endLostInputs(key: string): Promise<void> {
-    await this.discardInputs([key]);
+    await this.#inputs.discard([key]);
     await this.mutate(meta => { Object.assign(meta.runs[key]!, { status: "interrupted", inputsLost: true }); });
   }
 
@@ -1647,7 +1667,7 @@ export class RunnerSession {
    */
   private async runInput(run: Run) {
     if (!run.images) return run.content;
-    const images = await this.readInputs(run.key);
+    const images = await this.#inputs.read(run.key);
     if (!images) return undefined;
     return [
       ...(run.content.trim() ? [{ type: "text" as const, text: run.content }] : []),
@@ -1673,7 +1693,11 @@ export class RunnerSession {
       || (this.config.connectorId && mode === "write" && input.admissionId === undefined))
       throw new RunnerError(400, "Invalid or missing Worker write admission");
     // Decoded and fitted before the session's turn, as that can take a while: what is queued is what the model gets.
-    const prepared = images.length ? await this.prepareImages(images) : [];
+    const prepared = images.length ? await prepareMessageImages(images) : [];
+    const content = input.content;
+    // What the host's owner requires is checked now, and refuses the message at once; extensions' input handlers, which may
+    // ask a model for seconds, screen it once it is queued (see screen), never while the connector waits on this request.
+    const { screen } = await this.extensionGate();
     return this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
       // Messages queue while repositories are prepared; once that failed, say why instead of queueing forever.
@@ -1698,8 +1722,8 @@ export class RunnerSession {
         throw new RunnerError(429, "Session queue is full");
       const queuedBytes = Object.values(state.runs).filter(run => ["queued", "running", "admitting"].includes(run.status))
         .reduce((total, run) => total + Buffer.byteLength(run.content, "utf8"), 0);
-      if (queuedBytes + Buffer.byteLength(input.content, "utf8") > 1024 * 1024) throw new RunnerError(429, "Session queued content limit exceeded");
-      if (Object.values(state.runs).reduce((total, run) => total + Buffer.byteLength(run.content, "utf8"), 0) + Buffer.byteLength(input.content, "utf8") > 32 * 1024 * 1024)
+      if (queuedBytes + Buffer.byteLength(content, "utf8") > 1024 * 1024) throw new RunnerError(429, "Session queued content limit exceeded");
+      if (Object.values(state.runs).reduce((total, run) => total + Buffer.byteLength(run.content, "utf8"), 0) + Buffer.byteLength(content, "utf8") > 32 * 1024 * 1024)
         throw new RunnerError(429, "Session durable request content limit exceeded");
       if (Object.keys(state.runs).length >= 10_000) throw new RunnerError(429, "Session durable request ledger is full");
       const imageBytes = prepared.reduce((total, image) => total + image.data.length, 0);
@@ -1707,7 +1731,7 @@ export class RunnerSession {
         .reduce((total, run) => total + (run.images?.bytes ?? 0), 0) + imageBytes > MAX_QUEUED_IMAGE_BYTES) throw new RunnerError(429, "Session queued image limit exceeded");
       // On disk before the run is committed, so a queued run with images always finds them; a run that never commits
       // leaves them for sweepInputs.
-      if (prepared.length) await this.writeInputs(key, prepared);
+      if (prepared.length) await this.#inputs.write(key, prepared);
       const shared = this.#shared;
       let conversation = shared;
       if (mode === "ask") {
@@ -1721,15 +1745,17 @@ export class RunnerSession {
         conversation = head ? await shared.fork(head.id, fork, context) : await this.harness.createConversation(fork, context);
       }
       const transcript = await conversation.context(context);
-      const run: Run = { key, initiatedBy: ticket.actorId, ownerId: this.binding.owner.id, mode, conversationId: conversation.id, content: input.content, contentHash: hash, status: "queued", startEntry: transcript.entries.at(-1)?.id ?? 0, sequence: state.nextSequence ?? 0, submittedAt: Date.now() };
+      const run: Run = { key, initiatedBy: ticket.actorId, ownerId: this.binding.owner.id, mode, conversationId: conversation.id, content, contentHash: hash, status: "queued", startEntry: transcript.entries.at(-1)?.id ?? 0, sequence: state.nextSequence ?? 0, submittedAt: Date.now() };
       if (input.admissionId !== undefined) run.admissionId = input.admissionId;
       if (options) run.options = options;
       if (prepared.length) run.images = { count: prepared.length, bytes: imageBytes };
+      if (screen) run.screening = true;
       await this.mutate(meta => {
         meta.runs[key] = run;
         meta.nextSequence = (meta.nextSequence ?? 0) + 1;
         if (!meta.branches.some(branch => branch.id === conversation.id)) meta.branches.push({ id: conversation.id, mode, actorId: ticket.actorId });
       });
+      if (screen) void this.screen(key);
       this.drainQueue();
       return { submissionId: key, conversationId: String(conversation.id), status: "queued", queuePosition: Object.values(state.runs).filter(run => ["queued", "running", "admitting"].includes(run.status)).length + 1 };
     });
@@ -1760,7 +1786,7 @@ export class RunnerSession {
         }
       });
       // Stopped messages that never reached Pi never will.
-      await this.discardInputs(runs.filter(run => run.images && run.submissionId === undefined).map(run => run.key));
+      await this.#inputs.discard(runs.filter(run => run.images && run.submissionId === undefined).map(run => run.key));
       return runs;
     });
     if (stopped.some(run => run.status !== "queued")) void this.abortStopped().catch(() => { /* Reopening aborts what is left (see resumeWork). */ });
@@ -1785,9 +1811,9 @@ export class RunnerSession {
       await this.authorize(ticket.actorId, run.mode === "ask" ? "ask" : "write", ticket.policyVersion);
       if (run.status !== "queued" || run.stopped) throw new RunnerError(409, "That message has already started or ended");
       // Read before the run ends: ending it is what lets sweepInputs remove them.
-      const images = run.images ? await this.readInputs(key) : undefined;
+      const images = run.images ? await this.#inputs.read(key) : undefined;
       await this.mutate(meta => { Object.assign(meta.runs[key]!, { status: "interrupted", withdrawn: true }); });
-      if (run.images) await this.discardInputs([key]);
+      if (run.images) await this.#inputs.discard([key]);
       return { content: run.content, mode: run.mode, ...(images?.length ? { images: images as ChatImage[] } : {}),
         ...(run.images && !images?.length ? { imagesLost: true as const } : {}) };
     });
@@ -2141,13 +2167,13 @@ export class RunnerSession {
         executionMode: "sequential", parameters: Type.Object({
         action: StringEnum(sessionsToolActions), session: Type.Optional(Type.String()), message: Type.Optional(Type.String()),
         access: Type.Optional(StringEnum(accessModes)), notify: Type.Optional(Type.Boolean()), title: Type.Optional(Type.String()), model: Type.Optional(Type.String()),
-        visibility: Type.Optional(StringEnum(["private", "workspace"] as const)), message_id: Type.Optional(Type.String()),
+        thinking: Type.Optional(StringEnum(thinkingLevels)), visibility: Type.Optional(StringEnum(["private", "workspace"] as const)), message_id: Type.Optional(Type.String()),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.readEntries })),
         timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
       }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-          modelId: args.model, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
+          modelId: args.model, thinkingLevel: args.thinking, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
           Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
         if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");
         const wait = args.action === "wait";
@@ -2223,7 +2249,7 @@ export class RunnerSession {
         result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
           : refused ? (error as RunnerError).message : "Effect interrupted or outcome unknown. Inspect the session list or host before requesting another operation.";
       }
-      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.kept(id, result) }); });
+      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
     })().catch(() => { /* Durable executing records become interrupted on reopen. */ }).finally(() => {
       this.pushes.delete(entry);
       if (generation === this.generation && !this.closing) this.drainQueue();
@@ -2255,7 +2281,7 @@ export class RunnerSession {
         result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
           : refused ? (error as RunnerError).message : "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited.";
       }
-      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.kept(id, result) }); });
+      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
     })().catch(() => { /* Durable executing records become interrupted on reopen. */ }).finally(() => {
       this.pushes.delete(entry);
       if (generation === this.generation && !this.closing) this.drainQueue();
@@ -2391,10 +2417,10 @@ export class RunnerSession {
     if (admissionId !== undefined) approval.admissionId = admissionId;
     let created = false;
     // The tool call waits on its card: registered first, so a decision never finds the card without its call.
-    if (toolTaskId !== undefined && !automatic) this.waiter(id);
+    if (toolTaskId !== undefined && !automatic) this.#waits.waiter(id);
     try { await this.mutate(meta => { if (!meta.approvals[id]) { meta.approvals[id] = approval; created = true; } }); }
     catch (error) {
-      this.#approvalWaiters.delete(id);
+      this.#waits.forget(id);
       throw error;
     }
     // A replayed tool task finds its record and never repeats the effect; reopening marks interrupted executions.
@@ -2426,7 +2452,7 @@ export class RunnerSession {
         if (error instanceof RunnerError && error.status === 422 && operation.kind !== "github.comment") { status = "failed"; result = error.message; }
         else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
       }
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.kept(id, result) }); });
+      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
       return (await this.metadata()).approvals[id]!;
     }
     if (operation.kind === "git.push") {
@@ -2434,7 +2460,7 @@ export class RunnerSession {
       const entry = { controller: new AbortController(), done: Promise.resolve() };
       const settled = (async () => {
         const outcome = await this.runPush(id, operation, { actorId, admissionId: approval.admissionId }, async () => { await this.authorize(actorId, "write"); }, entry.controller.signal);
-        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.kept(id, outcome.result) }); });
+        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.#waits.kept(id, outcome.result) }); });
       })();
       entry.done = settled.then(() => undefined, () => undefined);
       this.pushes.add(entry);
@@ -2461,7 +2487,7 @@ export class RunnerSession {
       if (error instanceof SandboxProcessError) { status = "failed"; result = `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`; }
       else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
     }
-    await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.kept(id, result) }); });
+    await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
     return (await this.metadata()).approvals[id]!;
   }
 
@@ -2547,7 +2573,7 @@ export class RunnerSession {
       await this.authorize(approval.requestedBy, "write");
       // A tool call waiting on this card holds its message, so the operation runs now and the call gets its outcome. Any
       // other card (one requested outside a message) waits for the queue, so it never runs beside the agent.
-      if (!this.#approvalWaiters.has(id) && Object.values(state.runs).some(holdsQueue))
+      if (!this.#waits.waiting(id) && Object.values(state.runs).some(holdsQueue))
         throw new RunnerError(409, "Wait for the session queue to finish before approval execution");
       if (["github.comment", "github.merge", "github.issue", "git.push"].includes(approval.operation.kind) && !input.brokerCapability) throw new RunnerError(403, "Missing owner-bound single-use broker capability");
       await this.mutate(meta => { record(meta, { status: "executing", decidedBy: ticket.actorId }); });
@@ -2587,7 +2613,7 @@ export class RunnerSession {
             await this.authorize(ticket.actorId, "approve");
           }, controller.signal);
           if (generation !== this.generation) return;
-          await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.kept(id, outcome.result) }); });
+          await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.#waits.kept(id, outcome.result) }); });
         })().catch(() => { /* Reopening marks a still-executing approval interrupted; never retry the push. */ })
           .finally(() => {
             this.pushes.delete(entry);
@@ -2603,11 +2629,11 @@ export class RunnerSession {
           await this.authorize(ticket.actorId, "approve");
           result = await this.githubEffect(approval.operation, { sessionId: this.binding.session.id, actorId: ticket.actorId, approvalId: id, capability: input.brokerCapability! });
         } else throw new RunnerError(400, "Unsupported approval operation");
-        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.kept(id, result) }); });
+        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.#waits.kept(id, result) }); });
       } catch (error) {
         // GitHub said why it didn't merge or open the issue: nothing changed, so the agent can act on the reason.
         const outcome = error instanceof RunnerError && error.status === 422 && (approval.operation.kind === "github.merge" || approval.operation.kind === "github.issue")
-          ? { status: "failed" as const, result: this.kept(id, error.message) }
+          ? { status: "failed" as const, result: this.#waits.kept(id, error.message) }
           : { status: "interrupted" as const, result: "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited." };
         await this.mutate(meta => { Object.assign(meta.approvals[id]!, outcome); });
       }
@@ -2783,14 +2809,24 @@ export class RunnerSession {
     const entries: SessionView["entries"] = [];
     for (const snapshot of snapshots) {
       let previous: Run | undefined;
+      // Messages an extension refused never reached Pi: each shows where it was sent, after the entry the conversation
+      // ended with then.
+      const refused = Object.values(state.runs).filter(run => run.refused && run.conversationId === snapshot.branch.id)
+        .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+      const refusedAt = (after: (run: Run) => boolean) => {
+        for (const run of refused.filter(after)) entries.push(refusedView(run, snapshot.branch.id));
+      };
+      refusedAt(run => !snapshot.entries.some(entry => entry.id <= run.startEntry));
       for (const entry of snapshot.entries) {
         const run = Object.values(state.runs).filter(candidate => (candidate.started || candidate.submissionId !== undefined || candidate.status === "admitting") && candidate.conversationId === entry.conversationId && candidate.startEntry < entry.id).sort((a, b) => b.startEntry - a.startEntry)[0];
-        const ending = run !== previous && previous && this.endView(previous, snapshot.branch.id);
+        const ending = run !== previous && previous && endView(previous, snapshot.branch.id);
         if (ending) entries.push(ending);
         previous = run;
-        entries.push(this.entryView(entry, snapshot.branch.id, run?.initiatedBy, autoApproved));
+        entries.push(entryView(entry, snapshot.branch.id, run?.initiatedBy, autoApproved));
+        const next = snapshot.entries[snapshot.entries.indexOf(entry) + 1];
+        refusedAt(run => run.startEntry >= entry.id && (!next || run.startEntry < next.id));
       }
-      const ending = previous && this.endView(previous, snapshot.branch.id);
+      const ending = previous && endView(previous, snapshot.branch.id);
       if (ending) entries.push(ending);
     }
     const agent = await this.#shared.agent(context);
@@ -2807,7 +2843,7 @@ export class RunnerSession {
       busy: Object.values(state.runs).some(holdsQueue)
         || Object.values(state.approvals).some(approval => approval.status === "executing") || repositories?.status === "preparing",
       queue: Object.values(state.runs).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
-        .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.status })),
+        .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.refused ? "refused" : run.status })),
       stoppable: true,
       withdrawable: true,
       rewindable: true,
@@ -2824,62 +2860,31 @@ export class RunnerSession {
   /** What the view tells of the session's extensions: those it runs with now, and its workspace's enabled ones its host lacks. */
   private async extensionView(): Promise<Pick<SessionView, "extensions">> {
     const config = this.config.extensions;
-    if (!config) return {};
+    const enabled = this.#builtins ? (await this.hostConfig().catch(() => undefined))?.builtinExtensions ?? [] : [];
+    if (!config) {
+      const builtin = this.#builtins?.select(enabled, new Set()).map(item => item.name) ?? [];
+      return builtin.length ? { extensions: { running: [], missing: [], builtin } } : {};
+    }
     try {
       const answer = await config.workspace(this.binding.session.workspaceId);
       const installed = config.installed().map(item => item.summary);
-      const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId });
+      const required = await this.requiredExtensions() ?? [];
+      const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required);
+      const missingRequired = missingRequiredExtensions(required, installed);
       // The tools the next message would get of each, settled as that message settles them (SessionExtensions.select).
       const settled = settleToolNames(chosen.map(item => ({ source: item.source,
         tools: installed.find(candidate => candidate.source === item.source)?.modules.flatMap(module => module.tools.map(tool => tool.name)) ?? [] })),
         this.tools.map(tool => tool.name));
-      const running = chosen.map((item, index) => ({ source: item.source, dev: item.dev, tools: settled[index]!.kept }));
-      const missing = answer.extensions.filter(item => item.enabled && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
-      return running.length || missing.length ? { extensions: { running, missing } } : {};
+      const running = chosen.map((item, index) => ({ source: item.source, dev: item.dev, tools: settled[index]!.kept, ...(item.required ? { required: true as const } : {}) }));
+      // A workspace extension the host requires another version of isn't missing: the host's runs in its place.
+      const requiredPackages = new Set(required.map(item => extensionPackageKey(item.source)));
+      const missing = answer.extensions.filter(item => item.enabled && !requiredPackages.has(extensionPackageKey(item.source))
+        && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
+      // As the next message selects them: after the workspace's, which may replace one.
+      const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
+      return running.length || missing.length || builtin.length || missingRequired.length
+        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}) } } : {};
     } catch { return {}; }
-  }
-
-  private entryView(entry: EntryRecord, branch: number, actorId?: string, autoApproved?: ReturnType<typeof autoApprovedCalls>): SessionView["entries"][number] {
-    const messages = entry.model ?? [];
-    // Commands auto-approve ran have no card in the view: their calls say so instead.
-    const marks = messages.flatMap(message => message.role !== "assistant" ? [] : message.content.flatMap(block => {
-      const mark = block.type === "toolCall" ? autoApproved?.get(block.id) : undefined;
-      return mark && block.type === "toolCall" ? [{ tool: block.name, ...mark }] : [];
-    }));
-    const text = messages.flatMap(message => {
-      if (typeof message.content === "string") return [message.content];
-      // Image data stays on the host; the transcript only notes that the model saw one.
-      return (message.content ?? []).flatMap(block => block.type === "text" ? [block.text] : block.type === "toolCall" ? [`${block.name}(${JSON.stringify(block.arguments)})`] : block.type === "image" ? [`[image ${block.mimeType}]`] : []);
-    }).join("\n");
-    const failed = messages.find(message => message.role === "assistant" && message.stopReason === "error");
-    // Provider error text can carry account or endpoint details; only the HTTP status leaves the host.
-    const status = failed?.role === "assistant" ? Number(/^(\d{3})\b/.exec(failed.errorMessage ?? "")?.[1]) : NaN;
-    const error = failed?.role === "assistant" ? {
-      provider: String(failed.provider).slice(0, 128), modelId: String(failed.model).slice(0, 256), ...(status >= 100 && status <= 599 ? { status } : {}),
-    } : undefined;
-    // Pi measures the model's response for assistant messages and each tool run for tool results.
-    const durations = messages.flatMap(message => (message.role === "assistant" || message.role === "toolResult") && message.durationMs !== undefined ? [message.durationMs] : []);
-    const durationMs = durations.length ? durations.reduce((total, value) => total + value, 0) : undefined;
-    return { id: `${branch}:${entry.id}`, kind: entry.kind, role: messages[0]?.role ?? "system", text, ...(actorId ? { actorId } : {}), conversationId: String(branch),
-      ...(error ? { error } : {}), ...(durationMs !== undefined ? { durationMs } : {}), ...(marks.length ? { autoApproved: marks } : {}) };
-  }
-
-  /** What follows a run's entries: its failed model turn, who stopped it, or that its host's crashes ended it. */
-  private endView(run: Run, branch: number): SessionView["entries"][number] | undefined {
-    if (run.failure) return this.failureView(run, branch);
-    if (run.stopped) return { id: `${branch}:stopped:${run.key}`, kind: "workspace.run-stopped", role: "system", text: "Stopped", actorId: run.stopped.by, conversationId: String(branch) };
-    if (run.crashed) return { id: `${branch}:crashed:${run.key}`, kind: "workspace.run-crashed", role: "system", text: CRASHED_TEXT, conversationId: String(branch) };
-    return undefined;
-  }
-
-  /**
-   * A run Pi settled without an answer, shown as a failed model turn after its entries: provider and model, and which
-   * fixed compaction failure it was, never Pi's detail.
-   */
-  private failureView(run: Run, branch: number): SessionView["entries"][number] {
-    const { provider, modelId, compaction } = run.failure!;
-    return { id: `${branch}:failure:${run.key}`, kind: "workspace.run-failure", role: "assistant", text: "", actorId: run.initiatedBy, conversationId: String(branch),
-      error: { ...(provider ? { provider } : {}), ...(modelId ? { modelId } : {}), ...(compaction ? { compaction } : {}) } };
   }
 
   async restart(): Promise<void> {
@@ -2982,102 +2987,20 @@ export class RunnerSession {
 
   /**
    * One chunk of a file attached to a message (packages/shared/src/file-uploads.ts), as `write` sends it, since a
-   * collaborator could already have the agent write any file. Chunks wait in order in the session's uploads directory,
-   * outside the sandbox and the backups; the last one writes the whole file into the worktree's attachments directory,
-   * through the sandbox like a file tool, under a name not taken there yet, and answers where it went. Not exclusive with
-   * runs: like a file tool it waits only for the sandbox's own queue. One chunk of the session is handled at a time.
+   * collaborator could already have the agent write any file (see SessionUploads).
    */
   async upload(ticket: RunnerTicket, input: unknown): Promise<UploadResult> {
     this.assertTicket(ticket);
     await this.authorize(ticket.actorId, "write", ticket.policyVersion);
     const chunk = parseUploadChunk(input);
     if ("error" in chunk) throw new RunnerError(400, "Invalid upload chunk");
-    const turn = this.#uploading.then(() => this.receiveChunk(ticket, chunk));
-    this.#uploading = turn.then(() => {}, () => {});
-    return turn;
+    return this.#uploads.receive(ticket.actorId, chunk, async () => { await this.authorize(ticket.actorId, "write", ticket.policyVersion); });
   }
 
-  #uploading: Promise<void> = Promise.resolve();
-
-  private get uploadsDirectory(): string {
-    return join(this.directory, "uploads");
-  }
-
-  private async receiveChunk(ticket: RunnerTicket, chunk: UploadChunk): Promise<UploadResult> {
-    // One upload is one actor's one file: its chunks name the same file and size, or they are another upload.
-    const key = (await sha256(stableJson({ actor: ticket.actorId, uploadId: chunk.uploadId, name: chunk.name, size: chunk.size }))).slice(0, 43);
-    // Named with the size it declared, which counts against the session's staged bytes from its first chunk on.
-    const part = join(this.uploadsDirectory, `${key}-${chunk.size}.part`);
-    const data = Buffer.from(chunk.data, "base64");
-    await mkdir(this.uploadsDirectory, { recursive: true, mode: 0o700 });
-    if (chunk.offset === 0) await this.sweepUploads(`${key}-${chunk.size}.part`, chunk.size);
-    else {
-      let staged: number;
-      try { staged = (await lstat(part)).size; }
-      catch { throw new RunnerError(409, "That upload is no longer on the host. Attach the file again"); }
-      if (staged !== chunk.offset) throw new RunnerError(409, "Upload chunks arrived out of order. Attach the file again");
-    }
-    const file = await open(part, chunk.offset === 0 ? "w" : "a", 0o600);
-    try {
-      await file.writeFile(data);
-      await file.sync();
-    } finally { await file.close(); }
-    const received = chunk.offset + data.length;
-    if (received < chunk.size) return { received };
-    try {
-      const bytes = await readFile(part);
-      if (bytes.length !== chunk.size) throw new RunnerError(409, "Upload chunks arrived out of order. Attach the file again");
-      const authorize = async () => { await this.authorize(ticket.actorId, "write", ticket.policyVersion); };
-      let path: string;
-      try { path = await this.sandbox.importFile(ATTACHMENTS_DIRECTORY, chunk.name, bytes, authorize); }
-      catch (error) {
-        if (error instanceof RunnerError) throw error;
-        // Fixed reasons only (the control plane shows a 422's): never a host path or raw sandbox output.
-        const message = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ""}`.toLowerCase() : "";
-        if (/too many files with this name/.test(message)) throw new RunnerError(422, "The attachments directory has too many files of that name. Rename the file and attach it again");
-        if (/not a directory|symlinks are not followed|too many levels of symbolic links|path component is not a real directory|not a real directory/.test(message)) {
-          throw new RunnerError(422, "The worktree's attachments path isn't a directory the file can go into");
-        }
-        if (/no space|quota|file too large|exceeds size limit/.test(message)) throw new RunnerError(422, "The session has no room for that file");
-        throw new RunnerError(422, "The file could not be written into the worktree");
-      }
-      return { received, path };
-    } finally {
-      await rm(part, { force: true }).catch(() => {});
-    }
-  }
-
-  /**
-   * Before upload `own` (of `size` bytes) starts: removes uploads left unfinished for an hour, and anything else that
-   * isn't an upload, then refuses one that would make the session's unfinished uploads more than MAX_STAGED_UPLOADS, or
-   * declare more than MAX_STAGED_UPLOAD_BYTES between them. Each counts the whole size it declared, not what has
-   * arrived of it, so uploads started small can't grow past the limit later; chunks are taken one at a time, so no
-   * other upload starts between this check and its first chunk.
-   */
-  private async sweepUploads(own: string, size: number): Promise<void> {
-    let names: string[];
-    try { names = await readdir(this.uploadsDirectory); }
-    catch { return; }
-    let declared = 0;
-    let uploads = 0;
-    for (const name of names) {
-      if (name === own) continue;
-      const path = join(this.uploadsDirectory, name);
-      const match = /^[A-Za-z0-9_-]{43}-(\d{1,12})\.part$/.exec(name);
-      try {
-        const info = await lstat(path);
-        if (!match || !info.isFile() || Date.now() - info.mtimeMs > STALE_UPLOAD_MS) await rm(path, { force: true, recursive: true });
-        else { declared += Number(match[1]); uploads++; }
-      } catch { /* Gone meanwhile. */ }
-    }
-    if (uploads + 1 > MAX_STAGED_UPLOADS || declared + size > MAX_STAGED_UPLOAD_BYTES) {
-      throw new RunnerError(429, "Too many files are being uploaded to this session at once. Try again shortly");
-    }
-  }
 
   async close({ abortPushes = true }: { abortPushes?: boolean } = {}): Promise<void> {
     this.closing = true;
-    this.#wholeResults.clear();
+    this.#waits.dropResults();
     // A long fetch stops at once; a checkout already under way finishes in the sandbox and the next open finds it ready.
     const preparation = this.#repositories;
     if (preparation.status === "preparing") preparation.controller.abort();
@@ -3096,12 +3019,19 @@ export class RunnerSession {
     this.#hostExtensions = undefined;
     await extensions?.shutdown().catch(() => {});
     // Calls still waiting on a card end with the harness; their cards are marked interrupted on reopen.
-    this.#approvalWaiters.clear();
+    this.#waits.dropWaiters();
     // A Session that already failed on a storage error has closed itself, and closing again only repeats that error.
     // Read the flag first: a close that fails now also marks the session failed, and its error must still surface.
     const failed = this.#failed;
-    await this.#egress?.close();
-    await this.harness.close(context).catch((error: unknown) => { if (!failed) throw error; });
+    const builtins = this.#builtins;
+    this.#builtins = undefined;
+    try {
+      await this.#egress?.close();
+      await this.harness.close(context).catch((error: unknown) => { if (!failed) throw error; });
+    } finally {
+      // A script this stops resumes with the next opening's sandbox.
+      await builtins?.close().catch(() => {});
+    }
   }
 
   /** Credential → push → completion. The credential stays in this frame; results carry only fixed, credential-free text. */

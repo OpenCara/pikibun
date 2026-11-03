@@ -44,10 +44,32 @@ for later. On Windows, each server's host runs its sessions in WSL2 or natively:
   `pikibun connect --state-dir` command that runs the same connection from a terminal. Removing a server stops its host
   and leaves its state directory alone. Pairing codes travel only over the IPC channel: never argv, environment, files
   or logs.
-- macOS has no isolated sandbox, so starting the host asks for consent in a native dialog showing the CLI's own
-  `--unsafe-no-sandbox` warning. Linux uses the bubblewrap sandbox when its prerequisites are installed and asks the
-  same consent otherwise. Windows runs each host in WSL2's bubblewrap sandbox or natively, as its owner chooses
-  ([Windows](#windows)).
+- On macOS each server's host chooses its **Sandbox** (This Mac, or Settings › This Mac in the web app, which asks in a
+  native dialog first), only while it is stopped, from its next start: **None**, the default, where starting the host
+  asks for consent in a native dialog showing the CLI's own `--unsafe-no-sandbox` warning; or **macOS sandbox
+  (experimental)**, where the host asks the connector for macOS's own Seatbelt sandbox (the desktop host's
+  `experimentalSandbox` request, as `pikibun connect --experimental-sandbox`), and, while its prerequisites are missing
+  (macOS 15 or later, the developer tools), offers the same consent naming what is missing. Both use the same connector
+  state and pairing. In the sandbox, as the CLI's, shell commands run only in the host owner's own sessions, since
+  macOS can't limit a group of processes' memory or count. Linux uses the bubblewrap sandbox when its prerequisites are
+  installed and asks the same consent otherwise. Windows runs each host in WSL2's bubblewrap sandbox or natively, as
+  its owner chooses ([Windows](#windows)).
+- Getting a computer ready to host happens in This Mac (This Computer), without a terminal:
+  - **Pi**: the connector bundles Pi, so no separate Pi install is needed, only a provider to sign in to. **Sign Pi in
+    to a provider** (under Models offered) lists Pi's providers and runs the provider's own sign-in in the host, as
+    `pi`'s `/login` does (`apps/runner/src/pi-login.ts`, through Pi's `ModelRuntime.login`): its page opens in the
+    browser, a device code or API key is asked in the window, and the credential is saved in Pi's `auth.json` on that
+    computer (inside WSL2 for a WSL2 host) and never sent to Pikibun or a server's page. Answers travel only over the
+    IPC channel, as pairing codes do; secret ones are never shown, logged or kept.
+  - **Prerequisites**: each missing one says how to get it, with the command to run, and where the app can do it, a
+    button that does, once its owner confirms in a native dialog: Apple's installer for the Command Line Tools
+    (`xcode-select --install`, which brings Git and Python 3); on Windows Git for Windows (winget), the MXC SDK (npm),
+    Windows Update (Settings), WSL itself (`wsl --install`, as administrator), and in WSL2, Node.js 24 (nvm) and the
+    sandbox's packages (`sudo apt-get install`). Each runs where its owner sees it (an installer, a PowerShell window
+    that stays open, Settings); Refresh shows what changed. The app builds each from a fixed list
+    (`src/main/setup-actions.ts`), never from a command a host or a page sent, and only for something the latest
+    check found missing. Servers' Settings pages show what is missing and link to This Mac, which alone installs
+    things or takes an API key.
 - Pikibun on this computer runs the local server (`dist/host/desktop-server.mjs`, bundled from
   `apps/server/src/local/desktop.ts`) in a second utility process, with `pikibun serve`'s state
   (`~/.local/share/pikibun/server`), so the two share their data; a kernel lease on that directory (flock or lockf, as
@@ -97,8 +119,8 @@ For an end-to-end run against a local test-mode server, start `pnpm dev:native -
 the server to `http://127.0.0.1:8789` in Settings, and pair from This Mac with the printed pairing ID and code.
 
 A GUI app does not inherit your shell's environment: Pi providers configured only through environment variables (for
-example `ANTHROPIC_API_KEY` in `~/.zshrc`) are not visible to the host. Sign in through Pi itself (`auth.json`) so
-This Mac finds those models.
+example `ANTHROPIC_API_KEY` in `~/.zshrc`) are not visible to the host. Sign Pi in to the provider in This Mac (or
+with `pi`'s `/login`), which saves it in Pi's `auth.json`, so the host finds those models.
 
 ## Package
 

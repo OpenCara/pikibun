@@ -4,7 +4,7 @@ export type IconName =
   | "plus" | "settings" | "more" | "chevron-right" | "chevron-down" | "chevron-up" | "chevron-left" | "x" | "check" | "copy"
   | "folder" | "file" | "message" | "terminal" | "tool" | "send" | "panel-right" | "menu" | "info" | "alert" | "shield"
   | "server" | "users" | "user" | "palette" | "sun" | "moon" | "sparkle" | "monitor" | "logout" | "archive"
-  | "git-branch" | "git-pull-request" | "github" | "lock" | "globe" | "refresh" | "search" | "eye" | "trash" | "external" | "history" | "pencil" | "link" | "stop" | "clock" | "image" | "arrow-down" | "paperclip";
+  | "git-branch" | "git-pull-request" | "github" | "lock" | "globe" | "refresh" | "search" | "eye" | "trash" | "external" | "history" | "pencil" | "link" | "stop" | "clock" | "image" | "arrow-down" | "paperclip" | "bell";
 
 const paths: Record<Exclude<IconName, "github">, ReactNode> = {
   plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
@@ -51,6 +51,7 @@ const paths: Record<Exclude<IconName, "github">, ReactNode> = {
   external: <><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></>,
   history: <><path d="M3 12a9 9 0 1 0 9-9 9.8 9.8 0 0 0-6.7 2.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></>,
   clock: <><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>,
+  bell: <><path d="M10.268 21a2 2 0 0 0 3.464 0" /><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" /></>,
   image: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" /></>,
   "arrow-down": <><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></>,
   paperclip: <path d="m16 6-8.4 8.6a2 2 0 0 0 2.8 2.8l8.4-8.6a4 4 0 1 0-5.6-5.6l-8.4 8.5a6 6 0 1 0 8.5 8.5l8.4-8.5" />,

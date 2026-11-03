@@ -127,7 +127,10 @@ export function parseModels(value: unknown): Parsed<ModelChoice[] | null> {
   return { ok: true, value: [...unique.values()] };
 }
 
-/** Where a Windows host's sessions run, as a page chose it: WSL2 (in a named distribution, or WSL's default) or native. */
+/**
+ * Where a host's sessions run, as a page chose it: on Windows WSL2 (in a named distribution, or WSL's default) or native,
+ * on macOS Seatbelt or none. Which of them suits this computer is the host's to check (HostController.setSandbox).
+ */
 export function parseSandbox(value: unknown): Parsed<SandboxChoice> {
   const choice = parseSandboxChoice(value);
   return choice ? { ok: true, value: choice } : { ok: false, error: "Invalid request." };
@@ -159,4 +162,25 @@ export function parseUpload(value: unknown): Parsed<{ connectorId: string; grant
     return { ok: false, error: "Invalid upload request." };
   }
   return { ok: true, value: { connectorId: value.connectorId, grant: value.grant, body: value.body } };
+}
+
+/**
+ * A notification a server's page asks the app to show (remote-bridge.ts DesktopNotification): short text, and where
+ * clicking it goes as a hash route of that page's own server. Control characters are dropped and long text cut, so a
+ * page can't make a notification that hides or misleads.
+ */
+export function parseNotification(value: unknown): Parsed<{ title: string; body: string; path: string; tag?: string }> {
+  const refused = { ok: false as const, error: "Invalid notification." };
+  if (!isRecord(value) || !onlyKeys(value, ["title", "body", "path", "tag"]) || typeof value.title !== "string" || typeof value.body !== "string"
+    || typeof value.path !== "string" || (value.tag !== undefined && typeof value.tag !== "string")) return refused;
+  const clean = (text: string, max: number) => {
+    const line = text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
+    return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  };
+  const title = clean(value.title, 120);
+  const body = clean(value.body, 240);
+  // Only the app's own routes: `/#/` and a path of plain URL characters, never another origin or a script.
+  if (!title || !/^\/#\/[A-Za-z0-9/_%.~-]{0,300}$/.test(value.path)) return refused;
+  if (value.tag !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(value.tag)) return refused;
+  return { ok: true, value: { title, body, path: value.path, ...(value.tag !== undefined ? { tag: value.tag } : {}) } };
 }

@@ -1,4 +1,4 @@
-import type { AccessMode, EntryView, Permission, SessionActivity, SessionRecord, SessionView } from "./types.js";
+import type { AccessMode, EntryView, Permission, SessionActivity, SessionRecord, SessionView, ThinkingLevel } from "./types.js";
 
 /**
  * Cross-session communication: the `sessions` tool lets a session's agent list, read, message, start, stop and archive
@@ -37,6 +37,18 @@ export const crossSessionLimits = {
   waitSeconds: 1800,
   defaultWaitSeconds: 300,
 } as const;
+
+/**
+ * A workspace's settings for the sessions its agents start (`GET`/`PUT /api/workspaces/:id/child-sessions`), as its
+ * owners and admins chose them.
+ */
+export interface ChildSessionSettings {
+  /**
+   * An agent's create may choose the new session's model and reasoning level, to suit its sub-task. Off, every session
+   * an agent starts runs on its parent's current model and reasoning level. On by default.
+   */
+  childModels: boolean;
+}
 
 /** One session as the sessions tool shows it to an agent: no repository, host or audience details. */
 export interface CrossSessionSummary {
@@ -120,6 +132,12 @@ export interface SessionsToolRequest {
   /** create: the new session's title, model (one list returns) and visibility. */
   title?: string;
   modelId?: string;
+  /**
+   * create: the reasoning level the opening message runs at, which the new session's conversation keeps (one of its
+   * model's `thinkingLevels`, as list returns them). Only with a message, and only where the workspace lets agents
+   * choose (`ChildSessionSettings.childModels`).
+   */
+  thinkingLevel?: ThinkingLevel;
   visibility?: "private" | "workspace";
   /** read: the outcome of this message, as ask, send or create returned it. */
   messageId?: string;
@@ -128,11 +146,16 @@ export interface SessionsToolRequest {
 }
 
 export type SessionsToolResult =
-  | { sessions: CrossSessionSummary[]; models: { id: string; name: string; provider: string; modelId: string }[] }
+  /**
+   * `childModels`: whether create may name a model and reasoning level here (ChildSessionSettings); without, a new
+   * session runs on this session's current model and reasoning level. `thinkingLevels`: those a model's host offers it at.
+   */
+  | { sessions: CrossSessionSummary[]; models: { id: string; name: string; provider: string; modelId: string; thinkingLevels?: ThinkingLevel[] }[]; childModels: boolean }
   | { session: CrossSessionSummary; busy: boolean; entries: Pick<EntryView, "id" | "role" | "kind" | "actorId" | "text">[];
     pendingApprovals: { id: string; kind: string; tool?: string; requestedBy: string }[]; message?: CrossSessionMessage; outcome?: CrossSessionOutcome }
   | { message: CrossSessionMessage }
-  | { session: CrossSessionSummary; message?: CrossSessionMessage }
+  /** create: the new session, the model it runs on and the reasoning level its opening message runs at (none: its host's own). */
+  | { session: CrossSessionSummary; model?: { id: string; provider: string; modelId: string; thinkingLevel?: ThinkingLevel }; message?: CrossSessionMessage }
   | { stopped: number }
   | { archived: string }
   /**
@@ -143,12 +166,13 @@ export type SessionsToolResult =
 
 /** What a sessions tool call's permission card shows: the action and what it touches, in the call's own words. */
 export function sessionsToolTarget(request: { action: SessionsToolAction; targetSessionId?: string; message?: string; access?: AccessMode; notify?: boolean;
-  title?: string; modelId?: string; visibility?: string; messageId?: string }): string {
+  title?: string; modelId?: string; thinkingLevel?: string; visibility?: string; messageId?: string }): string {
   const parts: string[] = [request.action];
   if (request.targetSessionId) parts.push(`session ${request.targetSessionId}`);
   if (request.messageId) parts.push(`message ${request.messageId}`);
   if (request.title !== undefined) parts.push(`title ${JSON.stringify(request.title)}`);
   if (request.modelId) parts.push(`model ${request.modelId}`);
+  if (request.thinkingLevel) parts.push(`thinking ${request.thinkingLevel}`);
   if (request.visibility) parts.push(`visibility ${request.visibility}`);
   if (request.access) parts.push(`access ${request.access}`);
   if (request.notify) parts.push("notify");
@@ -186,7 +210,7 @@ export function crossSessionHeader(message: { id: string; kind: CrossSessionMess
   return `[Pikibun cross-session ${what} xs:${message.id} · from session "${oneLine(origin.title)}" (${origin.id}) · sent by ${by} through its agent · hop ${message.hops}]`;
 }
 
-const doneStatuses = new Set(["settled", "interrupted", "stopped", "images lost"]);
+const doneStatuses = new Set(["settled", "interrupted", "stopped", "images lost", "refused"]);
 
 /**
  * A delivered message's outcome in its target's view: its queue status, and the target agent's last answer after the

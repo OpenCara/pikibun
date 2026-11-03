@@ -45,10 +45,7 @@
         <div id="sandbox-row" hidden>
           <div class="inline">
             <label>Sandbox
-              <select id="sandbox">
-                <option value="wsl2">WSL2 (bubblewrap)</option>
-                <option value="native">Native Windows (experimental)</option>
-              </select>
+              <select id="sandbox"></select>
             </label>
             <label id="distro-row">WSL distribution
               <select id="distro"></select>
@@ -94,6 +91,35 @@
           <button id="models-save" type="button">Offer Only Checked</button>
           <button id="models-pi" class="ghost" type="button">Let Pi Choose</button>
         </div>
+        <div id="sign-in" class="subsection">
+          <h3>Sign Pi in to a provider</h3>
+          <p class="muted" id="sign-in-note">Pikibun runs Pi's own sign-in here, as Pi's /login does: the credential is saved in Pi's configuration on this computer and never sent to Pikibun. No separate Pi install is needed.</p>
+          <div class="inline" id="sign-in-pick">
+            <label>Provider
+              <select id="sign-in-provider"></select>
+            </label>
+            <label>With
+              <select id="sign-in-method"></select>
+            </label>
+            <button id="sign-in-start" type="button">Sign In</button>
+          </div>
+          <div id="sign-in-flow" hidden>
+            <p id="sign-in-status"></p>
+            <ul id="sign-in-notices" class="list notices"></ul>
+            <form id="sign-in-prompt" autocomplete="off" novalidate hidden>
+              <label><span id="sign-in-question"></span>
+                <input id="sign-in-answer" spellcheck="false" autocapitalize="off" />
+                <select id="sign-in-choice"></select>
+              </label>
+              <div class="actions">
+                <button id="sign-in-submit" class="primary" type="submit">Continue</button>
+              </div>
+            </form>
+            <div class="actions">
+              <button id="sign-in-cancel" class="ghost" type="button">Cancel Sign-In</button>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section aria-labelledby="options-heading">
@@ -108,7 +134,8 @@
       <section aria-labelledby="prerequisites-heading">
         <h2 id="prerequisites-heading">Prerequisites</h2>
         <p id="prerequisites-note" class="muted" hidden></p>
-        <ul id="prerequisites" class="list"></ul>
+        <div id="unsupported-fix" hidden></div>
+        <ul id="prerequisites" class="list prerequisites"></ul>
       </section>
 
       <section aria-labelledby="logs-heading">

@@ -17,6 +17,8 @@
     "build:server": "esbuild apps/server/src/main.ts --bundle --platform=node --format=esm --target=node24 --packages=external --outfile=dist/server/main.js && rm -rf dist/server/migrations && cp -R apps/server/migrations dist/server/migrations",
     "build:cli": "pnpm run build && pnpm --filter pikibun run build",
     "typecheck": "tsc --noEmit && pnpm --filter @pikibun/mobile --filter @pikibun/desktop run typecheck",
+    "python:embed": "node scripts/embed-python.mjs",
+    "python:check": "node scripts/check-python.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:integration": "node --import tsx tests/integration.ts",
     "test:connected": "node --import tsx tests/run-connected-integration.ts",
@@ -29,6 +31,7 @@
     "@aws-sdk/client-s3": "^3.1147.0",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-codemode": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
     "@hono/node-server": "1.19.11",
@@ -43,6 +46,7 @@
     "koffi": "3.3.5"
   },
   "devDependencies": {
+    "@astral-sh/ruff-wasm-nodejs": "0.17.3",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.0",
@@ -51,6 +55,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "esbuild": "0.28.2",
     "lowlight": "3.3.0",
+    "pyright": "1.1.414",
     "react-markdown": "10.1.0",
     "remark-breaks": "4.0.0",
     "remark-gfm": "4.0.1",

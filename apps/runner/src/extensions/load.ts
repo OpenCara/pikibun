@@ -2,11 +2,13 @@ import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { glob } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
-import { createExtensionRuntime, type Extension as PiExtension, type ExtensionRuntime, type LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
+import { createEventBus, createExtensionRuntime, type Extension as PiExtension, type ExtensionFactory, type ExtensionRuntime,
+  type LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { extensionLimits, type ExtensionModuleSummary, type InstalledExtension } from "../../../../packages/shared/src/host-extensions.js";
 import { retiredToolNames, toolNames } from "../../../../packages/shared/src/types.js";
 import type { ExtensionStore, InstalledSource } from "./store.js";
+import { pikiModulePath, connectorPikiExtensions, type PikiExtension } from "./piki/index.js";
 
 /*
  * Loads Pi extensions through pi-coding-agent's own loader (docs/design/host-extensions.md): TypeScript, `pi` manifests and
@@ -17,11 +19,12 @@ import type { ExtensionStore, InstalledSource } from "./store.js";
 
 /** Pi events Pikibun runs (adapter.ts). Others an extension handles are reported as ignored. */
 export const supportedEvents = new Set(["session_start", "session_shutdown", "before_agent_start", "agent_start", "agent_end", "agent_settled",
-  "turn_start", "turn_end", "message_end", "tool_call", "tool_result", "tool_execution_start", "tool_execution_end", "context",
+  "turn_start", "turn_end", "message_end", "input", "tool_call", "tool_result", "tool_execution_start", "tool_execution_end", "context",
   "context_with_system", "agent_before_settle", "session_before_compact"]);
 
 interface PiLoader {
   loadExtensions(paths: string[], cwd: string, eventBus?: EventBus, runtime?: ExtensionRuntime): Promise<LoadExtensionsResult>;
+  loadExtensionFromFactory(factory: ExtensionFactory, cwd: string, eventBus: EventBus, runtime: ExtensionRuntime, extensionPath?: string): Promise<PiExtension>;
 }
 
 let internals: Promise<PiLoader> | undefined;
@@ -71,8 +74,12 @@ async function packageEntries(directory: string, requireManifest: boolean): Prom
   return { files, ...about };
 }
 
-/** Pi's discovery in a directory: its .ts/.js files, and subdirectories with an index. */
+/**
+ * Pi's discovery in a directory: its index, if it has one; otherwise its .ts/.js files, and subdirectories with an index.
+ * A package's `"pi": { "extensions": ["./dist"] }` so loads `dist/index.js` alone, as in Pi, not the bundled CLIs next to it.
+ */
 async function directoryEntries(directory: string): Promise<string[]> {
+  for (const index of ["index.ts", "index.js"]) if (await isFile(join(directory, index))) return [join(directory, index)];
   const files: string[] = [];
   for (const item of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     if (item.isFile() && ENTRY.test(item.name) && !item.name.endsWith(".d.ts")) files.push(join(directory, item.name));
@@ -90,8 +97,36 @@ export interface LoadedSource {
   installed: InstalledSource;
   /** Where its paths in the summary are relative to. */
   root: string;
+  /** Its modules' files; for a Pikibun extension, its module's path (`<piki:name>`), whose factory is `factories`'. */
   files: string[];
+  factories?: { path: string; factory: ExtensionFactory }[];
   summary: InstalledExtension;
+}
+
+/**
+ * Runs the factories of `loaded`'s modules, as Pi's loader does when it loads them: from their files, or a CLI
+ * extension's from the connector's own code.
+ */
+export async function loadSource(loaded: Pick<LoadedSource, "files" | "factories">, cwd: string, eventBus: EventBus = createEventBus(),
+  runtime: ExtensionRuntime = createExtensionRuntime()): Promise<LoadExtensionsResult> {
+  const loader = await piLoader();
+  if (!loaded.factories) return loader.loadExtensions(loaded.files, cwd, eventBus, runtime);
+  const result: LoadExtensionsResult = { extensions: [], errors: [], runtime } as unknown as LoadExtensionsResult;
+  for (const { path, factory } of loaded.factories) {
+    try { result.extensions.push(await loader.loadExtensionFromFactory(factory, cwd, eventBus, runtime, path)); }
+    catch (error) { result.errors.push({ path, error: `Failed to load extension: ${message(error)}` }); }
+  }
+  return result;
+}
+
+/** A Pikibun extension as an installed source, which every connector of this version has. */
+async function loadPikiExtension(extension: PikiExtension, cwd: string): Promise<LoadedSource> {
+  const path = pikiModulePath(extension.info.name);
+  const factories = [{ path, factory: extension.factory }];
+  const summary: InstalledExtension = { source: extension.info.source, dev: false, name: extension.info.title, description: extension.info.description, modules: [] };
+  try { summary.modules = summarizeModules("", [path], await loadSource({ files: [path], factories }, cwd), new Set()); }
+  catch (error) { summary.error = message(error); }
+  return { installed: { source: extension.info.source }, root: "", files: [path], factories, summary };
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, extensionLimits.text);
@@ -139,20 +174,20 @@ export function summarizeModules(root: string, files: string[], result: LoadExte
 }
 
 /**
- * Loads every installed source to learn what it offers, with `cwd` an empty directory: each module's factory runs, as
- * Pi runs it when it starts.
+ * Loads the connector's Pikibun extensions (`pikiExtensions`), then every installed source, to learn what they offer, with
+ * `cwd` an empty directory: each module's factory runs, as Pi runs it when it starts.
  */
-export async function loadInstalled(store: ExtensionStore): Promise<LoadedSource[]> {
+export async function loadInstalled(store: ExtensionStore, pikiExtensions: readonly PikiExtension[] = connectorPikiExtensions): Promise<LoadedSource[]> {
   const loaded: LoadedSource[] = [];
-  let installed: InstalledSource[];
+  let installed: InstalledSource[] = [];
+  let failure: unknown;
   try { installed = await store.list(); }
-  catch (error) {
-    process.stderr.write(`Host extensions: ${message(error)}\n`);
-    return [];
-  }
+  catch (error) { failure = error; }
+  if (failure) process.stderr.write(`Host extensions: ${message(failure)}\n`);
   const { loadExtensions } = await piLoader();
   const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
   try {
+    for (const extension of pikiExtensions) loaded.push(await loadPikiExtension(extension, cwd));
     for (const source of installed) {
       const dev = source.source.startsWith("local:");
       const location = store.location(source);

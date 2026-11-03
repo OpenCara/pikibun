@@ -1,6 +1,6 @@
 # Workspaces and members
 
-Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Transcripts**, **Approvals**, **Session database**, **Members** and, for owners and admins, **Data export**.
+Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Transcripts**, **Approvals**, **Sub-task sessions**, **Session database**, **Members** and, for owners and admins, **Data export**.
 
 Owners and admins add people with **Members → Add member**, entering the person's **User ID** and a role; saving an existing member changes their role, which takes effect at once. Or they share an invite link instead (see [Invite links and pending members](#invite-links-and-pending-members)). Below the owner there are four tiers:
 

@@ -178,6 +178,14 @@ async function boundedBody(response: Response, maximum: number, signal?: AbortSi
   }
 }
 
+/** The control plane's refusal of a callback, with its status. */
+class CallbackRefused extends Error {
+  constructor(readonly status: number) { super("Scoped connector callback denied or unavailable"); }
+}
+
+/** Whether the control plane refused an extensions report as invalid: one that predates Pikibun extensions does. */
+const refusedReport = (error: unknown) => error instanceof CallbackRefused && error.status === 400;
+
 function decodeJson(bytes: Uint8Array): unknown {
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
   catch { throw new Error("Invalid control-plane response"); }
@@ -583,11 +591,21 @@ export class LocalConnector {
     const extensions = this.hostExtensions;
     if (!extensions) return;
     let results: ExtensionRequestResult[] = [];
+    // A control plane that predates Pikibun extensions refuses a report naming them: it gets the report without them.
+    let pikiExtensions = true;
     const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
     while (!signal.aborted) {
       try {
         await extensions.refreshIfChanged();
-        const answer = parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions", { report: extensions.report(), results }));
+        const sync = async () => parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions",
+          { report: pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions(), results }));
+        let answer: ReturnType<typeof parseExtensionsSyncAnswer>;
+        try { answer = await sync(); }
+        catch (error) {
+          if (!pikiExtensions || !refusedReport(error)) throw error;
+          pikiExtensions = false;
+          answer = await sync();
+        }
         results = [];
         if (answer.requests.length) {
           results = await extensions.apply(answer.requests);
@@ -672,6 +690,8 @@ export class LocalConnector {
       sharedSecret: this.secret, connectorId: state.connectorId,
       allowFaux: this.options.allowFaux === true, allowTestShell: this.options.allowTestShell === true,
       resources: this.options.resources, unsandboxed: this.options.unsandboxed === true,
+      // The host's owner lets Pikibun extensions' commands use this host's own sign-in in their own sessions.
+      pikiHostSignIn: process.env.PIKIBUN_PIKI_HOST_SIGN_IN === "1",
       ...(this.options.sandboxBackend && !this.options.unsandboxed ? { sandboxBackend: this.options.sandboxBackend } : {}),
       resolveModels: model => {
         if (this.lifetime.signal.aborted) throw new Error("Connector has stopped");
@@ -755,6 +775,7 @@ export class LocalConnector {
         ]).parse(await this.brokerCallback(await this.connection(), "/api/connectors/self/git/push/credential", payload));
       },
       hostConfig: () => hostConfig.current(),
+      requiredExtensions: () => hostConfig.required(),
       // Only while the host's owner has them on in Pikibun; the control plane checks that too before it names them.
       hostGitCredential: async (remote: string, signal?: AbortSignal) => {
         if (!(await hostConfig.current()).gitCredentials) throw new HostCredentialError("This host's owner hasn't turned on its Git credentials in Pikibun (Settings → Hosts → the host → Configuration)");
@@ -776,7 +797,9 @@ export class LocalConnector {
       // control plane's word to relay it.
       gitDirect: async (sessionId, request) => this.brokerCallback(await this.connection(), "/api/connectors/self/git/direct", { sessionId, ...request }),
       // The session's credential for a credentialed API (api.github.com), which its proxy adds to the requests it answers.
-      apiCredential: async (sessionId, host) => this.brokerCallback(await this.connection(), "/api/connectors/self/api/credential", { sessionId, host }),
+      // A read leaves `access` out, as connectors did before writes: an older control plane refuses what it doesn't know.
+      apiCredential: async (sessionId, host, access) => this.brokerCallback(await this.connection(), "/api/connectors/self/api/credential",
+        { sessionId, host, ...(access === "write" ? { access } : {}) }),
       // The relay streams a whole pack, so it gets the length of the longest command rather than the RPC budget. A push
       // outlives a replaced connection: once its pack is under way, the forge's answer must reach Git.
       gitRelay: async (sessionId, request) => {
@@ -819,7 +842,7 @@ export class LocalConnector {
     try {
       this.requireGeneration(generation);
       signal.throwIfAborted();
-      if (!response.ok) throw new Error("Scoped connector callback denied or unavailable");
+      if (!response.ok) throw new CallbackRefused(response.status);
     } catch (error) {
       await response.body?.cancel();
       throw error;

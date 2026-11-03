@@ -157,6 +157,18 @@ export interface ConnectorCapabilities {
    */
   extensions?: boolean;
   /**
+   * The connector's sessions run the Pi built-in extensions its configuration turns on (HostConfig.builtinExtensions).
+   * Absent on older connectors, whose sessions run none.
+   */
+  builtinExtensions?: boolean;
+  /**
+   * The connector's sessions run the extensions its owner requires of every session on it (HostConfig.requiredExtensions),
+   * whatever their workspace chose, and refuse messages while one can't run; and they run extensions' `input` handlers
+   * on each message before accepting it, which a prompt audit such as `piki:prompt-audit` needs. Absent on older
+   * connectors, whose sessions run neither: their messages go unaudited.
+   */
+  requiredExtensions?: boolean;
+  /**
    * The connector runs as its owner and admins configure it in Pikibun (HostConfig: command time limit, GPU, Git
    * credentials, repository cache), read from the control plane, rather than by connect options. Absent on older
    * connectors, which keep their options.

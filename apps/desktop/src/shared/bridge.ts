@@ -1,9 +1,9 @@
-import type { HostInspection, HostState } from "../../../runner/src/desktop-protocol.js";
+import type { HostInspection, HostState, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider, PrerequisiteFix, SetupAction } from "../../../runner/src/desktop-protocol.js";
 import type { LocalInspection, LocalSharedSettings, LocalStatus } from "../../../server/src/local/desktop-protocol.js";
 
 // The typed surface between the app's local pages and its main process. Remote content never sees any of it.
 
-export type { HostInspection, HostState, LocalInspection, LocalSharedSettings, LocalStatus };
+export type { HostInspection, HostState, LocalInspection, LocalSharedSettings, LocalStatus, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider, PrerequisiteFix, SetupAction };
 
 export const channels = {
   hostView: "host:view",
@@ -17,6 +17,12 @@ export const channels = {
   hostModels: "host:models",
   hostSandbox: "host:sandbox",
   hostOpenAtLogin: "host:open-at-login",
+  hostProviders: "host:providers",
+  hostSignIn: "host:sign-in",
+  hostSignInAnswer: "host:sign-in-answer",
+  hostSignInCancel: "host:sign-in-cancel",
+  hostSetup: "host:setup",
+  hostLink: "host:link",
   settingsView: "settings:view",
   settingsServer: "settings:server",
   settingsUpdate: "settings:update",
@@ -42,16 +48,44 @@ export interface ModelChoice { provider: string; modelId: string }
  */
 export type WindowsSandbox = "wsl2" | "native";
 
-export interface SandboxChoice {
+export interface WindowsSandboxChoice {
   sandbox: WindowsSandbox;
   /** WSL2 only: the distribution, else WSL's default WSL2 one. */
   distro?: string;
 }
 
+/**
+ * Whether a Mac host's sessions run in macOS's own Seatbelt sandbox (experimental, as
+ * `pikibun connect --experimental-sandbox`, else unsandboxed with consent while it isn't ready), or without one, with
+ * consent (as `--unsafe-no-sandbox`). Each server's host has its own choice; both share its pairing.
+ */
+export type MacSandbox = "seatbelt" | "none";
+
+export interface MacSandboxChoice { sandbox: MacSandbox }
+
+/** A host's sandbox, of its platform's kind: Windows' on Windows, the Mac's on macOS. */
+export type SandboxChoice = WindowsSandboxChoice | MacSandboxChoice;
+
 export interface WslDistro { name: string; version: number; default: boolean }
 
 /** This computer's WSL: whether wsl.exe lists anything, and its distributions (Docker Desktop's own left out). */
 export interface WslStatus { installed: boolean; distros: WslDistro[] }
+
+/**
+ * Pi signing in to a provider on this host (its own sign-in flow, as `pi`'s /login): what it showed, the question it
+ * asks now, and how it ended. Answers to secret prompts are never part of it.
+ */
+export interface SignInView {
+  provider: string;
+  /** The provider's name, as Pi gives it. */
+  name: string;
+  method: LoginMethodType;
+  state: "running" | "done" | "failed" | "cancelled";
+  /** What the flow showed (pages to sign in on, device codes, progress), oldest first. */
+  notices: Exclude<LoginEvent, { kind: "prompt" | "prompt-closed" }>[];
+  prompt?: { id: number; detail: LoginPrompt };
+  error?: string;
+}
 
 /** This computer as a host of one server: one connector, like one `pikibun connect`. */
 export interface HostView {
@@ -67,7 +101,9 @@ export interface HostView {
    */
   running?: { server: string; unsandboxed: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string };
   /** Windows only: where this host's sessions run, WSL2 or native Windows. */
-  windows?: SandboxChoice;
+  windows?: WindowsSandboxChoice;
+  /** macOS only: whether this host's sessions run in macOS's own sandbox. Absent from apps that predate it. */
+  mac?: MacSandboxChoice;
   inspection?: HostInspection;
   inspecting: boolean;
   /** The latest failure, cleared by the next start. */
@@ -77,6 +113,12 @@ export interface HostView {
   models?: ModelChoice[];
   /** The same connection from a terminal, for reference. */
   command: string;
+  /** Pi's providers this host can sign in to, once listed. */
+  providers?: LoginProvider[];
+  /** Why they couldn't be listed (the host can't start yet, say); Refresh tries again. */
+  providersError?: string;
+  /** The latest sign-in, until another starts. */
+  signIn?: SignInView;
 }
 
 export interface HostsView {
@@ -139,9 +181,20 @@ export interface PikibunBridge {
     open(id: string): Promise<Outcome>;
     /** The models to offer, or null for Pi's own choice. */
     setModels(id: string, models: ModelChoice[] | null): Promise<Outcome>;
-    /** Windows only: where the host's sessions run, from its next start; refused while it runs. */
+    /** Windows and macOS: where the host's sessions run, from its next start; refused while it runs. */
     setSandbox(id: string, choice: SandboxChoice): Promise<Outcome>;
     setOpenAtLogin(enabled: boolean): Promise<Outcome>;
+    /** Lists Pi's providers this host can sign in to (HostView.providers). */
+    providers(id: string): Promise<Outcome>;
+    /** Signs Pi in to a provider on this host; settles once the sign-in ends (HostView.signIn shows its progress). */
+    signIn(id: string, provider: string, method: LoginMethodType): Promise<Outcome>;
+    /** Answers the sign-in's current question. */
+    answerSignIn(id: string, prompt: number, value: string): Promise<Outcome>;
+    cancelSignIn(id: string): Promise<Outcome>;
+    /** Does what a missing prerequisite's fix offers (an installer, a terminal, Settings), once the owner confirms. */
+    setup(id: string, action: SetupAction): Promise<Outcome>;
+    /** Opens a page the host offered (a fix's, or a sign-in's) in the browser. */
+    openLink(id: string, url: string): Promise<Outcome>;
     onUpdate(listener: (view: HostsView) => void): () => void;
   };
   settings: {

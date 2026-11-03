@@ -6,12 +6,14 @@ import { AdminSettings } from "./settings/AdminSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { DesktopSettings } from "./settings/DesktopSettings";
 import { HostsSettings } from "./settings/HostsSettings";
+import { NotificationSettings } from "./settings/NotificationSettings";
 import { ProfileSettings } from "./settings/ProfileSettings";
 import { WorkspacesSettings } from "./settings/WorkspacesSettings";
 import { ScreenHeader } from "./ui";
 
 const sections: { id: SettingsSection; label: string; icon: IconName; admin?: true; desktop?: true }[] = [
   { id: "profile", label: "Profile", icon: "user" },
+  { id: "notifications", label: "Notifications", icon: "bell" },
   { id: "hosts", label: "Hosts", icon: "server" },
   // Only in the Pikibun desktop app: its own settings (servers, this computer as a host, Pikibun on this computer).
   { id: "desktop", label: "This Computer", icon: "monitor", desktop: true },
@@ -41,6 +43,7 @@ export function SettingsScreen({ section, id }: { section: SettingsSection; id?:
       <ScreenHeader title={current.label} />
       <div className="content-column">
         {current.id === "profile" ? <ProfileSettings />
+          : current.id === "notifications" ? <NotificationSettings />
           : current.id === "hosts" ? <HostsSettings id={id} />
           : current.id === "desktop" ? <DesktopSettings />
           : current.id === "workspaces" ? <WorkspacesSettings id={id} />

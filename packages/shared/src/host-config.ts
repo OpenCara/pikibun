@@ -1,3 +1,5 @@
+import { extensionPackageKey, normalizeExtensionSource, parseExtensionSettings, type ExtensionSettings } from "./host-extensions.js";
+
 /**
  * How a host runs its sessions. Its owner sets this in Pikibun (Settings → Hosts → the host → Configuration), and so do
  * its admins, except for the settings that decide whose Git credentials the host uses (`ownerOnlyHostConfig`). The
@@ -12,6 +14,31 @@ export type RepositoryCacheMode = (typeof repositoryCacheModes)[number];
 /** The GPU device a host can lend its sandboxed commands: WSL's /dev/dxg, or Linux DRM render nodes. */
 export const gpuKinds = ["dxg", "render"] as const;
 export type GpuKind = (typeof gpuKinds)[number];
+
+/**
+ * Pi's built-in extensions a host's owner and admins turn on for every session on it (HostConfig.builtinExtensions), with
+ * nothing to install: they ship with Pikibun, from pi-durable (docs/design/host-extensions.md). Each runs in the
+ * connector; its tool calls are the session's own, decided as usual. Pi's other built-ins have no counterpart here:
+ * `mcp` and `llama.cpp` register MCP servers and providers, which Pikibun doesn't run, and `tool-search` finds deferred
+ * tools, which Pikibun has none of. Each is named `pi:<name>`, beside Pikibun's own built-ins, which workspaces choose as
+ * `piki:<name>` (piki-extensions.ts).
+ */
+export const builtinExtensions = Object.freeze([
+  Object.freeze({
+    name: "pi:codemode", title: "Code mode", tools: Object.freeze(["codemode"]),
+    description: "The codemode tool: the model writes JavaScript that calls the session's tools, run in a QuickJS sandbox in the connector, to batch, chain and filter calls. Each call it makes is decided like the model's own, and a script resumes where it was after a restart.",
+  }),
+] as const);
+export type BuiltinExtensionName = (typeof builtinExtensions)[number]["name"];
+export const builtinExtensionNames: readonly BuiltinExtensionName[] = Object.freeze(builtinExtensions.map(item => item.name));
+
+/**
+ * `names` with Pi's built-ins named `pi:<name>`: they were named bare (`codemode`) before, as configurations saved then
+ * and clients of then still name them.
+ */
+export function normalizeBuiltinExtensionNames(names: readonly unknown[]): unknown[] {
+  return names.map(name => typeof name === "string" && !name.includes(":") ? `pi:${name}` : name);
+}
 
 /** A model's compaction token counts, or the whole host's; each one left out keeps the host's Pi setting. */
 export interface CompactionTokens {
@@ -59,6 +86,25 @@ export interface HostConfig {
   hostSessions: boolean;
   /** Compaction token counts over the host's Pi settings; empty keeps those. Sessions pick a change up within a minute (the connector's refresh), with their next message. */
   compaction: HostCompaction;
+  /**
+   * Pi's built-in extensions every session on the host runs with (`builtinExtensions`), in that list's order. Sessions
+   * pick a change up with their next message, within a minute.
+   */
+  builtinExtensions: BuiltinExtensionName[];
+  /**
+   * Extensions every session on the host runs, whatever its workspace chose, before the workspace's own, with the
+   * settings the host's owner gave them (RequiredExtension): Pikibun's own (`piki:<name>`, such as `piki:prompt-audit`)
+   * or ones installed on the host. A session whose host lacks one, or can't load it, takes no messages until it has it.
+   * Only the host's owner changes them. Sessions pick a change up with their next message, within a minute.
+   */
+  requiredExtensions: RequiredExtension[];
+}
+
+/** An extension a host's owner requires of every session on it, and its settings (the extension's Pi flags). */
+export interface RequiredExtension {
+  /** A normalized source: `piki:<name>`, `npm:<name>@<version>` or `git:<url>@<commit>`; never a dev extension. */
+  source: string;
+  settings: ExtensionSettings;
 }
 
 export const hostConfigLimits = Object.freeze({
@@ -66,11 +112,55 @@ export const hostConfigLimits = Object.freeze({
   /** Each compaction token count, and the number of models with their own (a host offers at most 200). */
   compactionTokens: Object.freeze({ min: 0, max: 10_000_000 }),
   compactionModels: 200,
+  /** Extensions a host requires of its sessions, and their sources and settings together, as JSON. */
+  requiredExtensions: 16,
+  requiredExtensionsBytes: 32 * 1024,
 });
 
 export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
+  builtinExtensions: Object.freeze([]) as unknown as BuiltinExtensionName[],
+  requiredExtensions: Object.freeze([]) as unknown as RequiredExtension[],
 });
+
+/**
+ * The extensions a host requires: normalized sources, one version of each package, each with valid settings, in the
+ * owner's order (the order sessions run them in).
+ */
+export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
+  if (!Array.isArray(input)) throw new Error("Invalid required extensions");
+  if (input.length > hostConfigLimits.requiredExtensions) throw new Error(`A host requires at most ${hostConfigLimits.requiredExtensions} extensions`);
+  const packages = new Set<string>();
+  const parsed = input.map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => key !== "source" && key !== "settings")) {
+      throw new Error("Invalid required extension");
+    }
+    const { source, settings } = item as { source?: unknown; settings?: unknown };
+    if (typeof source !== "string") throw new Error("Invalid required extension");
+    let normalized: string;
+    try { normalized = normalizeExtensionSource(source); }
+    catch (error) { throw new Error(`Invalid required extension: ${error instanceof Error ? error.message : "its source"}`); }
+    const key = extensionPackageKey(normalized);
+    if (packages.has(key)) throw new Error(`A host requires one version of ${key}`);
+    packages.add(key);
+    return { source: normalized, settings: parseExtensionSettings(settings ?? {}) };
+  });
+  // The whole configuration reaches the connector in one answer of at most 128 KiB, beside compaction counts for every model.
+  if (new TextEncoder().encode(JSON.stringify(parsed)).length > hostConfigLimits.requiredExtensionsBytes) {
+    throw new Error(`Required extensions and their settings take at most ${hostConfigLimits.requiredExtensionsBytes / 1024} KB`);
+  }
+  return parsed;
+}
+
+/** The built-in extensions a host runs: known names, each once, in the catalog's order, so equal settings are equal JSON. */
+export function parseBuiltinExtensions(input: unknown): BuiltinExtensionName[] {
+  if (!Array.isArray(input) || input.length > builtinExtensionNames.length) throw new Error("Invalid built-in extensions");
+  const value = normalizeBuiltinExtensionNames(input);
+  if (value.some(name => !(builtinExtensionNames as readonly unknown[]).includes(name)) || new Set(value).size !== value.length) {
+    throw new Error(`Built-in extensions are ${builtinExtensionNames.join(", ")}`);
+  }
+  return builtinExtensionNames.filter(name => value.includes(name));
+}
 
 const compactionTokenKeys = ["reserveTokens", "keepRecentTokens"] as const;
 /** A model as Pi's compaction overrides name it: `provider/modelId`, as the host advertises them (80 and 200 characters at most). */
@@ -113,10 +203,10 @@ export function parseHostCompaction(value: unknown): HostCompaction {
 }
 
 /**
- * Only the host's owner changes these: they decide whose Git credentials the host uses, and whether anything runs on it
- * without the sandbox. Its admins change the rest.
+ * Only the host's owner changes these: they decide whose Git credentials the host uses, whether anything runs on it
+ * without the sandbox, and what runs as its OS user in every session on it. Its admins change the rest.
  */
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions"]);
 
 /** A whole configuration, as the control plane reports it; anything else is refused. */
 export function parseHostConfig(value: unknown): HostConfig {
@@ -136,7 +226,8 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
   return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
-    hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction) };
+    hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
+    requiredExtensions: parseRequiredExtensions(input.requiredExtensions) };
 }
 
 /**
@@ -155,12 +246,13 @@ export function parseHostConfigChange(value: unknown): Partial<HostConfig> {
 
 /**
  * A configuration as a connector reads it from the control plane: settings it doesn't know (from a newer control plane)
- * are left out, and ones the control plane doesn't send (an older one) keep their defaults. What it does read must be
- * valid, or none of it is used.
+ * are left out, and ones the control plane doesn't send (an older one) keep their defaults; so are built-in extensions
+ * it doesn't ship. What it does read must be valid, or none of it is used.
  */
 export function readHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
   const input = value as Record<string, unknown>;
   const known = Object.fromEntries(Object.keys(defaultHostConfig).filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]]));
+  if (Array.isArray(known.builtinExtensions)) known.builtinExtensions = normalizeBuiltinExtensionNames(known.builtinExtensions).filter(name => (builtinExtensionNames as readonly unknown[]).includes(name));
   return parseHostConfig({ ...defaultHostConfig, ...known });
 }

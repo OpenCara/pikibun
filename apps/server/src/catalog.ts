@@ -3,6 +3,7 @@ import { assignableWorkspaceRoles, retiredToolNames, toolNames } from '../../../
 import type { AssignableWorkspaceRole, ToolName, Workspace, WorkspaceRole } from '../../../packages/shared/src/types.js';
 import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
+import { defaultWorkspaceExtensions, extensionPackageKey } from '../../../packages/shared/src/host-extensions.js';
 import { auditAfterChange, auditStatement, modelDefinition, requireMember } from './db.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
 import type { AgentRow, Env, ModelRow, WorkerEnv } from './types.js';
@@ -236,6 +237,11 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
       c.env.DB.query<never>("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)")
         .bind(workspace.id, workspace.ownerId, createdAt),
       auditStatement(c.env, workspace.ownerId, 'workspace.create', workspace.id),
+      // Popular Pi extensions, turned off, for its owners and admins to turn on.
+      ...defaultWorkspaceExtensions.map((source, index) => c.env.DB.query<never>(`INSERT INTO workspace_extensions
+          (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
+          VALUES (?, ?, ?, ?, 0, 'approval', '{}', ?, ?)`)
+        .bind(workspace.id, extensionPackageKey(source), source, index + 1, workspace.ownerId, createdAt)),
       // The creator's hosts are theirs wherever they work: connect them here, privately.
       ...ownerHostStatements(c.env, workspace.ownerId, workspace.id),
     ]);

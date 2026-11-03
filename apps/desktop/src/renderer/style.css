@@ -82,3 +82,12 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap:
 fieldset { border: 0; margin: 0; padding: 0; }
 fieldset:disabled { opacity: .7; }
 .models li label.check { margin: 0; }
+h3 { font-size: 13px; margin: 0 0 6px; }
+.subsection { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+#sign-in-pick { margin-bottom: 8px; }
+.prerequisites .fix { flex-basis: 100%; }
+.fix { display: grid; gap: 6px; margin: 2px 0 6px 1.6em; }
+.fix .actions button { padding: 4px 10px; font-size: 13px; }
+#unsupported-fix .fix { margin-left: 0; }
+.notices li { display: grid; gap: 4px; }
+.device-code { font: 600 18px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; user-select: text; }

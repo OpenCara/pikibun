@@ -20,14 +20,16 @@ its host has.
    from its page in Pikibun, where extensions a workspace uses but the host lacks show an **Install** button, or with
    `pikibun extensions` on the machine. Every install is pinned, runs no npm scripts, and is audited.
 4. **In the connector process.** Extensions run in the connector, as the host's OS user, outside the sandbox, with its
-   files, credentials and network. A buggy one can slow or crash the connector. Isolation is later work.
+   files, credentials and network. A buggy one can slow or crash the connector. Isolation is later work. Modules are
+   found as Pi finds them: a directory a package's `pi.extensions` names loads its `index.ts`/`index.js` alone when it
+   has one, so CLIs bundled next to it (which may exit the process) never load.
 5. **Approval by default.** An extension tool call is decided like `host_bash`, by the host's owner or a member granted
    host commands. It runs without approval only where the workspace set the extension's tools to automatic **and** the
    host's owner lets workspaces do that on their host (off by default).
 6. **Dev mode.** An extension installed from a local path on the host isn't something a workspace can name: it runs only
    in the host owner's own sessions on that host, in every workspace, marked as a dev extension.
 7. **Missing means without.** A session on a host that lacks one of the workspace's enabled extensions, or has another
-   version, starts without it and says so. (A per-extension **Required** switch could block it later.)
+   version, starts without it and says so. One the host's owner requires is the exception (rule 11).
 8. **Settings per workspace.** An extension's settings are its Pi flags (`registerFlag`); the workspace sets their values.
    Secrets never go there: the extension reads them on the host (its environment, files, or Pi's `auth.json`), which the
    host's owner sets up.
@@ -36,6 +38,28 @@ its host has.
    connectors' searches are refused (410). An extension may register tools with retired names, so a Pi web search
    extension provides `web_search` as it does in Pi. Unlike `web_fetch`, an extension's requests aren't confined by the
    workspace's network access: they run in the connector, approved like host commands unless automatic.
+10. **Pi's built-ins, from the host's configuration.** Pi ships built-in extensions (pi-coding-agent's `builtInExtensions`).
+   A host's owner and admins turn them on for every session on the host, in every workspace
+   (`HostConfig.builtinExtensions`, Host → Extensions), with nothing to install. Pikibun runs pi-durable's own versions,
+   because Pi's call other tools through the coding agent's loop (`ctx.executeTool`), which Pikibun doesn't run. Today
+   that is **code mode** (`pi:codemode`, from `@earendil-works/pi-durable/codemode`). Pi's others have no counterpart:
+   `mcp` and `llama.cpp` register MCP servers and providers (ignored, see below), and `tool-search` finds deferred tools,
+   which Pikibun has none of.
+11. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
+    off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0049 (postgres/0042) added them to existing
+    workspaces after their own, except where a workspace already used the package or was at its limit.
+
+11. **The host's owner requires extensions.** A host's owner can require any extension the host has, Pikibun's own
+   (`piki:<name>`) or an installed one, of every session on it, with settings of their own
+   (`HostConfig.requiredExtensions`, owner only, Host → Extensions → **Require of every session**). Sessions run them first,
+   whatever their workspace chose and in its owner's sessions too, in place of a workspace's version of the same package;
+   their tools are approved as rule 5 says, never automatic. A session whose host can't run one (not installed at that
+   version, not built into its connector, failing to load, or with a module that does) takes no messages until it can,
+   and each message is checked again as it starts: a guard the host's owner counts on never silently drops out. The
+   connector keeps what it last heard was required through any outage of the control plane (`HostConfigSource.required`),
+   and until it has heard once, its sessions take no messages. Connectors that do this advertise `requiredExtensions`. This is how a host guards
+   itself: `piki:prompt-audit` ([Pikibun's extensions](piki-extensions.md)) on messages, a tool-call guard such as
+   `npm:cc-safety-net` on what runs.
 
 ## Compatibility
 
@@ -47,6 +71,7 @@ the session's own, then maps what it registered:
 | `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), behind the approval of rule 5. `onUpdate` is ignored. A tool named like one of Pikibun's own is ignored, unless that one is retired (`web_fetch`, `web_search`, …) |
 | `before_agent_start` | Run once per message with its prompt; a returned `systemPrompt` (appended to the empty base it gets) and `message` become a prompt section |
 | `context` | `GenerationHooks.beforeRequest` |
+| `input` | On each message or side ask once it is queued, before it starts (`Session.screen`, `SessionExtensions.input`), beside the session's work: the connector answers one request at a time, so a handler that asks a model never holds up another session's request. The message and those queued behind it wait for it. `transform` changes what runs, `handled` refuses it: it ends `refused`, shown in the transcript (`workspace.run-refused`) with the source's last `ctx.ui.notify` text. `source` is `interactive` for the host owner's own messages and `rpc` for everyone else's. A handler that throws or takes over a minute refuses the message; a restart while one runs screens the message again |
 | `tool_call` | `ToolHooks.beforeTool`: `block`/`reason`, and changes made to `event.input` |
 | `tool_result` | `ToolHooks.afterTool`: `content`, `isError`, `details` |
 | `turn_start`, `turn_end` | Before each model request, `GenerationHooks.afterTools` (results ignored) |
@@ -60,14 +85,39 @@ the session's own, then maps what it registered:
 | `exec` | Runs on the host, in the session's worktree |
 | `ctx.cwd`, `ctx.signal`, `ctx.model`, `getThinkingLevel` | The session's worktree on the host, the call's signal, and the model and reasoning level of the message running (a message may switch them) |
 | `ctx.ui.*`, `registerCommand`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage`, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
-| `registerProvider`, `registerMcpServer`, `registerVirtualModel`, `input`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
+| `registerProvider`, `registerMcpServer`, `registerVirtualModel`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 
 The host's page shows, per extension, which of its registrations work, are no-ops or are ignored, so a workspace can
 tell what it gets. `ctx.modelRegistry` is the host's Pi model registry, so an extension that uses the host's provider keys
 works.
 
 Extensions written directly against pi-durable (`defineExtension`) are libraries without a plugin contract (their own
-options and lifecycle); the useful ones (`tool-search`, `codemode`, auto-compact) get small wrappers in Pikibun later.
+options and lifecycle), so a workspace can't name one. Pikibun wraps the useful ones itself as built-ins (rule 10).
+
+## Built-in extensions
+
+- `HostConfig.builtinExtensions` lists the names the host runs (`pi:<name>`, beside Pikibun's own `piki:<name>`; reads
+  also take the bare names saved before, which migrations `0048`/`0041` rename), in the catalog's order (`builtinExtensions` in
+  `packages/shared/src/host-config.ts`); the default is none. It is saved as `connector_configs.builtin_extensions_json`
+  (sqlite `0047`, postgres `0040`) and read by the connector with the rest of the configuration, every 30 seconds. A
+  connector drops names it doesn't ship rather than the whole configuration, and so does the control plane for stored
+  names it no longer ships. Connectors that run them advertise `builtinExtensions`.
+- A session installs every built-in in its registry when it opens, so a script it resumes finds its tool. Each shared
+  message selects the ones the configuration turns on, after the workspace's extensions; one steps aside where a
+  workspace extension of that message offers a tool by its name, as Pi's built-ins do (`extensions/builtin.ts`).
+- **Code mode**: `createCodemodeExtension` with a QuickJS sandbox per session (`LimitedCodemodeSandbox`), 256 MiB per
+  script, at most 2 scripts at once per session and 8 per connector (another is refused), and `models: false`.
+  pi-codemode's `start()` sets no deadline unless the script asks for `timeout_ms`, so the sandbox stops a VM that has
+  computed for 120 seconds in all (from its start and each delivered result until `onIdle`). That ends the script as a
+  time-out, not an abort, which the tool would take for a closed sandbox. Time the script's calls take, approvals
+  included, doesn't count. Pikibun gives the harness no execution environment, so the tool gets one of its own that
+  writes only its full text output, into the worktree's `codemode-output/` as the message's sender (`writeFile`, the file
+  tools' rules), except in Read-only messages; images still reach the model but aren't saved. Scripts call the conversation's callable
+  tools as nested calls through the harness, so each one is permitted, approved (`extension.tool` cards included) and
+  refused in Read-only messages exactly as the model's own call would be. Scripts survive a restart (pi-durable's
+  journal). The script itself runs outside the OS sandbox, in a worker thread of the connector, but QuickJS gives it no
+  Node, file system, network or timers.
+- The session view lists the built-ins the next message gets (`SessionView.extensions.builtin`).
 
 ## Installing
 
@@ -100,8 +150,8 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 - **Workspace → Extensions** (owners and admins edit, members read): the workspace's extensions, each with its source,
   **Enabled**, **Tools** (approval, automatic) and settings; per host shared with the workspace, whether it has each one
   (installed, missing, other version).
-- **Host → Configuration → Extensions**: what the host has installed and what each offers or ignores; the owner's
-  **Install**, **Update**, **Remove**; **Let workspaces run extension tools without approval** (owner only). Per workspace
+- **Host → Configuration → Extensions**: Pi's built-in extensions, each with an **Every session** switch for the owner and
+  admins; what the host has installed and what each offers or ignores; the owner's **Install**, **Update**, **Remove**; **Let workspaces run extension tools without approval** (owner only). Per workspace
   the host is shared with, extensions it uses that the host lacks, with **Install** or **Update** for the owner.
 - **Session**: the extensions it runs with, dev ones marked, and the workspace's enabled ones its host lacks.
 - **Approval card** `extension.tool`: the extension, tool and exact arguments, decided like a host command.
@@ -146,10 +196,17 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 | Sessions: selection, `before_agent_start`, lifecycle events, `extension.tool` cards; connector sync and installs | Done (`session.ts`, `extensions/host.ts`, `connector.ts`) |
 | Control plane: tables, routes, owner/admin rules, connector reports, remote installs, audit | Done (`apps/server/src/extensions.ts`, migrations `0046`/`0039`) |
 | Web and mobile: workspace and host sections, install buttons, session list, approval card | Done (`WorkspaceExtensions.tsx`, `HostExtensions.tsx`, `session-panel.tsx`; mobile: the approval card) |
+| Pi's built-ins from the host's configuration: code mode | Done (`extensions/builtin.ts`, `host-config.ts`, `HostExtensions.tsx`) |
+
+## Pikibun's built-in extensions (`piki:`)
+
+The connector also carries workspace extensions of its own, `piki:gh`, `piki:glab` and `piki:azure-cli`, which every host
+has without installing them and a workspace gets with its first repository on that forge: see
+[Pikibun's built-in extensions](piki-extensions.md). Unlike Pi's built-ins above, the workspace chooses them, like any extension.
 
 ## Later
 
 - Isolation in a worker or child process.
 - `registerMcpServer` as tools, `registerProvider` feeding the host's models.
 - `ctx.ui.confirm`/`select` as cards; asking the session owner instead of refusing tools in Read-only messages.
-- Wrappers for pi-durable's `tool-search` and `codemode`.
+- `tool-search` as a built-in, once Pikibun defers tools (MCP servers' tools, say).

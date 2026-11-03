@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react";
 import type { Workspace } from "../../../../packages/shared/src/types";
-import { extensionLimits, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
+import { pikiCommandExtensions, pikiExtension } from "../../../../packages/shared/src/piki-extensions";
+import { ExtensionSettingsFields } from "./ExtensionSettingsFields";
+import { extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
   type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension } from "../../../../packages/shared/src/host-extensions";
 import { api, segment } from "../api";
 import { Icon } from "../icons";
@@ -23,6 +25,7 @@ const toolsLabel: Record<ExtensionToolMode, string> = { approval: "Approval", au
 
 const info = <div className="stack">
   <p>Pi extensions add tools, prompt text and hooks to this workspace's sessions. A session runs those enabled here that its host has installed at the same version: its host's owner installs them there, from the host's page or with <code>pikibun extensions</code>.</p>
+  <p>Pikibun's built-in extensions come with every host's connector: <code>piki:gh</code>, <code>piki:glab</code> and <code>piki:azure-cli</code> run the GitHub, GitLab or Azure CLI the host has installed and signed in. The workspace gets the one for a forge when it binds its first repository there.</p>
   <p>Extensions run on the host, as its owner's OS user, outside the sandbox and the network access above. Their tool calls are approved like host commands, by the host's owner or a member granted host commands, unless you set their tools to run automatically and the host's owner allows that on their host.</p>
   <p>Settings are the extension's own options. Never put secrets in them: an extension reads keys on its host, which its owner sets up.</p>
 </div>;
@@ -50,9 +53,10 @@ function clashes(extensions: readonly WorkspaceExtension[], hosts: readonly Exte
   return [...owners].filter(([, sources]) => sources.length > 1).map(([tool, sources]) => ({ tool, sources }));
 }
 
-function availabilityBadge(availability: ExtensionAvailability | undefined) {
+function availabilityBadge(availability: ExtensionAvailability | undefined, source: string) {
   if (!availability) return <StatusBadge tone="neutral">Not reported</StatusBadge>;
-  if (availability.status === "installed") return <StatusBadge tone="success">Installed</StatusBadge>;
+  if (availability.status === "installed") return <StatusBadge tone="success">{isPikiExtensionSource(source) ? "Available" : "Installed"}</StatusBadge>;
+  if (isPikiExtensionSource(source)) return <StatusBadge tone="warning">Update its connector</StatusBadge>;
   if (availability.status === "other-version") return <StatusBadge tone="warning">{availability.installed.slice(availability.installed.lastIndexOf("@") + 1)} installed</StatusBadge>;
   return <StatusBadge tone="neutral">Missing</StatusBadge>;
 }
@@ -96,20 +100,22 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
     ? <Button variant="outline" size="sm" icon="plus" onClick={() => setEditing("new")}>Add extension</Button> : undefined}>
     <ResourceState loading={resource.loading && !data} error={resource.error} retry={resource.refresh}>
       {data && <div className="card">
-        {!data.extensions.length && <EmptyState title="No extensions">{admin ? "Add a Pi extension, such as npm:cc-safety-net@2.7.2, to run it in this workspace's sessions." : "Owners and admins add the Pi extensions this workspace's sessions run."}</EmptyState>}
+        {!data.extensions.length && <EmptyState title="No extensions">{admin ? "Add a Pi extension, such as npm:cc-safety-net@2.7.2 or piki:gh (the GitHub CLI), to run it in this workspace's sessions." : "Owners and admins add the Pi extensions this workspace's sessions run."}</EmptyState>}
         {data.extensions.map(extension => {
           const installedOn = data.hosts.filter(host => host.availability?.[extension.source]?.status === "installed").length;
-          return <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={<code>{extension.source}</code>}
-            hint={`Tools: ${toolsLabel[extension.tools].toLowerCase()} · installed on ${installedOn} of ${data.hosts.length} ${data.hosts.length === 1 ? "host" : "hosts"}`}
+          const cli = pikiExtension(extension.source);
+          return <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={cli ? <>{cli.title} <code>{extension.source}</code></> : <code>{extension.source}</code>}
+            hint={`Tools: ${toolsLabel[extension.tools].toLowerCase()} · ${cli ? "on" : "installed on"} ${installedOn} of ${data.hosts.length} ${data.hosts.length === 1 ? "host" : "hosts"}`}
             trailing={extension.enabled ? <StatusBadge tone="success">On</StatusBadge> : <StatusBadge tone="neutral">Off</StatusBadge>}>
             {data.hosts.map(host => {
               const availability = host.availability?.[extension.source];
-              const installable = host.ownerId === userId && host.report?.remoteInstalls === true && availability && availability.status !== "installed";
+              const installable = !cli && host.ownerId === userId && host.report?.remoteInstalls === true && availability && availability.status !== "installed";
               return <Row key={host.id} leading={<Icon name="server" size={16} />} title={host.name} hint={`Hosted by ${host.ownerId === userId ? "you" : host.ownerName}`}
-                trailing={<span className="inline">{availabilityBadge(availability)}{installable && <Button variant="outline" size="sm" disabled={action.busy}
+                trailing={<span className="inline">{availabilityBadge(availability, extension.source)}{installable && <Button variant="outline" size="sm" disabled={action.busy}
                   onClick={() => install(host, extension.source)}>{availability.status === "other-version" ? "Update" : "Install"}</Button>}</span>} />;
             })}
             {!data.hosts.length && <Row title="No hosts" hint="No host is connected to this workspace yet" />}
+            {cli && <CardBody><p className="muted small">{cli.description}{cli.tool && cli.install && cli.account && <> Each host needs <code>{cli.tool}</code> installed (<a href={cli.install} target="_blank" rel="noreferrer">{cli.install}</a>) where its sandbox finds it. It acts as the session's owner, with {cli.account} in Pikibun: it reads the workspace's repositories, and writes only in a call a person approved, on the session owner's own host. Turn on <strong>read-only</strong> under Edit before running its tools automatically.</>}</p></CardBody>}
             {admin && <CardBody><div className="inline">
               <label className="check-row small"><input type="checkbox" className="checkbox" checked={extension.enabled} disabled={action.busy}
                 onChange={event => void save({ ...extension, enabled: event.target.checked }, event.target.checked ? "Extension on." : "Extension off.")} /><span>Enabled</span></label>
@@ -139,10 +145,11 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
   let invalid = "";
   try { normalized = source.trim() ? normalizeExtensionSource(source.trim()) : undefined; }
   catch (reason) { invalid = reason instanceof Error ? reason.message : "Invalid source"; }
-  const replacing = !extension && normalized ? taken.find(item => item.source.slice(0, item.source.lastIndexOf("@")) === normalized!.slice(0, normalized!.lastIndexOf("@"))) : undefined;
-  // Settings the extension no longer declares are kept, shown as they are.
-  const known = new Set(flags?.map(flag => flag.name));
-  const extra = Object.keys(settings).filter(name => !known.has(name));
+  const replacing = !extension && normalized ? taken.find(item => extensionPackageKey(item.source) === extensionPackageKey(normalized!)) : undefined;
+  const cli = normalized ? pikiExtension(normalized) : undefined;
+  const offered = pikiCommandExtensions().filter(item => !taken.some(used => used.source === item.source));
+  const editingCli = !!extension && isPikiExtensionSource(extension.source);
+  const extra = Object.keys(settings).filter(name => !flags?.some(flag => flag.name === name));
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!normalized) return;
@@ -153,11 +160,18 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
     <Button variant="default" type="submit" form="extension-form" disabled={busy || !normalized}>{busy ? "Saving..." : "Save"}</Button>
   </>}>
     <form id="extension-form" className="stack" onSubmit={submit}>
-      <Field label="Source" hint={extension ? "Change the version to move every host to it: until a host's owner installs it there, sessions on that host run without it"
-        : "npm:<package>@<exact version>, or git:<https URL>@<full commit>. A Pi extension package, pinned"} error={invalid}>
-        <input className="input mono" value={source} onChange={event => setSource(event.target.value)} disabled={busy} autoComplete="off" spellCheck={false}
+      {!extension && !!offered.length && <div className="field"><span className="field-label">Command-line tools</span>
+        <div className="inline">{offered.map(item => <Button key={item.source} variant={normalized === item.source ? "default" : "outline"} size="sm" disabled={busy}
+          onClick={() => setSource(item.source)}>{item.title}</Button>)}</div>
+        <span className="field-hint">These come with every host's connector: each host needs only the command itself, signed in by its owner.</span>
+      </div>}
+      <Field label="Source" hint={editingCli ? "Built into the connector: its version is each host's connector's"
+        : extension ? "Change the version to move every host to it: until a host's owner installs it there, sessions on that host run without it"
+        : "npm:<package>@<exact version>, git:<https URL>@<full commit>, or piki:<name>. A Pi extension package, pinned"} error={invalid}>
+        <input className="input mono" value={source} onChange={event => setSource(event.target.value)} disabled={busy || editingCli} autoComplete="off" spellCheck={false}
           maxLength={512} placeholder="npm:cc-safety-net@2.7.2" autoFocus={!extension} />
       </Field>
+      {cli && <p className="muted small">{cli.description}{cli.tool && <> It runs <code>{cli.tool}</code> as the host's owner is signed in to it.</>}</p>}
       {replacing && <p className="muted small">The workspace uses {replacing.source}: this replaces it, in its place.</p>}
       <div className="field"><span className="field-label">Tools</span>
         <SegmentedControl label="Tools" value={tools} onChange={setTools} options={(["approval", "automatic"] as const).map(value => ({ value, label: toolsLabel[value] }))} />
@@ -168,20 +182,7 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
         ? <p className="muted small">Its settings show here once a host that has it installed reports them.</p>
         : !flags.length && !extra.length ? <p className="muted small">This extension has no settings.</p>
         : <div className="stack">
-          {flags.map(flag => <Field key={flag.name} label={flag.name} hint={flag.description ?? (flag.default !== undefined ? `Default: ${String(flag.default)}` : undefined)}>
-            {flag.type === "boolean"
-              ? <label className="check-row small"><input type="checkbox" className="checkbox" disabled={busy}
-                checked={(settings[flag.name] ?? flag.default) === true} onChange={event => setSettings(value => ({ ...value, [flag.name]: event.target.checked }))} /><span>On</span></label>
-              : <input className="input" disabled={busy} autoComplete="off" spellCheck={false} maxLength={4096} placeholder={typeof flag.default === "string" ? flag.default : ""}
-                value={typeof settings[flag.name] === "string" ? settings[flag.name] as string : ""}
-                onChange={event => setSettings(value => {
-                  const next = { ...value };
-                  if (event.target.value) next[flag.name] = event.target.value; else delete next[flag.name];
-                  return next;
-                })} />}
-          </Field>)}
-          {extra.map(name => <Row key={name} title={name} hint={`Kept: ${String(settings[name])}. The installed version doesn't declare it`}
-            trailing={<Button variant="ghost" size="sm" disabled={busy} onClick={() => setSettings(value => { const next = { ...value }; delete next[name]; return next; })}>Clear</Button>} />)}
+          <ExtensionSettingsFields flags={flags} settings={settings} onChange={setSettings} busy={busy} />
           <p className="muted small">Never put secrets here: every member of the workspace can read these, and they are in its audit log.</p>
         </div>)}
       <Feedback error={error} />
