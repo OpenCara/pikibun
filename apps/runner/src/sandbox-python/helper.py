@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 
 # Where the host's repository mirrors are mounted: sandbox.ts MIRROR_ROOT (tests/sandbox-python.test.ts checks it).
 MIRROR_ROOT = '/repository-mirrors'
@@ -960,6 +961,149 @@ def clone_restore(request):
         os.close(work)
 
 
+# The search tool (search.ts): mirrors SEARCH_CORE there, line for line, so every backend answers the same; change both
+# together. Mirrors searchLimits.
+SEARCH_FILE_BYTES = 1024 * 1024
+SEARCH_FILES = 20000
+SEARCH_BYTES = 64 * 1024 * 1024
+SEARCH_LINE_TEXT = 300
+SEARCH_SECONDS = 10
+
+
+def glob_expression(glob):
+    source, index = '', 0
+    while index < len(glob):
+        char = glob[index]
+        if char == '*' and glob[index + 1:index + 2] == '*':
+            index += 1
+            if glob[index + 1:index + 2] == '/':
+                index += 1
+                source += '(?:.*/)?'
+            else:
+                source += '.*'
+        elif char == '*':
+            source += '[^/]*'
+        elif char == '?':
+            source += '[^/]'
+        else:
+            source += re.escape(char)
+        index += 1
+    return re.compile('^' + source + '$')
+
+
+def search(root, request):
+    pattern, glob = request['pattern'], request.get('glob')
+    literal, ignore_case, show_all = request['literal'], request['ignoreCase'], request['all']
+    context, max_results = request['context'], request['maxResults']
+    if not isinstance(pattern, str) or not pattern or len(pattern) > 1000 or (glob is not None and (not isinstance(glob, str) or len(glob) > 200)) \
+            or not all(isinstance(value, bool) for value in (literal, ignore_case, show_all)) \
+            or type(context) is not int or not 0 <= context <= 5 or type(max_results) is not int or not 1 <= max_results <= 500:
+        raise ValueError('invalid search request')
+    try:
+        expression = re.compile(re.escape(pattern) if literal else pattern, re.IGNORECASE if ignore_case else 0)
+    except re.error:
+        raise ValueError('invalid regular expression') from None
+    glob_match = None if glob is None else glob_expression(glob)
+    glob_path = glob is not None and '/' in glob
+    deadline = time.monotonic() + SEARCH_SECONDS
+    matches, state = [], {'files': 0, 'bytes': 0, 'truncated': False}
+
+    def shown(line):
+        return line[:SEARCH_LINE_TEXT] + '\u2026' if len(line) > SEARCH_LINE_TEXT else line
+
+    def done():
+        return state['truncated'] or len(matches) >= max_results
+
+    def search_file(parent, name, relative, size):
+        if size > SEARCH_FILE_BYTES:
+            return
+        if state['files'] >= SEARCH_FILES or state['bytes'] + size > SEARCH_BYTES or time.monotonic() > deadline:
+            state['truncated'] = True
+            return
+        try:
+            data = read_at(parent, name, SEARCH_FILE_BYTES)[0]
+        except (OSError, ValueError):
+            return
+        if b'\0' in data:
+            return
+        try:
+            text = data.decode('utf-8')
+        except UnicodeDecodeError:
+            return
+        state['files'] += 1
+        state['bytes'] += len(data)
+        lines = [line[:-1] if line.endswith('\r') else line for line in text.split('\n')]
+        if len(lines) > 1 and lines[-1] == '':
+            lines.pop()
+        for index, line in enumerate(lines):
+            if not expression.search(line):
+                continue
+            if len(matches) >= max_results:
+                state['truncated'] = True
+                return
+            match = {'path': relative, 'line': index + 1, 'text': shown(line)}
+            if context > 0:
+                match['before'] = [shown(item) for item in lines[max(0, index - context):index]]
+                match['after'] = [shown(item) for item in lines[index + 1:index + 1 + context]]
+            matches.append(match)
+
+    def visit(directory, prefix):
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            return
+        for name in names:
+            if done():
+                return
+            if time.monotonic() > deadline:
+                state['truncated'] = True
+                return
+            relative = name if prefix == '.' else prefix + '/' + name
+            try:
+                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except OSError:
+                continue
+            if stat.S_ISLNK(info.st_mode):
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                if name == '.git' or (not show_all and name == 'node_modules'):
+                    continue
+                try:
+                    child = os.open(name, DIR_FLAGS, dir_fd=directory)
+                except OSError:
+                    continue
+                try:
+                    visit(child, relative)
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(info.st_mode) and (glob_match is None or glob_match.match(relative if glob_path else name)):
+                search_file(directory, name, relative, info.st_size)
+
+    path = request['path']
+    parts = parts_for(path)
+    if not parts:
+        visit(root, '.')
+    else:
+        parent = walk(root, parts[:-1])
+        try:
+            info = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                raise ValueError('the path is a link')
+            if stat.S_ISDIR(info.st_mode):
+                directory = os.open(parts[-1], DIR_FLAGS, dir_fd=parent)
+                try:
+                    visit(directory, '/'.join(parts))
+                finally:
+                    os.close(directory)
+            elif stat.S_ISREG(info.st_mode):
+                search_file(parent, parts[-1], '/'.join(parts), info.st_size)
+            else:
+                raise ValueError('the path is not a file or directory')
+        finally:
+            os.close(parent)
+    return {'matches': matches, 'files': state['files'], 'truncated': state['truncated']}
+
+
 def main():
     # One JSON line.
     request = json.loads(sys.stdin.buffer.readline())
@@ -1015,6 +1159,9 @@ def main():
     try:
         if kind == 'import':
             print(json.dumps({'path': import_at(root, request)}, ensure_ascii=True))
+            return
+        if kind == 'search':
+            print(json.dumps(search(root, request), ensure_ascii=True))
             return
         parts = parts_for(request['path'], kind == 'write')
         if kind == 'write':

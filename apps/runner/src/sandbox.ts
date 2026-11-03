@@ -15,6 +15,7 @@ import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
 import { CA_BUNDLE, sandboxCertificates } from "./trust-store.js";
 import { runHostShell } from "./host-shell.js";
 import { checkedBrowse, type BrowseResult } from "./file-browser.js";
+import { checkedSearch, type SearchRequest, type SearchResult } from "./search.js";
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
 import type { IsolatedWorkspace } from "./workspace.js";
@@ -173,6 +174,7 @@ export type SandboxRequest = Request;
 type Request =
   | { kind: "initialize" }
   | { kind: "read" | "read-content" | "list" | "browse"; path: string }
+  | SearchRequest
   | { kind: "write"; path: string; content: string }
   | { kind: "import"; directory: string; name: string; data: string }
   | { kind: "snapshot"; clones?: string[]; skipCaches?: true }
@@ -549,6 +551,11 @@ export class Sandbox implements IsolatedWorkspace {
   /** The file browser's read-only look at one worktree path: a directory's entries or a file's preview. */
   async browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult> {
     return checkedBrowse(JSON.parse(await this.#operation({ kind: "browse", path: text(path, "path", 1024) }, true, authorize)));
+  }
+
+  /** The search tool's search, in the helper: read-only, like reading a file. */
+  async search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult> {
+    return checkedSearch(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, true, authorize)));
   }
 
   async execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options: SandboxExecutionOptions = {}): Promise<string> {

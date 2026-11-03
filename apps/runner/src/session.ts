@@ -25,6 +25,8 @@ import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
+import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
+import { lineRange } from "./edits.js";
 import { pikiSessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
@@ -148,7 +150,7 @@ const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", vers
 /** Prepared images of queued messages that a session holds on disk at once, until their messages reach Pi. */
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
 /** Tools that never change files or run commands: the whole toolset of side asks. */
-const readOnlyTools = ["identity", "read_file", "list_files"];
+const readOnlyTools = ["identity", "read_file", "list_files", "search"];
 /** How often a sessions tool wait reads its message's outcome. */
 const WAIT_POLL_MS = 3000;
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
@@ -808,6 +810,10 @@ export class RunnerSession {
     if (this.#conversationOnlyRestore) instructions += "\n\nThis session was restored from a backup that kept only its conversation: "
       + "the files, clones and uncommitted work its messages from before that restore mention were not restored with it, so they may be "
       + "missing unless they were made again since. Clone the repositories you need again, and check that a file exists before relying on it.";
+    // Sessions read and searched code with grep, sed -n and head in a third of their shell commands (#163), each one approved.
+    if (this.tools.some(tool => tool.name === "search")) instructions += "\n\nTo find and read code, use search (a regular expression or text across the worktree's files, "
+      + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than grep, find, sed, cat or head in bash: "
+      + "they need no approval and their output is already bounded.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -2086,10 +2092,12 @@ export class RunnerSession {
           ...(this.#onHost ? { onHost: true } : {}) };
         return text({ ...await this.sandbox.identity(() => this.recheckTool(attribution)), commands, ...attribution });
       } }),
-      defineTool({ name: "read_file", description: "Read a confined worktree file. PNG, JPEG, GIF and WebP images are returned as images, scaled to fit.", parameters: Type.Object({ path: Type.String() }), execute: async (args, api, call) => {
+      defineTool({ name: "read_file", description: "Read a confined worktree file. PNG, JPEG, GIF and WebP images are returned as images, scaled to fit. For a text file, offset (the first line, from 1) and limit (how many lines) read only part of it, and the result says which lines of how many it holds: use search to find where to look, then read around it.",
+        parameters: Type.Object({ path: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1 })) }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
         await this.permit(api, call, "read_file", args.path);
         const file = await this.sandbox.readContent(args.path, () => this.recheckTool(attribution));
+        if ("text" in file && (args.offset !== undefined || args.limit !== undefined)) return text({ ...attribution, ...lineRange(file.text, args.offset, args.limit) });
         if ("text" in file) return text({ ...attribution, content: file.text });
         const prepared = await prepareImage(file.image, file.mimeType);
         if ("error" in prepared) return { output: [], isError: true, diagnostics: [{ severity: "error" as const, code: "image", message: prepared.error }] };
@@ -2104,6 +2112,17 @@ export class RunnerSession {
         await this.permit(api, call, "list_files", args.path ?? "");
         return text({ ...attribution, files: await this.sandbox.listFiles(args.path, () => this.recheckTool(attribution)) });
       } }),
+      defineTool({ name: "search", description: "Search the worktree's text files for a regular expression (or, with literal, exact text), line by line, as grep -rn does, without a shell or approval. path narrows it to a directory or one file; glob to file names (*.ts) or paths (apps/**/*.ts); context adds up to 5 lines around each match; ignore_case; max_results (100 by default, at most 500). .git is never searched, nor node_modules unless all is true; links, binary and non-UTF-8 files and files over 1 MB are skipped. Results give each match's path, line number and text; truncated says it stopped early. Then read_file with offset and limit reads around a match.",
+        parameters: Type.Object({ pattern: Type.String(), path: Type.Optional(Type.String()), glob: Type.Optional(Type.String()), literal: Type.Optional(Type.Boolean()),
+          ignore_case: Type.Optional(Type.Boolean()), context: Type.Optional(Type.Integer({ minimum: 0, maximum: searchLimits.context })),
+          max_results: Type.Optional(Type.Integer({ minimum: 1, maximum: searchLimits.maxResults })), all: Type.Optional(Type.Boolean()) }),
+        execute: async (args, api, call) => {
+          let request: SearchRequest;
+          try { request = searchRequest(args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid search"); }
+          const attribution = await this.toolActor(api, false);
+          await this.permit(api, call, "search", `${request.path}: ${request.pattern}`.slice(0, 1200));
+          return text({ ...attribution, ...await this.sandbox.search(request, () => this.recheckTool(attribution)) });
+        } }),
       // Writes run one at a time: a round with a write is sequential, so an edit never reads a file another call changes.
       defineTool({ name: "write_file", description: "Write a confined worktree file. In a read-only request it waits for the session owner to allow it.", executionMode: "sequential", parameters: Type.Object({ path: Type.String(), content: Type.String() }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
