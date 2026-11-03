@@ -1,7 +1,7 @@
 import type { ExtensionToolOperation, HostCommandOperation } from "../../../packages/shared/src/types.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
+import { lstat, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { awaitWithContext, BACKGROUND_CONTEXT as context, type Context } from "@earendil-works/chord/context";
@@ -23,7 +23,7 @@ import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession
 import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
-import { ATTACHMENTS_DIRECTORY, fileUploadLimits, parseUploadChunk, type UploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
+import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
@@ -33,14 +33,19 @@ import { HelperWorkspace } from "./helper-workspace.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { reportedBranches } from "./clone-branches.js";
+import { answered, ApprovalWaits } from "./session/approval-waits.js";
+import { endView, entryView, refusedView } from "./session/entries.js";
+import { MessageInputs, prepareMessageImages, type InputImage } from "./session/inputs.js";
+import { refused, SessionMirrors } from "./session/mirrors.js";
+import { SessionUploads } from "./session/uploads.js";
 import {
-  hostGitLfs, MIRROR_ROOT, Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
+  hostGitLfs, Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
 } from "./sandbox.js";
-import { IMAGE_BUSY, IMAGE_ERROR, imageType, prepareImage } from "./images.js";
+import { prepareImage } from "./images.js";
 import { performClonePush, PushError, pushSummary, type PushResult } from "./push.js";
-import { HostCredentialError, hostGitAuthorization } from "./git-credentials.js";
-import { GitRemote, GitRemoteError } from "./git-remote.js";
-import { mirrorPath, type MirrorRepository, type RepositoryCache } from "./repo-cache.js";
+import { HostCredentialError } from "./git-credentials.js";
+import type { GitRemote } from "./git-remote.js";
+import type { RepositoryCache } from "./repo-cache.js";
 import type { RepositoryPreparationItem, RepositoryPreparationView } from "../../../packages/shared/src/types.js";
 import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
@@ -48,8 +53,8 @@ import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { applyEdits } from "./edits.js";
 import { compactionFailure, configuredCompaction, hostCompaction } from "./compaction.js";
 import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
-import { autoApprovedCalls, settled, viewApprovals, type StoredApproval } from "./approval-view.js";
-import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayFetch, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
+import { autoApprovedCalls, viewApprovals, type StoredApproval } from "./approval-view.js";
+import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
 import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
@@ -58,7 +63,7 @@ import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredE
 import { commandLimits, type CommandLimits } from "./host-config.js";
 import { requesterAutoApproves, decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
 
-type Run = {
+export type Run = {
   key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
   conversationId: number; content: string; contentHash: string; submissionId?: number;
   status: "queued" | "admitting" | "running" | "settled" | "interrupted"; startEntry: number;
@@ -139,16 +144,8 @@ type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Record<strin
   forkedFrom?: { sessionId: string; entryId: string } };
 /** One JSON string that every change replaces, so each change is stored whole: a delta would be as large and only lengthen replay. */
 const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", version: 1, scope: "session", initial: () => ({ json: "" }), checkpointWhen: () => true });
-/** A message's image as the model gets it: prepared by `prepareImage`, base64. */
-type InputImage = { mimeType: string; data: string };
 /** Prepared images of queued messages that a session holds on disk at once, until their messages reach Pi. */
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
-/** Bytes of a session's uploads (file-uploads.ts) its host holds at once, until each is complete and in the worktree. */
-const MAX_STAGED_UPLOAD_BYTES = 4 * fileUploadLimits.maxBytes;
-/** Unfinished uploads a session's host holds at once: a message's files, and some to spare. */
-const MAX_STAGED_UPLOADS = 2 * fileUploadLimits.count;
-/** An upload no chunk has reached for this long is abandoned, and the next one to start removes it. */
-const STALE_UPLOAD_MS = 60 * 60 * 1000;
 /** Tools that never change files or run commands: the whole toolset of side asks. */
 const readOnlyTools = ["identity", "read_file", "list_files"];
 /** How often a sessions tool wait reads its message's outcome. */
@@ -182,24 +179,8 @@ function tellsActivity(run: Run): boolean {
 }
 
 /** Whether `run` keeps the session busy: it is queued or at work, or a stop of it is still ending its work. */
-/**
- * Whether the tool call waiting on `approval` goes on: once it settled, or, for an extension's tool call, which runs it
- * itself, once it is approved.
- */
-function answered(approval: ApprovalRecord): boolean {
-  return settled(approval) || (approval.operation.kind === "extension.tool" && approval.status === "approved");
-}
 function holdsQueue(run: Run): boolean {
   return ["queued", "running", "admitting"].includes(run.status) || run.stopped?.pending === true;
-}
-/**
- * The control plane rejects approval results above 8192 characters, so the approval record keeps the start and the
- * (usually decisive) end of a longer one. The tool call waiting on it still returns the whole output to the agent
- * (see `RunnerSession.#wholeResults`).
- */
-function boundedResult(value: string): string {
-  if (value.length <= 8000) return value;
-  return `${value.slice(0, 2000)}\n… ${value.length - 7500} characters omitted …\n${value.slice(-5500)}`;
 }
 export type RunnerConfig = {
   dataDir: string; controlPlaneUrl: string; sharedSecret: string; allowFaux: boolean; allowTestShell?: boolean; fetch?: typeof fetch;
@@ -301,44 +282,6 @@ export type RunnerConfig = {
   };
 };
 
-/** How long the relay's word that a session's owner may read a repository lets the session borrow from its mirror. */
-const MIRROR_CONFIRM_MS = 10 * 60 * 1000;
-/** How long a clone waits for the refresh of a mirror filled before; then it borrows the mirror as it is (see mirror). */
-const MIRROR_REFRESH_WAIT_MS = 10_000;
-/** Pauses before the relay is asked again for a repository's refs, after a quick failure another attempt may get past. */
-const OWNER_REFS_RETRY_MS = [500, 2_000];
-/** How long one listing of a repository's refs through the relay may take. */
-const OWNER_REFS_TIMEOUT_MS = 30_000;
-
-/**
- * A definite refusal from the control plane or the provider: a 4xx other than a timeout or rate limit, as a RunnerError
- * from the relay or a GitRemoteError status (relayFetch turns the relay's refusals into HTTP statuses).
- */
-function refused(error: unknown): boolean {
-  const status = error instanceof RunnerError ? error.status : error instanceof GitRemoteError ? error.status : undefined;
-  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
-}
-
-/** A grant's repository as the cache keys it; an older control plane that names no provider id offers no mirror. */
-function mirrorRepository(repository: EgressRepository): MirrorRepository & { bindingId: string } {
-  if (repository.repositoryId === undefined) throw new RunnerError(409, "Update the Pikibun server to cache this repository on the host");
-  return { bindingId: repository.bindingId, provider: repository.provider, host: repository.host, repositoryId: repository.repositoryId, fullName: repository.fullName };
-}
-
-/**
- * Why the host couldn't fill its mirror of `repository`, as the clone waiting for it is told (see GIT_SHIM): 503 for a
- * failure another attempt may get past, after the cache's own attempts, so the clone asks again or stops to be run again
- * rather than downloading the repository without the cache; any other status lets it go ahead without the cache.
- */
-function cacheFailure(error: unknown, repository: EgressRepository): RunnerError {
-  if (error instanceof RunnerError) return error;
-  if (error instanceof GitRemoteError && error.status !== undefined && [401, 403, 404].includes(error.status)) {
-    return new RunnerError(502, `This host's Git credentials can't read ${repository.fullName}; its owner can set one up for ${repository.host} on it, for example with gh auth setup-git`);
-  }
-  const reason = error instanceof Error && /^[\x20-\x7e]{1,300}$/.test(error.message) ? error.message : "The repository could not be cached";
-  return new RunnerError(error instanceof GitRemoteError && error.retryable ? 503 : 502, reason);
-}
-
 function preparationFailure(reason: string): string {
   return `${reason.replace(/\.$/, "")}. Restart the session to try again.`;
 }
@@ -348,8 +291,6 @@ type RepositoryPreparation = { status: "ready" }
   | { status: "failed"; reason: string; items: RepositoryPreparationItem[] };
 type ProgressUpdate = (path: string, change: Partial<Omit<RepositoryPreparationItem, "path">>) => void;
 
-/** What the transcript says after a run that the host's crashes ended (see endParkedRuns). */
-const CRASHED_TEXT = "Stopped: the host crashed repeatedly while working on this message. Send it again to retry.";
 /** Why a message isn't run while what the host's owner requires can't be: plain text the control plane passes on (422). */
 const REQUIRED_UNKNOWN = "This host can't learn from Pikibun which extensions its owner requires right now, so no message is sent. Try again shortly";
 const REQUIRED_MISSING = "This host's owner requires an extension its connector can't run now, so no message is sent. Ask them to look at the host's extensions";
@@ -375,6 +316,16 @@ function activityEntry(entry: EntryRecord | undefined): ActivityEntry | undefine
   return entry && { id: Number(entry.id), failed: modelFailed(entry) };
 }
 
+/**
+ * One session on this host: its Pi harness and ledger, its runs and their queue, its tools and their approvals. Parts
+ * with state of their own live in apps/runner/src/session/, each with its own tests (tests/runner-session-parts.test.ts),
+ * and the session coordinates them:
+ * - SessionUploads: files attached to messages, chunk by chunk, until each is whole in the worktree;
+ * - MessageInputs: queued messages' prepared images, until their messages reach Pi;
+ * - SessionMirrors: the host repository cache's mirrors a clone session borrows from;
+ * - ApprovalWaits: tool calls waiting on their cards, and operations' whole results;
+ * - entries.ts: how the transcript shows entries and runs' ends.
+ */
 export class RunnerSession {
   readonly sandbox: SessionWorkspace;
   readonly sqlitePath: string;
@@ -389,6 +340,12 @@ export class RunnerSession {
   #extension!: Extension;
   /** The harness's registry, where the session's extensions are installed as it first runs with each. */
   #registry?: Registry;
+  /** Queued messages' prepared images, outside the sandbox and the backups, until their messages reach Pi. */
+  readonly #inputs: MessageInputs;
+  /** Files attached to messages, chunk by chunk, until each is whole and in the worktree. */
+  readonly #uploads: SessionUploads;
+  /** The host cache's mirrors this clone session borrows from, on a host with a repository cache. */
+  readonly #mirrors: SessionMirrors | undefined;
   /**
    * The extension tool calls running now (runExtensionTool), by call id: only these run a Pikibun extension's command in
    * the sandbox, and `write` says whether a person (or the owner's Auto-approve) approved the call, which lets it write
@@ -419,14 +376,8 @@ export class RunnerSession {
   #failed = false;
   /** The reopen in progress, which every request waits for instead of reaching a half-open session. */
   #recovery: Promise<void> | undefined;
-  /** Tool calls waiting on a card, by approval id, until it settles (see `settled`); `mutate` hands them the card. */
-  #approvalWaiters = new Map<string, PromiseWithResolvers<ApprovalRecord>>();
-  /**
-   * The whole result of an operation whose record keeps only an excerpt, by approval id, until the tool call waiting
-   * on it returns it to the agent. Held in memory only: backups, views and the control plane get the bounded record,
-   * and a call that outlives its runner process is interrupted anyway.
-   */
-  #wholeResults = new Map<string, string>();
+  /** Tool calls waiting on their cards, and the whole results of operations their records keep an excerpt of. */
+  readonly #waits = new ApprovalWaits();
   /**
    * Cloning a restored session's clones again can take minutes, far longer than the control plane waits for `create`.
    * It runs in the background; runs are held until it is done (see drainQueue).
@@ -489,20 +440,20 @@ export class RunnerSession {
    * configuration refresh (HostConfigSource, 30 seconds).
    */
   #configuredCompaction: HostCompaction | undefined;
-  /**
-   * The host cache's mirrors this clone session may borrow from, by sandbox path, and when the relay last let its owner
-   * read each (0: not yet in this open). Mounted only while confirmed in the last MIRROR_CONFIRM_MS (see mirrorMounts).
-   */
-  private readonly mirrors = new Map<string, { mount: MirrorMount; repository: MirrorRepository & { bindingId: string }; confirmedAt: number }>();
 
   constructor(readonly binding: RunnerBinding, readonly directory: string, readonly config: RunnerConfig) {
     if (binding.session.connectorId !== config.connectorId || binding.model.connectorId !== config.connectorId)
       throw new RunnerError(403, "Session connector mismatch");
     this.sqlitePath = join(directory, "session.sqlite");
-    const cache = config.repositoryCache;
     this.#clone = binding.session.repositoryMode === "clone";
     this.#frozen = !this.#clone && (binding.session.repositories ?? []).length > 0;
     this.#hostSession = binding.session.hostEnvironment === true && config.unsandboxed !== true;
+    this.#inputs = new MessageInputs(join(directory, "inputs"));
+    // Its grant is the egress proxy's, made below: asked for only once a step runs.
+    this.#mirrors = this.#clone && config.repositoryCache ? new SessionMirrors({
+      cache: config.repositoryCache, ownerId: binding.owner.id, sessionId: binding.session.id, relay: request => this.relay(request),
+      grant: () => this.#egress!.grant(), ...(config.cacheRemote ? { cacheRemote: config.cacheRemote } : {}),
+    }) : undefined;
     this.#onHost = config.unsandboxed === true || this.#hostSession;
     // Only sessions of the host's owner, or of a member they granted that, run on the host itself: the control plane
     // admits no other, and the host checks a member's grant again before each of their commands
@@ -533,8 +484,9 @@ export class RunnerSession {
       this.#egress = this.egressProxy(egressSocketPath(binding.session.id, directory));
       this.sandbox = new Sandbox(binding, join(directory, "sandbox"), config.resources, { egressSocket: this.#egress.socketPath,
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
-        ...(this.#clone && cache ? { mirrors: () => this.mirrorMounts() } : {}) });
+        ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
+    this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
     const report = config.reportActivity;
     // Once the agent stops working, its clones are as it left them: a session on the host reports their branches then.
     this.#activity = report && new ActivityReporter(() => this.activity(), async activity => {
@@ -588,132 +540,20 @@ export class RunnerSession {
           { authorization: `Bearer ${this.config.sharedSecret}` }, request, AbortSignal.timeout(60 * 60 * 1000)));
     } catch (error) {
       // Only a refused Git read means the owner lost the repository: a push or a Git LFS download can be refused by policy alone.
-      if (egressReadServices.includes(request.service) && refused(error)) for (const [target, entry] of this.mirrors) if (entry.repository.bindingId === request.bindingId) this.mirrors.delete(target);
+      if (egressReadServices.includes(request.service) && refused(error)) this.#mirrors?.forget(request.bindingId);
       throw error;
     }
   }
 
-  /**
-   * A workspace repository read through the relay, where the relay itself adds the owner's credential: how this session
-   * confirms that its owner may read a repository before it borrows the host's mirror of it. Mirrors are never filled so.
-   */
-  private relayRemote(repository: EgressRepository, signal?: AbortSignal): GitRemote {
-    return new GitRemote({ url: bindingRemote(repository), authorization: "Bearer relay", fetch: relayFetch(repository.bindingId, request => this.relay(request)), signal });
-  }
-
-  /**
-   * Makes the host's mirror of `repository` ready and lets this session's shell commands borrow from it. The relay first
-   * lists the repository's branches and tags with the session owner's own account, which confirms they may read it; then
-   * the mirror fetches those tips straight from the provider with this host's own Git credentials (cacheRemote), never
-   * through the relay. A mirror no fill has completed yet is waited for, however long its first fill takes; a filled one
-   * for at most MIRROR_REFRESH_WAIT_MS, then it is borrowed as it is while its refresh goes on.
-   */
-  private async mirror(value: EgressRepository, onProgress?: (progress: MirrorProgress) => void): Promise<string> {
-    const repository = mirrorRepository(value);
-    const refs = await this.ownerRefs(value);
-    const confirmedAt = Date.now();
-    try {
-      const target = { repository, ownerId: this.binding.owner.id, sessionId: this.binding.session.id, remote: await this.cacheRemote(value), refs };
-      await this.config.repositoryCache!.ready(target, { ...(onProgress ? { onProgress } : {}), wait: MIRROR_REFRESH_WAIT_MS });
-    } catch (error) {
-      throw cacheFailure(error, value);
-    }
-    return this.allowMirror(repository, confirmedAt);
-  }
-
-  /**
-   * `repository`'s branches and tags as the session owner's own account lists them, through the relay (which checks the
-   * repository's identity too): what confirms that the session may borrow its mirror, and what the mirror mirrors.
-   * - A refusal is final (403).
-   * - A failure another attempt may get past (the relay busy or failing, its connection failing or breaking off, or the
-   *   listing running out of its time) ends in 503, which the clone asks again: a quick one only once the relay was asked
-   *   again (OWNER_REFS_RETRY_MS), one that ran out of its time at once.
-   * - Anything else will fail again just the same: 502, so the clone goes ahead without the cache, through the relay,
-   *   where Git says what is wrong.
-   */
-  private async ownerRefs(value: EgressRepository): Promise<Map<string, string>> {
-    for (let failures = 0; ; failures++) {
-      const timeout = AbortSignal.timeout(OWNER_REFS_TIMEOUT_MS);
-      try { return await this.relayRemote(value, timeout).listRefs(); }
-      catch (error) {
-        // A refused read already ended borrowing for this open (see relay).
-        if (refused(error)) throw new RunnerError(403, `Pikibun did not confirm that this session's owner can read ${value.fullName}`);
-        // GitRemote calls a request its caller's signal aborted final; here that signal is the listing's own time limit.
-        if (!timeout.aborted && !(error instanceof GitRemoteError && error.retryable)) {
-          throw new RunnerError(502, `Pikibun could not list ${value.fullName} for this session's owner`);
-        }
-        const pause = timeout.aborted ? undefined : OWNER_REFS_RETRY_MS[failures];
-        if (pause === undefined) throw new RunnerError(503, `Pikibun could not confirm right now that this session's owner can read ${value.fullName}`);
-        await sleep(pause);
-      }
-    }
-  }
-
-  /** How the host's repository cache reads `repository` (see RunnerConfig.cacheRemote). */
-  private async cacheRemote(repository: EgressRepository): Promise<GitRemote> {
-    if (this.config.cacheRemote) return this.config.cacheRemote(repository);
-    const url = bindingRemote(repository);
-    let authorization: string | undefined;
-    // A host with no credential for the provider still fills public repositories.
-    try { authorization = await hostGitAuthorization(url); }
-    catch (error) { if (!(error instanceof HostCredentialError)) throw error; }
-    return new GitRemote({ url, ...(authorization ? { authorization } : {}) });
-  }
-
-  private allowMirror(repository: MirrorRepository & { bindingId: string }, confirmedAt: number): string {
-    // The cache's own layout, at a path every session sees the same way.
-    const mount = { source: this.config.repositoryCache!.mirrorDirectory(repository, this.binding.owner.id), target: `${MIRROR_ROOT}/${mirrorPath(repository)}` };
-    this.mirrors.set(mount.target, { mount, repository, confirmedAt });
-    return mount.target;
-  }
-
-  /**
-   * The mirrors a step that runs Git in a clone gets: those of repositories still in the workspace's grant, each read
-   * through the relay with the owner's access in the last MIRROR_CONFIRM_MS (older ones are confirmed again first, and
-   * their keep refs marked used). A repository the grant or the relay no longer allows is dropped for this open.
-   */
+  /** The mirrors a step that runs Git in a clone mounts now (SessionMirrors.mounts): none on a host without a cache. */
   private async mirrorMounts(): Promise<MirrorMount[]> {
-    let repositories: EgressRepository[];
-    try { repositories = (await this.#egress!.grant()).repositories; }
-    catch (error) {
-      if (refused(error)) this.mirrors.clear();
-      return [];
-    }
-    const granted = new Set(repositories.map(repository => repository.bindingId));
-    for (const [target, entry] of this.mirrors) if (!granted.has(entry.repository.bindingId)) this.mirrors.delete(target);
-    const stale = [...this.mirrors.values()].filter(entry => Date.now() - entry.confirmedAt > MIRROR_CONFIRM_MS);
-    await Promise.all(stale.map(async entry => {
-      try {
-        await this.relayRemote(entry.repository, AbortSignal.timeout(15_000)).listRefs();
-        entry.confirmedAt = Date.now();
-        await this.config.repositoryCache!.touch(entry.repository, this.binding.owner.id, this.binding.session.id).catch(() => {});
-      } catch (error) {
-        // A refusal ends borrowing for this open; anything else (a timeout, a rate limit, an outage) only skips this step,
-        // and the next one asks again.
-        if (refused(error)) this.mirrors.delete(entry.mount.target);
-      }
-    }));
-    return [...this.mirrors.values()].filter(entry => Date.now() - entry.confirmedAt <= MIRROR_CONFIRM_MS).map(entry => entry.mount);
+    return this.#mirrors ? this.#mirrors.mounts() : [];
   }
 
-  /**
-   * Lists the mirror of every workspace repository for this open, creating the ones this host doesn't have yet, empty:
-   * each is mounted only once the relay confirms the owner can read its repository (see mirrorMounts). Created before any
-   * command runs, so the command that first clones a repository already mounts the mirror its clone waits to fill (see
-   * GIT_SHIM), and clones made earlier still borrow from theirs after a reopen.
-   */
-  private async restoreMirrors(repositories: readonly EgressRepository[]): Promise<void> {
-    const cache = this.config.repositoryCache;
-    if (!this.#clone || !cache) return;
-    this.mirrors.clear();
-    for (const value of repositories) {
-      if (value.repositoryId === undefined) continue;
-      const repository = mirrorRepository(value);
-      // A cache root that isn't private can't be used; the clone hears why when it asks for the mirror.
-      try { await cache.prepare(repository, this.binding.owner.id); }
-      catch { continue; }
-      this.allowMirror(repository, 0);
-    }
+  /** The host's mirror of `repository`, ready for this session to borrow from (SessionMirrors.mirror): its sandbox path. */
+  private mirror(repository: EgressRepository, onProgress?: (progress: MirrorProgress) => void): Promise<string> {
+    if (!this.#mirrors) throw new RunnerError(409, "This host keeps no repository cache");
+    return this.#mirrors.mirror(repository, onProgress);
   }
 
   private assertTicket(ticket: RunnerTicket): void {
@@ -997,7 +837,7 @@ export class RunnerSession {
       this.#sources = grant?.sources ?? [];
       this.#cloneRepositories = repositories.map(repository => bindingRemote(repository));
       this.#lfsRepositories = repositories.filter(repository => repository.lfs).map(repository => bindingRemote(repository));
-      await this.restoreMirrors(repositories);
+      await this.#mirrors?.restore(repositories);
       // A restored or moved session clones its clones again before its work resumes.
       this.#cloneFailures = [];
       // Only a restore writes the list (in the worktree's .git, which shell commands can't change), so a session that
@@ -1223,20 +1063,7 @@ export class RunnerSession {
     }, context);
     // Every run and approval status changes here, so this is where the activity can change and waiting calls go on.
     this.#activity?.changed();
-    if (committed && this.#approvalWaiters.size) {
-      for (const [id, waiter] of this.#approvalWaiters) {
-        const approval = committed.approvals[id];
-        if (!approval || !answered(approval)) continue;
-        this.#approvalWaiters.delete(id);
-        waiter.resolve(approval);
-      }
-    }
-  }
-
-  private waiter(id: string): PromiseWithResolvers<ApprovalRecord> {
-    let waiter = this.#approvalWaiters.get(id);
-    if (!waiter) this.#approvalWaiters.set(id, waiter = Promise.withResolvers<ApprovalRecord>());
-    return waiter;
+    if (committed) this.#waits.settle(committed.approvals);
   }
 
   /**
@@ -1244,10 +1071,10 @@ export class RunnerSession {
    * its message's write admission ends) or when the call stops is marked interrupted, so no card outlives its call.
    */
   private async awaitCard(id: string, waiting: Context, deadline: number): Promise<ApprovalRecord> {
-    const waiter = this.waiter(id);
+    const waiter = this.#waits.waiter(id);
     const current = (await this.metadata()).approvals[id];
     if (current && answered(current)) {
-      this.#approvalWaiters.delete(id);
+      this.#waits.forget(id);
       return current;
     }
     // decide() records a decision only on a card still pending, so an interrupted card never runs.
@@ -1260,7 +1087,7 @@ export class RunnerSession {
     expiry.unref();
     try { return await awaitWithContext(waiter.promise, waiting); }
     catch (error) {
-      this.#approvalWaiters.delete(id);
+      this.#waits.forget(id);
       await interrupt("The tool call stopped before a decision.").catch(() => {});
       throw error;
     } finally { clearTimeout(expiry); }
@@ -1269,29 +1096,13 @@ export class RunnerSession {
   /** What an operation a tool call requested came to: the call waits until it is decided and has run. */
   private async operationOutcome(approval: ApprovalRecord, waiting: Context): Promise<ApprovalRecord> {
     if (answered(approval)) {
-      this.#approvalWaiters.delete(approval.id);
-      return this.whole(approval);
+      this.#waits.forget(approval.id);
+      return this.#waits.whole(approval);
     }
     const state = await this.metadata();
     const actor = state.toolActors[approval.id.slice("tool-".length)];
     const run = actor && state.runs[actor.runKey];
-    return this.whole(await this.awaitCard(approval.id, waiting, (run?.submittedAt ?? Date.now()) + DECISION_WAIT_MS));
-  }
-
-  /** `result` as the approval record keeps it; the whole of a longer one waits for the tool call (see `whole`). */
-  private kept(id: string, result: string): string {
-    const bounded = boundedResult(result);
-    if (bounded === result) this.#wholeResults.delete(id);
-    else this.#wholeResults.set(id, result);
-    return bounded;
-  }
-
-  /** `approval` with its whole result, for the tool call returning it to the agent; the result is then let go. */
-  private whole(approval: ApprovalRecord): ApprovalRecord {
-    const result = this.#wholeResults.get(approval.id);
-    if (result === undefined || !settled(approval)) return approval;
-    this.#wholeResults.delete(approval.id);
-    return { ...approval, result };
+    return this.#waits.whole(await this.awaitCard(approval.id, waiting, (run?.submittedAt ?? Date.now()) + DECISION_WAIT_MS));
   }
 
   /**
@@ -1400,7 +1211,7 @@ export class RunnerSession {
         try { await this.authorize(run.initiatedBy, run.mode === "ask" ? "ask" : "write"); }
         catch {
           // Its images go first, as in endLostInputs: once the ledger ends the run, nothing of it is left on the host.
-          if (run.images) await this.discardInputs([run.key]);
+          if (run.images) await this.#inputs.discard([run.key]);
           await this.mutate(meta => { meta.runs[run.key]!.status = "interrupted"; });
           continue;
         }
@@ -1408,7 +1219,7 @@ export class RunnerSession {
         // between its being accepted and its running.
         const refusal = await this.requiredRefusal(true).catch(() => INPUT_FAILED);
         if (refusal) {
-          if (run.images) await this.discardInputs([run.key]);
+          if (run.images) await this.#inputs.discard([run.key]);
           await this.mutate(meta => { Object.assign(meta.runs[run.key]!, { status: "interrupted", refused: { by: "", notice: refusal } }); });
           continue;
         }
@@ -1432,7 +1243,7 @@ export class RunnerSession {
           meta.runs[run.key]!.status = "running";
         });
         // Pi's transcript holds its images now.
-        if (run.images) await this.discardInputs([run.key]);
+        if (run.images) await this.#inputs.discard([run.key]);
         this.observeRun(run.key, submission.id);
         return;
       }
@@ -1613,10 +1424,10 @@ export class RunnerSession {
     try {
       const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
       const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: this.kept(id, shown || "(no output)") }); });
+      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: result.isError ? "failed" : "executed", result: this.#waits.kept(id, shown || "(no output)") }); });
       return result;
     } catch (error) {
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
+      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.#waits.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
       throw error;
     } finally {
       this.#pikiCalls.delete(callId);
@@ -1737,15 +1548,15 @@ export class RunnerSession {
     let images: InputImage[] | undefined;
     if (outcome.action === "continue") {
       const run = (await this.metadata()).runs[key];
-      const before = run?.images ? await this.readInputs(key) ?? [] : [];
+      const before = run?.images ? await this.#inputs.read(key) ?? [] : [];
       const changed = outcome.images.length !== before.length || outcome.images.some((image, index) => image.data !== before[index]!.data);
       if (outcome.text.length > 100_000 || (!outcome.text.trim() && !outcome.images.length)) outcome = { action: "refused", by: "", notice: INPUT_EMPTY };
       else if (changed) {
         const parsed = parseChatImages(outcome.images.map(image => ({ mimeType: image.mimeType, data: image.data })));
-        images = "error" in parsed ? undefined : parsed.images.length ? await this.prepareImages(parsed.images).catch(() => undefined) : [];
+        images = "error" in parsed ? undefined : parsed.images.length ? await prepareMessageImages(parsed.images).catch(() => undefined) : [];
         if (!images) outcome = { action: "refused", by: "", notice: INPUT_IMAGES };
-        else if (images.length) await this.writeInputs(key, images);
-        else await this.discardInputs([key]);
+        else if (images.length) await this.#inputs.write(key, images);
+        else await this.#inputs.discard([key]);
       }
     }
     const result = outcome;
@@ -1766,7 +1577,7 @@ export class RunnerSession {
         }
       }
     });
-    if (refused) await this.discardInputs([key]);
+    if (refused) await this.#inputs.discard([key]);
     this.drainQueue();
   }
 
@@ -1777,7 +1588,7 @@ export class RunnerSession {
     if (!host || !run?.screening || run.status !== "queued") return { action: "skip" };
     const refusal = await this.requiredRefusal(true);
     if (refusal) return { action: "refused", by: "", notice: refusal };
-    const images = run.images ? await this.readInputs(key) : [];
+    const images = run.images ? await this.#inputs.read(key) : [];
     // Its images are gone: it never runs, as drainQueue finds (endLostInputs).
     if (!images) return { action: "skip" };
     const { chosen } = await this.extensionChoice();
@@ -1802,22 +1613,6 @@ export class RunnerSession {
     return open;
   }
 
-  /** Decodes a message's images and fits them to what the model gets of an image, as read_file does for image files. */
-  private async prepareImages(images: readonly ChatImage[]): Promise<InputImage[]> {
-    const prepared: InputImage[] = [];
-    for (const image of images) {
-      const bytes = Buffer.from(image.data, "base64");
-      // The sender names the type, and an image passed through to a provider under another type than its bytes would
-      // fail every later turn of the conversation: the bytes' signature must say the same.
-      if (imageType(bytes) !== image.mimeType) throw new RunnerError(422, IMAGE_ERROR);
-      const result = await prepareImage(bytes, image.mimeType);
-      // 422 carries this fixed, runner-authored reason through the Worker to the sender.
-      if ("error" in result) throw new RunnerError(422, result.error === IMAGE_BUSY ? "Too many images are being prepared at once. Send the message again shortly" : result.error);
-      prepared.push({ mimeType: result.image.mimeType, data: result.image.data });
-    }
-    return prepared;
-  }
-
   /** Images go only to a model that takes them; one that doesn't would answer the text without ever seeing them. */
   private async requireImageModel(options: ChatOptions | undefined): Promise<void> {
     const target = options?.model ?? (await this.#shared.agent(context)).model ?? this.modelRef;
@@ -1826,61 +1621,16 @@ export class RunnerSession {
     if (model && Array.isArray(model.input) && !model.input.includes("image")) throw new RunnerError(422, "The model doesn't accept images");
   }
 
-  /** Where queued messages' prepared images wait, outside the sandbox and the backups, until their messages reach Pi. */
-  private get inputsDirectory(): string {
-    return join(this.directory, "inputs");
-  }
-
-  /** A run's images, by its key: the hash `requestKey` makes, so always a plain file name. */
-  private inputPath(key: string): string {
-    return join(this.inputsDirectory, `${key}.json`);
-  }
-
-  /** Keeps a queued run's prepared images, whole or not at all, until it reaches Pi. */
-  private async writeInputs(key: string, images: readonly InputImage[]): Promise<void> {
-    await mkdir(this.inputsDirectory, { recursive: true, mode: 0o700 });
-    const temporary = join(this.inputsDirectory, `.${key}.${randomUUID()}.tmp`);
-    try {
-      const file = await open(temporary, "wx", 0o600);
-      try {
-        await file.writeFile(JSON.stringify({ images }));
-        await file.sync();
-      } finally { await file.close(); }
-      await rename(temporary, this.inputPath(key));
-    } catch (error) {
-      await rm(temporary, { force: true });
-      throw error;
-    }
-  }
-
-  /** A run's prepared images; undefined when they are gone or unreadable. */
-  private async readInputs(key: string): Promise<InputImage[] | undefined> {
-    try {
-      const images = (JSON.parse(await readFile(this.inputPath(key), "utf8")) as { images?: unknown }).images;
-      if (!Array.isArray(images) || !images.length
-        || images.some(image => typeof image?.mimeType !== "string" || typeof image.data !== "string")) return undefined;
-      return images as InputImage[];
-    } catch { return undefined; }
-  }
-
-  private async discardInputs(keys: readonly string[]): Promise<void> {
-    await Promise.all(keys.map(key => rm(this.inputPath(key), { force: true }).catch(() => {})));
-  }
-
   /**
    * Removes the images of every run that no longer waits to reach Pi, and those a run that never committed left. Called
    * only where no submission can be writing its images: in the session's turn, or while it opens.
    */
   private async sweepInputs(): Promise<void> {
-    let names: string[];
-    try { names = await readdir(this.inputsDirectory); }
-    catch { return; }
     const runs = (await this.metadata()).runs;
-    const waiting = (name: string) => {
-      const run = name.endsWith(".json") ? runs[name.slice(0, -".json".length)] : undefined;
+    await this.#inputs.sweep(key => {
+      const run = runs[key];
       return run !== undefined && run.submissionId === undefined && ["queued", "admitting", "running"].includes(run.status);
-    };
-    await Promise.all(names.filter(name => !waiting(name)).map(name => rm(join(this.inputsDirectory, name), { force: true }).catch(() => {})));
+    });
   }
 
   /**
@@ -1889,7 +1639,7 @@ export class RunnerSession {
    * that stops in between finds the run still queued without its images when it reopens, and ends it here again.
    */
   private async endLostInputs(key: string): Promise<void> {
-    await this.discardInputs([key]);
+    await this.#inputs.discard([key]);
     await this.mutate(meta => { Object.assign(meta.runs[key]!, { status: "interrupted", inputsLost: true }); });
   }
 
@@ -1900,7 +1650,7 @@ export class RunnerSession {
    */
   private async runInput(run: Run) {
     if (!run.images) return run.content;
-    const images = await this.readInputs(run.key);
+    const images = await this.#inputs.read(run.key);
     if (!images) return undefined;
     return [
       ...(run.content.trim() ? [{ type: "text" as const, text: run.content }] : []),
@@ -1926,7 +1676,7 @@ export class RunnerSession {
       || (this.config.connectorId && mode === "write" && input.admissionId === undefined))
       throw new RunnerError(400, "Invalid or missing Worker write admission");
     // Decoded and fitted before the session's turn, as that can take a while: what is queued is what the model gets.
-    const prepared = images.length ? await this.prepareImages(images) : [];
+    const prepared = images.length ? await prepareMessageImages(images) : [];
     const content = input.content;
     // What the host's owner requires is checked now, and refuses the message at once; extensions' input handlers, which may
     // ask a model for seconds, screen it once it is queued (see screen), never while the connector waits on this request.
@@ -1964,7 +1714,7 @@ export class RunnerSession {
         .reduce((total, run) => total + (run.images?.bytes ?? 0), 0) + imageBytes > MAX_QUEUED_IMAGE_BYTES) throw new RunnerError(429, "Session queued image limit exceeded");
       // On disk before the run is committed, so a queued run with images always finds them; a run that never commits
       // leaves them for sweepInputs.
-      if (prepared.length) await this.writeInputs(key, prepared);
+      if (prepared.length) await this.#inputs.write(key, prepared);
       const shared = this.#shared;
       let conversation = shared;
       if (mode === "ask") {
@@ -2019,7 +1769,7 @@ export class RunnerSession {
         }
       });
       // Stopped messages that never reached Pi never will.
-      await this.discardInputs(runs.filter(run => run.images && run.submissionId === undefined).map(run => run.key));
+      await this.#inputs.discard(runs.filter(run => run.images && run.submissionId === undefined).map(run => run.key));
       return runs;
     });
     if (stopped.some(run => run.status !== "queued")) void this.abortStopped().catch(() => { /* Reopening aborts what is left (see resumeWork). */ });
@@ -2044,9 +1794,9 @@ export class RunnerSession {
       await this.authorize(ticket.actorId, run.mode === "ask" ? "ask" : "write", ticket.policyVersion);
       if (run.status !== "queued" || run.stopped) throw new RunnerError(409, "That message has already started or ended");
       // Read before the run ends: ending it is what lets sweepInputs remove them.
-      const images = run.images ? await this.readInputs(key) : undefined;
+      const images = run.images ? await this.#inputs.read(key) : undefined;
       await this.mutate(meta => { Object.assign(meta.runs[key]!, { status: "interrupted", withdrawn: true }); });
-      if (run.images) await this.discardInputs([key]);
+      if (run.images) await this.#inputs.discard([key]);
       return { content: run.content, mode: run.mode, ...(images?.length ? { images: images as ChatImage[] } : {}),
         ...(run.images && !images?.length ? { imagesLost: true as const } : {}) };
     });
@@ -2482,7 +2232,7 @@ export class RunnerSession {
         result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
           : refused ? (error as RunnerError).message : "Effect interrupted or outcome unknown. Inspect the session list or host before requesting another operation.";
       }
-      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.kept(id, result) }); });
+      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
     })().catch(() => { /* Durable executing records become interrupted on reopen. */ }).finally(() => {
       this.pushes.delete(entry);
       if (generation === this.generation && !this.closing) this.drainQueue();
@@ -2514,7 +2264,7 @@ export class RunnerSession {
         result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
           : refused ? (error as RunnerError).message : "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited.";
       }
-      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.kept(id, result) }); });
+      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
     })().catch(() => { /* Durable executing records become interrupted on reopen. */ }).finally(() => {
       this.pushes.delete(entry);
       if (generation === this.generation && !this.closing) this.drainQueue();
@@ -2650,10 +2400,10 @@ export class RunnerSession {
     if (admissionId !== undefined) approval.admissionId = admissionId;
     let created = false;
     // The tool call waits on its card: registered first, so a decision never finds the card without its call.
-    if (toolTaskId !== undefined && !automatic) this.waiter(id);
+    if (toolTaskId !== undefined && !automatic) this.#waits.waiter(id);
     try { await this.mutate(meta => { if (!meta.approvals[id]) { meta.approvals[id] = approval; created = true; } }); }
     catch (error) {
-      this.#approvalWaiters.delete(id);
+      this.#waits.forget(id);
       throw error;
     }
     // A replayed tool task finds its record and never repeats the effect; reopening marks interrupted executions.
@@ -2685,7 +2435,7 @@ export class RunnerSession {
         if (error instanceof RunnerError && error.status === 422 && operation.kind !== "github.comment") { status = "failed"; result = error.message; }
         else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
       }
-      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.kept(id, result) }); });
+      await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
       return (await this.metadata()).approvals[id]!;
     }
     if (operation.kind === "git.push") {
@@ -2693,7 +2443,7 @@ export class RunnerSession {
       const entry = { controller: new AbortController(), done: Promise.resolve() };
       const settled = (async () => {
         const outcome = await this.runPush(id, operation, { actorId, admissionId: approval.admissionId }, async () => { await this.authorize(actorId, "write"); }, entry.controller.signal);
-        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.kept(id, outcome.result) }); });
+        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.#waits.kept(id, outcome.result) }); });
       })();
       entry.done = settled.then(() => undefined, () => undefined);
       this.pushes.add(entry);
@@ -2720,7 +2470,7 @@ export class RunnerSession {
       if (error instanceof SandboxProcessError) { status = "failed"; result = `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`; }
       else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
     }
-    await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.kept(id, result) }); });
+    await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
     return (await this.metadata()).approvals[id]!;
   }
 
@@ -2806,7 +2556,7 @@ export class RunnerSession {
       await this.authorize(approval.requestedBy, "write");
       // A tool call waiting on this card holds its message, so the operation runs now and the call gets its outcome. Any
       // other card (one requested outside a message) waits for the queue, so it never runs beside the agent.
-      if (!this.#approvalWaiters.has(id) && Object.values(state.runs).some(holdsQueue))
+      if (!this.#waits.waiting(id) && Object.values(state.runs).some(holdsQueue))
         throw new RunnerError(409, "Wait for the session queue to finish before approval execution");
       if (["github.comment", "github.merge", "github.issue", "git.push"].includes(approval.operation.kind) && !input.brokerCapability) throw new RunnerError(403, "Missing owner-bound single-use broker capability");
       await this.mutate(meta => { record(meta, { status: "executing", decidedBy: ticket.actorId }); });
@@ -2846,7 +2596,7 @@ export class RunnerSession {
             await this.authorize(ticket.actorId, "approve");
           }, controller.signal);
           if (generation !== this.generation) return;
-          await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.kept(id, outcome.result) }); });
+          await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.#waits.kept(id, outcome.result) }); });
         })().catch(() => { /* Reopening marks a still-executing approval interrupted; never retry the push. */ })
           .finally(() => {
             this.pushes.delete(entry);
@@ -2862,11 +2612,11 @@ export class RunnerSession {
           await this.authorize(ticket.actorId, "approve");
           result = await this.githubEffect(approval.operation, { sessionId: this.binding.session.id, actorId: ticket.actorId, approvalId: id, capability: input.brokerCapability! });
         } else throw new RunnerError(400, "Unsupported approval operation");
-        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.kept(id, result) }); });
+        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.#waits.kept(id, result) }); });
       } catch (error) {
         // GitHub said why it didn't merge or open the issue: nothing changed, so the agent can act on the reason.
         const outcome = error instanceof RunnerError && error.status === 422 && (approval.operation.kind === "github.merge" || approval.operation.kind === "github.issue")
-          ? { status: "failed" as const, result: this.kept(id, error.message) }
+          ? { status: "failed" as const, result: this.#waits.kept(id, error.message) }
           : { status: "interrupted" as const, result: "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited." };
         await this.mutate(meta => { Object.assign(meta.approvals[id]!, outcome); });
       }
@@ -3047,19 +2797,19 @@ export class RunnerSession {
       const refused = Object.values(state.runs).filter(run => run.refused && run.conversationId === snapshot.branch.id)
         .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
       const refusedAt = (after: (run: Run) => boolean) => {
-        for (const run of refused.filter(after)) entries.push(this.refusedView(run, snapshot.branch.id));
+        for (const run of refused.filter(after)) entries.push(refusedView(run, snapshot.branch.id));
       };
       refusedAt(run => !snapshot.entries.some(entry => entry.id <= run.startEntry));
       for (const entry of snapshot.entries) {
         const run = Object.values(state.runs).filter(candidate => (candidate.started || candidate.submissionId !== undefined || candidate.status === "admitting") && candidate.conversationId === entry.conversationId && candidate.startEntry < entry.id).sort((a, b) => b.startEntry - a.startEntry)[0];
-        const ending = run !== previous && previous && this.endView(previous, snapshot.branch.id);
+        const ending = run !== previous && previous && endView(previous, snapshot.branch.id);
         if (ending) entries.push(ending);
         previous = run;
-        entries.push(this.entryView(entry, snapshot.branch.id, run?.initiatedBy, autoApproved));
+        entries.push(entryView(entry, snapshot.branch.id, run?.initiatedBy, autoApproved));
         const next = snapshot.entries[snapshot.entries.indexOf(entry) + 1];
         refusedAt(run => run.startEntry >= entry.id && (!next || run.startEntry < next.id));
       }
-      const ending = previous && this.endView(previous, snapshot.branch.id);
+      const ending = previous && endView(previous, snapshot.branch.id);
       if (ending) entries.push(ending);
     }
     const agent = await this.#shared.agent(context);
@@ -3118,54 +2868,6 @@ export class RunnerSession {
       return running.length || missing.length || builtin.length || missingRequired.length
         ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}) } } : {};
     } catch { return {}; }
-  }
-
-  private entryView(entry: EntryRecord, branch: number, actorId?: string, autoApproved?: ReturnType<typeof autoApprovedCalls>): SessionView["entries"][number] {
-    const messages = entry.model ?? [];
-    // Commands auto-approve ran have no card in the view: their calls say so instead.
-    const marks = messages.flatMap(message => message.role !== "assistant" ? [] : message.content.flatMap(block => {
-      const mark = block.type === "toolCall" ? autoApproved?.get(block.id) : undefined;
-      return mark && block.type === "toolCall" ? [{ tool: block.name, ...mark }] : [];
-    }));
-    const text = messages.flatMap(message => {
-      if (typeof message.content === "string") return [message.content];
-      // Image data stays on the host; the transcript only notes that the model saw one.
-      return (message.content ?? []).flatMap(block => block.type === "text" ? [block.text] : block.type === "toolCall" ? [`${block.name}(${JSON.stringify(block.arguments)})`] : block.type === "image" ? [`[image ${block.mimeType}]`] : []);
-    }).join("\n");
-    const failed = messages.find(message => message.role === "assistant" && message.stopReason === "error");
-    // Provider error text can carry account or endpoint details; only the HTTP status leaves the host.
-    const status = failed?.role === "assistant" ? Number(/^(\d{3})\b/.exec(failed.errorMessage ?? "")?.[1]) : NaN;
-    const error = failed?.role === "assistant" ? {
-      provider: String(failed.provider).slice(0, 128), modelId: String(failed.model).slice(0, 256), ...(status >= 100 && status <= 599 ? { status } : {}),
-    } : undefined;
-    // Pi measures the model's response for assistant messages and each tool run for tool results.
-    const durations = messages.flatMap(message => (message.role === "assistant" || message.role === "toolResult") && message.durationMs !== undefined ? [message.durationMs] : []);
-    const durationMs = durations.length ? durations.reduce((total, value) => total + value, 0) : undefined;
-    return { id: `${branch}:${entry.id}`, kind: entry.kind, role: messages[0]?.role ?? "system", text, ...(actorId ? { actorId } : {}), conversationId: String(branch),
-      ...(error ? { error } : {}), ...(durationMs !== undefined ? { durationMs } : {}), ...(marks.length ? { autoApproved: marks } : {}) };
-  }
-
-  /** What follows a run's entries: its failed model turn, who stopped it, or that its host's crashes ended it. */
-  private endView(run: Run, branch: number): SessionView["entries"][number] | undefined {
-    if (run.failure) return this.failureView(run, branch);
-    if (run.stopped) return { id: `${branch}:stopped:${run.key}`, kind: "workspace.run-stopped", role: "system", text: "Stopped", actorId: run.stopped.by, conversationId: String(branch) };
-    if (run.crashed) return { id: `${branch}:crashed:${run.key}`, kind: "workspace.run-crashed", role: "system", text: CRASHED_TEXT, conversationId: String(branch) };
-    return undefined;
-  }
-
-  /** A message an extension's input handler refused (see `screen`): what its sender was told, where they sent it. */
-  private refusedView(run: Run, branch: number): SessionView["entries"][number] {
-    return { id: `${branch}:refused:${run.key}`, kind: "workspace.run-refused", role: "system", text: run.refused!.notice, actorId: run.initiatedBy, conversationId: String(branch) };
-  }
-
-  /**
-   * A run Pi settled without an answer, shown as a failed model turn after its entries: provider and model, and which
-   * fixed compaction failure it was, never Pi's detail.
-   */
-  private failureView(run: Run, branch: number): SessionView["entries"][number] {
-    const { provider, modelId, compaction } = run.failure!;
-    return { id: `${branch}:failure:${run.key}`, kind: "workspace.run-failure", role: "assistant", text: "", actorId: run.initiatedBy, conversationId: String(branch),
-      error: { ...(provider ? { provider } : {}), ...(modelId ? { modelId } : {}), ...(compaction ? { compaction } : {}) } };
   }
 
   async restart(): Promise<void> {
@@ -3268,102 +2970,20 @@ export class RunnerSession {
 
   /**
    * One chunk of a file attached to a message (packages/shared/src/file-uploads.ts), as `write` sends it, since a
-   * collaborator could already have the agent write any file. Chunks wait in order in the session's uploads directory,
-   * outside the sandbox and the backups; the last one writes the whole file into the worktree's attachments directory,
-   * through the sandbox like a file tool, under a name not taken there yet, and answers where it went. Not exclusive with
-   * runs: like a file tool it waits only for the sandbox's own queue. One chunk of the session is handled at a time.
+   * collaborator could already have the agent write any file (see SessionUploads).
    */
   async upload(ticket: RunnerTicket, input: unknown): Promise<UploadResult> {
     this.assertTicket(ticket);
     await this.authorize(ticket.actorId, "write", ticket.policyVersion);
     const chunk = parseUploadChunk(input);
     if ("error" in chunk) throw new RunnerError(400, "Invalid upload chunk");
-    const turn = this.#uploading.then(() => this.receiveChunk(ticket, chunk));
-    this.#uploading = turn.then(() => {}, () => {});
-    return turn;
+    return this.#uploads.receive(ticket.actorId, chunk, async () => { await this.authorize(ticket.actorId, "write", ticket.policyVersion); });
   }
 
-  #uploading: Promise<void> = Promise.resolve();
-
-  private get uploadsDirectory(): string {
-    return join(this.directory, "uploads");
-  }
-
-  private async receiveChunk(ticket: RunnerTicket, chunk: UploadChunk): Promise<UploadResult> {
-    // One upload is one actor's one file: its chunks name the same file and size, or they are another upload.
-    const key = (await sha256(stableJson({ actor: ticket.actorId, uploadId: chunk.uploadId, name: chunk.name, size: chunk.size }))).slice(0, 43);
-    // Named with the size it declared, which counts against the session's staged bytes from its first chunk on.
-    const part = join(this.uploadsDirectory, `${key}-${chunk.size}.part`);
-    const data = Buffer.from(chunk.data, "base64");
-    await mkdir(this.uploadsDirectory, { recursive: true, mode: 0o700 });
-    if (chunk.offset === 0) await this.sweepUploads(`${key}-${chunk.size}.part`, chunk.size);
-    else {
-      let staged: number;
-      try { staged = (await lstat(part)).size; }
-      catch { throw new RunnerError(409, "That upload is no longer on the host. Attach the file again"); }
-      if (staged !== chunk.offset) throw new RunnerError(409, "Upload chunks arrived out of order. Attach the file again");
-    }
-    const file = await open(part, chunk.offset === 0 ? "w" : "a", 0o600);
-    try {
-      await file.writeFile(data);
-      await file.sync();
-    } finally { await file.close(); }
-    const received = chunk.offset + data.length;
-    if (received < chunk.size) return { received };
-    try {
-      const bytes = await readFile(part);
-      if (bytes.length !== chunk.size) throw new RunnerError(409, "Upload chunks arrived out of order. Attach the file again");
-      const authorize = async () => { await this.authorize(ticket.actorId, "write", ticket.policyVersion); };
-      let path: string;
-      try { path = await this.sandbox.importFile(ATTACHMENTS_DIRECTORY, chunk.name, bytes, authorize); }
-      catch (error) {
-        if (error instanceof RunnerError) throw error;
-        // Fixed reasons only (the control plane shows a 422's): never a host path or raw sandbox output.
-        const message = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ""}`.toLowerCase() : "";
-        if (/too many files with this name/.test(message)) throw new RunnerError(422, "The attachments directory has too many files of that name. Rename the file and attach it again");
-        if (/not a directory|symlinks are not followed|too many levels of symbolic links|path component is not a real directory|not a real directory/.test(message)) {
-          throw new RunnerError(422, "The worktree's attachments path isn't a directory the file can go into");
-        }
-        if (/no space|quota|file too large|exceeds size limit/.test(message)) throw new RunnerError(422, "The session has no room for that file");
-        throw new RunnerError(422, "The file could not be written into the worktree");
-      }
-      return { received, path };
-    } finally {
-      await rm(part, { force: true }).catch(() => {});
-    }
-  }
-
-  /**
-   * Before upload `own` (of `size` bytes) starts: removes uploads left unfinished for an hour, and anything else that
-   * isn't an upload, then refuses one that would make the session's unfinished uploads more than MAX_STAGED_UPLOADS, or
-   * declare more than MAX_STAGED_UPLOAD_BYTES between them. Each counts the whole size it declared, not what has
-   * arrived of it, so uploads started small can't grow past the limit later; chunks are taken one at a time, so no
-   * other upload starts between this check and its first chunk.
-   */
-  private async sweepUploads(own: string, size: number): Promise<void> {
-    let names: string[];
-    try { names = await readdir(this.uploadsDirectory); }
-    catch { return; }
-    let declared = 0;
-    let uploads = 0;
-    for (const name of names) {
-      if (name === own) continue;
-      const path = join(this.uploadsDirectory, name);
-      const match = /^[A-Za-z0-9_-]{43}-(\d{1,12})\.part$/.exec(name);
-      try {
-        const info = await lstat(path);
-        if (!match || !info.isFile() || Date.now() - info.mtimeMs > STALE_UPLOAD_MS) await rm(path, { force: true, recursive: true });
-        else { declared += Number(match[1]); uploads++; }
-      } catch { /* Gone meanwhile. */ }
-    }
-    if (uploads + 1 > MAX_STAGED_UPLOADS || declared + size > MAX_STAGED_UPLOAD_BYTES) {
-      throw new RunnerError(429, "Too many files are being uploaded to this session at once. Try again shortly");
-    }
-  }
 
   async close({ abortPushes = true }: { abortPushes?: boolean } = {}): Promise<void> {
     this.closing = true;
-    this.#wholeResults.clear();
+    this.#waits.dropResults();
     // A long fetch stops at once; a checkout already under way finishes in the sandbox and the next open finds it ready.
     const preparation = this.#repositories;
     if (preparation.status === "preparing") preparation.controller.abort();
@@ -3382,7 +3002,7 @@ export class RunnerSession {
     this.#hostExtensions = undefined;
     await extensions?.shutdown().catch(() => {});
     // Calls still waiting on a card end with the harness; their cards are marked interrupted on reopen.
-    this.#approvalWaiters.clear();
+    this.#waits.dropWaiters();
     // A Session that already failed on a storage error has closed itself, and closing again only repeats that error.
     // Read the flag first: a close that fails now also marks the session failed, and its error must still surface.
     const failed = this.#failed;
