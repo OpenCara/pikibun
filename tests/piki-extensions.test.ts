@@ -344,7 +344,7 @@ test('the sandbox\'s shell command passes arguments and variables as they are, i
   const bin = join(root, 'bin');
   await mkdir(bin);
   await mkdir(join(root, 'app'));
-  // Named so that no real command in /usr/local/bin, which the shell command searches first, stands in for it.
+  // Named so that no real command, on the PATH or in /usr/local/bin, stands in for it.
   await writeFile(join(bin, 'pikibun-fake-gh'), '#!/bin/sh\necho "cwd=$(pwd)"\nfor arg in "$@"; do echo "arg=$arg"; done\necho "token=$GH_TOKEN"\necho oops >&2\n');
   await chmod(join(bin, 'pikibun-fake-gh'), 0o755);
   const args = ["it's", '$HOME', '`id`', 'a b', '; rm -rf /', '"quoted"'];
@@ -353,12 +353,13 @@ test('the sandbox\'s shell command passes arguments and variables as they are, i
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout, `cwd=${root}/app\n${args.map(arg => `arg=${arg}\n`).join('')}token=x'y $z\noops\n`, 'its errors come with its output');
   assert.throws(() => sandboxShellCommand('gh', [], { 'BAD NAME': 'x' }), /Invalid variable name/);
-  // A directory named like one of cd's own arguments is still that directory; /usr/local/bin is searched first.
+  // A directory named like one of cd's own arguments is still that directory; /usr/local/bin is searched last, after the
+  // sandbox's own PATH, whose first entry may be its git shim (review of #158).
   await mkdir(join(root, '-'));
   await writeFile(join(bin, 'pikibun-fake-where'), '#!/bin/sh\necho "cwd=$(pwd) path=$PATH"\n');
   await chmod(join(bin, 'pikibun-fake-where'), 0o755);
   const dash = spawnSync('bash', ['-c', sandboxShellCommand('pikibun-fake-where', [], {}, '-')], { cwd: root, encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, OLDPWD: '/' } });
-  assert.equal(dash.stdout, `cwd=${root}/- path=/usr/local/bin:${bin}:/usr/bin:/bin\n`);
+  assert.equal(dash.stdout, `cwd=${root}/- path=${bin}:/usr/bin:/bin:/usr/local/bin\n`);
   assert.equal(sandboxDirectory('./app//src/'), 'app/src');
   assert.equal(sandboxDirectory('.'), '.');
   for (const bad of ['/etc', '../x', 'a/../../b', 'C:\\x']) assert.throws(() => sandboxDirectory(bad), /within the session's worktree/, bad);
