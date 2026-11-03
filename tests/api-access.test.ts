@@ -8,12 +8,13 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import test, { type TestContext } from "node:test";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
-import { githubApiRule, graphqlWrites, parseApiCredentialGrant, restRepository, type UpstreamRequest, type UpstreamResponse } from "../apps/runner/src/api-access.js";
+import { apiRule, apiRules, graphqlWrites, parseApiCredentialGrant, placeholderOf, restRepository, type UpstreamRequest, type UpstreamResponse } from "../apps/runner/src/api-access.js";
 import { EgressProxy, egressEnvironment, parseEgressGrant, type EgressEntry } from "../apps/runner/src/egress.js";
 import { InterceptionAuthority } from "../apps/runner/src/interception-ca.js";
-import { API_TOKEN_PLACEHOLDER, type ApiCredentialGrant, type EgressGrant, type NetworkPolicy } from "../packages/shared/src/network.js";
+import { API_TOKEN_PLACEHOLDER, apiWriteLease, apiWriteToken, credentialedApiHosts, type ApiAccessKind, type ApiCredentialGrant, type EgressApi, type EgressGrant,
+  type NetworkPolicy } from "../packages/shared/src/network.js";
 
-const authority = new InterceptionAuthority(["api.github.com"]);
+const authority = new InterceptionAuthority(credentialedApiHosts);
 const repository = { bindingId: "binding-app", provider: "github", host: "github.com", repositoryId: "1701", fullName: "acme/app" } as const;
 const credentials: ApiCredentialGrant = { available: true, cacheSeconds: 60, credentials: [
   { account: "acme", authorization: "Bearer ghs_acme", repositories: ["acme/app"], expiresAt: new Date(Date.now() + 3600_000).toISOString() },
@@ -21,19 +22,19 @@ const credentials: ApiCredentialGrant = { available: true, cacheSeconds: 60, cre
 ] };
 
 interface Answer { status: number; headers?: Record<string, string>; body?: string }
-async function proxy(t: TestContext, options: { policy?: Partial<NetworkPolicy>; apis?: boolean; credential?: () => Promise<unknown>;
-  answer?: (request: UpstreamRequest) => Answer } = {}) {
+async function proxy(t: TestContext, options: { policy?: Partial<NetworkPolicy>; apis?: boolean | EgressApi[];
+  credential?: (host: string, access: ApiAccessKind) => Promise<unknown>; answer?: (request: UpstreamRequest) => Answer } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "api-"));
   const upstream: UpstreamRequest[] = [];
   const asked: string[] = [];
   const instance = new EgressProxy({
     socketPath: join(directory, "proxy.sock"),
     grant: async (): Promise<EgressGrant> => ({ policy: { mode: "off", domains: [], packageRegistries: false, ...options.policy }, repositories: [repository],
-      ...(options.apis === false ? {} : { apis: [{ host: "api.github.com", provider: "github" }] }) }),
+      ...(options.apis === false ? {} : { apis: Array.isArray(options.apis) ? options.apis : [{ host: "api.github.com", provider: "github" }] }) }),
     relay: async () => new Response("unused"),
     lookup: async () => [{ address: "93.184.216.34", family: 4 }],
     connect: () => { throw new Error("A credentialed API is never tunnelled"); },
-    apiCredential: async host => { asked.push(host); return options.credential ? options.credential() : credentials; },
+    apiCredential: async (host, access) => { asked.push(access === "write" ? `${host} (write)` : host); return options.credential ? options.credential(host, access) : credentials; },
     apiAuthority: authority,
     apiUpstream: async (request): Promise<UpstreamResponse> => {
       upstream.push(request);
@@ -61,12 +62,14 @@ function connect(socketPath: string, host = "api.github.com"): Promise<TLSSocket
   });
 }
 
-async function call(socketPath: string, path: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {})
+async function call(socketPath: string, path: string, init: { method?: string; headers?: Record<string, string | undefined>; body?: string; host?: string } = {})
   : Promise<{ status: number; headers: IncomingHttpHeaders; body: string; protocol: string | false }> {
-  const socket = await connect(socketPath);
+  const host = init.host ?? "api.github.com";
+  const socket = await connect(socketPath, host);
+  const headers = Object.fromEntries(Object.entries({ host, authorization: `token ${API_TOKEN_PLACEHOLDER}`, "user-agent": "GitHub CLI 2.80.0", ...init.headers })
+    .filter((entry): entry is [string, string] => entry[1] !== undefined));
   return new Promise((resolve, reject) => {
-    const request = httpRequest({ createConnection: () => socket, method: init.method ?? "GET", path,
-      headers: { host: "api.github.com", authorization: `token ${API_TOKEN_PLACEHOLDER}`, "user-agent": "GitHub CLI 2.80.0", ...init.headers } }, response => {
+    const request = httpRequest({ createConnection: () => socket, method: init.method ?? "GET", path, headers }, response => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk: Buffer) => chunks.push(chunk));
       response.on("end", () => { resolve({ status: response.statusCode!, headers: response.headers, body: Buffer.concat(chunks).toString("utf8"), protocol: socket.alpnProtocol ?? false }); socket.destroy(); });
@@ -103,10 +106,9 @@ test("the proxy's authority vouches only for the credentialed API hosts, for str
   assert.match(`${other.stdout}${other.stderr}`, /permitted subtree violation/);
 });
 
-test("sandboxed commands get a placeholder GitHub token, never a real one", () => {
+test("sandboxed commands get a placeholder token for each forge's API, never a real one", () => {
   const environment = egressEnvironment();
-  assert.equal(environment.GH_TOKEN, API_TOKEN_PLACEHOLDER);
-  assert.equal(environment.GITHUB_TOKEN, API_TOKEN_PLACEHOLDER);
+  for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "AZURE_DEVOPS_EXT_PAT"]) assert.equal(environment[name], API_TOKEN_PLACEHOLDER, name);
 });
 
 test("GitHub API reads get the session's read-only token at the proxy, whatever the network policy", async t => {
@@ -238,8 +240,9 @@ test("without the API in its grant (a pinned session, an older control plane), t
 
 test("grants keep only the credentialed APIs this connector knows; credentials parse strictly", () => {
   const policy = { mode: "off", domains: [], packageRegistries: false };
-  assert.deepEqual(parseEgressGrant({ policy, repositories: [], apis: [{ host: "api.github.com", provider: "github" }, { host: "management.azure.com", provider: "azure" }] }).apis,
-    [{ host: "api.github.com", provider: "github" }]);
+  assert.deepEqual(parseEgressGrant({ policy, repositories: [], apis: [{ host: "api.github.com", provider: "github" }, { host: "management.azure.com", provider: "azure" },
+    { host: "gitlab.com", provider: "gitlab" }, { host: "dev.azure.com", provider: "github" }] }).apis,
+    [{ host: "api.github.com", provider: "github" }, { host: "gitlab.com", provider: "gitlab" }], "a host keeps only its own provider");
   assert.equal(parseEgressGrant({ policy, repositories: [] }).apis, undefined);
   assert.throws(() => parseEgressGrant({ policy, repositories: [], apis: "api.github.com" }), /Invalid APIs/);
   assert.deepEqual(parseApiCredentialGrant(credentials), credentials);
@@ -247,11 +250,19 @@ test("grants keep only the credentialed APIs this connector knows; credentials p
   assert.throws(() => parseApiCredentialGrant({ available: true, cacheSeconds: 60, credentials: [] }), /Invalid API credential/);
 });
 
-test("the GitHub rules: reads and GraphQL queries pass, writes and mutations don't", () => {
-  assert.deepEqual(githubApiRule("GET", "/repos/a/b"), { kind: "read" });
-  assert.deepEqual(githubApiRule("HEAD", "/"), { kind: "read" });
-  assert.deepEqual(githubApiRule("POST", "/graphql"), { kind: "graphql" });
-  assert.ok("refused" in githubApiRule("POST", "/repos/a/b/issues"));
+test("the rules: reads and GraphQL queries read, anything else writes; which paths are each API's", () => {
+  const github = apiRules["api.github.com"]!;
+  assert.equal(apiRule(github, "GET", "/repos/a/b"), "read");
+  assert.equal(apiRule(github, "HEAD", "/"), "read");
+  assert.equal(apiRule(github, "POST", "/graphql"), "graphql");
+  assert.equal(apiRule(github, "POST", "/repos/a/b/issues"), "write");
+  assert.equal(apiRule(github, "PUT", "/graphql"), "write");
+  const gitlab = apiRules["gitlab.com"]!;
+  assert.equal(apiRule(gitlab, "POST", "/api/graphql"), "graphql");
+  assert.equal(gitlab.api("/api/v4/projects"), true);
+  assert.equal(gitlab.api("/group/project/-/merge_requests"), false, "gitlab.com's website is not its API");
+  assert.deepEqual(apiRules["dev.azure.com"]!.scope("/Contoso/App/_apis/git/repositories"), { account: "contoso" });
+  assert.deepEqual(github.scope("/repos/acme/app/pulls"), { repository: "acme/app" });
   assert.equal(graphqlWrites("query { viewer { login } }"), false);
   assert.equal(graphqlWrites("{ repository(owner: \"a\", name: \"mutation\") { id } }"), false);
   assert.equal(graphqlWrites("# mutation in a comment\nquery { viewer { login } }"), false);
@@ -261,4 +272,105 @@ test("the GitHub rules: reads and GraphQL queries pass, writes and mutations don
   assert.equal(restRepository("/repos/acme/app/actions/runs"), "acme/app");
   assert.equal(restRepository("/repos/acme"), undefined);
   assert.equal(restRepository("/user"), undefined);
+});
+
+
+test("placeholders are found where each tool sends its token: Bearer and token, Basic (az devops), PRIVATE-TOKEN (glab)", () => {
+  const lease = "L".repeat(43);
+  assert.deepEqual(placeholderOf({ authorization: `token ${API_TOKEN_PLACEHOLDER}` }), { placeholder: true, own: false });
+  assert.deepEqual(placeholderOf({ authorization: `Bearer ${apiWriteToken(lease)}` }), { placeholder: true, lease, own: false });
+  assert.deepEqual(placeholderOf({ authorization: `Basic ${Buffer.from(`:${apiWriteToken(lease)}`).toString("base64")}` }), { placeholder: true, lease, own: false });
+  assert.deepEqual(placeholderOf({ "private-token": API_TOKEN_PLACEHOLDER }), { placeholder: true, own: false });
+  assert.deepEqual(placeholderOf({ authorization: "token ghp_their_own" }), { placeholder: false, own: true });
+  assert.deepEqual(placeholderOf({ "private-token": "glpat-their-own" }), { placeholder: false, own: true });
+  assert.deepEqual(placeholderOf({}), { placeholder: false, own: false });
+  assert.equal(apiWriteLease(apiWriteToken(lease)), lease);
+  assert.equal(apiWriteLease(`${API_TOKEN_PLACEHOLDER}.write.short`), undefined);
+});
+
+const owners: ApiCredentialGrant = { available: true, cacheSeconds: 60, credentials: [
+  { account: "session-owner", authorization: "Bearer gho_owner", repositories: ["acme/app"], expiresAt: new Date(Date.now() + 3600_000).toISOString() },
+] };
+
+test("an approved call's write lease writes as the session owner, and only while it holds", async t => {
+  const { instance, socketPath, upstream, asked, log } = await proxy(t, { credential: async (_host, access) => access === "write" ? owners : credentials });
+  const lease = instance.apiLease()!;
+  const comment = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{\"body\":\"hi\"}",
+    headers: { "content-type": "application/json", authorization: `token ${lease.token}` } });
+  assert.equal(comment.status, 200);
+  assert.equal(upstream[0]!.method, "POST");
+  assert.equal(upstream[0]!.headers.authorization, "Bearer gho_owner");
+  assert.equal(Buffer.from(upstream[0]!.body!).toString("utf8"), "{\"body\":\"hi\"}", "the body goes on as it was");
+  assert.doesNotMatch(JSON.stringify(upstream[0]!.headers), new RegExp(API_TOKEN_PLACEHOLDER));
+  // Its reads and mutations go as the owner too, and the owner's credential is still only for the workspace's repositories.
+  const mutation = await call(socketPath, "/graphql", { method: "POST", headers: { "content-type": "application/json", authorization: `bearer ${lease.token}` },
+    body: JSON.stringify({ query: "mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }" }) });
+  assert.equal(mutation.status, 200);
+  assert.equal(upstream[1]!.headers.authorization, "Bearer gho_owner");
+  const elsewhere = await call(socketPath, "/repos/someone/else/issues", { method: "POST", body: "{}", headers: { authorization: `token ${lease.token}` } });
+  assert.equal(elsewhere.status, 403);
+  assert.deepEqual(asked, ["api.github.com", "api.github.com (write)"]);
+  assert.match(log()[0]!.reason!, /^the session owner's token for session-owner \(200\)$/);
+
+  // Released, its token is the plain placeholder's: writes are refused again.
+  lease.release();
+  const after = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{}", headers: { authorization: `token ${lease.token}` } });
+  assert.equal(after.status, 403);
+  assert.match(JSON.parse(after.body).message, /or the gh tool \(piki:gh\), approved, on the session owner's own host$/);
+  // A lease never handed out is no lease.
+  const forged = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{}", headers: { authorization: `token ${apiWriteToken("F".repeat(43))}` } });
+  assert.equal(forged.status, 403);
+  assert.equal(upstream.length, 2);
+});
+
+test("a write lease on a host that doesn't get the owner's credential reads as before, and its writes say why", async t => {
+  const reason = "Writes through the API act as the session owner, so Pikibun allows them only on the session owner's own hosts";
+  const { instance, socketPath, upstream } = await proxy(t, { credential: async (_host, access) => access === "write" ? { available: false, reason, cacheSeconds: 60 } : credentials });
+  const lease = instance.apiLease()!;
+  t.after(() => lease.release());
+  const read = await call(socketPath, "/repos/acme/app/pulls/2", { headers: { authorization: `token ${lease.token}` } });
+  assert.equal(read.status, 200);
+  assert.equal(upstream[0]!.headers.authorization, "Bearer ghs_acme");
+  const write = await call(socketPath, "/repos/acme/app/pulls/2/merge", { method: "PUT", body: "{}", headers: { authorization: `token ${lease.token}` } });
+  assert.equal(write.status, 403);
+  assert.match(JSON.parse(write.body).message, new RegExp(`^${reason}; PUT /repos/acme/app/pulls/2/merge didn't reach GitHub$`));
+  assert.equal(upstream.length, 1);
+});
+
+test("gitlab.com: glab's requests get the owner's token, its website goes on as a tunnel would", async t => {
+  const gitlab: ApiCredentialGrant = { available: true, cacheSeconds: 60, credentials: [
+    { account: "gitlab.com", authorization: "Bearer glpat-owner", repositories: [], expiresAt: new Date(Date.now() + 3600_000).toISOString() }] };
+  const closed = await proxy(t, { apis: [{ host: "gitlab.com", provider: "gitlab" }], credential: async () => gitlab });
+  const project = await call(closed.socketPath, "/api/v4/projects/group%2Fproject/pipelines", { host: "gitlab.com", headers: { authorization: undefined, "private-token": API_TOKEN_PLACEHOLDER } });
+  assert.equal(project.status, 200);
+  assert.equal(closed.upstream[0]!.headers.authorization, "Bearer glpat-owner");
+  assert.equal(closed.upstream[0]!.headers["private-token"], undefined);
+  assert.deepEqual(closed.asked, ["gitlab.com"]);
+  const note = await call(closed.socketPath, "/api/v4/projects/1/merge_requests/2/notes", { host: "gitlab.com", method: "POST", body: "{}", headers: { authorization: undefined, "private-token": API_TOKEN_PLACEHOLDER } });
+  assert.equal(note.status, 403);
+  assert.match(JSON.parse(note.body).message, /only read through the GitLab API; it writes only with the glab tool \(piki:glab\)/);
+  // The website, and the API without the placeholder, aren't Pikibun's to answer: only where the policy allows gitlab.com.
+  const page = await call(closed.socketPath, "/group/project/-/raw/main/README.md", { host: "gitlab.com", headers: { authorization: undefined } });
+  assert.equal(page.status, 403);
+  assert.match(JSON.parse(page.body).message, /network policy doesn't allow gitlab\.com/);
+  const open = await proxy(t, { apis: [{ host: "gitlab.com", provider: "gitlab" }], credential: async () => gitlab, policy: { mode: "open" } });
+  const form = await call(open.socketPath, "/users/sign_in", { host: "gitlab.com", method: "POST", body: "a=b", headers: { authorization: undefined } });
+  assert.equal(form.status, 200);
+  assert.equal(open.upstream[0]!.headers.authorization, undefined);
+  assert.equal(Buffer.from(open.upstream[0]!.body!).toString("utf8"), "a=b");
+  assert.deepEqual(open.asked, [], "no credential is asked for what isn't the API");
+});
+
+test("dev.azure.com: az devops's Basic placeholder gets the owner's token for the organization the request names", async t => {
+  const azure: ApiCredentialGrant = { available: true, cacheSeconds: 60, credentials: [
+    { account: "fabrikam", authorization: "Basic ZmFicmlrYW0=", repositories: [], expiresAt: new Date(Date.now() + 3600_000).toISOString() },
+    { account: "contoso", authorization: "Basic Y29udG9zbw==", repositories: [], expiresAt: new Date(Date.now() + 3600_000).toISOString() }] };
+  const { socketPath, upstream } = await proxy(t, { apis: [{ host: "dev.azure.com", provider: "azure-devops" }], credential: async () => azure });
+  const basic = `Basic ${Buffer.from(`:${API_TOKEN_PLACEHOLDER}`).toString("base64")}`;
+  const answer = await call(socketPath, "/Contoso/App/_apis/git/pullrequests?api-version=7.1", { host: "dev.azure.com", headers: { authorization: basic } });
+  assert.equal(answer.status, 200);
+  assert.equal(upstream[0]!.headers.authorization, "Basic Y29udG9zbw==");
+  const create = await call(socketPath, "/contoso/App/_apis/git/repositories/r/pullrequests", { host: "dev.azure.com", method: "POST", body: "{}", headers: { authorization: basic } });
+  assert.equal(create.status, 403);
+  assert.match(JSON.parse(create.body).message, /the az tool \(piki:azure-cli\)/);
 });

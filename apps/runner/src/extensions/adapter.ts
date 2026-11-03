@@ -9,6 +9,8 @@ import { createEventBus, createExtensionRuntime, ExtensionRunner, SessionManager
 import { isJsonValue } from "./json.js";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
 import { loadSource, type LoadedSource } from "./load.js";
+import { connectorPikiExtension } from "./piki/index.js";
+import { noPikiSession, type PikiSession } from "./piki/command.js";
 
 /*
  * Runs a session's Pi extensions on pi-durable (docs/design/host-extensions.md). Each source gets its own Pi
@@ -42,6 +44,11 @@ export interface ExtensionHost {
   readonly inputTimeoutMs?: number;
   /** An extension's error; logged on the host, never shown to the model. */
   warn(source: string, message: string): void;
+  /**
+   * Where the session runs its Pikibun extensions' commands (piki:gh, ...): in its sandbox as its owner, or with the
+   * host's sign-in where it may. Without it they don't run.
+   */
+  readonly piki?: PikiSession;
 }
 
 /**
@@ -172,7 +179,10 @@ export class SessionExtensions {
       if (this.#opened.some(item => item.source === source) || loaded.summary.error) continue;
       try {
         const runtime = createExtensionRuntime();
-        const result = await loadSource(loaded, this.host.directory, createEventBus(), runtime);
+        // A Pikibun extension runs its command as this session lets it, not as the connector's own copy does.
+        const piki = loaded.factories && source.startsWith("piki:") ? connectorPikiExtension(source) : undefined;
+        const factories = piki && loaded.factories?.map(item => ({ path: item.path, factory: piki.forSession(this.host.piki ?? noPikiSession) }));
+        const result = await loadSource(factories ? { ...loaded, factories } : loaded, this.host.directory, createEventBus(), runtime);
         for (const error of result.errors) this.host.warn(source, error.error);
         // Part of it didn't load for this session: it runs as far as it did, but isn't whole (see isOpen).
         if (result.errors.length) this.#broken.add(source);

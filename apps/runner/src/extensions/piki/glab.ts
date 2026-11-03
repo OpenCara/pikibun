@@ -1,5 +1,5 @@
 import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
-import { apiWrites, commandExtension, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
+import { apiWrites, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
 /*
  * piki:glab, the GitLab CLI (docs/design/piki-extensions.md).
@@ -28,16 +28,17 @@ export const glabSpec: CliSpec = {
   command: "glab",
   windowsCommand: { file: "glab.exe", shim: false },
   description: [
-    "Run the GitLab CLI (glab) on the session's Pikibun host, outside the sandbox, signed in as the host's owner is to glab.",
+    "Run the GitLab CLI (glab) as the session owner: in the session's sandbox, where Pikibun adds the session owner's GitLab (gitlab.com) access token to its API requests, on the session owner's own host.",
     "Give the arguments after glab as a list, as they are passed (no shell, no quoting), such as {\"args\": [\"ci\", \"list\", \"--repo\", \"group/project\"]}.",
     "Use it for what the sandbox can't reach: merge requests and their discussions, CI/CD pipelines and job logs (ci list, ci trace <job id>), releases, and the API (api projects/:id/...).",
-    "Name the project with --repo group/project (and GITLAB_HOST's server, or the host's glab configuration, for self-managed GitLab): it runs in the session's worktree on the host, or in directory, a clone in it.",
-    "It acts as the host owner's glab account, which may not be the session owner's.",
+    "Name the project with --repo group/project: it runs in the session's worktree, or in directory, a clone in it. Only gitlab.com is reached this way, not self-managed GitLab.",
+    "It reads always; it writes (merge requests, notes, pipeline runs) only in a call a person approved.",
     "Each call waits for approval unless the workspace runs this extension's tools automatically; where the workspace set it read-only, only commands that read run.",
     "Commands that would show its token (--show-token, config get token) are refused. Interactive commands (ci view) don't work here.",
   ].join(" "),
   passEnv: name => ["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN", "GITLAB_HOST", "GITLAB_URI", "GL_HOST", "GITLAB_API_HOST", "GLAB_CONFIG_DIR"].includes(name),
   setEnv: { NO_PROMPT: "1", GLAB_CHECK_UPDATE: "false", GLAB_SEND_TELEMETRY: "false", GLAMOUR_STYLE: "notty" },
+  tokenEnv: ["GITLAB_TOKEN"],
   // Options may sit anywhere among the command's words, and short ones cluster (-at): these look at every argument.
   refused(args) {
     const words = positionals(args);
@@ -57,5 +58,3 @@ export const glabSpec: CliSpec = {
     return `glab ${words.slice(0, 2).join(" ")} is not a command that only reads`;
   },
 };
-
-export const glabExtension = commandExtension(glabSpec);

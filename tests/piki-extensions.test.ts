@@ -7,7 +7,9 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createExtensionRuntime, createEventBus } from '@earendil-works/pi-coding-agent';
 import { azureCliSpec } from '../apps/runner/src/extensions/piki/azure-cli.js';
-import { apiWrites, cliEnvironment, commandWords, optionValues } from '../apps/runner/src/extensions/piki/command.js';
+import { spawnSync } from 'node:child_process';
+import { apiWrites, cliEnvironment, commandWords, optionValues, sandboxDirectory, sandboxShellCommand, type CliRun, type PikiSandboxRun,
+  type PikiSession } from '../apps/runner/src/extensions/piki/command.js';
 import { ghSpec } from '../apps/runner/src/extensions/piki/gh.js';
 import { glabSpec } from '../apps/runner/src/extensions/piki/glab.js';
 import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
@@ -193,8 +195,11 @@ test('the command gets its own sign-in and the host\'s tools from the connector\
   assert.equal(cliEnvironment(azureCliSpec, { GH_TOKEN: 'no' }).GH_TOKEN, undefined);
 });
 
-/** The gh tool of a session in `worktree`, with a fake gh first on PATH, and the read-only setting as given. */
-async function ghTool(t: TestContext, readOnly = false) {
+/**
+ * The gh tool of a session in `worktree`, with a fake gh first on PATH, and the read-only setting as given; by default as
+ * a session that may use the host's sign-in runs it.
+ */
+async function ghTool(t: TestContext, readOnly = false, session: PikiSession = { hostSignIn: true }) {
   const root = await directory(t);
   const bin = join(root, 'bin');
   await mkdir(bin);
@@ -211,7 +216,7 @@ async function ghTool(t: TestContext, readOnly = false) {
   t.after(() => { process.env.PATH = path; delete process.env.PIKIBUN_TEST_SECRET; });
   const extension = connectorPikiExtensions.find(item => item.info.name === 'gh')!;
   const runtime = createExtensionRuntime();
-  const result = await loadSource({ files: ['<piki:gh>'], factories: [{ path: '<piki:gh>', factory: extension.factory }] }, worktree, createEventBus(), runtime);
+  const result = await loadSource({ files: ['<piki:gh>'], factories: [{ path: '<piki:gh>', factory: extension.forSession(session) }] }, worktree, createEventBus(), runtime);
   if (readOnly) runtime.flagValues.set('read-only', true);
   const tool = result.extensions[0]!.tools.get('gh')!.definition;
   const call = (params: Record<string, unknown>) => tool.execute('call', params as never, new AbortController().signal, undefined, { cwd: worktree } as never)
@@ -257,7 +262,7 @@ test('a session runs a Pikibun extension like any other: its tool, behind the se
   const loaded = await loadInstalled(new ExtensionStore(join(worktree, '..', 'state')));
   const gated: string[] = [];
   const host: ExtensionHost = {
-    directory: worktree, model: () => undefined, hookTimeoutMs: 2000, warn: (_source, message) => assert.fail(message),
+    directory: worktree, model: () => undefined, hookTimeoutMs: 2000, warn: (_source, message) => assert.fail(message), piki: { hostSignIn: true },
     state: async source => ({ active: source === 'piki:gh', settings: { 'read-only': true } }),
     runTool: async (call, execute) => { gated.push(`${call.source} ${call.tool} ${JSON.stringify(call.arguments)}`); return execute(call.signal); },
   };
@@ -272,6 +277,84 @@ test('a session runs a Pikibun extension like any other: its tool, behind the se
   assert.doesNotMatch(result.output[0]!.text, new RegExp(`cwd=${worktree}`), 'the workspace\'s read-only setting applies');
   await assert.rejects(tool.execute({ args: ['pr', 'merge', '1'] }, { callId: 'call-2' }, { abortSignal: new AbortController().signal }), /read-only/);
   assert.deepEqual(gated, ['piki:gh gh {"args":["pr","list","--repo","acme/app"]}', 'piki:gh gh {"args":["pr","merge","1"]}'], 'each call goes through the session\'s gate');
+});
+
+test('in the sandbox: the command runs as the session owner, through the session, which says how it ends', async t => {
+  const runs: PikiSandboxRun[] = [];
+  let answer: CliRun = { exitCode: 0, signal: null, output: 'ran\n' };
+  const { call } = await ghTool(t, false, { hostSignIn: false, sandbox: async run => { runs.push(run); return answer; } });
+  assert.equal(await call({ args: ['pr', 'create', '--fill'], directory: './app/' }), 'ran');
+  assert.equal(runs.length, 1);
+  const [run] = runs;
+  assert.deepEqual([run!.callId, run!.command, run!.args, run!.directory, run!.readOnly, run!.timeoutSeconds], ['call', 'gh', ['pr', 'create', '--fill'], 'app', false, 300]);
+  assert.deepEqual(run!.tokenEnv, ['GH_TOKEN', 'GITHUB_TOKEN'], 'the variables an approved call\'s write lease replaces');
+  assert.equal(run!.env.GH_PROMPT_DISABLED, '1');
+  assert.equal(run!.env.PIKIBUN_TEST_SECRET, undefined, 'none of the connector\'s variables');
+  await assert.rejects(call({ args: ['status'], directory: '../elsewhere' }), /within the session's worktree/);
+  await assert.rejects(call({ args: ['auth', 'token'] }), /Refused: gh auth token would show its token/);
+  answer = { exitCode: 1, signal: null, output: 'HTTP 403: writes run only in an approved call' };
+  await assert.rejects(call({ args: ['pr', 'merge', '1'] }), /It exited with 1\.\nHTTP 403/);
+  answer = { exitCode: 127, signal: null, output: 'bash: line 1: exec: gh: not found' };
+  await assert.rejects(call({ args: ['status'] }), /gh isn't installed where the session's sandbox finds it .*https:\/\/cli\.github\.com/);
+  assert.equal(runs.length, 3, 'refusals never reach the sandbox');
+});
+
+test('in the sandbox, read-only: only commands that read, in the worktree mounted read-only', async t => {
+  const runs: PikiSandboxRun[] = [];
+  const { call } = await ghTool(t, true, { hostSignIn: false, sandbox: async run => { runs.push(run); return { exitCode: 0, signal: null, output: 'ok' }; } });
+  await call({ args: ['pr', 'list'], directory: 'app' });
+  assert.deepEqual([runs[0]!.readOnly, runs[0]!.directory], [true, 'app']);
+  await assert.rejects(call({ args: ['pr', 'merge', '1'] }), /read-only, and gh pr merge is not a command that only reads/);
+  assert.equal(runs.length, 1);
+});
+
+test('a session with neither a sandbox nor the host\'s sign-in doesn\'t run the command, and says why', async t => {
+  const { call } = await ghTool(t, false, { hostSignIn: false });
+  await assert.rejects(call({ args: ['status'] }), /gh can't run in this session: it runs in a session's sandbox, as the session owner/);
+  // The connector's own copy, which only reports what the extension offers, is such a session.
+  const extension = connectorPikiExtensions.find(item => item.info.name === 'gh')!;
+  const runtime = createExtensionRuntime();
+  const result = await loadSource({ files: ['<piki:gh>'], factories: [{ path: '<piki:gh>', factory: extension.factory }] }, tmpdir(), createEventBus(), runtime);
+  const tool = result.extensions[0]!.tools.get('gh')!.definition;
+  await assert.rejects(tool.execute('call', { args: ['status'] } as never, new AbortController().signal, undefined, { cwd: tmpdir() } as never), /can't run in this session/);
+});
+
+test('a session opens its Pikibun extensions as it runs them: in its sandbox', async t => {
+  const { worktree } = await ghTool(t);
+  const loaded = await loadInstalled(new ExtensionStore(join(worktree, '..', 'state')));
+  const runs: PikiSandboxRun[] = [];
+  const host: ExtensionHost = {
+    directory: worktree, model: () => undefined, hookTimeoutMs: 2000, warn: (_source, message) => assert.fail(message),
+    piki: { hostSignIn: false, sandbox: async run => { runs.push(run); return { exitCode: 0, signal: null, output: 'from the sandbox' }; } },
+    state: async source => ({ active: source === 'piki:gh', settings: {} }),
+    runTool: async (call, execute) => execute(call.signal),
+  };
+  const extensions = new SessionExtensions(host, ['bash']);
+  await extensions.ensure(loaded);
+  t.after(() => extensions.shutdown());
+  const tool = extensions.select(['piki:gh']).selected[0]!.tools[0]! as unknown as { execute(args: unknown, api: unknown, call: unknown): Promise<{ output: { text: string }[] }> };
+  const result = await tool.execute({ args: ['run', 'list'] }, { callId: 'call-7' }, { abortSignal: new AbortController().signal });
+  assert.equal(result.output[0]!.text, 'from the sandbox');
+  assert.deepEqual(runs.map(run => [run.callId, run.args]), [['call-7', ['run', 'list']]]);
+});
+
+test('the sandbox\'s shell command passes arguments and variables as they are, in the directory asked for', async t => {
+  if (spawnSync('bash', ['-c', 'true']).status !== 0) return t.diagnostic('bash is not installed');
+  const root = await directory(t);
+  const bin = join(root, 'bin');
+  await mkdir(bin);
+  await mkdir(join(root, 'app'));
+  await writeFile(join(bin, 'gh'), '#!/bin/sh\necho "cwd=$(pwd)"\nfor arg in "$@"; do echo "arg=$arg"; done\necho "token=$GH_TOKEN"\necho oops >&2\n');
+  await chmod(join(bin, 'gh'), 0o755);
+  const args = ["it's", '$HOME', '`id`', 'a b', '; rm -rf /', '"quoted"'];
+  const command = sandboxShellCommand('gh', args, { GH_TOKEN: "x'y $z" }, 'app');
+  const run = spawnSync('bash', ['-c', command], { cwd: root, encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin` } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, `cwd=${root}/app\n${args.map(arg => `arg=${arg}\n`).join('')}token=x'y $z\noops\n`, 'its errors come with its output');
+  assert.throws(() => sandboxShellCommand('gh', [], { 'BAD NAME': 'x' }), /Invalid variable name/);
+  assert.equal(sandboxDirectory('./app//src/'), 'app/src');
+  assert.equal(sandboxDirectory('.'), '.');
+  for (const bad of ['/etc', '../x', 'a/../../b', 'C:\\x']) assert.throws(() => sandboxDirectory(bad), /within the session's worktree/, bad);
 });
 
 const migrations = new URL('../apps/server/migrations/sqlite/', import.meta.url);

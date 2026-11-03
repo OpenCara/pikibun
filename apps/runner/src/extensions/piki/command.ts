@@ -8,11 +8,14 @@ import type { PikiExtensionInfo } from "../../../../../packages/shared/src/piki-
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
 
 /*
- * A command-line tool as a Pi extension (docs/design/piki-extensions.md): one tool that runs the command on the host
- * with the arguments the model gives, without a shell, as the connector's OS user and with its sign-in to that command.
- * Arguments that would show the command's credentials never run. With the workspace's `read-only` setting, only
- * commands that read run, and outside the session's worktree, so that what a session wrote there (a repository's Git
- * configuration, say) can't make the command run code.
+ * A command-line tool as a Pi extension (docs/design/piki-extensions.md): one tool that runs the command with the
+ * arguments the model gives, without a shell, as the session owner. It runs in the session's sandbox, where the egress
+ * proxy adds the session owner's access to the forge's API (api-access.ts): reads always, writes only in a call a person
+ * approved, on the session owner's own host. Only where the session itself runs on its host, or in the host owner's own
+ * sessions where the host's owner turned it on (PIKIBUN_PIKI_HOST_SIGN_IN), does it run on the host with the host's own
+ * sign-in to the command, as it did before. Arguments that would show the command's credentials never run. With the
+ * workspace's `read-only` setting, only commands that read run: in the sandbox, with the worktree read-only; on the host,
+ * outside the worktree, so that what a session wrote there (a repository's Git configuration) can't make it run code.
  */
 
 /** What one command-line tool needs. */
@@ -23,8 +26,10 @@ export interface CliSpec {
   windowsCommand?: { file: string; shim: boolean };
   /** The tool's description, for the model. */
   description: string;
-  /** Environment variables of the connector it gets, besides the common ones: its own sign-in and configuration. */
+  /** Environment variables of the connector it gets on the host, besides the common ones: its own sign-in and configuration. */
   passEnv: (name: string) => boolean;
+  /** The variables that hold its API token in the sandbox: the proxy's placeholder, or an approved call's write lease. */
+  tokenEnv: readonly string[];
   /** Variables it always gets: no prompts, colors, pagers or update checks. */
   setEnv: Record<string, string>;
   /** Why `args` never run (they would show its credentials), if so. */
@@ -224,8 +229,61 @@ async function worktreeDirectory(root: string, directory: string): Promise<strin
 
 const READ_ONLY = "read-only";
 
-/** The Pi extension for `spec`: its tool, and its `read-only` setting. */
-export function commandExtension(spec: CliSpec): ExtensionFactory {
+/** One run of a command in the session's sandbox (PikiSession.sandbox). */
+export interface PikiSandboxRun {
+  /** The tool call it is for: only a call the session admitted runs, and only one a person approved may write. */
+  callId: string;
+  command: string;
+  args: readonly string[];
+  /** A directory in the worktree, relative to it; the worktree by default. */
+  directory?: string;
+  /** Variables it gets besides the sandbox's own: no prompts, colors, pagers or update checks. */
+  env: Record<string, string>;
+  /** The variables that hold the API placeholder, which an approved call's write lease replaces. */
+  tokenEnv: readonly string[];
+  /** The workspace's read-only setting: the worktree is mounted read-only, and the call never writes through the API. */
+  readOnly: boolean;
+  signal: AbortSignal;
+  timeoutSeconds: number;
+}
+
+/**
+ * Where a session runs its Pikibun extensions' commands: `sandbox`, in its sandbox as the session owner, where it has
+ * one with an egress proxy; `hostSignIn`, on the host with the host's own sign-in, only where the session runs on its
+ * host or is the host owner's own and its owner allowed that. Neither: the command can't run in this session.
+ */
+export interface PikiSession {
+  sandbox?: (run: PikiSandboxRun) => Promise<CliRun>;
+  hostSignIn: boolean;
+}
+
+/** What a session that offers neither gets: the tool, which says why it can't run. */
+export const noPikiSession: PikiSession = Object.freeze({ hostSignIn: false });
+
+/**
+ * The shell command that runs `command` with `args` and `env` in the sandbox, in `directory` of the worktree: every word
+ * quoted, so nothing in them is the shell's; stdin closed, and its errors with its output.
+ */
+export function sandboxShellCommand(command: string, args: readonly string[], env: Record<string, string>, directory?: string): string {
+  const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+  const assignments = Object.entries(env).map(([name, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`Invalid variable name ${name}`);
+    return quote(`${name}=${value}`);
+  });
+  return `${directory && directory !== "." ? `cd -- ${quote(directory)} && ` : ""}exec env ${[...assignments, quote(command), ...args.map(quote)].join(" ")} </dev/null 2>&1`;
+}
+
+/** `directory` as the sandbox takes it: a relative path within the worktree, without `..`. */
+export function sandboxDirectory(directory: string): string {
+  const parts = directory.replaceAll("\\", "/").split("/").filter(part => part && part !== ".");
+  if (directory.includes("\0") || isAbsolute(directory) || /^[A-Za-z]:/.test(directory) || parts.includes("..")) {
+    throw new Error("directory is a path within the session's worktree, such as app");
+  }
+  return parts.join("/") || ".";
+}
+
+/** The Pi extension for `spec`: its tool, and its `read-only` setting, as `session` runs it. */
+export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSession): ExtensionFactory {
   return (pi: ExtensionAPI) => {
     pi.registerFlag(READ_ONLY, { type: "boolean", default: false,
       description: `Run only ${spec.command} commands that read (lists, views, logs, GET requests), outside the session's worktree. Set it before running the tool automatically.` });
@@ -238,7 +296,7 @@ export function commandExtension(spec: CliSpec): ExtensionFactory {
           description: "Where it runs: a directory in the session's worktree, such as a clone (app). The worktree by default." })),
         timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600, description: `At most this long (${DEFAULT_TIMEOUT_SECONDS} seconds by default).` })),
       }),
-      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      async execute(toolCallId, params, signal, _onUpdate, ctx) {
         const args = params.args;
         if (args.some(arg => arg.includes("\0"))) throw new Error("An argument holds a NUL character.");
         const refused = spec.refused(args);
@@ -247,22 +305,39 @@ export function commandExtension(spec: CliSpec): ExtensionFactory {
         if (readOnly) {
           const writes = spec.writes(args);
           if (writes) throw new Error(`Refused: this workspace runs ${spec.command} read-only, and ${writes}. Nothing ran.`);
-          if (params.directory !== undefined) throw new Error(`Refused: this workspace runs ${spec.command} read-only, outside the session's worktree; leave out directory. Nothing ran.`);
         }
+        const timeoutSeconds = params.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS;
+        const outcome = (run: CliRun) => {
+          const status = run.failure ?? (run.exitCode === 0 ? undefined : run.signal ? `It ended with ${run.signal}` : `It exited with ${run.exitCode}`);
+          const text = run.output.trim() || "(no output)";
+          if (status) throw new Error(`${status}.\n${text}`);
+          return { content: [{ type: "text" as const, text }], details: { exitCode: 0 } };
+        };
+        if (!session.hostSignIn) {
+          if (!session.sandbox) {
+            throw new Error(`${spec.command} can't run in this session: it runs in a session's sandbox, as the session owner, and this session has none that reaches `
+              + `the API through Pikibun; on the host it runs only in the host owner's own sessions, where the host's owner allows that. Nothing ran.`);
+          }
+          const run = await session.sandbox({ callId: toolCallId, command: spec.command, args, ...(params.directory !== undefined ? { directory: sandboxDirectory(params.directory) } : {}),
+            env: spec.setEnv, tokenEnv: spec.tokenEnv, readOnly, signal: signal ?? new AbortController().signal, timeoutSeconds });
+          // The shell's own answer when the command isn't there: the sandbox sees the host's /usr only.
+          if (run.exitCode === 127 && new RegExp(`${spec.command}: (?:command )?not found|No such file`).test(run.output)) {
+            throw new Error(`${spec.command} isn't installed where the session's sandbox finds it (the host's /usr/bin or /usr/local/bin). The host's owner installs it (${spec.info.install}).`);
+          }
+          return outcome(run);
+        }
+        if (readOnly && params.directory !== undefined) throw new Error(`Refused: this workspace runs ${spec.command} read-only, outside the session's worktree; leave out directory. Nothing ran.`);
         const scratch = readOnly ? await mkdtemp(join(tmpdir(), `pikibun-${spec.info.name}-`)) : undefined;
         try {
           const cwd = scratch ?? (params.directory !== undefined ? await worktreeDirectory(ctx.cwd, params.directory) : ctx.cwd);
           let run: CliRun;
           try {
-            run = await runCli(spec, args, { cwd, signal: signal ?? new AbortController().signal, timeoutSeconds: params.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS });
+            run = await runCli(spec, args, { cwd, signal: signal ?? new AbortController().signal, timeoutSeconds });
           } catch (error) {
             if (error instanceof MissingCommandError) throw new Error(`${error.message}. Its owner installs it (${spec.info.install}) and signs in with ${spec.info.signIn}.`);
             throw error;
           }
-          const status = run.failure ?? (run.exitCode === 0 ? undefined : run.signal ? `It ended with ${run.signal}` : `It exited with ${run.exitCode}`);
-          const text = run.output.trim() || "(no output)";
-          if (status) throw new Error(`${status}.\n${text}`);
-          return { content: [{ type: "text", text }], details: { exitCode: 0 } };
+          return outcome(run);
         } finally {
           if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
         }
