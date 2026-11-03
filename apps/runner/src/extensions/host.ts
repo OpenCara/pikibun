@@ -1,7 +1,8 @@
-import { extensionLimits, parseExtensionSourceSpec, parseWorkspaceExtensionsAnswer, type ExtensionRequest, type ExtensionRequestResult,
+import { extensionLimits, isPikiExtensionSource, parseExtensionSourceSpec, parseWorkspaceExtensionsAnswer, type ExtensionRequest, type ExtensionRequestResult,
   type HostExtensionsReport, type WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
+import type { PikiExtension } from "./piki/index.js";
 import { loadInstalled, type LoadedSource } from "./load.js";
-import type { ExtensionStore } from "./store.js";
+import type { ExtensionSource, ExtensionStore } from "./store.js";
 
 /*
  * A connector's extensions (docs/design/host-extensions.md): what is installed and loaded, what it reports to the
@@ -21,17 +22,27 @@ export class HostExtensions {
   #loaded: LoadedSource[] = [];
   #workspaces = new Map<string, { value: WorkspaceExtensionsAnswer; at: number; refresh?: Promise<WorkspaceExtensionsAnswer> }>();
 
-  constructor(readonly store: ExtensionStore, readonly options: { remoteInstalls: boolean; now?: () => number }) {}
+  /** `pikiExtensions`: the connector's Pikibun extensions (all of this version's by default). */
+  constructor(readonly store: ExtensionStore, readonly options: { remoteInstalls: boolean; now?: () => number; pikiExtensions?: readonly PikiExtension[] }) {}
 
-  /** What is installed, loaded once when the connector starts and again after each change. */
+  /** What the host has: its Pikibun extensions, then those installed, loaded once when the connector starts and again after each change. */
   get loaded(): readonly LoadedSource[] { return this.#loaded; }
 
-  async load(): Promise<void> { this.#loaded = await loadInstalled(this.store); }
+  async load(): Promise<void> { this.#loaded = await loadInstalled(this.store, this.options.pikiExtensions); }
+
+  /**
+   * The report without its Pikibun extensions, for a control plane that predates them (it refuses a report that names
+   * one).
+   */
+  reportWithoutPikiExtensions(): HostExtensionsReport {
+    const report = this.report();
+    return { ...report, installed: report.installed.filter(item => !isPikiExtensionSource(item.source)) };
+  }
 
   /** Loads the installed extensions again when `pikibun extensions` changed them since. */
   async refreshIfChanged(): Promise<void> {
     const installed = (await this.store.list().catch(() => [])).map(item => item.source);
-    const loaded = this.#loaded.map(item => item.installed.source);
+    const loaded = this.#loaded.filter(item => !item.factories).map(item => item.installed.source);
     if (installed.length !== loaded.length || installed.some((source, index) => source !== loaded[index])) await this.load();
   }
 
@@ -51,7 +62,8 @@ export class HostExtensions {
     const results: ExtensionRequestResult[] = [];
     for (const request of requests) {
       try {
-        if (request.action === "install") await this.store.add(parseExtensionSourceSpec(request.source));
+        if (isPikiExtensionSource(request.source)) throw new Error(`${request.source} is built into the connector: update the connector instead (npx pikibun@latest connect).`);
+        if (request.action === "install") await this.store.add(parseExtensionSourceSpec(request.source) as ExtensionSource);
         else if ((await this.store.list()).some(item => item.source === request.source)) await this.store.remove(request.source);
         results.push({ id: request.id, ok: true });
       } catch (error) {

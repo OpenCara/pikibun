@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { builtinExtensionNames, defaultHostConfig, ownerOnlyHostConfig, parseBuiltinExtensions, parseHostCompaction, parseHostConfigChange, type HostConfig,
+import { builtinExtensionNames, defaultHostConfig, normalizeBuiltinExtensionNames, ownerOnlyHostConfig, parseBuiltinExtensions, parseHostCompaction, parseHostConfigChange, type HostConfig,
   type RepositoryCacheMode } from '../../../packages/shared/src/host-config.js';
 import type { Env, WorkerEnv } from './types.js';
 import { auditStatement } from './db.js';
@@ -32,7 +32,7 @@ export async function connectorHostConfig(env: Env, connectorId: string): Promis
 function storedBuiltinExtensions(json: string): HostConfig['builtinExtensions'] {
   try {
     const names: unknown = JSON.parse(json);
-    return Array.isArray(names) ? parseBuiltinExtensions(names.filter(name => (builtinExtensionNames as readonly unknown[]).includes(name))) : [];
+    return Array.isArray(names) ? parseBuiltinExtensions(normalizeBuiltinExtensionNames(names).filter(name => (builtinExtensionNames as readonly unknown[]).includes(name))) : [];
   } catch { return []; }
 }
 
