@@ -230,7 +230,7 @@ export function commandExtension(spec: CliSpec): ExtensionFactory {
     pi.registerFlag(READ_ONLY, { type: "boolean", default: false,
       description: `Run only ${spec.command} commands that read (lists, views, logs, GET requests), outside the session's worktree. Set it before running the tool automatically.` });
     pi.registerTool({
-      name: spec.info.tool, label: spec.info.title, description: spec.description,
+      name: spec.info.tool ?? spec.command, label: spec.info.title, description: spec.description,
       parameters: Type.Object({
         args: Type.Array(Type.String({ maxLength: 32 * 1024 }), { minItems: 1, maxItems: 256,
           description: `The arguments after ${spec.command}, one per item, exactly as they are passed: there is no shell, so don't quote them.` }),

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { Workspace } from "../../../../packages/shared/src/types";
-import { pikiExtension, pikiExtensions } from "../../../../packages/shared/src/piki-extensions";
+import { pikiCommandExtensions, pikiExtension } from "../../../../packages/shared/src/piki-extensions";
+import { ExtensionSettingsFields } from "./ExtensionSettingsFields";
 import { extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
   type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension } from "../../../../packages/shared/src/host-extensions";
 import { api, segment } from "../api";
@@ -114,7 +115,7 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
                   onClick={() => install(host, extension.source)}>{availability.status === "other-version" ? "Update" : "Install"}</Button>}</span>} />;
             })}
             {!data.hosts.length && <Row title="No hosts" hint="No host is connected to this workspace yet" />}
-            {cli && <CardBody><p className="muted small">{cli.description} Each host needs <code>{cli.tool}</code> installed (<a href={cli.install} target="_blank" rel="noreferrer">{cli.install}</a>) and signed in by its owner: <code>{cli.signIn}</code>. Turn on <strong>read-only</strong> under Edit before running its tools automatically.</p></CardBody>}
+            {cli && <CardBody><p className="muted small">{cli.description}{cli.tool && cli.install && cli.signIn && <> Each host needs <code>{cli.tool}</code> installed (<a href={cli.install} target="_blank" rel="noreferrer">{cli.install}</a>) and signed in by its owner: <code>{cli.signIn}</code>. Turn on <strong>read-only</strong> under Edit before running its tools automatically.</>}</p></CardBody>}
             {admin && <CardBody><div className="inline">
               <label className="check-row small"><input type="checkbox" className="checkbox" checked={extension.enabled} disabled={action.busy}
                 onChange={event => void save({ ...extension, enabled: event.target.checked }, event.target.checked ? "Extension on." : "Extension off.")} /><span>Enabled</span></label>
@@ -146,11 +147,9 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
   catch (reason) { invalid = reason instanceof Error ? reason.message : "Invalid source"; }
   const replacing = !extension && normalized ? taken.find(item => extensionPackageKey(item.source) === extensionPackageKey(normalized!)) : undefined;
   const cli = normalized ? pikiExtension(normalized) : undefined;
-  const offered = pikiExtensions.filter(item => !taken.some(used => used.source === item.source));
+  const offered = pikiCommandExtensions().filter(item => !taken.some(used => used.source === item.source));
   const editingCli = !!extension && isPikiExtensionSource(extension.source);
-  // Settings the extension no longer declares are kept, shown as they are.
-  const known = new Set(flags?.map(flag => flag.name));
-  const extra = Object.keys(settings).filter(name => !known.has(name));
+  const extra = Object.keys(settings).filter(name => !flags?.some(flag => flag.name === name));
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!normalized) return;
@@ -172,7 +171,7 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
         <input className="input mono" value={source} onChange={event => setSource(event.target.value)} disabled={busy || editingCli} autoComplete="off" spellCheck={false}
           maxLength={512} placeholder="npm:cc-safety-net@2.7.2" autoFocus={!extension} />
       </Field>
-      {cli && <p className="muted small">{cli.description} It runs <code>{cli.tool}</code> as the host's owner is signed in to it.</p>}
+      {cli && <p className="muted small">{cli.description}{cli.tool && <> It runs <code>{cli.tool}</code> as the host's owner is signed in to it.</>}</p>}
       {replacing && <p className="muted small">The workspace uses {replacing.source}: this replaces it, in its place.</p>}
       <div className="field"><span className="field-label">Tools</span>
         <SegmentedControl label="Tools" value={tools} onChange={setTools} options={(["approval", "automatic"] as const).map(value => ({ value, label: toolsLabel[value] }))} />
@@ -183,20 +182,7 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
         ? <p className="muted small">Its settings show here once a host that has it installed reports them.</p>
         : !flags.length && !extra.length ? <p className="muted small">This extension has no settings.</p>
         : <div className="stack">
-          {flags.map(flag => <Field key={flag.name} label={flag.name} hint={flag.description ?? (flag.default !== undefined ? `Default: ${String(flag.default)}` : undefined)}>
-            {flag.type === "boolean"
-              ? <label className="check-row small"><input type="checkbox" className="checkbox" disabled={busy}
-                checked={(settings[flag.name] ?? flag.default) === true} onChange={event => setSettings(value => ({ ...value, [flag.name]: event.target.checked }))} /><span>On</span></label>
-              : <input className="input" disabled={busy} autoComplete="off" spellCheck={false} maxLength={4096} placeholder={typeof flag.default === "string" ? flag.default : ""}
-                value={typeof settings[flag.name] === "string" ? settings[flag.name] as string : ""}
-                onChange={event => setSettings(value => {
-                  const next = { ...value };
-                  if (event.target.value) next[flag.name] = event.target.value; else delete next[flag.name];
-                  return next;
-                })} />}
-          </Field>)}
-          {extra.map(name => <Row key={name} title={name} hint={`Kept: ${String(settings[name])}. The installed version doesn't declare it`}
-            trailing={<Button variant="ghost" size="sm" disabled={busy} onClick={() => setSettings(value => { const next = { ...value }; delete next[name]; return next; })}>Clear</Button>} />)}
+          <ExtensionSettingsFields flags={flags} settings={settings} onChange={setSettings} busy={busy} />
           <p className="muted small">Never put secrets here: every member of the workspace can read these, and they are in its audit log.</p>
         </div>)}
       <Feedback error={error} />

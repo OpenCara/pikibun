@@ -61,6 +61,7 @@ This is how a team shares one model subscription or set of API keys. Sign Pi in 
 - Sessions on a shared host still belong to the members who start them: they run as those members, with their Git accounts, not yours. Agents, session permissions and Git credentials are not shared, and your Pi history is never imported.
 - As the host's operator, you can see the prompts and repository files of every session that runs on it. Members starting a session on someone else's host confirm they trust it (**I trust …'s host**).
 - **Settings → Hosts → Shared with you** lists the hosts others shared into your workspaces.
+- To guard what lies on your machine from members' messages, require the [prompt audit](extensions.md#prompt-audit-pikiprompt-audit) of every session on it: a model on the host checks each of their messages before it reaches the agent. You can require any extension of every session on your host the same way, such as a tool-call guard ([required extensions](extensions.md)).
 
 The host's page shows its **Status** (online or offline, owner, capabilities), **Models** (where its owner and admins [enable or disable](#models) each one), **Sharing**, **[Configuration](#host-configuration)**, **Host command access**, **Admins**, **Details** (the connection ID) and **Danger zone**. **Revoke host** disconnects it and blocks work in every workspace, your own sessions included; session records are kept, and the machine needs a new pairing to come back.
 

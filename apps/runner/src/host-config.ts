@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join, relative, sep } from "node:path";
-import { defaultHostConfig, hostConfigLimits, readHostConfig, type GpuKind, type HostConfig } from "../../../packages/shared/src/host-config.js";
+import { defaultHostConfig, hostConfigLimits, readHostConfig, type GpuKind, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
 
 /** How long the host's configuration is used before the control plane is asked again: changes reach commands within it. */
 const CONFIG_TTL_MS = 30_000;
@@ -22,6 +22,8 @@ export class HostConfigSource {
   #expired = false;
   /** Answers the control plane has given, so `refresh` can tell its answer from the cached or default fallback. */
   #answers = 0;
+  /** The extensions the control plane last said the host's owner requires; kept however old, never the defaults' none. */
+  #required?: RequiredExtension[];
 
   constructor(private readonly load: () => Promise<unknown>, private readonly options: { ttlMs?: number; staleMs?: number; now?: () => number } = {}) {}
 
@@ -33,6 +35,7 @@ export class HostConfigSource {
       const config = readHostConfig(value);
       this.#cached = { value: config, at: now() };
       this.#answers++;
+      this.#required = config.requiredExtensions;
       return config;
     }).finally(() => { this.#refresh = undefined; this.#expired = false; });
     try { return await this.#refresh; }
@@ -40,6 +43,17 @@ export class HostConfigSource {
       if (cached && now() - cached.at < (this.options.staleMs ?? CONFIG_STALE_MS)) return cached.value;
       return { ...defaultHostConfig };
     }
+  }
+
+  /**
+   * The extensions the host's owner requires of every session, as the control plane last said; undefined until it has
+   * answered once. Unlike the rest of the configuration, these never fall back to the defaults (none) when the control
+   * plane can't be asked: a guard the owner requires doesn't drop out with an outage, and until the connector has heard
+   * what is required, its sessions take no messages.
+   */
+  async required(): Promise<RequiredExtension[] | undefined> {
+    await this.current();
+    return this.#required;
   }
 
   /**

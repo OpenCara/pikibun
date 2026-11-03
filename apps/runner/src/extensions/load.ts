@@ -19,7 +19,7 @@ import { pikiModulePath, connectorPikiExtensions, type PikiExtension } from "./p
 
 /** Pi events Pikibun runs (adapter.ts). Others an extension handles are reported as ignored. */
 export const supportedEvents = new Set(["session_start", "session_shutdown", "before_agent_start", "agent_start", "agent_end", "agent_settled",
-  "turn_start", "turn_end", "message_end", "tool_call", "tool_result", "tool_execution_start", "tool_execution_end", "context",
+  "turn_start", "turn_end", "message_end", "input", "tool_call", "tool_result", "tool_execution_start", "tool_execution_end", "context",
   "context_with_system", "agent_before_settle", "session_before_compact"]);
 
 interface PiLoader {

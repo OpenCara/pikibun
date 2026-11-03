@@ -1,11 +1,11 @@
-# Pikibun's built-in extensions: gh, glab and az
+# Pikibun's built-in extensions: gh, glab, az and the prompt audit
 
 Sessions on a sandboxed host have no network but the workspace's: they clone and push through the egress proxy, and read
 and act on GitHub through `github_read`, `github_comment`, `github_issue` and `github_merge`. What those don't cover (CI
 runs and their logs, checks, releases, other forges' merge requests and pipelines, the forges' APIs) took `host_bash`,
 with nothing to guide the agent or the person approving it. With this design the connector carries Pi extensions of its
 own that give sessions a forge's command-line tool, run on the host with its owner's sign-in to it, and a workspace gets
-the one for a forge when it binds its first repository there.
+the one for a forge when it binds its first repository there. It also carries a guard, the prompt audit (below).
 
 Built-in extensions are named for where they come from: Pi's are `pi:<name>` (`pi:codemode`, [host
 extensions](host-extensions.md), rule 10), which a host's configuration turns on for every session on it; Pikibun's own
@@ -59,13 +59,38 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    without them, until it reconnects. Sessions on an older connector run without them, and the workspace's and host's
    pages say to update it.
 
+## The prompt audit: piki:prompt-audit
+
+A shared host runs other members' messages next to its owner's files and credentials. `piki:prompt-audit` has a model
+of the host check each message before the agent sees it, and refuses those that reach for what lies on the machine.
+
+8. **A Pi extension on `input`.** It registers no tool: it handles Pi's `input` event, which Pikibun runs on each
+   message before accepting it ([host extensions](host-extensions.md), the compatibility table), so it works in Pi as
+   it does in Pikibun. It audits messages whose `source` isn't `interactive`: in Pikibun everyone's but the host
+   owner's, in Pi those from RPC clients and other extensions; its `audit` flag set to `all` audits every message.
+9. **Required by the host's owner.** Hosts guard themselves by requiring it of every session on them (host extensions
+   rule 11), with the owner's settings: `model` (`provider/modelId`, from `ctx.modelRegistry`; the session's model,
+   `ctx.model`, when empty) and `policy` (the owner's own words, added to the auditor's instructions). A workspace can
+   add it too, for its own sessions.
+10. **One model call, the message as data.** The auditor gets fixed instructions (credentials, host files, the host's
+   environment, exfiltration and getting around safeguards, the owner's policy; ordinary work allowed) and the message
+   between markers with a random nonce, so the message can't close them, plus its images; a model that can't see images
+   refuses messages with them. It answers with one JSON verdict. The call has 45 seconds and 2048 tokens, within the minute
+   Pikibun gives `input` handlers, which run once the message is queued, never while the connector waits on a request.
+11. **Fails closed, never throws.** Pi lets a message through when an `input` handler throws, so every failure (no
+   model, a provider error, a timeout, no verdict) is a refusal (`handled`). Pikibun refuses one that throws anyway.
+12. **Fixed words to the sender, the reason to the host.** A refusal tells the sender (`ctx.ui.notify`) only the kind of
+   thing flagged, in fixed text within the charset the control plane's relay passes on; the auditor's own reason is
+   model text a crafted message could steer, so it goes to standard error without a UI: the connector's log.
+
 ## Where things are
 
 | Part | Where |
 |---|---|
 | Catalogue (names, tools, providers, install and sign-in hints) | `packages/shared/src/piki-extensions.ts` |
 | `piki:` sources | `packages/shared/src/host-extensions.ts` |
-| The command tool, its environment and output | `apps/runner/src/extensions/piki/cli.ts` |
+| The command tool, its environment and output | `apps/runner/src/extensions/piki/command.ts` |
+| The prompt audit | `apps/runner/src/extensions/piki/prompt-audit.ts`; tests in `tests/prompt-audit.test.ts` |
 | gh, glab, az: refused and read-only arguments | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
 | Added on binding; a connector's list; install requests refused | `apps/server/src/extensions.ts`, `repositories.ts`; migrations `0048`/`0041` |

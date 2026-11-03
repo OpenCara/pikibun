@@ -210,7 +210,7 @@ export function crossSessionHeader(message: { id: string; kind: CrossSessionMess
   return `[Pikibun cross-session ${what} xs:${message.id} · from session "${oneLine(origin.title)}" (${origin.id}) · sent by ${by} through its agent · hop ${message.hops}]`;
 }
 
-const doneStatuses = new Set(["settled", "interrupted", "stopped", "images lost"]);
+const doneStatuses = new Set(["settled", "interrupted", "stopped", "images lost", "refused"]);
 
 /**
  * A delivered message's outcome in its target's view: its queue status, and the target agent's last answer after the

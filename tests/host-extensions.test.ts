@@ -93,7 +93,7 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
           pi.registerCommand("search", { description: "x", handler: async () => {} });
           pi.registerProvider("proxy", { baseUrl: "https://proxy.example.com", api: "openai-completions", apiKey: "x", models: [] });
           pi.on("tool_call", () => undefined);
-          pi.on("input", () => undefined);
+          pi.on("user_bash", () => undefined);
         }`,
     },
     "not-an-extension": { "package.json": JSON.stringify({ name: "not-an-extension", version: "1.0.0" }), "index.js": "module.exports = () => {};" },
@@ -109,7 +109,7 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
   assert.deepEqual(search, { source: "npm:pi-search@1.0.0", dev: false, name: "pi-search", version: "1.0.0", description: "Searches.", modules: [{
     path: "src/index.ts", tools: [{ name: "team_search", description: "Search the index." }, { name: "web_search", description: "Search the web." }], events: ["tool_call"],
     flags: [{ name: "endpoint", type: "string", description: "Where to search", default: "https://search.example.com" }],
-    noops: ["/search"], ignored: ["tool bash (one of Pikibun's own)", "input event", "provider proxy"],
+    noops: ["/search"], ignored: ["tool bash (one of Pikibun's own)", "user_bash event", "provider proxy"],
   }] });
   assert.match(notExtension!.error!, /isn't a Pi extension package/);
   assert.equal(dev!.dev, true);

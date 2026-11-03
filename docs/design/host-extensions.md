@@ -29,7 +29,7 @@ its host has.
 6. **Dev mode.** An extension installed from a local path on the host isn't something a workspace can name: it runs only
    in the host owner's own sessions on that host, in every workspace, marked as a dev extension.
 7. **Missing means without.** A session on a host that lacks one of the workspace's enabled extensions, or has another
-   version, starts without it and says so. (A per-extension **Required** switch could block it later.)
+   version, starts without it and says so. One the host's owner requires is the exception (rule 11).
 8. **Settings per workspace.** An extension's settings are its Pi flags (`registerFlag`); the workspace sets their values.
    Secrets never go there: the extension reads them on the host (its environment, files, or Pi's `auth.json`), which the
    host's owner sets up.
@@ -49,6 +49,18 @@ its host has.
     off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0049 (postgres/0042) added them to existing
     workspaces after their own, except where a workspace already used the package or was at its limit.
 
+11. **The host's owner requires extensions.** A host's owner can require any extension the host has, Pikibun's own
+   (`piki:<name>`) or an installed one, of every session on it, with settings of their own
+   (`HostConfig.requiredExtensions`, owner only, Host → Extensions → **Require of every session**). Sessions run them first,
+   whatever their workspace chose and in its owner's sessions too, in place of a workspace's version of the same package;
+   their tools are approved as rule 5 says, never automatic. A session whose host can't run one (not installed at that
+   version, not built into its connector, failing to load, or with a module that does) takes no messages until it can,
+   and each message is checked again as it starts: a guard the host's owner counts on never silently drops out. The
+   connector keeps what it last heard was required through any outage of the control plane (`HostConfigSource.required`),
+   and until it has heard once, its sessions take no messages. Connectors that do this advertise `requiredExtensions`. This is how a host guards
+   itself: `piki:prompt-audit` ([Pikibun's extensions](piki-extensions.md)) on messages, a tool-call guard such as
+   `npm:cc-safety-net` on what runs.
+
 ## Compatibility
 
 Pikibun runs each extension's factory with `pi-coding-agent`'s loader once per session, so module state and closures are
@@ -59,6 +71,7 @@ the session's own, then maps what it registered:
 | `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), behind the approval of rule 5. `onUpdate` is ignored. A tool named like one of Pikibun's own is ignored, unless that one is retired (`web_fetch`, `web_search`, …) |
 | `before_agent_start` | Run once per message with its prompt; a returned `systemPrompt` (appended to the empty base it gets) and `message` become a prompt section |
 | `context` | `GenerationHooks.beforeRequest` |
+| `input` | On each message or side ask once it is queued, before it starts (`Session.screen`, `SessionExtensions.input`), beside the session's work: the connector answers one request at a time, so a handler that asks a model never holds up another session's request. The message and those queued behind it wait for it. `transform` changes what runs, `handled` refuses it: it ends `refused`, shown in the transcript (`workspace.run-refused`) with the source's last `ctx.ui.notify` text. `source` is `interactive` for the host owner's own messages and `rpc` for everyone else's. A handler that throws or takes over a minute refuses the message; a restart while one runs screens the message again |
 | `tool_call` | `ToolHooks.beforeTool`: `block`/`reason`, and changes made to `event.input` |
 | `tool_result` | `ToolHooks.afterTool`: `content`, `isError`, `details` |
 | `turn_start`, `turn_end` | Before each model request, `GenerationHooks.afterTools` (results ignored) |
@@ -72,7 +85,7 @@ the session's own, then maps what it registered:
 | `exec` | Runs on the host, in the session's worktree |
 | `ctx.cwd`, `ctx.signal`, `ctx.model` | The session's worktree on the host, the call's signal, the session's model |
 | `ctx.ui.*`, `registerCommand`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage`, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
-| `registerProvider`, `registerMcpServer`, `registerVirtualModel`, `input`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
+| `registerProvider`, `registerMcpServer`, `registerVirtualModel`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 
 The host's page shows, per extension, which of its registrations work, are no-ops or are ignored, so a workspace can
 tell what it gets. `ctx.modelRegistry` is the host's Pi model registry, so an extension that uses the host's provider keys

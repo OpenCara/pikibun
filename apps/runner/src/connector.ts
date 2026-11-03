@@ -773,6 +773,7 @@ export class LocalConnector {
         ]).parse(await this.brokerCallback(await this.connection(), "/api/connectors/self/git/push/credential", payload));
       },
       hostConfig: () => hostConfig.current(),
+      requiredExtensions: () => hostConfig.required(),
       // Only while the host's owner has them on in Pikibun; the control plane checks that too before it names them.
       hostGitCredential: async (remote: string, signal?: AbortSignal) => {
         if (!(await hostConfig.current()).gitCredentials) throw new HostCredentialError("This host's owner hasn't turned on its Git credentials in Pikibun (Settings → Hosts → the host → Configuration)");
