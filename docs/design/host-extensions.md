@@ -179,6 +179,12 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 | Web and mobile: workspace and host sections, install buttons, session list, approval card | Done (`WorkspaceExtensions.tsx`, `HostExtensions.tsx`, `session-panel.tsx`; mobile: the approval card) |
 | Pi's built-ins from the host's configuration: code mode | Done (`extensions/builtin.ts`, `host-config.ts`, `HostExtensions.tsx`) |
 
+## Built-in extensions
+
+The connector also carries extensions of its own, `builtin:gh`, `builtin:glab` and `builtin:azure-cli`, which every host
+has without installing them and a workspace gets with its first repository on that forge: see
+[Built-in extensions](builtin-extensions.md).
+
 ## Later
 
 - Isolation in a worker or child process.

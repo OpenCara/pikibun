@@ -10,18 +10,32 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 export const extensionToolModes = ["approval", "automatic"] as const;
 export type ExtensionToolMode = (typeof extensionToolModes)[number];
 
-/** A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`. */
-export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string };
+/**
+ * A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`; or `builtin:<name>`, an
+ * extension built into the connector (builtin-extensions.ts), whose version is the connector's own.
+ */
+export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string }
+  | { kind: "builtin"; name: string };
 
 export const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 export const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 const COMMIT = /^[0-9a-f]{40}$/;
+/** A built-in extension's name. Any such name parses, so a control plane takes ones built into newer connectors. */
+export const BUILTIN_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 
 export class ExtensionSourceError extends Error {}
 
-/** Parses `npm:<name>@<version>` or `git:<url>@<commit>` (an https URL, `https://` optional); anything else is refused. */
+/**
+ * Parses `npm:<name>@<version>`, `git:<url>@<commit>` (an https URL, `https://` optional) or `builtin:<name>`; anything
+ * else is refused.
+ */
 export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
   if (typeof spec !== "string" || spec.length > 512) throw new ExtensionSourceError("Invalid extension source");
+  if (spec.startsWith("builtin:")) {
+    const name = spec.slice(8);
+    if (!BUILTIN_NAME.test(name)) throw new ExtensionSourceError(`Invalid built-in extension name: ${name}`);
+    return { kind: "builtin", name };
+  }
   if (spec.startsWith("npm:")) {
     const rest = spec.slice(4);
     const at = rest.lastIndexOf("@");
@@ -45,11 +59,16 @@ export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
     if (!COMMIT.test(commit)) throw new ExtensionSourceError(`Pin a full commit, such as git:${url}@<40-character commit>: branches and tags could load different code later.`);
     return { kind: "git", url: parsed.href.replace(/\/$/, "").replace(/\.git$/, ""), commit };
   }
-  throw new ExtensionSourceError("An extension source is npm:<package>@<version> or git:<https URL>@<commit>.");
+  throw new ExtensionSourceError("An extension source is npm:<package>@<version>, git:<https URL>@<commit> or builtin:<name>.");
 }
 
 export function extensionSourceString(spec: ExtensionSourceSpec): string {
-  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : `git:${spec.url}@${spec.commit}`;
+  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : spec.kind === "git" ? `git:${spec.url}@${spec.commit}` : `builtin:${spec.name}`;
+}
+
+/** Whether `source` names an extension built into the connector: hosts never install or remove those. */
+export function isBuiltinExtensionSource(source: string): boolean {
+  return source.startsWith("builtin:");
 }
 
 /** The normalized form of `spec`, or an error. */
@@ -57,10 +76,13 @@ export function normalizeExtensionSource(spec: string): string {
   return extensionSourceString(parseExtensionSourceSpec(spec));
 }
 
-/** What stays the same across versions of one extension: `npm:<name>` or `git:<url>`. A workspace has one version of each. */
+/**
+ * What stays the same across versions of one extension: `npm:<name>`, `git:<url>`, or the built-in source itself. A
+ * workspace has one version of each.
+ */
 export function extensionPackageKey(source: string): string {
   const spec = parseExtensionSourceSpec(source);
-  return spec.kind === "npm" ? `npm:${spec.package}` : `git:${spec.url}`;
+  return spec.kind === "npm" ? `npm:${spec.package}` : spec.kind === "git" ? `git:${spec.url}` : `builtin:${spec.name}`;
 }
 
 /** A Pi flag an extension registers: one of its settings. */
@@ -88,7 +110,7 @@ export interface ExtensionModuleSummary {
 
 /** One source installed on a host, with what it holds. */
 export interface InstalledExtension {
-  /** Normalized npm or Git source; for a dev extension, `local:<path>`. */
+  /** Normalized npm, Git or built-in source; for a dev extension, `local:<path>`. */
   source: string;
   /** Installed from a local path: runs only in the host owner's own sessions. */
   dev: boolean;
@@ -112,7 +134,7 @@ export type ExtensionSettings = Record<string, boolean | string>;
 
 /** An extension a workspace uses, as its owners and admins set it. */
 export interface WorkspaceExtension {
-  /** Normalized npm or Git source. */
+  /** Normalized npm, Git or built-in source. */
   source: string;
   enabled: boolean;
   tools: ExtensionToolMode;
@@ -226,7 +248,10 @@ export function parseHostExtensionsReport(value: unknown): HostExtensionsReport 
   return { installed, remoteInstalls: value.remoteInstalls };
 }
 
-/** How a workspace's extension stands on one host: installed at its version, at another, or missing. */
+/**
+ * How a workspace's extension stands on one host: installed at its version, at another, or missing. A built-in one is
+ * missing only from connectors that predate it, which an update of the connector brings.
+ */
 export type ExtensionAvailability = { status: "installed" } | { status: "other-version"; installed: string } | { status: "missing" };
 
 export function extensionAvailability(source: string, installed: readonly InstalledExtension[]): ExtensionAvailability {
@@ -256,7 +281,7 @@ export function sessionExtensions(workspace: readonly WorkspaceExtension[], inst
 export interface ExtensionRequest {
   id: string;
   action: "install" | "remove";
-  /** Normalized npm or Git source. */
+  /** Normalized npm or Git source; never a built-in one. */
   source: string;
 }
 

@@ -1382,7 +1382,7 @@ test('a connected host reports its extensions, carries out the installs its owne
   });
   const syncs = mailbox<{ report: { installed: { source: string }[]; remoteInstalls: boolean }; results: unknown[] }>();
   let asked = false;
-  const fixture = await connectorFixture(t, { extensions: new HostExtensions(store, { remoteInstalls: true }), extensionsSync: body => {
+  const fixture = await connectorFixture(t, { extensions: new HostExtensions(store, { remoteInstalls: true, builtins: [] }), extensionsSync: body => {
     syncs.push(body as never);
     const requests = asked ? [] : [{ id: 'request-1', action: 'install', source: 'npm:pi-hello@1.0.0' }];
     asked = true;
@@ -1394,4 +1394,21 @@ test('a connected host reports its extensions, carries out the installs its owne
   assert.deepEqual(second.results, [{ id: 'request-1', ok: true }]);
   assert.deepEqual(second.report.installed.map(item => item.source), ['npm:pi-hello@1.0.0']);
   assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['npm:pi-hello@1.0.0'], 'sessions see it at once');
+});
+
+test('a connected host reports its built-in extensions, and leaves them out for a control plane that refuses them', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-builtins-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const syncs = mailbox<{ report: { installed: { source: string }[] } }>();
+  const fixture = await connectorFixture(t, { extensions: new HostExtensions(new ExtensionStore(join(root, 'extensions')), { remoteInstalls: true }), extensionsSync: body => {
+    syncs.push(body as never);
+    // A control plane that predates built-in extensions refuses a report that names one.
+    const refused = (body as { report: { installed: { source: string }[] } }).report.installed.some(item => item.source.startsWith('builtin:'));
+    return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
+  } });
+  await startFixture(fixture);
+  assert.deepEqual((await syncs.next()).report.installed.map(item => item.source), ['builtin:gh', 'builtin:glab', 'builtin:azure-cli']);
+  assert.deepEqual((await syncs.next()).report.installed, [], 'tried again at once, without them');
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['builtin:gh', 'builtin:glab', 'builtin:azure-cli'],
+    'sessions still have them');
 });

@@ -185,3 +185,22 @@ test('a host\'s sessions get their workspace\'s extensions and its owner\'s swit
   const own = await sessionExtensionSources(f.env, { workspace_id: s.workspaceId, owner_id: s.alice.user.id, connector_owner_id: s.alice.user.id });
   assert.equal(own('local:/home/alice/dev.ts'), true, 'a dev extension in its host owner\'s own session');
 });
+
+test('built-in extensions: hosts aren\'t asked to install them, and a connector that predates them gets its workspace\'s others', async t => {
+  const f = await fixture(t); const s = await team(f);
+  const path = `/api/workspaces/${s.workspaceId}/extensions`;
+  await json(await s.alice.request('PUT', path, { source: 'builtin:gh' }));
+  await json(await s.alice.request('PUT', path, { source: 'npm:pi-memory@0.4.2' }));
+  await denied(await s.alice.request('POST', `/api/connectors/${s.connector.connectorId}/extensions/requests`, { action: 'install', source: 'builtin:gh' }), 400, 'builtin_extension');
+  type Answer = { extensions: WorkspaceExtension[] };
+  const ask = async () => (await json<Answer>(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.workspaceId }))).extensions.map(item => item.source);
+  assert.deepEqual(await ask(), ['npm:pi-memory@0.4.2'], 'before a report that names built-in extensions');
+  await json(await self(f, s.connector, 'extensions', { report: report([installed('npm:pi-memory@0.4.2')]), results: [] }));
+  assert.deepEqual(await ask(), ['npm:pi-memory@0.4.2'], 'an older connector would refuse the whole list');
+  await json(await self(f, s.connector, 'extensions', { report: report([installed('builtin:gh'), installed('builtin:glab'), installed('npm:pi-memory@0.4.2')]), results: [] }));
+  assert.deepEqual(await ask(), ['builtin:gh', 'npm:pi-memory@0.4.2']);
+  const listed = await json<{ hosts: { availability?: Record<string, ExtensionAvailability> }[] }>(await s.bob.request('GET', path));
+  assert.deepEqual(listed.hosts[0]!.availability!['builtin:gh'], { status: 'installed' });
+  const sources = await sessionExtensionSources(f.env, { workspace_id: s.workspaceId, owner_id: s.bob.user.id, connector_owner_id: s.alice.user.id });
+  assert.deepEqual(['builtin:gh', 'builtin:glab'].map(sources), [true, false], 'a tool card names one the workspace runs');
+});

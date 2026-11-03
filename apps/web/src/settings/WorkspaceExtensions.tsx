@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { Workspace } from "../../../../packages/shared/src/types";
-import { extensionLimits, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
+import { builtinExtension, builtinExtensions } from "../../../../packages/shared/src/builtin-extensions";
+import { extensionLimits, extensionPackageKey, isBuiltinExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
   type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension } from "../../../../packages/shared/src/host-extensions";
 import { api, segment } from "../api";
 import { Icon } from "../icons";
@@ -23,6 +24,7 @@ const toolsLabel: Record<ExtensionToolMode, string> = { approval: "Approval", au
 
 const info = <div className="stack">
   <p>Pi extensions add tools, prompt text and hooks to this workspace's sessions. A session runs those enabled here that its host has installed at the same version: its host's owner installs them there, from the host's page or with <code>pikibun extensions</code>.</p>
+  <p>Built-in extensions come with every host's connector: <code>builtin:gh</code>, <code>builtin:glab</code> and <code>builtin:azure-cli</code> run the GitHub, GitLab or Azure CLI the host has installed and signed in. The workspace gets the one for a forge when it binds its first repository there.</p>
   <p>Extensions run on the host, as its owner's OS user, outside the sandbox and the network access above. Their tool calls are approved like host commands, by the host's owner or a member granted host commands, unless you set their tools to run automatically and the host's owner allows that on their host.</p>
   <p>Settings are the extension's own options. Never put secrets in them: an extension reads keys on its host, which its owner sets up.</p>
 </div>;
@@ -50,9 +52,10 @@ function clashes(extensions: readonly WorkspaceExtension[], hosts: readonly Exte
   return [...owners].filter(([, sources]) => sources.length > 1).map(([tool, sources]) => ({ tool, sources }));
 }
 
-function availabilityBadge(availability: ExtensionAvailability | undefined) {
+function availabilityBadge(availability: ExtensionAvailability | undefined, source: string) {
   if (!availability) return <StatusBadge tone="neutral">Not reported</StatusBadge>;
-  if (availability.status === "installed") return <StatusBadge tone="success">Installed</StatusBadge>;
+  if (availability.status === "installed") return <StatusBadge tone="success">{isBuiltinExtensionSource(source) ? "Built in" : "Installed"}</StatusBadge>;
+  if (isBuiltinExtensionSource(source)) return <StatusBadge tone="warning">Update its connector</StatusBadge>;
   if (availability.status === "other-version") return <StatusBadge tone="warning">{availability.installed.slice(availability.installed.lastIndexOf("@") + 1)} installed</StatusBadge>;
   return <StatusBadge tone="neutral">Missing</StatusBadge>;
 }
@@ -96,20 +99,22 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
     ? <Button variant="outline" size="sm" icon="plus" onClick={() => setEditing("new")}>Add extension</Button> : undefined}>
     <ResourceState loading={resource.loading && !data} error={resource.error} retry={resource.refresh}>
       {data && <div className="card">
-        {!data.extensions.length && <EmptyState title="No extensions">{admin ? "Add a Pi extension, such as npm:cc-safety-net@2.7.2, to run it in this workspace's sessions." : "Owners and admins add the Pi extensions this workspace's sessions run."}</EmptyState>}
+        {!data.extensions.length && <EmptyState title="No extensions">{admin ? "Add a Pi extension, such as npm:cc-safety-net@2.7.2 or the built-in builtin:gh, to run it in this workspace's sessions." : "Owners and admins add the Pi extensions this workspace's sessions run."}</EmptyState>}
         {data.extensions.map(extension => {
           const installedOn = data.hosts.filter(host => host.availability?.[extension.source]?.status === "installed").length;
-          return <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={<code>{extension.source}</code>}
-            hint={`Tools: ${toolsLabel[extension.tools].toLowerCase()} · installed on ${installedOn} of ${data.hosts.length} ${data.hosts.length === 1 ? "host" : "hosts"}`}
+          const builtin = builtinExtension(extension.source);
+          return <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={builtin ? <>{builtin.title} <code>{extension.source}</code></> : <code>{extension.source}</code>}
+            hint={`Tools: ${toolsLabel[extension.tools].toLowerCase()} · ${builtin ? "on" : "installed on"} ${installedOn} of ${data.hosts.length} ${data.hosts.length === 1 ? "host" : "hosts"}`}
             trailing={extension.enabled ? <StatusBadge tone="success">On</StatusBadge> : <StatusBadge tone="neutral">Off</StatusBadge>}>
             {data.hosts.map(host => {
               const availability = host.availability?.[extension.source];
-              const installable = host.ownerId === userId && host.report?.remoteInstalls === true && availability && availability.status !== "installed";
+              const installable = !builtin && host.ownerId === userId && host.report?.remoteInstalls === true && availability && availability.status !== "installed";
               return <Row key={host.id} leading={<Icon name="server" size={16} />} title={host.name} hint={`Hosted by ${host.ownerId === userId ? "you" : host.ownerName}`}
-                trailing={<span className="inline">{availabilityBadge(availability)}{installable && <Button variant="outline" size="sm" disabled={action.busy}
+                trailing={<span className="inline">{availabilityBadge(availability, extension.source)}{installable && <Button variant="outline" size="sm" disabled={action.busy}
                   onClick={() => install(host, extension.source)}>{availability.status === "other-version" ? "Update" : "Install"}</Button>}</span>} />;
             })}
             {!data.hosts.length && <Row title="No hosts" hint="No host is connected to this workspace yet" />}
+            {builtin && <CardBody><p className="muted small">{builtin.description} Each host needs <code>{builtin.tool}</code> installed (<a href={builtin.install} target="_blank" rel="noreferrer">{builtin.install}</a>) and signed in by its owner: <code>{builtin.signIn}</code>. Turn on <strong>read-only</strong> under Edit before running its tools automatically.</p></CardBody>}
             {admin && <CardBody><div className="inline">
               <label className="check-row small"><input type="checkbox" className="checkbox" checked={extension.enabled} disabled={action.busy}
                 onChange={event => void save({ ...extension, enabled: event.target.checked }, event.target.checked ? "Extension on." : "Extension off.")} /><span>Enabled</span></label>
@@ -139,7 +144,10 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
   let invalid = "";
   try { normalized = source.trim() ? normalizeExtensionSource(source.trim()) : undefined; }
   catch (reason) { invalid = reason instanceof Error ? reason.message : "Invalid source"; }
-  const replacing = !extension && normalized ? taken.find(item => item.source.slice(0, item.source.lastIndexOf("@")) === normalized!.slice(0, normalized!.lastIndexOf("@"))) : undefined;
+  const replacing = !extension && normalized ? taken.find(item => extensionPackageKey(item.source) === extensionPackageKey(normalized!)) : undefined;
+  const builtin = normalized ? builtinExtension(normalized) : undefined;
+  const offered = builtinExtensions.filter(item => !taken.some(used => used.source === item.source));
+  const editingBuiltin = !!extension && isBuiltinExtensionSource(extension.source);
   // Settings the extension no longer declares are kept, shown as they are.
   const known = new Set(flags?.map(flag => flag.name));
   const extra = Object.keys(settings).filter(name => !known.has(name));
@@ -153,11 +161,18 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
     <Button variant="default" type="submit" form="extension-form" disabled={busy || !normalized}>{busy ? "Saving..." : "Save"}</Button>
   </>}>
     <form id="extension-form" className="stack" onSubmit={submit}>
-      <Field label="Source" hint={extension ? "Change the version to move every host to it: until a host's owner installs it there, sessions on that host run without it"
-        : "npm:<package>@<exact version>, or git:<https URL>@<full commit>. A Pi extension package, pinned"} error={invalid}>
-        <input className="input mono" value={source} onChange={event => setSource(event.target.value)} disabled={busy} autoComplete="off" spellCheck={false}
+      {!extension && !!offered.length && <div className="field"><span className="field-label">Built in</span>
+        <div className="inline">{offered.map(item => <Button key={item.source} variant={normalized === item.source ? "default" : "outline"} size="sm" disabled={busy}
+          onClick={() => setSource(item.source)}>{item.title}</Button>)}</div>
+        <span className="field-hint">These come with every host's connector: each host needs only the command itself, signed in by its owner.</span>
+      </div>}
+      <Field label="Source" hint={editingBuiltin ? "Built into the connector: its version is each host's connector's"
+        : extension ? "Change the version to move every host to it: until a host's owner installs it there, sessions on that host run without it"
+        : "npm:<package>@<exact version>, git:<https URL>@<full commit>, or builtin:<name>. A Pi extension package, pinned"} error={invalid}>
+        <input className="input mono" value={source} onChange={event => setSource(event.target.value)} disabled={busy || editingBuiltin} autoComplete="off" spellCheck={false}
           maxLength={512} placeholder="npm:cc-safety-net@2.7.2" autoFocus={!extension} />
       </Field>
+      {builtin && <p className="muted small">{builtin.description} It runs <code>{builtin.tool}</code> as the host's owner is signed in to it.</p>}
       {replacing && <p className="muted small">The workspace uses {replacing.source}: this replaces it, in its place.</p>}
       <div className="field"><span className="field-label">Tools</span>
         <SegmentedControl label="Tools" value={tools} onChange={setTools} options={(["approval", "automatic"] as const).map(value => ({ value, label: toolsLabel[value] }))} />

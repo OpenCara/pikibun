@@ -7,7 +7,7 @@ import { createEventBus, createExtensionRuntime, ExtensionRunner, SessionManager
   type ExtensionContextActions, type ModelRegistry, type ToolCallEvent, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { isJsonValue } from "./json.js";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
-import { piLoader, type LoadedSource } from "./load.js";
+import { loadSource, type LoadedSource } from "./load.js";
 
 /*
  * Runs a session's Pi extensions on pi-durable (docs/design/host-extensions.md). Each source gets its own Pi
@@ -117,14 +117,13 @@ export class SessionExtensions {
    * source that fails is left out, and logged.
    */
   async ensure(sources: readonly LoadedSource[]): Promise<void> {
-    const { loadExtensions } = await piLoader();
     const opened: OpenedSource[] = [];
     for (const loaded of sources) {
       const source = loaded.summary.source;
       if (this.#opened.some(item => item.source === source) || loaded.summary.error) continue;
       try {
         const runtime = createExtensionRuntime();
-        const result = await loadExtensions(loaded.files, this.host.directory, createEventBus(), runtime);
+        const result = await loadSource(loaded, this.host.directory, createEventBus(), runtime);
         for (const error of result.errors) this.host.warn(source, error.error);
         const runner = new ExtensionRunner(result.extensions, runtime, this.host.directory, SessionManager.inMemory(this.host.directory),
           this.host.modelRegistry ?? (undefined as never));
