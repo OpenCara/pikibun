@@ -20,7 +20,9 @@ its host has.
    from its page in Pikibun, where extensions a workspace uses but the host lacks show an **Install** button, or with
    `pikibun extensions` on the machine. Every install is pinned, runs no npm scripts, and is audited.
 4. **In the connector process.** Extensions run in the connector, as the host's OS user, outside the sandbox, with its
-   files, credentials and network. A buggy one can slow or crash the connector. Isolation is later work.
+   files, credentials and network. A buggy one can slow or crash the connector. Isolation is later work. Modules are
+   found as Pi finds them: a directory a package's `pi.extensions` names loads its `index.ts`/`index.js` alone when it
+   has one, so CLIs bundled next to it (which may exit the process) never load.
 5. **Approval by default.** An extension tool call is decided like `host_bash`, by the host's owner or a member granted
    host commands. It runs without approval only where the workspace set the extension's tools to automatic **and** the
    host's owner lets workspaces do that on their host (off by default).
@@ -43,6 +45,9 @@ its host has.
    that is **code mode** (`pi:codemode`, from `@earendil-works/pi-durable/codemode`). Pi's others have no counterpart:
    `mcp` and `llama.cpp` register MCP servers and providers (ignored, see below), and `tool-search` finds deferred tools,
    which Pikibun has none of.
+11. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
+    off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0049 (postgres/0042) added them to existing
+    workspaces after their own, except where a workspace already used the package or was at its limit.
 
 11. **The host's owner requires extensions.** A host's owner can require any extension the host has, Pikibun's own
    (`piki:<name>`) or an installed one, of every session on it, with settings of their own

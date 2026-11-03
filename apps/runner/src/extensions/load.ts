@@ -74,8 +74,12 @@ async function packageEntries(directory: string, requireManifest: boolean): Prom
   return { files, ...about };
 }
 
-/** Pi's discovery in a directory: its .ts/.js files, and subdirectories with an index. */
+/**
+ * Pi's discovery in a directory: its index, if it has one; otherwise its .ts/.js files, and subdirectories with an index.
+ * A package's `"pi": { "extensions": ["./dist"] }` so loads `dist/index.js` alone, as in Pi, not the bundled CLIs next to it.
+ */
 async function directoryEntries(directory: string): Promise<string[]> {
+  for (const index of ["index.ts", "index.js"]) if (await isFile(join(directory, index))) return [join(directory, index)];
   const files: string[] = [];
   for (const item of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     if (item.isFile() && ENTRY.test(item.name) && !item.name.endsWith(".d.ts")) files.push(join(directory, item.name));

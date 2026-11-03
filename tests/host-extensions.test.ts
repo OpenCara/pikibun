@@ -125,6 +125,29 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
   assert.deepEqual((await store.list()).map(item => item.source), ["npm:not-an-extension@1.0.0", `local:${join(root, "dev.ts")}`, `local:${join(root, "broken.ts")}`]);
 });
 
+test("a directory a package names loads as Pi loads it: its index alone, if it has one, else every module in it", async t => {
+  const exits = `process.exit(3);`;
+  const { store } = await storeWith(t, {
+    // pi-web-access ships a CLI (`dist/mcp-cli.js`, which exits) next to its extension (`dist/index.js`).
+    "pi-bundled": {
+      "package.json": JSON.stringify({ name: "pi-bundled", version: "1.0.0", pi: { extensions: ["./dist"] } }),
+      "dist/index.js": `export default function (pi) { pi.on("session_start", () => {}); }`,
+      "dist/mcp-cli.js": exits,
+    },
+    "pi-several": {
+      "package.json": JSON.stringify({ name: "pi-several", version: "1.0.0", pi: { extensions: ["./extensions"] } }),
+      "extensions/a.js": `export default function (pi) { pi.on("agent_start", () => {}); }`,
+      "extensions/b/index.js": `export default function (pi) { pi.on("agent_end", () => {}); }`,
+      "extensions/b/cli.js": exits,
+    },
+  });
+  await store.add(parseExtensionSource("npm:pi-bundled@1.0.0"));
+  await store.add(parseExtensionSource("npm:pi-several@1.0.0"));
+  const [bundled, several] = (await loadInstalled(store)).map(item => item.summary).filter(item => item.source.startsWith("npm:"));
+  assert.deepEqual(bundled!.modules.map(module => [module.path, module.events]), [["dist/index.js", ["session_start"]]]);
+  assert.deepEqual(several!.modules.map(module => [module.path, module.events]), [["extensions/a.js", ["agent_start"]], ["extensions/b/index.js", ["agent_end"]]]);
+});
+
 test("system prompt changes become the text they add", () => {
   assert.equal(addedPrompt("Base.", "Base.\n\nExtra."), "Extra.");
   assert.equal(addedPrompt("A\nB", "A\nInserted\nB"), "Inserted");
