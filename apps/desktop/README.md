@@ -140,7 +140,7 @@ blocks them elsewhere (right-click › Open, or `xattr -dr com.apple.quarantine 
 
 The desktop release workflow (`.github/workflows/release-desktop.yml`, started by a `desktop-v1.2.3` tag) does all of
 this without editing `electron-builder.yml`: once `MAC_CERTIFICATE_P12` and the notarization key are configured (the
-root README, "Releasing", lists them), it overrides the identity, hardened runtime and notarization on the command
+[`docs/development.md`](../../docs/development.md), "Releasing", lists them), it overrides the identity, hardened runtime and notarization on the command
 line. It then attaches the DMG to the tag's GitHub release, and without those secrets it releases the ad-hoc
 signed build. A Windows job builds the x64 installer from the same tag and attaches it to the same release: signed when
 `WIN_CERTIFICATE_P12` (a base64 code-signing .p12) and `WIN_CERTIFICATE_PASSWORD` are set in the `release`

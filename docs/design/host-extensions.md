@@ -86,8 +86,14 @@ options and lifecycle), so a workspace can't name one. Pikibun wraps the useful 
 - A session installs every built-in in its registry when it opens, so a script it resumes finds its tool. Each shared
   message selects the ones the configuration turns on, after the workspace's extensions; one steps aside where a
   workspace extension of that message offers a tool by its name, as Pi's built-ins do (`extensions/builtin.ts`).
-- **Code mode**: `createCodemodeExtension` with a QuickJS `CodemodeSandbox` per session, 256 MiB per script and at most
-  8 scripts at once per connector (another is refused), and `models: false`. Scripts call the conversation's callable
+- **Code mode**: `createCodemodeExtension` with a QuickJS sandbox per session (`LimitedCodemodeSandbox`), 256 MiB per
+  script, at most 2 scripts at once per session and 8 per connector (another is refused), and `models: false`.
+  pi-codemode's `start()` sets no deadline unless the script asks for `timeout_ms`, so the sandbox stops a VM that has
+  computed for 120 seconds in all (from its start and each delivered result until `onIdle`). That ends the script as a
+  time-out, not an abort, which the tool would take for a closed sandbox. Time the script's calls take, approvals
+  included, doesn't count. Pikibun gives the harness no execution environment, so the tool gets one of its own that
+  writes only its full text output, into the worktree's `codemode-output/` as the message's sender (`writeFile`, the file
+  tools' rules), except in Read-only messages; images still reach the model but aren't saved. Scripts call the conversation's callable
   tools as nested calls through the harness, so each one is permitted, approved (`extension.tool` cards included) and
   refused in Read-only messages exactly as the model's own call would be. Scripts survive a restart (pi-durable's
   journal). The script itself runs outside the OS sandbox, in a worker thread of the connector, but QuickJS gives it no

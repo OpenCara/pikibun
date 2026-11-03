@@ -65,7 +65,7 @@ as attachments.
 ## Not done yet
 
 - **App Store**: the iOS release workflow (`.github/workflows/release-ios.yml`) uploads each `ios-v1.2.3` tag to
-  TestFlight once its signing secrets are configured (the root README, "Releasing", lists them). Submitting a build for App
+  TestFlight once its signing secrets are configured ([`docs/development.md`](../../docs/development.md), "Releasing", lists them). Submitting a build for App
   Store review is manual.
 - **Android**: `app.json` already has the package name and adaptive icon, and the code keeps platform differences
   behind explicit `Platform` checks: keyboard avoidance and keyboard events (`lib/layout.ts`, the session and sign-in

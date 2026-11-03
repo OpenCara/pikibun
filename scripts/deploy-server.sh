@@ -12,7 +12,7 @@ dir=${2:?directory}
 timeout=${DEPLOY_HEALTH_TIMEOUT:-180}
 
 cd "$dir"
-[ -f .env ] || { echo "No .env in $(pwd): set up the server as README.md's \"Docker\" says first." >&2; exit 1; }
+[ -f .env ] || { echo "No .env in $(pwd): set up the server as docs/self-hosting.md's \"Docker\" says first." >&2; exit 1; }
 
 echo "Pulling $image"
 if ! docker pull --quiet "$image"; then
