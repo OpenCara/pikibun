@@ -24,6 +24,7 @@ import { connectorAdmins, connectorHostGrants, managedConnector, requireManagedW
 import { connectorHostConfig } from './host-config.js';
 import { disabledModelKeys, hostModelSettings } from './host-models.js';
 import { reportSessionBranches } from './session-branches.js';
+import { notifySessionActivityQuietly } from './notifications.js';
 
 export interface ConnectorRow {
   id: string; owner_id: string; name: string; credential_hash: string; revoked_at: string | null;
@@ -202,9 +203,15 @@ async function reportSessionActivity(c: AppContext, connectorId: string): Promis
   if (!row) fail(404, 'not_found', 'Session not found.');
   await requireCallbackScope(c, row, connectorId);
   if (row.activity !== activity) {
-    await c.env.DB.query('UPDATE sessions SET activity = ? WHERE id = ? AND connector_id = ?').bind(activity, row.id, connectorId).run();
+    // From the activity this report read, so that of two reports at once only the one that made a change notifies; the
+    // other still writes its activity, the latest report winning as before.
+    const { changes } = await c.env.DB.query('UPDATE sessions SET activity = ? WHERE id = ? AND connector_id = ? AND COALESCE(activity, \'\') = ?')
+      .bind(activity, row.id, connectorId, row.activity ?? '').run();
+    if (!changes) await c.env.DB.query('UPDATE sessions SET activity = ? WHERE id = ? AND connector_id = ?').bind(activity, row.id, connectorId).run();
     // An agent at work changes the session: the next automatic backup has something new to save.
     if (activity === 'working') await markSessionChanged(c.env, row.id);
+    // Waiting for an approval, finished or failed: the people it concerns hear about it (notifications.ts).
+    if (changes) await notifySessionActivityQuietly(c.env, row, row.activity, activity);
   }
   return c.json({ ok: true });
 }

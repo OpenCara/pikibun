@@ -19,6 +19,7 @@ import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { sessionExtensions, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
+import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { ATTACHMENTS_DIRECTORY, fileUploadLimits, parseUploadChunk, type UploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
@@ -145,12 +146,12 @@ const readOnlyTools = ["identity", "read_file", "list_files"];
 /** How often a sessions tool wait reads its message's outcome. */
 const WAIT_POLL_MS = 3000;
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
-  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent) and the models create can use. "
+  + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
   + "read {session, limit?, message_id?}: a session's latest shared-conversation entries and pending approvals; with message_id, also the outcome of a message this session sent it (status, done, reply). "
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access approval, the default: its commands wait for people there; read: inspect only; auto: only in a message the session owner sent with auto-approve, to a session they own); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
-  + "create {message?, title?, model?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, on this session's model unless model names one list returns, and send it message. "
+  + "create {message?, title?, model?, thinking?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
   + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
   + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
   + "chains of messages stop after 3 hops and never loop back to a session they came from; approvals in another session are decided only by people there. "
@@ -363,6 +364,8 @@ export class RunnerSession {
   #registry?: Registry;
   /** The session's Pi extensions (docs/design/host-extensions.md), where the host has any. */
   #hostExtensions?: SessionExtensions;
+  /** Pi's built-in extensions (HostConfig.builtinExtensions), installed in the registry; each message selects those the host's configuration turns on. */
+  #builtins?: SessionBuiltins;
   private tools: ToolRegistration[] = [];
   private lock: Promise<unknown> = Promise.resolve();
   private generation = 0;
@@ -970,6 +973,11 @@ export class RunnerSession {
     this.#extension = extension;
     registry.install(extension);
     this.#registry = registry;
+    if (!this.#packed) {
+      // Installed whether or not the host's configuration turns them on now, so a script it resumes finds its tool.
+      this.#builtins = new SessionBuiltins({ outputs: api => this.codemodeOutputs(api) });
+      for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
+    }
     if (this.config.extensions && !this.#packed) {
       this.#hostExtensions = new SessionExtensions(this.extensionHost(), this.tools.map(tool => tool.name));
       // Installed before the harness opens, so a call of an extension's tool it resumes finds its tool.
@@ -1385,14 +1393,18 @@ export class RunnerSession {
     const options = run.options ?? {};
     const access = options.access ?? "approval";
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
+    // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
+    const builtins = run.mode === "write" && this.#builtins
+      ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
+      : [];
     const change: AgentChange = {
       ...(options.model ? { model: { provider: options.model.provider, modelId: options.model.modelId } } : {}),
       ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       // Every shared run states its toolset and instructions, so a read-only request never leaks into the next one. All
       // tools are offered: a call the session doesn't allow asks the owner instead of failing.
       ...(run.mode === "write" ? {
-        tools: [...this.tools, ...extensions.flatMap(extension => extension.tools)],
-        extensions: [this.#extension, ...extensions.map(extension => extension.extension)],
+        tools: [...this.tools, ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
+        extensions: [this.#extension, ...extensions.map(extension => extension.extension), ...builtins],
         instructions: this.agentInstructions(access === "read" ? "read" : "write"),
       } : {}),
     };
@@ -1429,6 +1441,18 @@ export class RunnerSession {
     const { selected, created } = host.select(chosen.map(item => item.source));
     for (const extension of created) this.#registry?.install(extension);
     return selected;
+  }
+
+  /**
+   * Where a code mode call saves its full output: files in the worktree, written as the message's sender, which read_file
+   * reads; none in a Read-only message, whose result then says it couldn't be saved.
+   */
+  private async codemodeOutputs(api: ToolExecutionApi): Promise<OutputFiles | undefined> {
+    const attribution = await this.toolActor(api, true);
+    const state = await this.metadata();
+    const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
+    if (run.options?.access === "read") return undefined;
+    return { writeFile: (path, content) => this.sandbox.writeFile(path, content, async () => { await this.recheckTool(attribution); }) };
   }
 
   /** What the session gives its extensions: its worktree, their state and settings, and the gate of their tool calls. */
@@ -2124,13 +2148,13 @@ export class RunnerSession {
         executionMode: "sequential", parameters: Type.Object({
         action: StringEnum(sessionsToolActions), session: Type.Optional(Type.String()), message: Type.Optional(Type.String()),
         access: Type.Optional(StringEnum(accessModes)), notify: Type.Optional(Type.Boolean()), title: Type.Optional(Type.String()), model: Type.Optional(Type.String()),
-        visibility: Type.Optional(StringEnum(["private", "workspace"] as const)), message_id: Type.Optional(Type.String()),
+        thinking: Type.Optional(StringEnum(thinkingLevels)), visibility: Type.Optional(StringEnum(["private", "workspace"] as const)), message_id: Type.Optional(Type.String()),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.readEntries })),
         timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
       }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
-          modelId: args.model, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
+          modelId: args.model, thinkingLevel: args.thinking, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
           Omit<SessionsToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
         if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Sessions tool fields must not contain NUL characters");
         const wait = args.action === "wait";
@@ -2807,7 +2831,11 @@ export class RunnerSession {
   /** What the view tells of the session's extensions: those it runs with now, and its workspace's enabled ones its host lacks. */
   private async extensionView(): Promise<Pick<SessionView, "extensions">> {
     const config = this.config.extensions;
-    if (!config) return {};
+    const enabled = this.#builtins ? (await this.hostConfig().catch(() => undefined))?.builtinExtensions ?? [] : [];
+    if (!config) {
+      const builtin = this.#builtins?.select(enabled, new Set()).map(item => item.name) ?? [];
+      return builtin.length ? { extensions: { running: [], missing: [], builtin } } : {};
+    }
     try {
       const answer = await config.workspace(this.binding.session.workspaceId);
       const installed = config.installed().map(item => item.summary);
@@ -2818,7 +2846,9 @@ export class RunnerSession {
         this.tools.map(tool => tool.name));
       const running = chosen.map((item, index) => ({ source: item.source, dev: item.dev, tools: settled[index]!.kept }));
       const missing = answer.extensions.filter(item => item.enabled && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
-      return running.length || missing.length ? { extensions: { running, missing } } : {};
+      // As the next message selects them: after the workspace's, which may replace one.
+      const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
+      return running.length || missing.length || builtin.length ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}) } } : {};
     } catch { return {}; }
   }
 
@@ -3083,8 +3113,15 @@ export class RunnerSession {
     // A Session that already failed on a storage error has closed itself, and closing again only repeats that error.
     // Read the flag first: a close that fails now also marks the session failed, and its error must still surface.
     const failed = this.#failed;
-    await this.#egress?.close();
-    await this.harness.close(context).catch((error: unknown) => { if (!failed) throw error; });
+    const builtins = this.#builtins;
+    this.#builtins = undefined;
+    try {
+      await this.#egress?.close();
+      await this.harness.close(context).catch((error: unknown) => { if (!failed) throw error; });
+    } finally {
+      // A script this stops resumes with the next opening's sandbox.
+      await builtins?.close().catch(() => {});
+    }
   }
 
   /** Credential → push → completion. The credential stays in this frame; results carry only fixed, credential-free text. */

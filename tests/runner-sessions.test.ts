@@ -62,6 +62,8 @@ test("the agent works with other sessions through the control plane, asking the 
     fauxAssistantMessage("Not allowed."),
     fauxAssistantMessage([fauxToolCall("sessions", { action: "send", session: "worker", message: "Go" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Sent."),
+    fauxAssistantMessage([fauxToolCall("sessions", { action: "create", title: "Docs", message: "Write the docs", model: "model-2", thinking: "low" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Started."),
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
@@ -69,7 +71,7 @@ test("the agent works with other sessions through the control plane, asking the 
     dataDir: directory, sharedSecret: "runner-sessions-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    crossSessions: async request => { requests.push(request); return answers.shift() ?? { sessions: [], models: [] }; },
+    crossSessions: async request => { requests.push(request); return answers.shift() ?? { sessions: [], models: [], childModels: true }; },
   });
   await service.initialize();
   t.after(() => service.close());
@@ -129,4 +131,13 @@ test("the agent works with other sessions through the control plane, asking the 
   await idle(session);
   assert.deepEqual(strip(requests[5]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "send", targetSessionId: "worker", message: "Go" });
   assert.match(await transcript(), /"m2"/);
+
+  // A new session for a sub-task, on the model and reasoning level the agent chose for it.
+  answers.push({ session: { id: "docs", title: "Docs", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], parentSessionId: id, createdAt: "" },
+    model: { id: "model-2", provider: "faux", modelId: "faux-2", thinkingLevel: "low" } });
+  await session.submit(await ticket(id, "submit"), { content: "Start a docs sub-task.", requestId: "create", admissionId }, "write");
+  await idle(session);
+  assert.deepEqual(strip(requests[6]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "create", title: "Docs", message: "Write the docs",
+    modelId: "model-2", thinkingLevel: "low" });
+  assert.match(await transcript(), /"thinkingLevel": ?"low"/);
 });

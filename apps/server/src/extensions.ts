@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
-import { extensionAvailability, extensionLimits, extensionPackageKey, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
+import { pikiExtensionsFor } from '../../../packages/shared/src/piki-extensions.js';
+import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type ExtensionToolMode, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, WorkerEnv } from './types.js';
@@ -65,6 +66,35 @@ export async function sessionExtensionSources(env: Env, row: { workspace_id: str
   return source => enabled.has(source) || (ownHost && source.startsWith('local:'));
 }
 
+/**
+ * Adds the Pikibun extensions for repositories of `provider` (piki-extensions.ts) to a workspace that has just bound
+ * its first one there, enabled, their tools with approval, at the end of its list, unless it already uses them or as many
+ * extensions as it may. Returns the sources it added.
+ */
+export async function addPikiExtensions(env: Env, workspaceId: string, provider: string, actor: string): Promise<string[]> {
+  const added: string[] = [];
+  for (const extension of pikiExtensionsFor(provider)) {
+    const providers = extension.providers;
+    const saved = await env.DB.query<{ source: string }>(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
+      SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), 1, 'approval', '{}', ?, ?
+      WHERE (SELECT COUNT(*) FROM workspace_repositories WHERE workspace_id = ? AND provider IN (${providers.map(() => '?').join(', ')})) = 1
+        AND (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ?) < ?
+      ON CONFLICT (workspace_id, package_key) DO NOTHING
+      RETURNING source`)
+      .bind(workspaceId, extension.source, extension.source, workspaceId, actor, now(), workspaceId, ...providers, workspaceId, extensionLimits.workspace).first();
+    if (!saved) continue;
+    added.push(saved.source);
+    await auditStatement(env, actor, 'workspace.extension.updated', workspaceId, null,
+      { source: saved.source, enabled: true, tools: 'approval', settings: [], reason: 'repository', provider }).run();
+  }
+  return added;
+}
+
+/** Whether a connector's last report names Pikibun extensions: one that predates them refuses a workspace's list naming one. */
+async function knowsPikiExtensions(env: Env, connectorId: string): Promise<boolean> {
+  return (await hostReport(env, connectorId))?.report.installed.some(item => isPikiExtensionSource(item.source)) === true;
+}
+
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
 /**
  * The extensions whose tool calls the session's host may run without approval for anyone's message: enabled ones its
@@ -113,7 +143,11 @@ export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
       JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = ?
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
     if (!connected) fail(404, 'not_found', 'Workspace not found.');
-    return c.json({ extensions: await workspaceExtensions(c.env, workspaceId), automaticTools: await automaticTools(c.env, row.id) });
+    const extensions = await workspaceExtensions(c.env, workspaceId);
+    // A connector that predates Pikibun extensions would refuse the whole list for naming one: it gets the others.
+    const shown = extensions.some(item => isPikiExtensionSource(item.source)) && !await knowsPikiExtensions(c.env, row.id)
+      ? extensions.filter(item => !isPikiExtensionSource(item.source)) : extensions;
+    return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id) });
   });
 }
 
@@ -225,6 +259,7 @@ export function registerExtensions(app: Hono<WorkerEnv>): void {
     let source: string;
     try { source = normalizeExtensionSource(input.source); }
     catch (error) { return fail(400, 'invalid_extension_request', error instanceof Error ? error.message : 'Invalid extension source.'); }
+    if (isPikiExtensionSource(source)) fail(400, 'piki_extension', 'Pikibun extensions come with the connector: update it (npx pikibun@latest connect) to get newer ones.');
     const reported = await hostReport(c.env, row.id);
     if (reported && !reported.report.remoteInstalls) fail(409, 'remote_installs_off', 'This host\'s connector refuses installs from Pikibun: install extensions on it with pikibun extensions.');
     const existing = await c.env.DB.query<{ id: string }>(`SELECT id FROM connector_extension_requests WHERE connector_id = ? AND status = 'pending' AND action = ? AND source = ?`)

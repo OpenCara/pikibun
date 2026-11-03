@@ -7,4 +7,6 @@ The sandbox has no network, so agents read and act on GitHub through Pikibun ins
 - `github_issue` opens an issue with exactly the approved title and body in one of the workspace's github.com repositories, once it's approved, and gives the agent its number and URL (connector newer than 0.9.0). Use it rather than `gh issue create`: the sandbox holds no GitHub credentials. If GitHub refuses (issues turned off, no access), no issue is opened and the agent gets GitHub's reason.
 - `github_merge` merges a pull request at the exact head commit the agent read, with a merge commit, squash or rebase, once it's approved. If the head moved or GitHub refuses, nothing is merged and the agent gets GitHub's reason.
 
+For the rest of GitHub (Actions runs and their logs, checks, releases, the API), the workspace's `piki:gh` [extension](extensions.md#piki-extensions-gh-glab-and-az) runs the GitHub CLI on the host, as the host's owner is signed in to `gh`. A workspace gets it with its first GitHub repository.
+
 Comments, issues and merges wait for a human decision, unless the session owner sent the message with **Auto-approve**: then they run at once. Each automatic one is attempted once (never retried), keeps its card with its outcome and is recorded in the session's activity; a message runs at most 20 of them.

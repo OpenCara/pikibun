@@ -21,7 +21,8 @@ export function remoteView(input: { title: string; origin: string; primaryServer
     title: input.title, origin, primaryServer: input.primaryServer, defaultServer: input.defaultServer,
     ...(here ? { connectionHere: here.id } : {}),
     // Another server's host id, which only that server's pages hand uploads to, is left out with its logs.
-    hosts: { ...hosts, connections: hosts.connections.map(connection => connection.server === origin ? connection
+    // A sign-in under way (its pages and device codes) stays in the app's own window, as its answers do.
+    hosts: { ...hosts, connections: hosts.connections.map(({ signIn: _signIn, ...connection }) => connection.server === origin ? connection
       : { ...connection, logs: [], ...(connection.running ? { running: { server: connection.running.server, unsandboxed: connection.running.unsandboxed, ...(connection.running.sandbox ? { sandbox: connection.running.sandbox } : {}) } } : {}) }) },
     local: local.status.origin === origin ? local : { ...local, status: publicStatus(local.status), logs: [] },
     version: input.version, ...(input.update ? { update: input.update } : {}),

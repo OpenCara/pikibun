@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { sessionRoles, type ApprovalRecord, type EntryView, type GitHubMergeMethod, type GitHubMergeOperation, type GitPushOperation, type Operation, type PermissionNeed, type PermissionRequest, type SessionGrant, type SessionRecord, type SessionRole, type SessionView, type UserProfile, type WorkspaceRole } from "../../../packages/shared/src/types";
 import { managesSession, sessionRoleAllowed, sessionRoleGrantable, sessionRoleOf, sessionRolePermissions, workspaceManagerRoles, workspaceSessionPermissions } from "../../../packages/shared/src/policy";
 import { containsRedaction, REDACTED } from "../../../packages/shared/src/redaction";
+import { builtinExtensions } from "../../../packages/shared/src/host-config";
 import { useSessionLink } from "./session-link";
 import { api, segment } from "./api";
 import { BackupList, backupDatabaseLabel, backupDownloadHref, backupLocationLabel, type Backup, type BackupDatabase, type BackupListing, type BackupListingResource } from "./backups";
@@ -412,12 +413,18 @@ function HostSection({ session, user, hosts }: { session: SessionRecord; user: U
 
 /** The extensions the session runs with, and its workspace's enabled ones its host lacks. */
 function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView["extensions"]> }) {
-  return <Section title="Extensions" info={<p>Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls are approved like host commands unless the workspace and the host's owner let them run automatically. Dev extensions are the host owner's own, in their own sessions.</p>}>
+  return <Section title="Extensions" info={<p>Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls are approved like host commands unless the workspace and the host's owner let them run automatically. Dev extensions are the host owner's own, in their own sessions. Built-in ones come with Pikibun, as the host's configuration turns them on.</p>}>
     {extensions.running.map(item => <Row key={item.source} leading={<Icon name="tool" size={16} />} title={<code>{item.source}</code>}
       hint={item.tools.length ? `Tools: ${item.tools.join(", ")}` : "No tools: prompt or hooks only"}
       trailing={item.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : <StatusBadge tone="success">Running</StatusBadge>} />)}
     {extensions.missing.map(source => <Row key={source} title={<code>{source}</code>} hint="Not on this host at this version: the session runs without it until the host's owner installs it"
       trailing={<StatusBadge tone="neutral">Missing</StatusBadge>} />)}
+    {(extensions.builtin ?? []).map(name => {
+      const item = builtinExtensions.find(candidate => candidate.name === name);
+      return <Row key={`builtin ${name}`} leading={<Icon name="tool" size={16} />} title={item ? <>{item.title} <code>{name}</code></> : <code>{name}</code>}
+        hint={item ? `Built in, as the host's configuration turns it on. Tools: ${item.tools.join(", ")}` : "Built in, as the host's configuration turns it on"}
+        trailing={<StatusBadge tone="success">Running</StatusBadge>} />;
+    })}
   </Section>;
 }
 

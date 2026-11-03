@@ -16,6 +16,12 @@ const bridge: PikibunBridge = {
     setModels: (id, models) => ipcRenderer.invoke(channels.hostModels, { id, models }),
     setSandbox: (id, choice) => ipcRenderer.invoke(channels.hostSandbox, { id, choice }),
     setOpenAtLogin: enabled => ipcRenderer.invoke(channels.hostOpenAtLogin, enabled),
+    providers: id => ipcRenderer.invoke(channels.hostProviders, { id }),
+    signIn: (id, provider, method) => ipcRenderer.invoke(channels.hostSignIn, { id, provider, method }),
+    answerSignIn: (id, prompt, value) => ipcRenderer.invoke(channels.hostSignInAnswer, { id, prompt, value }),
+    cancelSignIn: id => ipcRenderer.invoke(channels.hostSignInCancel, { id }),
+    setup: (id, action) => ipcRenderer.invoke(channels.hostSetup, { id, action }),
+    openLink: (id, url) => ipcRenderer.invoke(channels.hostLink, { id, url }),
     onUpdate: listener => {
       const forward = (_event: unknown, view: HostsView) => listener(view);
       ipcRenderer.on(channels.hostUpdate, forward);

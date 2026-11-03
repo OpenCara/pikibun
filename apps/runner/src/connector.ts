@@ -178,6 +178,14 @@ async function boundedBody(response: Response, maximum: number, signal?: AbortSi
   }
 }
 
+/** The control plane's refusal of a callback, with its status. */
+class CallbackRefused extends Error {
+  constructor(readonly status: number) { super("Scoped connector callback denied or unavailable"); }
+}
+
+/** Whether the control plane refused an extensions report as invalid: one that predates Pikibun extensions does. */
+const refusedReport = (error: unknown) => error instanceof CallbackRefused && error.status === 400;
+
 function decodeJson(bytes: Uint8Array): unknown {
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
   catch { throw new Error("Invalid control-plane response"); }
@@ -583,11 +591,21 @@ export class LocalConnector {
     const extensions = this.hostExtensions;
     if (!extensions) return;
     let results: ExtensionRequestResult[] = [];
+    // A control plane that predates Pikibun extensions refuses a report naming them: it gets the report without them.
+    let pikiExtensions = true;
     const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
     while (!signal.aborted) {
       try {
         await extensions.refreshIfChanged();
-        const answer = parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions", { report: extensions.report(), results }));
+        const sync = async () => parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions",
+          { report: pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions(), results }));
+        let answer: ReturnType<typeof parseExtensionsSyncAnswer>;
+        try { answer = await sync(); }
+        catch (error) {
+          if (!pikiExtensions || !refusedReport(error)) throw error;
+          pikiExtensions = false;
+          answer = await sync();
+        }
         results = [];
         if (answer.requests.length) {
           results = await extensions.apply(answer.requests);
@@ -819,7 +837,7 @@ export class LocalConnector {
     try {
       this.requireGeneration(generation);
       signal.throwIfAborted();
-      if (!response.ok) throw new Error("Scoped connector callback denied or unavailable");
+      if (!response.ok) throw new CallbackRefused(response.status);
     } catch (error) {
       await response.body?.cancel();
       throw error;

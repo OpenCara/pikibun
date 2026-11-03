@@ -13,7 +13,7 @@ import { HostLaunchError, HostProcess, stdioHost, type HostChild } from "../apps
 import { parseConnectionCall, parseSandbox } from "../apps/desktop/src/main/requests.js";
 import { remoteView } from "../apps/desktop/src/main/remote-view.js";
 import { parseSettings, SettingsStore } from "../apps/desktop/src/main/settings.js";
-import { chooseDistro, parseWslList, wslCommand, wslHostArgs, wslStateDir } from "../apps/desktop/src/main/wsl.js";
+import { chooseDistro, parseWslList, setupFixes, wslCommand, wslFixes, wslHostArgs, wslStateDir } from "../apps/desktop/src/main/wsl.js";
 
 // The Windows app's choice of sandbox for each host, WSL2 or native Windows, and the WSL2 host it runs through wsl.exe:
 // everything but wsl.exe itself, which only Windows has.
@@ -40,6 +40,7 @@ test("a WSL2 host runs in the chosen distribution, else WSL's default WSL2 one, 
   assert.match((chooseDistro({ installed: true, distros }, "Debian") as { error: string }).error, /WSL 1.*wsl --set-version Debian 2/);
   assert.match((chooseDistro({ installed: true, distros }, "Arch") as { error: string }).error, /no longer has/);
   assert.match((chooseDistro({ installed: false, distros: [] }, undefined) as { error: string }).error, /wsl --install.*Native Windows/);
+  assert.deepEqual((chooseDistro({ installed: false, distros: [] }, undefined) as { fix?: unknown }).fix, wslFixes.install, "the app offers to install WSL");
   assert.match((chooseDistro({ installed: true, distros: [{ name: "Debian", version: 1, default: true }] }, undefined) as { error: string }).error, /WSL 1/);
 
   // wsl.exe gets the distribution, the app's connector directory (which --cd translates) and the build, never a secret.
@@ -122,11 +123,15 @@ test("a Windows host's sandbox changes only while it is stopped, and native Wind
   assert.equal(controller.view().inspection?.unsupported, unsupported);
   assert.deepEqual(await controller.start({ replacePairing: false }), { ok: false, error: unsupported });
 
-  // A host elsewhere offers no choice.
-  const mac = new HostController({ id: "default", settings, fixtureModels: false, command: () => "", confirmUnsandboxed: async () => false });
-  assert.equal(mac.view().windows, undefined);
-  assert.match((await mac.setSandbox({ sandbox: "native" }) as { error: string }).error, /Only Windows/);
-  assert.match(mac.sandboxRefusal() ?? "", /Only Windows/);
+  // Neither a Mac's choice nor a host elsewhere (Linux, whose sandbox is bubblewrap) applies here.
+  assert.match((await controller.setSandbox({ sandbox: "seatbelt" }) as { error: string }).error, /macOS's: this computer runs Windows/);
+  assert.deepEqual(settings.connection("default")?.windows, { sandbox: "wsl2", distro: "Ubuntu" });
+  assert.equal(settings.connection("default")?.mac, undefined);
+  const linux = new HostController({ id: "default", settings, fixtureModels: false, command: () => "", confirmUnsandboxed: async () => false });
+  assert.equal(linux.view().windows, undefined);
+  assert.equal(linux.view().mac, undefined);
+  assert.match((await linux.setSandbox({ sandbox: "native" }) as { error: string }).error, /Only Windows and macOS/);
+  assert.match(linux.sandboxRefusal() ?? "", /Only Windows and macOS/);
 });
 
 test("the same host in a terminal: WSL2's in its distribution, native Windows' with its whole state path, which cmd and PowerShell take as is", () => {
@@ -235,6 +240,15 @@ test("a launcher's setup problem, or one that can't launch at all, is shown as i
     onEvent: () => {}, onOutput: () => {}, onExit: () => {},
   });
   assert.deepEqual(await setup.request({ type: "inspect" }), { type: "result", id: 0, ok: false, error: { code: "unsupported", message: "Node.js 24 or newer isn't installed in WSL2 (Ubuntu)." } });
+  // A coded problem comes with the fix the app knows for it; an unknown code with none.
+  const coded = (code: string) => new HostProcess({
+    launch: () => stdioHost("/bin/sh", ["-c", `echo 'pikibun-setup[${code}]: Node.js 24 is missing.' >&2; exit 78`]),
+    onEvent: () => {}, onOutput: () => {}, onExit: () => {}, setupFixes,
+  });
+  assert.deepEqual(await coded("wsl-node").request({ type: "inspect" }), { type: "result", id: 0, ok: false, error: { code: "unsupported", message: "Node.js 24 is missing.", fix: wslFixes.node } });
+  assert.deepEqual(await coded("constructor").request({ type: "inspect" }), { type: "result", id: 0, ok: false, error: { code: "unsupported", message: "Node.js 24 is missing." } });
+  const withFix = new HostProcess({ launch: () => { throw new HostLaunchError("WSL2 isn't set up on this computer.", wslFixes.install); }, onEvent: () => {}, onOutput: () => {}, onExit: () => {} });
+  assert.deepEqual(await withFix.request({ type: "inspect" }), { type: "result", id: 0, ok: false, error: { code: "unsupported", message: "WSL2 isn't set up on this computer.", fix: wslFixes.install } });
   // A process's last words without a line feed are kept too, and a setup line among them.
   const output: string[] = [];
   const crashed = new HostProcess({
@@ -302,7 +316,7 @@ test("wsl-host.sh copies the connector into WSL2's home once per build, finds No
   const old = spawnSync("/bin/sh", [join(root, "no-system-node.sh"), "1.2.4"],
     { cwd: connector, encoding: "utf8", input: "", env: { HOME: home, PATH: `${bin}:/nonexistent`, WSL_DISTRO_NAME: "Ubuntu" } });
   assert.equal(old.status, 78);
-  assert.match(old.stderr, /^pikibun-setup: Node\.js 24 or newer isn't installed in WSL2 \(Ubuntu\)/m);
+  assert.match(old.stderr, /^pikibun-setup\[wsl-node\]: Node\.js 24 or newer isn't installed in WSL2 \(Ubuntu\)/m, "a problem the app can fix names its fix");
   // The script stays line-feed only, as /bin/sh needs it.
   assert.ok(!readFileSync(join(repository, "apps/desktop/src/wsl/wsl-host.sh"), "utf8").includes("\r"));
 });

@@ -29,7 +29,14 @@ export const remoteChannels = {
   openWindow: "desktop:open-window",
   upload: "desktop:upload",
   openUpdate: "desktop:open-update",
+  notify: "desktop:notify",
 } as const;
+
+/**
+ * A notification the page asks the app to show (the page's notification feed: a session waits for an approval, finished
+ * or failed). `path` is where clicking it goes, on the page's own server: a hash route such as `/#/s/<session>`.
+ */
+export interface DesktopNotification { title: string; body: string; path: string; tag?: string }
 
 /**
  * A chunk the page handed a host on this computer: the runner's reply, as the relay would have carried it; or why it
@@ -78,8 +85,9 @@ export interface DesktopBridge {
     open(id: string): Promise<Outcome>;
     setModels(id: string, models: ModelChoice[] | null): Promise<Outcome>;
     /**
-     * Windows only: where the host's sessions run (WSL2 or native Windows), from its next start; the app asks the owner
-     * first. Absent from apps that predate it.
+     * Where the host's sessions run, from its next start: on Windows WSL2 or native Windows, on macOS macOS's own sandbox
+     * or none. The app asks the owner first, and refuses a choice of another platform's kind. Absent from apps that
+     * predate it; apps that predate the Mac's choice show no `mac` in their view.
      */
     setSandbox?(id: string, choice: SandboxChoice): Promise<Outcome>;
   };
@@ -100,4 +108,9 @@ export interface DesktopBridge {
   upload?(input: { connectorId: string; grant: string; body: string }): Promise<UploadOutcome>;
   /** Opens the newer release's page (DesktopView.update) in the browser. Absent from apps older than update checks. */
   openUpdate?(): Promise<Outcome>;
+  /**
+   * Shows a native notification for the page's server; clicking it brings the window back at `path`. Absent from apps
+   * that predate notifications.
+   */
+  notify?(notification: DesktopNotification): Promise<Outcome>;
 }
