@@ -149,7 +149,7 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
             : extension.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : isPikiExtensionSource(extension.source) ? <StatusBadge tone="neutral">With the connector</StatusBadge>
             : waiting(extension.source) ? <StatusBadge tone="neutral" dot>Removing</StatusBadge> : <StatusBadge tone="success">Installed</StatusBadge>}>
           <ModuleDetails extension={extension} />
-          {!extension.dev && !extension.error && (owner || isRequired(extension.source)) && <CardBody><div className="inline">
+          {!extension.dev && !extension.error && !pikiExtension(extension.source)?.sessionTools && (owner || isRequired(extension.source)) && <CardBody><div className="inline">
             {owner ? <label className="check-row small"><input type="checkbox" className="checkbox" checked={isRequired(extension.source)}
               disabled={action.busy || !!connector.revokedAt || (!isRequired(extension.source) && required.length >= hostConfigLimits.requiredExtensions)}
               onChange={event => setRequired(extension, event.target.checked)} /><span>Require of every session</span></label>

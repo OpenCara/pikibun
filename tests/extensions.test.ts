@@ -108,6 +108,11 @@ test('a workspace\'s owners and admins choose its extensions, one version of eac
     ['npm:cc-safety-net@2.7.2'], 'removing names the package, whatever the version');
   for (let index = 1; index < 32; index++) await json(await s.alice.request('PUT', path, { source: `npm:extension-${index}@1.0.0` }));
   await denied(await s.alice.request('PUT', path, { source: 'npm:one-too-many@1.0.0' }), 409, 'extension_limit');
+  // A session-tool extension switches the session's own tools: turning one off takes none of the workspace's places, and
+  // keeps no tool mode or settings, which mean nothing for it.
+  const switched = await json<Listing>(await s.alice.request('PUT', path, { source: 'piki:schedule', enabled: false, tools: 'automatic', settings: { strict: true } }));
+  assert.deepEqual(switched.extensions.find(item => item.source === 'piki:schedule'), { source: 'piki:schedule', enabled: false, tools: 'approval', settings: {} });
+  await denied(await s.alice.request('PUT', path, { source: 'npm:one-too-many@1.0.0' }), 409, 'extension_limit');
   await json(await s.alice.request('PUT', path, { source: 'npm:extension-1@2.0.0' }), 200);
   const audits = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.extension.%'").all().map(row => row.action);
   assert.equal(audits.filter(action => action === 'workspace.extension.removed').length, 1);

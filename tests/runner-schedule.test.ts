@@ -11,6 +11,8 @@ import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
 import type { AuthorizationRequest, PermissionRequest, RunnerAction, RunnerBinding, RunnerTicket, ScheduleToolRequest, SessionSchedule } from "../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../packages/shared/src/cron.js";
+import { sessionToolsOff } from "../packages/shared/src/piki-extensions.js";
+import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 
 function binding(id: string): RunnerBinding {
@@ -107,4 +109,74 @@ test("the agent schedules prompts from the chat for the session owner, never add
   assert.equal(requests.length, 2);
   assert.deepEqual({ ...requests[1], callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "update", scheduleId: "schedule-1", enabled: false });
   assert.equal((await session.view()).approvals.filter(approval => approval.status === "pending").length, 0);
+});
+
+test("piki:schedule: the workspace turns the schedule tool off, and a call by name is refused; it stays on where the workspace never chose or can't be read", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-schedule-switch-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const requests: ScheduleToolRequest[] = [];
+  const offered: string[][] = [];
+  // Each message: the model notes the tools it was offered, then calls schedule anyway.
+  const listing = (context: { messages: { role: string; toolsAdded?: { name: string }[]; toolsRemoved?: { name: string }[] }[] }) => {
+    // The tools offered now: those the transcript's system messages added, less those they removed since.
+    const tools = new Set<string>();
+    for (const message of context.messages) {
+      if (message.role !== "system") continue;
+      for (const tool of message.toolsAdded ?? []) tools.add(tool.name);
+      for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name);
+    }
+    offered.push([...tools]);
+    return fauxAssistantMessage([fauxToolCall("schedule", { action: "list" })], { stopReason: "toolUse" });
+  };
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([listing, fauxAssistantMessage("Listed."), listing, fauxAssistantMessage("Refused."), listing, fauxAssistantMessage("Listed.")] as never);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer | Error = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-schedule-switch-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    schedules: async request => { requests.push(request); return { schedules: [] }; },
+    extensions: { installed: () => [], workspace: async () => { if (answer instanceof Error) throw answer; return answer; } },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "schedule-switch-session";
+  const withTool = binding(id);
+  withTool.agent.tools = ["read_file", "schedule"];
+  const session = await service.provision(withTool, await ticket(id, "create"));
+  const admissionId = await sha256("schedule switch admission");
+  const transcript = async () => (await session.view()).entries.map(entry => entry.text).join("\n");
+  const send = async (requestId: string) => {
+    await session.submit(await ticket(id, "submit"), { content: "What is scheduled?", requestId, admissionId, options: { access: "auto" } }, "write");
+    await idle(session);
+  };
+
+  // A workspace that never chose: on, as before it was switchable.
+  await send("never-chose");
+  assert.ok(offered[0]!.includes("schedule"));
+  assert.equal(requests.length, 1);
+
+  // Turned off: not offered, and a call by name never reaches the control plane.
+  answer = { extensions: [{ source: "piki:schedule", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await send("off");
+  assert.ok(!offered[1]!.includes("schedule"), "the model isn't offered it");
+  assert.ok(offered[1]!.includes("read_file"), "the session's other tools stay");
+  assert.equal(requests.length, 1);
+  // The harness refuses a tool the message wasn't offered; the tool itself refuses too, for a code mode script's call.
+  assert.match(await transcript(), /Tool schedule is not available/);
+
+  // The workspace's choice can't be read: its tools stay on rather than vanish.
+  answer = new Error("control plane unreachable");
+  await send("unreadable");
+  assert.ok(offered[2]!.includes("schedule"));
+  assert.equal(requests.length, 2);
+});
+
+test("sessionToolsOff: only a session-tool extension the workspace lists turned off turns its tools off", () => {
+  assert.deepEqual([...sessionToolsOff([])], []);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: true }])], []);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule"]);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:gh", enabled: false }, { source: "npm:pi-web-access@0.46.0", enabled: false }])], [], "other extensions offer no session tools");
 });

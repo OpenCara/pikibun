@@ -28,6 +28,13 @@ export interface PikiExtensionInfo {
   signIn?: string;
   /** A workspace that binds its first repository of one of these providers gets this extension. */
   providers: readonly GitProvider[];
+  /**
+   * Session tools only: the session's own tools this extension turns on (docs/design/piki-extensions.md, "Session
+   * tools"). They keep running as the session's own, under its permissions and approvals, never as `extension.tool`
+   * cards; the workspace only decides whether its sessions offer them. They are on unless the workspace lists the
+   * extension turned off, so a workspace that never chose, or a control plane that predates it, keeps them.
+   */
+  sessionTools?: readonly string[];
 }
 
 export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
@@ -48,6 +55,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     signIn: "az login (and az extension add --name azure-devops)", providers: ["azure-devops"],
   },
   {
+    name: "schedule", source: "piki:schedule", title: "Scheduled prompts", sessionTools: ["schedule"],
+    description: "The schedule tool: the agent lists, creates, changes and deletes the session's scheduled prompts when its owner asks, such as a nightly check. On unless turned off here.",
+    providers: [],
+  },
+  {
     name: "prompt-audit", source: "piki:prompt-audit", title: "Prompt audit",
     description: "Has a model of the host check each message from anyone but the host's owner before it reaches the agent, and refuses ones that reach for the host's credentials, files, environment or network. A message it can't check is refused too.",
     providers: [],
@@ -62,6 +74,23 @@ export function pikiExtension(source: string): PikiExtensionInfo | undefined {
 /** The Pikibun extensions that run a command-line tool, which the workspace page offers as such. */
 export function pikiCommandExtensions(): PikiExtensionInfo[] {
   return pikiExtensions.filter(item => item.tool !== undefined);
+}
+
+/** The Pikibun extensions that turn on session tools, which the workspace page lists whether or not the workspace chose them. */
+export function pikiSessionToolExtensions(): PikiExtensionInfo[] {
+  return pikiExtensions.filter(item => item.sessionTools !== undefined);
+}
+
+/**
+ * The session tools `workspace` turns off: those of the session-tool extensions it lists disabled. One it doesn't list
+ * is on (see `sessionTools`).
+ */
+export function sessionToolsOff(workspace: readonly { source: string; enabled: boolean }[]): Set<string> {
+  const off = new Set<string>();
+  for (const extension of pikiSessionToolExtensions()) {
+    if (workspace.some(item => item.source === extension.source && !item.enabled)) for (const tool of extension.sessionTools ?? []) off.add(tool);
+  }
+  return off;
 }
 
 /** The Pikibun extensions for repositories of `provider`. */

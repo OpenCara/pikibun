@@ -24,8 +24,15 @@ export interface PikiExtension {
   forSession(session: PikiSession): ExtensionFactory;
 }
 
+/**
+ * A session-tool extension (`sessionTools`) registers nothing in Pi: its tools are the session's own, which the session
+ * offers while its workspace leaves the extension on. The connector still has it, so it reports it like the others.
+ */
+const sessionToolsFactory: ExtensionFactory = () => {};
+
 /** This connector's Pikibun extensions, in the catalogue's order. */
 export const connectorPikiExtensions: readonly PikiExtension[] = pikiExtensions.flatMap((info): PikiExtension[] => {
+  if (info.sessionTools) return [{ info, factory: sessionToolsFactory, forSession: () => sessionToolsFactory }];
   const spec = specs[info.name];
   if (spec) return [{ info, factory: commandExtension(spec, noPikiSession), forSession: session => commandExtension(spec, session) }];
   const factory = factories[info.name];

@@ -25,6 +25,7 @@ import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
+import { pikiSessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
@@ -1269,6 +1270,8 @@ export class RunnerSession {
     const options = run.options ?? {};
     const access = options.access ?? "approval";
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
+    // The session's own tools, less those its workspace turned off (Pikibun's session-tool extensions, such as piki:schedule).
+    const off = run.mode === "write" ? await this.sessionToolsOff() : new Set<string>();
     // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
     const builtins = run.mode === "write" && this.#builtins
       ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
@@ -1279,7 +1282,7 @@ export class RunnerSession {
       // Every shared run states its toolset and instructions, so a read-only request never leaks into the next one. All
       // tools are offered: a call the session doesn't allow asks the owner instead of failing.
       ...(run.mode === "write" ? {
-        tools: [...this.tools, ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
+        tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [this.#extension, ...extensions.map(extension => extension.extension), ...builtins],
         instructions: this.agentInstructions(access === "read" ? "read" : "write"),
       } : {}),
@@ -1321,6 +1324,28 @@ export class RunnerSession {
     const installed = config.installed().map(item => item.summary);
     return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
       automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
+  }
+
+  /**
+   * The session's own tools its workspace turned off, by turning off the Pikibun extension that offers them
+   * (`sessionToolsOff`). None where the session has no workspace extensions, or can't learn them now: the tools stay on,
+   * as they were before they became switchable.
+   */
+  private async sessionToolsOff(): Promise<Set<string>> {
+    const config = this.config.extensions;
+    if (!config) return new Set();
+    const answer = await config.workspace(this.binding.session.workspaceId).catch(() => undefined);
+    return answer ? sessionToolsOff(answer.extensions) : new Set();
+  }
+
+  /**
+   * Refuses a call of `tool` while the workspace has it off. The model isn't offered it then, but a code mode script
+   * calls the session's tools by name, so the tool checks too.
+   */
+  private async requireSessionTool(tool: string): Promise<void> {
+    if (!(await this.sessionToolsOff()).has(tool)) return;
+    const extension = pikiSessionToolExtensions().find(item => item.sessionTools?.includes(tool));
+    throw new RunnerError(403, `${tool} is turned off in this workspace${extension ? ` (${extension.source})` : ""}. Its owners and admins turn it on under Settings → Workspaces → Extensions.`);
   }
 
   /** The extensions this session runs with now, opened (and installed in the registry) as it first runs with each. */
@@ -2151,6 +2176,7 @@ export class RunnerSession {
         time_zone: Type.Optional(Type.String()), name: Type.Optional(Type.String()), access: Type.Optional(StringEnum(accessModes)), enabled: Type.Optional(Type.Boolean()),
       }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
+        await this.requireSessionTool("schedule");
         const fields = Object.fromEntries(Object.entries({ scheduleId: args.id, name: args.name, cron: args.cron, timeZone: args.time_zone, content: args.message,
           access: args.access, enabled: args.enabled }).filter(([, value]) => value !== undefined)) as Omit<ScheduleToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
         if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Schedule fields must not contain NUL characters");
