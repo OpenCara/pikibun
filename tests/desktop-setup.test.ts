@@ -12,7 +12,7 @@ import type { HostProcess } from "../apps/desktop/src/main/host-process.js";
 import { remoteView } from "../apps/desktop/src/main/remote-view.js";
 import { SettingsStore } from "../apps/desktop/src/main/settings.js";
 import { parseSetupAction, setupPlan } from "../apps/desktop/src/main/setup-actions.js";
-import { listedPrerequisites } from "../apps/desktop/src/shared/prerequisites.js";
+import { listedPrerequisites } from "../packages/shared/src/host-prerequisites.js";
 import { NVM_INSTALL } from "../apps/desktop/src/main/wsl.js";
 
 // Getting a computer ready to host from the desktop app: each missing prerequisite's fix, what the app runs for it, and
@@ -267,7 +267,8 @@ test("a host that runs unsandboxed until its sandbox is ready lists what the san
   // Native Windows with Git but without the MXC SDK: it runs unsandboxed, needing only Git, until the SDK is there.
   const inspection: HostInspection = { platform: "win32", stateDir: directory, mode: "unsandboxed", models: [], prerequisites: [git], sandboxPrerequisites: [git, mxc] };
   assert.deepEqual(listedPrerequisites(inspection), [{ entry: git, sandbox: false }, { entry: mxc, sandbox: true }]);
-  assert.deepEqual(listedPrerequisites({ ...inspection, mode: "sandboxed", prerequisites: [git, { ...mxc, ok: true }], sandboxPrerequisites: [git, { ...mxc, ok: true }] }).map(item => item.sandbox), [false, false]);
+  const ready: HostInspection = { ...inspection, mode: "sandboxed", prerequisites: [git, { ...mxc, ok: true }], sandboxPrerequisites: [git, { ...mxc, ok: true }] };
+  assert.deepEqual(listedPrerequisites(ready).map(item => item.sandbox), [false, false]);
   assert.deepEqual(listedPrerequisites(undefined), []);
 
   const ran: unknown[] = [];

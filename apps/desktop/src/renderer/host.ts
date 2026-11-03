@@ -1,5 +1,5 @@
 import { stateLabels, type HostsView, type HostView, type LoginMethodType, type ModelChoice, type Outcome, type PikibunBridge, type PrerequisiteFix, type SandboxChoice, type SetupAction, type SignInView } from "../shared/bridge.js";
-import { listedPrerequisites } from "../shared/prerequisites.js";
+import { listedPrerequisites } from "../../../../packages/shared/src/host-prerequisites.js";
 import { element, setText } from "./dom.js";
 
 declare global { interface Window { pikibun: PikibunBridge } }

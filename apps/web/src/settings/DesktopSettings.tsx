@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { ConnectorPairing } from "../../../../packages/shared/src/connector";
 import { api } from "../api";
-import { listedPrerequisites } from "../../../desktop/src/shared/prerequisites";
+import { listedPrerequisites } from "../../../../packages/shared/src/host-prerequisites";
 import { check, useDesktop, type DesktopBridge, type DesktopView } from "../desktop";
 import { Alert, Button, CardBody, Collapsible, CopyField, EmptyState, Feedback, Field, Loading, Row, Section, SegmentedControl, StatusBadge, useAction, type Tone } from "../ui";
 import "./settings.css";
