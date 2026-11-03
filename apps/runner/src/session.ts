@@ -1293,10 +1293,18 @@ export class RunnerSession {
     await conversation.commit(async tx => { (await tx.doc(ExtensionPrompts, conversation.id)).prompts = prompts; }, context);
   }
 
-  /** Notes the model and reasoning level `conversation` runs on now, for the session's extensions. */
+  /**
+   * Notes the model and reasoning level `conversation` runs on now, for the session's extensions. Where it can't be read
+   * or has no model, they see the session's own model (`modelRef`) rather than an earlier message's, and the reason is logged.
+   */
   private async noteCurrentModel(conversation: Conversation): Promise<void> {
-    const agent = await conversation.agent(context).catch(() => undefined);
-    if (agent?.model) this.#currentModel = { provider: agent.model.provider, modelId: agent.model.modelId, ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) };
+    const agent = await conversation.agent(context).catch(error => {
+      process.stderr.write(`Session ${this.binding.session.id}: cannot read the conversation's model for its extensions: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`);
+      return undefined;
+    });
+    this.#currentModel = agent?.model
+      ? { provider: agent.model.provider, modelId: agent.model.modelId, ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) }
+      : undefined;
   }
 
   /**
