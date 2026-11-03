@@ -109,8 +109,7 @@ const cases: Case[] = [
 
 for (const kind of workspaceKinds) {
   test(`${kind.name}: a session's files follow the same rules`, { skip: kind.missing }, async t => {
-    const workspace = await kind.open(t);
-    const root = workspace.worktree;
+    const { workspace, worktree: root } = await kind.open(t);
     const outside = join(root, "..", "outside");
     await mkdir(outside, { recursive: true });
     await writeFile(join(outside, "secret.txt"), "secret");

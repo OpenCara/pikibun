@@ -19,7 +19,8 @@ import type { RunnerBinding } from "../../packages/shared/src/types.js";
  * is held to the rules is each helper's own logic.
  */
 
-const which = (command: string) => spawnSync("sh", ["-c", `command -v ${command}`], { encoding: "utf8" }).stdout.trim();
+// Without sh (Windows), nothing is found, and the kinds that need these are skipped.
+const which = (command: string) => spawnSync("sh", ["-c", `command -v ${command}`], { encoding: "utf8" }).stdout?.trim() ?? "";
 export const git = which("git");
 export const bash = ["/bin/bash", "/usr/bin/bash"].find(path => existsSync(path)) ?? "";
 export const python = which("python3");
@@ -69,7 +70,11 @@ export interface WorkspaceKind {
   name: string;
   /** Why it can't run here, if it can't: its tests are skipped with this reason. */
   missing?: string;
-  open(t: TestContext): Promise<SessionWorkspace & { readonly worktree: string }>;
+  /**
+   * Opens one, and says where its worktree is on this machine, for a test to set up files in. The Linux sandbox's own
+   * `worktree` is the path its commands see inside the sandbox, not this one.
+   */
+  open(t: TestContext): Promise<{ workspace: SessionWorkspace; worktree: string }>;
 }
 
 async function scratch(t: TestContext, prefix: string): Promise<string> {
@@ -78,28 +83,40 @@ async function scratch(t: TestContext, prefix: string): Promise<string> {
   return directory;
 }
 
-async function opened<T extends { initialize(): Promise<void>; close(): Promise<void> }>(t: TestContext, workspace: T): Promise<T> {
+async function opened(t: TestContext, workspace: SessionWorkspace, worktree: string): Promise<{ workspace: SessionWorkspace; worktree: string }> {
   t.after(() => workspace.close());
   await workspace.initialize();
-  return workspace;
+  return { workspace, worktree };
 }
 
 /** Each implementation of a session's files, and why it can't run here, if it can't. */
 export const workspaceKinds: readonly WorkspaceKind[] = [
   {
     name: "the Linux sandbox (bubblewrap, Python helper)", missing: linuxSandboxMissing(),
-    open: async t => opened(t, new Sandbox(binding("conformance-linux"), join(await scratch(t, "conformance-linux-"), "session"))),
+    open: async t => {
+      const root = join(await scratch(t, "conformance-linux-"), "session");
+      return opened(t, new Sandbox(binding("conformance-linux"), root), join(root, "worktree"));
+    },
   },
   {
     name: "the Python helper, as the macOS sandbox runs it", missing: !posix ? "needs a POSIX host with git and bash" : !python ? "python3 is not installed" : undefined,
-    open: async t => opened(t, new HelperWorkspace(binding("conformance-python"), join(await scratch(t, "conformance-python-"), "sandbox"), new Unconfined("python", true, "python"))),
+    open: async t => {
+      const workspace = new HelperWorkspace(binding("conformance-python"), join(await scratch(t, "conformance-python-"), "sandbox"), new Unconfined("python", true, "python"));
+      return opened(t, workspace, workspace.worktree);
+    },
   },
   {
     name: "the Node helper, as the Windows sandbox runs it", missing: !posix ? "needs a POSIX host with git and bash" : undefined,
-    open: async t => opened(t, new HelperWorkspace(binding("conformance-node"), join(await scratch(t, "conformance-node-"), "sandbox"), new Unconfined("node", true, "node"))),
+    open: async t => {
+      const workspace = new HelperWorkspace(binding("conformance-node"), join(await scratch(t, "conformance-node-"), "sandbox"), new Unconfined("node", true, "node"));
+      return opened(t, workspace, workspace.worktree);
+    },
   },
   {
     name: "the unsandboxed host's workspace", missing: !posix ? "needs a POSIX host with git and bash" : undefined,
-    open: async t => opened(t, new HostWorkspace(binding("conformance-host"), join(await scratch(t, "conformance-host-"), "session"))),
+    open: async t => {
+      const workspace = new HostWorkspace(binding("conformance-host"), join(await scratch(t, "conformance-host-"), "session"));
+      return opened(t, workspace, workspace.worktree);
+    },
   },
 ];
