@@ -1,10 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord";
 import { CompactionTask, defineDoc, defineExtension, defineTool, GenerationTask, hook, section, ToolTask, type Extension, type HookRegistration,
   type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
 import { createEventBus, createExtensionRuntime, ExtensionRunner, SessionManager, type AgentToolResult, type ExtensionActions,
-  type ExtensionContextActions, type ModelRegistry, type ToolCallEvent, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
+  type ExtensionContext, type ExtensionContextActions, type ModelRegistry, type ToolCallEvent, type ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { isJsonValue } from "./json.js";
 import type { ExtensionSettings } from "../../../../packages/shared/src/host-extensions.js";
 import { loadSource, type LoadedSource } from "./load.js";
@@ -34,6 +35,11 @@ export interface ExtensionHost {
     execute: (signal: AbortSignal) => Promise<ToolExecutionResult>): Promise<ToolExecutionResult>;
   /** How long one event's handlers may take. */
   readonly hookTimeoutMs: number;
+  /**
+   * How long one source's `input` handlers may take with a message, which waits for them before it is accepted: within
+   * the control plane's 30 seconds for that. `hookTimeoutMs` without it.
+   */
+  readonly inputTimeoutMs?: number;
   /** An extension's error; logged on the host, never shown to the model. */
   warn(source: string, message: string): void;
 }
@@ -54,6 +60,34 @@ export interface SessionExtension {
   extension: Extension;
   tools: ToolRegistration[];
   runner: ExtensionRunner;
+}
+
+/**
+ * Where a message's input stands after the extensions' `input` handlers: going on, with the text and images they left
+ * it (`transform`), or refused by `by` (`handled`, a handler that failed, or one that took too long). `notice` is the
+ * last thing that source's handlers told the person through `ctx.ui.notify`, as Pi shows it to them.
+ */
+export type InputOutcome = { action: "continue"; text: string; images: ImageContent[] } | { action: "refused"; by: string; notice?: string };
+
+/** Where the `ctx.ui.notify` messages of the `input` handlers running now go (see `noticesOf`). */
+const inputNotices = new AsyncLocalStorage<string[]>();
+
+/**
+ * Lets `runner`'s handlers tell the person who sent a message something while its `input` handlers run: Pikibun runs
+ * extensions without a UI (Pi's print mode, `hasUI` false), so `ctx.ui.notify` does nothing, except then, where what it
+ * says is kept as the message's notice. Everything else of the context stays as it is.
+ */
+function noticesOf(runner: ExtensionRunner): void {
+  const createContext = runner.createContext.bind(runner);
+  runner.createContext = () => {
+    const ctx = createContext();
+    const sink = inputNotices.getStore();
+    if (!sink) return ctx;
+    const ui = new Proxy(ctx.ui, { get: (target, name, receiver) => name === "notify"
+      ? (message: unknown) => { sink.push(String(message)); }
+      : Reflect.get(target, name, receiver) });
+    return Object.create(ctx, { ui: { value: ui } }) as ExtensionContext;
+  };
 }
 
 function withTimeout<T>(work: () => T | Promise<T>, ms: number, what: string): Promise<T> {
@@ -129,6 +163,7 @@ export class SessionExtensions {
           this.host.modelRegistry ?? (undefined as never));
         runner.bindCore(noActions(runner, message => this.host.warn(source, message)), contextActions(this.host));
         runner.onError(error => this.host.warn(source, `${error.event}: ${error.error}`));
+        noticesOf(runner);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
         const extension = build(source, loaded.summary.dev, runner, offered, this.host);
         this.#opened.push(extension);
@@ -182,6 +217,40 @@ export class SessionExtensions {
   /** Runs `event` on every source that applies; one that fails or times out is logged. */
   private async each(event: string, work: (runner: ExtensionRunner, source: string) => Promise<unknown>): Promise<void> {
     for (const extension of this.#opened) await this.one(extension, event, work);
+  }
+
+  /**
+   * Pi's `input` event for a message about to be accepted, through `sources` in that order (those the session opened
+   * and that apply now): each may let it go on, change its text and images (`transform`), or take it (`handled`), which
+   * refuses it. `inputSource` is Pi's: `interactive` for the host owner's own messages, the machine's person in Pi's
+   * terms, and `rpc` for everyone else's. Unlike in Pi, where a handler that throws lets the message through, a handler
+   * that fails or takes too long refuses it here, as a `tool_call` handler blocks its call: a broken guard never lets
+   * through what it would have stopped.
+   */
+  async input(sources: readonly string[], text: string, images: ImageContent[], inputSource: "interactive" | "rpc"): Promise<InputOutcome> {
+    let current = { text, images };
+    for (const source of sources) {
+      const opened = this.#opened.find(item => item.source === source);
+      if (!opened?.runner.hasHandlers("input") || !(await applyState(this.host, source, opened.runner))) continue;
+      const notices: string[] = [];
+      const errors: string[] = [];
+      const stop = opened.runner.onError(error => { if (error.event === "input") errors.push(error.error); });
+      try {
+        const { text, images } = current;
+        const result = await inputNotices.run(notices, () => withTimeout(() => opened.runner.emitInput(text, images.length ? images : undefined, inputSource),
+          this.host.inputTimeoutMs ?? this.host.hookTimeoutMs, `${source}'s input handlers`));
+        if (errors.length) return { action: "refused", by: source };
+        if (result.action === "handled") return { action: "refused", by: source, ...(notices.length ? { notice: notices.at(-1)! } : {}) };
+        if (result.action === "transform") {
+          if (typeof result.text !== "string") throw new Error("input: transform without text");
+          current = { text: result.text, images: Array.isArray(result.images) ? result.images : current.images };
+        }
+      } catch (error) {
+        this.host.warn(source, describe(error));
+        return { action: "refused", by: source };
+      } finally { stop(); }
+    }
+    return { action: "continue", ...current };
   }
 
   sessionStart(): Promise<void> {

@@ -827,10 +827,12 @@ export interface SessionView {
   /**
    * The session's extensions (docs/design/host-extensions.md): those it runs with now, with the tools it got from each,
    * its workspace's enabled ones its host lacks or has at another version (`missing`), and Pi's built-in ones its host's
-   * configuration turns on that it runs with (`builtin`, by name, as HostConfig.builtinExtensions names them). Absent from
-   * runners that predate extensions, and where the host has none to tell.
+   * configuration turns on that it runs with (`builtin`, by name, as HostConfig.builtinExtensions names them). Those the
+   * host's owner requires of every session on it are marked `required`; `missingRequired` are those of them the host
+   * can't run, while the session takes no messages. Absent from runners that predate extensions, and where the host has
+   * none to tell.
    */
-  extensions?: { running: { source: string; dev: boolean; tools: string[] }[]; missing: string[]; builtin?: string[] };
+  extensions?: { running: { source: string; dev: boolean; tools: string[]; required?: true }[]; missing: string[]; builtin?: string[]; missingRequired?: string[] };
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];

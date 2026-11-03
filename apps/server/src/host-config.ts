@@ -1,6 +1,8 @@
 import type { Hono } from 'hono';
-import { builtinExtensionNames, defaultHostConfig, normalizeBuiltinExtensionNames, ownerOnlyHostConfig, parseBuiltinExtensions, parseHostCompaction, parseHostConfigChange, type HostConfig,
-  type RepositoryCacheMode } from '../../../packages/shared/src/host-config.js';
+import { builtinExtensionNames, defaultHostConfig, hostConfigLimits, normalizeBuiltinExtensionNames, ownerOnlyHostConfig, parseBuiltinExtensions, parseHostCompaction,
+  parseHostConfigChange, parseRequiredExtensions, type HostConfig, type RepositoryCacheMode } from '../../../packages/shared/src/host-config.js';
+import { isPikiExtensionSource } from '../../../packages/shared/src/host-extensions.js';
+import { pikiExtension } from '../../../packages/shared/src/piki-extensions.js';
 import type { Env, WorkerEnv } from './types.js';
 import { auditStatement } from './db.js';
 import { fail, jsonObject, now } from './http.js';
@@ -10,22 +12,24 @@ import { managedConnector } from './host-access.js';
  * How a host runs its sessions (HostConfig): its command time limit, whether sandboxed commands get its GPU, whether
  * pushes in its owner's sessions may use its Git credentials, its repository cache, whether its owner's sessions may
  * run directly on it, without the sandbox, when its long conversations are summarized (compaction), and which of Pi's
- * built-in extensions its sessions run (builtinExtensions). Its owner sets them here, as do its admins, except the ones that decide whose
- * credentials the host uses and what runs on it unsandboxed. Connectors read them back (`/api/connectors/self/config`)
+ * built-in extensions its sessions run (builtinExtensions), and the extensions it requires of every session on it
+ * (requiredExtensions). Its owner sets them here, as do its admins, except the ones that decide whose credentials the
+ * host uses, what runs on it unsandboxed, and what every session on it must run. Connectors read them back (`/api/connectors/self/config`)
  * instead of taking connect options.
  */
 
 interface ConfigRow { command_timeout_seconds: number; gpu: number; git_credentials: number; repository_cache: RepositoryCacheMode; host_sessions: number; compaction_json: string;
-  builtin_extensions_json: string }
+  builtin_extensions_json: string; required_extensions_json: string }
 
 /** The configuration of `connectorId`; the defaults until its owner or an admin changes one. */
 export async function connectorHostConfig(env: Env, connectorId: string): Promise<HostConfig> {
   const row = await env.DB.query<ConfigRow>(`SELECT command_timeout_seconds, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
-    builtin_extensions_json FROM connector_configs WHERE connector_id = ?`).bind(connectorId).first();
-  if (!row) return { ...defaultHostConfig, builtinExtensions: [] };
+    builtin_extensions_json, required_extensions_json FROM connector_configs WHERE connector_id = ?`).bind(connectorId).first();
+  if (!row) return { ...defaultHostConfig, builtinExtensions: [], requiredExtensions: [] };
   return { commandTimeoutSeconds: Number(row.command_timeout_seconds), gpu: Number(row.gpu) === 1,
     gitCredentials: Number(row.git_credentials) === 1, repositoryCache: row.repository_cache, hostSessions: Number(row.host_sessions) === 1,
-    compaction: storedCompaction(row.compaction_json), builtinExtensions: storedBuiltinExtensions(row.builtin_extensions_json) };
+    compaction: storedCompaction(row.compaction_json), builtinExtensions: storedBuiltinExtensions(row.builtin_extensions_json),
+    requiredExtensions: storedRequiredExtensions(row.required_extensions_json) };
 }
 
 /** The saved built-in extensions, those this control plane still ships; one that no longer reads as valid is none. */
@@ -34,6 +38,17 @@ function storedBuiltinExtensions(json: string): HostConfig['builtinExtensions'] 
     const names: unknown = JSON.parse(json);
     return Array.isArray(names) ? parseBuiltinExtensions(normalizeBuiltinExtensionNames(names).filter(name => (builtinExtensionNames as readonly unknown[]).includes(name))) : [];
   } catch { return []; }
+}
+
+/**
+ * The saved required extensions. Each one that still reads as valid stays required, even when another doesn't (a
+ * database edited by hand, say): they guard the host's sessions, so none is dropped for another's sake.
+ */
+function storedRequiredExtensions(json: string): HostConfig['requiredExtensions'] {
+  let items: unknown;
+  try { items = JSON.parse(json); } catch { return []; }
+  if (!Array.isArray(items)) return [];
+  return items.flatMap(item => { try { return parseRequiredExtensions([item]); } catch { return []; } }).slice(0, hostConfigLimits.requiredExtensions);
 }
 
 /** The saved compaction setting; one that no longer reads as valid (a database edited by hand, say) is none. */
@@ -45,7 +60,7 @@ function storedCompaction(json: string): HostConfig['compaction'] {
 /** Each setting's column; the only names `upsert` puts in its SQL. */
 const columns: Readonly<Record<keyof HostConfig, string>> = Object.freeze({ commandTimeoutSeconds: 'command_timeout_seconds', gpu: 'gpu',
   gitCredentials: 'git_credentials', repositoryCache: 'repository_cache', hostSessions: 'host_sessions', compaction: 'compaction_json',
-  builtinExtensions: 'builtin_extensions_json' });
+  builtinExtensions: 'builtin_extensions_json', requiredExtensions: 'required_extensions_json' });
 
 /**
  * Saves a change of `settings`. A host with no configuration yet gets a whole one: the change over what it had (the
@@ -54,8 +69,8 @@ const columns: Readonly<Record<keyof HostConfig, string>> = Object.freeze({ comm
  */
 function upsert(settings: readonly (keyof HostConfig)[]): string {
   return `INSERT INTO connector_configs (connector_id, command_timeout_seconds, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
-    builtin_extensions_json, updated_by, updated_at)
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM connectors WHERE id = ? AND revoked_at IS NULL AND removed_at IS NULL)
+    builtin_extensions_json, required_extensions_json, updated_by, updated_at)
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM connectors WHERE id = ? AND revoked_at IS NULL AND removed_at IS NULL)
   ON CONFLICT (connector_id) DO UPDATE SET ${settings.map(key => `${columns[key]} = excluded.${columns[key]}, `).join('')}
     updated_by = excluded.updated_by, updated_at = excluded.updated_at
   RETURNING connector_id`;
@@ -72,12 +87,15 @@ export function registerHostConfig(app: Hono<WorkerEnv>): void {
     // Room for compaction counts of the most models, with the longest names a host advertises (about 67 KB).
     try { change = parseHostConfigChange(await jsonObject(c, 131_072)); }
     catch (error) { return fail(400, 'invalid_host_config', error instanceof Error ? error.message : 'Invalid host configuration.'); }
+    // A Pikibun extension it requires is one this control plane knows: a misspelt one would hold every session.
+    const unknown = change.requiredExtensions?.find(item => isPikiExtensionSource(item.source) && !pikiExtension(item.source));
+    if (unknown) return fail(400, 'invalid_host_config', `${unknown.source} is not one of Pikibun's extensions.`);
     const current = await connectorHostConfig(c.env, row.id);
     let settings = Object.keys(change) as (keyof HostConfig)[];
     if (row.role !== 'owner') {
       // An admin may name one of the owner's settings only as it is: changing it is the owner's.
-      if (settings.some(key => ownerOnlyHostConfig.includes(key) && change[key] !== current[key])) {
-        fail(403, 'host_owner_required', 'Only the host\'s owner decides whether it uses its Git credentials, keeps a repository cache or runs sessions without the sandbox.');
+      if (settings.some(key => ownerOnlyHostConfig.includes(key) && JSON.stringify(change[key]) !== JSON.stringify(current[key]))) {
+        fail(403, 'host_owner_required', 'Only the host\'s owner decides whether it uses its Git credentials, keeps a repository cache, runs sessions without the sandbox or requires extensions of every session on it.');
       }
       settings = settings.filter(key => !ownerOnlyHostConfig.includes(key));
       if (!settings.length) return c.json({ config: current });
@@ -85,7 +103,7 @@ export function registerHostConfig(app: Hono<WorkerEnv>): void {
     const config: HostConfig = { ...current, ...Object.fromEntries(settings.map(key => [key, change[key]])) };
     const saved = await c.env.DB.query(upsert(settings))
       .bind(row.id, config.commandTimeoutSeconds, config.gpu ? 1 : 0, config.gitCredentials ? 1 : 0, config.repositoryCache, config.hostSessions ? 1 : 0,
-        JSON.stringify(config.compaction), JSON.stringify(config.builtinExtensions), actorId, now(), row.id).first();
+        JSON.stringify(config.compaction), JSON.stringify(config.builtinExtensions), JSON.stringify(config.requiredExtensions), actorId, now(), row.id).first();
     if (!saved) fail(409, 'connector_revoked', 'Connector is revoked.');
     const effective = await connectorHostConfig(c.env, row.id);
     await auditStatement(c.env, actorId, 'host.config.updated', null, null, { connectorId: row.id, ...effective }).run();

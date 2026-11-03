@@ -16,7 +16,7 @@ import type { CompactionFailure } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
-import { sessionExtensions, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
+import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
 import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
@@ -364,6 +364,8 @@ export class RunnerSession {
   #registry?: Registry;
   /** The session's Pi extensions (docs/design/host-extensions.md), where the host has any. */
   #hostExtensions?: SessionExtensions;
+  /** The extensions being opened now (openExtensions): one opening at a time, so none is opened twice. */
+  #opening: Promise<void> = Promise.resolve();
   /** Pi's built-in extensions (HostConfig.builtinExtensions), installed in the registry; each message selects those the host's configuration turns on. */
   #builtins?: SessionBuiltins;
   private tools: ToolRegistration[] = [];
@@ -1420,12 +1422,15 @@ export class RunnerSession {
    * The workspace's extensions this session runs with now (docs/design/host-extensions.md): its enabled ones the host
    * has at that version, then, in the host owner's own sessions, the host's dev extensions.
    */
-  private async extensionChoice(): Promise<{ chosen: ReturnType<typeof sessionExtensions>; automaticTools: boolean }> {
+  private async extensionChoice(): Promise<{ chosen: ChosenExtension[]; automaticTools: boolean; missingRequired: string[] }> {
     const config = this.config.extensions;
-    if (!config) return { chosen: [], automaticTools: false };
+    if (!config) return { chosen: [], automaticTools: false, missingRequired: [] };
     const answer = await config.workspace(this.binding.session.workspaceId).catch(() => ({ extensions: [], automaticTools: false }));
-    return { chosen: sessionExtensions(answer.extensions, config.installed().map(item => item.summary),
-      { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }), automaticTools: answer.automaticTools };
+    // Those the host's owner requires, as the host's configuration has them now.
+    const required = (await this.hostConfig()).requiredExtensions;
+    const installed = config.installed().map(item => item.summary);
+    return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
+      automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed) };
   }
 
   /** The extensions this session runs with now, opened (and installed in the registry) as it first runs with each. */
@@ -1434,9 +1439,7 @@ export class RunnerSession {
     const config = this.config.extensions;
     if (!host || !config) return [];
     const { chosen } = await this.extensionChoice();
-    const installed = config.installed();
-    const loaded = chosen.flatMap(item => installed.filter(candidate => candidate.summary.source === item.source));
-    await host.ensure(loaded);
+    await this.openExtensions(chosen.map(item => item.source));
     // Tool name clashes are settled among the extensions this message runs with, in the workspace's order.
     const { selected, created } = host.select(chosen.map(item => item.source));
     for (const extension of created) this.#registry?.install(extension);
@@ -1463,10 +1466,12 @@ export class RunnerSession {
       model: () => this.modelRef && this.config.extensions?.modelRegistry?.find(this.modelRef.provider, this.modelRef.modelId) as never,
       state: async source => {
         const item = (await this.extensionChoice()).chosen.find(candidate => candidate.source === source);
-        return { active: !!item, settings: item?.workspace?.settings ?? {} };
+        return { active: !!item, settings: item?.required?.settings ?? item?.workspace?.settings ?? {} };
       },
       runTool: (call, execute) => this.runExtensionTool(call, execute),
       hookTimeoutMs: 30_000,
+      // A message waits for its input handlers within the control plane's 30 seconds to accept it.
+      inputTimeoutMs: 25_000,
       warn: (source, message) => { process.stderr.write(`Session ${this.binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
     };
   }
@@ -1554,6 +1559,61 @@ export class RunnerSession {
       if (value.autoMerge) options.autoMerge = true;
     }
     return Object.keys(options).length ? options : undefined;
+  }
+
+  /**
+   * Runs the extensions' `input` handlers on a message before it is accepted (SessionExtensions.input): those the host's
+   * owner requires first, then the workspace's, in side asks too. What they leave of it is what is queued; one that
+   * takes it refuses the message, with what it told the sender where the control plane can pass that on. While the host
+   * lacks an extension its owner requires, every message is refused. A message sent again with its request id went
+   * through them when it was accepted, and doesn't again.
+   */
+  private async extensionInput(ticket: RunnerTicket, input: SubmitInput, mode: "write" | "ask", images: InputImage[]): Promise<{ content: string; images: InputImage[] }> {
+    const host = this.#hostExtensions;
+    const config = this.config.extensions;
+    if (!host || !config) return { content: input.content, images };
+    const { chosen, missingRequired } = await this.extensionChoice();
+    const log = (line: string) => { process.stderr.write(`Session ${this.binding.session.id}: ${line.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 500)}\n`); };
+    if (missingRequired.length) {
+      log(`refused a message: this host requires ${missingRequired.join(", ")}, which it can't run`);
+      throw new RunnerError(422, "This host's owner requires an extension its connector can't run now, so no message is sent. Ask them to look at the host's extensions");
+    }
+    // Only those that handle input, as the host loaded them, and only for a new message from a sender who may send it.
+    const installed = config.installed();
+    if (!chosen.some(item => installed.some(candidate => candidate.summary.source === item.source && candidate.summary.modules.some(module => module.events.includes("input"))))) {
+      return { content: input.content, images };
+    }
+    if ((await this.metadata()).runs[await requestKey(ticket.actorId, mode, input.requestId)]) return { content: input.content, images };
+    await this.authorize(ticket.actorId, mode === "ask" ? "ask" : "write", ticket.policyVersion);
+    await this.openExtensions(chosen.map(item => item.source));
+    const hostOwner = this.binding.session.connectorOwnerId;
+    const outcome = await host.input(chosen.map(item => item.source), input.content, images.map(image => ({ type: "image" as const, ...image })),
+      hostOwner && ticket.actorId === hostOwner ? "interactive" : "rpc");
+    if (outcome.action === "refused") {
+      // The relay passes on only plain text in this charset (connector-transport.ts runnerReason); other notices stay here.
+      const notice = outcome.notice && /^[\w .,:'()-]{1,300}$/.test(outcome.notice) ? outcome.notice : undefined;
+      if (!notice) log(`${outcome.by} refused a message${outcome.notice ? `: ${outcome.notice}` : ""}`);
+      throw new RunnerError(422, notice ?? "An extension on this host refused this message");
+    }
+    if (outcome.text === input.content && outcome.images.length === images.length && outcome.images.every((image, index) => image.data === images[index]!.data)) {
+      return { content: input.content, images };
+    }
+    // Changed: checked as a message is.
+    if (outcome.text.length > 100_000 || (!outcome.text.trim() && !outcome.images.length)) throw new RunnerError(422, "An extension on this host left this message empty or too long");
+    const parsed = parseChatImages(outcome.images.map(image => ({ mimeType: image.mimeType, data: image.data })));
+    if ("error" in parsed) throw new RunnerError(422, "An extension on this host changed this message's images into ones that can't be sent");
+    return { content: outcome.text, images: parsed.images.length ? await this.prepareImages(parsed.images) : [] };
+  }
+
+  /** Opens those of `sources` the host has loaded that the session hasn't opened yet, one opening at a time. */
+  private openExtensions(sources: readonly string[]): Promise<void> {
+    const host = this.#hostExtensions;
+    const config = this.config.extensions;
+    if (!host || !config) return Promise.resolve();
+    const installed = config.installed();
+    const open = this.#opening.then(() => host.ensure(sources.flatMap(source => installed.filter(candidate => candidate.summary.source === source))));
+    this.#opening = open.catch(() => {});
+    return open;
   }
 
   /** Decodes a message's images and fits them to what the model gets of an image, as read_file does for image files. */
@@ -1680,7 +1740,10 @@ export class RunnerSession {
       || (this.config.connectorId && mode === "write" && input.admissionId === undefined))
       throw new RunnerError(400, "Invalid or missing Worker write admission");
     // Decoded and fitted before the session's turn, as that can take a while: what is queued is what the model gets.
-    const prepared = images.length ? await this.prepareImages(images) : [];
+    const sent = images.length ? await this.prepareImages(images) : [];
+    // Also before the session's turn: the extensions' input handlers, such as a prompt audit that asks a model, may take
+    // seconds, and a stop or a decision meanwhile isn't kept waiting. What they leave of the message is what is queued.
+    const { content, images: prepared } = await this.extensionInput(ticket, input, mode, sent);
     return this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
       // Messages queue while repositories are prepared; once that failed, say why instead of queueing forever.
@@ -1705,8 +1768,8 @@ export class RunnerSession {
         throw new RunnerError(429, "Session queue is full");
       const queuedBytes = Object.values(state.runs).filter(run => ["queued", "running", "admitting"].includes(run.status))
         .reduce((total, run) => total + Buffer.byteLength(run.content, "utf8"), 0);
-      if (queuedBytes + Buffer.byteLength(input.content, "utf8") > 1024 * 1024) throw new RunnerError(429, "Session queued content limit exceeded");
-      if (Object.values(state.runs).reduce((total, run) => total + Buffer.byteLength(run.content, "utf8"), 0) + Buffer.byteLength(input.content, "utf8") > 32 * 1024 * 1024)
+      if (queuedBytes + Buffer.byteLength(content, "utf8") > 1024 * 1024) throw new RunnerError(429, "Session queued content limit exceeded");
+      if (Object.values(state.runs).reduce((total, run) => total + Buffer.byteLength(run.content, "utf8"), 0) + Buffer.byteLength(content, "utf8") > 32 * 1024 * 1024)
         throw new RunnerError(429, "Session durable request content limit exceeded");
       if (Object.keys(state.runs).length >= 10_000) throw new RunnerError(429, "Session durable request ledger is full");
       const imageBytes = prepared.reduce((total, image) => total + image.data.length, 0);
@@ -1728,7 +1791,7 @@ export class RunnerSession {
         conversation = head ? await shared.fork(head.id, fork, context) : await this.harness.createConversation(fork, context);
       }
       const transcript = await conversation.context(context);
-      const run: Run = { key, initiatedBy: ticket.actorId, ownerId: this.binding.owner.id, mode, conversationId: conversation.id, content: input.content, contentHash: hash, status: "queued", startEntry: transcript.entries.at(-1)?.id ?? 0, sequence: state.nextSequence ?? 0, submittedAt: Date.now() };
+      const run: Run = { key, initiatedBy: ticket.actorId, ownerId: this.binding.owner.id, mode, conversationId: conversation.id, content, contentHash: hash, status: "queued", startEntry: transcript.entries.at(-1)?.id ?? 0, sequence: state.nextSequence ?? 0, submittedAt: Date.now() };
       if (input.admissionId !== undefined) run.admissionId = input.admissionId;
       if (options) run.options = options;
       if (prepared.length) run.images = { count: prepared.length, bytes: imageBytes };
@@ -2839,16 +2902,22 @@ export class RunnerSession {
     try {
       const answer = await config.workspace(this.binding.session.workspaceId);
       const installed = config.installed().map(item => item.summary);
-      const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId });
+      const required = (await this.hostConfig()).requiredExtensions;
+      const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required);
+      const missingRequired = missingRequiredExtensions(required, installed);
       // The tools the next message would get of each, settled as that message settles them (SessionExtensions.select).
       const settled = settleToolNames(chosen.map(item => ({ source: item.source,
         tools: installed.find(candidate => candidate.source === item.source)?.modules.flatMap(module => module.tools.map(tool => tool.name)) ?? [] })),
         this.tools.map(tool => tool.name));
-      const running = chosen.map((item, index) => ({ source: item.source, dev: item.dev, tools: settled[index]!.kept }));
-      const missing = answer.extensions.filter(item => item.enabled && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
+      const running = chosen.map((item, index) => ({ source: item.source, dev: item.dev, tools: settled[index]!.kept, ...(item.required ? { required: true as const } : {}) }));
+      // A workspace extension the host requires another version of isn't missing: the host's runs in its place.
+      const requiredPackages = new Set(required.map(item => extensionPackageKey(item.source)));
+      const missing = answer.extensions.filter(item => item.enabled && !requiredPackages.has(extensionPackageKey(item.source))
+        && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
       // As the next message selects them: after the workspace's, which may replace one.
       const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
-      return running.length || missing.length || builtin.length ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}) } } : {};
+      return running.length || missing.length || builtin.length || missingRequired.length
+        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}) } } : {};
     } catch { return {}; }
   }
 

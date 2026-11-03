@@ -39,7 +39,7 @@ test('Pikibun extension sources parse as piki:<name>, are their own package, and
   assert.deepEqual(sessionExtensions(parseWorkspaceExtensions([{ source: 'piki:gh' }, { source: 'piki:glab' }]), installed, { ownerId: 'bob', connectorOwnerId: 'alice' })
     .map(item => item.source), ['piki:gh'], 'every member\'s sessions run it, not only the host owner\'s');
 
-  assert.deepEqual(pikiExtensions.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli']);
+  assert.deepEqual(pikiExtensions.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:prompt-audit']);
   assert.deepEqual(pikiExtensionsFor('github-enterprise').map(item => item.source), ['piki:gh']);
   assert.deepEqual(pikiExtensionsFor('azure-devops').map(item => item.tool), ['az']);
   assert.deepEqual(pikiExtensionsFor('bitbucket'), []);
@@ -55,27 +55,33 @@ test('Pikibun extension sources parse as piki:<name>, are their own package, and
     error: 'piki:gh is built into the connector: update the connector instead (npx pikibun@latest connect).' }]);
 });
 
-test('every connector has its Pikibun extensions: each offers one tool and its read-only setting', async t => {
+test('every connector has its Pikibun extensions: each command-line one offers one tool and its read-only setting; the prompt audit handles input', async t => {
   const root = await directory(t);
   const store = new ExtensionStore(join(root, 'extensions'));
   const loaded = await loadInstalled(store);
-  assert.deepEqual(loaded.map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli']);
+  assert.deepEqual(loaded.map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:prompt-audit']);
   for (const item of loaded) {
     assert.equal(item.summary.error, undefined);
     const [module] = item.summary.modules;
     assert.equal(module!.error, undefined, item.summary.source);
+    if (item.summary.source === 'piki:prompt-audit') {
+      // No tool: it checks each message on Pi's input event, with its settings.
+      assert.deepEqual([module!.tools, module!.events, module!.noops, module!.ignored], [[], ['input'], [], []]);
+      assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['audit', 'string', 'others'], ['model', 'string', ''], ['policy', 'string', '']]);
+      continue;
+    }
     assert.deepEqual(module!.tools.map(tool => tool.name), [pikiExtension(item.summary.source)!.tool]);
     assert.deepEqual(module!.flags, [{ name: 'read-only', type: 'boolean', default: false, description: module!.flags[0]!.description }]);
     assert.deepEqual([module!.noops, module!.ignored, module!.events], [[], [], []]);
   }
   const host = new HostExtensions(store, { remoteInstalls: true });
   await host.load();
-  assert.deepEqual(host.report().installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli']);
+  assert.deepEqual(host.report().installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:prompt-audit']);
   assert.deepEqual(host.reportWithoutPikiExtensions().installed, [], 'a control plane that predates them gets the report without them');
   // Nothing is installed in the store: the CLI's changes are compared with what is installed only.
   await host.refreshIfChanged();
-  assert.equal(host.loaded.length, 3);
-  assert.equal(connectorPikiExtensions.length, 3);
+  assert.equal(host.loaded.length, 4);
+  assert.equal(connectorPikiExtensions.length, 4);
 });
 
 test('arguments are read as the commands take them', () => {
@@ -172,7 +178,7 @@ test('refusals hold wherever options sit, clustered, abbreviated or in another c
 test('a host\'s report holds its Pikibun extensions besides as many installed ones as it may have', () => {
   const installed = Array.from({ length: 64 }, (_, index) => ({ source: `npm:extension-${index}@1.0.0`, dev: false, modules: [] }));
   const report = parseHostExtensionsReport({ installed: [...connectorPikiExtensions.map(item => ({ source: item.info.source, dev: false, modules: [] })), ...installed], remoteInstalls: true });
-  assert.equal(report.installed.length, 67);
+  assert.equal(report.installed.length, 68);
 });
 
 test('the command gets its own sign-in and the host\'s tools from the connector\'s environment, never the connector\'s other secrets', () => {

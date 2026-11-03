@@ -413,10 +413,12 @@ function HostSection({ session, user, hosts }: { session: SessionRecord; user: U
 
 /** The extensions the session runs with, and its workspace's enabled ones its host lacks. */
 function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView["extensions"]> }) {
-  return <Section title="Extensions" info={<p>Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls are approved like host commands unless the workspace and the host's owner let them run automatically. Dev extensions are the host owner's own, in their own sessions. Built-in ones come with Pikibun, as the host's configuration turns them on.</p>}>
+  return <Section title="Extensions" info={<p>Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls are approved like host commands unless the workspace and the host's owner let them run automatically. Dev extensions are the host owner's own, in their own sessions. Built-in ones come with Pikibun, as the host's configuration turns them on. The host's owner can also require extensions of every session on their host, whatever the workspace chose.</p>}>
     {extensions.running.map(item => <Row key={item.source} leading={<Icon name="tool" size={16} />} title={<code>{item.source}</code>}
       hint={item.tools.length ? `Tools: ${item.tools.join(", ")}` : "No tools: prompt or hooks only"}
-      trailing={item.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : <StatusBadge tone="success">Running</StatusBadge>} />)}
+      trailing={item.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : item.required ? <StatusBadge tone="success">Required by the host</StatusBadge> : <StatusBadge tone="success">Running</StatusBadge>} />)}
+    {(extensions.missingRequired ?? []).map(source => <Row key={`required ${source}`} leading={<Icon name="alert" size={16} />} title={<code>{source}</code>}
+      hint="The host's owner requires it of every session on the host, which can't run it now: no message is sent until it can" trailing={<StatusBadge tone="danger">Missing</StatusBadge>} />)}
     {extensions.missing.map(source => <Row key={source} title={<code>{source}</code>} hint="Not on this host at this version: the session runs without it until the host's owner installs it"
       trailing={<StatusBadge tone="neutral">Missing</StatusBadge>} />)}
     {(extensions.builtin ?? []).map(name => {

@@ -3,13 +3,14 @@ import { pikiExtensions, type PikiExtensionInfo } from "../../../../../packages/
 import { azurePikiExtension } from "./azure-cli.js";
 import { ghExtension } from "./gh.js";
 import { glabExtension } from "./glab.js";
+import { promptAuditExtension } from "./prompt-audit.js";
 
 /*
  * The extensions built into this connector (docs/design/piki-extensions.md), as Pi extension factories: every host
  * has them, as `piki:<name>`, and runs one where its workspace uses it.
  */
 
-const factories: Record<string, ExtensionFactory> = { gh: ghExtension, glab: glabExtension, "azure-cli": azurePikiExtension };
+const factories: Record<string, ExtensionFactory> = { gh: ghExtension, glab: glabExtension, "azure-cli": azurePikiExtension, "prompt-audit": promptAuditExtension };
 
 export interface PikiExtension { info: PikiExtensionInfo; factory: ExtensionFactory }
 

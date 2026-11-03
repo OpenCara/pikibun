@@ -1,3 +1,5 @@
+import { extensionPackageKey, normalizeExtensionSource, parseExtensionSettings, type ExtensionSettings } from "./host-extensions.js";
+
 /**
  * How a host runs its sessions. Its owner sets this in Pikibun (Settings → Hosts → the host → Configuration), and so do
  * its admins, except for the settings that decide whose Git credentials the host uses (`ownerOnlyHostConfig`). The
@@ -89,6 +91,20 @@ export interface HostConfig {
    * pick a change up with their next message, within a minute.
    */
   builtinExtensions: BuiltinExtensionName[];
+  /**
+   * Extensions every session on the host runs, whatever its workspace chose, before the workspace's own, with the
+   * settings the host's owner gave them (RequiredExtension): Pikibun's own (`piki:<name>`, such as `piki:prompt-audit`)
+   * or ones installed on the host. A session whose host lacks one, or can't load it, takes no messages until it has it.
+   * Only the host's owner changes them. Sessions pick a change up with their next message, within a minute.
+   */
+  requiredExtensions: RequiredExtension[];
+}
+
+/** An extension a host's owner requires of every session on it, and its settings (the extension's Pi flags). */
+export interface RequiredExtension {
+  /** A normalized source: `piki:<name>`, `npm:<name>@<version>` or `git:<url>@<commit>`; never a dev extension. */
+  source: string;
+  settings: ExtensionSettings;
 }
 
 export const hostConfigLimits = Object.freeze({
@@ -96,12 +112,39 @@ export const hostConfigLimits = Object.freeze({
   /** Each compaction token count, and the number of models with their own (a host offers at most 200). */
   compactionTokens: Object.freeze({ min: 0, max: 10_000_000 }),
   compactionModels: 200,
+  /** Extensions a host requires of its sessions. */
+  requiredExtensions: 16,
 });
 
 export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
   builtinExtensions: Object.freeze([]) as unknown as BuiltinExtensionName[],
+  requiredExtensions: Object.freeze([]) as unknown as RequiredExtension[],
 });
+
+/**
+ * The extensions a host requires: normalized sources, one version of each package, each with valid settings, in the
+ * owner's order (the order sessions run them in).
+ */
+export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
+  if (!Array.isArray(input)) throw new Error("Invalid required extensions");
+  if (input.length > hostConfigLimits.requiredExtensions) throw new Error(`A host requires at most ${hostConfigLimits.requiredExtensions} extensions`);
+  const packages = new Set<string>();
+  return input.map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => key !== "source" && key !== "settings")) {
+      throw new Error("Invalid required extension");
+    }
+    const { source, settings } = item as { source?: unknown; settings?: unknown };
+    if (typeof source !== "string") throw new Error("Invalid required extension");
+    let normalized: string;
+    try { normalized = normalizeExtensionSource(source); }
+    catch (error) { throw new Error(`Invalid required extension: ${error instanceof Error ? error.message : "its source"}`); }
+    const key = extensionPackageKey(normalized);
+    if (packages.has(key)) throw new Error(`A host requires one version of ${key}`);
+    packages.add(key);
+    return { source: normalized, settings: parseExtensionSettings(settings ?? {}) };
+  });
+}
 
 /** The built-in extensions a host runs: known names, each once, in the catalog's order, so equal settings are equal JSON. */
 export function parseBuiltinExtensions(input: unknown): BuiltinExtensionName[] {
@@ -154,10 +197,10 @@ export function parseHostCompaction(value: unknown): HostCompaction {
 }
 
 /**
- * Only the host's owner changes these: they decide whose Git credentials the host uses, and whether anything runs on it
- * without the sandbox. Its admins change the rest.
+ * Only the host's owner changes these: they decide whose Git credentials the host uses, whether anything runs on it
+ * without the sandbox, and what runs as its OS user in every session on it. Its admins change the rest.
  */
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions"]);
 
 /** A whole configuration, as the control plane reports it; anything else is refused. */
 export function parseHostConfig(value: unknown): HostConfig {
@@ -177,7 +220,8 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
   return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
-    hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions) };
+    hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
+    requiredExtensions: parseRequiredExtensions(input.requiredExtensions) };
 }
 
 /**
