@@ -20,6 +20,7 @@ import { useSession } from "../lib/auth";
 import { forgetSentDraft, readDraft, saveDraft, useDraft } from "../lib/drafts";
 import { useKeyboardVisible, useOpenSession } from "../lib/layout";
 import { useLiveSession } from "../lib/live-session";
+import { watchSession } from "../lib/notifications";
 import { PeopleProvider, useUsername, useWorkspacePeople } from "../lib/people";
 import { useAction, useResource } from "../lib/resource";
 import { usePalette } from "../theme";
@@ -42,6 +43,8 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
   const headerHeight = useHeaderHeight();
   const live = useLiveSession(id);
   const { session, view } = live;
+  // A notification about this session, while it is on screen, shows in the list rather than as a banner.
+  useEffect(() => watchSession(id), [id]);
   const [approvalsOpen, setApprovalsOpen] = useState(false);
   const permissions = session?.permissions ?? [];
   // Archived sessions are read-only on the server; don't offer decisions that would be refused.

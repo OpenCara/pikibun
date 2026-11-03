@@ -60,6 +60,13 @@ export interface Env {
   MICROSOFT_TENANT?: string;
   TENCENT_DOCS_CLIENT_ID?: string;
   TENCENT_DOCS_CLIENT_SECRET?: string;
+  /**
+   * Notifications (notifications.ts): the contact push services are given with each Web Push, a mailto: or https: URL;
+   * the server's own origin by default, where it is https.
+   */
+  WEB_PUSH_CONTACT?: string;
+  /** An Expo access token (secret), for an Expo project that requires one to send push notifications to the app. */
+  EXPO_ACCESS_TOKEN?: string;
   /** `true` on a local server (http.ts localMode): loopback only, and only the GitHub account that claimed it signs in. */
   LOCAL_MODE?: string;
   /** The local server's claim secret (base64url, 32 bytes): a sign-in carrying it may claim an unclaimed local server. */

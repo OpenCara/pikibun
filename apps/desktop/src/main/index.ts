@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { app, BrowserWindow, dialog, ipcMain, net, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, Notification, shell, type IpcMainInvokeEvent } from "electron";
 import { channels, type HostsView, type LocalStartInput, type Outcome, type SettingsView } from "../shared/bridge.js";
 import { remoteChannels, type DesktopView, type UploadOutcome } from "../shared/remote-bridge.js";
 import { githubLookup, resolveAdmins } from "./admins.js";
@@ -13,7 +13,7 @@ import { HostLaunchError, HostProcess, stdioHost } from "./host-process.js";
 import { LocalServerController } from "./local-server.js";
 import { HostTray, installAppMenu, type MenuActions } from "./menu.js";
 import { DEFAULT_SERVER, parseServerOrigin } from "./origin.js";
-import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseSandbox, parseStartInput, parseString, parseUpload } from "./requests.js";
+import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parseNotification, parsePairHere, parseRemoteLocalStart, parseSandbox, parseStartInput, parseString, parseUpload } from "./requests.js";
 import { remoteView } from "./remote-view.js";
 import { PRIMARY_CONNECTION, SettingsStore, type SandboxChoice } from "./settings.js";
 import { UpdateChecker } from "./updates.js";
@@ -54,6 +54,8 @@ const connectCommandFor = (id: string, server: string, sandbox: SandboxChoice | 
 const hostLabel = (origin: string) => URL.parse(origin)?.host ?? origin;
 
 app.setName("Pikibun");
+// Windows shows an app's notifications only under the identity its installer's shortcut has (electron-builder.yml appId).
+if (process.platform === "win32") app.setAppUserModelId("com.pikibun.desktop");
 if (userData) app.setPath("userData", userData);
 registerLocalScheme();
 
@@ -540,6 +542,45 @@ function main(): void {
     return { ok: true };
   });
   handleRemote(remoteChannels.openUpdate, () => openUpdate());
+  // Notifications from a server's page (its notification feed): native ones, which bring the window back at the session
+  // they are about. Shown notifications are kept so their click handlers live as long as they do; each tag shows once
+  // per server, as every window of a server polls the same feed.
+  const shownNotifications = new Set<Notification>();
+  const shownTags = new Map<string, number>();
+  handleRemote(remoteChannels.notify, (origin, window, payload): Outcome => {
+    const input = parseNotification(payload);
+    if (!input.ok) return { ok: false, error: input.error };
+    if (!Notification.isSupported()) return { ok: false, error: "This computer can't show notifications." };
+    const at = Date.now();
+    for (const [key, shownAt] of shownTags) if (at - shownAt > 30 * 60_000) shownTags.delete(key);
+    if (input.value.tag) {
+      const key = `${origin} ${input.value.tag}`;
+      if (shownTags.has(key)) return { ok: true };
+      shownTags.set(key, at);
+    }
+    const notification = new Notification({ title: input.value.title, body: input.value.body });
+    shownNotifications.add(notification);
+    const release = () => { shownNotifications.delete(notification); };
+    notification.on("close", release);
+    notification.on("click", () => {
+      release();
+      const url = `${origin}${input.value.path}`;
+      const target = !window.isDestroyed() ? window
+        : origin === activeServer() && mainWindow && !mainWindow.isDestroyed() ? mainWindow
+        : [...serverWindows].find(([open, server]) => server === origin && !open.isDestroyed())?.[0];
+      if (!target) {
+        if (origin === activeServer()) { openMain(); void mainWindow?.loadURL(url).catch(() => {}); } else newServerWindow(origin, url);
+        return;
+      }
+      showWindow(target);
+      // On the server's page already, only the route changes, keeping what the page has loaded; else the page loads.
+      if (URL.parse(target.webContents.getURL())?.origin === origin) {
+        void target.webContents.executeJavaScript(`window.location.hash = ${JSON.stringify(input.value.path.slice(1))}`).catch(() => {});
+      } else void target.loadURL(url).catch(() => {});
+    });
+    notification.show();
+    return { ok: true };
+  });
 
   app.on("second-instance", openMain);
   app.on("activate", () => { if (!BrowserWindow.getAllWindows().some(window => window.isVisible())) openMain(); });

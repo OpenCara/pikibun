@@ -8,6 +8,7 @@ import { AppProvider, useApp } from "./app-context";
 import { GitHubMark, Icon, Logo } from "./icons";
 import { JoinWorkspaceScreen, OwnJoinRequests, rememberInvite, takeRememberedInvite } from "./JoinWorkspaceScreen";
 import { NewSession } from "./NewSession";
+import { useNotificationDelivery } from "./notifications";
 import { PasswordSignIn, type SignupMode } from "./PasswordSignIn";
 import { NewWorkspaceSheet } from "./NewWorkspaceSheet";
 import { navigate, useRoute, type Route } from "./router";
@@ -117,7 +118,10 @@ function Home() {
 
 function Shell() {
   const route = useRoute();
+  const { user } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Where notifications are on for this device: shown while the app is open, and pushes kept on this sign-in.
+  useNotificationDelivery(user.id);
   useEffect(() => { document.title = title(route); }, [route]);
   useEffect(() => { document.getElementById("main-content")?.scrollTo({ top: 0 }); }, [route]);
   // A sign-in started from an invite link returns to the app's root; pick the invite up where it left off.
