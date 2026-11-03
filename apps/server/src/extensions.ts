@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { pikiExtensionsFor } from '../../../packages/shared/src/piki-extensions.js';
+import { pikiExtensionsFor, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type ExtensionToolMode, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
@@ -56,6 +56,9 @@ function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExte
   return ownerView ? report : { ...report, installed: report.installed.filter(item => !item.dev) };
 }
 
+/** The sources of Pikibun's session-tool extensions, which are also their package keys. */
+const sessionToolSources: readonly string[] = pikiSessionToolExtensions().map(item => item.source);
+
 /** SQL true while `user` (bound) is the owner or an admin of the workspace (bound before it). */
 const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
 
@@ -78,10 +81,10 @@ export async function addPikiExtensions(env: Env, workspaceId: string, provider:
     const saved = await env.DB.query<{ source: string }>(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
       SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), 1, 'approval', '{}', ?, ?
       WHERE (SELECT COUNT(*) FROM workspace_repositories WHERE workspace_id = ? AND provider IN (${providers.map(() => '?').join(', ')})) = 1
-        AND (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ?) < ?
+        AND (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ? AND package_key NOT IN (${sessionToolSources.map(() => '?').join(', ')})) < ?
       ON CONFLICT (workspace_id, package_key) DO NOTHING
       RETURNING source`)
-      .bind(workspaceId, extension.source, extension.source, workspaceId, actor, now(), workspaceId, ...providers, workspaceId, extensionLimits.workspace).first();
+      .bind(workspaceId, extension.source, extension.source, workspaceId, actor, now(), workspaceId, ...providers, workspaceId, ...sessionToolSources, extensionLimits.workspace).first();
     if (!saved) continue;
     added.push(saved.source);
     await auditStatement(env, actor, 'workspace.extension.updated', workspaceId, null,
@@ -90,9 +93,16 @@ export async function addPikiExtensions(env: Env, workspaceId: string, provider:
   return added;
 }
 
-/** Whether a connector's last report names Pikibun extensions: one that predates them refuses a workspace's list naming one. */
-async function knowsPikiExtensions(env: Env, connectorId: string): Promise<boolean> {
-  return (await hostReport(env, connectorId))?.report.installed.some(item => isPikiExtensionSource(item.source)) === true;
+/**
+ * A workspace's extensions as a connector can read them, from its last report. One that predates Pikibun extensions
+ * would refuse the whole list for naming one: it gets the others. Session-tool extensions (piki:schedule, ...) go only to
+ * a connector that reports having them: they don't count towards the workspace's 32, and an older connector's parser
+ * would refuse a longer list, while it offers their tools whatever the workspace chose anyway.
+ */
+export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined): WorkspaceExtension[] {
+  const has = new Set((installed ?? []).map(item => item.source));
+  const knowsPiki = [...has].some(isPikiExtensionSource);
+  return extensions.filter(item => !isPikiExtensionSource(item.source) || (knowsPiki && (!sessionToolSources.includes(item.source) || has.has(item.source))));
 }
 
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
@@ -144,9 +154,8 @@ export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
     if (!connected) fail(404, 'not_found', 'Workspace not found.');
     const extensions = await workspaceExtensions(c.env, workspaceId);
-    // A connector that predates Pikibun extensions would refuse the whole list for naming one: it gets the others.
-    const shown = extensions.some(item => isPikiExtensionSource(item.source)) && !await knowsPikiExtensions(c.env, row.id)
-      ? extensions.filter(item => !isPikiExtensionSource(item.source)) : extensions;
+    const shown = extensions.some(item => isPikiExtensionSource(item.source))
+      ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed) : extensions;
     return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id) });
   });
 }
@@ -184,15 +193,19 @@ export function registerExtensions(app: Hono<WorkerEnv>): void {
     try { extension = parseWorkspaceExtension(await jsonObject(c, extensionLimits.settingsBytes + 4096)); }
     catch (error) { return fail(400, 'invalid_extension', error instanceof Error ? error.message : 'Invalid extension.'); }
     const key = extensionPackageKey(extension.source);
+    // Session-tool extensions (piki:schedule, ...) are a switch on the session's own tools: they never take one of the
+    // workspace's places, nor run as extension tools, so they keep approval and no settings.
+    const sessionTool = sessionToolSources.includes(key);
+    if (sessionTool) extension = { ...extension, tools: 'approval', settings: {} };
     const saved = await c.env.DB.query(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
       SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), ?, ?, ?, ?, ?
-      WHERE ${adminSql} AND ((SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ?) < ?
+      WHERE ${adminSql} AND (? = 1 OR (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ? AND package_key NOT IN (${sessionToolSources.map(() => '?').join(', ')})) < ?
         OR EXISTS (SELECT 1 FROM workspace_extensions WHERE workspace_id = ? AND package_key = ?))
       ON CONFLICT (workspace_id, package_key) DO UPDATE SET source = excluded.source, enabled = excluded.enabled, tools_mode = excluded.tools_mode,
         settings_json = excluded.settings_json, updated_by = excluded.updated_by, updated_at = excluded.updated_at
       RETURNING package_key`)
       .bind(workspaceId, key, extension.source, workspaceId, extension.enabled ? 1 : 0, extension.tools, JSON.stringify(extension.settings), actor, now(),
-        workspaceId, actor, workspaceId, extensionLimits.workspace, workspaceId, key).first();
+        workspaceId, actor, sessionTool ? 1 : 0, workspaceId, ...sessionToolSources, extensionLimits.workspace, workspaceId, key).first();
     if (!saved) {
       await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
       fail(409, 'extension_limit', `A workspace uses at most ${extensionLimits.workspace} extensions.`);

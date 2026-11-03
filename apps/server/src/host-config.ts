@@ -90,6 +90,9 @@ export function registerHostConfig(app: Hono<WorkerEnv>): void {
     // A Pikibun extension it requires is one this control plane knows: a misspelt one would hold every session.
     const unknown = change.requiredExtensions?.find(item => isPikiExtensionSource(item.source) && !pikiExtension(item.source));
     if (unknown) return fail(400, 'invalid_host_config', `${unknown.source} is not one of Pikibun's extensions.`);
+    // A session-tool extension only lets a workspace turn its tools off: requiring it of a host means nothing.
+    const sessionTools = change.requiredExtensions?.find(item => pikiExtension(item.source)?.sessionTools !== undefined);
+    if (sessionTools) return fail(400, 'invalid_host_config', `${sessionTools.source} offers tools every session has unless its workspace turns them off; a host can't require it.`);
     const current = await connectorHostConfig(c.env, row.id);
     let settings = Object.keys(change) as (keyof HostConfig)[];
     if (row.role !== 'owner') {

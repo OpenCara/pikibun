@@ -3359,7 +3359,7 @@ test('only a host\'s owner requires extensions of every session on it, which its
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, requiredExtensions: [] } });
   for (const invalid of [{ requiredExtensions: null }, { requiredExtensions: ['piki:prompt-audit'] }, { requiredExtensions: [{ source: 'npm:cc-safety-net' }] },
     { requiredExtensions: [{ source: './guard.ts' }] }, { requiredExtensions: [{ source: 'piki:prompt-audit', settings: { policy: 5 } }] },
-    { requiredExtensions: [{ source: 'piki:no-such-extension' }] }]) {
+    { requiredExtensions: [{ source: 'piki:no-such-extension' }] }, { requiredExtensions: [{ source: 'piki:schedule' }] }]) {
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
   }
   const required = [{ source: 'piki:prompt-audit', settings: { model: 'anthropic/haiku', policy: 'Never read ~/clients.' } }, { source: 'npm:cc-safety-net@2.7.2', settings: {} }];

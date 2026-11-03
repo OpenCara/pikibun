@@ -94,6 +94,34 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    sandboxes Go programs such as `gh` and `glab` can't verify the proxy's certificate yet. Another member's session never
    gets the host's sign-in; a session with neither a sandbox nor (a) or (b) doesn't run the command, and says why.
 
+## Session tools: piki:schedule, and the built-in tools after it
+
+The session's own tools (`identity`, the file tools, `github_*`, `schedule`, `sessions`, `bash`, `host_bash`, ...) are
+moving to extensions one at a time ([#163](https://github.com/OpenCara/pikibun/issues/163)), so a workspace chooses every
+tool the same way. They can't simply become Pi extension tools: those run as `extension.tool` cards decided like host
+commands, so a member on a shared host would wait on its owner for every file read, and Pi's loader ignores an
+extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool extension** is the switch instead.
+
+15. **A catalogue entry with `sessionTools`.** `piki:schedule` names the session tools it turns on (`schedule`). The
+    connector has it like any Pikibun extension and reports it, from a factory that registers nothing in Pi.
+16. **The session's tools, switched.** The session keeps defining the tools as before, with its own permissions,
+    approvals and Read-only rules. Each shared message offers them less those the workspace turned off (`sessionToolsOff`:
+    a session-tool extension it lists disabled), and each such tool refuses a call while it is off, since a code mode
+    script calls tools by name.
+17. **On unless turned off.** A workspace that never chose, a control plane that predates the extension, and a
+    connector that can't read the workspace's choice now all leave the tools on: the tools were always there, and a
+    vanishing `schedule` would surprise more than one that a workspace turned off showing for a while. So there is no
+    migration. Turning one on removes the workspace's entry; turning it off saves it disabled. A tool whose being off
+    protects something (`host_bash`) will need its connector to keep the workspace's last answer and fail closed instead.
+18. **No tool mode, settings or host requirement.** The control plane saves a session-tool extension with approval and
+    no settings, doesn't count it towards a workspace's 32, and refuses a host's requiring one. Connectors that predate
+    one offer its tools whatever the workspace chose; its page says so.
+
+Next, in order: `source_read` (`piki:sources`), `sessions` (`piki:sessions`), `github_*` (`piki:github`), `git_push`
+(`piki:git`), then the file tools and `identity` (`piki:files`, which every session needs, so it can't be turned off).
+`bash` and `host_bash` are retired last, once the extensions that cover what sessions use them for (git, project tasks,
+search, file operations, host diagnostics) are in place: see #163.
+
 ## The prompt audit: piki:prompt-audit
 
 A shared host runs other members' messages next to its owner's files and credentials. `piki:prompt-audit` has a model
@@ -126,6 +154,7 @@ of the host check each message before the agent sees it, and refuses those that 
 | `piki:` sources | `packages/shared/src/host-extensions.ts` |
 | The command tool, its environment and output, in the sandbox or on the host | `apps/runner/src/extensions/piki/command.ts` |
 | The prompt audit | `apps/runner/src/extensions/piki/prompt-audit.ts`; tests in `tests/prompt-audit.test.ts` |
+| Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`); `session.ts` (`applyOptions`, `requireSessionTool`); tests in `tests/runner-schedule.test.ts` |
 | gh, glab, az: refused and read-only arguments, token variables | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
 | A session's factories, where it runs the command, write leases | `apps/runner/src/extensions/piki/index.ts`, `adapter.ts`; `session.ts` (`pikiSession`, `runPikiCommand`) |
 | The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/api-access.ts` |

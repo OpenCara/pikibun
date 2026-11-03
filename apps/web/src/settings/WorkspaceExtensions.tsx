@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { Fragment, useState, type FormEvent } from "react";
 import type { Workspace } from "../../../../packages/shared/src/types";
-import { pikiCommandExtensions, pikiExtension } from "../../../../packages/shared/src/piki-extensions";
+import { pikiCommandExtensions, pikiExtension, pikiSessionToolExtensions } from "../../../../packages/shared/src/piki-extensions";
 import { ExtensionSettingsFields } from "./ExtensionSettingsFields";
 import { extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
   type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension } from "../../../../packages/shared/src/host-extensions";
@@ -95,13 +95,33 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
       }, "Extension removed.");
     })();
   }
-  const conflicts = data ? clashes(data.extensions, data.hosts) : [];
-  return <Section title="Extensions" bare info={info} action={admin && (data?.extensions.length ?? 0) < extensionLimits.workspace
+  /** Turns a session-tool extension's tools on or off: off is a disabled entry, on removes it (on is what a workspace that never chose has). */
+  function switchSessionTools(source: string, on: boolean) {
+    void action.run(async () => {
+      const saved = on
+        ? await api<{ extensions: WorkspaceExtension[] }>(`${path}?source=${encodeURIComponent(source)}`, { method: "DELETE" })
+        : await api<{ extensions: WorkspaceExtension[] }>(path, { method: "PUT", body: { source, enabled: false, tools: "approval", settings: {} } });
+      resource.setData(current => current && { ...current, ...saved });
+    }, on ? "Tool on. Sessions offer it from their next message." : "Tool off. Sessions stop offering it from their next message.");
+  }
+  const sessionToolSources = new Set<string>(pikiSessionToolExtensions().map(item => item.source));
+  const listed = data ? data.extensions.filter(extension => !sessionToolSources.has(extension.source)) : [];
+  const conflicts = data ? clashes(listed, data.hosts) : [];
+  return <Section title="Extensions" bare info={info} action={admin && listed.length < extensionLimits.workspace
     ? <Button variant="outline" size="sm" icon="plus" onClick={() => setEditing("new")}>Add extension</Button> : undefined}>
     <ResourceState loading={resource.loading && !data} error={resource.error} retry={resource.refresh}>
       {data && <div className="card">
-        {!data.extensions.length && <EmptyState title="No extensions">{admin ? "Add a Pi extension, such as npm:cc-safety-net@2.7.2 or piki:gh (the GitHub CLI), to run it in this workspace's sessions." : "Owners and admins add the Pi extensions this workspace's sessions run."}</EmptyState>}
-        {data.extensions.map(extension => {
+        {pikiSessionToolExtensions().map(item => {
+          const on = !data.extensions.some(extension => extension.source === item.source && !extension.enabled);
+          return <Row key={item.source} leading={<Icon name="tool" size={16} />} title={<>{item.title} <code>{item.source}</code></>}
+            hint={<>{item.description} Hosts on older connectors offer {(item.sessionTools ?? []).map((tool, index) => <Fragment key={tool}>{index ? ", " : ""}<code>{tool}</code></Fragment>)} whatever is chosen here.</>}
+            trailing={admin
+              ? <label className="check-row small"><input type="checkbox" className="checkbox" checked={on} disabled={action.busy}
+                onChange={event => switchSessionTools(item.source, event.target.checked)} /><span>On</span></label>
+              : on ? <StatusBadge tone="success">On</StatusBadge> : <StatusBadge tone="neutral">Off</StatusBadge>} />;
+        })}
+        {!listed.length && <EmptyState title="No extensions">{admin ? "Add a Pi extension, such as npm:cc-safety-net@2.7.2 or piki:gh (the GitHub CLI), to run it in this workspace's sessions." : "Owners and admins add the Pi extensions this workspace's sessions run."}</EmptyState>}
+        {listed.map(extension => {
           const installedOn = data.hosts.filter(host => host.availability?.[extension.source]?.status === "installed").length;
           const cli = pikiExtension(extension.source);
           return <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={cli ? <>{cli.title} <code>{extension.source}</code></> : <code>{extension.source}</code>}

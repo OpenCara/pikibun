@@ -16,7 +16,7 @@ The tools an agent can use:
 | `github_merge` | Merge a GitHub pull request | Approval |
 | `github_issue` | Open a GitHub issue | Approval |
 | `source_read` | Read an item of one of the workspace's [document sources](repositories.md#document-sources), with the session owner's connection | Nothing, during a shared message |
-| `schedule` | List, create, change or delete the session's [scheduled prompts](sessions.md#scheduled-prompts) | A message from the session owner; Auto-approve for auto-approved schedules |
+| `schedule` | List, create, change or delete the session's [scheduled prompts](sessions.md#scheduled-prompts); a workspace turns it off by turning off [`piki:schedule`](extensions.md#session-tools-pikischedule) | A message from the session owner; Auto-approve for auto-approved schedules |
 | `sessions` | List, read, message, start, stop and archive the workspace's other sessions, as the message's sender (see [Working across sessions](sessions.md#working-across-sessions)) | A shared message; permission in **Read only** messages for changes, and to pass content between sessions whose readers differ |
 | `host_bash` | Run a command on the host, outside the sandbox | The approval of the host owner, or of a member they [granted host commands](hosts.md#host-admins-and-host-command-grants) |
 | Extension tools | Whatever the workspace's [extensions](extensions.md) offer, run on the host outside the sandbox | Decided like `host_bash`, unless the workspace runs the extension's tools automatically and the host's owner allows that |

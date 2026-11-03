@@ -4,6 +4,8 @@
  * version, and, in its host owner's own sessions, the host's dev extensions (installed from a local path).
  */
 
+import { pikiSessionToolExtensions } from "./piki-extensions.js";
+
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 /** How an extension's tool calls run: each decided like a host command, or at once (also needs the host owner's leave). */
@@ -202,10 +204,15 @@ export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
   return { source, enabled, tools: tools as ExtensionToolMode, settings: parseExtensionSettings(value.settings ?? {}) };
 }
 
-/** A workspace's extensions: one version per package. */
+/**
+ * A workspace's extensions: one version per package, at most `extensionLimits.workspace` of them besides Pikibun's
+ * session-tool extensions (piki:schedule, ...), which take none of its places.
+ */
 export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {
-  if (!Array.isArray(value) || value.length > extensionLimits.workspace) throw new Error("Invalid extensions");
+  const sessionTools = pikiSessionToolExtensions().map(item => item.source as string);
+  if (!Array.isArray(value) || value.length > extensionLimits.workspace + sessionTools.length) throw new Error("Invalid extensions");
   const extensions = value.map(parseWorkspaceExtension);
+  if (extensions.filter(extension => !sessionTools.includes(extension.source)).length > extensionLimits.workspace) throw new Error("Invalid extensions");
   const keys = extensions.map(extension => extensionPackageKey(extension.source));
   if (new Set(keys).size !== keys.length) throw new Error("A workspace uses one version of each extension");
   return extensions;
