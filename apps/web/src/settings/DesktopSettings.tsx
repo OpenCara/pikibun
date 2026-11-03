@@ -89,7 +89,7 @@ function WindowsSandboxField({ connection, view, bridge }: { connection: HostVie
   };
   return <Field label="Sandbox" hint={choice.sandbox === "wsl2"
     ? "Sessions run in WSL2's bubblewrap sandbox, with Node.js, Pi's models and the host's pairing inside that distribution, as `pikibun connect` run there does."
-    : "Sessions run in Windows' own sandbox, which is experimental (Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32 and Microsoft's MXC SDK), or without one, after your consent, while it isn't ready. Pi's models and the host's pairing are your Windows profile's."}>
+    : "Sessions run in Windows' own sandbox, which is experimental (Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32, Node.js 24 or newer and Microsoft's MXC SDK), or without one, after your consent, while it isn't ready. Pi's models and the host's pairing are your Windows profile's."}>
     <div className="stack">
       <fieldset className="stack" disabled={action.busy || !stopped}>
         <SegmentedControl label="Sandbox" value={choice.sandbox} onChange={sandbox => change(sandbox === "native" ? { sandbox: "native" } : { sandbox: "wsl2" })}
@@ -252,7 +252,8 @@ function SetupAlert({ connection, view, bridge }: { connection: HostView; view: 
   const inspection = connection.inspection;
   if (!inspection) return null;
   // What the sandbox lacks too, where the host would run without it until then: those are what to install.
-  const missing = listedPrerequisites(inspection).map(item => item.entry).filter(item => !item.ok);
+  // Optional ones (npm, for extensions) don't keep this computer from hosting: the app's window lists them.
+  const missing = listedPrerequisites(inspection).map(item => item.entry).filter(item => !item.ok && !item.optional);
   const fixes = [...new Map(missing.flatMap(item => item.fix ? [[JSON.stringify(item.fix), item.fix] as const] : [])).values()];
   if (inspection.unsupportedFix) fixes.unshift(inspection.unsupportedFix);
   const noModels = !inspection.unsupported && !inspection.models.length && inspection.modelsError;

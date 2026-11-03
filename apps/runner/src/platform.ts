@@ -77,6 +77,58 @@ export function sandboxShellPath(): string | undefined {
 /** Where to get the sandbox's shell. */
 export const SANDBOX_SHELL_HINT = "download busybox64.exe from https://frippery.org/busybox/ and save it as %LOCALAPPDATA%\\Programs\\busybox\\busybox.exe";
 
+/** The oldest Node.js the Windows sandbox's runner and helper run on: MXC's SDK needs 24. */
+const SANDBOX_NODE_MAJOR = 24;
+
+/**
+ * Node.js for the Windows sandbox's steps: its runner (which loads MXC) and the helper in the container. The CLI runs on
+ * Node, so it is the CLI's own. A desktop app's connector runs on Electron's embedded Node, whose executable is the app
+ * itself, and the app can't run as plain Node (its RunAsNode fuse is off): starting it would only open the app again.
+ * There it is Node.js 24 or newer from PIKIBUN_SANDBOX_NODE, PATH or its usual install folder, resolved through launchers
+ * (Scoop, Volta and winget shims) to node.exe itself, since only that file's folder is granted to the container.
+ */
+export function sandboxNodePath(): string | undefined {
+  if (!process.versions.electron) return process.execPath;
+  if (!windows) return undefined;
+  // Each candidate is asked in a synchronous child process, and every session's backend asks: what was found is kept
+  // while it is still there. Nothing found isn't kept, so a Refresh after installing Node finds it.
+  if (foundNode && foundNode.override === process.env.PIKIBUN_SANDBOX_NODE && firstExecutable([foundNode.path])) return foundNode.path;
+  foundNode = undefined;
+  const programs = [process.env.ProgramW6432, process.env.ProgramFiles];
+  const candidates = process.env.PIKIBUN_SANDBOX_NODE ? [process.env.PIKIBUN_SANDBOX_NODE]
+    : ["node", ...programs.map(root => root && join(root, "nodejs", "node.exe"))];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const found = realNode(candidate);
+    if (found) {
+      foundNode = { path: found, override: process.env.PIKIBUN_SANDBOX_NODE };
+      return found;
+    }
+  }
+  return undefined;
+}
+
+/** The Node sandboxNodePath found last, and the PIKIBUN_SANDBOX_NODE it was found with. */
+let foundNode: { path: string; override: string | undefined } | undefined;
+
+/** Where to get Node.js for the sandbox's steps. */
+export const SANDBOX_NODE_HINT = "install Node.js 24 or newer (winget install --id OpenJS.NodeJS.LTS -e, or https://nodejs.org) so that node is on PATH, or set PIKIBUN_SANDBOX_NODE to its node.exe";
+
+/** The node.exe `command` runs, when it is Node.js (not Electron) of a version the sandbox supports. */
+function realNode(command: string): string | undefined {
+  const result = spawnSync(command, ["-p", "JSON.stringify([process.execPath, process.versions.node, process.versions.electron ?? null])"], {
+    encoding: "utf8", windowsHide: true, timeout: 15_000,
+    env: { ...windowsSystemEnvironment(), PATH: process.env.PATH ?? "" },
+  });
+  if (result.status !== 0) return undefined;
+  try {
+    const [path, version, electron] = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "") as unknown[];
+    if (typeof path !== "string" || typeof version !== "string" || electron !== null) return undefined;
+    if (Number(version.split(".")[0]) < SANDBOX_NODE_MAJOR) return undefined;
+    return firstExecutable([path]);
+  } catch { return undefined; }
+}
+
 let gitRoot: string | null | undefined;
 /** Git for Windows' install root (the directory holding bin\bash.exe and usr\bin), from `git --exec-path`. */
 export function gitForWindowsRoot(): string | undefined {

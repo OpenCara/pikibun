@@ -7,7 +7,7 @@ import { createFauxLocalModels, loadLocalPiModels, readPiSettings, type LocalMod
 import type { Prerequisite } from "./desktop-protocol.js";
 import { aptFix, fixes, linuxPackages } from "./prerequisite-fixes.js";
 import { ConnectorSetupError } from "./protocol.js";
-import { bashPath, gitForWindowsRoot, SANDBOX_SHELL_HINT, sandboxShellPath } from "./platform.js";
+import { bashPath, gitForWindowsRoot, SANDBOX_SHELL_HINT, sandboxNodePath, sandboxShellPath } from "./platform.js";
 import { MXC_SDK_VERSION, mxcEntry, mxcInstallHint, windowsRuntimeDirectory } from "./sandbox-backend.js";
 import { SANDBOX_EXEC, seatbeltTools } from "./seatbelt.js";
 import { windowsBuild, windowsSandboxSupport } from "./windows-sandbox.js";
@@ -44,14 +44,17 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
     const found = windowsBuild() ?? release().split(".")[2] ?? "unknown";
     const build = Number(found.split(".")[0]);
     const sdk = mxcEntry(runtime);
+    // The CLI's own Node; a desktop app's connector runs on Electron, which can't run the sandbox's steps (sandboxNodePath).
+    const node = sandboxNodePath();
     const result: Prerequisite[] = [{ name: "Git for Windows (git on PATH)", ok: gitForWindowsRoot() !== undefined, fix: fixes.gitForWindows },
       { name: `busybox-w32, the sandbox's shell (${SANDBOX_SHELL_HINT}; or set PIKIBUN_SANDBOX_SHELL)`, ok: sandboxShellPath() !== undefined, fix: fixes.busybox },
+      ...(process.versions.electron ? [{ name: "Node.js 24 or newer for the sandbox's steps (node on PATH, or set PIKIBUN_SANDBOX_NODE)", ok: node !== undefined, fix: fixes.nodeForWindows }] : []),
       { name: `Windows 11 24H2 or later (build 26100+, found ${found})`, ok: build >= 26100, fix: fixes.windowsUpdate },
       { name: `Microsoft MXC SDK ${MXC_SDK_VERSION} in ${runtime} (install: ${mxcInstallHint(runtime)})`, ok: sdk !== undefined, fix: fixes.mxcSdk(runtime) }];
     // The update level decides whether sessions can work, and its number differs between releases (25H2 is 26200.x,
     // 26H2 26300.x), so Windows is asked: one container with a session's network policy, resolving a path in it.
-    if (sdk && build >= 26100) {
-      const support = await windowsSandboxSupport(sdk);
+    if (sdk && node && build >= 26100) {
+      const support = await windowsSandboxSupport(sdk, node);
       result.push(
         { name: `Windows' process container for sessions, with proxy-only egress (MXC's base-container tier)${support.container ? "" : `: ${support.detail}`}`, ok: support.container, fix: fixes.windowsUpdate },
         { name: `Paths that Git and Node resolve inside the container (Windows' October 2026 update or later: install the latest Windows update)${support.container && !support.paths ? `: ${support.detail}` : ""}`, ok: support.paths, fix: fixes.windowsUpdate });
@@ -85,9 +88,19 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
   return result;
 }
 
+/**
+ * npm on the host's PATH, which installing extensions from npm or Git needs (extensions/store.ts): optional, since a host
+ * runs without extensions, so it never keeps one from starting. `npm --version` needs Node.js on PATH as well.
+ */
+export function npmPrerequisite(platform: NodeJS.Platform = process.platform, path = process.env.PATH ?? ""): Prerequisite {
+  const found = spawnSync(platform === "win32" ? "npm.cmd" : "npm", ["--version"], { stdio: "ignore", timeout: 15_000, windowsHide: true,
+    shell: platform === "win32", env: { ...process.env, PATH: path } }).status === 0;
+  return { name: "Node.js and npm on PATH, to install extensions from npm or Git", ok: found, optional: true, ...(found ? {} : { fix: fixes.node(platform) }) };
+}
+
 /** Fails with the missing prerequisites; `sandboxHint` offers the unsandboxed mode where the front end has one. */
 export function assertPrerequisites(prerequisites: readonly Prerequisite[], unsandboxed: boolean, sandboxHint: string): void {
-  const missing = prerequisites.filter(item => !item.ok).map(item => item.name);
+  const missing = prerequisites.filter(item => !item.ok && !item.optional).map(item => item.name);
   if (!missing.length) return;
   const hint = process.platform === "darwin" ? " Install Git, e.g. xcode-select --install or brew install git."
     : process.platform === "win32" ? (missing.some(name => name.startsWith("Git for Windows")) ? " Install Git for Windows from https://git-scm.com/download/win." : "")

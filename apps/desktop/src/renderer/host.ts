@@ -54,9 +54,9 @@ let modelDraft: { id: string; loaded: boolean; checked: Set<string> } | undefine
 const modelKey = (model: ModelChoice) => `${model.provider}/${model.modelId}`;
 const hostOf = (origin: string) => { try { return new URL(origin).host; } catch { return origin; } };
 
-function item(text: string, detail?: string, mark?: "ok" | "missing"): HTMLLIElement {
+function item(text: string, detail?: string, mark?: "ok" | "missing" | "optional"): HTMLLIElement {
   const li = document.createElement("li");
-  if (mark) { const icon = li.appendChild(document.createElement("span")); icon.className = `mark ${mark}`; icon.textContent = mark === "ok" ? "✓" : "✕"; icon.setAttribute("aria-label", mark === "ok" ? "Present" : "Missing"); }
+  if (mark) { const icon = li.appendChild(document.createElement("span")); icon.className = `mark ${mark}`; icon.textContent = mark === "ok" ? "✓" : mark === "optional" ? "–" : "✕"; icon.setAttribute("aria-label", mark === "ok" ? "Present" : mark === "optional" ? "Missing (optional)" : "Missing"); }
   li.appendChild(document.createElement("span")).textContent = text;
   if (detail) { const small = li.appendChild(document.createElement("span")); small.className = "muted"; small.textContent = detail; }
   return li;
@@ -137,11 +137,11 @@ function renderSandbox(view: HostsView, connection: HostView): void {
   distroSelect.disabled = busy || !stopped;
   setText(element("sandbox-note"), choice.sandbox === "wsl2"
     ? "Sessions run in WSL2's bubblewrap sandbox, using Node.js, Pi's models and the connector's pairing inside that distribution, as `pikibun connect` run there does. Pikibun copies its connector into WSL2 at the first start."
-    : "Sessions run in Windows' own sandbox (experimental: Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32 and Microsoft's MXC SDK; Prerequisites below lists what is missing), or, while it isn't ready, without one after your consent. Native Windows uses Pi's models and the connector's pairing in your Windows profile.");
+    : "Sessions run in Windows' own sandbox (experimental: Windows 11 24H2 or later with the October 2026 update, Git for Windows, busybox-w32, Node.js 24 or newer and Microsoft's MXC SDK; Prerequisites below lists what is missing), or, while it isn't ready, without one after your consent. Native Windows uses Pi's models and the connector's pairing in your Windows profile.");
 }
 
 const actionLabels: Record<SetupAction["kind"], string> = {
-  "xcode-tools": "Install Developer Tools", "git-for-windows": "Install Git", "mxc-sdk": "Install MXC SDK",
+  "xcode-tools": "Install Developer Tools", "git-for-windows": "Install Git", "node-for-windows": "Install Node.js", "mxc-sdk": "Install MXC SDK",
   "windows-update": "Open Windows Update", "wsl-install": "Install WSL", "wsl-node": "Install Node.js 24", apt: "Install Packages",
 };
 
@@ -185,7 +185,7 @@ function renderPrerequisites(connection: HostView): void {
   const inspection = connection.inspection;
   const shown = new Set<string>();
   element("prerequisites").replaceChildren(...listedPrerequisites(inspection).map(({ entry, sandbox }) => {
-    const li = item(entry.name, sandbox ? "for the sandbox" : undefined, entry.ok ? "ok" : "missing");
+    const li = item(entry.name, sandbox ? "for the sandbox" : entry.optional && !entry.ok ? "optional" : undefined, entry.ok ? "ok" : entry.optional ? "optional" : "missing");
     const key = entry.fix && JSON.stringify(entry.fix);
     if (!entry.ok && entry.fix && key && !shown.has(key)) { shown.add(key); li.appendChild(fixBlock(entry.fix)); }
     return li;

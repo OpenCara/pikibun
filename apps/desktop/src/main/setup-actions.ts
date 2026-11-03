@@ -14,7 +14,7 @@ export function parseSetupAction(value: unknown): SetupAction | undefined {
   if (!isRecord(value)) return undefined;
   const keys = Object.keys(value);
   switch (value.kind) {
-    case "xcode-tools": case "git-for-windows": case "mxc-sdk": case "windows-update": case "wsl-install": case "wsl-node":
+    case "xcode-tools": case "git-for-windows": case "node-for-windows": case "mxc-sdk": case "windows-update": case "wsl-install": case "wsl-node":
       return keys.length === 1 ? { kind: value.kind } : undefined;
     case "apt": {
       const packages = value.packages;
@@ -87,6 +87,10 @@ export function setupPlan(action: SetupAction, context: SetupContext): SetupPlan
       if (!windows) return wrong;
       return { title: "Install Git for Windows?", detail: "A PowerShell window runs winget install --id Git.Git, which may ask for administrator permission.",
         step: console("winget install --id Git.Git -e --source winget --accept-source-agreements") };
+    case "node-for-windows":
+      if (!windows) return wrong;
+      return { title: "Install Node.js?", detail: "A PowerShell window runs winget install --id OpenJS.NodeJS.LTS, which may ask for administrator permission. The Windows sandbox runs its steps on it, and npm, which comes with it, installs the MXC SDK.",
+        step: console("winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements") };
     case "mxc-sdk":
       if (!windows || !context.mxcRuntime) return wrong;
       return { title: "Install Microsoft's MXC SDK?", detail: `A PowerShell window runs npm install @microsoft/mxc-sdk@${MXC_SDK_VERSION} into ${context.mxcRuntime}. It needs Node.js and npm on Windows (https://nodejs.org).`,

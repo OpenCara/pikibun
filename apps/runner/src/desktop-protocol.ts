@@ -10,6 +10,8 @@ export type SetupAction =
   | { kind: "xcode-tools" }
   /** Windows: Git for Windows, with winget. */
   | { kind: "git-for-windows" }
+  /** Windows: Node.js LTS, with winget: the Windows sandbox's steps run on it (a desktop app's own Node can't run them). */
+  | { kind: "node-for-windows" }
   /** Windows: Microsoft's MXC SDK, with npm, into the directory the app's native hosts use. */
   | { kind: "mxc-sdk" }
   /** Windows: Settings › Windows Update. */
@@ -39,7 +41,13 @@ export interface PrerequisiteFix {
 }
 
 /** One binary or tool the chosen isolation mode needs, as connect-setup.ts checks it, and how to get it when missing. */
-export interface Prerequisite { name: string; ok: boolean; fix?: PrerequisiteFix }
+export interface Prerequisite {
+  name: string;
+  ok: boolean;
+  fix?: PrerequisiteFix;
+  /** Needed only for some work (npm for installing extensions): a host lacking it still starts, and lists it as optional. */
+  optional?: boolean;
+}
 
 // Messages between a desktop app and its connector host (desktop-host.ts), over the parent's IPC channel only. Pairing
 // codes travel here and nowhere else: never argv, environment, files or logs. Types and patterns only, so the app's
