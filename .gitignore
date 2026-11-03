@@ -12,3 +12,5 @@ coverage/
 *.sqlite-shm
 *.sqlite-wal
 *.log
+__pycache__/
+*.pyc

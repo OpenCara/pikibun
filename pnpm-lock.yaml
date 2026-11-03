@@ -48,6 +48,9 @@ importers:
         specifier: 4.3.6
         version: 4.3.6
     devDependencies:
+      '@astral-sh/ruff-wasm-nodejs':
+        specifier: 0.17.3
+        version: 0.17.3
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.1
@@ -72,6 +75,9 @@ importers:
       lowlight:
         specifier: 3.3.0
         version: 3.3.0
+      pyright:
+        specifier: 1.1.414
+        version: 1.1.414
       react-markdown:
         specifier: 10.1.0
         version: 10.1.0(@types/react@19.3.0)(react@19.2.0)
@@ -254,6 +260,9 @@ packages:
     peerDependenciesMeta:
       zod:
         optional: true
+
+  '@astral-sh/ruff-wasm-nodejs@0.17.3':
+    resolution: {integrity: sha512-HDPHxflh9jFmBoOn/2SBP/6lkIMJH70zuzKBBdaaK0czXfR2a1izYsIR2UjR9nETl8clZc1Q6Av8WwariGvlVA==}
 
   '@aws-sdk/checksums@3.1001.1':
     resolution: {integrity: sha512-x12Q17KYlJAd3nKf8LV5LV0vt8sh8/6YfQLGPtrGnQf/tW4jqxPGq5GPpuVitpQYM3eUR4XB7CbxZf751NMbLw==}
@@ -4144,6 +4153,11 @@ packages:
     resolution: {integrity: sha512-BbubeCEyTuQjVMakvJQ/Sxbc93F2pwmbsxONT/ZRrwU7Ua38d8unYTwXpTVLAKJ4BDuH9IGztCjQcd/N/39Dvg==}
     engines: {node: '>=16.0.0'}
 
+  pyright@1.1.414:
+    resolution: {integrity: sha512-FPZZb51jepDX4eP7TEYDeNFtmE3WgwkkEcJpvH3/QmUSsj0EAy3LXu+xB4T/FWDejtsXlCfFr/rbWFjwuwuXww==}
+    engines: {node: '>=14.0.0'}
+    hasBin: true
+
   quick-lru@5.1.1:
     resolution: {integrity: sha512-WuyALRjWPDGtt/wzJiadO5AXY+8hZ80hVpe6MyivgraREW751X3SbhRvG3eLKOYN+8VEvqLcf3wdnt44Z4S4SA==}
     engines: {node: '>=10'}
@@ -4969,6 +4983,8 @@ snapshots:
       standardwebhooks: 1.1.1
     optionalDependencies:
       zod: 4.3.6
+
+  '@astral-sh/ruff-wasm-nodejs@0.17.3': {}
 
   '@aws-sdk/checksums@3.1001.1':
     dependencies:
@@ -6874,7 +6890,9 @@ snapshots:
       metro-runtime: 0.87.1
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.88.0': {}
 
@@ -9735,6 +9753,10 @@ snapshots:
       tslib: 2.8.1
 
   pvutils@1.2.0: {}
+
+  pyright@1.1.414:
+    optionalDependencies:
+      fsevents: 2.3.3
 
   quick-lru@5.1.1: {}
 
