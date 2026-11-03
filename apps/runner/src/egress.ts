@@ -9,7 +9,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Readable, type Duplex } from "node:stream";
 import { bindingRemote, gitProviders, validGitHost, validRepositoryId, validRepositoryName, type GitProvider } from "../../../packages/shared/src/repositories.js";
 import { documentItemTypes, documentKind, sourceLimits, type DocumentItemType, type GrantSource } from "../../../packages/shared/src/sources.js";
-import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, egressPushService, hostAllowed, lfsLimits, parseLfsBatchRequest, parseNetworkPolicy, validLfsOid, validLfsSize,
+import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, credentialedApiProviders, type ApiAccessKind, type CredentialedApiProvider, egressPushService, hostAllowed, lfsLimits, parseLfsBatchRequest, parseNetworkPolicy, validLfsOid, validLfsSize,
   type EgressApi, type EgressGitService, type EgressGrant, type EgressRepository, type LfsBatchResult } from "../../../packages/shared/src/network.js";
 import { boundedStream, drainStream, PUSH_REQUEST_BYTES, pushRejection, PushRequestError, readPushCommands, sessionBranchRefusal, type PushCommand } from "../../../packages/shared/src/git-push.js";
 import { RunnerError } from "./protocol.js";
@@ -92,7 +92,7 @@ export interface EgressOptions {
    * Asks the control plane for the session's credential for a credentialed API host (an ApiCredentialGrant, see
    * api-access.ts). Without it, the proxy answers for no API itself and tunnels them like any other host.
    */
-  apiCredential?: (host: string) => Promise<unknown>;
+  apiCredential?: (host: string, access: ApiAccessKind) => Promise<unknown>;
   /** Overridable for tests: the authority the proxy answers credentialed APIs with, and its requests to them. */
   apiAuthority?: InterceptionAuthority;
   apiUpstream?: ApiUpstream;
@@ -120,8 +120,9 @@ export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpo
     // The host's trusted certificates, mounted read-only at CA_BUNDLE, for HTTPS through the proxy's tunnels.
     ...Object.fromEntries(CA_BUNDLE_VARIABLES.map(name => [name, caBundle])),
     PIKIBUN_EGRESS_STATUS: `${proxy}/__pikibun/status`,
-    // gh and GitHub's SDKs send this to api.github.com, where the proxy puts the session's own credential in its place.
-    GH_TOKEN: API_TOKEN_PLACEHOLDER, GITHUB_TOKEN: API_TOKEN_PLACEHOLDER,
+    // gh and GitHub's SDKs send this to api.github.com, glab to gitlab.com and az devops to dev.azure.com, where the proxy
+    // puts the session's own credential in its place.
+    GH_TOKEN: API_TOKEN_PLACEHOLDER, GITHUB_TOKEN: API_TOKEN_PLACEHOLDER, GITLAB_TOKEN: API_TOKEN_PLACEHOLDER, AZURE_DEVOPS_EXT_PAT: API_TOKEN_PLACEHOLDER,
     ...(sessionBranch ? { PIKIBUN_SESSION_BRANCH: sessionBranch } : {}),
     ...config,
   };
@@ -336,6 +337,12 @@ export class EgressProxy {
       ...(options.apiUpstream ? { upstream: options.apiUpstream } : {}),
     });
   }
+
+  /**
+   * A write lease for one approved call of a Pikibun extension's command (see ApiAccess.lease): undefined where the
+   * proxy answers no API itself.
+   */
+  apiLease(): { token: string; release(): void } | undefined { return this.#api?.lease(); }
 
   /** The credentialed API the grant names for `host`, for which the control plane gives this session a credential. */
   #credentialedApi(grant: EgressGrant, host: string): EgressApi | undefined {
@@ -578,7 +585,7 @@ export class EgressProxy {
       repositories: grant?.repositories.map(repository => bindingRemote(repository)) ?? [],
       apis: grant && this.#api ? credentialedApiHosts.map(host => ({ host,
         access: this.#credentialedApi(grant!, host)
-          ? `the proxy answers HTTPS to ${host} itself and reads the workspace's repositories with a read-only token; GH_TOKEN holds only a placeholder`
+          ? `the proxy answers HTTPS to ${host} itself and adds the session owner's access to the workspace's repositories, to read; GH_TOKEN, GITLAB_TOKEN and AZURE_DEVOPS_EXT_PAT hold only a placeholder`
           : `the proxy answers HTTPS to ${host} itself, without a credential for this session, where the network policy allows ${host}` })) : [],
       lfs: grant?.repositories.filter(repository => repository.lfs).map(repository => bindingRemote(repository)) ?? [],
       gitRemotes: `https:// remotes go through ${this.#port === undefined ? EGRESS_GIT_BASE : `http://127.0.0.1:${this.#port}/git/`}<host>/<path>; the workspace's repositories are read with the session owner's access`
@@ -879,7 +886,7 @@ export function parseEgressGrant(value: unknown): EgressGrant {
   const apis = ((input.apis ?? []) as unknown[]).flatMap((item): EgressApi[] => {
     const api = item as Partial<EgressApi> | null;
     if (!api || typeof api.host !== "string" || typeof api.provider !== "string") throw new RunnerError(502, "Invalid APIs from the control plane");
-    return credentialedApiHosts.includes(api.host) && api.provider === "github" ? [{ host: api.host, provider: api.provider }] : [];
+    return credentialedApiHosts.includes(api.host) && credentialedApiProviders[api.host] === api.provider ? [{ host: api.host, provider: api.provider as CredentialedApiProvider }] : [];
   });
   return { policy, repositories, ...(apis.length ? { apis } : {}), ...(sources ? { sources } : {}) };
 }

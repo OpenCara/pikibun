@@ -1,5 +1,5 @@
 import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
-import { commandExtension, commandWords, positionals, type CliSpec } from "./command.js";
+import { commandWords, positionals, type CliSpec } from "./command.js";
 
 /*
  * piki:azure-cli, the Azure CLI (docs/design/piki-extensions.md), with its azure-devops extension where the host
@@ -61,15 +61,16 @@ export const azureCliSpec: CliSpec = {
   command: "az",
   windowsCommand: { file: "az.cmd", shim: true },
   description: [
-    "Run the Azure CLI (az) on the session's Pikibun host, outside the sandbox, signed in as the host's owner is to az.",
+    "Run the Azure CLI (az) as the session owner: in the session's sandbox, where Pikibun adds the session owner's Azure DevOps personal access token (for the organization a request names) to its requests to dev.azure.com, on the session owner's own host.",
     "Give the arguments after az as a list, as they are passed (no shell, no quoting), such as {\"args\": [\"repos\", \"pr\", \"list\", \"--organization\", \"https://dev.azure.com/acme\", \"--project\", \"App\"]}.",
-    "Use it for what the sandbox can't reach: Azure DevOps pull requests, pipelines and their runs, and work items (az repos, az pipelines, az boards, with the host's azure-devops extension), their REST API (az devops invoke), and Azure resources.",
-    "Pass --organization and --project unless the host's az devops configure set them; it runs in the session's worktree on the host, or in directory, a clone in it. Add --output json for output to read.",
-    "It acts as the host owner's az account, which may not be the session owner's.",
+    "Use it for Azure DevOps: pull requests, pipelines and their runs, and work items (az repos, az pipelines, az boards, with the azure-devops extension), and their REST API (az devops invoke). Azure resources (az vm, az storage, ...) need an Azure sign-in, which only the host owner's own sessions have, where the host's owner allows that.",
+    "Pass --organization https://dev.azure.com/<organization> and --project; it runs in the session's worktree, or in directory, a clone in it. Add --output json for output to read.",
+    "It reads always; it writes only in a call a person approved.",
     "Each call waits for approval unless the workspace runs this extension's tools automatically; where the workspace set it read-only, only commands that read (list, show, query) run, and none that show keys or secrets.",
     "Commands that would show its tokens (account get-access-token, --expose-token, --debug) are refused.",
   ].join(" "),
   passEnv: name => name.startsWith("AZURE_") || name === "AZDEVOPS_EXT_PAT",
+  tokenEnv: ["AZURE_DEVOPS_EXT_PAT"],
   setEnv: { AZURE_CORE_NO_COLOR: "true", AZURE_CORE_ONLY_SHOW_ERRORS: "true", AZURE_CORE_DISABLE_PROGRESS_BAR: "true", AZURE_CORE_SURVEY_MESSAGE: "false",
     PYTHONIOENCODING: "utf-8" },
   // Options may sit anywhere among the command's words, abbreviated, in any case: these look at every argument.
@@ -98,5 +99,3 @@ export const azureCliSpec: CliSpec = {
     return READ_VERB.test(words.at(-1)!) ? undefined : `az ${words.join(" ")} is not a command that only reads`;
   },
 };
-
-export const azurePikiExtension = commandExtension(azureCliSpec);

@@ -4,8 +4,14 @@ Sessions on a sandboxed host have no network but the workspace's: they clone and
 and act on GitHub through `github_read`, `github_comment`, `github_issue` and `github_merge`. What those don't cover (CI
 runs and their logs, checks, releases, other forges' merge requests and pipelines, the forges' APIs) took `host_bash`,
 with nothing to guide the agent or the person approving it. With this design the connector carries Pi extensions of its
-own that give sessions a forge's command-line tool, run on the host with its owner's sign-in to it, and a workspace gets
-the one for a forge when it binds its first repository there. It also carries a guard, the prompt audit (below).
+own that give sessions a forge's command-line tool, and a workspace gets the one for a forge when it binds its first
+repository there. It also carries a guard, the prompt audit (below).
+
+The command runs **as the session owner**: in the session's sandbox, where the session's egress proxy adds the session
+owner's access to the forge's API ([credentialed APIs](egress.md#credentialed-apis-gh-without-a-token-in-the-sandbox)).
+It first ran on the host with the host owner's own sign-in, so a member's session on a host someone else shared acted as
+that host's owner, with whatever their account could reach. Now the host's own sign-in is used only where the session
+itself runs on its host (rule 9).
 
 Built-in extensions are named for where they come from: Pi's are `pi:<name>` (`pi:codemode`, [host
 extensions](host-extensions.md), rule 10), which a host's configuration turns on for every session on it; Pikibun's own
@@ -21,30 +27,34 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    their package key the source itself, and their version the connector's: every connector that knows one has it, and
    reports it with what is installed, so hosts never install, update or remove them (the store, the CLI, the connector
    and the control plane all refuse to). They load through Pi's loader from their factory
-   (`loadExtensionFromFactory`), not a file, so they are part of the connector's bundle.
+   (`loadExtensionFromFactory`), not a file, so they are part of the connector's bundle. A session loads each with a
+   factory of its own (`forSession`), which knows where that session runs the command (rules 8 and 9); the connector's
+   copy, which only reports what the extension offers, runs nothing.
 3. **One tool per command**, named for it (`gh`, `glab`, `az`), whose arguments are the command's, as a list: it runs
-   without a shell, in the session's worktree on the host or a `directory` in it (resolved within the worktree, links
-   too), with stdin closed and no prompts, colors, pagers or update checks, until it exits, its call stops or it reaches
-   its `timeout_seconds` (300 by default). Its output (stdout and stderr) is cut to its first 32 KB and last 96 KB, where
-   a failure's reason is. A non-zero exit is the call's error, with the output.
-4. **The host owner's sign-in, never shown.** The command gets the host's `PATH`, `HOME`, `XDG_*` directories, D-Bus
-   session (for keyrings), proxies and CA bundles, and its own variables (`GH_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`, …;
-   `GITLAB_TOKEN`, `GITLAB_HOST`, …; `AZURE_*`), never the connector's other environment, as `host_bash` doesn't.
-   Arguments that would print its credentials (`gh auth token`, `--show-token`, `glab config get token`,
-   `az account get-access-token`, `--expose-token`, `az --debug`) never run, even approved. These checks look at every
-   argument, since all three commands take options between their command words (`auth --hostname x token`), gh and glab
-   cluster short options (`-at`), and az takes long options abbreviated, its words in any case and by unique prefix
-   (`acc get` is `account get-access-token`); they would rather
-   refuse a harmless call (a label named `auth` beside a search for `token`) than miss one.
+   without a shell (in the sandbox, every word quoted), in the session's worktree or a `directory` in it, with stdin
+   closed and no prompts, colors, pagers or update checks, until it exits, its call stops or it reaches its
+   `timeout_seconds` (300 by default). Its output (stdout and stderr) is cut to its first 32 KB and last 96 KB, where a
+   failure's reason is. A non-zero exit is the call's error, with the output.
+4. **Never a token in sight.** In the sandbox the command holds only the proxy's placeholder (`GH_TOKEN`,
+   `GITHUB_TOKEN`, `GITLAB_TOKEN`, `AZURE_DEVOPS_EXT_PAT`), never a credential. On the host (rule 9) it gets the host's
+   `PATH`, `HOME`, `XDG_*` directories, D-Bus session (for keyrings), proxies and CA bundles, and its own variables
+   (`GH_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`, …; `GITLAB_TOKEN`, `GITLAB_HOST`, …; `AZURE_*`), never the connector's other
+   environment, as `host_bash` doesn't. Either way, arguments that would print its credentials (`gh auth token`,
+   `--show-token`, `glab config get token`, `az account get-access-token`, `--expose-token`, `az --debug`) never run,
+   even approved. These checks look at every argument, since all three commands take options between their command
+   words (`auth --hostname x token`), gh and glab cluster short options (`-at`), and az takes long options abbreviated,
+   its words in any case and by unique prefix (`acc get` is `account get-access-token`); they would rather refuse a
+   harmless call (a label named `auth` beside a search for `token`) than miss one.
 5. **Read-only, a setting.** Each registers the Pi flag `read-only` (off by default). With it, only commands that read
    run: an allowlist of subcommands for gh and glab (`pr view`, `run view`, `ci trace`, …), their `api` with `GET` (or a
    GraphQL query, no mutation, no `@file` fields, no `--input`, no method override, short options taking their values
    apart so none hides in a cluster); for az, verbs `list`, `show`, `query`, `list-*` and `show-*` of command groups that
    don't name keys, secrets, passwords, credentials, tokens, connection strings, SAS or app settings, `az rest` and
-   `az devops invoke` with `GET` and no body, and no `@file` arguments. A read-only call runs in an empty temporary
-   directory instead of the worktree and refuses `directory`: a session can write the worktree, and a repository's Git
-   configuration there could make a command that runs Git (`gh pr status`) run code. A workspace that sets the tools to
-   automatic should set read-only too; the workspace page says so.
+   `az devops invoke` with `GET` and no body, and no `@file` arguments. Such a call never gets a write lease (rule 8). In
+   the sandbox it runs with the worktree mounted read-only. On the host it runs in an empty temporary directory instead
+   of the worktree and refuses `directory`: a session can write the worktree, and a repository's Git configuration there
+   could make a command that runs Git (`gh pr status`) run code on the host. A workspace that sets the tools to automatic
+   should set read-only too; the workspace page says so.
 6. **Added with the first repository of a forge.** Binding a repository whose provider is `github` or
    `github-enterprise` adds `piki:gh`, `gitlab` `piki:glab`, and `azure-devops` `piki:azure-cli`, when it is
    the workspace's first repository of those providers and the workspace doesn't use that extension yet (nor 32
@@ -57,29 +67,54 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    names none. A report holds up to 16 Pikibun extensions besides the 64 installed sources a host may have. A control plane
    that predates them refuses a report that names one (400): the connector then reports
    without them, until it reconnects. Sessions on an older connector run without them, and the workspace's and host's
-   pages say to update it.
+   pages say to update it. A control plane that predates writes refuses the proxy's `access: write` (400), so writes
+   are refused with a reason; one that predates GitLab and Azure DevOps names only `api.github.com` in grants, and an
+   older connector leaves out the API hosts it doesn't know.
+8. **In the sandbox, as the session owner.** A session with a sandbox and an egress proxy runs the command there, as
+   one sandbox operation (`RunnerSession.runPikiCommand`, through `bash` with every word quoted): it sees the host's
+   `/usr`, so the host's owner installs the command there. Its API requests go through the proxy, which adds the session
+   owner's access (see [credentialed APIs](egress.md#credentialed-apis-gh-without-a-token-in-the-sandbox)):
+   - **Reads, always**: of api.github.com with the read-only GitHub App token for the workspace's repositories the
+     session owner can read, on any host; of gitlab.com and dev.azure.com with the owner's own personal access token,
+     which can't be limited to a repository, so only on the owner's own hosts.
+   - **Writes, only in a call a person decided**: the call's card was approved (or ran under the session owner's
+     Auto-approve), not run because the workspace sets the tools to automatic, and outside the read-only setting. Such a
+     call gets a **write lease** from the proxy for as long as it runs, a placeholder naming it in the token variables.
+     Its requests then go with the session owner's own credential (their GitHub sign-in, their GitLab or Azure DevOps
+     token), which the control plane gives only to the owner's own hosts: a host someone else owns could take it from
+     its connector. Elsewhere writes are refused with that reason, and `github_comment`, `github_issue`, `github_merge`
+     and `git_push` remain. Sandbox operations run one at a time per session, so no other command runs while a lease
+     holds, and only a call `runExtensionTool` admitted runs a command at all.
+   The card is still decided like a host command (rule 1): it is the same card as before.
+9. **The host's own sign-in, only where the session is the host's.** The command runs on the host, as it first did,
+   with the host's own sign-in to it (rule 4), only (a) where the session itself runs on its host (an unsandboxed host,
+   or a session on the host's environment), whose commands all run there as the host's OS user anyway; or (b) in the
+   host owner's own sessions, where the host's owner set `PIKIBUN_PIKI_HOST_SIGN_IN=1` for the connector: Azure
+   resources (`az vm`, …) need an Azure sign-in Pikibun doesn't have, and in the experimental macOS and Windows
+   sandboxes Go programs such as `gh` and `glab` can't verify the proxy's certificate yet. Another member's session never
+   gets the host's sign-in; a session with neither a sandbox nor (a) or (b) doesn't run the command, and says why.
 
 ## The prompt audit: piki:prompt-audit
 
 A shared host runs other members' messages next to its owner's files and credentials. `piki:prompt-audit` has a model
 of the host check each message before the agent sees it, and refuses those that reach for what lies on the machine.
 
-8. **A Pi extension on `input`.** It registers no tool: it handles Pi's `input` event, which Pikibun runs on each
+10. **A Pi extension on `input`.** It registers no tool: it handles Pi's `input` event, which Pikibun runs on each
    message before accepting it ([host extensions](host-extensions.md), the compatibility table), so it works in Pi as
    it does in Pikibun. It audits messages whose `source` isn't `interactive`: in Pikibun everyone's but the host
    owner's, in Pi those from RPC clients and other extensions; its `audit` flag set to `all` audits every message.
-9. **Required by the host's owner.** Hosts guard themselves by requiring it of every session on them (host extensions
+11. **Required by the host's owner.** Hosts guard themselves by requiring it of every session on them (host extensions
    rule 11), with the owner's settings: `model` (`provider/modelId`, from `ctx.modelRegistry`; the session's model,
    `ctx.model`, when empty) and `policy` (the owner's own words, added to the auditor's instructions). A workspace can
    add it too, for its own sessions.
-10. **One model call, the message as data.** The auditor gets fixed instructions (credentials, host files, the host's
+12. **One model call, the message as data.** The auditor gets fixed instructions (credentials, host files, the host's
    environment, exfiltration and getting around safeguards, the owner's policy; ordinary work allowed) and the message
    between markers with a random nonce, so the message can't close them, plus its images; a model that can't see images
    refuses messages with them. It answers with one JSON verdict. The call has 45 seconds and 2048 tokens, within the minute
    Pikibun gives `input` handlers, which run once the message is queued, never while the connector waits on a request.
-11. **Fails closed, never throws.** Pi lets a message through when an `input` handler throws, so every failure (no
+13. **Fails closed, never throws.** Pi lets a message through when an `input` handler throws, so every failure (no
    model, a provider error, a timeout, no verdict) is a refusal (`handled`). Pikibun refuses one that throws anyway.
-12. **Fixed words to the sender, the reason to the host.** A refusal tells the sender (`ctx.ui.notify`) only the kind of
+14. **Fixed words to the sender, the reason to the host.** A refusal tells the sender (`ctx.ui.notify`) only the kind of
    thing flagged, in fixed text within the charset the control plane's relay passes on; the auditor's own reason is
    model text a crafted message could steer, so it goes to standard error without a UI: the connector's log.
 
@@ -87,19 +122,27 @@ of the host check each message before the agent sees it, and refuses those that 
 
 | Part | Where |
 |---|---|
-| Catalogue (names, tools, providers, install and sign-in hints) | `packages/shared/src/piki-extensions.ts` |
+| Catalogue (names, tools, providers, install, account and sign-in hints) | `packages/shared/src/piki-extensions.ts` |
 | `piki:` sources | `packages/shared/src/host-extensions.ts` |
-| The command tool, its environment and output | `apps/runner/src/extensions/piki/command.ts` |
+| The command tool, its environment and output, in the sandbox or on the host | `apps/runner/src/extensions/piki/command.ts` |
 | The prompt audit | `apps/runner/src/extensions/piki/prompt-audit.ts`; tests in `tests/prompt-audit.test.ts` |
-| gh, glab, az: refused and read-only arguments | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
+| gh, glab, az: refused and read-only arguments, token variables | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
+| A session's factories, where it runs the command, write leases | `apps/runner/src/extensions/piki/index.ts`, `adapter.ts`; `session.ts` (`pikiSession`, `runPikiCommand`) |
+| The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/api-access.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
 | Added on binding; a connector's list; install requests refused | `apps/server/src/extensions.ts`, `repositories.ts`; migrations `0048`/`0041` |
 | Workspace and host pages | `apps/web/src/settings/WorkspaceExtensions.tsx`, `HostExtensions.tsx` |
-| Tests | `tests/piki-extensions.test.ts`, and in `extensions`, `repositories`, `local-connector` |
+| Tests | `tests/piki-extensions.test.ts`, `api-access.test.ts`, and in `push-broker`, `host-extensions`, `extensions`, `repositories`, `local-connector` |
 
 ## Later
 
-- Report on the host's page whether each command is installed and signed in (`gh auth status`), without its output.
+- Decide a sandboxed call's card like a sandboxed command (by whoever may approve in the session), not like a host
+  command: it no longer runs on the host. The card would then say where it runs.
+- On a host someone else shared, writes as the session owner through the control plane: the proxy forwards an approved
+  call's write there, and the control plane adds the owner's credential, so it never reaches the host.
+- GitHub Enterprise Server and self-managed GitLab: the proxy's certificate authority vouches only for the fixed API
+  hosts, by its name constraint; their hosts would join it from the workspace's repositories.
+- Act as the owner with a narrower credential where the provider can mint one: a GitHub App user token, limited to the
+  app's installations, instead of the owner's sign-in for writes.
+- Report on the host's page whether each command is installed where its sandboxes find it.
 - `tea` for Gitea and Forgejo; Bitbucket has no official CLI.
-- Act as the session owner: give the command a short-lived token of the session owner's account, where the provider
-  can mint one, instead of the host owner's sign-in.

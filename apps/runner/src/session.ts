@@ -19,6 +19,7 @@ import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
+import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
 import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
@@ -55,7 +56,7 @@ import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activit
 import { autoApprovedCalls, viewApprovals, type StoredApproval } from "./approval-view.js";
 import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
-import { egressReadServices, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
+import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import { documentKindNames, validSourceItem, type GrantSource, type SourceReadRequest, type SourceReadView } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
@@ -230,6 +231,12 @@ export type RunnerConfig = {
   resources?: ResourceConfig;
   /** Owner-consented host mode: no isolation, so bash needs only per-command approval. */
   unsandboxed?: boolean;
+  /**
+   * Whether Pikibun extensions' commands (piki:gh, ...) run on the host with the host's own sign-in in the host owner's
+   * own sessions, as the host's owner chose (PIKIBUN_PIKI_HOST_SIGN_IN=1); otherwise they run in the sandbox, as the
+   * session owner. Other members' sessions never get the host's sign-in.
+   */
+  pikiHostSignIn?: boolean;
   /** The sandbox of a macOS or native Windows host (see sandbox-backend.ts); Linux hosts use bubblewrap without it. */
   sandboxBackend?: SandboxBackendConfig;
   /** Opens a session's Pi storage; defaults to the SQLite file in its directory. */
@@ -253,7 +260,7 @@ export type RunnerConfig = {
    * A session's credential for a credentialed API host (ApiCredentialGrant, see api-access.ts), through the connector;
    * without it, the control plane's internal route. The session's egress proxy adds it to the API requests it answers.
    */
-  apiCredential?: (sessionId: string, host: string) => Promise<unknown>;
+  apiCredential?: (sessionId: string, host: string, access: ApiAccessKind) => Promise<unknown>;
   /**
    * How the host runs its sessions, as its owner and admins set it in Pikibun (the connector caches it briefly). Read for
    * each shell command: its time limit and GPU. Without it, the defaults.
@@ -339,6 +346,12 @@ export class RunnerSession {
   readonly #uploads: SessionUploads;
   /** The host cache's mirrors this clone session borrows from, on a host with a repository cache. */
   readonly #mirrors: SessionMirrors | undefined;
+  /**
+   * The extension tool calls running now (runExtensionTool), by call id: only these run a Pikibun extension's command in
+   * the sandbox, and `write` says whether a person (or the owner's Auto-approve) approved the call, which lets it write
+   * through the forge's API as the session owner.
+   */
+  readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" } }>();
   /** The session's Pi extensions (docs/design/host-extensions.md), where the host has any. */
   #hostExtensions?: SessionExtensions;
   /** The extensions being opened now (openExtensions): one opening at a time, so none is opened twice. */
@@ -505,8 +518,8 @@ export class RunnerSession {
       ...(token ? { tcp: { token } } : {}),
       grant: () => this.requestGrant(),
       relay: request => this.relay(request),
-      apiCredential: host => this.config.apiCredential ? this.config.apiCredential(this.binding.session.id, host)
-        : this.controlPlane("/api/internal/api/credential", { sessionId: this.binding.session.id, host }),
+      apiCredential: (host, access) => this.config.apiCredential ? this.config.apiCredential(this.binding.session.id, host, access)
+        : this.controlPlane("/api/internal/api/credential", { sessionId: this.binding.session.id, host, ...(access === "write" ? { access } : {}) }),
       ...(this.#clone && this.config.repositoryCache ? { mirror: (repository: EgressRepository, onProgress: (progress: MirrorProgress) => void) => this.mirror(repository, onProgress) } : {}),
       ...(this.#clone ? { sessionBranch: sessionBranch(this.binding.session) } : {}),
     });
@@ -1325,11 +1338,55 @@ export class RunnerSession {
         return { active: !!item, settings: item?.required?.settings ?? item?.workspace?.settings ?? {} };
       },
       runTool: (call, execute) => this.runExtensionTool(call, execute),
+      piki: this.pikiSession(),
       hookTimeoutMs: 30_000,
       // A queued message waits for its input handlers (see screen), and the messages behind it with it.
       inputTimeoutMs: 60_000,
       warn: (source, message) => { process.stderr.write(`Session ${this.binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
     };
+  }
+
+  /**
+   * Where this session runs its Pikibun extensions' commands (docs/design/piki-extensions.md): on the host with the
+   * host's own sign-in where the session itself runs on its host, or in the host owner's own sessions where its owner
+   * allows that; otherwise in its sandbox, as the session owner, where it has one with an egress proxy.
+   */
+  private pikiSession(): PikiSession {
+    const hostOwner = this.binding.session.connectorOwnerId;
+    const ownSession = !!hostOwner && hostOwner === this.binding.owner.id;
+    return {
+      hostSignIn: this.#onHost || (ownSession && this.config.pikiHostSignIn === true),
+      ...(this.#egress && !this.#onHost ? { sandbox: (run: PikiSandboxRun) => this.runPikiCommand(run) } : {}),
+    };
+  }
+
+  /**
+   * A Pikibun extension's command in the sandbox, for a call runExtensionTool admitted. A call a person approved (or the
+   * owner's Auto-approve), outside the workspace's read-only setting, gets a write lease from the egress proxy for as
+   * long as it runs: its API requests may then write as the session owner, where the control plane gives this host the
+   * owner's credential (only the owner's own hosts). Sandbox operations run one at a time, so no other command of the
+   * session runs while the lease holds.
+   */
+  private async runPikiCommand(run: PikiSandboxRun): Promise<CliRun> {
+    const call = this.#pikiCalls.get(run.callId);
+    if (!call) throw new RunnerError(403, `${run.command} runs only in a call of its tool this session admitted. Nothing ran.`);
+    const lease = call.write && !run.readOnly ? this.#egress?.apiLease() : undefined;
+    try {
+      const env = { ...run.env };
+      if (lease) for (const name of run.tokenEnv) env[name] = lease.token;
+      const command = sandboxShellCommand(run.command, run.args, env, run.directory);
+      // Its call was decided as a host command is (or the host's owner lets the workspace run it automatically), which
+      // is what lets a command run without the limits this host may lack.
+      const output = await this.sandbox.execute({ kind: "bash", command }, run.readOnly, () => this.recheckTool(call.attribution), {
+        unbounded: true, ...await this.commandOptions(), signal: AbortSignal.any([run.signal, AbortSignal.timeout(run.timeoutSeconds * 1000)]) });
+      return { exitCode: 0, signal: null, output };
+    } catch (error) {
+      if (!(error instanceof SandboxProcessError)) throw error;
+      const output = [error.stdout, error.stderr].filter(Boolean).join("\n");
+      return { exitCode: error.exitCode, signal: error.signal, output, ...(error.exitCode === null && !error.signal ? { failure: error.message } : {}) };
+    } finally {
+      lease?.release();
+    }
   }
 
   /**
@@ -1360,6 +1417,10 @@ export class RunnerSession {
     await this.mutate(meta => { const card = meta.approvals[id]; if (card?.status === "approved") card.status = "executing"; });
     await this.recheckTool(attribution);
     const limits = commandLimits((await this.hostConfig()).commandTimeoutSeconds);
+    // A Pikibun extension's command may write as the session owner only where a person decided the call: never where
+    // the workspace runs the extension's tools automatically.
+    const callId = String(call.api.callId);
+    this.#pikiCalls.set(callId, { write: !(item.workspace?.tools === "automatic" && automaticTools), attribution });
     try {
       const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
       const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
@@ -1368,6 +1429,8 @@ export class RunnerSession {
     } catch (error) {
       await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.#waits.kept(id, error instanceof Error ? error.message : String(error)) }); }).catch(() => {});
       throw error;
+    } finally {
+      this.#pikiCalls.delete(callId);
     }
   }
 

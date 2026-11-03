@@ -115,7 +115,7 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
                   onClick={() => install(host, extension.source)}>{availability.status === "other-version" ? "Update" : "Install"}</Button>}</span>} />;
             })}
             {!data.hosts.length && <Row title="No hosts" hint="No host is connected to this workspace yet" />}
-            {cli && <CardBody><p className="muted small">{cli.description}{cli.tool && cli.install && cli.signIn && <> Each host needs <code>{cli.tool}</code> installed (<a href={cli.install} target="_blank" rel="noreferrer">{cli.install}</a>) and signed in by its owner: <code>{cli.signIn}</code>. Turn on <strong>read-only</strong> under Edit before running its tools automatically.</>}</p></CardBody>}
+            {cli && <CardBody><p className="muted small">{cli.description}{cli.tool && cli.install && cli.account && <> Each host needs <code>{cli.tool}</code> installed (<a href={cli.install} target="_blank" rel="noreferrer">{cli.install}</a>) where its sandbox finds it. It acts as the session's owner, with {cli.account} in Pikibun: it reads the workspace's repositories, and writes only in a call a person approved, on the session owner's own host. Turn on <strong>read-only</strong> under Edit before running its tools automatically.</>}</p></CardBody>}
             {admin && <CardBody><div className="inline">
               <label className="check-row small"><input type="checkbox" className="checkbox" checked={extension.enabled} disabled={action.busy}
                 onChange={event => void save({ ...extension, enabled: event.target.checked }, event.target.checked ? "Extension on." : "Extension off.")} /><span>Enabled</span></label>

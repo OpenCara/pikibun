@@ -50,6 +50,8 @@ jobs:
       - name: Connector shrinkwrap matches package.json
         run: node packages/cli/scripts/shrinkwrap.mjs --check
       - run: pnpm typecheck
+      # The sandbox's Python programs: Ruff and Pyright, from npm (embedded as checked by tests/sandbox-python.test.ts).
+      - run: pnpm python:check
       - run: pnpm test
       - run: pnpm build
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.

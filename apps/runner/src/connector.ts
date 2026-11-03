@@ -690,6 +690,8 @@ export class LocalConnector {
       sharedSecret: this.secret, connectorId: state.connectorId,
       allowFaux: this.options.allowFaux === true, allowTestShell: this.options.allowTestShell === true,
       resources: this.options.resources, unsandboxed: this.options.unsandboxed === true,
+      // The host's owner lets Pikibun extensions' commands use this host's own sign-in in their own sessions.
+      pikiHostSignIn: process.env.PIKIBUN_PIKI_HOST_SIGN_IN === "1",
       ...(this.options.sandboxBackend && !this.options.unsandboxed ? { sandboxBackend: this.options.sandboxBackend } : {}),
       resolveModels: model => {
         if (this.lifetime.signal.aborted) throw new Error("Connector has stopped");
@@ -795,7 +797,9 @@ export class LocalConnector {
       // control plane's word to relay it.
       gitDirect: async (sessionId, request) => this.brokerCallback(await this.connection(), "/api/connectors/self/git/direct", { sessionId, ...request }),
       // The session's credential for a credentialed API (api.github.com), which its proxy adds to the requests it answers.
-      apiCredential: async (sessionId, host) => this.brokerCallback(await this.connection(), "/api/connectors/self/api/credential", { sessionId, host }),
+      // A read leaves `access` out, as connectors did before writes: an older control plane refuses what it doesn't know.
+      apiCredential: async (sessionId, host, access) => this.brokerCallback(await this.connection(), "/api/connectors/self/api/credential",
+        { sessionId, host, ...(access === "write" ? { access } : {}) }),
       // The relay streams a whole pack, so it gets the length of the longest command rather than the RPC budget. A push
       // outlives a replaced connection: once its pack is under way, the forge's answer must reach Git.
       gitRelay: async (sessionId, request) => {

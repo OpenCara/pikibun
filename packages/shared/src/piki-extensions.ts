@@ -1,11 +1,12 @@
 import type { GitProvider } from "./repositories.js";
 
 /*
- * Extensions built into the connector (docs/design/piki-extensions.md): Pi extensions that give sessions a forge's or
- * a cloud's command-line tool as one tool, run on the host with the host's own sign-in to that tool, and guards such as
- * the prompt audit, which checks messages before they reach the agent. Every connector that knows one has it, at its
- * own version, so hosts never install them; a workspace runs one like any other extension, as `piki:<name>`, and gets
- * the one for a forge as soon as it binds a repository there; a host's owner can require one of every session on it.
+ * Extensions built into the connector (docs/design/piki-extensions.md): Pi extensions that give sessions a forge's
+ * command-line tool as one tool, run in the session's sandbox as the session owner, with the owner's account in
+ * Pikibun added to its API requests by the session's egress proxy, and guards such as the prompt audit, which checks
+ * messages before they reach the agent. Every connector that knows one has it, at its own version, so hosts never
+ * install them; a workspace runs one like any other extension, as `piki:<name>`, and gets the one for a forge as soon
+ * as it binds a repository there; a host's owner can require one of every session on it.
  */
 
 export interface PikiExtensionInfo {
@@ -16,8 +17,14 @@ export interface PikiExtensionInfo {
   tool?: string;
   title: string;
   description: string;
-  /** Where to get the command, and how to sign in to it on the host; command-line tools only. */
+  /** Command-line tools only: where to get the command, which the host installs where its sandbox finds it (its /usr). */
   install?: string;
+  /** Command-line tools only: the session owner's account in Pikibun the command acts with. */
+  account?: string;
+  /**
+   * Command-line tools only: how the host's owner signs in to it on the host, for their own sessions where they let it
+   * use that (PIKIBUN_PIKI_HOST_SIGN_IN).
+   */
   signIn?: string;
   /** A workspace that binds its first repository of one of these providers gets this extension. */
   providers: readonly GitProvider[];
@@ -26,18 +33,19 @@ export interface PikiExtensionInfo {
 export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   {
     name: "gh", source: "piki:gh", tool: "gh", title: "GitHub CLI",
-    description: "Runs the GitHub CLI (gh) on the host, with its owner's gh sign-in: pull requests, issues, Actions runs and their logs, releases, and the GitHub API.",
-    install: "https://cli.github.com", signIn: "gh auth login", providers: ["github", "github-enterprise"],
+    description: "Runs the GitHub CLI (gh) in the session's sandbox, as the session owner: pull requests, issues, Actions runs and their logs, releases, and the GitHub API.",
+    install: "https://cli.github.com", account: "their GitHub sign-in", signIn: "gh auth login", providers: ["github", "github-enterprise"],
   },
   {
     name: "glab", source: "piki:glab", tool: "glab", title: "GitLab CLI",
-    description: "Runs the GitLab CLI (glab) on the host, with its owner's glab sign-in: merge requests, issues, CI/CD pipelines and their logs, releases, and the GitLab API.",
-    install: "https://gitlab.com/gitlab-org/cli", signIn: "glab auth login", providers: ["gitlab"],
+    description: "Runs the GitLab CLI (glab) in the session's sandbox, as the session owner: merge requests, issues, CI/CD pipelines and their logs, releases, and the GitLab API of gitlab.com.",
+    install: "https://gitlab.com/gitlab-org/cli", account: "their GitLab (gitlab.com) access token under Git accounts", signIn: "glab auth login", providers: ["gitlab"],
   },
   {
     name: "azure-cli", source: "piki:azure-cli", tool: "az", title: "Azure CLI",
-    description: "Runs the Azure CLI (az) on the host, with its owner's az sign-in: Azure DevOps pull requests, pipelines and work items (with the azure-devops extension), and Azure resources.",
-    install: "https://learn.microsoft.com/cli/azure/install-azure-cli", signIn: "az login (and az extension add --name azure-devops)", providers: ["azure-devops"],
+    description: "Runs the Azure CLI (az) in the session's sandbox, as the session owner: Azure DevOps pull requests, pipelines and work items (with the azure-devops extension).",
+    install: "https://learn.microsoft.com/cli/azure/install-azure-cli", account: "their Azure DevOps access token for the organization under Git accounts",
+    signIn: "az login (and az extension add --name azure-devops)", providers: ["azure-devops"],
   },
   {
     name: "prompt-audit", source: "piki:prompt-audit", title: "Prompt audit",
