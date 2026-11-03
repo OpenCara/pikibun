@@ -85,9 +85,19 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
   return result;
 }
 
+/**
+ * npm on the host's PATH, which installing extensions from npm or Git needs (extensions/store.ts): optional, since a host
+ * runs without extensions, so it never keeps one from starting. `npm --version` needs Node.js on PATH as well.
+ */
+export function npmPrerequisite(platform: NodeJS.Platform = process.platform, path = process.env.PATH ?? ""): Prerequisite {
+  const found = spawnSync(platform === "win32" ? "npm.cmd" : "npm", ["--version"], { stdio: "ignore", timeout: 15_000, windowsHide: true,
+    shell: platform === "win32", env: { ...process.env, PATH: path } }).status === 0;
+  return { name: "Node.js and npm on PATH, to install extensions from npm or Git", ok: found, optional: true, ...(found ? {} : { fix: fixes.node(platform) }) };
+}
+
 /** Fails with the missing prerequisites; `sandboxHint` offers the unsandboxed mode where the front end has one. */
 export function assertPrerequisites(prerequisites: readonly Prerequisite[], unsandboxed: boolean, sandboxHint: string): void {
-  const missing = prerequisites.filter(item => !item.ok).map(item => item.name);
+  const missing = prerequisites.filter(item => !item.ok && !item.optional).map(item => item.name);
   if (!missing.length) return;
   const hint = process.platform === "darwin" ? " Install Git, e.g. xcode-select --install or brew install git."
     : process.platform === "win32" ? (missing.some(name => name.startsWith("Git for Windows")) ? " Install Git for Windows from https://git-scm.com/download/win." : "")

@@ -151,8 +151,24 @@ export class ExtensionStore {
 
 async function defaultNpm(args: string[], cwd: string, env?: Record<string, string>): Promise<void> {
   try { await run(process.platform === "win32" ? "npm.cmd" : "npm", args, { cwd, maxBuffer: 16 * 1024 * 1024, shell: process.platform === "win32", env: { ...process.env, ...env } }); }
-  catch (error) {
-    const stderr = (error as { stderr?: string }).stderr?.trim();
-    throw new ExtensionSourceError(`npm ${args[0]} failed${stderr ? `:\n${stderr.split("\n").slice(-20).join("\n")}` : "."}`);
-  }
+  catch (error) { throw npmFailure(error, args); }
+}
+
+/** How to install Node.js, which brings npm, on this platform. */
+export function nodeInstallHint(platform: NodeJS.Platform = process.platform): string {
+  return platform === "darwin" ? "Install Node.js (brew install node, or the installer from https://nodejs.org), then restart Pikibun or the connector."
+    : platform === "win32" ? "Install Node.js from https://nodejs.org (or winget install OpenJS.NodeJS.LTS), then restart Pikibun or the connector."
+    : "Install Node.js and npm (from https://nodejs.org or this system's packages), then restart the connector.";
+}
+
+/**
+ * Why npm failed, as the owner reads it: npm missing from PATH (a Mac app started from Finder sees only the system's
+ * PATH; Windows' shell answers 127 or "is not recognized") says so and how to get it, rather than an empty failure.
+ */
+export function npmFailure(error: unknown, args: readonly string[], platform: NodeJS.Platform = process.platform, path = process.env.PATH ?? ""): ExtensionSourceError {
+  const failed = error as { code?: unknown; stderr?: string };
+  const stderr = failed.stderr?.trim() ?? "";
+  const missing = failed.code === "ENOENT" || failed.code === 127 || /is not recognized as an internal or external command|npm: (command )?not found|env: node: No such file/i.test(stderr);
+  if (missing) return new ExtensionSourceError(`npm, which installs extensions from npm and Git, wasn't found on this host's PATH (${path || "empty"}). ${nodeInstallHint(platform)}`);
+  return new ExtensionSourceError(`npm ${args[0]} failed${stderr ? `:\n${stderr.split("\n").slice(-20).join("\n")}` : "."}`);
 }

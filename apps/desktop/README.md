@@ -70,6 +70,10 @@ for later. On Windows, each server's host runs its sessions in WSL2 or natively:
     (`src/main/setup-actions.ts`), never from a command a host or a page sent, and only for something the latest
     check found missing. Servers' Settings pages show what is missing and link to This Mac, which alone installs
     things or takes an API key.
+  - **Node.js and npm** are optional: a host installs extensions from npm or Git with them, so it lists them without
+    needing them to start, with `brew install node` and nodejs.org's installer. A Mac app started from Finder gets only
+    launchd's PATH, so the app starts each Mac host with its owner's login-shell PATH (`$SHELL -ilc`, read at each
+    launch: `src/main/shell-path.ts`), as `pikibun connect` in Terminal sees it.
 - Pikibun on this computer runs the local server (`dist/host/desktop-server.mjs`, bundled from
   `apps/server/src/local/desktop.ts`) in a second utility process, with `pikibun serve`'s state
   (`~/.local/share/pikibun/server`), so the two share their data; a kernel lease on that directory (flock or lockf, as
