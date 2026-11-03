@@ -13,6 +13,22 @@ export type RepositoryCacheMode = (typeof repositoryCacheModes)[number];
 export const gpuKinds = ["dxg", "render"] as const;
 export type GpuKind = (typeof gpuKinds)[number];
 
+/**
+ * Pi's built-in extensions a host's owner and admins turn on for every session on it (HostConfig.builtinExtensions), with
+ * nothing to install: they ship with Pikibun, from pi-durable (docs/design/host-extensions.md). Each runs in the
+ * connector; its tool calls are the session's own, decided as usual. Pi's other built-ins have no counterpart here:
+ * `mcp` and `llama.cpp` register MCP servers and providers, which Pikibun doesn't run, and `tool-search` finds deferred
+ * tools, which Pikibun has none of.
+ */
+export const builtinExtensions = Object.freeze([
+  Object.freeze({
+    name: "codemode", title: "Code mode", tools: Object.freeze(["codemode"]),
+    description: "The codemode tool: the model writes JavaScript that calls the session's tools, run in a QuickJS sandbox in the connector, to batch, chain and filter calls. Each call it makes is decided like the model's own, and a script resumes where it was after a restart.",
+  }),
+] as const);
+export type BuiltinExtensionName = (typeof builtinExtensions)[number]["name"];
+export const builtinExtensionNames: readonly BuiltinExtensionName[] = Object.freeze(builtinExtensions.map(item => item.name));
+
 /** A model's compaction token counts, or the whole host's; each one left out keeps the host's Pi setting. */
 export interface CompactionTokens {
   /**
@@ -59,6 +75,11 @@ export interface HostConfig {
   hostSessions: boolean;
   /** Compaction token counts over the host's Pi settings; empty keeps those. Sessions pick a change up within a minute (the connector's refresh), with their next message. */
   compaction: HostCompaction;
+  /**
+   * Pi's built-in extensions every session on the host runs with (`builtinExtensions`), in that list's order. Sessions
+   * pick a change up with their next message, within a minute.
+   */
+  builtinExtensions: BuiltinExtensionName[];
 }
 
 export const hostConfigLimits = Object.freeze({
@@ -70,7 +91,17 @@ export const hostConfigLimits = Object.freeze({
 
 export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
+  builtinExtensions: Object.freeze([]) as unknown as BuiltinExtensionName[],
 });
+
+/** The built-in extensions a host runs: known names, each once, in the catalog's order, so equal settings are equal JSON. */
+export function parseBuiltinExtensions(value: unknown): BuiltinExtensionName[] {
+  if (!Array.isArray(value) || value.length > builtinExtensionNames.length) throw new Error("Invalid built-in extensions");
+  if (value.some(name => !(builtinExtensionNames as readonly unknown[]).includes(name)) || new Set(value).size !== value.length) {
+    throw new Error(`Built-in extensions are ${builtinExtensionNames.join(", ")}`);
+  }
+  return builtinExtensionNames.filter(name => value.includes(name));
+}
 
 const compactionTokenKeys = ["reserveTokens", "keepRecentTokens"] as const;
 /** A model as Pi's compaction overrides name it: `provider/modelId`, as the host advertises them (80 and 200 characters at most). */
@@ -136,7 +167,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
   return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
-    hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction) };
+    hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions) };
 }
 
 /**
@@ -155,12 +186,13 @@ export function parseHostConfigChange(value: unknown): Partial<HostConfig> {
 
 /**
  * A configuration as a connector reads it from the control plane: settings it doesn't know (from a newer control plane)
- * are left out, and ones the control plane doesn't send (an older one) keep their defaults. What it does read must be
- * valid, or none of it is used.
+ * are left out, and ones the control plane doesn't send (an older one) keep their defaults; so are built-in extensions
+ * it doesn't ship. What it does read must be valid, or none of it is used.
  */
 export function readHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
   const input = value as Record<string, unknown>;
   const known = Object.fromEntries(Object.keys(defaultHostConfig).filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]]));
+  if (Array.isArray(known.builtinExtensions)) known.builtinExtensions = known.builtinExtensions.filter(name => (builtinExtensionNames as readonly unknown[]).includes(name));
   return parseHostConfig({ ...defaultHostConfig, ...known });
 }

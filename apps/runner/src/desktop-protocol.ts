@@ -1,7 +1,45 @@
 import type { LocalModelSummary } from "../../../packages/shared/src/connector.js";
 
-/** One binary or tool the chosen isolation mode needs, as connect-setup.ts checks it. */
-export interface Prerequisite { name: string; ok: boolean }
+/**
+ * What a desktop app can do itself to provide something a host lacks, once its owner confirms in a native dialog. A
+ * fixed list the app implements (apps/desktop/src/main/setup-actions.ts) and checks again: never a command the host
+ * chose. Each runs where the owner sees it (an installer, a terminal window, Settings), never silently.
+ */
+export type SetupAction =
+  /** macOS: Apple's installer for the Command Line Tools (`xcode-select --install`). */
+  | { kind: "xcode-tools" }
+  /** Windows: Git for Windows, with winget. */
+  | { kind: "git-for-windows" }
+  /** Windows: Microsoft's MXC SDK, with npm, into the directory the app's native hosts use. */
+  | { kind: "mxc-sdk" }
+  /** Windows: Settings › Windows Update. */
+  | { kind: "windows-update" }
+  /** Windows: WSL with Ubuntu (`wsl --install`), as administrator. */
+  | { kind: "wsl-install" }
+  /** WSL2: Node.js 24 from nvm, in the host's distribution. */
+  | { kind: "wsl-node" }
+  /** Debian and Ubuntu (WSL2): these packages with apt, in a terminal that asks for the sudo password. */
+  | { kind: "apt"; packages: string[] };
+
+/** Microsoft's MXC SDK version the Windows sandbox runs, which the app's mxc-sdk action installs. */
+export const MXC_SDK_VERSION = "1.0.1";
+
+/** Packages a SetupAction of kind apt may name: the sandbox's own prerequisites. */
+export const APT_PACKAGES = ["bubblewrap", "python3", "git", "util-linux"] as const;
+
+/** How to get what is missing: what to do, a command or page that does it, and what the app can do itself. */
+export interface PrerequisiteFix {
+  /** One sentence: what to install or change. */
+  text: string;
+  /** A terminal command that does it, for the owner to copy. */
+  command?: string;
+  /** An https page that explains it or downloads it. */
+  url?: string;
+  action?: SetupAction;
+}
+
+/** One binary or tool the chosen isolation mode needs, as connect-setup.ts checks it, and how to get it when missing. */
+export interface Prerequisite { name: string; ok: boolean; fix?: PrerequisiteFix }
 
 // Messages between a desktop app and its connector host (desktop-host.ts), over the parent's IPC channel only. Pairing
 // codes travel here and nowhere else: never argv, environment, files or logs. Types and patterns only, so the app's
@@ -55,7 +93,56 @@ export interface StopRequest { type: "stop"; id: number }
  */
 export interface UploadRequest { type: "upload"; id: number; grant: string; body: string }
 
-export type HostRequest = InspectRequest | StartRequest | StopRequest | UploadRequest;
+/** Pi's providers this host can sign in to, and which it is signed in to already (LoginProvider). */
+export interface ProvidersRequest { type: "providers"; id: number }
+
+/**
+ * Signs Pi on this host in to a provider, as `pi`'s /login does: the credential is saved in Pi's auth.json here and
+ * never leaves the host. Its result comes once the sign-in ends; meanwhile `login` events (LoginEvent) carry what the
+ * owner has to see and answer, each naming this request's id. One sign-in at a time.
+ */
+export interface LoginRequest { type: "login"; id: number; provider: string; method: LoginMethodType }
+
+/** The owner's answer to one of a sign-in's prompts; `value` is what they entered or the option they chose. */
+export interface LoginAnswerRequest { type: "login-answer"; id: number; login: number; prompt: number; value: string }
+
+/** Ends a sign-in under way: its own request then fails as cancelled. */
+export interface LoginCancelRequest { type: "login-cancel"; id: number; login: number }
+
+export type HostRequest = InspectRequest | StartRequest | StopRequest | UploadRequest | ProvidersRequest | LoginRequest | LoginAnswerRequest | LoginCancelRequest;
+
+export type LoginMethodType = "oauth" | "api_key";
+
+export interface LoginMethod {
+  type: LoginMethodType;
+  /** Pi's name for it, e.g. "Anthropic (Claude Pro/Max)" or "Anthropic API key". */
+  name: string;
+  /** Whether it signs in with a provider subscription rather than paid API use. */
+  subscription?: boolean;
+}
+
+export interface LoginProvider {
+  id: string;
+  name: string;
+  /** Pi has a credential for it saved on this host. */
+  signedIn: boolean;
+  methods: LoginMethod[];
+}
+
+/** A sign-in's prompt, as Pi asks it. A `secret` answer is never shown, logged or kept. */
+export type LoginPrompt =
+  | { type: "text" | "secret" | "manual_code"; message: string; placeholder?: string }
+  | { type: "select"; message: string; options: { id: string; label: string; description?: string }[] };
+
+export type LoginEvent =
+  | { kind: "prompt"; prompt: number; detail: LoginPrompt }
+  /** The prompt needs no answer any more: the browser's callback arrived first, say. */
+  | { kind: "prompt-closed"; prompt: number }
+  /** A page the owner signs in on, in their browser. */
+  | { kind: "auth-url"; url: string; instructions?: string }
+  | { kind: "device-code"; userCode: string; verificationUri: string }
+  | { kind: "info"; message: string; links?: { url: string; label?: string }[] }
+  | { kind: "progress"; message: string };
 
 /** Upper bounds of an UploadRequest, which the host checks again. */
 export const uploadRequestLimits = { grant: 16_384, body: 1024 * 1024 } as const;
@@ -68,6 +155,8 @@ export interface HostInspection {
   stateDir: string;
   /** Why this machine cannot host at all (native Windows, an old Node.js). */
   unsupported?: string;
+  /** What would let it host, where the app knows (WSL2 missing, or Node.js in it). */
+  unsupportedFix?: PrerequisiteFix;
   /**
    * Linux with bubblewrap and its companions runs sandboxed, as do macOS and native Windows with `experimentalSandbox`
    * and every prerequisite of their own sandbox; everything else needs the owner's unsandboxed consent.
@@ -90,13 +179,20 @@ export interface HostInspection {
 
 /** Stable reasons a front end may act on; the message is always shown as is. */
 export type HostErrorCode = "invalid-request" | "unsupported" | "consent-required" | "not-paired" | "already-paired"
-  | "server-mismatch" | "already-running" | "lease-busy" | "setup" | "failed" | "not-running";
+  | "server-mismatch" | "already-running" | "lease-busy" | "setup" | "failed" | "not-running" | "cancelled" | "busy";
 
-export interface HostError { code: HostErrorCode; message: string }
+export interface HostError {
+  code: HostErrorCode;
+  message: string;
+  /** What would let this computer host, for a host the app can't launch here (`unsupported`), where it knows. */
+  fix?: PrerequisiteFix;
+}
 
 export type HostEvent =
   | { type: "ready" }
-  | { type: "result"; id: number; ok: true; inspection?: HostInspection; reply?: { status: number; body: string } }
+  | { type: "result"; id: number; ok: true; inspection?: HostInspection; reply?: { status: number; body: string }; providers?: LoginProvider[] }
+  /** What the sign-in `login` (its LoginRequest's id) shows or asks now. */
+  | { type: "login"; login: number; event: LoginEvent }
   | { type: "result"; id: number; ok: false; error: HostError }
   /** `connectorId`, once connected: the host this computer is on that server, which its pages hand uploads to directly. */
   | { type: "status"; state: HostState; server?: string; unsandboxed?: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string }

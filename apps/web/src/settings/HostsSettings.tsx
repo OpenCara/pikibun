@@ -251,7 +251,7 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
     </Section>
     <HostConfigSection connector={connector} refresh={refresh} />
     {connector.config && <HostCompactionSection connector={connector} refresh={refresh} />}
-    {connector.role && <HostExtensionsSection connector={connector} />}
+    {connector.role && <HostExtensionsSection connector={connector} refresh={refresh} />}
     {connector.capabilities.hostCommands && <HostCommandGrantsSection connector={connector} refresh={refresh} />}
     <HostAdminsSection connector={connector} refresh={refresh} />
     <Section title="Details">

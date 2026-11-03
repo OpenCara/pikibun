@@ -17,6 +17,11 @@ usernames and session status. The web app (`apps/web`) is the reference for beha
   server's `SIGNUP=invite` a new GitHub account is refused (`invite_required`; the app says to create it through the
   invite link in a browser first).
 - Every request carries that token; no cookies. A 401 signs the app out.
+- Notifications (`lib/notifications.ts`, [docs/notifications.md](../../docs/notifications.md)): turned on under
+  Settings, the app registers its Expo push token with the server (`POST /api/notifications/devices`), bound to the
+  current sign-in. The server sends through Expo's push service, and a tapped notification opens its session. It needs
+  `expo.extra.eas.projectId` in `app.json` (an Expo project with an APNs key for `com.pikibun.app`) and a real device:
+  the simulator gets no push token. Without a project ID, Settings says so and the switch stays off.
 
 ## Develop
 

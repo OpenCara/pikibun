@@ -1,9 +1,10 @@
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { app, BrowserWindow, dialog, ipcMain, net, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, Notification, shell, type IpcMainInvokeEvent } from "electron";
 import { channels, type HostsView, type LocalStartInput, type Outcome, type SettingsView } from "../shared/bridge.js";
 import { remoteChannels, type DesktopView, type UploadOutcome } from "../shared/remote-bridge.js";
 import { githubLookup, resolveAdmins } from "./admins.js";
@@ -13,13 +14,14 @@ import { HostLaunchError, HostProcess, stdioHost } from "./host-process.js";
 import { LocalServerController } from "./local-server.js";
 import { HostTray, installAppMenu, type MenuActions } from "./menu.js";
 import { DEFAULT_SERVER, parseServerOrigin } from "./origin.js";
-import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parsePairHere, parseRemoteLocalStart, parseSandbox, parseStartInput, parseString, parseUpload } from "./requests.js";
+import { isLocalPage, parseBoolean, parseConnectionCall, parseCreateAdmin, parseLocalStartInput, parseModels, parseNotification, parsePairHere, parseRemoteLocalStart, parseSandbox, parseStartInput, parseString, parseUpload } from "./requests.js";
 import { remoteView } from "./remote-view.js";
-import { PRIMARY_CONNECTION, SettingsStore, type SandboxChoice } from "./settings.js";
+import { PRIMARY_CONNECTION, SettingsStore, type ConnectionSettings, type SandboxChoice } from "./settings.js";
 import { UpdateChecker } from "./updates.js";
 import { utilityHost } from "./utility-host.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
-import { chooseDistro, wslExe, wslHostArgs, wslStateDir, wslStatus } from "./wsl.js";
+import { chooseDistro, setupFixes, wslExe, wslHostArgs, wslStateDir, wslStatus } from "./wsl.js";
+import { parseSetupAction, setupPlan, type SetupAction } from "./setup-actions.js";
 import type { WslStatus } from "../shared/bridge.js";
 
 const mac = process.platform === "darwin";
@@ -46,14 +48,20 @@ const smokeDirectory = process.env.PIKIBUN_DESKTOP_SMOKE || undefined;
  */
 const connectionsDirectory = stateDir ? join(dirname(stateDir), "connections") : join(homedir(), ".local", "share", "pikibun", "connections");
 const connectorStateDir = (id: string): string | undefined => id === PRIMARY_CONNECTION ? stateDir : join(connectionsDirectory, id);
-/** A connection's sandbox on Windows, WSL2 unless the owner chose native Windows; undefined elsewhere. */
-const sandboxOf = (choice: SandboxChoice | undefined): SandboxChoice | undefined => windowsHost ? choice ?? { sandbox: "wsl2" } : undefined;
+/**
+ * A connection's sandbox: on Windows WSL2 unless the owner chose native Windows; on macOS none unless they chose macOS's
+ * own (experimental) sandbox, as Macs ran before they had the choice; undefined elsewhere.
+ */
+const sandboxOf = (connection: Readonly<ConnectionSettings> | undefined): SandboxChoice | undefined =>
+  windowsHost ? connection?.windows ?? { sandbox: "wsl2" } : mac ? connection?.mac ?? { sandbox: "none" } : undefined;
 const connectCommandFor = (id: string, server: string, sandbox: SandboxChoice | undefined) => connectCommand({
   server, sandbox, stateDir: connectorStateDir(id), wslStateDir: wslStateDir(id, id === PRIMARY_CONNECTION), home: homedir(), windows: windowsHost,
 });
 const hostLabel = (origin: string) => URL.parse(origin)?.host ?? origin;
 
 app.setName("Pikibun");
+// Windows shows an app's notifications only under the identity its installer's shortcut has (electron-builder.yml appId).
+if (process.platform === "win32") app.setAppUserModelId("com.pikibun.desktop");
 if (userData) app.setPath("userData", userData);
 registerLocalScheme();
 
@@ -132,17 +140,22 @@ function main(): void {
   let publish = () => {};
   const createHost = (id: string): Host => {
     const directory = connectorStateDir(id);
-    const sandbox = () => sandboxOf(settings.connection(id)?.windows);
+    const sandbox = () => sandboxOf(settings.connection(id));
     const controller = new HostController({
       id, settings, fixtureModels, command: server => connectCommandFor(id, server, sandbox()),
-      ...(windowsHost ? { sandbox } : {}),
+      ...(windowsHost || mac ? { sandbox } : {}),
+      runSetup: action => runSetup(sandbox(), action),
+      canSetup: action => !("error" in setupPlan(action, setupContext(sandbox()))),
+      openBrowser: url => { void shell.openExternal(url).catch(() => {}); },
       confirmUnsandboxed: (warning, server, missing) => confirm(hostWindow, {
         type: "warning", buttons: ["Cancel", "Run Unsandboxed"], defaultId: 0, cancelId: 0, noLink: true,
         title: "Run without a sandbox?",
         message: missing.length
           ? `${mac ? "This Mac" : "This computer"}'s sandbox isn't ready. Run ${hostLabel(server)}'s agent work directly on it?`
-          : `${mac ? "This Mac" : "This computer"} has no isolated sandbox. Run ${hostLabel(server)}'s agent work directly on it?`,
-        detail: `${missing.length ? `The sandbox needs: ${missing.join("; ")}.\n\n` : ""}${warning.trim()}`,
+          : mac ? `This Mac runs ${hostLabel(server)}'s host without a sandbox. Run its agent work directly on this Mac?`
+          : `This computer has no isolated sandbox. Run ${hostLabel(server)}'s agent work directly on it?`,
+        detail: `${missing.length ? `The sandbox needs: ${missing.join("; ")}.\n\n` : ""}${warning.trim()}${mac && !missing.length
+          ? `\n\nTo isolate it instead, stop here and choose "macOS sandbox (experimental)" under Sandbox in ${hostTitle}.` : ""}`,
       }),
     });
     /** A utility process here, or, for a Windows host in WSL2, the host inside the chosen distribution. */
@@ -150,7 +163,7 @@ function main(): void {
       const choice = sandbox();
       if (choice?.sandbox !== "wsl2") return utilityHost(hostEntry, directory ? ["--state-dir", directory] : [], nativeEnv);
       const distro = chooseDistro(await refreshWsl(), choice.distro);
-      if (!distro.ok) throw new HostLaunchError(distro.error);
+      if (!distro.ok) throw new HostLaunchError(distro.error, distro.fix);
       if (!existsSync(join(wslConnector, "dist", "desktop-host.mjs")) || !existsSync(join(wslConnector, "node_modules"))) {
         throw new HostLaunchError(app.isPackaged ? "Pikibun's connector is missing from this installation: reinstall Pikibun." : "WSL2 hosts run the staged connector: run `pnpm build`, then `node scripts/stage-connector.mjs` in apps/desktop.");
       }
@@ -162,8 +175,10 @@ function main(): void {
       onEvent: event => {
         if (event.type === "status") controller.handleStatus(event.state, event);
         else if (event.type === "log") controller.log(event.level, event.message);
+        else if (event.type === "login") controller.handleLogin(event.login, event.event);
         else controller.handleFailure(event.error.message);
       },
+      setupFixes,
       onOutput: line => controller.log("warning", line),
       onExit: (code, expected) => controller.handleExit(code, expected),
     });
@@ -172,6 +187,33 @@ function main(): void {
     const host = { controller, process };
     hosts.set(id, host);
     return host;
+  };
+  /**
+   * A missing prerequisite's fix, done for the owner: what setup-actions.ts plans for it here (for a WSL2 host, in its
+   * distribution), once they confirm in a native dialog. It runs where they see it, and Refresh shows what changed.
+   */
+  /** Where a host's setup runs: this computer, and for a WSL2 host the distribution as WSL last listed it. */
+  const setupContext = (choice: SandboxChoice | undefined, status = wsl) => {
+    const chosen = choice?.sandbox === "wsl2" && status ? chooseDistro(status, choice.distro) : undefined;
+    return { platform: process.platform, ...(chosen?.ok ? { distro: chosen.name } : {}), ...(nativeEnv?.PIKIBUN_MXC_RUNTIME ? { mxcRuntime: nativeEnv.PIKIBUN_MXC_RUNTIME } : {}) };
+  };
+  const runSetup = async (choice: SandboxChoice | undefined, action: SetupAction): Promise<Outcome> => {
+    const plan = setupPlan(action, setupContext(choice, choice?.sandbox === "wsl2" ? wsl ?? await refreshWsl() : wsl));
+    if ("error" in plan) return { ok: false, error: plan.error };
+    if (!await confirm(hostWindow, { type: "question", buttons: ["Cancel", "Continue"], defaultId: 1, cancelId: 0, noLink: true, title: "Pikibun", message: plan.title, detail: plan.detail })) {
+      return { ok: false, error: "Not started." };
+    }
+    const step = plan.step;
+    if (step.type === "open") {
+      try { await shell.openExternal(step.url); } catch { return { ok: false, error: "Settings could not be opened." }; }
+      return { ok: true };
+    }
+    // Its own window (a console on Windows, Apple's installer on macOS), which outlives the app if it must.
+    return await new Promise<Outcome>(resolve => {
+      const child = spawn(step.file, step.args, { detached: true, stdio: "ignore", windowsHide: !step.console });
+      child.once("error", () => resolve({ ok: false, error: `${step.file} could not be started.` }));
+      child.once("spawn", () => { child.unref(); resolve({ ok: true }); });
+    });
   };
   for (const connection of settings.get().connections) createHost(connection.id);
   const primaryHost = () => hosts.get(PRIMARY_CONNECTION)!.controller;
@@ -353,6 +395,30 @@ function main(): void {
     const choice = parseSandbox(call.choice);
     return choice.ok ? target.controller.setSandbox(choice.value) : choice;
   }));
+  // Getting this computer ready to host: Pi's sign-in and the prerequisites' fixes, only from the app's own window,
+  // which alone takes secrets (an API key) and starts installers.
+  handle(channels.hostProviders, "host.html", host, forConnection([], target => target.controller.loadProviders()));
+  handle(channels.hostSignIn, "host.html", host, forConnection(["provider", "method"], (target, call) => {
+    const provider = parseString(call.provider, 128);
+    if (!provider.ok || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(provider.value) || (call.method !== "oauth" && call.method !== "api_key")) return refused;
+    return target.controller.startSignIn(provider.value, call.method);
+  }));
+  handle(channels.hostSignInAnswer, "host.html", host, forConnection(["prompt", "value"], (target, call) => {
+    const value = parseString(call.value, 8192);
+    if (!value.ok || typeof call.prompt !== "number" || !Number.isSafeInteger(call.prompt) || call.prompt < 1) return refused;
+    return target.controller.answerSignIn(call.prompt, value.value);
+  }));
+  handle(channels.hostSignInCancel, "host.html", host, forConnection([], target => target.controller.cancelSignIn()));
+  handle(channels.hostSetup, "host.html", host, forConnection(["action"], (target, call) => {
+    const action = parseSetupAction(call.action);
+    return action ? target.controller.setup(action) : refused;
+  }));
+  handle(channels.hostLink, "host.html", host, forConnection(["url"], (target, call) => {
+    const url = parseString(call.url, 8192);
+    if (!url.ok || !target.controller.knownLink(url.value)) return refused;
+    void shell.openExternal(url.value).catch(() => {});
+    return { ok: true as const };
+  }));
   // The changes both the app's own pages and the servers' Settings pages make.
   /** Adds a server; `confirm` asks the owner first (a web page's request). */
   const addServer = async (payload: unknown, confirm?: (origin: string) => Promise<boolean>): Promise<Outcome & { id?: string }> => {
@@ -467,22 +533,24 @@ function main(): void {
     const models = parseModels(call.models);
     return models.ok ? target.controller.setModels(models.value) : models;
   })(payload));
-  // Where a Windows host's sessions run: the page's choice, once the owner agrees in a native dialog.
+  // Where a Windows or Mac host's sessions run: the page's choice, once the owner agrees in a native dialog.
   handleRemote(remoteChannels.hostSandbox, (origin, window, payload) => forConnection(["choice"], async (target, call) => {
-    const choice = parseSandbox(call.choice);
-    if (!choice.ok) return choice;
-    const refusal = target.controller.sandboxRefusal();
+    const parsed = parseSandbox(call.choice);
+    if (!parsed.ok) return parsed;
+    const choice = parsed.value;
+    const refusal = target.controller.sandboxChoiceRefusal(choice);
     if (refusal) return { ok: false as const, error: refusal };
-    const current = target.controller.view().windows;
-    if (current?.sandbox === choice.value.sandbox && (choice.value.sandbox !== "wsl2" || current.distro === choice.value.distro)) return { ok: true as const };
-    const where = choice.value.sandbox === "native" ? "natively on Windows" : `in WSL2${choice.value.distro ? ` (${choice.value.distro})` : ""}`;
-    if (!await ask(window, origin, `Run ${hostLabel(target.controller.server)}'s sessions ${where}?`,
-      choice.value.sandbox === "native"
-        ? "From the host's next start, sessions run in Windows' own sandbox, which is experimental, or without one if it isn't ready, after your consent. Native Windows has its own pairing."
-        : "From the host's next start, sessions run in WSL2's bubblewrap sandbox, with WSL2's Pi configuration and its own pairing.", "Change")) {
-      return { ok: false as const, error: "Not changed." };
-    }
-    return target.controller.setSandbox(choice.value);
+    if (target.controller.sameSandbox(choice)) return { ok: true as const };
+    const server = hostLabel(target.controller.server);
+    const [question, detail] = choice.sandbox === "native"
+      ? [`Run ${server}'s sessions natively on Windows?`, "From the host's next start, sessions run in Windows' own sandbox, which is experimental, or without one if it isn't ready, after your consent. Native Windows has its own pairing."]
+      : choice.sandbox === "wsl2"
+      ? [`Run ${server}'s sessions in WSL2${choice.distro ? ` (${choice.distro})` : ""}?`, "From the host's next start, sessions run in WSL2's bubblewrap sandbox, with WSL2's Pi configuration and its own pairing."]
+      : choice.sandbox === "seatbelt"
+      ? [`Run ${server}'s sessions in macOS's own sandbox?`, "From the host's next start, sessions run in macOS's Seatbelt sandbox, which is experimental, or without one if it isn't ready, after your consent. Shell commands then run only in your own sessions on this host."]
+      : [`Run ${server}'s sessions without a sandbox?`, "From the host's next start, agent work runs directly as you on this Mac, after your consent at each start."];
+    if (!await ask(window, origin, question, detail, "Change")) return { ok: false as const, error: "Not changed." };
+    return target.controller.setSandbox(choice);
   })(payload));
   // A page pairs only the connection to its own server, with a pairing it just made for its signed-in user.
   handleRemote(remoteChannels.hostPairHere, async (origin, window, payload): Promise<Outcome> => {
@@ -540,6 +608,45 @@ function main(): void {
     return { ok: true };
   });
   handleRemote(remoteChannels.openUpdate, () => openUpdate());
+  // Notifications from a server's page (its notification feed): native ones, which bring the window back at the session
+  // they are about. Shown notifications are kept so their click handlers live as long as they do; each tag shows once
+  // per server, as every window of a server polls the same feed.
+  const shownNotifications = new Set<Notification>();
+  const shownTags = new Map<string, number>();
+  handleRemote(remoteChannels.notify, (origin, window, payload): Outcome => {
+    const input = parseNotification(payload);
+    if (!input.ok) return { ok: false, error: input.error };
+    if (!Notification.isSupported()) return { ok: false, error: "This computer can't show notifications." };
+    const at = Date.now();
+    for (const [key, shownAt] of shownTags) if (at - shownAt > 30 * 60_000) shownTags.delete(key);
+    if (input.value.tag) {
+      const key = `${origin} ${input.value.tag}`;
+      if (shownTags.has(key)) return { ok: true };
+      shownTags.set(key, at);
+    }
+    const notification = new Notification({ title: input.value.title, body: input.value.body });
+    shownNotifications.add(notification);
+    const release = () => { shownNotifications.delete(notification); };
+    notification.on("close", release);
+    notification.on("click", () => {
+      release();
+      const url = `${origin}${input.value.path}`;
+      const target = !window.isDestroyed() ? window
+        : origin === activeServer() && mainWindow && !mainWindow.isDestroyed() ? mainWindow
+        : [...serverWindows].find(([open, server]) => server === origin && !open.isDestroyed())?.[0];
+      if (!target) {
+        if (origin === activeServer()) { openMain(); void mainWindow?.loadURL(url).catch(() => {}); } else newServerWindow(origin, url);
+        return;
+      }
+      showWindow(target);
+      // On the server's page already, only the route changes, keeping what the page has loaded; else the page loads.
+      if (URL.parse(target.webContents.getURL())?.origin === origin) {
+        void target.webContents.executeJavaScript(`window.location.hash = ${JSON.stringify(input.value.path.slice(1))}`).catch(() => {});
+      } else void target.loadURL(url).catch(() => {});
+    });
+    notification.show();
+    return { ok: true };
+  });
 
   app.on("second-instance", openMain);
   app.on("activate", () => { if (!BrowserWindow.getAllWindows().some(window => window.isVisible())) openMain(); });

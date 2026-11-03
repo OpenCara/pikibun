@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { ConnectorPairing } from "../../../../packages/shared/src/connector";
 import { api } from "../api";
+import { listedPrerequisites } from "../../../../packages/shared/src/host-prerequisites";
 import { check, useDesktop, type DesktopBridge, type DesktopView } from "../desktop";
 import { Alert, Button, CardBody, Collapsible, CopyField, EmptyState, Feedback, Field, Loading, Row, Section, SegmentedControl, StatusBadge, useAction, type Tone } from "../ui";
 import "./settings.css";
@@ -37,10 +38,42 @@ function isolation(view: HostView): string {
 }
 
 /**
- * Windows: where a host's sessions run, WSL2 (in which distribution) or native Windows. The app asks the owner before
+ * Where a host's sessions run. Windows: WSL2 (in which distribution) or native Windows. The app asks the owner before
  * it changes, and only while the host is stopped. Absent from apps that predate the choice.
  */
 function SandboxField({ connection, view, bridge }: { connection: HostView; view: DesktopView; bridge: DesktopBridge }) {
+  return connection.mac ? <MacSandboxField connection={connection} bridge={bridge} /> : <WindowsSandboxField connection={connection} view={view} bridge={bridge} />;
+}
+
+/**
+ * macOS: whether a host's sessions run in macOS's own sandbox (experimental) or without one. The app asks the owner
+ * before it changes, and only while the host is stopped. Absent from apps that predate the choice.
+ */
+function MacSandboxField({ connection, bridge }: { connection: HostView; bridge: DesktopBridge }) {
+  const action = useAction();
+  const choice = connection.mac;
+  const setSandbox = bridge.host.setSandbox;
+  if (!choice || !setSandbox) return null;
+  const stopped = connection.state === "stopped";
+  const change = (sandbox: "seatbelt" | "none") => {
+    if (!stopped || action.busy || sandbox === choice.sandbox) return;
+    void action.run(() => check(setSandbox(connection.id, { sandbox })));
+  };
+  return <Field label="Sandbox" hint={choice.sandbox === "seatbelt"
+    ? "Sessions run in macOS's own Seatbelt sandbox, which is experimental (macOS 15 or later with the developer tools: xcode-select --install), or without one, after your consent, while it isn't ready. Each session sees only its own files and reaches the network only through its egress proxy. macOS can't limit a session's memory or processes, so shell commands run only in your own sessions on this host."
+    : "Sessions run directly as you on this Mac, after your consent in the app at each start: approved commands can read and change anything you can. Choose macOS sandbox to isolate them."}>
+    <div className="stack">
+      <fieldset className="stack" disabled={action.busy || !stopped}>
+        <SegmentedControl label="Sandbox" value={choice.sandbox} onChange={change}
+          options={[{ value: "none", label: "None", hint: "Unsandboxed, after your consent" }, { value: "seatbelt", label: "macOS sandbox", hint: "Seatbelt (experimental)" }]} />
+      </fieldset>
+      {!stopped && <span className="small muted">Stop the host to change where its sessions run.</span>}
+      <Feedback {...action} />
+    </div>
+  </Field>;
+}
+
+function WindowsSandboxField({ connection, view, bridge }: { connection: HostView; view: DesktopView; bridge: DesktopBridge }) {
   const action = useAction();
   const choice = connection.windows;
   const setSandbox = bridge.host.setSandbox;
@@ -200,7 +233,7 @@ function ConnectionRow({ connection, view, bridge }: { connection: HostView; vie
           </div>
         </div>
       </Field>}
-      {inspection?.prerequisitesError && <Alert variant="warning" title="Prerequisites">{inspection.prerequisitesError}</Alert>}
+      <SetupAlert connection={connection} view={view} bridge={bridge} />
       {connection.logs.length > 0 && <Collapsible plain title="Recent activity">
         <ol className="small mono desktop-logs">{connection.logs.slice(-30).reverse().map((line, index) => <li key={index} className={line.level === "error" ? "danger" : line.level === "warning" ? "muted" : undefined}>
           {new Date(line.time).toLocaleTimeString()} {line.message}
@@ -209,6 +242,31 @@ function ConnectionRow({ connection, view, bridge }: { connection: HostView; vie
       <Feedback {...action} />
     </div>
   </Collapsible>;
+}
+
+/**
+ * What this computer lacks to host, with what to do about each. Installing and signing Pi in happen in the app's own
+ * window (it starts installers and takes API keys, which a web page never does), so this links there.
+ */
+function SetupAlert({ connection, view, bridge }: { connection: HostView; view: DesktopView; bridge: DesktopBridge }) {
+  const inspection = connection.inspection;
+  if (!inspection) return null;
+  // What the sandbox lacks too, where the host would run without it until then: those are what to install.
+  const missing = listedPrerequisites(inspection).map(item => item.entry).filter(item => !item.ok);
+  const fixes = [...new Map(missing.flatMap(item => item.fix ? [[JSON.stringify(item.fix), item.fix] as const] : [])).values()];
+  if (inspection.unsupportedFix) fixes.unshift(inspection.unsupportedFix);
+  const noModels = !inspection.unsupported && !inspection.models.length && inspection.modelsError;
+  if (!missing.length && !inspection.prerequisitesError && !inspection.unsupportedFix && !noModels) return null;
+  return <Alert variant="warning" title={`Set up ${view.title === "This Mac" ? "this Mac" : "this computer"} to host`}>
+    <div className="stack">
+      {inspection.prerequisitesError && <span>{inspection.prerequisitesError}</span>}
+      {fixes.map(fix => <span key={fix.text}>{fix.text}{fix.command && <> <code>{fix.command}</code></>}</span>)}
+      {noModels && <span>{inspection.modelsError} Sign Pi in to your provider in the {view.title} window: no separate Pi install is needed.</span>}
+      <div className="inline">
+        <Button size="sm" variant="outline" onClick={() => void bridge.openWindow("host")}>{fixes.some(fix => fix.action) || noModels ? `Set up in ${view.title}…` : `Open ${view.title}…`}</Button>
+      </div>
+    </div>
+  </Alert>;
 }
 
 const emptyShared: Shared = { origin: "", listen: "loopback", trustProxy: true, signup: "invite", passwordAuth: true, admins: [] };

@@ -8,6 +8,7 @@ import { parentTransport, stdioTransport } from "./desktop-transport.js";
 import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "./desktop-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
 import { ConnectorSetupError } from "./protocol.js";
+import { LoginError, LoginSession, loginProviders, piLogin, runLogin } from "./pi-login.js";
 import { DEFAULT_WINDOWS_LIMITS, windowsRuntimeDirectory, type SandboxBackendConfig } from "./sandbox-backend.js";
 
 // The connector, run by a desktop app instead of a terminal: requests arrive over the parent's IPC channel (Electron's
@@ -33,6 +34,10 @@ const hostRequestSchema: z.ZodType<HostRequest> = z.discriminatedUnion("type", [
   }).strict(),
   z.object({ type: z.literal("stop"), id: requestId }).strict(),
   z.object({ type: z.literal("upload"), id: requestId, grant: z.string().min(1).max(uploadRequestLimits.grant), body: z.string().max(uploadRequestLimits.body) }).strict(),
+  z.object({ type: z.literal("providers"), id: requestId }).strict(),
+  z.object({ type: z.literal("login"), id: requestId, provider: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/), method: z.enum(["oauth", "api_key"]) }).strict(),
+  z.object({ type: z.literal("login-answer"), id: requestId, login: requestId, prompt: requestId, value: z.string().max(8192) }).strict(),
+  z.object({ type: z.literal("login-cancel"), id: requestId, login: requestId }).strict(),
 ]);
 
 /** Only connector-authored text crosses to the app: SDK and HTTP errors can carry auth or configuration detail. */
@@ -49,6 +54,8 @@ const givenStateDir = values["state-dir"];
 const stateDir = givenStateDir === undefined ? defaultStateDir() : givenStateDir.startsWith("~/") ? join(homedir(), givenStateDir.slice(2)) : givenStateDir;
 const transport = values.stdio ? stdioTransport<HostEvent>() : parentTransport<HostEvent>();
 let running: { connector: LocalConnector; stopRequested: boolean } | undefined;
+/** The sign-in under way, named by its request's id: one at a time. */
+let signingIn: { id: number; session: LoginSession } | undefined;
 
 function emit(event: HostEvent): void { transport.send(event); }
 function log(level: "info" | "warning" | "error", message: string): void { emit({ type: "log", level, message }); }
@@ -162,9 +169,40 @@ async function stop(): Promise<void> {
   await current.connector.stop();
 }
 
+/** Signs Pi in to a provider here (pi-login.ts); its events name this request, and its result ends it. */
+async function login(id: number, provider: string, method: "oauth" | "api_key"): Promise<void> {
+  if (signingIn) throw new HostFailure("busy", "Another sign-in is under way: finish or cancel it first.");
+  const session = new LoginSession(event => emit({ type: "login", login: id, event }));
+  signingIn = { id, session };
+  try {
+    const pi = await piLogin();
+    await runLogin({ runtime: pi.runtime, provider, method, session, deviceId: pi.deviceId });
+    log("info", "Pi signed in to a provider on this computer. Its models are offered from the host's next start.");
+  } catch (error) {
+    if (error instanceof LoginError) throw new HostFailure(error.cancelled ? "cancelled" : "failed", error.message);
+    throw new HostFailure("failed", "Sign-in failed. Check this computer's network and Pi's configuration, then try again.");
+  } finally {
+    if (signingIn?.session === session) signingIn = undefined;
+  }
+}
+
 async function handle(request: HostRequest): Promise<void> {
   try {
-    if (request.type === "upload") {
+    if (request.type === "providers") {
+      let providers;
+      try { providers = await loginProviders((await piLogin()).runtime); }
+      catch { throw new HostFailure("failed", "Pi's providers could not be read. Check Pi's configuration on this computer."); }
+      emit({ type: "result", id: request.id, ok: true, providers });
+    } else if (request.type === "login") {
+      await login(request.id, request.provider, request.method);
+      emit({ type: "result", id: request.id, ok: true });
+    } else if (request.type === "login-answer" || request.type === "login-cancel") {
+      const current = signingIn?.id === request.login ? signingIn.session : undefined;
+      if (!current) throw new HostFailure("not-running", "That sign-in has ended.");
+      if (request.type === "login-cancel") current.cancel();
+      else if (!current.answer(request.prompt, request.value)) throw new HostFailure("not-running", "That question has been answered or has closed.");
+      emit({ type: "result", id: request.id, ok: true });
+    } else if (request.type === "upload") {
       if (!running) throw new HostFailure("not-running", "The host isn't running.");
       emit({ type: "result", id: request.id, ok: true, reply: await running.connector.direct({ grant: request.grant, body: request.body }) });
     } else if (request.type === "inspect") {
@@ -174,7 +212,7 @@ async function handle(request: HostRequest): Promise<void> {
       emit({ type: "result", id: request.id, ok: true });
     }
   } catch (error) {
-    emit({ type: "result", id: request.id, ok: false, error: hostError(error, request.type === "stop" ? "The host did not stop cleanly." : request.type === "upload" ? "The host could not take the file." : "The host could not start. Check this computer's pairing, Pi configuration and prerequisites.") });
+    emit({ type: "result", id: request.id, ok: false, error: hostError(error, request.type === "stop" ? "The host did not stop cleanly." : request.type === "upload" ? "The host could not take the file." : request.type.startsWith("login") || request.type === "providers" ? "Sign-in failed." : "The host could not start. Check this computer's pairing, Pi configuration and prerequisites.") });
   }
 }
 
@@ -182,6 +220,7 @@ let closing = false;
 async function shutdown(): Promise<void> {
   if (closing) return;
   closing = true;
+  signingIn?.session.cancel();
   await stop().catch(() => {});
   process.exit(0);
 }
