@@ -51,6 +51,7 @@ The [quick start](docs/quick-start.md) walks through it step by step.
   - [Extensions](docs/extensions.md)
   - [Sessions](docs/sessions.md)
   - [Approvals and permission requests](docs/approvals.md)
+  - [Notifications](docs/notifications.md): on the web, the Mac and Windows app, and iPhone and iPad
   - [Collaborating on a session](docs/collaboration.md)
   - [Commits, pushes and pull requests](docs/pushes.md)
   - [GitHub issues and pull requests](docs/github.md)

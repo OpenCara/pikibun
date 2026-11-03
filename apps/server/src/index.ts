@@ -35,6 +35,7 @@ import { registerNetworkPolicies } from './network.js';
 import { registerTranscriptSettings } from './transcript-settings.js';
 import { registerRequesterAutoApprove } from './requester-auto-approve.js';
 import { registerAdmin } from './admin.js';
+import { registerNotifications } from './notifications.js';
 import { registerWorkspaceInvites } from './workspace-invites.js';
 import { compression } from './compression.js';
 
@@ -116,6 +117,7 @@ registerNetworkPolicies(app);
 registerTranscriptSettings(app);
 registerRequesterAutoApprove(app);
 registerAdmin(app);
+registerNotifications(app);
 app.all('/api/*', () => fail(404, 'not_found', 'API route not found.'));
 
 export default app;

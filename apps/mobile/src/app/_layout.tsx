@@ -3,7 +3,8 @@ import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { AppDataProvider } from "../lib/app-data";
-import { AuthProvider, useAuth } from "../lib/auth";
+import { AuthProvider, useAuth, useSession } from "../lib/auth";
+import { useNotificationRouting } from "../lib/notifications";
 import { usePalette } from "../theme";
 
 // The stored sign-in is checked before the first screen shows.
@@ -45,6 +46,13 @@ function Navigator() {
   return <ThemeProvider value={theme}>
     <StatusBar style="auto" />
     {/* Keyed by user so lists never carry over to another account. */}
-    {signedIn ? <AppDataProvider key={`${state.origin} ${state.user.id}`}>{stack}</AppDataProvider> : stack}
+    {signedIn ? <AppDataProvider key={`${state.origin} ${state.user.id}`}><NotificationRouting />{stack}</AppDataProvider> : stack}
   </ThemeProvider>;
+}
+
+/** Signed in: keeps this device's notifications registered, and opens the session a tapped notification is about. */
+function NotificationRouting() {
+  const { api, origin, user } = useSession();
+  useNotificationRouting(api, origin, user.id);
+  return null;
 }

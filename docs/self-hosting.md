@@ -88,6 +88,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `OIDC_SIGNING_KEY` | none | RSA private key (PKCS#8 PEM) for Pikibun's OIDC issuer |
 | `GIT_DIRECT` | `on` | Where sessions' Git data goes (see [Network access](hosts.md#network-access)): `on` lets hosts fetch from Git hosts themselves with credentials limited to a repository, `own-hosts` gives credentials only to session owners' own hosts, `off` relays every Git request through the server |
 | `SANDBOX_GITHUB_API` | `on` | Whether sessions' `gh` and other GitHub API clients read the workspace's github.com repositories (see [Network access](hosts.md#network-access)): `on` gives every host running a session a read-only GitHub App token for them, which its egress proxy adds, `own-hosts` only session owners' own hosts, `off` none |
+| `WEB_PUSH_CONTACT`, `EXPO_ACCESS_TOKEN` | none | [Notifications](notifications.md#for-operators): the contact push services are given with Web Push (the server's `https://` origin by default), and an Expo access token where the app's Expo project requires one |
 | `ADMIN_USER_IDS` | none | Comma-separated user IDs of the server's administrators (see [Administration](#administration)) |
 | `RUNNER_URL`, `RUNNER_EVENT_TRANSPORT`, `RUNNER_SHARED_SECRET` | none | Legacy operator-managed runner, for development only; leave empty |
 | `TEST_AUTH_ENABLED`, `TEST_AUTH_SECRET`, `TEST_AUTH_EXPIRES_AT` | off | Local test mode, for development only |
