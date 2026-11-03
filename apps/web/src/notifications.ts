@@ -115,15 +115,28 @@ export async function enableNotifications(userId: string, config: Pick<Notificat
   return support;
 }
 
-/** Turns them off here: the browser's subscription and its registration go. */
+/** The browser's push subscription goes, whatever the server said; nothing is pushed to it after. */
+async function unsubscribePush(): Promise<void> {
+  const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration("/sw.js").catch(() => undefined) : undefined;
+  await (await registration?.pushManager?.getSubscription().catch(() => null))?.unsubscribe().catch(() => false);
+}
+
+/**
+ * Turns them off here: the browser's subscription and its registration go. The device's id is forgotten only once the
+ * server removed it (or never had it), so a failed removal can be tried again.
+ */
 export async function disableNotifications(userId: string): Promise<void> {
   write(choiceKey(userId), null);
   changed();
-  const id = read(deviceKey(userId));
-  write(deviceKey(userId), null);
-  if (id) await api(`/api/notifications/devices/${segment(id)}`, { method: "DELETE" }).catch(reason => { if (!(reason instanceof ApiError && reason.status === 404)) throw reason; });
-  const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration("/sw.js").catch(() => undefined) : undefined;
-  await (await registration?.pushManager.getSubscription().catch(() => null))?.unsubscribe().catch(() => false);
+  try {
+    const id = read(deviceKey(userId));
+    if (id) {
+      await api(`/api/notifications/devices/${segment(id)}`, { method: "DELETE" }).catch(reason => { if (!(reason instanceof ApiError && reason.status === 404)) throw reason; });
+      write(deviceKey(userId), null);
+    }
+  } finally {
+    await unsubscribePush();
+  }
 }
 
 /** This device's registration, as the server knows it, when it has one. */
@@ -189,7 +202,16 @@ export function useNotificationDelivery(userId: string): void {
       try {
         const config = await api<NotificationConfig>("/api/notifications/config");
         support = deviceSupport(config.webPushKey);
-        // Registered again on every start: a new sign-in in this browser takes the subscription over.
+        const known = read(deviceKey(userId));
+        if (support.kind === "push" && known && !config.devices.some(device => device.id === known)) {
+          // Removed under Settings elsewhere, or its sign-in ended: off here too, until it is turned on again.
+          write(deviceKey(userId), null);
+          write(choiceKey(userId), null);
+          changed();
+          await unsubscribePush();
+          return;
+        }
+        // Registered again on every start (its token may change); a new sign-in takes the subscription over.
         if (support.kind === "push") await registerPush(userId, config.webPushKey!);
       } catch {
         // Push isn't working here now: the page shows what comes while it is open.

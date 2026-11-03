@@ -34,7 +34,8 @@ approval.*).
 **Devices** lists the browsers and apps that get your notifications even when Pikibun isn't open. **Remove** stops
 one. **Send a test** sends a notification to all of them. Each one belongs to the sign-in that turned it on: signing
 out of it, its sign-in expiring, or signing an app out under **Settings → Profile → Signed-in apps** also stops its
-notifications. If someone else then signs in on that device, they don't get yours.
+notifications. The device then keeps notifications off until they are turned on again, so if someone else signs in
+on that device, they don't get yours.
 
 ## What passes through push services
 

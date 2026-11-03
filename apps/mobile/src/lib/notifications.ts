@@ -6,7 +6,7 @@ import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useRef } from "react";
 import { Platform } from "react-native";
-import type { NotificationDevice, NotificationPayload } from "../../../../packages/shared/src/notifications";
+import type { NotificationConfig, NotificationDevice, NotificationPayload } from "../../../../packages/shared/src/notifications";
 
 // Notifications on this iPhone or iPad (docs/notifications.md): the server sends them through Expo's push service to
 // the push token this app registers, once its person turns them on here. Tapping one opens its session.
@@ -73,13 +73,18 @@ export async function enableNotifications(api: Api, origin: string, userId: stri
   await SecureStore.setItemAsync(storageKey(origin, userId, "on"), "on");
 }
 
+/**
+ * Turns them off here. The device's id is forgotten only once the server removed it (or never had it), so a failed
+ * removal can be tried again rather than leaving the server pushing to a device that no longer knows which it is.
+ */
 export async function disableNotifications(api: Api, origin: string, userId: string): Promise<void> {
   await SecureStore.deleteItemAsync(storageKey(origin, userId, "on"));
   const id = await SecureStore.getItemAsync(storageKey(origin, userId, "device"));
-  await SecureStore.deleteItemAsync(storageKey(origin, userId, "device"));
-  if (id) await api(`/api/notifications/devices/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(reason => {
+  if (!id) return;
+  await api(`/api/notifications/devices/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(reason => {
     if (!(reason instanceof ApiError && reason.status === 404)) throw reason;
   });
+  await SecureStore.deleteItemAsync(storageKey(origin, userId, "device"));
 }
 
 /** This device's registration, as the server knows it, when it has one. */
@@ -98,6 +103,17 @@ export function useNotificationRouting(api: Api, origin: string, userId: string)
   useEffect(() => {
     void (async () => {
       if (!await notificationsOn(origin, userId) || pushUnavailable()) return;
+      const known = await SecureStore.getItemAsync(storageKey(origin, userId, "device"));
+      if (known) {
+        const config = await api<NotificationConfig>("/api/notifications/config").catch(() => null);
+        if (config && !config.devices.some(device => device.id === known)) {
+          // Removed under Settings elsewhere, or its sign-in ended: off here too, until it is turned on again.
+          await SecureStore.deleteItemAsync(storageKey(origin, userId, "device"));
+          await SecureStore.deleteItemAsync(storageKey(origin, userId, "on"));
+          return;
+        }
+      }
+      // Registered again on every start: a push token can change.
       await register(api, origin, userId, false).catch(() => {});
     })();
   }, [api, origin, userId]);

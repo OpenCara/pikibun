@@ -4,7 +4,7 @@ import {
 } from "@pikibun/client";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
-import { Stack } from "expo-router";
+import { Stack, useFocusEffect } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
@@ -43,8 +43,9 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
   const headerHeight = useHeaderHeight();
   const live = useLiveSession(id);
   const { session, view } = live;
-  // A notification about this session, while it is on screen, shows in the list rather than as a banner.
-  useEffect(() => watchSession(id), [id]);
+  // A notification about this session, while its screen is the one in focus, shows in the list rather than as a
+  // banner. Focus, not mounting: a stack keeps covered screens mounted.
+  useFocusEffect(useCallback(() => watchSession(id), [id]));
   const [approvalsOpen, setApprovalsOpen] = useState(false);
   const permissions = session?.permissions ?? [];
   // Archived sessions are read-only on the server; don't offer decisions that would be refused.

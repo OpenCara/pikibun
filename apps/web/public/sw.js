@@ -24,20 +24,23 @@ self.addEventListener("push", event => {
   if (!payload || (payload.origin && payload.origin !== self.location.origin)) return;
   const path = safePath(payload.path);
   event.waitUntil((async () => {
-    // Someone looking at that very session needs no notification about it.
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    const watching = payload.sessionId && windows.some(client => client.focused && client.visibilityState === "visible"
+    const watching = Boolean(payload.sessionId) && windows.some(client => client.focused && client.visibilityState === "visible"
       && new URL(client.url).hash === path.slice(1));
-    if (watching) return;
+    // One notification per session: a newer one about it replaces the last, and still alerts.
+    const tag = payload.sessionId ? `session:${payload.sessionId}` : `pikibun:${payload.id}`;
+    // Every push shows a notification (subscriptions are userVisibleOnly: browsers penalize or revoke ones that
+    // don't). Someone looking at that very session gets a silent one, closed at once.
     await self.registration.showNotification(payload.title, {
       body: payload.body,
       icon: "/favicon.svg",
-      // One notification per session: a newer one about it replaces the last, and still alerts.
-      tag: payload.sessionId ? `session:${payload.sessionId}` : `pikibun:${payload.id}`,
-      renotify: true,
-      requireInteraction: payload.kind === "approval",
+      tag,
+      renotify: !watching,
+      silent: watching,
+      requireInteraction: payload.kind === "approval" && !watching,
       data: { path },
     });
+    if (watching) for (const shown of await self.registration.getNotifications({ tag })) shown.close();
   })());
 });
 
