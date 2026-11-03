@@ -77,6 +77,7 @@ export class HostWorkspace implements SessionWorkspace {
 
   get home(): string { return this.#identity.home; }
   get worktree(): string { return this.#identity.worktree; }
+  get hostWorktree(): string { return this.worktree; }
 
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
     return this.#operation(authorize, async () => this.#identity);
