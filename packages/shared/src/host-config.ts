@@ -33,21 +33,6 @@ export interface HostCompaction extends CompactionTokens {
   modelOverrides?: Record<string, CompactionTokens>;
 }
 
-/**
- * An LLM's check of each message sent to a session on this host by anyone but its owner (a member's message, side ask,
- * scheduled prompt or message from another session), before it reaches the session's agent. The host's owner turns it
- * on so that members using the host can't have its agents read out what lies on the machine: its Pi credentials and
- * API keys, its owner's files and environment, its network. A message the audit flags, or one it can't check, is
- * refused. The host's own messages are never audited. See the runner's prompt-audit.ts.
- */
-export interface PromptAudit {
-  enabled: boolean;
-  /** The host's model that audits, as `provider/modelId`; absent: the model the message is to run on. */
-  model?: string;
-  /** What else the host's owner counts as sensitive on this host, in their own words, which the audit also checks for. */
-  policy?: string;
-}
-
 export interface HostConfig {
   /**
    * The longest a shell command in this host's sessions runs, in seconds. Commands longer than the default also get
@@ -74,8 +59,6 @@ export interface HostConfig {
   hostSessions: boolean;
   /** Compaction token counts over the host's Pi settings; empty keeps those. Sessions pick a change up within a minute (the connector's refresh), with their next message. */
   compaction: HostCompaction;
-  /** Messages from anyone but the host's owner are audited by an LLM first (PromptAudit). Only the owner changes it. */
-  promptAudit: PromptAudit;
 }
 
 export const hostConfigLimits = Object.freeze({
@@ -83,13 +66,10 @@ export const hostConfigLimits = Object.freeze({
   /** Each compaction token count, and the number of models with their own (a host offers at most 200). */
   compactionTokens: Object.freeze({ min: 0, max: 10_000_000 }),
   compactionModels: 200,
-  /** The host owner's own audit policy, in characters. */
-  promptAuditPolicy: 4000,
 });
 
 export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
-  promptAudit: Object.freeze({ enabled: false }),
 });
 
 const compactionTokenKeys = ["reserveTokens", "keepRecentTokens"] as const;
@@ -133,31 +113,10 @@ export function parseHostCompaction(value: unknown): HostCompaction {
 }
 
 /**
- * A prompt audit setting: on or off, the model that audits as `provider/modelId` (as compaction names one), and the
- * owner's policy, trimmed, of at most 4000 characters. Empty ones are left out.
+ * Only the host's owner changes these: they decide whose Git credentials the host uses, and whether anything runs on it
+ * without the sandbox. Its admins change the rest.
  */
-export function parsePromptAudit(value: unknown): PromptAudit {
-  if (!isPlainObject(value) || Object.keys(value).some(key => !["enabled", "model", "policy"].includes(key))) throw new Error("Invalid prompt audit setting");
-  if (typeof value.enabled !== "boolean") throw new Error("Invalid prompt audit setting");
-  const audit: PromptAudit = { enabled: value.enabled };
-  if (value.model !== undefined && value.model !== "") {
-    if (typeof value.model !== "string" || !COMPACTION_MODEL.test(value.model)) throw new Error("The prompt audit names its model as provider/modelId");
-    audit.model = value.model;
-  }
-  if (value.policy !== undefined) {
-    if (typeof value.policy !== "string" || value.policy.includes("\0")) throw new Error("Invalid prompt audit setting");
-    const policy = value.policy.trim();
-    if (policy.length > hostConfigLimits.promptAuditPolicy) throw new Error(`The prompt audit policy is at most ${hostConfigLimits.promptAuditPolicy} characters`);
-    if (policy) audit.policy = policy;
-  }
-  return audit;
-}
-
-/**
- * Only the host's owner changes these: they decide whose Git credentials the host uses, whether anything runs on it
- * without the sandbox, and how it guards what lies on it from other members' messages. Its admins change the rest.
- */
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "promptAudit"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions"]);
 
 /** A whole configuration, as the control plane reports it; anything else is refused. */
 export function parseHostConfig(value: unknown): HostConfig {
@@ -177,7 +136,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
   return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
-    hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), promptAudit: parsePromptAudit(input.promptAudit) };
+    hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction) };
 }
 
 /**

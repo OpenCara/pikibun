@@ -59,7 +59,6 @@ This is how a team shares one model subscription or set of API keys. Sign Pi in 
 - Sessions on a shared host still belong to the members who start them: they run as those members, with their Git accounts, not yours. Agents, session permissions and Git credentials are not shared, and your Pi history is never imported.
 - As the host's operator, you can see the prompts and repository files of every session that runs on it. Members starting a session on someone else's host confirm they trust it (**I trust …'s host**).
 - **Settings → Hosts → Shared with you** lists the hosts others shared into your workspaces.
-- To guard what lies on your machine from members' messages, turn on the [prompt audit](#prompt-audit): a model on the host checks each of their messages before it reaches the agent.
 
 The host's page shows its **Status** (online or offline, owner, capabilities), **Models** (where its owner and admins [enable or disable](#models) each one), **Sharing**, **[Configuration](#host-configuration)**, **Host command access**, **Admins**, **Details** (the connection ID) and **Danger zone**. **Revoke host** disconnects it and blocks work in every workspace, your own sessions included; session records are kept, and the machine needs a new pairing to come back.
 
@@ -101,20 +100,6 @@ Such a session runs like one on an [unsandboxed host](#running-without-the-sandb
 - Turning **Sessions on the host** off stops the next command of every such session (within half a minute) before it runs; nothing else of theirs changes. So does a member's grant ending or no longer including sessions on the host, for their sessions.
 - Pushes with the [host's Git credentials](pushes.md#push-access) stay the owner's alone; a member's clones still use Git on the host, with whatever credential helpers it has set up.
 - Everyone who can see the session is warned that it runs without a sandbox (**Runs on the host**).
-
-## Prompt audit
-
-A shared host runs other members' messages with its owner's models, next to the owner's files and credentials. The sandbox keeps sessions away from them, but host commands, [sessions on the host](#sessions-on-the-host), unsandboxed hosts and extensions run on the machine itself, so a message that talks an agent (or a person approving it) into reading out `~/.pi/agent/auth.json` could still leak the owner's secrets. The **prompt audit** has an LLM check each message first.
-
-Turn it on under **Settings → Hosts →** the host **→ Prompt audit → Audit other members' messages** (owner only; admins see whether it is on). From then on, every message that someone other than the host's owner sends to a session on the host is read by a model on the host before it reaches the agent: members' messages and side questions, scheduled prompts, and messages from other sessions, whoever owns the session. The host owner's own messages are never audited.
-
-- **What it refuses:** messages that try to get the agent to read, print or use the host's or its owner's credentials (Pi's provider keys and logins, SSH keys, tokens, credential files, secrets in the environment), read the owner's files outside the session's worktree and repositories, probe the machine's environment, processes or network, or send host data elsewhere or get around the sandbox, its proxy, approvals or the audit itself. Ordinary work, including work that is *about* secrets in the project, is allowed.
-- **Your policy:** optionally, describe what else counts as sensitive on this host in your own words (up to 4000 characters, such as `Never read ~/work/clients or the database in /srv/data`). The audit refuses what it forbids, too.
-- **Audit model:** by default, the model the message is to run on. Choose a small, fast model of the host's instead to keep sending quick and cheap. Each audit is one request on the host owner's provider account, and it takes up to 20 seconds. A message with images needs an audit model that reads images, or it is refused.
-- **It fails closed.** A message the audit flags is refused before it is queued, and so is one it can't check: its model is unavailable, fails, takes longer than 20 seconds or gives no clear verdict. The sender sees a fixed reason naming the kind of thing that was flagged (for example *it asks for credentials, keys or tokens*). The auditor's own explanation is model text, so it isn't shown to the sender: the connector writes it to its log on the host (`Session …: prompt audit refused a message from …`).
-- **Its limits:** the audit judges each message on its own. It doesn't see earlier messages, or what the agent later reads in files, web pages or tool output, so it is one more safeguard and doesn't replace the sandbox and approvals. A message's text goes to the audit model as data between markers, and the model is told to ignore instructions in it, but like any LLM check, a determined attempt may get past it.
-
-Sessions pick up a change within a minute. The audit needs a connector advertising `promptAudit`. Until the connector is updated, the page says so, and messages run unaudited. Changes are recorded in the audit log (`host.config.updated`).
 
 ## The sandbox
 

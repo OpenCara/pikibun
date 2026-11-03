@@ -167,11 +167,6 @@ export interface ConnectorCapabilities {
    * (HostConfig.compaction) over its Pi settings. Absent on older connectors, which follow their Pi settings alone.
    */
   compactionConfig?: boolean;
-  /**
-   * The connector audits messages from anyone but the host's owner with an LLM before they reach its sessions' agents,
-   * as its owner sets it in Pikibun (HostConfig.promptAudit). Absent on older connectors, which run every message unaudited.
-   */
-  promptAudit?: boolean;
   /** The GPU device this host can lend its sandboxed commands (HostConfig.gpu). Absent when it has none, or runs unsandboxed. */
   gpu?: GpuKind;
 }

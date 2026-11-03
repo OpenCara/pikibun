@@ -210,9 +210,9 @@ function capabilities(value?: ConnectorCapabilities, mode: { unsandboxed?: boole
   // owner runs it unsandboxed.
   const cache = mode.repositoryCache ? { repositoryCache: true } : {};
   if (mode.unsandboxed) return { platform: result.platform, sandbox: false, productionShell: false, unsandboxed: true, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true,
-    github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, sessionBranches: true, conversationBackups: true, hostConfig: true, compactionConfig: true, promptAudit: true, ...cache };
+    github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, sessionBranches: true, conversationBackups: true, hostConfig: true, compactionConfig: true, ...cache };
   return { platform: result.platform, sandbox: result.sandbox, productionShell: result.productionShell, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true,
-    github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, hostConfig: true, compactionConfig: true, promptAudit: true, ...cache,
+    github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, hostConfig: true, compactionConfig: true, ...cache,
     sessionPacking: true, ...(mode.gpu ? { gpu: mode.gpu } : {}) };
 }
 
