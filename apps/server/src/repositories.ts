@@ -11,6 +11,7 @@ import {
 } from './git/accounts.js';
 import { collectRepositories, gitProviderAdapters, listBytes, listPageSize } from './git/providers.js';
 import { workspaceGitAccess } from './workspace-connections.js';
+import { addPikiExtensions } from './extensions.js';
 
 export interface GitHubAccess { token: string; ciphertext: string; userId: string; githubId: string }
 /** The acting user's credential for one provider/host: the sign-in OAuth token for github.com, a token account otherwise. */
@@ -278,7 +279,9 @@ export function registerRepositories(app: Hono<WorkerEnv>): void {
         .bind(row.id, workspaceId, actor, row.created_at, readsAsWorkspace ? 1 : 0, row.id),
     ]);
     if (!results[0]!.results[0]) fail(409, 'repository_binding_conflict', 'Repository already configured, limit reached, or workspace authority changed.');
-    return c.json({ repository: publicRepository({ ...row, read_as: readsAsWorkspace ? 'workspace' : null }) }, 201);
+    // Its first repository on a forge brings that forge's command-line tool to the workspace's sessions (piki:gh, say).
+    const extensions = await addPikiExtensions(c.env, workspaceId, provider, actor);
+    return c.json({ repository: publicRepository({ ...row, read_as: readsAsWorkspace ? 'workspace' : null }), ...(extensions.length ? { extensions } : {}) }, 201);
   });
   // Whether sandboxed sessions may download the repository's Git LFS objects. Changes reach running sessions with their
   // next grant (within a minute), and the relay checks the setting again on every LFS request.

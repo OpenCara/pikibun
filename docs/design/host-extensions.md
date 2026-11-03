@@ -33,10 +33,7 @@ its host has.
 8. **Settings per workspace.** An extension's settings are its Pi flags (`registerFlag`); the workspace sets their values.
    Secrets never go there: the extension reads them on the host (its environment, files, or Pi's `auth.json`), which the
    host's owner sets up.
-9. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
-   off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0048 (postgres/0041) added them to existing
-   workspaces after their own, except where a workspace already used the package or was at its limit.
-10. **Web tools are extensions.** Pikibun's own `web_fetch` and `web_search` are retired (`retiredToolNames`): no session
+9. **Web tools are extensions.** Pikibun's own `web_fetch` and `web_search` are retired (`retiredToolNames`): no session
    offers them, the server's `WEB_SEARCH` provider and the workspace's **Web search** setting are gone, and older
    connectors' searches are refused (410). An extension may register tools with retired names, so a Pi web search
    extension provides `web_search` as it does in Pi. Unlike `web_fetch`, an extension's requests aren't confined by the
@@ -45,9 +42,12 @@ its host has.
    A host's owner and admins turn them on for every session on the host, in every workspace
    (`HostConfig.builtinExtensions`, Host → Extensions), with nothing to install. Pikibun runs pi-durable's own versions,
    because Pi's call other tools through the coding agent's loop (`ctx.executeTool`), which Pikibun doesn't run. Today
-   that is **code mode** (`codemode`, from `@earendil-works/pi-durable/codemode`). Pi's others have no counterpart:
+   that is **code mode** (`pi:codemode`, from `@earendil-works/pi-durable/codemode`). Pi's others have no counterpart:
    `mcp` and `llama.cpp` register MCP servers and providers (ignored, see below), and `tool-search` finds deferred tools,
    which Pikibun has none of.
+11. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
+    off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0049 (postgres/0042) added them to existing
+    workspaces after their own, except where a workspace already used the package or was at its limit.
 
 ## Compatibility
 
@@ -83,7 +83,8 @@ options and lifecycle), so a workspace can't name one. Pikibun wraps the useful 
 
 ## Built-in extensions
 
-- `HostConfig.builtinExtensions` lists the names the host runs, in the catalog's order (`builtinExtensions` in
+- `HostConfig.builtinExtensions` lists the names the host runs (`pi:<name>`, beside Pikibun's own `piki:<name>`; reads
+  also take the bare names saved before, which migrations `0048`/`0041` rename), in the catalog's order (`builtinExtensions` in
   `packages/shared/src/host-config.ts`); the default is none. It is saved as `connector_configs.builtin_extensions_json`
   (sqlite `0047`, postgres `0040`) and read by the connector with the rest of the configuration, every 30 seconds. A
   connector drops names it doesn't ship rather than the whole configuration, and so does the control plane for stored
@@ -183,6 +184,12 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 | Control plane: tables, routes, owner/admin rules, connector reports, remote installs, audit | Done (`apps/server/src/extensions.ts`, migrations `0046`/`0039`) |
 | Web and mobile: workspace and host sections, install buttons, session list, approval card | Done (`WorkspaceExtensions.tsx`, `HostExtensions.tsx`, `session-panel.tsx`; mobile: the approval card) |
 | Pi's built-ins from the host's configuration: code mode | Done (`extensions/builtin.ts`, `host-config.ts`, `HostExtensions.tsx`) |
+
+## Pikibun's built-in extensions (`piki:`)
+
+The connector also carries workspace extensions of its own, `piki:gh`, `piki:glab` and `piki:azure-cli`, which every host
+has without installing them and a workspace gets with its first repository on that forge: see
+[Pikibun's built-in extensions](piki-extensions.md). Unlike Pi's built-ins above, the workspace chooses them, like any extension.
 
 ## Later
 

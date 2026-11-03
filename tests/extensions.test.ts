@@ -190,6 +190,25 @@ test('a host\'s sessions get their workspace\'s extensions and its owner\'s swit
   assert.equal(own('local:/home/alice/dev.ts'), true, 'a dev extension in its host owner\'s own session');
 });
 
+test('Pikibun extensions: hosts aren\'t asked to install them, and a connector that predates them gets its workspace\'s others', async t => {
+  const f = await fixture(t); const s = await team(f);
+  const path = `/api/workspaces/${s.workspaceId}/extensions`;
+  await json(await s.alice.request('PUT', path, { source: 'piki:gh' }));
+  await json(await s.alice.request('PUT', path, { source: 'npm:pi-memory@0.4.2' }));
+  await denied(await s.alice.request('POST', `/api/connectors/${s.connector.connectorId}/extensions/requests`, { action: 'install', source: 'piki:gh' }), 400, 'piki_extension');
+  type Answer = { extensions: WorkspaceExtension[] };
+  const ask = async () => (await json<Answer>(await self(f, s.connector, 'extensions/workspace', { workspaceId: s.workspaceId }))).extensions.map(item => item.source);
+  assert.deepEqual(await ask(), ['npm:pi-memory@0.4.2'], 'before a report that names Pikibun extensions');
+  await json(await self(f, s.connector, 'extensions', { report: report([installed('npm:pi-memory@0.4.2')]), results: [] }));
+  assert.deepEqual(await ask(), ['npm:pi-memory@0.4.2'], 'an older connector would refuse the whole list');
+  await json(await self(f, s.connector, 'extensions', { report: report([installed('piki:gh'), installed('piki:glab'), installed('npm:pi-memory@0.4.2')]), results: [] }));
+  assert.deepEqual(await ask(), ['piki:gh', 'npm:pi-memory@0.4.2']);
+  const listed = await json<{ hosts: { availability?: Record<string, ExtensionAvailability> }[] }>(await s.bob.request('GET', path));
+  assert.deepEqual(listed.hosts[0]!.availability!['piki:gh'], { status: 'installed' });
+  const sources = await sessionExtensionSources(f.env, { workspace_id: s.workspaceId, owner_id: s.bob.user.id, connector_owner_id: s.alice.user.id });
+  assert.deepEqual(['piki:gh', 'piki:glab'].map(sources), [true, false], 'a tool card names one the workspace runs');
+});
+
 test('every workspace starts with popular extensions, turned off, and existing ones got them after their own', async t => {
   const f = await fixture(t);
   const alice = await f.client('alice');
@@ -210,7 +229,7 @@ test('every workspace starts with popular extensions, turned off, and existing o
   await json(await alice.request('PUT', `/api/workspaces/${older.id}/extensions`, { source: 'npm:pi-memory@0.4.2' }));
   await json(await alice.request('PUT', `/api/workspaces/${older.id}/extensions`, { source: 'npm:pi-web-search@1.6.0', enabled: true }));
   for (let index = 0; index < 32; index++) await json(await alice.request('PUT', `/api/workspaces/${full.id}/extensions`, { source: `npm:extension-${index}@1.0.0` }));
-  f.sqlite.exec(readFileSync(new URL('../apps/server/migrations/sqlite/0048_default_extensions.sql', import.meta.url), 'utf8'));
+  f.sqlite.exec(readFileSync(new URL('../apps/server/migrations/sqlite/0049_default_extensions.sql', import.meta.url), 'utf8'));
   const listed = async (id: string) => (await json<{ extensions: WorkspaceExtension[] }>(await alice.request('GET', `/api/workspaces/${id}/extensions`))).extensions;
   assert.deepEqual(await listed(older.id), [
     { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'approval', settings: {} },

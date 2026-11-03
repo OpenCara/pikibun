@@ -10,18 +10,32 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 export const extensionToolModes = ["approval", "automatic"] as const;
 export type ExtensionToolMode = (typeof extensionToolModes)[number];
 
-/** A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`. */
-export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string };
+/**
+ * A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`; or `piki:<name>`, an
+ * extension built into the connector (piki-extensions.ts), whose version is the connector's own.
+ */
+export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string }
+  | { kind: "piki"; name: string };
 
 export const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 export const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 const COMMIT = /^[0-9a-f]{40}$/;
+/** A Pikibun extension's name. Any such name parses, so a control plane takes ones built into newer connectors. */
+export const PIKI_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 
 export class ExtensionSourceError extends Error {}
 
-/** Parses `npm:<name>@<version>` or `git:<url>@<commit>` (an https URL, `https://` optional); anything else is refused. */
+/**
+ * Parses `npm:<name>@<version>`, `git:<url>@<commit>` (an https URL, `https://` optional) or `piki:<name>`; anything
+ * else is refused.
+ */
 export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
   if (typeof spec !== "string" || spec.length > 512) throw new ExtensionSourceError("Invalid extension source");
+  if (spec.startsWith("piki:")) {
+    const name = spec.slice(5);
+    if (!PIKI_NAME.test(name)) throw new ExtensionSourceError(`Invalid Pikibun extension name: ${name}`);
+    return { kind: "piki", name };
+  }
   if (spec.startsWith("npm:")) {
     const rest = spec.slice(4);
     const at = rest.lastIndexOf("@");
@@ -45,11 +59,16 @@ export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
     if (!COMMIT.test(commit)) throw new ExtensionSourceError(`Pin a full commit, such as git:${url}@<40-character commit>: branches and tags could load different code later.`);
     return { kind: "git", url: parsed.href.replace(/\/$/, "").replace(/\.git$/, ""), commit };
   }
-  throw new ExtensionSourceError("An extension source is npm:<package>@<version> or git:<https URL>@<commit>.");
+  throw new ExtensionSourceError("An extension source is npm:<package>@<version>, git:<https URL>@<commit> or piki:<name>.");
 }
 
 export function extensionSourceString(spec: ExtensionSourceSpec): string {
-  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : `git:${spec.url}@${spec.commit}`;
+  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : spec.kind === "git" ? `git:${spec.url}@${spec.commit}` : `piki:${spec.name}`;
+}
+
+/** Whether `source` names an extension built into the connector: hosts never install or remove those. */
+export function isPikiExtensionSource(source: string): boolean {
+  return source.startsWith("piki:");
 }
 
 /** The normalized form of `spec`, or an error. */
@@ -57,10 +76,13 @@ export function normalizeExtensionSource(spec: string): string {
   return extensionSourceString(parseExtensionSourceSpec(spec));
 }
 
-/** What stays the same across versions of one extension: `npm:<name>` or `git:<url>`. A workspace has one version of each. */
+/**
+ * What stays the same across versions of one extension: `npm:<name>`, `git:<url>`, or the built-in source itself. A
+ * workspace has one version of each.
+ */
 export function extensionPackageKey(source: string): string {
   const spec = parseExtensionSourceSpec(source);
-  return spec.kind === "npm" ? `npm:${spec.package}` : `git:${spec.url}`;
+  return spec.kind === "npm" ? `npm:${spec.package}` : spec.kind === "git" ? `git:${spec.url}` : `piki:${spec.name}`;
 }
 
 /** A Pi flag an extension registers: one of its settings. */
@@ -88,7 +110,7 @@ export interface ExtensionModuleSummary {
 
 /** One source installed on a host, with what it holds. */
 export interface InstalledExtension {
-  /** Normalized npm or Git source; for a dev extension, `local:<path>`. */
+  /** Normalized npm, Git or built-in source; for a dev extension, `local:<path>`. */
   source: string;
   /** Installed from a local path: runs only in the host owner's own sessions. */
   dev: boolean;
@@ -112,7 +134,7 @@ export type ExtensionSettings = Record<string, boolean | string>;
 
 /** An extension a workspace uses, as its owners and admins set it. */
 export interface WorkspaceExtension {
-  /** Normalized npm or Git source. */
+  /** Normalized npm, Git or built-in source. */
   source: string;
   enabled: boolean;
   tools: ExtensionToolMode;
@@ -122,7 +144,7 @@ export interface WorkspaceExtension {
 /**
  * Popular Pi extensions every workspace starts with, in this order, turned off and with tools on approval: its owners
  * and admins turn on the ones they want, once their hosts install them. Existing workspaces got them in migration
- * sqlite/0048 (postgres/0041), which lists the same sources. `pi-web-access` and `pi-web-search` both offer
+ * sqlite/0049 (postgres/0042), which lists the same sources. `pi-web-access` and `pi-web-search` both offer
  * `web_search`, so a workspace turns on one of them (with both, sessions keep the first's).
  */
 export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([
@@ -135,6 +157,8 @@ export const extensionLimits = Object.freeze({
   /** Sources a workspace uses, and a host installs. */
   workspace: 32,
   installed: 64,
+  /** Pikibun extensions a connector reports besides what it installed (piki-extensions.ts). */
+  connector: 16,
   modulesPerSource: 16,
   toolsPerModule: 64,
   flagsPerModule: 64,
@@ -232,13 +256,16 @@ function parseInstalled(value: unknown): InstalledExtension {
 export function parseHostExtensionsReport(value: unknown): HostExtensionsReport {
   if (!isPlainObject(value)) throw new Error("Invalid extensions report");
   only(value, ["installed", "remoteInstalls"], "extensions report");
-  if (typeof value.remoteInstalls !== "boolean" || !Array.isArray(value.installed) || value.installed.length > extensionLimits.installed) throw new Error("Invalid extensions report");
+  if (typeof value.remoteInstalls !== "boolean" || !Array.isArray(value.installed) || value.installed.length > extensionLimits.installed + extensionLimits.connector) throw new Error("Invalid extensions report");
   const installed = value.installed.map(parseInstalled);
   if (new Set(installed.map(item => item.source)).size !== installed.length) throw new Error("An extension is reported twice");
   return { installed, remoteInstalls: value.remoteInstalls };
 }
 
-/** How a workspace's extension stands on one host: installed at its version, at another, or missing. */
+/**
+ * How a workspace's extension stands on one host: installed at its version, at another, or missing. A built-in one is
+ * missing only from connectors that predate it, which an update of the connector brings.
+ */
 export type ExtensionAvailability = { status: "installed" } | { status: "other-version"; installed: string } | { status: "missing" };
 
 export function extensionAvailability(source: string, installed: readonly InstalledExtension[]): ExtensionAvailability {
@@ -268,7 +295,7 @@ export function sessionExtensions(workspace: readonly WorkspaceExtension[], inst
 export interface ExtensionRequest {
   id: string;
   action: "install" | "remove";
-  /** Normalized npm or Git source. */
+  /** Normalized npm or Git source; never a built-in one. */
   source: string;
 }
 

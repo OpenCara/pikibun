@@ -104,7 +104,7 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
   await store.add(parseExtensionSource(join(root, "dev.ts")));
   await writeFile(join(root, "broken.ts"), `export default function (pi) { throw new Error("broken on purpose"); }`);
   await store.add(parseExtensionSource(join(root, "broken.ts")));
-  const loaded = await loadInstalled(store);
+  const loaded = await loadInstalled(store, []);
   const [search, notExtension, dev, broken] = loaded.map(item => item.summary);
   assert.deepEqual(search, { source: "npm:pi-search@1.0.0", dev: false, name: "pi-search", version: "1.0.0", description: "Searches.", modules: [{
     path: "src/index.ts", tools: [{ name: "team_search", description: "Search the index." }, { name: "web_search", description: "Search the web." }], events: ["tool_call"],
@@ -143,7 +143,7 @@ test("a directory a package names loads as Pi loads it: its index alone, if it h
   });
   await store.add(parseExtensionSource("npm:pi-bundled@1.0.0"));
   await store.add(parseExtensionSource("npm:pi-several@1.0.0"));
-  const [bundled, several] = (await loadInstalled(store)).map(item => item.summary);
+  const [bundled, several] = (await loadInstalled(store)).map(item => item.summary).filter(item => item.source.startsWith("npm:"));
   assert.deepEqual(bundled!.modules.map(module => [module.path, module.events]), [["dist/index.js", ["session_start"]]]);
   assert.deepEqual(several!.modules.map(module => [module.path, module.events]), [["extensions/a.js", ["agent_start"]], ["extensions/b/index.js", ["agent_end"]]]);
 });
@@ -158,7 +158,7 @@ test("system prompt changes become the text they add", () => {
 async function session(t: test.TestContext, source: string, root: string, options: { tool: string; settings?: ExtensionSettings; active?: () => boolean }) {
   const store = new ExtensionStore(join(root, "state"));
   await store.add(parseExtensionSource(source));
-  const loaded = await loadInstalled(store);
+  const loaded = await loadInstalled(store, []);
   assert.equal(loaded[0]!.summary.error, undefined);
   const ran: string[] = [];
   const warnings: string[] = [];
@@ -267,7 +267,7 @@ test("a host carries out the installs its owner asks for in Pikibun, unless it r
   const { store } = await storeWith(t, {
     "pi-a": { "package.json": JSON.stringify({ name: "pi-a", version: "1.0.0", pi: { extensions: ["./index.js"] } }), "index.js": "export default function () {}" },
   });
-  const host = new HostExtensions(store, { remoteInstalls: true });
+  const host = new HostExtensions(store, { remoteInstalls: true, pikiExtensions: [] });
   await host.load();
   assert.deepEqual(host.report(), { installed: [], remoteInstalls: true });
   assert.deepEqual(await host.apply([{ id: "r1", action: "install", source: "npm:pi-a@1.0.0" }, { id: "r2", action: "install", source: "npm:missing@1.0.0" }]),
@@ -277,13 +277,13 @@ test("a host carries out the installs its owner asks for in Pikibun, unless it r
   assert.deepEqual(await host.apply([{ id: "r4", action: "remove", source: "npm:pi-a@1.0.0" }, { id: "r5", action: "remove", source: "npm:pi-a@1.0.0" }]),
     [{ id: "r4", ok: true }, { id: "r5", ok: true }]);
   assert.deepEqual(host.report().installed, []);
-  const refusing = new HostExtensions(store, { remoteInstalls: false });
+  const refusing = new HostExtensions(store, { remoteInstalls: false, pikiExtensions: [] });
   assert.match((await refusing.apply([{ id: "r6", action: "install", source: "npm:pi-a@1.0.0" }]))[0]!.error!, /--no-remote-installs/);
 
   let now = 0;
   let answer: unknown = { extensions: [{ source: "npm:pi-a@1.0.0" }], automaticTools: false };
   let asked = 0;
-  const cached = new HostExtensions(store, { remoteInstalls: true, now: () => now });
+  const cached = new HostExtensions(store, { remoteInstalls: true, now: () => now, pikiExtensions: [] });
   const fetch = async () => { asked++; if (answer instanceof Error) throw answer; return answer; };
   assert.equal((await cached.workspace("w", fetch)).extensions[0]!.source, "npm:pi-a@1.0.0");
   now = 29_000;
@@ -305,7 +305,7 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
     }`);
   const store = new ExtensionStore(join(root, "state"));
   await store.add(parseExtensionSource(join(root, "shout.ts")));
-  const [dev] = await loadInstalled(store);
+  const [dev] = await loadInstalled(store, []);
   // The same code, as an npm extension the workspace chose.
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
   let answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
@@ -413,7 +413,7 @@ test("tool name clashes are settled per selection: another version of an extensi
   const store = new ExtensionStore(join(root, "state"));
   await store.add(parseExtensionSource(join(root, "v1.ts")));
   await store.add(parseExtensionSource(join(root, "v2.ts")));
-  const loaded = await loadInstalled(store);
+  const loaded = await loadInstalled(store, []);
   const [one, two] = loaded.map(item => item.summary.source);
   const warnings: string[] = [];
   const runtime = await ModelRuntime.create({ authPath: join(root, "auth.json"), modelsPath: join(root, "models.json"), refreshOnCreate: false, allowModelNetwork: false } as never);

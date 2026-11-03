@@ -45,7 +45,7 @@ function fauxBinding(id: string): RunnerBinding {
 
 test("a host configuration is whole and within bounds, or refused", () => {
   const config = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: "owner", hostSessions: true,
-    compaction: { reserveTokens: 32_768, modelOverrides: { "anthropic/opus": { keepRecentTokens: 20_000 } } }, builtinExtensions: ["codemode"] };
+    compaction: { reserveTokens: 32_768, modelOverrides: { "anthropic/opus": { keepRecentTokens: 20_000 } } }, builtinExtensions: ["pi:codemode"] };
   assert.deepEqual(parseHostConfig(config), config);
   assert.deepEqual(parseHostConfig({ ...defaultHostConfig }), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [] });
   for (const invalid of [undefined, null, [], "config", { ...config, commandTimeoutSeconds: 29 }, { ...config, commandTimeoutSeconds: 3601 },
@@ -53,7 +53,7 @@ test("a host configuration is whole and within bounds, or refused", () => {
     { ...config, repositoryCache: "shared" }, { ...config, hostSessions: "true" }, { ...config, extra: true },
     { ...config, compaction: undefined }, { ...config, compaction: { reserveTokens: -1 } },
     { ...config, builtinExtensions: undefined }, { ...config, builtinExtensions: "codemode" }, { ...config, builtinExtensions: ["tool-search"] },
-    { ...config, builtinExtensions: ["codemode", "codemode"] },
+    { ...config, builtinExtensions: ["pi:codemode", "codemode"] },
     { commandTimeoutSeconds: 60, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false },
     { ...config, toString: "x" }]) {
     assert.throws(() => parseHostConfig(invalid), /host configuration|time limit|setting|token counts|[Bb]uilt-in extensions/, JSON.stringify(invalid));
@@ -75,10 +75,11 @@ test("a change of configuration names one or more valid settings, and only those
 
 test("a connector reads what it knows of a configuration: newer settings are left out, missing ones keep their defaults", () => {
   const sent = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host", hostSessions: true, compaction: { reserveTokens: 20_000 },
-    builtinExtensions: ["codemode"] };
+    builtinExtensions: ["pi:codemode"] };
   assert.deepEqual(readHostConfig({ ...sent, someLaterSetting: "on" }), sent);
   // Built-in extensions it doesn't ship are left out too, not a reason to drop the whole configuration.
-  assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["tool-search", "codemode"] }), sent);
+  assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["tool-search", "pi:codemode"] }), sent);
+  assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["codemode"] }), sent, "a control plane of before pi: names names them bare");
   assert.deepEqual(readHostConfig({ commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host" }), { ...sent, hostSessions: false, compaction: {}, builtinExtensions: [] });
   assert.deepEqual(readHostConfig({}), defaultHostConfig);
   // What it does read must hold, or none of it is used.

@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0048_default_extensions.sql.
+-- Postgres translation of sqlite/0049_default_extensions.sql.
 -- Popular Pi extensions for every existing workspace (docs/extensions.md), turned off and with tools on approval, after
 -- the ones it has: its owners and admins turn on the ones they want. New workspaces get the same ones when they are
 -- created (defaultWorkspaceExtensions in packages/shared/src/host-extensions.ts, which lists the same sources). A

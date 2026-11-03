@@ -18,7 +18,8 @@ import { extensionLimits, extensionPackageKey, extensionSourceString, ExtensionS
 
 const run = promisify(execFile);
 
-export type ExtensionSource = ExtensionSourceSpec | { kind: "local"; path: string };
+/** What a host installs: an npm or Git source, or a local path. Pikibun extensions come with the connector. */
+export type ExtensionSource = Exclude<ExtensionSourceSpec, { kind: "piki" }> | { kind: "local"; path: string };
 
 export interface InstalledSource {
   /** Normalized: `npm:<name>@<version>`, `git:<url>@<commit>` or `local:<absolute path>`. */
@@ -34,7 +35,8 @@ export { ExtensionSourceError };
 
 /** What `pikibun extensions add` takes: `npm:<name>@<version>`, `git:<https url>@<commit>`, or a path (a dev extension). */
 export function parseExtensionSource(spec: string, cwd = process.cwd()): ExtensionSource {
-  if (spec.startsWith("npm:") || spec.startsWith("git:")) return parseExtensionSourceSpec(spec);
+  if (spec.startsWith("piki:")) throw new ExtensionSourceError(`${spec} is built into the connector: every host has it, and a workspace that uses it runs it. Update the connector for newer ones.`);
+  if (spec.startsWith("npm:") || spec.startsWith("git:")) return parseExtensionSourceSpec(spec) as ExtensionSource;
   const path = resolve(cwd, spec);
   if (!existsSync(path)) throw new ExtensionSourceError(`No such file or directory: ${path}`);
   return { kind: "local", path };
@@ -73,6 +75,7 @@ export class ExtensionStore {
 
   /** Installs `source`; one already installed is left as it is. Another version of the same package stays too. */
   add(source: ExtensionSource, options: { allowScripts?: boolean } = {}): Promise<InstalledSource> {
+    if ((source as { kind: string }).kind === "piki") return Promise.reject(new ExtensionSourceError("Pikibun extensions come with the connector: they aren't installed."));
     return this.exclusive(async () => {
       const sources = await this.list();
       const normalized = sourceString(source);
@@ -114,6 +117,7 @@ export class ExtensionStore {
    * the bare name), which must then match one installed version.
    */
   remove(name: string): Promise<InstalledSource> {
+    if (name.startsWith("piki:")) return Promise.reject(new ExtensionSourceError(`${name} is built into the connector: it can't be removed. A workspace that doesn't want it removes it from its extensions.`));
     return this.exclusive(async () => {
       const sources = await this.list();
       const path = isAbsolute(name) || name.startsWith(".") ? resolve(name) : undefined;

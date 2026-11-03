@@ -22,12 +22,12 @@ import type { ApprovalRecord, RunnerAction, RunnerBinding } from "../packages/sh
 test("a built-in extension steps aside where a workspace's extension offers a tool by its name", async t => {
   const builtins = new SessionBuiltins();
   t.after(() => builtins.close());
-  assert.deepEqual([...builtins.extensions.keys()], ["codemode"]);
+  assert.deepEqual([...builtins.extensions.keys()], ["pi:codemode"]);
   assert.deepEqual(builtins.select([], new Set()), []);
-  assert.deepEqual(builtins.select(["codemode"], new Set()).map(item => item.name), ["codemode"]);
-  assert.deepEqual(builtins.select(["codemode"], new Set(["codemode"])), []);
+  assert.deepEqual(builtins.select(["pi:codemode"], new Set()).map(item => item.name), ["pi:codemode"]);
+  assert.deepEqual(builtins.select(["pi:codemode"], new Set(["codemode"])), []);
   // Scripts get no models.* tools: only the codemode tool itself.
-  assert.deepEqual(builtins.extensions.get("codemode")!.tools!.map(tool => tool.name), ["codemode"]);
+  assert.deepEqual(builtins.extensions.get("pi:codemode")!.tools!.map(tool => tool.name), ["codemode"]);
 });
 
 test("a script's VM stops once it has computed too long, while time its calls take doesn't count; long output goes to the worktree", async t => {
@@ -50,7 +50,7 @@ test("a script's VM stops once it has computed too long, while time its calls ta
   const registry = createRegistry();
   const workspace = defineExtension({ name: "workspace-tools", tools: [slow] });
   registry.install(workspace);
-  const codemode = builtins.extensions.get("codemode")!;
+  const codemode = builtins.extensions.get("pi:codemode")!;
   registry.install(codemode);
   const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
   t.after(() => harness.close(context));
@@ -95,10 +95,10 @@ test("code mode runs where the host's configuration turns it on, and its scripts
     }`);
   const store = new ExtensionStore(join(root, "state"));
   await store.add(parseExtensionSource(join(root, "shout.ts")));
-  const [dev] = await loadInstalled(store);
+  const [dev] = await loadInstalled(store, []);
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
   const answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
-  let config: HostConfig = { ...defaultHostConfig, builtinExtensions: ["codemode"] };
+  let config: HostConfig = { ...defaultHostConfig, builtinExtensions: ["pi:codemode"] };
   // The tools each request offers the model.
   const offered: string[][] = [];
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
@@ -151,7 +151,7 @@ test("code mode runs where the host's configuration turns it on, and its scripts
   };
   const assistant = async () => (await session.view()).entries.filter(entry => entry.role === "assistant").map(entry => entry.text).at(-1);
 
-  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["codemode"] });
+  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"] });
   await send("hello");
   // Each call the script makes of the extension's tool is a card for the host's owner, as the model's own call would be.
   const decided = new Set<string>();
