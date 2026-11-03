@@ -2183,8 +2183,8 @@ export class RunnerSession {
         action: StringEnum(scheduleToolActions), id: Type.Optional(Type.String()), message: Type.Optional(Type.String()), cron: Type.Optional(Type.String()),
         time_zone: Type.Optional(Type.String()), name: Type.Optional(Type.String()), access: Type.Optional(StringEnum(accessModes)), enabled: Type.Optional(Type.Boolean()),
       }), execute: async (args, api, call) => {
-        const attribution = await this.toolActor(api, true);
         await this.requireSessionTool("schedule");
+        const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ scheduleId: args.id, name: args.name, cron: args.cron, timeZone: args.time_zone, content: args.message,
           access: args.access, enabled: args.enabled }).filter(([, value]) => value !== undefined)) as Omit<ScheduleToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
         if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Schedule fields must not contain NUL characters");
@@ -2260,8 +2260,9 @@ export class RunnerSession {
         description: "Run any command OUTSIDE the sandbox on the host, with its tools, files, credentials and network. Uses the session worktree as cwd and the host home/PATH. Requires exact approval by the host owner or a member they granted host commands; auto-approve skips it only in the session of the host owner or of a member granted automatic host commands. No CPU/memory/disk quotas. Default 300 seconds, maximum 3600. Never use as an implicit fallback.",
         parameters: Type.Object({ command: Type.String(), timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })) }),
         execute: async (args, api, call) => {
-          const attribution = await this.toolActor(api, true);
+          // Before anything is recorded for the call: a refused one leaves nothing behind.
           await this.requireSessionTool("host_bash");
+          const attribution = await this.toolActor(api, true);
           await this.permit(api, call, "host_bash", args.command, { write: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy,
             { kind: "host.bash", command: args.command, timeoutSeconds: args.timeout_seconds ?? 300 }, String(api.taskId), { permitted: true }), call));

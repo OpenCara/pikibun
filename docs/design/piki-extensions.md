@@ -121,6 +121,10 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     the workspace's answer now or the last one the connector read (`HostExtensions.lastKnown`, however old) turns it off.
     The connector otherwise falls back to no extensions after 5 minutes without the control plane, which would turn
     such a tool back on. A connector that never read an answer (a control plane that predates extensions) leaves it on.
+    The last answer is kept in memory only: a connector restarted while the control plane is out of reach has none, so
+    such a tool is on there until it reads one. Messages and scheduled prompts reach a session only through the control
+    plane, so that leaves at most a message already running when the connector restarted; persisting the answer (in the
+    extension store, say) would close that too.
 20. **The order follows use.** A sample of recent sessions (#163) ran `host_bash` twice, both times for `gh`, which
     `piki:gh` covers; `bash` ran read and search (32%), builds and tests (27%), git (23%) and waits for CI (9%), with
     inline Python and Node scripts in most sessions. So `host_bash` became switchable first, while `bash` stays a
