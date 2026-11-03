@@ -11,6 +11,7 @@ import { EgressProxy, egressEnvironment, type EgressEndpoint } from "../apps/run
 import { egressPort, HelperWorkspace, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "../apps/runner/src/helper-workspace.js";
 import { NODE_HELPER, NODE_HELPER_KINDS } from "../apps/runner/src/node-helper.js";
 import { HELPER, type SandboxRequest } from "../apps/runner/src/sandbox.js";
+import { sandboxNodePath } from "../apps/runner/src/platform.js";
 import { validWindowsLimits } from "../apps/runner/src/sandbox-backend.js";
 import { SeatbeltBackend, seatbeltProfile } from "../apps/runner/src/seatbelt.js";
 import { WINDOWS_RUNNER, WINDOWS_SUPPORT_CHECK, WindowsBackend, windowsSandboxSupport } from "../apps/runner/src/windows-sandbox.js";
@@ -299,7 +300,7 @@ test("the Windows setup check runs a session's container and resolves a path in 
   t.after(() => rm(directory, { recursive: true, force: true }));
   const check = async (name: string, source: string) => {
     await writeFile(join(directory, `${name}.mjs`), source);
-    return windowsSandboxSupport(join(directory, `${name}.mjs`));
+    return windowsSandboxSupport(join(directory, `${name}.mjs`), process.execPath);
   };
   assert.deepEqual(await check("works", FAKE_CHECK_SDK("base-container")), { container: true, paths: true });
   const denied = await check("denied", FAKE_CHECK_SDK("base-container", { denied: true }));
@@ -309,7 +310,7 @@ test("the Windows setup check runs a session's container and resolves a path in 
   assert.deepEqual([fallback.container, fallback.paths], [false, false]);
   assert.match(fallback.detail!, /MXC chose appcontainer-dacl/);
   assert.match((await check("no-proxy", FAKE_CHECK_SDK("base-container", { identityless: false }))).detail!, /without proxy-only egress/);
-  assert.match((await windowsSandboxSupport(join(directory, "missing.mjs"))).detail!, /could not be loaded/);
+  assert.match((await windowsSandboxSupport(join(directory, "missing.mjs"), process.execPath)).detail!, /could not be loaded/);
 });
 
 test("the Windows runner and helper are valid modules, and job limits are checked", async t => {
@@ -324,4 +325,24 @@ test("the Windows runner and helper are valid modules, and job limits are checke
   assert.throws(() => validWindowsLimits({ memoryBytes: 1024, processes: 64, cpuPercent: 25 }), /memory/);
   assert.throws(() => validWindowsLimits({ memoryBytes: 1 << 30, processes: 1, cpuPercent: 25 }), /process/);
   assert.throws(() => validWindowsLimits({ memoryBytes: 1 << 30, processes: 64, cpuPercent: 0 }), /CPU/);
+});
+
+test("the Windows sandbox's steps run on real Node: the CLI's own, never a desktop app's Electron executable", () => {
+  assert.equal(sandboxNodePath(), process.execPath, "the CLI runs on Node");
+  // In Electron, process.execPath is the app itself, which (its RunAsNode fuse off) would only open the app again.
+  const inElectron = (environment: Record<string, string>) => {
+    const script = `Object.defineProperty(process, "versions", { value: { ...process.versions, electron: "44.8.0" } });
+const { sandboxNodePath } = await import(${JSON.stringify(new URL("../apps/runner/src/platform.ts", import.meta.url).href)});
+process.stdout.write(JSON.stringify(sandboxNodePath() ?? null));`;
+    const run = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, ...environment } });
+    assert.equal(run.status, 0, run.stderr);
+    return JSON.parse(run.stdout) as string | null;
+  };
+  if (process.platform === "win32") {
+    // A launcher on PATH or named by the variable is resolved to node.exe itself, whose folder the container is granted.
+    assert.equal(inElectron({ PIKIBUN_SANDBOX_NODE: process.execPath })?.toLowerCase(), process.execPath.toLowerCase());
+    assert.equal(inElectron({ PIKIBUN_SANDBOX_NODE: join(tmpdir(), "no-such-node.exe") }), null);
+  } else {
+    assert.equal(inElectron({}), null, "only native Windows looks for Node beside an Electron app");
+  }
 });

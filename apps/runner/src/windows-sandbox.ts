@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { egressPort, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "./helper-workspace.js";
 import { NODE_HELPER, NODE_HELPER_KINDS } from "./node-helper.js";
-import { gitForWindowsRoot, SANDBOX_SHELL_HINT, sandboxShellPath } from "./platform.js";
+import { gitForWindowsRoot, SANDBOX_NODE_HINT, SANDBOX_SHELL_HINT, sandboxNodePath, sandboxShellPath } from "./platform.js";
 import { mxcEntry, mxcInstallHint, validWindowsLimits, type WindowsJobLimits } from "./sandbox-backend.js";
 import type { SandboxRequest } from "./sandbox.js";
 import { WindowsJob } from "./windows-job.js";
@@ -145,8 +145,8 @@ export interface WindowsSandboxSupport {
   detail?: string;
 }
 
-/** Runs WINDOWS_SUPPORT_CHECK with the SDK at `sdk` (its entry point). */
-export async function windowsSandboxSupport(sdk: string, node = process.execPath): Promise<WindowsSandboxSupport> {
+/** Runs WINDOWS_SUPPORT_CHECK with the SDK at `sdk` (its entry point) on `node`, the Node.js sessions' steps run on (sandboxNodePath). */
+export async function windowsSandboxSupport(sdk: string, node: string): Promise<WindowsSandboxSupport> {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-sandbox-check-")));
   try {
     const system = process.env.SystemRoot ?? "C:\\Windows";
@@ -186,6 +186,7 @@ export class WindowsBackend implements HelperBackend {
   readonly #git: string;
   readonly #bash: string;
   readonly #gitRoot: string;
+  readonly #node: string;
 
   constructor(options: WindowsBackendOptions) {
     if (process.platform !== "win32") throw new Error("The Windows sandbox runs only on Windows");
@@ -195,6 +196,9 @@ export class WindowsBackend implements HelperBackend {
     if (!gitRoot) throw new Error("The Windows sandbox needs Git for Windows: install it from https://git-scm.com/download/win");
     const bash = sandboxShellPath();
     if (!bash) throw new Error(`The Windows sandbox needs busybox-w32 as its shell (Git for Windows' bash can't start in the process container): ${SANDBOX_SHELL_HINT}`);
+    const node = sandboxNodePath();
+    if (!node) throw new Error(`The Windows sandbox needs Node.js 24 or newer to run its steps: ${SANDBOX_NODE_HINT}`);
+    this.#node = node;
     this.#runtime = options.runtime;
     this.#sdk = sdk;
     this.#limits = validWindowsLimits(options.limits);
@@ -203,7 +207,7 @@ export class WindowsBackend implements HelperBackend {
     this.#bash = bash;
     const system = process.env.SystemRoot ?? "C:\\Windows";
     // Git for Windows' Unix tools first, as in its own Git Bash.
-    this.path = [join(gitRoot, "usr", "bin"), join(gitRoot, "mingw64", "bin"), join(gitRoot, "cmd"), dirname(process.execPath),
+    this.path = [join(gitRoot, "usr", "bin"), join(gitRoot, "mingw64", "bin"), join(gitRoot, "cmd"), dirname(node),
       join(system, "System32"), system, join(system, "System32", "WindowsPowerShell", "v1.0")].join(";");
   }
 
@@ -242,13 +246,13 @@ export class WindowsBackend implements HelperBackend {
       ...(port !== undefined ? { SANDBOX_EGRESS_PROXY: context.environment.HTTPS_PROXY!, SANDBOX_EGRESS_NO_PROXY: context.environment.NO_PROXY ?? "" } : {}),
     };
     // The shell is granted alone: it may sit in a folder with other things, such as the user's own programs.
-    const readonly = [system, dirname(process.execPath), this.#gitRoot, this.#bash, layout.bin, layout.ownerConfig, layout.caBundle, join(layout.worktree, ".git"),
+    const readonly = [system, dirname(this.#node), this.#gitRoot, this.#bash, layout.bin, layout.ownerConfig, layout.caBundle, join(layout.worktree, ".git"),
       ...(context.gitWritable ? [] : [layout.git])];
     const readwrite = context.readOnly ? [] : [layout.home, layout.worktree, ...(context.gitWritable ? [layout.git] : [])];
     if (context.readOnly) readonly.push(layout.home, layout.worktree);
     const containerRequest = {
       // The container can't lstat the drive root, which Node's realpath of the entry script needs; skip that walk.
-      command: `"${process.execPath}" --preserve-symlinks-main --preserve-symlinks "${join(layout.bin, "helper.mjs")}"`,
+      command: `"${this.#node}" --preserve-symlinks-main --preserve-symlinks "${join(layout.bin, "helper.mjs")}"`,
       containment: { type: "processcontainer" },
       filesystem: { readwritePaths: readwrite, readonlyPaths: readonly, deniedPaths: [] },
       // Proxy-only egress (MXC's "Model 2"): the container reaches only the session's loopback proxy; no proxy, no network.
@@ -266,7 +270,7 @@ export class WindowsBackend implements HelperBackend {
     let job: WindowsJob | undefined;
     void request;
     return {
-      command: process.execPath,
+      command: this.#node,
       args: [join(layout.bin, "runner.mjs")],
       cwd: layout.root,
       // The runner gets nothing of the connector's environment: only what Node and MXC need to start.

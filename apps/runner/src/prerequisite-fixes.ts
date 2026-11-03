@@ -7,6 +7,7 @@ import { MXC_SDK_VERSION, mxcInstallHint } from "./sandbox-backend.js";
 /** How to get each missing prerequisite: the same advice in a terminal (its command) and in the app (its action). */
 export const fixes = {
   gitForWindows: { text: "Install Git for Windows.", command: "winget install --id Git.Git -e --source winget", url: "https://git-scm.com/download/win", action: { kind: "git-for-windows" } },
+  nodeForWindows: { text: "Install Node.js 24 or newer for Windows (the sandbox runs its steps on it, and npm installs the MXC SDK).", command: "winget install --id OpenJS.NodeJS.LTS -e --source winget", url: "https://nodejs.org", action: { kind: "node-for-windows" } },
   busybox: { text: "Download busybox64.exe and save it as %LOCALAPPDATA%\\Programs\\busybox\\busybox.exe.", url: "https://frippery.org/busybox/" },
   windowsUpdate: { text: "Install the latest Windows update (Windows 11 24H2 or later, with the October 2026 update).", action: { kind: "windows-update" } },
   mxcSdk: (runtime: string): PrerequisiteFix => ({ text: `Install Microsoft's MXC SDK ${MXC_SDK_VERSION} with npm (it needs Node.js on Windows).`, command: mxcInstallHint(runtime), url: "https://github.com/microsoft/mxc", action: { kind: "mxc-sdk" } }),

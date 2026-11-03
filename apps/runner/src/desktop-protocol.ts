@@ -10,6 +10,8 @@ export type SetupAction =
   | { kind: "xcode-tools" }
   /** Windows: Git for Windows, with winget. */
   | { kind: "git-for-windows" }
+  /** Windows: Node.js LTS, with winget: the Windows sandbox's steps run on it (a desktop app's own Node can't run them). */
+  | { kind: "node-for-windows" }
   /** Windows: Microsoft's MXC SDK, with npm, into the directory the app's native hosts use. */
   | { kind: "mxc-sdk" }
   /** Windows: Settings › Windows Update. */
