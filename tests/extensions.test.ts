@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
@@ -9,6 +10,7 @@ import { fakeHub, testDatabase } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import type { ExtensionAvailability, HostExtensionsReport, WorkspaceExtension } from '../packages/shared/src/host-extensions.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
+import { defaultWorkspaceExtensions } from '../packages/shared/src/host-extensions.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'extensions-test-secret-not-for-deployment';
@@ -71,6 +73,8 @@ function self(f: Fixture, connector: Connected, path: string, body: unknown) {
 async function team(f: Fixture) {
   const alice = await f.client('alice'); const bob = await f.client('bob'); const carol = await f.client('carol');
   const { workspace } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'Team' }), 201);
+  // Without the extensions every workspace starts with (their own test below), so each test chooses its own.
+  f.sqlite.prepare('DELETE FROM workspace_extensions WHERE workspace_id = ?').run(workspace.id);
   await json(await alice.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: bob.user.id, role: 'member' }));
   await json(await alice.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: carol.user.id, role: 'admin' }));
   const connector = await connect(f, alice);
@@ -184,4 +188,39 @@ test('a host\'s sessions get their workspace\'s extensions and its owner\'s swit
   assert.deepEqual(['npm:pi-memory@0.4.2', 'npm:off@1.0.0', 'local:/home/alice/dev.ts'].map(sources), [true, false, false]);
   const own = await sessionExtensionSources(f.env, { workspace_id: s.workspaceId, owner_id: s.alice.user.id, connector_owner_id: s.alice.user.id });
   assert.equal(own('local:/home/alice/dev.ts'), true, 'a dev extension in its host owner\'s own session');
+});
+
+test('every workspace starts with popular extensions, turned off, and existing ones got them after their own', async t => {
+  const f = await fixture(t);
+  const alice = await f.client('alice');
+  const off = (source: string) => ({ source, enabled: false, tools: 'approval', settings: {} });
+  const expected = ['npm:pi-web-access@0.46.0', 'npm:pi-web-search@1.7.0', 'npm:cc-safety-net@2.7.2'];
+  assert.deepEqual(defaultWorkspaceExtensions, expected);
+  const { workspace } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'New' }), 201);
+  const path = `/api/workspaces/${workspace.id}/extensions`;
+  assert.deepEqual((await json<{ extensions: WorkspaceExtension[] }>(await alice.request('GET', path))).extensions, expected.map(off));
+  // Turned off, sessions don't run them.
+  const sources = await sessionExtensionSources(f.env, { workspace_id: workspace.id, owner_id: alice.user.id, connector_owner_id: alice.user.id });
+  assert.deepEqual(expected.map(sources), [false, false, false]);
+
+  // The migration, as it ran on workspaces made before: theirs come first, and a package they use keeps their version.
+  const { workspace: older } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'Older' }), 201);
+  const { workspace: full } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'Full' }), 201);
+  f.sqlite.prepare('DELETE FROM workspace_extensions WHERE workspace_id IN (?, ?)').run(older.id, full.id);
+  await json(await alice.request('PUT', `/api/workspaces/${older.id}/extensions`, { source: 'npm:pi-memory@0.4.2' }));
+  await json(await alice.request('PUT', `/api/workspaces/${older.id}/extensions`, { source: 'npm:pi-web-search@1.6.0', enabled: true }));
+  for (let index = 0; index < 32; index++) await json(await alice.request('PUT', `/api/workspaces/${full.id}/extensions`, { source: `npm:extension-${index}@1.0.0` }));
+  f.sqlite.exec(readFileSync(new URL('../apps/server/migrations/sqlite/0047_default_extensions.sql', import.meta.url), 'utf8'));
+  const listed = async (id: string) => (await json<{ extensions: WorkspaceExtension[] }>(await alice.request('GET', `/api/workspaces/${id}/extensions`))).extensions;
+  assert.deepEqual(await listed(older.id), [
+    { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'approval', settings: {} },
+    { source: 'npm:pi-web-search@1.6.0', enabled: true, tools: 'approval', settings: {} },
+    off('npm:pi-web-access@0.46.0'),
+    off('npm:cc-safety-net@2.7.2'),
+  ]);
+  assert.deepEqual(await listed(workspace.id), expected.map(off), 'a workspace that has them is left as it is');
+  assert.equal((await listed(full.id)).length, 32, 'a workspace at the limit gets no more');
+  const row = f.sqlite.prepare('SELECT updated_by, updated_at FROM workspace_extensions WHERE workspace_id = ? AND package_key = ?').get(older.id, 'npm:pi-web-access') as { updated_by: string; updated_at: string };
+  assert.equal(row.updated_by, alice.user.id, 'set by the workspace\'s owner');
+  assert.match(row.updated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });

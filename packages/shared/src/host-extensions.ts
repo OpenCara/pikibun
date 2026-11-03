@@ -119,6 +119,18 @@ export interface WorkspaceExtension {
   settings: ExtensionSettings;
 }
 
+/**
+ * Popular Pi extensions every workspace starts with, in this order, turned off and with tools on approval: its owners
+ * and admins turn on the ones they want, once their hosts install them. Existing workspaces got them in migration
+ * sqlite/0047 (postgres/0040), which lists the same sources. `pi-web-access` and `pi-web-search` both offer
+ * `web_search`, so a workspace turns on one of them (with both, sessions keep the first's).
+ */
+export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([
+  "npm:pi-web-access@0.46.0",
+  "npm:pi-web-search@1.7.0",
+  "npm:cc-safety-net@2.7.2",
+]);
+
 export const extensionLimits = Object.freeze({
   /** Sources a workspace uses, and a host installs. */
   workspace: 32,

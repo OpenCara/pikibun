@@ -20,7 +20,9 @@ its host has.
    from its page in Pikibun, where extensions a workspace uses but the host lacks show an **Install** button, or with
    `pikibun extensions` on the machine. Every install is pinned, runs no npm scripts, and is audited.
 4. **In the connector process.** Extensions run in the connector, as the host's OS user, outside the sandbox, with its
-   files, credentials and network. A buggy one can slow or crash the connector. Isolation is later work.
+   files, credentials and network. A buggy one can slow or crash the connector. Isolation is later work. Modules are
+   found as Pi finds them: a directory a package's `pi.extensions` names loads its `index.ts`/`index.js` alone when it
+   has one, so CLIs bundled next to it (which may exit the process) never load.
 5. **Approval by default.** An extension tool call is decided like `host_bash`, by the host's owner or a member granted
    host commands. It runs without approval only where the workspace set the extension's tools to automatic **and** the
    host's owner lets workspaces do that on their host (off by default).
@@ -31,7 +33,10 @@ its host has.
 8. **Settings per workspace.** An extension's settings are its Pi flags (`registerFlag`); the workspace sets their values.
    Secrets never go there: the extension reads them on the host (its environment, files, or Pi's `auth.json`), which the
    host's owner sets up.
-9. **Web tools are extensions.** Pikibun's own `web_fetch` and `web_search` are retired (`retiredToolNames`): no session
+9. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
+   off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0047 (postgres/0040) added them to existing
+   workspaces after their own, except where a workspace already used the package or was at its limit.
+10. **Web tools are extensions.** Pikibun's own `web_fetch` and `web_search` are retired (`retiredToolNames`): no session
    offers them, the server's `WEB_SEARCH` provider and the workspace's **Web search** setting are gone, and older
    connectors' searches are refused (410). An extension may register tools with retired names, so a Pi web search
    extension provides `web_search` as it does in Pi. Unlike `web_fetch`, an extension's requests aren't confined by the
