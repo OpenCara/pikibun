@@ -20,12 +20,23 @@ test("npm missing from PATH says so and how to get it; other failures keep npm's
   assert.match(mac.message, /npm, which installs extensions from npm and Git, wasn't found on this host's PATH \(\/usr\/bin:\/bin\)/);
   assert.match(mac.message, /brew install node/);
   assert.match(npmFailure({ code: 1, stderr: "'npm' is not recognized as an internal or external command," }, ["install"], "win32").message, /winget install OpenJS\.NodeJS\.LTS/);
-  assert.match(npmFailure({ code: 127, stderr: "" }, ["install"], "linux", "").message, /PATH \(empty\)/);
+  assert.match(npmFailure({ code: "ENOENT" }, ["install"], "linux", "").message, /PATH \(empty\)/);
   assert.match(npmFailure({ code: 127, stderr: "env: node: No such file or directory" }, ["install"], "darwin").message, /wasn't found/,
     "npm without Node.js on PATH counts as missing");
+  assert.match(npmFailure({ code: 127, stderr: "/bin/sh: 1: npm: not found" }, ["install"], "linux").message, /wasn't found/);
+  assert.match(npmFailure({ code: 127, stderr: "bash: line 1: npm: command not found" }, ["install"], "linux").message, /wasn't found/);
   const failed = npmFailure({ code: 1, stderr: "npm error 404 Not Found - GET https://registry.npmjs.org/nope" }, ["install"], "darwin");
   assert.equal(failed.message, "npm install failed:\nnpm error 404 Not Found - GET https://registry.npmjs.org/nope");
   assert.equal(npmFailure({ code: 1 }, ["install"], "darwin").message, "npm install failed.");
+
+  // Only npm or node itself missing counts: an install script's missing command, or npm's own 127, keeps npm's output.
+  const script = "npm error code 127\nnpm error command failed\nnpm error command sh -c node-gyp rebuild\nnpm error sh: 1: node-gyp: not found";
+  assert.equal(npmFailure({ code: 127, stderr: script }, ["install"], "linux").message, `npm install failed:\n${script}`);
+  const windowsScript = "npm error 'python' is not recognized as an internal or external command,";
+  assert.equal(npmFailure({ code: 1, stderr: windowsScript }, ["install"], "win32").message, `npm install failed:\n${windowsScript}`);
+  assert.equal(npmFailure({ code: 127, stderr: "" }, ["install"], "linux").message, "npm install failed.");
+  assert.equal(npmFailure({ code: 1, stderr: "npm error sh: npm: command not found" }, ["install"], "linux").message, "npm install failed:\nnpm error sh: npm: command not found",
+    "a script's own call to npm isn't the host's npm missing");
 });
 
 test("the login shell's PATH is read from env's own line between the marks, ahead of the app's", async () => {

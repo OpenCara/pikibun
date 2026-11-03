@@ -111,7 +111,8 @@ function main(): void {
     : undefined;
   /**
    * A native host's environment. A Mac host sees its owner's login-shell PATH (Homebrew, nvm), as `pikibun connect` in
-   * Terminal does: read at each launch, so Node.js installed for extensions counts once the host restarts.
+   * Terminal does: read as each host process launches (with the app, or when its sandbox changes; Stop and Start keep
+   * the process), so Node.js installed for extensions counts once Pikibun is reopened.
    */
   const hostEnv = (): Promise<NodeJS.ProcessEnv | undefined> => mac ? withLoginShellPath(process.env) : Promise.resolve(nativeEnv);
   /** WSL's distributions, as last listed: shown on Windows, refreshed whenever a WSL2 host launches or the owner looks. */

@@ -13,10 +13,10 @@ export const fixes = {
   xcodeTools: { text: "Install Apple's developer tools (the Command Line Tools), which bring Git and Python 3.", command: "xcode-select --install", action: { kind: "xcode-tools" } },
   /** Node.js, which brings npm: the host installs extensions from npm and Git with it. */
   node: (platform: NodeJS.Platform): PrerequisiteFix => platform === "darwin"
-    ? { text: "Install Node.js, which brings npm, to install extensions from npm or Git: with Homebrew, or the macOS installer from nodejs.org. Then restart the host.", command: "brew install node", url: "https://nodejs.org/en/download" }
+    ? { text: "Install Node.js, which brings npm, to install extensions from npm or Git: with Homebrew, or the macOS installer from nodejs.org. Then quit and reopen Pikibun, which reads your PATH as it starts its hosts.", command: "brew install node", url: "https://nodejs.org/en/download" }
     : platform === "win32"
-    ? { text: "Install Node.js, which brings npm, to install extensions from npm or Git. Then restart the host.", command: "winget install OpenJS.NodeJS.LTS", url: "https://nodejs.org/en/download" }
-    : { text: "Install Node.js and npm to install extensions from npm or Git. Then restart the host.", url: "https://nodejs.org/en/download" },
+    ? { text: "Install Node.js, which brings npm, to install extensions from npm or Git. Then quit and reopen Pikibun.", command: "winget install OpenJS.NodeJS.LTS", url: "https://nodejs.org/en/download" }
+    : { text: "Install Node.js and npm to install extensions from npm or Git. Then quit and reopen Pikibun.", url: "https://nodejs.org/en/download" },
 } satisfies Record<string, PrerequisiteFix | ((runtime: string) => PrerequisiteFix) | ((platform: NodeJS.Platform) => PrerequisiteFix)>;
 
 /** Debian and Ubuntu packages of the Linux binaries the connector checks. */
