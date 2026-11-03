@@ -1,0 +1,49 @@
+# Development
+
+Requires Node 24 and pnpm.
+
+```sh
+pnpm install
+cp apps/server/.env.example apps/server/.env   # see below
+pnpm dev:server                                 # API on :8787
+pnpm dev                                        # web UI on :5173, proxying /api to :8787
+```
+
+For local development, set in `apps/server/.env`: `APP_ORIGIN=http://localhost:5173`, `DATABASE_URL=sqlite:./data/dev.sqlite` (the default `/data` path is the container's), `SESSION_SECRET`, `VAULT_KEY`, and the test mode that allows plain HTTP on localhost: `TEST_AUTH_ENABLED=true`, a `TEST_AUTH_SECRET` of at least 32 characters and a future `TEST_AUTH_EXPIRES_AT` (such as `2030-01-01T00:00:00Z`). Sign in with a GitHub OAuth app whose callback is `http://localhost:5173/api/auth/github/callback`, or as a test user by running this in the browser console on `http://localhost:5173`, then reloading:
+
+```js
+await fetch("/api/auth/test", { method: "POST", headers: { Authorization: "Bearer YOUR_TEST_AUTH_SECRET", "Content-Type": "application/json" }, body: JSON.stringify({ displayName: "Dev" }) });
+```
+
+- `pnpm typecheck` (also typechecks the apps), `pnpm test` (set `TEST_DATABASE_URL=postgres://…` to also run the provider suite against Postgres), `pnpm build` (web), `pnpm build:server` (bundled server in `dist/server`), `pnpm build:cli` (the connector package).
+- `pnpm connect …` runs the connector from source, with the same options as `pikibun connect`; add `--allow-insecure-loopback` to pair with a local `http://` server.
+- `pnpm test:connected` runs the end-to-end suite against a real server and connector (Linux with bubblewrap).
+- `pnpm dev:native [--port 8787] [--no-host] [--pairing]` runs a local test-mode server for developing the apps: a test user with an app token, a workspace and, unless `--no-host`, this machine as a host offering the deterministic fixture model (not an LLM) with one session. `--pairing` adds a pairing code for the desktop app. It writes what the apps need to `.local/dev-native.json`; Ctrl-C stops it and deletes its data.
+- Releasing: each part has its own release line and version, started by pushing its tag on a commit in `main` (e.g. `git tag server-v1.4.0 && git push origin server-v1.4.0`). A suffix such as `-beta.1` makes a prerelease. Nothing needs committing first: each workflow checks the tag is on `main`, runs CI and sets the tag's version in the package it builds (`scripts/set-release-version.mjs`), so the committed versions need not match.
+
+  | Tag | Workflow | Publishes |
+  | --- | --- | --- |
+  | `cli-v1.2.3` | `release.yml` | `pikibun` on npm, with provenance; a prerelease goes to the `next` dist-tag |
+  | `server-v1.2.3` | `release-server.yml` | The server image (web app and backend) to `ghcr.io/opencara/pikibun`, then deploys a release (not a prerelease) to the deployment server once the image is pushed; no GitHub release |
+  | `desktop-v1.2.3` | `release-desktop.yml` | The desktop app on a GitHub release: macOS (arm64 DMG) and Windows (x64 installer); Linux from the same tag later |
+  | `ios-v1.2.3` | `release-ios.yml` | The iOS app to TestFlight |
+
+  Only the desktop line creates a GitHub release, the one GitHub marks latest, with notes since the line's previous tag. The desktop app bundles the connector from `packages/cli` at its tagged commit, so when a connector change matters to it, release `cli-v` and then `desktop-v`. npm needs either a trusted publisher on npmjs.com for `OpenCara/pikibun`, workflow `release.yml` (keep that file name), environment `release`, or an `NPM_TOKEN` repository secret.
+- Deploying the server: once a `server-v` release's image is on GHCR, `deploy-server.yml` connects to the deployment server over SSH and runs [`scripts/deploy-server.sh`](../scripts/deploy-server.sh) there. It pulls the image by digest, writes it to `PIKIBUN_IMAGE` in the deploy directory's `.env`, recreates the `pikibun` service with `docker compose up -d --no-build` and waits for the container to report healthy, then checks `DEPLOY_URL`'s `/api/health`. Prereleases are not deployed; **Actions → Deploy server → Run workflow** deploys any published version, to redeploy or go back to one. A failed deploy is not rolled back by itself: migrations ran when the new container started, so go back only to a version that reads the migrated database. Configure it in the `production` environment, and add required reviewers there to approve each deploy; without the settings nothing is deployed:
+  - Variables `DEPLOY_HOST`, `DEPLOY_USER` (in the `docker` group), and optionally `DEPLOY_PORT` (22), `DEPLOY_PATH` (the directory with `docker-compose.yml` and `.env`, `pikibun` from the user's home by default) and `DEPLOY_URL` (the public origin).
+  - Secrets `DEPLOY_SSH_KEY` (a private key in that user's `authorized_keys`, ideally for deploys only) and `DEPLOY_SSH_KNOWN_HOSTS` (the server's host keys, `ssh-keyscan -p PORT HOST`, checked against the server's own fingerprints).
+  - The server's `docker-compose.yml` runs `image: ${PIKIBUN_IMAGE:-pikibun}`, as this repository's does, and the user can pull from `ghcr.io/opencara/pikibun` (public, or after `docker login ghcr.io`).
+- Apple signing for the `desktop-v` and `ios-v` releases: the secrets and variables below live in the `release` environment. Without them, the macOS app is released ad-hoc signed (Gatekeeper blocks it on other Macs until it's opened with right-click › Open), and the iOS job only checks that the app archives.
+  - An App Store Connect API key (Users and Access › Integrations; the App Manager role is enough), shared by both apps: `APP_STORE_CONNECT_API_KEY` (the `.p8` file's contents), `APP_STORE_CONNECT_API_KEY_ID` and `APP_STORE_CONNECT_API_ISSUER_ID`.
+  - macOS, signed with Developer ID and notarized: `MAC_CERTIFICATE_P12` (a **Developer ID Application** certificate and its key, exported as `.p12`, base64: `base64 -i cert.p12`), `MAC_CERTIFICATE_PASSWORD`, and the variable `MAC_SIGNING_IDENTITY`, the certificate's name without its `Developer ID Application:` prefix (e.g. `OpenCara (TEAMID)`).
+  - iOS, uploaded to TestFlight: an app record for the bundle ID `com.pikibun.app` in App Store Connect, `IOS_CERTIFICATE_P12` (an **Apple Distribution** certificate as base64 `.p12`), `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE` (an App Store provisioning profile for `com.pikibun.app`, base64) and the variable `APPLE_TEAM_ID`. Its version is the tag's without a prerelease suffix, and its build number is the run's (`run number.attempt`). Every `ios-v` tag goes to TestFlight; submitting a build for App Store review stays manual.
+- Windows signing for the `desktop-v` release, in the same `release` environment: `WIN_CERTIFICATE_P12` (a code-signing certificate and its key as base64 `.p12`) and `WIN_CERTIFICATE_PASSWORD`. Without them the Windows installer is released unsigned, and SmartScreen warns before its first launch (**More info → Run anyway**).
+
+## Layout
+
+- `apps/server`: the control plane (Hono on Node); `src/local` runs it on one person's own computer (`pikibun serve` and the desktop app). `src/db` holds the database providers and the SQLite→Postgres dialect translation; `src/storage` the backup storage providers; `src/workspace-databases` the owner-connected session databases; `src/git` the Git providers and accounts; `src/push` push identities and credentials; `src/data-export.ts` the session and workspace exports; `src/admin.ts` the server administration API; `src/auth.ts` GitHub and session sign-in and `src/password-auth.ts` password accounts, with `src/password-accounts-cli.ts` for `--create-admin` and `--reset-password`; `src/connector-hub.ts` the WebSocket relay to connected hosts.
+- `apps/web`: the React UI.
+- `apps/mobile`: the iPhone and iPad app (Expo; Android later). `apps/desktop`: the macOS and Windows app (Electron; Linux later).
+- `apps/runner`: the connector runtime that runs on each host, published as the `pikibun` CLI from `packages/cli` (with the server, for `pikibun serve`) and bundled into the desktop app.
+- `packages/shared`: types and policy shared by all of the above. `packages/client`: the API client, live session updates and chat-option rules shared by the web and the apps.
+- `docs/design`: design notes, such as the [repository cache](design/repository-cache.md).

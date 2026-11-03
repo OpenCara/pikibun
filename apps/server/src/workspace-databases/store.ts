@@ -45,7 +45,7 @@ const explanations: Record<WorkspaceDatabaseFailure, string> = {
   database_not_found: 'The database does not exist on that server.',
   permission_denied: "The database user can't create or write Pikibun's tables (pikibun_workspaces, pikibun_sessions and pikibun_session_backups).",
   pikibun_database: "This is a Pikibun server's own database. Connect a separate database.",
-  schema_mismatch: "Pikibun's tables in the database lack columns this server needs. Compare them with the definitions in the README.",
+  schema_mismatch: "Pikibun's tables in the database lack columns this server needs. Compare them with the definitions in docs/self-hosting.md.",
   response_too_large: 'The database sent more data than expected.',
   unavailable: 'The database could not complete the request.',
 };

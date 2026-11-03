@@ -524,7 +524,7 @@ test('the workspace owner imports dumps of this workspace into its database; nob
   assert.equal(failed.status, 503);
   const failure = await failed.json() as { code: string; error: string };
   assert.equal(failure.code, 'workspace_database_unavailable');
-  assert.match(failure.error, /README/);
+  assert.match(failure.error, /docs\/self-hosting\.md/);
   assert.ok(!failure.error.includes('10.0.0.7'));
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.database.imported'").get()!.n, 2);
   delete f.env.WORKSPACE_DATABASES;
