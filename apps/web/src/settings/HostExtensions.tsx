@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { ConnectorInfo } from "../../../../packages/shared/src/connector";
 import { builtinExtensions, hostConfigLimits, type BuiltinExtensionName, type RequiredExtension } from "../../../../packages/shared/src/host-config";
-import { isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionSettings, type HostExtensionsReport,
+import { isPikiExtensionSource, missingRequiredExtensions, normalizeExtensionSource, type ExtensionAvailability, type ExtensionSettings, type HostExtensionsReport,
   type InstalledExtension } from "../../../../packages/shared/src/host-extensions";
 import { pikiExtension } from "../../../../packages/shared/src/piki-extensions";
 import { ExtensionSettingsFields } from "./ExtensionSettingsFields";
@@ -124,7 +124,8 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
   }
   const isRequired = (source: string) => required.some(item => item.source === source);
   const installedSources = new Set(data?.report?.installed.map(item => item.source) ?? []);
-  const unavailable = data?.report ? required.filter(item => !data.report!.installed.some(candidate => candidate.source === item.source && !candidate.dev && !candidate.error)) : [];
+  const unavailable = data?.report ? missingRequiredExtensions(required, data.report.installed)
+    .flatMap(source => required.filter(item => item.source === source)) : [];
   const missing = (data?.workspaces ?? []).flatMap(workspace => workspace.extensions.filter(item => item.availability.status !== "installed").map(item => ({ workspace, ...item })));
   const waiting = (source: string) => pending.some(item => item.source === source);
   return <Section title="Extensions" bare info={info} action={owner && data?.report?.remoteInstalls !== false

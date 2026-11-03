@@ -302,6 +302,16 @@ test("a message is accepted at once while its audit runs, and the messages behin
   assert.deepEqual(audits.map(audit => audit.text.includes("auth.json")), [true, false]);
 });
 
+test("messages screened at once each run on their own: a screening that ends during a drain wakes the queue again", hostMode, async t => {
+  const { session, send, status, audits } = await hostSession(t, [{ source: "piki:prompt-audit", settings: { model: "test/audit-1" } }]);
+  // The host owner's own are screened without a model call, the fastest way a screening can end while a drain still runs.
+  const sent = [];
+  for (let index = 0; index < 8; index++) sent.push(await send(`Fix test ${index}`, index % 2 ? "test:bob" : "test:alice"));
+  await idle(session);
+  assert.deepEqual(await Promise.all(sent.map(item => status(item.submissionId))), sent.map(() => "settled"), "none stays queued");
+  assert.equal(audits.length, 4, "only the member's were audited");
+});
+
 test("while the host lacks an extension its owner requires, or hasn't heard what is required, its sessions take no messages, the owner's included", hostMode, async t => {
   const { session, send, setRequired, audits } = await hostSession(t, [{ source: "npm:cc-safety-net@2.7.2", settings: {} }]);
   const missing = "This host's owner requires an extension its connector can't run now, so no message is sent. Ask them to look at the host's extensions";

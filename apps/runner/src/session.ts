@@ -393,6 +393,11 @@ export class RunnerSession {
   private generation = 0;
   private closing = false;
   private draining = false;
+  /**
+   * A drain was asked for while one ran (a screening that just ended, say): that pass may have read the queue before the
+   * change, so one more follows it. Only such asks set it, so a pass that stops at a message still screened doesn't loop.
+   */
+  #drainAgain = false;
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
   /** Pushes (approved ones settle after decide() returns; automatic ones inline); close() aborts and awaits them. */
@@ -1365,8 +1370,10 @@ export class RunnerSession {
 
   private drainQueue(): void {
     // Runs wait for repositories prepared in the background; their preparation drains the queue when it is done.
-    if (this.draining || this.closing || this.#repositories.status !== "ready") return;
+    if (this.draining) { this.#drainAgain = true; return; }
+    if (this.closing || this.#repositories.status !== "ready") return;
     this.draining = true;
+    this.#drainAgain = false;
     void this.exclusive(async () => {
       while (!this.closing) {
         const state = await this.metadata();
@@ -1417,7 +1424,10 @@ export class RunnerSession {
         return;
       }
     }).catch(() => { /* Admission is durable even when activation fails; restart reconciles it. */ })
-      .finally(() => { this.draining = false; });
+      .finally(() => {
+        this.draining = false;
+        if (this.#drainAgain) { this.#drainAgain = false; this.drainQueue(); }
+      });
   }
 
   /**
