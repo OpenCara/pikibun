@@ -130,8 +130,22 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     inline Python and Node scripts in most sessions. So `host_bash` became switchable first, while `bash` stays a
     built-in tool, never switchable on its own: without it a session can't clone its repositories (`sessions.ts`).
 
-Next, in order: code search and line ranges (`piki:files`), git (`piki:git`), a wait for pull request checks, project
-tasks and scripts (`piki:tasks`); then `bash` becomes `piki:shell`, and `host_bash` is removed. The brokered tools
+21. **Search and line ranges, without a shell.** The `search` tool and `read_file`'s `offset`/`limit` replace the grep,
+    find, sed -n, cat and head that took a third of sessions' shell commands, each approved. Like `read_file`, they need
+    no approval and stay in the worktree: `search` never follows links, skips hard-linked, binary and over-1 MB files,
+    and skips `.git` directories as it walks (nor `node_modules` unless `all`); a `path` inside `.git` searches it, as
+    `read_file` reads it. Stopping at `max_results` with anything left unsearched is `truncated`, and an answer holds at
+    most 256K characters of lines, within the helpers' 4 MB of output. Every backend runs the same search
+    (`apps/runner/src/search.ts`): the Python helper in the Linux and macOS sandboxes, and `SEARCH_CORE` in the Windows
+    Node helper and, on unsandboxed hosts, in a worker thread, so a pattern that backtracks without end stops the worker
+    (after 30 seconds) rather than the connector. Each search stops itself after 10 seconds, 20,000 files or 64 MB and
+    answers what it found as `truncated`. Python's and JavaScript's regular expressions agree on the common syntax
+    (classes, groups, alternation, anchors, quantifiers); `\d` and `\w` match Unicode digits and letters in the Python
+    helper only. The conformance suite holds every backend to the same answers. They are built-in tools like `read_file`;
+    they join `piki:files` when the file tools move there.
+
+Next, in order: git (`piki:git`), a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
+becomes `piki:shell`, and `host_bash` is removed. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
 
 ## The prompt audit: piki:prompt-audit

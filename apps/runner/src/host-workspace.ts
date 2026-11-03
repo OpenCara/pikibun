@@ -14,6 +14,7 @@ import {
 import { MAX_IMAGE_BYTES, imageType, type FileContent } from "./images.js";
 import { browseDirectory, browseFile, checkedBrowse, type BrowseResult } from "./file-browser.js";
 import type { SessionWorkspace } from "./workspace.js";
+import { searchInWorker, type SearchRequest, type SearchResult } from "./search.js";
 import { bashPath, CREATE_FILE, hostBashArgs, killTree, OPEN_DIRECTORY, OPEN_FILE, privateEntry, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
 import { readCloneBranches, type CloneBranch } from "./clone-branches.js";
 import { ATTACHMENT_CANDIDATES, attachmentCandidate } from "../../../packages/shared/src/file-uploads.js";
@@ -187,6 +188,20 @@ export class HostWorkspace implements SessionWorkspace {
       const parent = await directoryAt(this.worktree, parts.slice(0, -1));
       const target = join(parent, parts.at(-1)!);
       return checkedBrowse((await lstat(target)).isDirectory() ? await browseDirectory(target) : await browseFile(target));
+    });
+  }
+
+  /**
+   * The search tool's search, under the same path rules as the file tools: in a worker thread (search.ts), since this
+   * runs in the connector, so a pattern that backtracks without end stops the worker, not the connector.
+   */
+  async search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult> {
+    const value = text(request.path, "path", 1024);
+    return this.#operation(authorize, async () => {
+      const parts = await this.#parts(value, false);
+      const start = parts.length ? join(await directoryAt(this.worktree, parts.slice(0, -1)), parts.at(-1)!) : this.worktree;
+      try { return await searchInWorker(start, parts.length ? parts.join("/") : ".", { ...request, path: value }); }
+      catch (error) { throw hostError(error instanceof Error ? error.message : "search failed"); }
     });
   }
 

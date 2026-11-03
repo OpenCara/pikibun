@@ -10,6 +10,7 @@
  *
  * Not yet here: clone backups and restores (backups and moves of clone sessions), which the workspace refuses.
  */
+import { SEARCH_CORE } from "./search.js";
 export const NODE_HELPER = String.raw`
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
@@ -413,6 +414,15 @@ async function clonePushPack(request) {
   if (code) refuse("push pack failed");
 }
 
+${SEARCH_CORE}
+
+const searchFs = {
+  lstat: path => { const info = lstatSync(path); return { directory: info.isDirectory(), file: info.isFile(), link: info.isSymbolicLink(), size: info.size }; },
+  list: path => readdirSync(path),
+  read: path => readAt(path, MAX_FILE).data,
+  join,
+};
+
 async function readRequest() {
   const chunks = [];
   let size = 0;
@@ -467,6 +477,11 @@ async function main() {
     const info = lstatSync(path);
     return print(info.isDirectory() && !info.isSymbolicLink() ? browseDirectory(path) : browseFile(path));
   }
+  if (kind === "search") {
+    const start = parts.length ? join(directoryAt(parts.slice(0, -1)), parts.at(-1)) : worktreeRoot();
+    try { return print(searchTree(searchFs, start, parts.length ? parts.join("/") : ".", request)); }
+    catch (error) { if (error instanceof SearchRefusal) refuse(error.message); throw error; }
+  }
   if (kind === "list") {
     const names = readdirSync(directoryAt(parts));
     if (names.length > MAX_ENTRIES) refuse("directory has too many entries");
@@ -483,5 +498,5 @@ main().catch(error => {
 `;
 
 /** The request kinds the Node helper runs. */
-export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "snapshot", "bash",
+export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "search", "snapshot", "bash",
   "clone-head", "clone-push-prepare", "clone-push-pack"]);

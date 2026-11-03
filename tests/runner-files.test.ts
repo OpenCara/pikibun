@@ -1,0 +1,69 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { RunnerService } from "../apps/runner/src/server.js";
+import type { RunnerSession } from "../apps/runner/src/session.js";
+import type { AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
+import { toolNames } from "../packages/shared/src/types.js";
+import { sha256 } from "../packages/shared/src/crypto.js";
+
+function binding(id: string): RunnerBinding {
+  return {
+    session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Files", policyVersion: 1, status: "ready", createdAt: "2026-01-01T00:00:00Z", repositories: [], repositoryMode: "clone" },
+    owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice Owner", gitEmail: "alice@example.test", env: {}, githubConnected: false },
+    agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: [...toolNames], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId: "faux-1" },
+  };
+}
+
+async function ticket(id: string, action: RunnerAction): Promise<RunnerTicket> {
+  const now = Math.floor(Date.now() / 1000);
+  return { aud: "runner", sessionId: id, actorId: "test:alice", ownerId: "test:alice", action, policyVersion: 1, iat: now, exp: now + 60, jti: randomUUID(), bodyHash: await sha256("") };
+}
+
+async function idle(session: RunnerSession): Promise<void> {
+  for (let count = 0; count < 1000; count++) {
+    if (!(await session.view()).busy) return;
+    await delay(20);
+  }
+  assert.fail("runner did not settle");
+}
+
+test("search and read_file's line ranges: the agent finds code and reads around it without a shell or an approval", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-files-tools-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("write_file", { path: "src/a.ts", content: "// a\nexport const answer = 42;\nexport const other = 1;\n" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("search", { pattern: "answer", glob: "*.ts" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("read_file", { path: "src/a.ts", offset: 2, limit: 2 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("search", { pattern: "(" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Found it."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-files-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "files-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Where is answer defined?", requestId: "find", admissionId: await sha256("files admission") }, "write");
+  await idle(session);
+  const view = await session.view();
+  const transcript = view.entries.map(entry => entry.text).join("\n");
+  assert.equal(view.approvals.length, 0, "no approval card");
+  assert.match(transcript, /"matches":\[\{"path":"src\/a\.ts","line":2,"text":"export const answer = 42;"\}\],"files":1,"truncated":false/);
+  assert.match(transcript, /"content":"export const answer = 42;\\nexport const other = 1;\\n","lines":\{"from":2,"to":3,"total":3\}/);
+  assert.match(transcript, /invalid regular expression/);
+  assert.match(transcript, /Found it\./);
+});

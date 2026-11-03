@@ -3,6 +3,7 @@ import { link, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/prom
 import { join } from "node:path";
 import test from "node:test";
 import type { SessionWorkspace } from "../apps/runner/src/workspace.js";
+import { searchRequest } from "../apps/runner/src/search.js";
 import { workspaceKinds } from "./helpers/workspaces.js";
 
 /*
@@ -33,6 +34,9 @@ const list = (path: string): Operation => async workspace => (await workspace.li
 const browse = (path: string): Operation => workspace => workspace.browse(path, allow);
 const content = (path: string): Operation => workspace => workspace.readContent(path, allow);
 const upload = (directory: string, name: string, data = "uploaded"): Operation => workspace => workspace.importFile(directory, name, Buffer.from(data), allow);
+const find = (args: Parameters<typeof searchRequest>[0]): Operation => workspace => workspace.search(searchRequest(args), allow);
+/** Only the matches, where how many files a search read depends on what earlier cases left. */
+const found = (args: Parameters<typeof searchRequest>[0]): Operation => async workspace => (await workspace.search(searchRequest(args), allow)).matches;
 
 const TRAVERSAL = /path traversal is not allowed/;
 const ABSOLUTE = /invalid relative path/;
@@ -105,6 +109,40 @@ const cases: Case[] = [
   // Writing through a link inside the worktree changes its target, which is in the worktree too.
   ["writes through a link to a directory inside", write("in-dir/through.txt", "through"), { ok: undefined }],
   ["wrote into the directory the link names", read("inside/through.txt"), { ok: "through" }],
+
+  // search: the same matches everywhere, from inside the worktree only, never through a link or a hard link.
+  ["writes files to search", async workspace => {
+    await workspace.writeFile("src/app.ts", "const a = 1;\nexport function hello() {\n  return \"hi\";\n}\n", allow);
+    await workspace.writeFile("src/lib/util.ts", "export const HELLO = 2;\r\n", allow);
+    await workspace.writeFile("node_modules/dep/index.js", "hello dep\n", allow);
+    await workspace.writeFile("long.txt", `${"x".repeat(400)}needle\n`, allow);
+    await workspace.writeFile("bin.dat", "needle\0", allow);
+  }, { ok: undefined }],
+  ["searches a directory", find({ pattern: "hello", path: "src" }), { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 2, truncated: false } }],
+  ["searches ignoring case, by file name, without the line's CR", found({ pattern: "hello", ignore_case: true, glob: "*.ts" }),
+    { ok: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }, { path: "src/lib/util.ts", line: 1, text: "export const HELLO = 2;" }] }],
+  ["searches by path glob", found({ pattern: "HELLO", glob: "src/**/*.ts" }), { ok: [{ path: "src/lib/util.ts", line: 1, text: "export const HELLO = 2;" }] }],
+  ["searches literal text", found({ pattern: "hello()", literal: true, path: "src" }), { ok: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }] }],
+  ["searches one file, with context", find({ pattern: "return", path: "src/app.ts", context: 1 }),
+    { ok: { matches: [{ path: "src/app.ts", line: 3, text: "  return \"hi\";", before: ["export function hello() {"], after: ["}"] }], files: 1, truncated: false } }],
+  ["stops at max_results, and says so", find({ pattern: "e", path: "src", max_results: 1 }),
+    { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 1, truncated: true } }],
+  ["says it stopped at max_results with files left, though no more matches were seen (review of #170)", find({ pattern: "hello", ignore_case: true, path: "src", max_results: 1 }),
+    { ok: { matches: [{ path: "src/app.ts", line: 2, text: "export function hello() {" }], files: 1, truncated: true } }],
+  ["stops at its text budget, and says so", async workspace => {
+    for (let index = 0; index < 10; index++) await workspace.writeFile(`wide/${index}.txt`, `${"\u{1F600}".repeat(300)}\n`.repeat(100), allow);
+    const result = await workspace.search(searchRequest({ pattern: ".", path: "wide", max_results: 500, context: 5 }), allow);
+    return { matches: result.matches.length, truncated: result.truncated };
+  }, { ok: { matches: 80, truncated: true } }],  // 256K characters: 301 per line, 6 to 11 lines a match
+  ["shortens a long line", found({ pattern: "needle", path: "long.txt" }), { ok: [{ path: "long.txt", line: 1, text: `${"x".repeat(300)}\u2026` }] }],
+  ["skips node_modules", find({ pattern: "dep", glob: "*.js" }), { ok: { matches: [], files: 0, truncated: false } }],
+  ["searches node_modules with all", found({ pattern: "dep", glob: "*.js", all: true }), { ok: [{ path: "node_modules/dep/index.js", line: 1, text: "hello dep" }] }],
+  ["skips binary files", find({ pattern: "needle", glob: "bin.dat" }), { ok: { matches: [], files: 0, truncated: false } }],
+  ["never finds what lies outside, through links or a hard link", found({ pattern: "secret" }), { ok: [] }],
+  ["skips .git as it walks", found({ pattern: "HEAD|ref", path: "." }), { ok: [] }],
+  ["refuses searching above the worktree", find({ pattern: "secret", path: "../outside" }), { refused: TRAVERSAL }],
+  ["refuses searching through a link outside", find({ pattern: "secret", path: "out-dir" }), { refused: ESCAPES }],
+  ["refuses an invalid regular expression", find({ pattern: "(", path: "src" }), { refused: /invalid regular expression/ }],
 ];
 
 for (const kind of workspaceKinds) {

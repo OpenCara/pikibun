@@ -35,3 +35,16 @@ export function applyEdits(content: string, edits: readonly TextEdit[], path: st
   result += base.slice(from);
   return crlf ? result.replaceAll("\n", "\r\n") : result;
 }
+
+/**
+ * Lines `offset` (from 1) to `offset + limit - 1` of `content`, for read_file: what sessions read with sed -n and head
+ * (#163). Line endings stay as they are, so the text can be quoted in edit_file as it is; a range past the end holds no
+ * lines, and says how many the file has.
+ */
+export function lineRange(content: string, offset = 1, limit?: number): { content: string; lines: { from: number; to: number; total: number } } {
+  const lines = content === "" ? [] : content.split(/(?<=\n)/);
+  const total = lines.length;
+  const from = Math.min(offset, total + 1);
+  const to = limit === undefined ? total : Math.min(total, from + limit - 1);
+  return { content: lines.slice(from - 1, to).join(""), lines: { from, to: Math.max(from - 1, to), total } };
+}
