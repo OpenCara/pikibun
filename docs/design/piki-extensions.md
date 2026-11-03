@@ -75,8 +75,8 @@ of the host check each message before the agent sees it, and refuses those that 
 10. **One model call, the message as data.** The auditor gets fixed instructions (credentials, host files, the host's
    environment, exfiltration and getting around safeguards, the owner's policy; ordinary work allowed) and the message
    between markers with a random nonce, so the message can't close them, plus its images; a model that can't see images
-   refuses messages with them. It answers with one JSON verdict. The call has 20 seconds and 2048 tokens, within the 25
-   seconds Pikibun gives `input` handlers and the control plane's 30 for accepting a message.
+   refuses messages with them. It answers with one JSON verdict. The call has 45 seconds and 2048 tokens, within the minute
+   Pikibun gives `input` handlers, which run once the message is queued, never while the connector waits on a request.
 11. **Fails closed, never throws.** Pi lets a message through when an `input` handler throws, so every failure (no
    model, a provider error, a timeout, no verdict) is a refusal (`handled`). Pikibun refuses one that throws anyway.
 12. **Fixed words to the sender, the reason to the host.** A refusal tells the sender (`ctx.ui.notify`) only the kind of

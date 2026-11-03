@@ -75,6 +75,26 @@ test("a host requires extensions by normalized source, one version of each packa
     assert.throws(() => parseRequiredExtensions(invalid), /required extension|requires|setting/i, JSON.stringify(invalid));
   }
   assert.ok(ownerOnlyHostConfig.includes("requiredExtensions"));
+  // Within what one configuration answer holds, beside compaction counts for every model.
+  const big = Array.from({ length: 9 }, (_, index) => ({ source: `npm:guard-${index}@1.0.0`, settings: { policy: "x".repeat(4000) } }));
+  assert.throws(() => parseRequiredExtensions(big), /at most 32 KB/);
+});
+
+test("the extensions a host requires are kept from the control plane's last answer however old, and unknown until it has answered", async () => {
+  let now = 0;
+  const answers: unknown[] = [];
+  const source = new HostConfigSource(async () => { const answer = answers.shift(); if (answer instanceof Error || answer === undefined) throw answer ?? new Error("none"); return answer; },
+    { now: () => now, ttlMs: 30_000, staleMs: 300_000 });
+  answers.push(new Error("control plane unreachable"));
+  assert.equal(await source.required(), undefined, "never answered: unknown, not none");
+  const required = [{ source: "piki:prompt-audit", settings: {} }];
+  answers.push({ ...defaultHostConfig, requiredExtensions: required });
+  assert.deepEqual(await source.required(), required);
+  // Long past the stale window, the rest of the configuration falls back to the defaults; what is required doesn't.
+  now += 3_600_000;
+  answers.push(new Error("control plane unreachable"));
+  assert.deepEqual((await source.current()).requiredExtensions, []);
+  assert.deepEqual(await source.required(), required);
 });
 
 test("a change of configuration names one or more valid settings, and only those", () => {

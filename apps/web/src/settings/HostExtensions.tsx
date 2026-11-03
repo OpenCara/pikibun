@@ -117,8 +117,9 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
         message: <>Every session on {connector.name} will run <code>{extension.source}</code>, yours included, in every workspace, whatever the workspace chose. It runs in this host's connector, as your OS user. Its settings are yours to set here.</>,
         confirmLabel: "Require" })) return;
       const next = on ? [...required, { source: extension.source, settings: {} }] : required.filter(item => item.source !== extension.source);
-      await saveRequired(next, on ? `Every session on this host runs ${name} from its next message, within a minute.` : `${name} is no longer required: sessions run it only where their workspace chose it.`);
-      if (on && extension.modules.some(module => module.flags.length)) setConfiguring({ extension: { source: extension.source, settings: {} }, flags: extension.modules.flatMap(module => module.flags) });
+      const saved = await saveRequired(next, on ? `Every session on this host runs ${name} from its next message, within a minute.` : `${name} is no longer required: sessions run it only where their workspace chose it.`);
+      // Its settings, once it is required: not when the save failed.
+      if (saved && on && extension.modules.some(module => module.flags.length)) setConfiguring({ extension: { source: extension.source, settings: {} }, flags: extension.modules.flatMap(module => module.flags) });
     })();
   }
   const isRequired = (source: string) => required.some(item => item.source === source);

@@ -283,6 +283,12 @@ export interface ChosenExtension { source: string; dev: boolean; workspace?: Wor
 
 /** Whether the host has `source` loaded and usable: installed (or built in) at that exact version, not a dev one, without error. */
 const usable = (installed: readonly InstalledExtension[], source: string) => installed.some(item => !item.dev && item.source === source && !item.error);
+/**
+ * Whether the host has a required `source` whole: usable, and every one of its modules loaded. A guard with a module
+ * that failed may be missing the very part that guards, so it counts as missing.
+ */
+const whole = (installed: readonly InstalledExtension[], source: string) => installed.some(item => !item.dev && item.source === source && !item.error
+  && item.modules.every(module => !module.error));
 
 /**
  * The extensions a session runs with: first those its host's owner requires of every session there that the host has,
@@ -294,7 +300,7 @@ export function sessionExtensions(workspace: readonly WorkspaceExtension[], inst
   session: { ownerId: string; connectorOwnerId?: string | null }, required: readonly HostRequiredExtension[] = []): ChosenExtension[] {
   const chosen: ChosenExtension[] = [];
   const requiredPackages = new Set(required.map(item => extensionPackageKey(item.source)));
-  for (const extension of required) if (usable(installed, extension.source)) chosen.push({ source: extension.source, dev: false, required: extension });
+  for (const extension of required) if (whole(installed, extension.source)) chosen.push({ source: extension.source, dev: false, required: extension });
   for (const extension of workspace) {
     if (extension.enabled && !requiredPackages.has(extensionPackageKey(extension.source)) && usable(installed, extension.source)) {
       chosen.push({ source: extension.source, dev: false, workspace: extension });
@@ -308,10 +314,10 @@ export function sessionExtensions(workspace: readonly WorkspaceExtension[], inst
 
 /**
  * The extensions the host's owner requires that the host can't run: not installed at that version (or, for a `piki:`
- * one, not built into its connector), or failing to load. Sessions there take no messages while any is.
+ * one, not built into its connector), or failing to load, whole or any of its modules. Sessions there take no messages while any is.
  */
 export function missingRequiredExtensions(required: readonly HostRequiredExtension[], installed: readonly InstalledExtension[]): string[] {
-  return required.filter(item => !usable(installed, item.source)).map(item => item.source);
+  return required.filter(item => !whole(installed, item.source)).map(item => item.source);
 }
 
 /** An install or removal the host's owner asked for in Pikibun, which the connector carries out when it next syncs. */

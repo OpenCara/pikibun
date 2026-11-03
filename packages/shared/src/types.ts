@@ -798,7 +798,8 @@ export interface SessionView {
   /**
    * Every message, in order. `stopping` and `stopped` mark one someone stopped (see `stoppable`): stopping while the host
    * still ends its work, which holds the queue until it is done. `images lost` marks one that never ran because the host
-   * no longer had the images it was sent with.
+   * no longer had the images it was sent with, and `refused` one an extension's input handler took (a prompt audit, say),
+   * shown in the transcript as a `workspace.run-refused` entry with what its sender was told.
    */
   queue?: { submissionId: string; actorId: string; mode: "write" | "ask"; status: string }[];
   /** The host can stop the session's work: the message running and those queued behind it. Absent from older runners. */

@@ -112,8 +112,9 @@ export const hostConfigLimits = Object.freeze({
   /** Each compaction token count, and the number of models with their own (a host offers at most 200). */
   compactionTokens: Object.freeze({ min: 0, max: 10_000_000 }),
   compactionModels: 200,
-  /** Extensions a host requires of its sessions. */
+  /** Extensions a host requires of its sessions, and their sources and settings together, as JSON. */
   requiredExtensions: 16,
+  requiredExtensionsBytes: 32 * 1024,
 });
 
 export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
@@ -130,7 +131,7 @@ export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
   if (!Array.isArray(input)) throw new Error("Invalid required extensions");
   if (input.length > hostConfigLimits.requiredExtensions) throw new Error(`A host requires at most ${hostConfigLimits.requiredExtensions} extensions`);
   const packages = new Set<string>();
-  return input.map(item => {
+  const parsed = input.map(item => {
     if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => key !== "source" && key !== "settings")) {
       throw new Error("Invalid required extension");
     }
@@ -144,6 +145,11 @@ export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
     packages.add(key);
     return { source: normalized, settings: parseExtensionSettings(settings ?? {}) };
   });
+  // The whole configuration reaches the connector in one answer of at most 128 KiB, beside compaction counts for every model.
+  if (new TextEncoder().encode(JSON.stringify(parsed)).length > hostConfigLimits.requiredExtensionsBytes) {
+    throw new Error(`Required extensions and their settings take at most ${hostConfigLimits.requiredExtensionsBytes / 1024} KB`);
+  }
+  return parsed;
 }
 
 /** The built-in extensions a host runs: known names, each once, in the catalog's order, so equal settings are equal JSON. */

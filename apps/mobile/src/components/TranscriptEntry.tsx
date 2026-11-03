@@ -61,10 +61,10 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, userId, on
   const { prose, calls } = entry.role === "assistant" ? splitToolCalls(entry.text) : { prose: entry.text, calls: [] };
   const toolLabel = calls.length > 0 ? `Tool · ${calls[0].name}` : "";
   const meta = [styles.meta, { color: palette.muted }];
-  if (entry.kind === "workspace.run-stopped" || entry.kind === "workspace.run-crashed") {
+  if (entry.kind === "workspace.run-stopped" || entry.kind === "workspace.run-crashed" || entry.kind === "workspace.run-refused") {
     return <View style={styles.stopped} accessibilityRole="text">
       <View style={[styles.rule, { backgroundColor: palette.border }]} />
-      <Text style={[meta, styles.stoppedText]}>{entry.kind === "workspace.run-crashed" ? entry.text : `Stopped${actor ? ` by ${actor}` : ""}`}</Text>
+      <Text style={[meta, styles.stoppedText]}>{entry.kind === "workspace.run-crashed" || entry.kind === "workspace.run-refused" ? entry.text : `Stopped${actor ? ` by ${actor}` : ""}`}</Text>
       <View style={[styles.rule, { backgroundColor: palette.border }]} />
     </View>;
   }

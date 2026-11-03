@@ -69,8 +69,11 @@ export interface SessionExtension {
  */
 export type InputOutcome = { action: "continue"; text: string; images: ImageContent[] } | { action: "refused"; by: string; notice?: string };
 
-/** Where the `ctx.ui.notify` messages of the `input` handlers running now go (see `noticesOf`). */
-const inputNotices = new AsyncLocalStorage<string[]>();
+/**
+ * What the `input` handlers running now tell the person (`ctx.ui.notify`) and which of them fail, per message: messages
+ * of a session are screened side by side, so neither leaks into another's (see `noticesOf`).
+ */
+const inputCall = new AsyncLocalStorage<{ notices: string[]; errors: string[] }>();
 
 /**
  * Lets `runner`'s handlers tell the person who sent a message something while its `input` handlers run: Pikibun runs
@@ -78,10 +81,12 @@ const inputNotices = new AsyncLocalStorage<string[]>();
  * says is kept as the message's notice. Everything else of the context stays as it is.
  */
 function noticesOf(runner: ExtensionRunner): void {
+  // Pi reports a handler's error to its listeners within the same call, so this one finds the message it was screening.
+  runner.onError(error => { if (error.event === "input") inputCall.getStore()?.errors.push(error.error); });
   const createContext = runner.createContext.bind(runner);
   runner.createContext = () => {
     const ctx = createContext();
-    const sink = inputNotices.getStore();
+    const sink = inputCall.getStore()?.notices;
     if (!sink) return ctx;
     const ui = new Proxy(ctx.ui, { get: (target, name, receiver) => name === "notify"
       ? (message: unknown) => { sink.push(String(message)); }
@@ -133,6 +138,8 @@ export class SessionExtensions {
   readonly #reserved: ReadonlySet<string>;
   #selected: SessionExtension[] = [];
   readonly #warned = new Set<string>();
+  /** Sources that failed to load for this session, whole or in part. */
+  readonly #broken = new Set<string>();
   #started = false;
 
   /** `reserved`: the session's own tool names. */
@@ -142,6 +149,14 @@ export class SessionExtensions {
 
   /** Every source the session opened. */
   get extensions(): readonly { source: string; dev: boolean; runner: ExtensionRunner }[] { return this.#opened; }
+
+  /**
+   * Whether the session opened `source` whole: loaded, with every part of it. A guard the host's owner requires runs only
+   * so; one that failed for this session holds its messages instead.
+   */
+  isOpen(source: string): boolean {
+    return this.#opened.some(item => item.source === source) && !this.#broken.has(source);
+  }
 
   /** `source` as the last selection has it: its Extension and the tools it kept. */
   get(source: string): SessionExtension | undefined { return this.#selected.find(item => item.source === source); }
@@ -159,6 +174,8 @@ export class SessionExtensions {
         const runtime = createExtensionRuntime();
         const result = await loadSource(loaded, this.host.directory, createEventBus(), runtime);
         for (const error of result.errors) this.host.warn(source, error.error);
+        // Part of it didn't load for this session: it runs as far as it did, but isn't whole (see isOpen).
+        if (result.errors.length) this.#broken.add(source);
         const runner = new ExtensionRunner(result.extensions, runtime, this.host.directory, SessionManager.inMemory(this.host.directory),
           this.host.modelRegistry ?? (undefined as never));
         runner.bindCore(noActions(runner, message => this.host.warn(source, message)), contextActions(this.host));
@@ -170,6 +187,7 @@ export class SessionExtensions {
         opened.push(extension);
       } catch (error) {
         this.host.warn(source, `didn't load: ${describe(error)}`);
+        this.#broken.add(source);
       }
     }
     if (this.#started) for (const extension of opened) await this.one(extension, "session_start", runner => runner.emit({ type: "session_start", reason: "startup" }));
@@ -234,10 +252,9 @@ export class SessionExtensions {
       if (!opened?.runner.hasHandlers("input") || !(await applyState(this.host, source, opened.runner))) continue;
       const notices: string[] = [];
       const errors: string[] = [];
-      const stop = opened.runner.onError(error => { if (error.event === "input") errors.push(error.error); });
       try {
         const { text, images } = current;
-        const result = await inputNotices.run(notices, () => withTimeout(() => opened.runner.emitInput(text, images.length ? images : undefined, inputSource),
+        const result = await inputCall.run({ notices, errors }, () => withTimeout(() => opened.runner.emitInput(text, images.length ? images : undefined, inputSource),
           this.host.inputTimeoutMs ?? this.host.hookTimeoutMs, `${source}'s input handlers`));
         if (errors.length) return { action: "refused", by: source };
         if (result.action === "handled") return { action: "refused", by: source, ...(notices.length ? { notice: notices.at(-1)! } : {}) };
@@ -248,7 +265,7 @@ export class SessionExtensions {
       } catch (error) {
         this.host.warn(source, describe(error));
         return { action: "refused", by: source };
-      } finally { stop(); }
+      }
     }
     return { action: "continue", ...current };
   }

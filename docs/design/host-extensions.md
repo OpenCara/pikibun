@@ -54,8 +54,10 @@ its host has.
    (`HostConfig.requiredExtensions`, owner only, Host → Extensions → **Require of every session**). Sessions run them first,
    whatever their workspace chose and in its owner's sessions too, in place of a workspace's version of the same package;
    their tools are approved as rule 5 says, never automatic. A session whose host can't run one (not installed at that
-   version, not built into its connector, or failing to load) takes no messages until it can: a guard the host's owner
-   counts on never silently drops out. Connectors that do this advertise `requiredExtensions`. This is how a host guards
+   version, not built into its connector, failing to load, or with a module that does) takes no messages until it can,
+   and each message is checked again as it starts: a guard the host's owner counts on never silently drops out. The
+   connector keeps what it last heard was required through any outage of the control plane (`HostConfigSource.required`),
+   and until it has heard once, its sessions take no messages. Connectors that do this advertise `requiredExtensions`. This is how a host guards
    itself: `piki:prompt-audit` ([Pikibun's extensions](piki-extensions.md)) on messages, a tool-call guard such as
    `npm:cc-safety-net` on what runs.
 
@@ -69,7 +71,7 @@ the session's own, then maps what it registered:
 | `registerTool` | A pi-durable tool (`execute(toolCallId, params, signal, onUpdate, ctx)`), behind the approval of rule 5. `onUpdate` is ignored. A tool named like one of Pikibun's own is ignored, unless that one is retired (`web_fetch`, `web_search`, …) |
 | `before_agent_start` | Run once per message with its prompt; a returned `systemPrompt` (appended to the empty base it gets) and `message` become a prompt section |
 | `context` | `GenerationHooks.beforeRequest` |
-| `input` | Before a message or side ask is accepted, outside the session's turn (`SessionExtensions.input`): `transform` changes what is queued, `handled` refuses it with the source's last `ctx.ui.notify` text. `source` is `interactive` for the host owner's own messages and `rpc` for everyone else's. A handler that throws or takes over 25 seconds refuses the message |
+| `input` | On each message or side ask once it is queued, before it starts (`Session.screen`, `SessionExtensions.input`), beside the session's work: the connector answers one request at a time, so a handler that asks a model never holds up another session's request. The message and those queued behind it wait for it. `transform` changes what runs, `handled` refuses it: it ends `refused`, shown in the transcript (`workspace.run-refused`) with the source's last `ctx.ui.notify` text. `source` is `interactive` for the host owner's own messages and `rpc` for everyone else's. A handler that throws or takes over a minute refuses the message; a restart while one runs screens the message again |
 | `tool_call` | `ToolHooks.beforeTool`: `block`/`reason`, and changes made to `event.input` |
 | `tool_result` | `ToolHooks.afterTool`: `content`, `isError`, `details` |
 | `turn_start`, `turn_end` | Before each model request, `GenerationHooks.afterTools` (results ignored) |

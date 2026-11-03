@@ -24,8 +24,8 @@ export type AuditCategory = (typeof auditCategories)[number];
 
 export type AuditVerdict = { allow: true } | { allow: false; category: AuditCategory; reason: string };
 
-/** How long one audit may take: within the 30 seconds Pikibun's control plane waits for a message to be accepted. */
-export const AUDIT_TIMEOUT_MS = 20_000;
+/** How long one audit may take: the message, and those behind it, wait for it. */
+export const AUDIT_TIMEOUT_MS = 45_000;
 /** Room for the verdict, and for a reasoning model's thinking before it. */
 const AUDIT_MAX_TOKENS = 2048;
 /** The longest reason kept for the log. */
@@ -106,11 +106,15 @@ export const promptAuditFlags = Object.freeze({
   policy: "What else counts as sensitive on this host, in your own words; the audit refuses what it forbids too",
 });
 
-/** The audit model: the `model` setting's, or the session's. */
-function auditModel(ctx: ExtensionContext, setting: string): Model<Api> | undefined {
+/**
+ * The audit model: the `model` setting's, or the session's when it is empty. A setting that doesn't name a model the
+ * host has (`provider/modelId`) is none, never the session's model, which the sender may have chosen.
+ */
+export function auditModel(ctx: Pick<ExtensionContext, "model" | "modelRegistry">, setting: string): Model<Api> | undefined {
+  if (!setting) return ctx.model as Model<Api> | undefined;
   const slash = setting.indexOf("/");
-  if (slash > 0) return ctx.modelRegistry?.find(setting.slice(0, slash), setting.slice(slash + 1));
-  return ctx.model as Model<Api> | undefined;
+  if (slash <= 0 || slash === setting.length - 1) return undefined;
+  return ctx.modelRegistry?.find(setting.slice(0, slash), setting.slice(slash + 1));
 }
 
 /** Asks the model about one message. Throws when it can't answer: no registry, a provider error, a timeout, no verdict. */

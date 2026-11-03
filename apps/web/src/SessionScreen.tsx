@@ -150,6 +150,7 @@ function TranscriptEntry({ entry, userId, actions }: { entry: EntryView; userId:
   const toolLabel = calls.length > 0 && `Tool · ${calls[0].name}`;
   if (entry.kind === "workspace.run-stopped") return <div className="entry-stopped" role="note"><span>Stopped{actor && <> by {actor}</>}</span></div>;
   if (entry.kind === "workspace.run-crashed") return <div className="entry-stopped" role="note"><span>{entry.text}</span></div>;
+  if (entry.kind === "workspace.run-refused") return <div className="entry-stopped" role="note"><span>{entry.text}{actor && <> · {actor}</>}</span></div>;
   if ((toolLabel && !prose.trim()) || entry.role === "system" || entry.role === "toolResult") {
     const label = toolLabel || (entry.role === "toolResult" ? "Tool result" : "System");
     // A tool call row would show the model's time, not the tool's, so only results carry a duration.

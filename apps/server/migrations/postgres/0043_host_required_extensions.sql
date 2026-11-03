@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0049_host_required_extensions.sql.
+-- Postgres translation of sqlite/0050_host_required_extensions.sql.
 
 -- The extensions a host's owner requires of every session on it, whatever its workspace chose (HostConfig.requiredExtensions
 -- in packages/shared/src/host-config.ts): each one's source and settings, as JSON, in the order sessions run them.

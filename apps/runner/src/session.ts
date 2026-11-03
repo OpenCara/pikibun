@@ -18,7 +18,7 @@ import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from
 import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { extensionPackageKey, missingRequiredExtensions, sessionExtensions, type ChosenExtension, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
+import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
 import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
@@ -53,7 +53,7 @@ import { DirectGit } from "./git-direct.js";
 import { egressReadServices, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import { documentKindNames, validSourceItem, type GrantSource, type SourceReadRequest, type SourceReadView } from "../../../packages/shared/src/sources.js";
-import { defaultHostConfig, type HostCompaction, type HostConfig } from "../../../packages/shared/src/host-config.js";
+import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
 import { requesterAutoApproves, decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
 
@@ -81,6 +81,13 @@ type Run = {
   stopped?: { by: string; pending?: true };
   /** Pi parked its work after host crashes cut it off again and again, so it ended (see endParkedRuns). */
   crashed?: true;
+  /**
+   * Extensions' input handlers are still to see it (see `screen`): it is queued, but neither it nor anything behind it
+   * starts until they have.
+   */
+  screening?: true;
+  /** An extension's input handler took it (see `screen`), so it ended without reaching Pi; `notice` is what the sender is told. */
+  refused?: { by: string; notice: string };
   /** Someone went back to before this shared message (see `revert`): it no longer says what the session is doing. */
   reverted?: true;
   /** Its sender took it back before it ran, to edit it (see `withdraw`): it never reached Pi, and says nothing of the session. */
@@ -272,6 +279,11 @@ export type RunnerConfig = {
    */
   hostConfig?: () => Promise<HostConfig>;
   /**
+   * The extensions the host's owner requires of every session (HostConfig.requiredExtensions), as the connector last
+   * heard them, however long ago; undefined until it has heard. Without it, those of `hostConfig`.
+   */
+  requiredExtensions?: () => Promise<RequiredExtension[] | undefined>;
+  /**
    * The host's extensions and the workspace's choice of them (docs/design/host-extensions.md); without it, sessions run
    * none. `workspace` is asked often: the connector caches its answers.
    */
@@ -331,6 +343,14 @@ type ProgressUpdate = (path: string, change: Partial<Omit<RepositoryPreparationI
 
 /** What the transcript says after a run that the host's crashes ended (see endParkedRuns). */
 const CRASHED_TEXT = "Stopped: the host crashed repeatedly while working on this message. Send it again to retry.";
+/** Why a message isn't run while what the host's owner requires can't be: plain text the control plane passes on (422). */
+const REQUIRED_UNKNOWN = "This host can't learn from Pikibun which extensions its owner requires right now, so no message is sent. Try again shortly";
+const REQUIRED_MISSING = "This host's owner requires an extension its connector can't run now, so no message is sent. Ask them to look at the host's extensions";
+/** What a message's sender is told when extensions' input handlers ended it otherwise than by a notice of their own. */
+const REFUSED = "An extension on this host refused this message.";
+const INPUT_FAILED = "This host couldn't check this message with its extensions, so it was not sent. Try again shortly.";
+const INPUT_EMPTY = "An extension on this host left this message empty or too long, so it was not sent.";
+const INPUT_IMAGES = "An extension on this host changed this message's images into ones that can't be sent.";
 
 /**
  * Beside a session's storage while its agent is working or waiting on a decision, and gone once it isn't: a runner that
@@ -1057,6 +1077,10 @@ export class RunnerSession {
       });
       await this.sweepInputs();
     }
+    // Messages whose screening the previous open didn't finish are screened again (see screen).
+    if (!this.#frozen && !this.#packed) {
+      for (const run of Object.values((await this.metadata()).runs)) if (run.screening && run.status === "queued") void this.screen(run.key);
+    }
     // Reported while its repositories are still being prepared too; reopening is also how a report lost with a previous
     // connection or process gets through.
     this.#activity?.start();
@@ -1350,12 +1374,22 @@ export class RunnerSession {
           || Object.values(state.approvals).some(approval => approval.status === "executing")) return;
         const run = Object.values(state.runs).filter(candidate => candidate.status === "queued")
           .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))[0];
-        if (!run) return;
+        // The next message waits for extensions' input handlers to screen it, and everything behind it waits too, in order;
+        // its screening drains the queue again once it is done (see screen).
+        if (!run || run.screening) return;
         try { await this.authorize(run.initiatedBy, run.mode === "ask" ? "ask" : "write"); }
         catch {
           // Its images go first, as in endLostInputs: once the ledger ends the run, nothing of it is left on the host.
           if (run.images) await this.discardInputs([run.key]);
           await this.mutate(meta => { meta.runs[run.key]!.status = "interrupted"; });
+          continue;
+        }
+        // What the host's owner requires, once more as the message starts: a tool-call guard among them never drops out
+        // between its being accepted and its running.
+        const refusal = await this.requiredRefusal(true).catch(() => INPUT_FAILED);
+        if (refusal) {
+          if (run.images) await this.discardInputs([run.key]);
+          await this.mutate(meta => { Object.assign(meta.runs[run.key]!, { status: "interrupted", refused: { by: "", notice: refusal } }); });
           continue;
         }
         const content = await this.runInput(run);
@@ -1422,15 +1456,16 @@ export class RunnerSession {
    * The workspace's extensions this session runs with now (docs/design/host-extensions.md): its enabled ones the host
    * has at that version, then, in the host owner's own sessions, the host's dev extensions.
    */
-  private async extensionChoice(): Promise<{ chosen: ChosenExtension[]; automaticTools: boolean; missingRequired: string[] }> {
+  private async extensionChoice(): Promise<{ chosen: ChosenExtension[]; automaticTools: boolean; missingRequired: string[]; unknownRequired: boolean }> {
     const config = this.config.extensions;
-    if (!config) return { chosen: [], automaticTools: false, missingRequired: [] };
+    if (!config) return { chosen: [], automaticTools: false, missingRequired: [], unknownRequired: false };
     const answer = await config.workspace(this.binding.session.workspaceId).catch(() => ({ extensions: [], automaticTools: false }));
-    // Those the host's owner requires, as the host's configuration has them now.
-    const required = (await this.hostConfig()).requiredExtensions;
+    // Those the host's owner requires, as the connector last heard them; none it can run while it hasn't heard.
+    const known = await this.requiredExtensions();
+    const required = known ?? [];
     const installed = config.installed().map(item => item.summary);
     return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
-      automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed) };
+      automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
   }
 
   /** The extensions this session runs with now, opened (and installed in the registry) as it first runs with each. */
@@ -1470,8 +1505,8 @@ export class RunnerSession {
       },
       runTool: (call, execute) => this.runExtensionTool(call, execute),
       hookTimeoutMs: 30_000,
-      // A message waits for its input handlers within the control plane's 30 seconds to accept it.
-      inputTimeoutMs: 25_000,
+      // A queued message waits for its input handlers (see screen), and the messages behind it with it.
+      inputTimeoutMs: 60_000,
       warn: (source, message) => { process.stderr.write(`Session ${this.binding.session.id}, extension ${source}: ${message.replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`); },
     };
   }
@@ -1562,47 +1597,125 @@ export class RunnerSession {
   }
 
   /**
-   * Runs the extensions' `input` handlers on a message before it is accepted (SessionExtensions.input): those the host's
-   * owner requires first, then the workspace's, in side asks too. What they leave of it is what is queued; one that
-   * takes it refuses the message, with what it told the sender where the control plane can pass that on. While the host
-   * lacks an extension its owner requires, every message is refused. A message sent again with its request id went
-   * through them when it was accepted, and doesn't again.
+   * What the host's owner requires of every session here (HostConfig.requiredExtensions): as the connector last heard it
+   * from the control plane, which it keeps through outages (HostConfigSource.required); undefined until it has heard.
    */
-  private async extensionInput(ticket: RunnerTicket, input: SubmitInput, mode: "write" | "ask", images: InputImage[]): Promise<{ content: string; images: InputImage[] }> {
+  private async requiredExtensions(): Promise<RequiredExtension[] | undefined> {
+    if (this.config.requiredExtensions) return this.config.requiredExtensions();
+    return (await this.hostConfig()).requiredExtensions;
+  }
+
+  /**
+   * Why a message can't run with what the host's owner requires now, or undefined when it can: the connector hasn't heard
+   * what is required, the host lacks one or can't load it, or (with `open`) the session couldn't open one. A guard the
+   * owner counts on never silently drops out.
+   */
+  private async requiredRefusal(open: boolean): Promise<string | undefined> {
     const host = this.#hostExtensions;
-    const config = this.config.extensions;
-    if (!host || !config) return { content: input.content, images };
-    const { chosen, missingRequired } = await this.extensionChoice();
+    if (!host || !this.config.extensions) return undefined;
+    const { chosen, missingRequired, unknownRequired } = await this.extensionChoice();
     const log = (line: string) => { process.stderr.write(`Session ${this.binding.session.id}: ${line.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 500)}\n`); };
+    if (unknownRequired) {
+      log("refused a message: the connector hasn't heard from Pikibun which extensions this host's owner requires");
+      return REQUIRED_UNKNOWN;
+    }
     if (missingRequired.length) {
       log(`refused a message: this host requires ${missingRequired.join(", ")}, which it can't run`);
-      throw new RunnerError(422, "This host's owner requires an extension its connector can't run now, so no message is sent. Ask them to look at the host's extensions");
+      return REQUIRED_MISSING;
     }
-    // Only those that handle input, as the host loaded them, and only for a new message from a sender who may send it.
-    const installed = config.installed();
-    if (!chosen.some(item => installed.some(candidate => candidate.summary.source === item.source && candidate.summary.modules.some(module => module.events.includes("input"))))) {
-      return { content: input.content, images };
-    }
-    if ((await this.metadata()).runs[await requestKey(ticket.actorId, mode, input.requestId)]) return { content: input.content, images };
-    await this.authorize(ticket.actorId, mode === "ask" ? "ask" : "write", ticket.policyVersion);
+    if (!open) return undefined;
     await this.openExtensions(chosen.map(item => item.source));
+    const closed = chosen.filter(item => item.required && !host.isOpen(item.source)).map(item => item.source);
+    if (!closed.length) return undefined;
+    log(`refused a message: this session couldn't open ${closed.join(", ")}, which this host requires`);
+    return REQUIRED_MISSING;
+  }
+
+  /**
+   * Checks a message against what the host's owner requires before it is accepted, refusing it at once, and says whether
+   * extensions' input handlers must screen it first: those of an extension the session runs that handles input.
+   */
+  private async extensionGate(): Promise<{ screen: boolean }> {
+    const config = this.config.extensions;
+    if (!this.#hostExtensions || !config) return { screen: false };
+    const refusal = await this.requiredRefusal(false);
+    if (refusal) throw new RunnerError(422, refusal);
+    const { chosen } = await this.extensionChoice();
+    const installed = config.installed();
+    return { screen: chosen.some(item => installed.some(candidate => candidate.summary.source === item.source && candidate.summary.modules.some(module => module.events.includes("input")))) };
+  }
+
+  /**
+   * Runs the extensions' `input` handlers on a queued message (SessionExtensions.input): those the host's owner requires
+   * first, then the workspace's, in side asks too. They run beside the session's work, never in a request the connector
+   * waits on, as an audit asking a model takes seconds and the connector answers one request at a time; the message and
+   * everything queued behind it wait for them. What they leave of it is what runs; one that takes it ends it refused, with
+   * what it told the sender. A host's crash or restart while they run screens it again when the session opens.
+   */
+  private async screen(key: string): Promise<void> {
+    const generation = this.generation;
+    let outcome: InputOutcome | { action: "skip" };
+    try { outcome = await this.screenInput(key); }
+    catch (error) {
+      process.stderr.write(`Session ${this.binding.session.id}: couldn't screen a message, so it was refused: ${String(error instanceof Error ? error.message : error).slice(0, 300)}\n`);
+      outcome = { action: "refused", by: "", notice: INPUT_FAILED };
+    }
+    if (generation !== this.generation || this.closing) return;
+    let images: InputImage[] | undefined;
+    if (outcome.action === "continue") {
+      const run = (await this.metadata()).runs[key];
+      const before = run?.images ? await this.readInputs(key) ?? [] : [];
+      const changed = outcome.images.length !== before.length || outcome.images.some((image, index) => image.data !== before[index]!.data);
+      if (outcome.text.length > 100_000 || (!outcome.text.trim() && !outcome.images.length)) outcome = { action: "refused", by: "", notice: INPUT_EMPTY };
+      else if (changed) {
+        const parsed = parseChatImages(outcome.images.map(image => ({ mimeType: image.mimeType, data: image.data })));
+        images = "error" in parsed ? undefined : parsed.images.length ? await this.prepareImages(parsed.images).catch(() => undefined) : [];
+        if (!images) outcome = { action: "refused", by: "", notice: INPUT_IMAGES };
+        else if (images.length) await this.writeInputs(key, images);
+        else await this.discardInputs([key]);
+      }
+    }
+    const result = outcome;
+    let refused = false;
+    await this.mutate(meta => {
+      const run = meta.runs[key];
+      // Stopped, taken back or already started meanwhile: it is no longer this screening's to settle.
+      if (!run?.screening || run.status !== "queued" || run.stopped || run.withdrawn) return;
+      delete run.screening;
+      if (result.action === "refused") {
+        Object.assign(run, { status: "interrupted", refused: { by: result.by, notice: result.notice ?? REFUSED } });
+        refused = true;
+      } else if (result.action === "continue") {
+        run.content = result.text;
+        if (images) {
+          if (images.length) run.images = { count: images.length, bytes: images.reduce((total, image) => total + image.data.length, 0) };
+          else delete run.images;
+        }
+      }
+    });
+    if (refused) await this.discardInputs([key]);
+    this.drainQueue();
+  }
+
+  /** What the extensions' input handlers make of queued message `key`; `skip` when there is nothing to screen. */
+  private async screenInput(key: string): Promise<InputOutcome | { action: "skip" }> {
+    const host = this.#hostExtensions;
+    const run = (await this.metadata()).runs[key];
+    if (!host || !run?.screening || run.status !== "queued") return { action: "skip" };
+    const refusal = await this.requiredRefusal(true);
+    if (refusal) return { action: "refused", by: "", notice: refusal };
+    const images = run.images ? await this.readInputs(key) : [];
+    // Its images are gone: it never runs, as drainQueue finds (endLostInputs).
+    if (!images) return { action: "skip" };
+    const { chosen } = await this.extensionChoice();
     const hostOwner = this.binding.session.connectorOwnerId;
-    const outcome = await host.input(chosen.map(item => item.source), input.content, images.map(image => ({ type: "image" as const, ...image })),
-      hostOwner && ticket.actorId === hostOwner ? "interactive" : "rpc");
-    if (outcome.action === "refused") {
-      // The relay passes on only plain text in this charset (connector-transport.ts runnerReason); other notices stay here.
-      const notice = outcome.notice && /^[\w .,:'()-]{1,300}$/.test(outcome.notice) ? outcome.notice : undefined;
-      if (!notice) log(`${outcome.by} refused a message${outcome.notice ? `: ${outcome.notice}` : ""}`);
-      throw new RunnerError(422, notice ?? "An extension on this host refused this message");
-    }
-    if (outcome.text === input.content && outcome.images.length === images.length && outcome.images.every((image, index) => image.data === images[index]!.data)) {
-      return { content: input.content, images };
-    }
-    // Changed: checked as a message is.
-    if (outcome.text.length > 100_000 || (!outcome.text.trim() && !outcome.images.length)) throw new RunnerError(422, "An extension on this host left this message empty or too long");
-    const parsed = parseChatImages(outcome.images.map(image => ({ mimeType: image.mimeType, data: image.data })));
-    if ("error" in parsed) throw new RunnerError(422, "An extension on this host changed this message's images into ones that can't be sent");
-    return { content: outcome.text, images: parsed.images.length ? await this.prepareImages(parsed.images) : [] };
+    const outcome = await host.input(chosen.map(item => item.source), run.content, images.map(image => ({ type: "image" as const, ...image })),
+      hostOwner && run.initiatedBy === hostOwner ? "interactive" : "rpc");
+    if (outcome.action !== "refused") return outcome;
+    // What it told the sender, as one plain line; or which extension took it.
+    const notice = outcome.notice?.replace(/[\x00-\x1f\x7f]+/g, " ").trim().slice(0, 300);
+    process.stderr.write(`Session ${this.binding.session.id}: ${outcome.by} refused a message${notice ? `: ${notice}` : ""}\n`);
+    return { action: "refused", by: outcome.by, notice: notice || `An extension on this host (${outcome.by}) refused this message.` };
   }
 
   /** Opens those of `sources` the host has loaded that the session hasn't opened yet, one opening at a time. */
@@ -1740,10 +1853,11 @@ export class RunnerSession {
       || (this.config.connectorId && mode === "write" && input.admissionId === undefined))
       throw new RunnerError(400, "Invalid or missing Worker write admission");
     // Decoded and fitted before the session's turn, as that can take a while: what is queued is what the model gets.
-    const sent = images.length ? await this.prepareImages(images) : [];
-    // Also before the session's turn: the extensions' input handlers, such as a prompt audit that asks a model, may take
-    // seconds, and a stop or a decision meanwhile isn't kept waiting. What they leave of the message is what is queued.
-    const { content, images: prepared } = await this.extensionInput(ticket, input, mode, sent);
+    const prepared = images.length ? await this.prepareImages(images) : [];
+    const content = input.content;
+    // What the host's owner requires is checked now, and refuses the message at once; extensions' input handlers, which may
+    // ask a model for seconds, screen it once it is queued (see screen), never while the connector waits on this request.
+    const { screen } = await this.extensionGate();
     return this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
       // Messages queue while repositories are prepared; once that failed, say why instead of queueing forever.
@@ -1795,11 +1909,13 @@ export class RunnerSession {
       if (input.admissionId !== undefined) run.admissionId = input.admissionId;
       if (options) run.options = options;
       if (prepared.length) run.images = { count: prepared.length, bytes: imageBytes };
+      if (screen) run.screening = true;
       await this.mutate(meta => {
         meta.runs[key] = run;
         meta.nextSequence = (meta.nextSequence ?? 0) + 1;
         if (!meta.branches.some(branch => branch.id === conversation.id)) meta.branches.push({ id: conversation.id, mode, actorId: ticket.actorId });
       });
+      if (screen) void this.screen(key);
       this.drainQueue();
       return { submissionId: key, conversationId: String(conversation.id), status: "queued", queuePosition: Object.values(state.runs).filter(run => ["queued", "running", "admitting"].includes(run.status)).length + 1 };
     });
@@ -2853,12 +2969,22 @@ export class RunnerSession {
     const entries: SessionView["entries"] = [];
     for (const snapshot of snapshots) {
       let previous: Run | undefined;
+      // Messages an extension refused never reached Pi: each shows where it was sent, after the entry the conversation
+      // ended with then.
+      const refused = Object.values(state.runs).filter(run => run.refused && run.conversationId === snapshot.branch.id)
+        .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+      const refusedAt = (after: (run: Run) => boolean) => {
+        for (const run of refused.filter(after)) entries.push(this.refusedView(run, snapshot.branch.id));
+      };
+      refusedAt(run => !snapshot.entries.some(entry => entry.id <= run.startEntry));
       for (const entry of snapshot.entries) {
         const run = Object.values(state.runs).filter(candidate => (candidate.started || candidate.submissionId !== undefined || candidate.status === "admitting") && candidate.conversationId === entry.conversationId && candidate.startEntry < entry.id).sort((a, b) => b.startEntry - a.startEntry)[0];
         const ending = run !== previous && previous && this.endView(previous, snapshot.branch.id);
         if (ending) entries.push(ending);
         previous = run;
         entries.push(this.entryView(entry, snapshot.branch.id, run?.initiatedBy, autoApproved));
+        const next = snapshot.entries[snapshot.entries.indexOf(entry) + 1];
+        refusedAt(run => run.startEntry >= entry.id && (!next || run.startEntry < next.id));
       }
       const ending = previous && this.endView(previous, snapshot.branch.id);
       if (ending) entries.push(ending);
@@ -2877,7 +3003,7 @@ export class RunnerSession {
       busy: Object.values(state.runs).some(holdsQueue)
         || Object.values(state.approvals).some(approval => approval.status === "executing") || repositories?.status === "preparing",
       queue: Object.values(state.runs).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
-        .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.status })),
+        .map(run => ({ submissionId: run.key, actorId: run.initiatedBy, mode: run.mode, status: run.stopped ? (run.stopped.pending ? "stopping" : "stopped") : run.withdrawn ? "withdrawn" : run.inputsLost ? "images lost" : run.refused ? "refused" : run.status })),
       stoppable: true,
       withdrawable: true,
       rewindable: true,
@@ -2902,7 +3028,7 @@ export class RunnerSession {
     try {
       const answer = await config.workspace(this.binding.session.workspaceId);
       const installed = config.installed().map(item => item.summary);
-      const required = (await this.hostConfig()).requiredExtensions;
+      const required = await this.requiredExtensions() ?? [];
       const chosen = sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required);
       const missingRequired = missingRequiredExtensions(required, installed);
       // The tools the next message would get of each, settled as that message settles them (SessionExtensions.select).
@@ -2952,6 +3078,11 @@ export class RunnerSession {
     if (run.stopped) return { id: `${branch}:stopped:${run.key}`, kind: "workspace.run-stopped", role: "system", text: "Stopped", actorId: run.stopped.by, conversationId: String(branch) };
     if (run.crashed) return { id: `${branch}:crashed:${run.key}`, kind: "workspace.run-crashed", role: "system", text: CRASHED_TEXT, conversationId: String(branch) };
     return undefined;
+  }
+
+  /** A message an extension's input handler refused (see `screen`): what its sender was told, where they sent it. */
+  private refusedView(run: Run, branch: number): SessionView["entries"][number] {
+    return { id: `${branch}:refused:${run.key}`, kind: "workspace.run-refused", role: "system", text: run.refused!.notice, actorId: run.initiatedBy, conversationId: String(branch) };
   }
 
   /**
