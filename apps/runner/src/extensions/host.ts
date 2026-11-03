@@ -21,6 +21,8 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 export class HostExtensions {
   #loaded: LoadedSource[] = [];
   #workspaces = new Map<string, { value: WorkspaceExtensionsAnswer; at: number; refresh?: Promise<WorkspaceExtensionsAnswer> }>();
+  /** Each workspace's last answer this connector read, whatever its age: what a fail-closed session tool goes by (lastKnown). */
+  #lastKnown = new Map<string, WorkspaceExtensionsAnswer>();
 
   /** `pikiExtensions`: the connector's Pikibun extensions (all of this version's by default). */
   constructor(readonly store: ExtensionStore, readonly options: { remoteInstalls: boolean; now?: () => number; pikiExtensions?: readonly PikiExtension[] }) {}
@@ -87,9 +89,17 @@ export class HostExtensions {
     entry.refresh = fetch().then(value => {
       entry.value = parseWorkspaceExtensionsAnswer(value);
       entry.at = now();
+      this.#lastKnown.set(workspaceId, entry.value);
       return entry.value;
     }).catch(() => now() - entry.at < WORKSPACE_STALE_MS ? entry.value : none).finally(() => { entry.refresh = undefined; });
     this.#workspaces.set(workspaceId, entry);
     return entry.refresh;
   }
+
+  /**
+   * The last answer read for workspace `workspaceId`, however old, or none while this connector never read one. Unlike
+   * `workspace`, it doesn't fall back to no extensions once the control plane has been out of reach for a while, so a
+   * session tool the workspace turned off whose being off protects something (a shell) stays off then.
+   */
+  lastKnown(workspaceId: string): WorkspaceExtensionsAnswer | undefined { return this.#lastKnown.get(workspaceId); }
 }

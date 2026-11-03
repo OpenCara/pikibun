@@ -678,6 +678,7 @@ export class LocalConnector {
       installed: () => extensions.loaded,
       workspace: workspaceId => extensions.workspace(workspaceId, async () =>
         this.callback(await this.connection(), "/api/connectors/self/extensions/workspace", { workspaceId }, WORKSPACE_EXTENSIONS_LIMIT)),
+      lastKnown: workspaceId => extensions.lastKnown(workspaceId),
       ...(this.options.localModels.modelRegistry ? { modelRegistry: this.options.localModels.modelRegistry } : {}),
     };
   }

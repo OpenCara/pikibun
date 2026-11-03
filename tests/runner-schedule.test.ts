@@ -180,3 +180,58 @@ test("sessionToolsOff: only a session-tool extension the workspace lists turned 
   assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule"]);
   assert.deepEqual([...sessionToolsOff([{ source: "piki:gh", enabled: false }, { source: "npm:pi-web-access@0.46.0", enabled: false }])], [], "other extensions offer no session tools");
 });
+
+test("piki:host-shell fails closed: host_bash stays off while the last answer read turned it off, even once the connector falls back to no extensions", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-shell-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const offered: string[][] = [];
+  const noting = (context: { messages: { role: string; toolsAdded?: { name: string }[]; toolsRemoved?: { name: string }[] }[] }) => {
+    const tools = new Set<string>();
+    for (const message of context.messages) {
+      if (message.role !== "system") continue;
+      for (const tool of message.toolsAdded ?? []) tools.add(tool.name);
+      for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name);
+    }
+    offered.push([...tools]);
+    return fauxAssistantMessage("Noted.");
+  };
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([noting, noting, noting, noting] as never);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const off = { source: "piki:host-shell", enabled: false, tools: "approval" as const, settings: {} };
+  let current: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  let last: WorkspaceExtensionsAnswer | undefined;
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-host-shell-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => current, lastKnown: () => last },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "host-shell-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const admissionId = await sha256("host shell admission");
+  const send = async (requestId: string) => {
+    await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId, admissionId }, "write");
+    await idle(session);
+  };
+
+  // Never read, or read without it: on, as before.
+  await send("never");
+  assert.ok(offered[0]!.includes("host_bash"));
+  // Turned off, and read so.
+  current = { extensions: [off], automaticTools: false }; last = current;
+  await send("off");
+  assert.ok(!offered[1]!.includes("host_bash"));
+  assert.ok(offered[1]!.includes("bash"), "bash stays: sessions still need it to clone and build");
+  // The control plane out of reach for long: the connector answers no extensions, but the last answer read still holds.
+  current = { extensions: [], automaticTools: false };
+  await send("outage");
+  assert.ok(!offered[2]!.includes("host_bash"), "losing the control plane never turns host_bash back on");
+  // Turned on again, and read so.
+  last = current;
+  await send("on");
+  assert.ok(offered[3]!.includes("host_bash"));
+});

@@ -279,6 +279,8 @@ export type RunnerConfig = {
   extensions?: {
     installed(): readonly LoadedSource[];
     workspace(workspaceId: string): Promise<WorkspaceExtensionsAnswer>;
+    /** The workspace's last answer read, however old (HostExtensions.lastKnown): fail-closed session tools go by it too. */
+    lastKnown?(workspaceId: string): WorkspaceExtensionsAnswer | undefined;
     modelRegistry?: ModelRegistry;
   };
 };
@@ -1329,13 +1331,18 @@ export class RunnerSession {
   /**
    * The session's own tools its workspace turned off, by turning off the Pikibun extension that offers them
    * (`sessionToolsOff`). None where the session has no workspace extensions, or can't learn them now: the tools stay on,
-   * as they were before they became switchable.
+   * as they were before they became switchable. A fail-closed one (the shells) also stays off while the last answer this
+   * connector read turned it off, however old, so losing the control plane never turns a shell back on.
    */
   private async sessionToolsOff(): Promise<Set<string>> {
     const config = this.config.extensions;
     if (!config) return new Set();
-    const answer = await config.workspace(this.binding.session.workspaceId).catch(() => undefined);
-    return answer ? sessionToolsOff(answer.extensions) : new Set();
+    const workspaceId = this.binding.session.workspaceId;
+    const answer = await config.workspace(workspaceId).catch(() => undefined);
+    const off = answer ? sessionToolsOff(answer.extensions) : new Set<string>();
+    const last = config.lastKnown?.(workspaceId);
+    if (last) for (const tool of sessionToolsOff(last.extensions, { failClosedOnly: true })) off.add(tool);
+    return off;
   }
 
   /**
@@ -2254,6 +2261,7 @@ export class RunnerSession {
         parameters: Type.Object({ command: Type.String(), timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })) }),
         execute: async (args, api, call) => {
           const attribution = await this.toolActor(api, true);
+          await this.requireSessionTool("host_bash");
           await this.permit(api, call, "host_bash", args.command, { write: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy,
             { kind: "host.bash", command: args.command, timeoutSeconds: args.timeout_seconds ?? 300 }, String(api.taskId), { permitted: true }), call));
