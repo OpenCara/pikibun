@@ -4,13 +4,13 @@ import test, { type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { childThinkingLevel, runCrossSessionNotifications } from '../apps/server/src/cross-session.js';
+import { runCrossSessionNotifications } from '../apps/server/src/cross-session.js';
 import {
   audienceTarget, crossSessionHeader, crossSessionLimits, messageOutcome, sessionsToolTarget, type CrossSessionMessage, type CrossSessionSummary, type SessionConnections,
 } from '../packages/shared/src/cross-session.js';
 import type { EntryView, SessionRecord, SessionView } from '../packages/shared/src/types.js';
 import { nestSessions } from '../packages/client/src/session-tree.js';
-import { seedAgentVersion, testDatabase } from './helpers/control-plane.js';
+import { fakeHub, seedAgentVersion, testDatabase } from './helpers/control-plane.js';
 
 test('a delivered message names its origin and sender, and its outcome is the answer after it in its own conversation', () => {
   const header = crossSessionHeader({ id: 'm1', kind: 'send', hops: 2 }, { id: 'origin', title: 'Fix [auth]\nnow' }, { id: 'github:1', login: 'alice' });
@@ -481,9 +481,11 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', thinkingLevel: 'low' }), 400, 'invalid_input');
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'huge' }), 400, 'invalid_input');
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'low' }), 409, 'thinking_unsupported');
-  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?)')
-    .run('levels-host', ownerId, 'Levels', 'h'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, chatOptions: true }),
+  // A host of the owner's that sets reasoning levels and offers its model at off and low.
+  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('levels-host', ownerId, 'Levels', 'h'.repeat(43), 'c'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, chatOptions: true, plainGit: true }),
       JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3', thinkingLevels: ['off', 'low'], thinkingLevel: 'low' }]), new Date().toISOString());
+  f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('levels-host', f.workspace.id, new Date().toISOString());
   f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
     .run('hosted-model', f.workspace.id, 'Faux 3', 'faux', 'faux-3', new Date().toISOString(), 'levels-host', ownerId);
   const unsupported = await f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', modelId: 'hosted-model', thinkingLevel: 'high' });
@@ -492,20 +494,42 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, before);
 
   // An agent that names a model but no level gets its parent's level where that model runs at it, and the host's own
-  // level where it doesn't; a level it chose is never replaced.
-  const hosted = { provider: 'faux', model_id: 'faux-3', connector_id: 'levels-host' };
-  assert.equal(await childThinkingLevel(f.env, hosted, undefined, 'low'), 'low');
-  assert.equal(await childThinkingLevel(f.env, hosted, undefined, 'high'), undefined);
-  assert.equal(await childThinkingLevel(f.env, hosted, 'off', 'low'), 'off');
-  assert.equal(await childThinkingLevel(f.env, { ...hosted, connector_id: null }, undefined, 'low'), undefined);
-  // Only an omitted model is recorded as inherited; the parent is asked for the level of a named model's opening message.
-  const named = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Named', modelId: f.model.id, message: 'Go' });
-  assert.equal(named.status, 201, JSON.stringify(named.body));
+  // level where it doesn't. Only an omitted model is recorded as inherited.
+  const hostedSubmits: Record<string, unknown>[] = [];
+  f.env.CONNECTOR_HUB = fakeHub({ rpc(_connectorId, envelope) {
+    const { action, sessionId } = envelope.request.ticket;
+    if (action === 'create') return Response.json({ ok: true }, { status: 201 });
+    if (action === 'view') return Response.json({ view: { ...f.fake(sessionId).view, sessionId } });
+    if (action === 'submit') {
+      hostedSubmits.push(JSON.parse(envelope.request.body) as Record<string, unknown>);
+      return Response.json({ submissionId: `hosted-${hostedSubmits.length}`, conversationId: '0', status: 'queued' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 503 });
+  } });
   const createdAudit = (childId: string) => JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.cross_session.created' AND detail_json LIKE ?")
     .get(`%${childId}%`)!.detail_json)) as Record<string, unknown>;
-  const namedAudit = createdAudit((named.body.session as CrossSessionSummary).id);
-  assert.equal(namedAudit.modelId, f.model.id);
-  assert.equal(namedAudit.inheritedModel, undefined);
+  f.fake('session-a').view.agent = { provider: 'faux', modelId: 'faux-2', thinkingLevel: 'low' };
+  await nextView();
+  const offered = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Offered', modelId: 'hosted-model', message: 'Go' });
+  assert.equal(offered.status, 201, JSON.stringify(offered.body));
+  assert.deepEqual(offered.body.model, { id: 'hosted-model', provider: 'faux', modelId: 'faux-3', thinkingLevel: 'low' });
+  assert.equal((hostedSubmits[0]!.options as Record<string, unknown>).thinkingLevel, 'low');
+  const offeredAudit = createdAudit((offered.body.session as CrossSessionSummary).id);
+  assert.deepEqual([offeredAudit.modelId, offeredAudit.thinkingLevel, offeredAudit.inheritedThinking, offeredAudit.inheritedModel], ['hosted-model', 'low', true, undefined]);
+  // The parent at a level that model doesn't offer: the opening message names none, and its host starts it at its own.
+  f.fake('session-a').view.agent = { provider: 'faux', modelId: 'faux-2', thinkingLevel: 'high' };
+  await nextView();
+  const notOffered = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Not offered', modelId: 'hosted-model', message: 'Go' });
+  assert.equal(notOffered.status, 201, JSON.stringify(notOffered.body));
+  assert.deepEqual(notOffered.body.model, { id: 'hosted-model', provider: 'faux', modelId: 'faux-3' });
+  assert.equal((hostedSubmits[1]!.options as Record<string, unknown> | undefined)?.thinkingLevel, undefined);
+  const notOfferedAudit = createdAudit((notOffered.body.session as CrossSessionSummary).id);
+  assert.deepEqual([notOfferedAudit.thinkingLevel, notOfferedAudit.inheritedThinking, notOfferedAudit.inheritedModel], [undefined, undefined, undefined]);
+  // A level the agent chose is never replaced by its parent's.
+  const own = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Own level', modelId: 'hosted-model', message: 'Go', thinkingLevel: 'off' });
+  assert.equal(own.status, 201, JSON.stringify(own.body));
+  assert.equal((hostedSubmits[2]!.options as Record<string, unknown>).thinkingLevel, 'off');
+  assert.equal(createdAudit((own.body.session as CrossSessionSummary).id).inheritedThinking, undefined);
   assert.equal(createdAudit(inheritedId).inheritedModel, true);
 
   // Turned off, agents choose neither, and every session they start runs on its parent's current model.

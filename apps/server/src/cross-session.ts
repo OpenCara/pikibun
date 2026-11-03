@@ -435,7 +435,7 @@ async function advertised(env: Env, model: Pick<ModelRow, 'provider' | 'model_id
  * offer it at, or else this session's own (`inherited`) where the new session's model runs at it; none leaves it to
  * the host, which starts the model at its own level.
  */
-export async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
+async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
   inherited: ThinkingLevel | undefined): Promise<ThinkingLevel | undefined> {
   if (chosen === undefined && inherited === undefined) return undefined;
   const offered = await advertised(env, model);
