@@ -368,13 +368,16 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   if (!childModels && (options.modelId !== undefined || options.thinkingLevel !== undefined)) {
     fail(403, 'child_models_disabled', 'This workspace runs the sessions agents start on their parent\'s model and reasoning level. Leave out model and thinking.');
   }
-  const parent = options.modelId === undefined ? await parentModel(call) : undefined;
+  // The parent is asked for whatever the agent leaves out: its model, or the reasoning level an opening message runs at.
+  const inheritsModel = options.modelId === undefined;
+  const inheritsThinking = options.thinkingLevel === undefined && options.message !== undefined;
+  const parent = inheritsModel || inheritsThinking ? await parentModel(call) : undefined;
   const modelId = options.modelId ?? parent?.modelId;
   if (!modelId) fail(409, 'invalid_binding', 'This session\'s model is unavailable; name a model that list returns.');
   const model = await c.env.DB.query<Pick<ModelRow, 'id' | 'provider' | 'model_id' | 'connector_id' | 'connector_owner_id'>>(
     'SELECT id, provider, model_id, connector_id, connector_owner_id FROM models WHERE id = ? AND workspace_id = ?').bind(modelId, origin.workspace_id).first();
   if (!model) fail(404, 'not_found', 'Model not found.');
-  const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, options.message === undefined ? undefined : parent?.thinkingLevel);
+  const thinkingLevel = await childThinkingLevel(c.env, model, options.thinkingLevel, inheritsThinking ? parent?.thinkingLevel : undefined);
   // The new session runs as the actor, with their Git accounts, on the model's host: one they own, or this session's
   // own host when it is theirs to trust (they started this session there). Any other host they acknowledge themselves.
   const trusted = model.connector_id && (model.connector_owner_id === actorId || (model.connector_id === origin.connector_id && actorId === origin.owner_id));
@@ -395,7 +398,8 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const { row } = await asActor(c.env, actorId, inner => createSession(inner, { workspaceId: origin.workspace_id, title, visibility, modelId,
     ...(model.connector_id ? { trustedConnectorId: model.connector_id } : {}) }, { parentSessionId: origin.id }));
   await auditStatement(c.env, actorId, 'session.cross_session.created', origin.workspace_id, origin.id, { childSessionId: row.id, callId: call.callId, modelId,
-    ...(thinkingLevel ? { thinkingLevel } : {}), ...(parent ? { inherited: true } : {}) }).run();
+    ...(thinkingLevel ? { thinkingLevel } : {}), ...(inheritsModel ? { inheritedModel: true } : {}),
+    ...(inheritsThinking && thinkingLevel ? { inheritedThinking: true } : {}) }).run();
   const created = await sessionAccess(c.env, row.id, actorId);
   if (!created) fail(409, 'policy_changed', 'The new session is no longer available.');
   const message = options.message === undefined ? undefined : await deliver(call, created.row, 'create', options.message, options.access, options.notify, thinkingLevel);
@@ -431,7 +435,7 @@ async function advertised(env: Env, model: Pick<ModelRow, 'provider' | 'model_id
  * offer it at, or else this session's own (`inherited`) where the new session's model runs at it; none leaves it to
  * the host, which starts the model at its own level.
  */
-async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
+export async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
   inherited: ThinkingLevel | undefined): Promise<ThinkingLevel | undefined> {
   if (chosen === undefined && inherited === undefined) return undefined;
   const offered = await advertised(env, model);

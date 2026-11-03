@@ -4,7 +4,7 @@ import test, { type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { runCrossSessionNotifications } from '../apps/server/src/cross-session.js';
+import { childThinkingLevel, runCrossSessionNotifications } from '../apps/server/src/cross-session.js';
 import {
   audienceTarget, crossSessionHeader, crossSessionLimits, messageOutcome, sessionsToolTarget, type CrossSessionMessage, type CrossSessionSummary, type SessionConnections,
 } from '../packages/shared/src/cross-session.js';
@@ -490,6 +490,23 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   assert.deepEqual([unsupported.status, unsupported.body.code], [400, 'thinking_unsupported']);
   assert.match(String((unsupported.body as { message?: string }).message ?? JSON.stringify(unsupported.body)), /off, low/);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, before);
+
+  // An agent that names a model but no level gets its parent's level where that model runs at it, and the host's own
+  // level where it doesn't; a level it chose is never replaced.
+  const hosted = { provider: 'faux', model_id: 'faux-3', connector_id: 'levels-host' };
+  assert.equal(await childThinkingLevel(f.env, hosted, undefined, 'low'), 'low');
+  assert.equal(await childThinkingLevel(f.env, hosted, undefined, 'high'), undefined);
+  assert.equal(await childThinkingLevel(f.env, hosted, 'off', 'low'), 'off');
+  assert.equal(await childThinkingLevel(f.env, { ...hosted, connector_id: null }, undefined, 'low'), undefined);
+  // Only an omitted model is recorded as inherited; the parent is asked for the level of a named model's opening message.
+  const named = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Named', modelId: f.model.id, message: 'Go' });
+  assert.equal(named.status, 201, JSON.stringify(named.body));
+  const createdAudit = (childId: string) => JSON.parse(String(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.cross_session.created' AND detail_json LIKE ?")
+    .get(`%${childId}%`)!.detail_json)) as Record<string, unknown>;
+  const namedAudit = createdAudit((named.body.session as CrossSessionSummary).id);
+  assert.equal(namedAudit.modelId, f.model.id);
+  assert.equal(namedAudit.inheritedModel, undefined);
+  assert.equal(createdAudit(inheritedId).inheritedModel, true);
 
   // Turned off, agents choose neither, and every session they start runs on its parent's current model.
   const off = await f.owner.request('PUT', path, { childModels: false });
