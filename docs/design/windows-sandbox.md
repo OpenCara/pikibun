@@ -9,7 +9,8 @@ decision is in [Choosing](#choosing-across-windows-linux-and-macos-from-the-requ
 The Windows desktop app offers both for each server's host: **WSL2** (the default; the app runs the connector inside a
 distribution) or **Native Windows**, which is this sandbox, through the desktop host's `experimentalSandbox` request,
 with the CLI's default limits, or unsandboxed with consent while its prerequisites are missing. See
-[the app's README](../../apps/desktop/README.md#windows).
+[the app's README](../../apps/desktop/README.md#windows). The Mac app likewise offers each host **macOS sandbox**
+(Seatbelt, through the same request) or **None** (unsandboxed with consent, the default).
 
 This note sets out what a native backend has to guarantee, the Windows primitives that can provide it, how three
 open-source sandboxes build on those primitives, and a recommended path. Sources read for it:

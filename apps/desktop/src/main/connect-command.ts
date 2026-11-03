@@ -10,7 +10,7 @@ export interface ConnectCommandInput {
   stateDir: string | undefined;
   /** In WSL2, inside the distribution: `~/…`, which its shell expands, or undefined for the CLI's own. */
   wslStateDir: string | undefined;
-  /** Windows only: where the host's sessions run. */
+  /** Windows and macOS: where the host's sessions run. */
   sandbox: SandboxChoice | undefined;
   home: string;
   windows: boolean;
@@ -27,5 +27,8 @@ export function connectCommand(input: ConnectCommandInput): string {
   // A POSIX shell expands a leading ~; cmd and PowerShell don't for a program's arguments, so Windows shows the whole path.
   const directory = input.stateDir;
   const shown = !input.windows && directory?.startsWith(`${input.home}/`) ? `~${directory.slice(input.home.length)}` : directory;
-  return `npx pikibun@latest connect --server ${quote(input.server)}${input.sandbox ? " --experimental-sandbox" : ""}${shown ? ` --state-dir ${quote(shown)}` : ""}`;
+  // macOS's CLI wants a choice: its own sandbox, or none (the app asks for consent at each start, the CLI at its prompt).
+  const sandbox = input.sandbox?.sandbox;
+  const flag = sandbox === "native" || sandbox === "seatbelt" ? " --experimental-sandbox" : sandbox === "none" ? " --unsafe-no-sandbox" : "";
+  return `npx pikibun@latest connect --server ${quote(input.server)}${flag}${shown ? ` --state-dir ${quote(shown)}` : ""}`;
 }

@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { readConnectorState } from "./connector.js";
 import { createFauxLocalModels, loadLocalPiModels, readPiSettings, type LocalModels } from "./local-pi.js";
 import type { Prerequisite } from "./desktop-protocol.js";
+import { aptFix, fixes, linuxPackages } from "./prerequisite-fixes.js";
 import { ConnectorSetupError } from "./protocol.js";
 import { bashPath, gitForWindowsRoot, SANDBOX_SHELL_HINT, sandboxShellPath } from "./platform.js";
 import { MXC_SDK_VERSION, mxcEntry, mxcInstallHint, windowsRuntimeDirectory } from "./sandbox-backend.js";
@@ -31,8 +32,8 @@ export function assertConnectorPlatform(mode: { unsandboxed?: boolean; experimen
 }
 
 const windowsGit = (): Prerequisite[] => [
-  { name: "Git for Windows (git on PATH)", ok: gitForWindowsRoot() !== undefined },
-  { name: "Git for Windows' bash.exe", ok: bashPath() !== undefined },
+  { name: "Git for Windows (git on PATH)", ok: gitForWindowsRoot() !== undefined, fix: fixes.gitForWindows },
+  { name: "Git for Windows' bash.exe", ok: bashPath() !== undefined, fix: fixes.gitForWindows },
 ];
 
 /** The binaries the chosen isolation mode needs, each named with where it is looked for. */
@@ -43,17 +44,17 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
     const found = windowsBuild() ?? release().split(".")[2] ?? "unknown";
     const build = Number(found.split(".")[0]);
     const sdk = mxcEntry(runtime);
-    const result: Prerequisite[] = [{ name: "Git for Windows (git on PATH)", ok: gitForWindowsRoot() !== undefined },
-      { name: `busybox-w32, the sandbox's shell (${SANDBOX_SHELL_HINT}; or set PIKIBUN_SANDBOX_SHELL)`, ok: sandboxShellPath() !== undefined },
-      { name: `Windows 11 24H2 or later (build 26100+, found ${found})`, ok: build >= 26100 },
-      { name: `Microsoft MXC SDK ${MXC_SDK_VERSION} in ${runtime} (install: ${mxcInstallHint(runtime)})`, ok: sdk !== undefined }];
+    const result: Prerequisite[] = [{ name: "Git for Windows (git on PATH)", ok: gitForWindowsRoot() !== undefined, fix: fixes.gitForWindows },
+      { name: `busybox-w32, the sandbox's shell (${SANDBOX_SHELL_HINT}; or set PIKIBUN_SANDBOX_SHELL)`, ok: sandboxShellPath() !== undefined, fix: fixes.busybox },
+      { name: `Windows 11 24H2 or later (build 26100+, found ${found})`, ok: build >= 26100, fix: fixes.windowsUpdate },
+      { name: `Microsoft MXC SDK ${MXC_SDK_VERSION} in ${runtime} (install: ${mxcInstallHint(runtime)})`, ok: sdk !== undefined, fix: fixes.mxcSdk(runtime) }];
     // The update level decides whether sessions can work, and its number differs between releases (25H2 is 26200.x,
     // 26H2 26300.x), so Windows is asked: one container with a session's network policy, resolving a path in it.
     if (sdk && build >= 26100) {
       const support = await windowsSandboxSupport(sdk);
       result.push(
-        { name: `Windows' process container for sessions, with proxy-only egress (MXC's base-container tier)${support.container ? "" : `: ${support.detail}`}`, ok: support.container },
-        { name: `Paths that Git and Node resolve inside the container (Windows' October 2026 update or later: install the latest Windows update)${support.container && !support.paths ? `: ${support.detail}` : ""}`, ok: support.paths });
+        { name: `Windows' process container for sessions, with proxy-only egress (MXC's base-container tier)${support.container ? "" : `: ${support.detail}`}`, ok: support.container, fix: fixes.windowsUpdate },
+        { name: `Paths that Git and Node resolve inside the container (Windows' October 2026 update or later: install the latest Windows update)${support.container && !support.paths ? `: ${support.detail}` : ""}`, ok: support.paths, fix: fixes.windowsUpdate });
     }
     return result;
   }
@@ -61,17 +62,26 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
     ? process.platform === "linux" ? { "/usr/bin/flock": "flock (util-linux)" } : { "/usr/bin/lockf": "lockf" }
     : process.platform === "darwin" ? { [SANDBOX_EXEC]: "sandbox-exec", "/usr/bin/lockf": "lockf" }
     : { "/usr/bin/bwrap": "bubblewrap", "/usr/bin/python3": "Python 3", "/usr/bin/git": "Git", "/usr/bin/flock": "flock (util-linux)" };
+  const executable = (path: string) => access(path, constants.X_OK).then(() => true, () => false);
   const result: Prerequisite[] = [];
   for (const [binary, name] of Object.entries(required)) {
-    result.push({ name: `${name} (${binary})`, ok: await access(binary, constants.X_OK).then(() => true, () => false) });
+    result.push({ name: `${name} (${binary})`, ok: await executable(binary) });
   }
   if (process.platform === "darwin" && !unsandboxed) {
     let tools = true;
     try { seatbeltTools(); } catch { tools = false; }
-    result.push({ name: "Python 3 and Git from the developer tools (xcode-select --install)", ok: tools });
+    result.push({ name: "Python 3 and Git from the developer tools (xcode-select --install)", ok: tools, fix: fixes.xcodeTools });
   }
   // Unsandboxed sessions use the owner's Git from PATH, e.g. Xcode tools or Homebrew on macOS.
-  if (unsandboxed) result.push({ name: "Git on PATH", ok: spawnSync("git", ["--version"], { stdio: "ignore", env: { PATH: process.env.PATH ?? "" } }).status === 0 });
+  if (unsandboxed) result.push({ name: "Git on PATH", ok: spawnSync("git", ["--version"], { stdio: "ignore", env: { PATH: process.env.PATH ?? "" } }).status === 0,
+    ...(process.platform === "darwin" ? { fix: fixes.xcodeTools } : {}) });
+  if (process.platform === "linux") {
+    // Every missing package in one fix: Git on PATH counts as the git package.
+    const missing = Object.entries(required).filter((_, index) => !result[index]!.ok).map(([binary]) => linuxPackages[binary]!);
+    if (unsandboxed && !result.at(-1)!.ok) missing.push("git");
+    const fix = aptFix(missing, await executable("/usr/bin/apt-get"));
+    for (const item of result) if (!item.ok) item.fix = fix;
+  }
   return result;
 }
 

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
+import type { PrerequisiteFix } from "../../../runner/src/desktop-protocol.js";
 import type { WslDistro, WslStatus } from "../shared/bridge.js";
 
 // WSL2 on Windows: which distributions this computer has, and how the app starts its connector host in one of them
@@ -41,18 +42,30 @@ export function wslStatus(): Promise<WslStatus> {
   });
 }
 
-const SETUP = "In PowerShell, run wsl --install (it installs Ubuntu on WSL2), restart if it asks, and open Ubuntu once to create your user. Then install Node.js 24, Pi, bubblewrap, Python 3, Git and util-linux there (on Ubuntu: sudo apt install bubblewrap python3 git util-linux), and configure Pi's models in WSL2.";
+const SETUP = "In PowerShell, run wsl --install (it installs Ubuntu on WSL2), restart if it asks, and open Ubuntu once to create your user. Then install Node.js 24, bubblewrap, Python 3, Git and util-linux there (on Ubuntu: sudo apt install bubblewrap python3 git util-linux); Pikibun shows what is missing and signs Pi in to your provider there.";
+
+/** nvm, from its pinned release, then Node.js 24: the host's launcher (wsl-host.sh) finds nvm's Node. No quotes. */
+export const NVM_INSTALL = "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && . $HOME/.nvm/nvm.sh && nvm install 24";
+
+/** What the app offers where WSL2 isn't set up, or its distribution has no Node.js 24 (wsl-host.sh, `wsl-node`). */
+export const wslFixes = {
+  install: { text: "Install WSL with Ubuntu, restart if Windows asks, and open Ubuntu once to create your Linux user.", command: "wsl --install", url: "https://learn.microsoft.com/windows/wsl/install", action: { kind: "wsl-install" } },
+  node: { text: "Install Node.js 24 in WSL2, with nvm.", command: NVM_INSTALL, url: "https://github.com/nvm-sh/nvm", action: { kind: "wsl-node" } },
+} satisfies Record<string, PrerequisiteFix>;
+
+/** Launcher setup problems (wsl-host.sh's `pikibun-setup[code]: ` lines) whose fix the app knows. */
+export const setupFixes: Record<string, PrerequisiteFix> = { "wsl-node": wslFixes.node };
 
 /**
  * The distribution a host runs in: the owner's choice, else WSL's default, else the first WSL2 one. Refused, with what
  * to do, where there is none or it runs on WSL 1, whose kernel has no namespaces for the sandbox.
  */
-export function chooseDistro(status: WslStatus, chosen: string | undefined): { ok: true; name: string } | { ok: false; error: string } {
-  if (!status.installed || !status.distros.length) return { ok: false, error: `WSL2 isn't set up on this computer. ${SETUP} Or choose Native Windows as this host's sandbox.` };
+export function chooseDistro(status: WslStatus, chosen: string | undefined): { ok: true; name: string } | { ok: false; error: string; fix?: PrerequisiteFix } {
+  if (!status.installed || !status.distros.length) return { ok: false, error: `WSL2 isn't set up on this computer. ${SETUP} Or choose Native Windows as this host's sandbox.`, fix: wslFixes.install };
   const named = chosen === undefined ? undefined : status.distros.find(distro => distro.name === chosen);
   if (chosen !== undefined && !named) return { ok: false, error: `This host runs in the WSL distribution ${chosen}, which this computer no longer has. Choose another one.` };
   const distro = named ?? status.distros.find(entry => entry.default && entry.version === 2) ?? status.distros.find(entry => entry.version === 2) ?? status.distros.find(entry => entry.default);
-  if (!distro) return { ok: false, error: `WSL2 isn't set up on this computer. ${SETUP}` };
+  if (!distro) return { ok: false, error: `WSL2 isn't set up on this computer. ${SETUP}`, fix: wslFixes.install };
   if (distro.version !== 2) return { ok: false, error: `${distro.name} runs on WSL 1, which has no sandbox. In PowerShell, run wsl --set-version ${distro.name} 2, or choose another distribution.` };
   return { ok: true, name: distro.name };
 }

@@ -12,6 +12,8 @@
 set -eu
 
 setup() { printf 'pikibun-setup: %s\n' "$1" >&2; exit 78; }
+# A problem the app knows how to fix (wsl.ts setupFixes) names its fix: pikibun-setup[CODE]: MESSAGE.
+setup_fix() { printf 'pikibun-setup[%s]: %s\n' "$1" "$2" >&2; exit 78; }
 
 build=${1:-}
 case $build in
@@ -38,7 +40,7 @@ for candidate in \
   /usr/local/bin/node /usr/bin/node; do
   if [ -n "$candidate" ] && [ -x "$candidate" ] && [ "$(major "$candidate")" -ge 24 ] 2>/dev/null; then node=$candidate; break; fi
 done
-[ -n "$node" ] || setup "Node.js 24 or newer isn't installed in WSL2 (${WSL_DISTRO_NAME:-this distribution}). Install it there (for example with nvm: https://github.com/nvm-sh/nvm, then nvm install 24), then refresh."
+[ -n "$node" ] || setup_fix wsl-node "Node.js 24 or newer isn't installed in WSL2 (${WSL_DISTRO_NAME:-this distribution}). Install it there (for example with nvm: https://github.com/nvm-sh/nvm, then nvm install 24), then refresh."
 
 base="$HOME/.local/share/pikibun/desktop"
 target="$base/connector-$build"
