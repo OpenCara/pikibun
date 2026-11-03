@@ -55,6 +55,7 @@ import { documentKindNames, validSourceItem, type GrantSource, type SourceReadRe
 import { defaultHostConfig, type HostCompaction, type HostConfig } from "../../../packages/shared/src/host-config.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
 import { requesterAutoApproves, decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
+import { AUDIT_NO_IMAGES, AUDIT_UNAVAILABLE, auditPrompt, auditRefusal } from "./prompt-audit.js";
 
 type Run = {
   key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
@@ -1532,6 +1533,61 @@ export class RunnerSession {
     return Object.keys(options).length ? options : undefined;
   }
 
+  /**
+   * The host's prompt audit (HostConfig.promptAudit, see prompt-audit.ts): a message from anyone but the host's owner
+   * reaches the agent only once a model of the host's finds that it doesn't reach for what lies on the machine. One it
+   * flags is refused with the kind of thing it flagged; one it can't check (no audit model, a provider error, a
+   * timeout, no verdict) is refused too. The host's owner's own messages, and those on a runner of no host, go
+   * unaudited. The flagged message and the auditor's reason stay on the host, in the connector's log.
+   */
+  private async auditMessage(ticket: RunnerTicket, input: SubmitInput, mode: "write" | "ask", images: readonly InputImage[]): Promise<void> {
+    const hostOwner = this.binding.session.connectorOwnerId;
+    if (!hostOwner || ticket.actorId === hostOwner) return;
+    const audit = (await this.hostConfig()).promptAudit;
+    if (!audit.enabled) return;
+    // A message sent again with its request id was audited when it was accepted; the session's turn answers it as before.
+    if ((await this.metadata()).runs[await requestKey(ticket.actorId, mode, input.requestId)]) return;
+    // Only a sender who may send it costs the host an audit.
+    await this.authorize(ticket.actorId, mode === "ask" ? "ask" : "write", ticket.policyVersion);
+    const sessionId = this.binding.session.id;
+    const log = (line: string) => { process.stderr.write(`Session ${sessionId}: prompt audit ${line.replace(/[\x00-\x1f\x7f]/g, " ")}\n`); };
+    let models: Models = this.models;
+    let target: { provider: string; modelId: string };
+    if (audit.model) {
+      const slash = audit.model.indexOf("/");
+      target = { provider: audit.model.slice(0, slash), modelId: audit.model.slice(slash + 1) };
+      if (this.config.resolveModels) {
+        try { models = (await this.config.resolveModels({ ...this.binding.model, ...target })).models; }
+        catch {
+          log(`refused a message from ${ticket.actorId}: its model ${audit.model} is not available on this host`);
+          throw new RunnerError(422, AUDIT_UNAVAILABLE);
+        }
+      }
+    } else {
+      // The model the message is to run on, as its sender chose it or the conversation has it.
+      const options = await this.chatOptions(input.options, mode, ticket.actorId);
+      target = options?.model ?? (await this.#shared.agent(context)).model ?? this.modelRef;
+    }
+    const model = models.getModel(target.provider, target.modelId);
+    if (!model) {
+      log(`refused a message from ${ticket.actorId}: its model ${target.provider}/${target.modelId} is not available on this host`);
+      throw new RunnerError(422, AUDIT_UNAVAILABLE);
+    }
+    // Images it can't see could carry what its text doesn't say.
+    if (images.length && Array.isArray(model.input) && !model.input.includes("image")) throw new RunnerError(422, AUDIT_NO_IMAGES);
+    let verdict;
+    try {
+      verdict = await auditPrompt({ models, model, content: input.content, mode, images: images.map(image => ({ type: "image", ...image })),
+        ...(audit.policy ? { policy: audit.policy } : {}), ...(this.config.identity ? { identity: this.config.identity } : {}) });
+    } catch (error) {
+      log(`could not check a message from ${ticket.actorId}, so it was refused: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
+      throw new RunnerError(422, AUDIT_UNAVAILABLE);
+    }
+    if (verdict.allow) return;
+    log(`refused a ${mode === "ask" ? "side ask" : "message"} from ${ticket.actorId} (${verdict.category}): ${verdict.reason || "no reason given"}`);
+    throw new RunnerError(422, auditRefusal(verdict.category));
+  }
+
   /** Decodes a message's images and fits them to what the model gets of an image, as read_file does for image files. */
   private async prepareImages(images: readonly ChatImage[]): Promise<InputImage[]> {
     const prepared: InputImage[] = [];
@@ -1657,6 +1713,8 @@ export class RunnerSession {
       throw new RunnerError(400, "Invalid or missing Worker write admission");
     // Decoded and fitted before the session's turn, as that can take a while: what is queued is what the model gets.
     const prepared = images.length ? await this.prepareImages(images) : [];
+    // Also before the session's turn, which an audit would hold for seconds: a stop or a decision meanwhile isn't kept waiting.
+    await this.auditMessage(ticket, input, mode, prepared);
     return this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
       // Messages queue while repositories are prepared; once that failed, say why instead of queueing forever.

@@ -11,6 +11,7 @@ import { href, navigate } from "../router";
 import { Alert, Button, CardBody, Collapsible, Combobox, confirmDialog, CopyField, EmptyState, Feedback, Field, Loading, ResourceState, Row, Section, Sheet, StatusDot, Timestamp, useAction, useResource, type ActionState } from "../ui";
 import { HostAdminsSection, HostCommandGrantsSection } from "./HostAccess";
 import { HostCompactionSection } from "./HostCompaction";
+import { HostPromptAuditSection } from "./HostPromptAudit";
 import { HostConfigSection } from "./HostConfig";
 import { HostExtensionsSection } from "./HostExtensions";
 import { check, desktopBridge } from "../desktop";
@@ -251,6 +252,7 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
     </Section>
     <HostConfigSection connector={connector} refresh={refresh} />
     {connector.config && <HostCompactionSection connector={connector} refresh={refresh} />}
+    {connector.config && <HostPromptAuditSection connector={connector} refresh={refresh} />}
     {connector.role && <HostExtensionsSection connector={connector} />}
     {connector.capabilities.hostCommands && <HostCommandGrantsSection connector={connector} refresh={refresh} />}
     <HostAdminsSection connector={connector} refresh={refresh} />

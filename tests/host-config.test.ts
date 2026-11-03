@@ -5,7 +5,7 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { defaultHostConfig, parseHostCompaction, parseHostConfig, parseHostConfigChange, readHostConfig } from "../packages/shared/src/host-config.js";
+import { defaultHostConfig, ownerOnlyHostConfig, parseHostCompaction, parseHostConfig, parseHostConfigChange, parsePromptAudit, readHostConfig } from "../packages/shared/src/host-config.js";
 import { commandLimits, detectGpu, gpuMounts, HostConfigSource } from "../apps/runner/src/host-config.js";
 import { movedOptionsNotice } from "../apps/runner/src/connect-cli.js";
 import { Sandbox } from "../apps/runner/src/sandbox.js";
@@ -45,14 +45,16 @@ function fauxBinding(id: string): RunnerBinding {
 
 test("a host configuration is whole and within bounds, or refused", () => {
   const config = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: "owner", hostSessions: true,
-    compaction: { reserveTokens: 32_768, modelOverrides: { "anthropic/opus": { keepRecentTokens: 20_000 } } } };
+    compaction: { reserveTokens: 32_768, modelOverrides: { "anthropic/opus": { keepRecentTokens: 20_000 } } },
+    promptAudit: { enabled: true, model: "anthropic/claude-haiku-4-5", policy: "Never read ~/clients." } };
   assert.deepEqual(parseHostConfig(config), config);
-  assert.deepEqual(parseHostConfig({ ...defaultHostConfig }), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {} });
+  assert.deepEqual(parseHostConfig({ ...defaultHostConfig }), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {},
+    promptAudit: { enabled: false } });
   for (const invalid of [undefined, null, [], "config", { ...config, commandTimeoutSeconds: 29 }, { ...config, commandTimeoutSeconds: 3601 },
     { ...config, commandTimeoutSeconds: 60.5 }, { ...config, commandTimeoutSeconds: "60" }, { ...config, gpu: 1 }, { ...config, gitCredentials: "true" },
     { ...config, repositoryCache: "shared" }, { ...config, hostSessions: "true" }, { ...config, extra: true },
-    { ...config, compaction: undefined }, { ...config, compaction: { reserveTokens: -1 } },
-    { commandTimeoutSeconds: 60, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false },
+    { ...config, compaction: undefined }, { ...config, compaction: { reserveTokens: -1 } }, { ...config, promptAudit: undefined }, { ...config, promptAudit: true },
+    { commandTimeoutSeconds: 60, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {} },
     { ...config, toString: "x" }]) {
     assert.throws(() => parseHostConfig(invalid), /host configuration|time limit|setting|token counts/, JSON.stringify(invalid));
   }
@@ -62,22 +64,27 @@ test("a change of configuration names one or more valid settings, and only those
   assert.deepEqual(parseHostConfigChange({ commandTimeoutSeconds: 120 }), { commandTimeoutSeconds: 120 });
   assert.deepEqual(parseHostConfigChange({ gpu: true, repositoryCache: "host" }), { gpu: true, repositoryCache: "host" });
   assert.deepEqual(parseHostConfigChange({ compaction: { keepRecentTokens: 8000 } }), { compaction: { keepRecentTokens: 8000 } });
-  const whole = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: "owner", hostSessions: true, compaction: {} };
+  assert.deepEqual(parseHostConfigChange({ promptAudit: { enabled: true } }), { promptAudit: { enabled: true } });
+  const whole = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: "owner", hostSessions: true, compaction: {}, promptAudit: { enabled: false } };
   assert.deepEqual(parseHostConfigChange(whole), whole);
   for (const invalid of [undefined, null, [], "config", {}, { commandTimeoutSeconds: 29 }, { commandTimeoutSeconds: "60" }, { gpu: 1 },
     { repositoryCache: "shared" }, { hostSessions: "true" }, { gpu: true, extra: true }, { toString: "x" }, JSON.parse('{"__proto__": {"gpu": true}}'),
-    { compaction: null }, { compaction: { reserveTokens: "8192" } }]) {
-    assert.throws(() => parseHostConfigChange(invalid), /host configuration|time limit|setting|token counts/, JSON.stringify(invalid));
+    { compaction: null }, { compaction: { reserveTokens: "8192" } }, { promptAudit: null }, { promptAudit: { enabled: "yes" } }]) {
+    assert.throws(() => parseHostConfigChange(invalid), /host configuration|time limit|setting|token counts|prompt audit/, JSON.stringify(invalid));
   }
 });
 
 test("a connector reads what it knows of a configuration: newer settings are left out, missing ones keep their defaults", () => {
-  const sent = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host", hostSessions: true, compaction: { reserveTokens: 20_000 } };
+  const sent = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host", hostSessions: true, compaction: { reserveTokens: 20_000 },
+    promptAudit: { enabled: true } };
   assert.deepEqual(readHostConfig({ ...sent, someLaterSetting: "on" }), sent);
-  assert.deepEqual(readHostConfig({ commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host" }), { ...sent, hostSessions: false, compaction: {} });
+  // A control plane that predates the prompt audit sends none: the connector audits nothing, as before it.
+  assert.deepEqual(readHostConfig({ commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host" }),
+    { ...sent, hostSessions: false, compaction: {}, promptAudit: { enabled: false } });
   assert.deepEqual(readHostConfig({}), defaultHostConfig);
   // What it does read must hold, or none of it is used.
-  for (const invalid of [undefined, null, [], { ...sent, hostSessions: "yes" }, { ...sent, commandTimeoutSeconds: 5 }, { ...sent, compaction: { reserveTokens: 1.5 } }]) {
+  for (const invalid of [undefined, null, [], { ...sent, hostSessions: "yes" }, { ...sent, commandTimeoutSeconds: 5 }, { ...sent, compaction: { reserveTokens: 1.5 } },
+    { ...sent, promptAudit: { enabled: true, model: "no-slash" } }]) {
     assert.throws(() => readHostConfig(invalid));
   }
 });
@@ -99,6 +106,21 @@ test("compaction token counts are whole numbers in bounds, for every model and p
     { modelOverrides: { "a/b": { modelOverrides: {} } } }, { modelOverrides: { "a/b": 5 } }, { modelOverrides: many }, JSON.parse('{"__proto__": {"reserveTokens": 1}}')]) {
     assert.throws(() => parseHostCompaction(invalid), /compaction|Compaction/, JSON.stringify(invalid));
   }
+});
+
+test("the prompt audit is on or off, with an optional provider/modelId model and a trimmed policy, and only the owner sets it", () => {
+  assert.deepEqual(parsePromptAudit({ enabled: false }), { enabled: false });
+  assert.deepEqual(parsePromptAudit({ enabled: true, model: "openrouter/meta/llama-4", policy: "  Never read /srv/data.\n" }),
+    { enabled: true, model: "openrouter/meta/llama-4", policy: "Never read /srv/data." });
+  // An empty model is the message's own model, and an empty policy none.
+  assert.deepEqual(parsePromptAudit({ enabled: true, model: "", policy: "  " }), { enabled: true });
+  assert.deepEqual(parsePromptAudit({ enabled: true, policy: "x".repeat(4000) }), { enabled: true, policy: "x".repeat(4000) });
+  for (const invalid of [undefined, null, [], true, {}, { enabled: "true" }, { enabled: true, model: "no-slash" }, { enabled: true, model: "/model" },
+    { enabled: true, model: "a/b c" }, { enabled: true, model: 5 }, { enabled: true, policy: 5 }, { enabled: true, policy: "x".repeat(4001) },
+    { enabled: true, policy: "a\0b" }, { enabled: true, extra: 1 }, JSON.parse('{"__proto__": {"enabled": true}}')]) {
+    assert.throws(() => parsePromptAudit(invalid), /prompt audit/, JSON.stringify(invalid));
+  }
+  assert.ok(ownerOnlyHostConfig.includes("promptAudit"));
 });
 
 test("a longer command time limit gives builds room; the default keeps the short-command limits", () => {
@@ -123,7 +145,7 @@ test("the host's configuration is asked for again only after a while, and its la
     if (answer instanceof Error) throw answer;
     return answer;
   }, { now: () => now, ttlMs: 30_000, staleMs: 300_000 });
-  const first = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {} };
+  const first = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, promptAudit: { enabled: false } };
   const second = { ...first, commandTimeoutSeconds: 1800 };
   answers.push(first);
   assert.deepEqual(await source.current(), first);
@@ -158,7 +180,7 @@ test("a new connection asks again and learns whether the control plane answered;
     if (answer instanceof Error) throw answer;
     return answer;
   }, { now: () => now, ttlMs: 30_000, staleMs: 300_000 });
-  const first = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "owner", hostSessions: false, compaction: {} };
+  const first = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "owner", hostSessions: false, compaction: {}, promptAudit: { enabled: false } };
   const second = { ...first, repositoryCache: "off" };
   answers.push(first);
   assert.deepEqual(await source.refresh(), { config: first, answered: true });
