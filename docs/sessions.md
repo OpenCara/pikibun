@@ -1,0 +1,106 @@
+# Sessions
+
+## Starting a session
+
+Select a workspace in the sidebar (or open **New session** in it):
+
+- **Describe the task**: the first message. Its first line becomes the session's title.
+- **Host**: one of your hosts, or a host shared with the workspace.
+- **Visibility**: **Workspace** (members can view; the default) or **Private** (explicit grants only, apart from the workspace's owner and admins, who [manage every session](workspaces.md#managing-every-session)). See [Collaborating on a session](collaboration.md).
+- **Where it runs** (on your own host, or one whose owner granted you **Sessions on the host**, once its [configuration](hosts.md#host-configuration) allows **Sessions on the host**): **Sandbox** (the default) or **On this host**, without the sandbox. See [Sessions on the host](hosts.md#sessions-on-the-host).
+- The model, reasoning level and access for the first message (see [Chat options](#chat-options)). The info tips show the host, the model and the repositories the session will pin.
+
+Press Enter to start (Shift+Enter adds a line; on a phone, Enter adds a line and the send button starts it). On someone else's host, first confirm that you trust it: its operator can read the session's prompts and repository files. The session shows **Starting** while the host prepares it, then runs your message. If it fails to start (**Not started**), its owner sends a message to start it again on the same host (**Restart and send**).
+
+## Shared messages and side asks
+
+The composer switches between **Shared** and **Side ask**:
+
+- A **shared** message (**Submit to session**, needs write permission) goes into the session's conversation and drives its work. Every message runs as the session owner, with their Git identity, accounts and environment, whoever sends it.
+- A **side ask** (**Send side ask**, needs ask permission) asks about the work without changing it: the agent gets only the read-only tools, in a separate thread that starts from the shared conversation (**Side ask 1**, **Side ask 2**, …). Anyone who can view the session can see side asks, but share links don't show them.
+
+Shared messages and side asks share one queue: up to 64 waiting or running, with up to 1 MiB of queued text. Accepted work goes on after you leave the page, as long as the host is online.
+
+## Images
+
+Paste images, such as screenshots, into the composer, or pick them with its image button (on a phone, from the photo library or camera): into a new session's first message, a shared message or a side ask. They show as thumbnails above the text; **×** removes one. A message carries up to 4 images, and can be images alone. The browser scales each image to at most 1568 pixels on its longest edge and compresses it until the message fits what the host takes in one request; the host decodes and prepares each image again, and the model gets them after the message's text. The images stay on the host: the transcript notes each one as `[image image/png]`.
+
+Images need a connector that supports them on the session's host (update it with `npx pikibun@latest connect`) and a model that accepts images; otherwise the composer or the send says why.
+
+## Files
+
+The same button (a paperclip where the host takes files) attaches any other file, and pasting a copied file attaches it too. Images the model can look at still go with the message as above; every other file shows as a chip with its name and size, and is uploaded into the session's worktree, under `attachments/`, when the message is sent. The message then ends with a note naming where each file went, such as `attachments/report.pdf (1.2 MB)`, so the agent can read or process it with its tools. A file never replaces another: a second `report.pdf` becomes `attachments/report (2).pdf`. A message carries up to 10 files, and can be files alone; a file that fails to upload stops the send, and sending again uploads only what isn't there yet.
+
+Each file may be at most **10 MB** until a workspace owner or admin chooses another limit, from 1 MB to 50 MB, under **Settings → Workspaces →** the workspace **→ Attachments**. Uploading writes into the worktree, so it takes the session collaborator role (`write`). Files travel in chunks of 512 KB through the server to the session's host, which keeps them outside the sandbox until the last chunk arrives and then writes the whole file into the worktree through the sandbox, like the agent's own file tools. In the macOS desktop app ([`apps/desktop`](../apps/desktop/README.md)), a file attached to a session that runs on that same computer goes straight to its host there: the server only grants each chunk, and the host has the server check that grant, and the sender's access, before it takes the chunk, so the file's bytes never leave the computer; with Pikibun on this computer, server and host are both on it anyway. Files need a connector that supports them on the session's host (update it with `npx pikibun@latest connect`).
+
+## Stopping the agent
+
+While the agent works, anyone with write permission can press **Stop** (the square beside send) to stop the message running now and every message queued behind it, side asks included (connector 0.9.0 or newer). They show as stopped in the queue at once, and the transcript marks where the work stopped and who stopped it. A tool call waiting on a card ends and its card is marked interrupted; a command or push already running finishes, and its card shows the outcome. The queue line reads **Stopping...** until the host has ended the work; messages sent meanwhile wait and then run as usual. A queued message that was stopped never reaches the agent: send it again to run it. A session whose last shared message was stopped shows as **Idle**.
+
+The host can stop a message too. When the host crashes (rather than stopping its connector) five times in a row while the same message is being worked on, Pi stops resuming that work so the host doesn't keep crashing. The transcript then says the message stopped because the host crashed, the session shows as **Failed**, and the queue moves on. Send the message again to retry it.
+
+## Copying, going back and forking
+
+Each message has actions beside who sent it: hover over it, or tab to it, in the web and Mac apps (they always show on touch screens); in the iPhone and iPad app, tap **…** under it.
+
+- **Copy message** (the copy icon): a message's text, or a reply's Markdown without its tool calls. Every message offers it, side asks too.
+- **Go back** (the history icon, needs write permission): takes the shared conversation back, for everyone, to just before one of the messages people sent, or to just after one of the agent's final replies. Everything after that point leaves the conversation, and the next message continues from there, with the model seeing only what is left. Going back to before a message puts that message's text in your chat box, if it's empty, so you can edit it and send it again. Only the conversation goes back: the worktree, its clones, commits and anything pushed stay as they are, so ask the agent to undo those if you need to. Stop the session's work first: going back waits until nothing runs or is queued. The host keeps the conversation it went back from, in its backups too, but it no longer shows.
+- **Fork** (the branch icon, the session's owner only): starts a new session of yours from the shared conversation up to the same points, on the same host, with the model and reasoning level the conversation uses now (or the model the session started on, once the host no longer offers that one or it's disabled) and the same visibility, titled **Fork: …**, and opens it; a fork from before a message puts that message in the new session's chat box. The session you forked from stays as it is. The host copies the conversation into the new session itself, so it never passes through the server. Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again, and only what was pushed is there. If the fork fails, the new session is archived.
+
+There are no such points inside one of the agent's turns, where a tool call would lose its result, so a reply that goes on to call tools offers only **Copy** (tool call and tool result rows show their text when expanded). A host whose connector predates these actions offers only **Copy** too: update it with `npx pikibun@latest connect`.
+
+## Chat options
+
+Beside the composer you can pick, for each message:
+
+- **Model**: any model the session's host offers and hasn't [disabled](hosts.md#models).
+- **Reasoning**: Off, Minimal, Low, Medium, High, Extra high or Max, as the model supports. A model starts at the level Pi on the host gives it: the level in its `enabledModels` pattern (such as `"anthropic/*:high"`), else its entry in `modelThinkingLevels`, else `defaultThinkingLevel`, else medium.
+- **Access** (shared messages only):
+
+| Access | Effect |
+|---|---|
+| **Read only** | Inspect files; edits, commands and commits ask the session owner first |
+| **Ask before acting** (default for everyone but the session owner) | Edits are automatic; commands, commits, pushes, GitHub comments, merges and issues need approval |
+| **Auto-approve** (session owner only; their default) | Commands, commits, pushes, GitHub comments, merges and new issues run at once as the owner, as do tools outside the agent and commands without resource limits (on someone else's host, only with automatic host commands there). `host_bash` runs without asking only on the owner's own host, or one whose owner granted them automatic host commands. |
+
+Before a session's first shared message, the owner's chat box starts on **Auto-approve** and everyone else's on **Ask before acting**; after it, each starts on the last shared message's access (Auto-approve only for the owner). Switching to **Auto-approve** asks for confirmation each time, and warns more strongly on an unsandboxed host. Under it the agent can merge any pull request of the workspace's github.com repositories that GitHub lets the owner merge, without asking; GitHub's branch protection and required checks still apply. The owner's chat box starts on **Auto-approve** without that confirmation, so their first message that would merge without asking asks for it instead, once in each browser or app (confirming it when switching counts too). Apps from before Auto-approve covered merges keep their **Auto-merge** option, and merge without asking only with it on. Automatic comments, issues and merges need a connector advertising `automaticGitHub`; older ones still ask for each. Hosts running a connector older than 0.3.0 keep each session's model and offer none of these options.
+
+The **Approvals** list keeps to what people decide. Shell and host commands that ran under **Auto-approve** get no card there: the conversation marks their tool calls **Auto-approved** (with their outcome when it isn't the usual "executed"), and each call's result holds the command's output. Automatic commits, pushes, repins and GitHub comments, issues and merges keep their cards. The list shows every approval still in play and the newest 50 settled ones, each with the start and end of its result; the host keeps them all. Hosts running an older connector list every approval.
+
+## Status, menu and panel
+
+Session lists show what each session's agent is doing: **Starting**, **Not started**, **In progress**, **Needs approval**, **Done**, **Failed**, **Idle** or **Archived**. A session at rest with a [scheduled prompt](#scheduled-prompts) shows **Scheduled**, with a clock in place of its status dot. The **Sessions** page groups sessions by workspace, with a search box, **Show archived** and **Open by ID** (for a session ID someone gave you).
+
+The session's menu offers **Copy session ID** and **Open in workspace settings**; to its owner and the workspace's owner and admins **Rename**, **Make private** or **Make workspace-visible** and **Archive** (or **Unarchive**); and to its owner **Create backup** too, and **Pack files** on an archived session (see [Packing archived sessions](backups.md#packing-archived-sessions)). Archiving makes a session read-only for everyone and hides it from lists; unarchiving brings it back as it was.
+
+The session panel has five tabs:
+
+- **Details**: **Host**, **Repositories** (cloned on demand; a pinned session's ref, commit and folder), **People**, **Transcript** (see [Transcript size](collaboration.md#transcript-size)), **Connected sessions** (see [Working across sessions](#working-across-sessions)), **Backups**, **Operation request**, **Export** and **Access**.
+- **Approvals**: every approval and permission request, pending ones first.
+- **Files**: the session's worktree on its host, read-only. Open directories and preview files: text up to 256 KB, with line numbers and syntax highlighting chosen by file name (up to 128 KB), and PNG, JPEG, GIF and WebP images up to 2 MB, over a checkerboard that shows transparency; click an image to switch between fitting the panel and its actual size. SVG files show as an image, drawn without running scripts or loading anything, with their source a click away. Each path is read from the host as you open it (**Refresh** reads it again), inside the session's sandbox and confined to its worktree like the agent's file tools; symlinks that lead out of it don't open, and values that look like secrets are hidden as in the transcript. It takes the session collaborator role (`write`), since collaborators can already have the agent read any file; viewers and share links don't get it. It isn't offered on archived sessions, and needs a host whose connector is new enough to advertise it.
+- **Schedules**: the session's [scheduled prompts](#scheduled-prompts).
+- **Activity**: the session's audit log, newest 200 entries.
+
+## Scheduled prompts
+
+A scheduled prompt wakes the session's agent on a schedule: the server sends it a message, as the session's owner, as if they typed it in the chat box. Use it for recurring work such as a nightly test run or a weekly dependency report. The session owner manages them in the panel's **Schedules** tab (**New**, **Pause**/**Resume**, **Run now**, **Edit**, **Delete**), or asks the agent in the chat ("every weekday at 9, check the nightly build"), and everyone who can view the session sees them.
+
+- **When**: a five-field cron expression (minute, hour, day of month, month, day of week, as in crontab, with ranges, steps, lists and names such as `*/30 8-18 * * mon-fri`, or `@hourly`, `@daily`, `@weekly`, `@monthly`), read in an IANA time zone (the browser's by default). Runs are at least 5 minutes apart. The form shows the next three runs as you type.
+- **Access**: **Ask for approval** (the default, as in the chat box), **Read-only** or the owner's **Auto-approve**, which runs commands without anyone watching. Read-only and auto-approve need a host whose connector takes chat options.
+- **Busy sessions**: a run that comes while the agent is working or waiting for an approval is skipped, not queued, and the schedule shows why. Runs missed while the server or host was offline, or the session archived, aren't caught up: the next check sends one and moves on. The session's host must be online for its message to run.
+- **From the chat**: the agent's `schedule` tool lists, creates, changes and deletes the session's schedules (connector newer than 0.9.0; in sessions started before it, the agent asks the owner's permission the first time). Only the session owner's messages can use it, since every run is the owner's message; a collaborator's are refused. A schedule with **Auto-approve** access is created, or changed and left so, only from a message the owner sent with Auto-approve, so a message never leaves behind a schedule with more access than it had itself; any of the owner's messages may pause one, lower its access or delete it.
+- Each run is audited as the owner's `session.submit` with the schedule's ID; creating, changing and deleting schedules are audited too, marked with the tool call when the agent did it. A session keeps at most 20 schedules, and the server checks for due ones every 30 seconds.
+
+## Working across sessions
+
+A session's agent can work with the workspace's other sessions through its `sessions` tool: ask you which sessions exist and what they are doing, read another session's latest transcript and pending approvals, ask it a side question, send its agent a message, start a new session for a sub-task, wait for or be notified of the outcome, and stop or archive sessions. Use it to split work between sessions ("start a session to update the docs while you fix the tests, and tell me when both are done") or to consult a session that already knows a part of the code.
+
+- **As the sender, never more**: every action runs as the person whose message the agent is working on, with exactly their permissions in the other session, as if they had acted themselves. A collaborator's message reaches only the sessions the collaborator can, and a session the agent starts is the sender's own, on their own host or this session's host when it is theirs. Sessions of other workspaces aren't reachable.
+- **Access is capped by the message**: a **Read only** message lists, reads and asks, and changes another session (send, start, stop, archive) only once the session owner allows it on a [permission request](approvals.md#permission-requests). A message sent elsewhere asks for approval by default, or is read-only; only a message the session owner sent with **Auto-approve** sends an auto-approved one, and only to a session they own.
+- **Approvals stay where they are**: commands that a message runs in another session wait for that session's own approval cards, decided by people there; the agent can see that cards are waiting but never decide them.
+- **Who can see what**: content passes between two sessions only when the same people can read both (a share link counts as everyone). Reading a session, or being notified of its reply, that someone reading this session can't open, or sending this session's content where people who can't read this session would see it, first asks the session owner with a permission request (**Allow once** or **Allow for this session**). A session started by the agent is never more visible than the one that started it: a private session starts only private ones.
+- **Messages say where they come from**: each message an agent sends starts with a line naming the session it comes from, its sender and its hop, and the server records it. The **Connected sessions** section of the panel shows the session that started this one, the sessions it started, and the latest messages either way, with their senders (only sessions you can open are named). Lists show sessions started by another session indented under it.
+- **Models for sub-tasks**: an agent that starts a session for a sub-task picks its model, among those the sender can use, and the reasoning level its opening message runs at, which that session's conversation keeps: a capable model thinking hard for difficult work, a fast one thinking little for simple work. Whatever it leaves out is this session's current model and reasoning level. A workspace owner or admin can turn the choice off under **Settings → Workspaces →** the workspace **→ Sub-task sessions**; then every session an agent starts runs on its parent's current model and reasoning level.
+- **Busy sessions and notifications**: a message to a session that is working or waiting for an approval is refused, not queued (side asks still go). With `notify`, the server sends the outcome back as a new message once the other session finished, as the same sender, when this session is idle; it gives up after 24 hours. The agent can also `wait` for an outcome, for up to 30 minutes.
+- **Limits**: a message that came from another session is one hop further down a chain; at 3 hops an agent reads and lists but sends nothing further, and no message goes back to a session it came through (the notification answers it instead). One message sends at most 10 messages to other sessions, and a session starts at most 20 sessions.
+- Every action is audited in both sessions: `session.cross_session.sent`, `.created`, `.stopped` and `.archived` in the sending session, and the usual `session.submit`, `session.stopped` or `session.archived` in the other, marked with the message. The tool needs a connector new enough to advertise it; in sessions started before it, the agent asks the owner's permission the first time. See [docs/design/cross-session.md](design/cross-session.md).
