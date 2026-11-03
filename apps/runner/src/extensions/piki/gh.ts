@@ -1,8 +1,8 @@
-import { cliExtension } from "../../../../../packages/shared/src/cli-extensions.js";
+import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
 import { apiWrites, commandExtension, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
 /*
- * cli:gh, the GitHub CLI (docs/design/cli-extensions.md).
+ * piki:gh, the GitHub CLI (docs/design/piki-extensions.md).
  */
 
 /** Commands that only read, by group: every subcommand of a group set to true. */
@@ -29,7 +29,7 @@ const READS: Record<string, readonly string[] | true> = {
 };
 
 export const ghSpec: CliSpec = {
-  info: cliExtension("cli:gh")!,
+  info: pikiExtension("piki:gh")!,
   command: "gh",
   windowsCommand: { file: "gh.exe", shim: false },
   description: [

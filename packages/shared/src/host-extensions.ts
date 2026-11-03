@@ -11,30 +11,30 @@ export const extensionToolModes = ["approval", "automatic"] as const;
 export type ExtensionToolMode = (typeof extensionToolModes)[number];
 
 /**
- * A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`; or `cli:<name>`, an
- * extension built into the connector (cli-extensions.ts), whose version is the connector's own.
+ * A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`; or `piki:<name>`, an
+ * extension built into the connector (piki-extensions.ts), whose version is the connector's own.
  */
 export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string }
-  | { kind: "cli"; name: string };
+  | { kind: "piki"; name: string };
 
 export const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 export const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 const COMMIT = /^[0-9a-f]{40}$/;
-/** A CLI extension's name. Any such name parses, so a control plane takes ones built into newer connectors. */
-export const CLI_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+/** A Pikibun extension's name. Any such name parses, so a control plane takes ones built into newer connectors. */
+export const PIKI_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 
 export class ExtensionSourceError extends Error {}
 
 /**
- * Parses `npm:<name>@<version>`, `git:<url>@<commit>` (an https URL, `https://` optional) or `cli:<name>`; anything
+ * Parses `npm:<name>@<version>`, `git:<url>@<commit>` (an https URL, `https://` optional) or `piki:<name>`; anything
  * else is refused.
  */
 export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
   if (typeof spec !== "string" || spec.length > 512) throw new ExtensionSourceError("Invalid extension source");
-  if (spec.startsWith("cli:")) {
-    const name = spec.slice(4);
-    if (!CLI_NAME.test(name)) throw new ExtensionSourceError(`Invalid CLI extension name: ${name}`);
-    return { kind: "cli", name };
+  if (spec.startsWith("piki:")) {
+    const name = spec.slice(5);
+    if (!PIKI_NAME.test(name)) throw new ExtensionSourceError(`Invalid Pikibun extension name: ${name}`);
+    return { kind: "piki", name };
   }
   if (spec.startsWith("npm:")) {
     const rest = spec.slice(4);
@@ -59,16 +59,16 @@ export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
     if (!COMMIT.test(commit)) throw new ExtensionSourceError(`Pin a full commit, such as git:${url}@<40-character commit>: branches and tags could load different code later.`);
     return { kind: "git", url: parsed.href.replace(/\/$/, "").replace(/\.git$/, ""), commit };
   }
-  throw new ExtensionSourceError("An extension source is npm:<package>@<version>, git:<https URL>@<commit> or cli:<name>.");
+  throw new ExtensionSourceError("An extension source is npm:<package>@<version>, git:<https URL>@<commit> or piki:<name>.");
 }
 
 export function extensionSourceString(spec: ExtensionSourceSpec): string {
-  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : spec.kind === "git" ? `git:${spec.url}@${spec.commit}` : `cli:${spec.name}`;
+  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : spec.kind === "git" ? `git:${spec.url}@${spec.commit}` : `piki:${spec.name}`;
 }
 
 /** Whether `source` names an extension built into the connector: hosts never install or remove those. */
-export function isCliExtensionSource(source: string): boolean {
-  return source.startsWith("cli:");
+export function isPikiExtensionSource(source: string): boolean {
+  return source.startsWith("piki:");
 }
 
 /** The normalized form of `spec`, or an error. */
@@ -82,7 +82,7 @@ export function normalizeExtensionSource(spec: string): string {
  */
 export function extensionPackageKey(source: string): string {
   const spec = parseExtensionSourceSpec(source);
-  return spec.kind === "npm" ? `npm:${spec.package}` : spec.kind === "git" ? `git:${spec.url}` : `cli:${spec.name}`;
+  return spec.kind === "npm" ? `npm:${spec.package}` : spec.kind === "git" ? `git:${spec.url}` : `piki:${spec.name}`;
 }
 
 /** A Pi flag an extension registers: one of its settings. */
@@ -145,7 +145,7 @@ export const extensionLimits = Object.freeze({
   /** Sources a workspace uses, and a host installs. */
   workspace: 32,
   installed: 64,
-  /** CLI extensions a connector reports besides what it installed (cli-extensions.ts). */
+  /** Pikibun extensions a connector reports besides what it installed (piki-extensions.ts). */
   connector: 16,
   modulesPerSource: 16,
   toolsPerModule: 64,

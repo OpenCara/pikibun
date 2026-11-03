@@ -4,11 +4,11 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { CliExtensionInfo } from "../../../../../packages/shared/src/cli-extensions.js";
+import type { PikiExtensionInfo } from "../../../../../packages/shared/src/piki-extensions.js";
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
 
 /*
- * A command-line tool as a Pi extension (docs/design/cli-extensions.md): one tool that runs the command on the host
+ * A command-line tool as a Pi extension (docs/design/piki-extensions.md): one tool that runs the command on the host
  * with the arguments the model gives, without a shell, as the connector's OS user and with its sign-in to that command.
  * Arguments that would show the command's credentials never run. With the workspace's `read-only` setting, only
  * commands that read run, and outside the session's worktree, so that what a session wrote there (a repository's Git
@@ -17,7 +17,7 @@ import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
 
 /** What one command-line tool needs. */
 export interface CliSpec {
-  info: CliExtensionInfo;
+  info: PikiExtensionInfo;
   /** The executable; on Windows `windowsCommand` (a `.cmd` shim runs through cmd.exe, with plain arguments only). */
   command: string;
   windowsCommand?: { file: string; shim: boolean };

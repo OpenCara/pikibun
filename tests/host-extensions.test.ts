@@ -244,7 +244,7 @@ test("a host carries out the installs its owner asks for in Pikibun, unless it r
   const { store } = await storeWith(t, {
     "pi-a": { "package.json": JSON.stringify({ name: "pi-a", version: "1.0.0", pi: { extensions: ["./index.js"] } }), "index.js": "export default function () {}" },
   });
-  const host = new HostExtensions(store, { remoteInstalls: true, cliExtensions: [] });
+  const host = new HostExtensions(store, { remoteInstalls: true, pikiExtensions: [] });
   await host.load();
   assert.deepEqual(host.report(), { installed: [], remoteInstalls: true });
   assert.deepEqual(await host.apply([{ id: "r1", action: "install", source: "npm:pi-a@1.0.0" }, { id: "r2", action: "install", source: "npm:missing@1.0.0" }]),
@@ -254,13 +254,13 @@ test("a host carries out the installs its owner asks for in Pikibun, unless it r
   assert.deepEqual(await host.apply([{ id: "r4", action: "remove", source: "npm:pi-a@1.0.0" }, { id: "r5", action: "remove", source: "npm:pi-a@1.0.0" }]),
     [{ id: "r4", ok: true }, { id: "r5", ok: true }]);
   assert.deepEqual(host.report().installed, []);
-  const refusing = new HostExtensions(store, { remoteInstalls: false, cliExtensions: [] });
+  const refusing = new HostExtensions(store, { remoteInstalls: false, pikiExtensions: [] });
   assert.match((await refusing.apply([{ id: "r6", action: "install", source: "npm:pi-a@1.0.0" }]))[0]!.error!, /--no-remote-installs/);
 
   let now = 0;
   let answer: unknown = { extensions: [{ source: "npm:pi-a@1.0.0" }], automaticTools: false };
   let asked = 0;
-  const cached = new HostExtensions(store, { remoteInstalls: true, now: () => now, cliExtensions: [] });
+  const cached = new HostExtensions(store, { remoteInstalls: true, now: () => now, pikiExtensions: [] });
   const fetch = async () => { asked++; if (answer instanceof Error) throw answer; return answer; };
   assert.equal((await cached.workspace("w", fetch)).extensions[0]!.source, "npm:pi-a@1.0.0");
   now = 29_000;

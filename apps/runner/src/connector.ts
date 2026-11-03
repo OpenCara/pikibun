@@ -183,7 +183,7 @@ class CallbackRefused extends Error {
   constructor(readonly status: number) { super("Scoped connector callback denied or unavailable"); }
 }
 
-/** Whether the control plane refused an extensions report as invalid: one that predates CLI extensions does. */
+/** Whether the control plane refused an extensions report as invalid: one that predates Pikibun extensions does. */
 const refusedReport = (error: unknown) => error instanceof CallbackRefused && error.status === 400;
 
 function decodeJson(bytes: Uint8Array): unknown {
@@ -591,19 +591,19 @@ export class LocalConnector {
     const extensions = this.hostExtensions;
     if (!extensions) return;
     let results: ExtensionRequestResult[] = [];
-    // A control plane that predates CLI extensions refuses a report naming them: it gets the report without them.
-    let cliExtensions = true;
+    // A control plane that predates Pikibun extensions refuses a report naming them: it gets the report without them.
+    let pikiExtensions = true;
     const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
     while (!signal.aborted) {
       try {
         await extensions.refreshIfChanged();
         const sync = async () => parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions",
-          { report: cliExtensions ? extensions.report() : extensions.reportWithoutCliExtensions(), results }));
+          { report: pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions(), results }));
         let answer: ReturnType<typeof parseExtensionsSyncAnswer>;
         try { answer = await sync(); }
         catch (error) {
-          if (!cliExtensions || !refusedReport(error)) throw error;
-          cliExtensions = false;
+          if (!pikiExtensions || !refusedReport(error)) throw error;
+          pikiExtensions = false;
           answer = await sync();
         }
         results = [];

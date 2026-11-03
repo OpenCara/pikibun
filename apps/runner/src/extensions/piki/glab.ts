@@ -1,8 +1,8 @@
-import { cliExtension } from "../../../../../packages/shared/src/cli-extensions.js";
+import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
 import { apiWrites, commandExtension, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
 /*
- * cli:glab, the GitLab CLI (docs/design/cli-extensions.md).
+ * piki:glab, the GitLab CLI (docs/design/piki-extensions.md).
  */
 
 /** Commands that only read, by group: every subcommand of a group set to true. `ci view` is interactive, so it isn't one. */
@@ -24,7 +24,7 @@ const READS: Record<string, readonly string[] | true> = {
 };
 
 export const glabSpec: CliSpec = {
-  info: cliExtension("cli:glab")!,
+  info: pikiExtension("piki:glab")!,
   command: "glab",
   windowsCommand: { file: "glab.exe", shim: false },
   description: [

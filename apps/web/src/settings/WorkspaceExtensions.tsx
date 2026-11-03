@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { Workspace } from "../../../../packages/shared/src/types";
-import { cliExtension, cliExtensions } from "../../../../packages/shared/src/cli-extensions";
-import { extensionLimits, extensionPackageKey, isCliExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
+import { pikiExtension, pikiExtensions } from "../../../../packages/shared/src/piki-extensions";
+import { extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
   type HostExtensionsReport, type InstalledExtension, type WorkspaceExtension } from "../../../../packages/shared/src/host-extensions";
 import { api, segment } from "../api";
 import { Icon } from "../icons";
@@ -24,7 +24,7 @@ const toolsLabel: Record<ExtensionToolMode, string> = { approval: "Approval", au
 
 const info = <div className="stack">
   <p>Pi extensions add tools, prompt text and hooks to this workspace's sessions. A session runs those enabled here that its host has installed at the same version: its host's owner installs them there, from the host's page or with <code>pikibun extensions</code>.</p>
-  <p>CLI extensions come with every host's connector: <code>cli:gh</code>, <code>cli:glab</code> and <code>cli:azure-cli</code> run the GitHub, GitLab or Azure CLI the host has installed and signed in. The workspace gets the one for a forge when it binds its first repository there.</p>
+  <p>Pikibun's built-in extensions come with every host's connector: <code>piki:gh</code>, <code>piki:glab</code> and <code>piki:azure-cli</code> run the GitHub, GitLab or Azure CLI the host has installed and signed in. The workspace gets the one for a forge when it binds its first repository there.</p>
   <p>Extensions run on the host, as its owner's OS user, outside the sandbox and the network access above. Their tool calls are approved like host commands, by the host's owner or a member granted host commands, unless you set their tools to run automatically and the host's owner allows that on their host.</p>
   <p>Settings are the extension's own options. Never put secrets in them: an extension reads keys on its host, which its owner sets up.</p>
 </div>;
@@ -54,8 +54,8 @@ function clashes(extensions: readonly WorkspaceExtension[], hosts: readonly Exte
 
 function availabilityBadge(availability: ExtensionAvailability | undefined, source: string) {
   if (!availability) return <StatusBadge tone="neutral">Not reported</StatusBadge>;
-  if (availability.status === "installed") return <StatusBadge tone="success">{isCliExtensionSource(source) ? "Available" : "Installed"}</StatusBadge>;
-  if (isCliExtensionSource(source)) return <StatusBadge tone="warning">Update its connector</StatusBadge>;
+  if (availability.status === "installed") return <StatusBadge tone="success">{isPikiExtensionSource(source) ? "Available" : "Installed"}</StatusBadge>;
+  if (isPikiExtensionSource(source)) return <StatusBadge tone="warning">Update its connector</StatusBadge>;
   if (availability.status === "other-version") return <StatusBadge tone="warning">{availability.installed.slice(availability.installed.lastIndexOf("@") + 1)} installed</StatusBadge>;
   return <StatusBadge tone="neutral">Missing</StatusBadge>;
 }
@@ -99,10 +99,10 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
     ? <Button variant="outline" size="sm" icon="plus" onClick={() => setEditing("new")}>Add extension</Button> : undefined}>
     <ResourceState loading={resource.loading && !data} error={resource.error} retry={resource.refresh}>
       {data && <div className="card">
-        {!data.extensions.length && <EmptyState title="No extensions">{admin ? "Add a Pi extension, such as npm:cc-safety-net@2.7.2 or cli:gh (the GitHub CLI), to run it in this workspace's sessions." : "Owners and admins add the Pi extensions this workspace's sessions run."}</EmptyState>}
+        {!data.extensions.length && <EmptyState title="No extensions">{admin ? "Add a Pi extension, such as npm:cc-safety-net@2.7.2 or piki:gh (the GitHub CLI), to run it in this workspace's sessions." : "Owners and admins add the Pi extensions this workspace's sessions run."}</EmptyState>}
         {data.extensions.map(extension => {
           const installedOn = data.hosts.filter(host => host.availability?.[extension.source]?.status === "installed").length;
-          const cli = cliExtension(extension.source);
+          const cli = pikiExtension(extension.source);
           return <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={cli ? <>{cli.title} <code>{extension.source}</code></> : <code>{extension.source}</code>}
             hint={`Tools: ${toolsLabel[extension.tools].toLowerCase()} · ${cli ? "on" : "installed on"} ${installedOn} of ${data.hosts.length} ${data.hosts.length === 1 ? "host" : "hosts"}`}
             trailing={extension.enabled ? <StatusBadge tone="success">On</StatusBadge> : <StatusBadge tone="neutral">Off</StatusBadge>}>
@@ -145,9 +145,9 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
   try { normalized = source.trim() ? normalizeExtensionSource(source.trim()) : undefined; }
   catch (reason) { invalid = reason instanceof Error ? reason.message : "Invalid source"; }
   const replacing = !extension && normalized ? taken.find(item => extensionPackageKey(item.source) === extensionPackageKey(normalized!)) : undefined;
-  const cli = normalized ? cliExtension(normalized) : undefined;
-  const offered = cliExtensions.filter(item => !taken.some(used => used.source === item.source));
-  const editingCli = !!extension && isCliExtensionSource(extension.source);
+  const cli = normalized ? pikiExtension(normalized) : undefined;
+  const offered = pikiExtensions.filter(item => !taken.some(used => used.source === item.source));
+  const editingCli = !!extension && isPikiExtensionSource(extension.source);
   // Settings the extension no longer declares are kept, shown as they are.
   const known = new Set(flags?.map(flag => flag.name));
   const extra = Object.keys(settings).filter(name => !known.has(name));
@@ -168,7 +168,7 @@ function ExtensionSheet({ extension, taken, flags, close, save, busy, error }: {
       </div>}
       <Field label="Source" hint={editingCli ? "Built into the connector: its version is each host's connector's"
         : extension ? "Change the version to move every host to it: until a host's owner installs it there, sessions on that host run without it"
-        : "npm:<package>@<exact version>, git:<https URL>@<full commit>, or cli:<name>. A Pi extension package, pinned"} error={invalid}>
+        : "npm:<package>@<exact version>, git:<https URL>@<full commit>, or piki:<name>. A Pi extension package, pinned"} error={invalid}>
         <input className="input mono" value={source} onChange={event => setSource(event.target.value)} disabled={busy || editingCli} autoComplete="off" spellCheck={false}
           maxLength={512} placeholder="npm:cc-safety-net@2.7.2" autoFocus={!extension} />
       </Field>

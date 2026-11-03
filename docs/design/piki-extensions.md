@@ -1,4 +1,4 @@
-# CLI extensions: gh, glab and az
+# Pikibun's built-in extensions: gh, glab and az
 
 Sessions on a sandboxed host have no network but the workspace's: they clone and push through the egress proxy, and read
 and act on GitHub through `github_read`, `github_comment`, `github_issue` and `github_merge`. What those don't cover (CI
@@ -7,9 +7,9 @@ with nothing to guide the agent or the person approving it. With this design the
 own that give sessions a forge's command-line tool, run on the host with its owner's sign-in to it, and a workspace gets
 the one for a forge when it binds its first repository there.
 
-They are not Pi's built-in extensions ([host extensions](host-extensions.md), rule 10), which a host's configuration
-turns on for every session on it: these are workspace extensions, chosen per workspace like any other, that happen to
-ship with the connector.
+Built-in extensions are named for where they come from: Pi's are `pi:<name>` (`pi:codemode`, [host
+extensions](host-extensions.md), rule 10), which a host's configuration turns on for every session on it; Pikibun's own
+are `piki:<name>`, workspace extensions that a workspace chooses like any other and that ship with the connector.
 
 ## Decisions
 
@@ -17,7 +17,7 @@ ship with the connector.
    disable and remove them, set their tools to approval or automatic, and set their settings; a session runs them where
    its workspace enables them; each tool call is an `extension.tool` card decided like a host command. Nothing new in
    sessions, cards or approvals.
-2. **Built into the connector.** Their source is `cli:<name>` (`cli:gh`, `cli:glab`, `cli:azure-cli`),
+2. **Built into the connector.** Their source is `piki:<name>` (`piki:gh`, `piki:glab`, `piki:azure-cli`),
    their package key the source itself, and their version the connector's: every connector that knows one has it, and
    reports it with what is installed, so hosts never install, update or remove them (the store, the CLI, the connector
    and the control plane all refuse to). They load through Pi's loader from their factory
@@ -45,15 +45,15 @@ ship with the connector.
    configuration there could make a command that runs Git (`gh pr status`) run code. A workspace that sets the tools to
    automatic should set read-only too; the workspace page says so.
 6. **Added with the first repository of a forge.** Binding a repository whose provider is `github` or
-   `github-enterprise` adds `cli:gh`, `gitlab` `cli:glab`, and `azure-devops` `cli:azure-cli`, when it is
+   `github-enterprise` adds `piki:gh`, `gitlab` `piki:glab`, and `azure-devops` `piki:azure-cli`, when it is
    the workspace's first repository of those providers and the workspace doesn't use that extension yet (nor 32
    extensions): enabled, tools with approval, at the end of its list, audited as `workspace.extension.updated` with
    `reason: repository`. One the workspace turned off stays off; one it removed comes back only with a later first
    repository of its forge. Migrations `0048` (SQLite) and `0041` (Postgres) do the same once for workspaces that already
    have such repositories, as their owner.
-7. **Older connectors and control planes.** A connector that predates CLI extensions would refuse a workspace's
+7. **Older connectors and control planes.** A connector that predates Pikibun extensions would refuse a workspace's
    whole list for naming one, so the control plane leaves them out of the list it gives a connector whose last report
-   names none. A report holds up to 16 CLI extensions besides the 64 installed sources a host may have. A control plane
+   names none. A report holds up to 16 Pikibun extensions besides the 64 installed sources a host may have. A control plane
    that predates them refuses a report that names one (400): the connector then reports
    without them, until it reconnects. Sessions on an older connector run without them, and the workspace's and host's
    pages say to update it.
@@ -62,14 +62,14 @@ ship with the connector.
 
 | Part | Where |
 |---|---|
-| Catalogue (names, tools, providers, install and sign-in hints) | `packages/shared/src/cli-extensions.ts` |
-| `cli:` sources | `packages/shared/src/host-extensions.ts` |
-| The command tool, its environment and output | `apps/runner/src/extensions/cli/cli.ts` |
-| gh, glab, az: refused and read-only arguments | `apps/runner/src/extensions/cli/{gh,glab,azure-cli}.ts` |
+| Catalogue (names, tools, providers, install and sign-in hints) | `packages/shared/src/piki-extensions.ts` |
+| `piki:` sources | `packages/shared/src/host-extensions.ts` |
+| The command tool, its environment and output | `apps/runner/src/extensions/piki/cli.ts` |
+| gh, glab, az: refused and read-only arguments | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
 | Added on binding; a connector's list; install requests refused | `apps/server/src/extensions.ts`, `repositories.ts`; migrations `0048`/`0041` |
 | Workspace and host pages | `apps/web/src/settings/WorkspaceExtensions.tsx`, `HostExtensions.tsx` |
-| Tests | `tests/cli-extensions.test.ts`, and in `extensions`, `repositories`, `local-connector` |
+| Tests | `tests/piki-extensions.test.ts`, and in `extensions`, `repositories`, `local-connector` |
 
 ## Later
 

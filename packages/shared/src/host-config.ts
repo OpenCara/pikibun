@@ -18,16 +18,25 @@ export type GpuKind = (typeof gpuKinds)[number];
  * nothing to install: they ship with Pikibun, from pi-durable (docs/design/host-extensions.md). Each runs in the
  * connector; its tool calls are the session's own, decided as usual. Pi's other built-ins have no counterpart here:
  * `mcp` and `llama.cpp` register MCP servers and providers, which Pikibun doesn't run, and `tool-search` finds deferred
- * tools, which Pikibun has none of.
+ * tools, which Pikibun has none of. Each is named `pi:<name>`, beside Pikibun's own built-ins, which workspaces choose as
+ * `piki:<name>` (piki-extensions.ts).
  */
 export const builtinExtensions = Object.freeze([
   Object.freeze({
-    name: "codemode", title: "Code mode", tools: Object.freeze(["codemode"]),
+    name: "pi:codemode", title: "Code mode", tools: Object.freeze(["codemode"]),
     description: "The codemode tool: the model writes JavaScript that calls the session's tools, run in a QuickJS sandbox in the connector, to batch, chain and filter calls. Each call it makes is decided like the model's own, and a script resumes where it was after a restart.",
   }),
 ] as const);
 export type BuiltinExtensionName = (typeof builtinExtensions)[number]["name"];
 export const builtinExtensionNames: readonly BuiltinExtensionName[] = Object.freeze(builtinExtensions.map(item => item.name));
+
+/**
+ * `names` with Pi's built-ins named `pi:<name>`: they were named bare (`codemode`) before, as configurations saved then
+ * and clients of then still name them.
+ */
+export function normalizeBuiltinExtensionNames(names: readonly unknown[]): unknown[] {
+  return names.map(name => typeof name === "string" && !name.includes(":") ? `pi:${name}` : name);
+}
 
 /** A model's compaction token counts, or the whole host's; each one left out keeps the host's Pi setting. */
 export interface CompactionTokens {
@@ -95,8 +104,9 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
 });
 
 /** The built-in extensions a host runs: known names, each once, in the catalog's order, so equal settings are equal JSON. */
-export function parseBuiltinExtensions(value: unknown): BuiltinExtensionName[] {
-  if (!Array.isArray(value) || value.length > builtinExtensionNames.length) throw new Error("Invalid built-in extensions");
+export function parseBuiltinExtensions(input: unknown): BuiltinExtensionName[] {
+  if (!Array.isArray(input) || input.length > builtinExtensionNames.length) throw new Error("Invalid built-in extensions");
+  const value = normalizeBuiltinExtensionNames(input);
   if (value.some(name => !(builtinExtensionNames as readonly unknown[]).includes(name)) || new Set(value).size !== value.length) {
     throw new Error(`Built-in extensions are ${builtinExtensionNames.join(", ")}`);
   }
@@ -193,6 +203,6 @@ export function readHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
   const input = value as Record<string, unknown>;
   const known = Object.fromEntries(Object.keys(defaultHostConfig).filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]]));
-  if (Array.isArray(known.builtinExtensions)) known.builtinExtensions = known.builtinExtensions.filter(name => (builtinExtensionNames as readonly unknown[]).includes(name));
+  if (Array.isArray(known.builtinExtensions)) known.builtinExtensions = normalizeBuiltinExtensionNames(known.builtinExtensions).filter(name => (builtinExtensionNames as readonly unknown[]).includes(name));
   return parseHostConfig({ ...defaultHostConfig, ...known });
 }

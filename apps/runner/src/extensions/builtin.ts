@@ -174,7 +174,7 @@ export class SessionBuiltins {
     this.#sandbox = new LimitedCodemodeSandbox(options.computeLimitMs);
     const codemode = createCodemodeExtension({ sandbox: this.#sandbox, models: false });
     this.extensions = new Map([
-      ["codemode", { ...codemode, tools: (codemode.tools ?? []).map(tool => withOutputs(tool, options.outputs)) }],
+      ["pi:codemode", { ...codemode, tools: (codemode.tools ?? []).map(tool => withOutputs(tool, options.outputs)) }],
     ]);
   }
 

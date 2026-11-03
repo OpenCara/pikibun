@@ -3333,20 +3333,21 @@ test('a host\'s owner and admins turn on Pi\'s built-in extensions for its sessi
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
   const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {} };
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, builtinExtensions: [] } });
-  for (const invalid of [{ builtinExtensions: null }, { builtinExtensions: 'codemode' }, { builtinExtensions: ['tool-search'] }, { builtinExtensions: ['codemode', 'codemode'] }]) {
+  for (const invalid of [{ builtinExtensions: null }, { builtinExtensions: 'codemode' }, { builtinExtensions: ['tool-search'] }, { builtinExtensions: ['pi:codemode', 'codemode'] }, { builtinExtensions: ['piki:gh'] }]) {
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
   }
-  assert.deepEqual(await json(await host.request('PATCH', path, { builtinExtensions: ['codemode'] })), { config: { ...defaults, builtinExtensions: ['codemode'] } });
-  assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, builtinExtensions: ['codemode'] } });
-  assert.equal(f.sqlite.prepare('SELECT builtin_extensions_json FROM connector_configs WHERE connector_id = ?').get(id)!.builtin_extensions_json, '["codemode"]');
+  assert.deepEqual(await json(await host.request('PATCH', path, { builtinExtensions: ['codemode'] })), { config: { ...defaults, builtinExtensions: ['pi:codemode'] } }, 'a bare name is Pi\'s');
+  assert.deepEqual(await json(await host.request('PATCH', path, { builtinExtensions: ['pi:codemode'] })), { config: { ...defaults, builtinExtensions: ['pi:codemode'] } });
+  assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, builtinExtensions: ['pi:codemode'] } });
+  assert.equal(f.sqlite.prepare('SELECT builtin_extensions_json FROM connector_configs WHERE connector_id = ?').get(id)!.builtin_extensions_json, '["pi:codemode"]');
   // A save of another setting keeps them; a member who doesn't manage the host can't change them, and an admin turns them off.
-  assert.deepEqual(await json(await host.request('PATCH', path, { commandTimeoutSeconds: 120 })), { config: { ...defaults, commandTimeoutSeconds: 120, builtinExtensions: ['codemode'] } });
+  assert.deepEqual(await json(await host.request('PATCH', path, { commandTimeoutSeconds: 120 })), { config: { ...defaults, commandTimeoutSeconds: 120, builtinExtensions: ['pi:codemode'] } });
   await denied(await creator.request('PATCH', path, { builtinExtensions: [] }), 404, 'not_found');
   await json(await host.request('PUT', `/api/connectors/${id}/admins/${creator.user.id}`));
   assert.deepEqual(await json(await creator.request('PATCH', path, { builtinExtensions: [] })), { config: { ...defaults, commandTimeoutSeconds: 120, builtinExtensions: [] } });
   // Names this control plane no longer ships, or a value it can't read, are none.
   f.sqlite.prepare('UPDATE connector_configs SET builtin_extensions_json = ? WHERE connector_id = ?').run('["retired","codemode"]', id);
-  assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, commandTimeoutSeconds: 120, builtinExtensions: ['codemode'] } });
+  assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, commandTimeoutSeconds: 120, builtinExtensions: ['pi:codemode'] } });
   f.sqlite.prepare('UPDATE connector_configs SET builtin_extensions_json = ? WHERE connector_id = ?').run('{', id);
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, commandTimeoutSeconds: 120, builtinExtensions: [] } });
 });

@@ -18,7 +18,7 @@ Commands:
                             git:<https URL>@<full commit>     e.g. git:github.com/acme/search@<40-character commit>
                             PATH                              a dev extension: a .ts/.js file or a package directory,
                                                               loaded in place, in your own sessions on this host only
-  list                    Load the CLI and installed extensions and show what each offers, ignores, or why it
+  list                    Load Pikibun's own and the installed extensions and show what each offers, ignores, or why it
                           doesn't load
   remove NAME             Uninstall one: its source as listed, a package name, or a dev extension's path
 
@@ -27,7 +27,7 @@ Options:
   --allow-scripts         For add: let npm run the package's install scripts (off by default)
   --help                  Show this help
 
-CLI extensions (cli:gh, cli:glab, cli:azure-cli) come with the connector: they run the GitHub, GitLab
+Pikibun's built-in extensions (piki:gh, piki:glab, piki:azure-cli) come with the connector: they run the GitHub, GitLab
 or Azure CLI installed and signed in on this host, where a workspace uses them. Nothing to install.
 
 A running connector picks up changes made here when it next reconnects; restart it to use them at once.
@@ -68,7 +68,7 @@ export async function extensionsMain(args: string[]): Promise<void> {
 
 function print(loaded: LoadedSource[]): void {
   for (const { summary } of loaded) {
-    process.stdout.write(`${summary.source}${summary.dev ? "  (dev: your own sessions on this host)" : summary.source.startsWith("cli:") ? "  (built into the connector)" : ""}\n`);
+    process.stdout.write(`${summary.source}${summary.dev ? "  (dev: your own sessions on this host)" : summary.source.startsWith("piki:") ? "  (built into the connector)" : ""}\n`);
     if (summary.description) process.stdout.write(`  ${summary.description}\n`);
     if (summary.error) { process.stdout.write(`  Doesn't load: ${summary.error}\n`); continue; }
     for (const module of summary.modules) {

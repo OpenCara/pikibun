@@ -265,7 +265,7 @@ test('repository API separates cookie/CSRF authentication, administrator writes,
   assert.equal(remote.calls.length, 1);
 });
 
-test('a workspace\'s first GitHub repository adds cli:gh to its extensions, once: owners and admins remove it like any other', async t => {
+test('a workspace\'s first GitHub repository adds piki:gh to its extensions, once: owners and admins remove it like any other', async t => {
   const f = await fixture(t); github(t);
   const owner = await f.client('owner');
   const team = await workspace(owner); const path = `/api/workspaces/${team.id}/repositories`;
@@ -273,19 +273,19 @@ test('a workspace\'s first GitHub repository adds cli:gh to its extensions, once
     await owner.request('GET', `/api/workspaces/${team.id}/extensions`))).extensions;
   const bind = async () => json<{ repository: WorkspaceRepository; extensions?: string[] }>(await owner.request('POST', path, repositoryInput), 201);
   const first = await bind();
-  assert.deepEqual(first.extensions, ['cli:gh']);
-  assert.deepEqual(await extensions(), [{ source: 'cli:gh', enabled: true, tools: 'approval', settings: {} }]);
+  assert.deepEqual(first.extensions, ['piki:gh']);
+  assert.deepEqual(await extensions(), [{ source: 'piki:gh', enabled: true, tools: 'approval', settings: {} }]);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.extension.updated'").get()!.n, 1);
   // Turned off, it stays off when the repository is bound again.
-  await json(await owner.request('PUT', `/api/workspaces/${team.id}/extensions`, { source: 'cli:gh', enabled: false }));
+  await json(await owner.request('PUT', `/api/workspaces/${team.id}/extensions`, { source: 'piki:gh', enabled: false }));
   assert.equal((await owner.request('DELETE', `${path}/${first.repository.id}`)).status, 204);
   assert.equal((await bind()).extensions, undefined);
-  assert.deepEqual((await extensions()).map(item => [item.source, item.enabled]), [['cli:gh', false]]);
+  assert.deepEqual((await extensions()).map(item => [item.source, item.enabled]), [['piki:gh', false]]);
   // Removed, a later first GitHub repository brings it back.
-  await json(await owner.request('DELETE', `/api/workspaces/${team.id}/extensions?source=cli:gh`));
+  await json(await owner.request('DELETE', `/api/workspaces/${team.id}/extensions?source=piki:gh`));
   const again = (await json<{ repositories: WorkspaceRepository[] }>(await owner.request('GET', path))).repositories[0]!;
   assert.equal((await owner.request('DELETE', `${path}/${again.id}`)).status, 204);
-  assert.deepEqual((await bind()).extensions, ['cli:gh']);
+  assert.deepEqual((await bind()).extensions, ['piki:gh']);
 });
 
 test('picker uses the acting GitHub token, projects safe metadata and lists every page up to the limit', async t => {

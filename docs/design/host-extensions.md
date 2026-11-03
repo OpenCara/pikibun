@@ -40,7 +40,7 @@ its host has.
    A host's owner and admins turn them on for every session on the host, in every workspace
    (`HostConfig.builtinExtensions`, Host → Extensions), with nothing to install. Pikibun runs pi-durable's own versions,
    because Pi's call other tools through the coding agent's loop (`ctx.executeTool`), which Pikibun doesn't run. Today
-   that is **code mode** (`codemode`, from `@earendil-works/pi-durable/codemode`). Pi's others have no counterpart:
+   that is **code mode** (`pi:codemode`, from `@earendil-works/pi-durable/codemode`). Pi's others have no counterpart:
    `mcp` and `llama.cpp` register MCP servers and providers (ignored, see below), and `tool-search` finds deferred tools,
    which Pikibun has none of.
 
@@ -78,7 +78,8 @@ options and lifecycle), so a workspace can't name one. Pikibun wraps the useful 
 
 ## Built-in extensions
 
-- `HostConfig.builtinExtensions` lists the names the host runs, in the catalog's order (`builtinExtensions` in
+- `HostConfig.builtinExtensions` lists the names the host runs (`pi:<name>`, beside Pikibun's own `piki:<name>`; reads
+  also take the bare names saved before, which migrations `0048`/`0041` rename), in the catalog's order (`builtinExtensions` in
   `packages/shared/src/host-config.ts`); the default is none. It is saved as `connector_configs.builtin_extensions_json`
   (sqlite `0047`, postgres `0040`) and read by the connector with the rest of the configuration, every 30 seconds. A
   connector drops names it doesn't ship rather than the whole configuration, and so does the control plane for stored
@@ -179,11 +180,11 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 | Web and mobile: workspace and host sections, install buttons, session list, approval card | Done (`WorkspaceExtensions.tsx`, `HostExtensions.tsx`, `session-panel.tsx`; mobile: the approval card) |
 | Pi's built-ins from the host's configuration: code mode | Done (`extensions/builtin.ts`, `host-config.ts`, `HostExtensions.tsx`) |
 
-## CLI extensions
+## Pikibun's built-in extensions (`piki:`)
 
-The connector also carries workspace extensions of its own, `cli:gh`, `cli:glab` and `cli:azure-cli`, which every host
+The connector also carries workspace extensions of its own, `piki:gh`, `piki:glab` and `piki:azure-cli`, which every host
 has without installing them and a workspace gets with its first repository on that forge: see
-[CLI extensions](cli-extensions.md). Unlike Pi's built-ins above, the workspace chooses them, like any extension.
+[Pikibun's built-in extensions](piki-extensions.md). Unlike Pi's built-ins above, the workspace chooses them, like any extension.
 
 ## Later
 

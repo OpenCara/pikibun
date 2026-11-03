@@ -6,16 +6,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createExtensionRuntime, createEventBus } from '@earendil-works/pi-coding-agent';
-import { azureCliSpec } from '../apps/runner/src/extensions/cli/azure-cli.js';
-import { apiWrites, cliEnvironment, commandWords, optionValues } from '../apps/runner/src/extensions/cli/command.js';
-import { ghSpec } from '../apps/runner/src/extensions/cli/gh.js';
-import { glabSpec } from '../apps/runner/src/extensions/cli/glab.js';
-import { connectorCliExtensions } from '../apps/runner/src/extensions/cli/index.js';
+import { azureCliSpec } from '../apps/runner/src/extensions/piki/azure-cli.js';
+import { apiWrites, cliEnvironment, commandWords, optionValues } from '../apps/runner/src/extensions/piki/command.js';
+import { ghSpec } from '../apps/runner/src/extensions/piki/gh.js';
+import { glabSpec } from '../apps/runner/src/extensions/piki/glab.js';
+import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
 import { SessionExtensions, type ExtensionHost } from '../apps/runner/src/extensions/adapter.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { loadInstalled, loadSource } from '../apps/runner/src/extensions/load.js';
 import { ExtensionStore, parseExtensionSource } from '../apps/runner/src/extensions/store.js';
-import { cliExtension, cliExtensions, cliExtensionsFor } from '../packages/shared/src/cli-extensions.js';
+import { pikiExtension, pikiExtensions, pikiExtensionsFor } from '../packages/shared/src/piki-extensions.js';
 import { extensionAvailability, extensionPackageKey, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
   sessionExtensions } from '../packages/shared/src/host-extensions.js';
 
@@ -25,57 +25,57 @@ async function directory(t: TestContext): Promise<string> {
   return path;
 }
 
-test('CLI extension sources parse as cli:<name>, are their own package, and are never installed or removed on a host', async t => {
-  assert.equal(normalizeExtensionSource('cli:gh'), 'cli:gh');
-  assert.equal(extensionPackageKey('cli:azure-cli'), 'cli:azure-cli');
-  for (const bad of ['cli:', 'cli:GH', 'cli:gh@1.0.0', 'cli:../x']) assert.throws(() => normalizeExtensionSource(bad), /./, bad);
+test('Pikibun extension sources parse as piki:<name>, are their own package, and are never installed or removed on a host', async t => {
+  assert.equal(normalizeExtensionSource('piki:gh'), 'piki:gh');
+  assert.equal(extensionPackageKey('piki:azure-cli'), 'piki:azure-cli');
+  for (const bad of ['piki:', 'piki:GH', 'piki:gh@1.0.0', 'piki:../x']) assert.throws(() => normalizeExtensionSource(bad), /./, bad);
   // A name a newer connector may have still parses, so reports and lists that hold one are taken.
-  assert.equal(normalizeExtensionSource('cli:some-future-cli'), 'cli:some-future-cli');
-  assert.deepEqual(parseWorkspaceExtensions([{ source: 'cli:gh' }, { source: 'npm:a@1.0.0' }]).map(item => item.source), ['cli:gh', 'npm:a@1.0.0']);
-  assert.deepEqual(parseHostExtensionsReport({ installed: [{ source: 'cli:gh', dev: false, modules: [] }], remoteInstalls: true }).installed[0]!.source, 'cli:gh');
-  const installed = [{ source: 'cli:gh', dev: false, modules: [] }];
-  assert.equal(extensionAvailability('cli:gh', installed).status, 'installed');
-  assert.equal(extensionAvailability('cli:glab', installed).status, 'missing', 'a connector that predates it lacks it');
-  assert.deepEqual(sessionExtensions(parseWorkspaceExtensions([{ source: 'cli:gh' }, { source: 'cli:glab' }]), installed, { ownerId: 'bob', connectorOwnerId: 'alice' })
-    .map(item => item.source), ['cli:gh'], 'every member\'s sessions run it, not only the host owner\'s');
+  assert.equal(normalizeExtensionSource('piki:some-future-cli'), 'piki:some-future-cli');
+  assert.deepEqual(parseWorkspaceExtensions([{ source: 'piki:gh' }, { source: 'npm:a@1.0.0' }]).map(item => item.source), ['piki:gh', 'npm:a@1.0.0']);
+  assert.deepEqual(parseHostExtensionsReport({ installed: [{ source: 'piki:gh', dev: false, modules: [] }], remoteInstalls: true }).installed[0]!.source, 'piki:gh');
+  const installed = [{ source: 'piki:gh', dev: false, modules: [] }];
+  assert.equal(extensionAvailability('piki:gh', installed).status, 'installed');
+  assert.equal(extensionAvailability('piki:glab', installed).status, 'missing', 'a connector that predates it lacks it');
+  assert.deepEqual(sessionExtensions(parseWorkspaceExtensions([{ source: 'piki:gh' }, { source: 'piki:glab' }]), installed, { ownerId: 'bob', connectorOwnerId: 'alice' })
+    .map(item => item.source), ['piki:gh'], 'every member\'s sessions run it, not only the host owner\'s');
 
-  assert.deepEqual(cliExtensions.map(item => item.source), ['cli:gh', 'cli:glab', 'cli:azure-cli']);
-  assert.deepEqual(cliExtensionsFor('github-enterprise').map(item => item.source), ['cli:gh']);
-  assert.deepEqual(cliExtensionsFor('azure-devops').map(item => item.tool), ['az']);
-  assert.deepEqual(cliExtensionsFor('bitbucket'), []);
-  assert.equal(cliExtension('cli:nope'), undefined);
+  assert.deepEqual(pikiExtensions.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli']);
+  assert.deepEqual(pikiExtensionsFor('github-enterprise').map(item => item.source), ['piki:gh']);
+  assert.deepEqual(pikiExtensionsFor('azure-devops').map(item => item.tool), ['az']);
+  assert.deepEqual(pikiExtensionsFor('bitbucket'), []);
+  assert.equal(pikiExtension('piki:nope'), undefined);
 
-  assert.throws(() => parseExtensionSource('cli:gh'), /built into the connector/);
+  assert.throws(() => parseExtensionSource('piki:gh'), /built into the connector/);
   const root = await directory(t);
   const store = new ExtensionStore(join(root, 'extensions'), async () => { throw new Error('npm never runs'); });
-  await assert.rejects(store.add({ kind: 'cli', name: 'gh' } as never), /come with the connector/);
-  await assert.rejects(store.remove('cli:gh'), /can't be removed/);
+  await assert.rejects(store.add({ kind: 'piki', name: 'gh' } as never), /come with the connector/);
+  await assert.rejects(store.remove('piki:gh'), /can't be removed/);
   const host = new HostExtensions(store, { remoteInstalls: true });
-  assert.deepEqual(await host.apply([{ id: 'r1', action: 'install', source: 'cli:gh' }]), [{ id: 'r1', ok: false,
-    error: 'cli:gh is built into the connector: update the connector instead (npx pikibun@latest connect).' }]);
+  assert.deepEqual(await host.apply([{ id: 'r1', action: 'install', source: 'piki:gh' }]), [{ id: 'r1', ok: false,
+    error: 'piki:gh is built into the connector: update the connector instead (npx pikibun@latest connect).' }]);
 });
 
-test('every connector has its CLI extensions: each offers one tool and its read-only setting', async t => {
+test('every connector has its Pikibun extensions: each offers one tool and its read-only setting', async t => {
   const root = await directory(t);
   const store = new ExtensionStore(join(root, 'extensions'));
   const loaded = await loadInstalled(store);
-  assert.deepEqual(loaded.map(item => item.summary.source), ['cli:gh', 'cli:glab', 'cli:azure-cli']);
+  assert.deepEqual(loaded.map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli']);
   for (const item of loaded) {
     assert.equal(item.summary.error, undefined);
     const [module] = item.summary.modules;
     assert.equal(module!.error, undefined, item.summary.source);
-    assert.deepEqual(module!.tools.map(tool => tool.name), [cliExtension(item.summary.source)!.tool]);
+    assert.deepEqual(module!.tools.map(tool => tool.name), [pikiExtension(item.summary.source)!.tool]);
     assert.deepEqual(module!.flags, [{ name: 'read-only', type: 'boolean', default: false, description: module!.flags[0]!.description }]);
     assert.deepEqual([module!.noops, module!.ignored, module!.events], [[], [], []]);
   }
   const host = new HostExtensions(store, { remoteInstalls: true });
   await host.load();
-  assert.deepEqual(host.report().installed.map(item => item.source), ['cli:gh', 'cli:glab', 'cli:azure-cli']);
-  assert.deepEqual(host.reportWithoutCliExtensions().installed, [], 'a control plane that predates them gets the report without them');
+  assert.deepEqual(host.report().installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli']);
+  assert.deepEqual(host.reportWithoutPikiExtensions().installed, [], 'a control plane that predates them gets the report without them');
   // Nothing is installed in the store: the CLI's changes are compared with what is installed only.
   await host.refreshIfChanged();
   assert.equal(host.loaded.length, 3);
-  assert.equal(connectorCliExtensions.length, 3);
+  assert.equal(connectorPikiExtensions.length, 3);
 });
 
 test('arguments are read as the commands take them', () => {
@@ -165,9 +165,9 @@ test('refusals hold wherever options sit, clustered, abbreviated or in another c
   assert.equal(azureCliSpec.writes(['Repos', 'PR', 'List']), undefined);
 });
 
-test('a host\'s report holds its CLI extensions besides as many installed ones as it may have', () => {
+test('a host\'s report holds its Pikibun extensions besides as many installed ones as it may have', () => {
   const installed = Array.from({ length: 64 }, (_, index) => ({ source: `npm:extension-${index}@1.0.0`, dev: false, modules: [] }));
-  const report = parseHostExtensionsReport({ installed: [...connectorCliExtensions.map(item => ({ source: item.info.source, dev: false, modules: [] })), ...installed], remoteInstalls: true });
+  const report = parseHostExtensionsReport({ installed: [...connectorPikiExtensions.map(item => ({ source: item.info.source, dev: false, modules: [] })), ...installed], remoteInstalls: true });
   assert.equal(report.installed.length, 67);
 });
 
@@ -199,9 +199,9 @@ async function ghTool(t: TestContext, readOnly = false) {
   process.env.PATH = `${bin}:${path}`;
   process.env.PIKIBUN_TEST_SECRET = 'leaked';
   t.after(() => { process.env.PATH = path; delete process.env.PIKIBUN_TEST_SECRET; });
-  const extension = connectorCliExtensions.find(item => item.info.name === 'gh')!;
+  const extension = connectorPikiExtensions.find(item => item.info.name === 'gh')!;
   const runtime = createExtensionRuntime();
-  const result = await loadSource({ files: ['<cli:gh>'], factories: [{ path: '<cli:gh>', factory: extension.factory }] }, worktree, createEventBus(), runtime);
+  const result = await loadSource({ files: ['<piki:gh>'], factories: [{ path: '<piki:gh>', factory: extension.factory }] }, worktree, createEventBus(), runtime);
   if (readOnly) runtime.flagValues.set('read-only', true);
   const tool = result.extensions[0]!.tools.get('gh')!.definition;
   const call = (params: Record<string, unknown>) => tool.execute('call', params as never, new AbortController().signal, undefined, { cwd: worktree } as never)
@@ -242,44 +242,44 @@ test('a missing command says how its host\'s owner gets it', async t => {
   await assert.rejects(call({ args: ['status'] }), /gh isn't installed on this host, or isn't on its PATH\. Its owner installs it \(https:\/\/cli\.github\.com\) and signs in with gh auth login\./);
 });
 
-test('a session runs a CLI extension like any other: its tool, behind the session\'s gate, with the workspace\'s settings', async t => {
+test('a session runs a Pikibun extension like any other: its tool, behind the session\'s gate, with the workspace\'s settings', async t => {
   const { worktree } = await ghTool(t);
   const loaded = await loadInstalled(new ExtensionStore(join(worktree, '..', 'state')));
   const gated: string[] = [];
   const host: ExtensionHost = {
     directory: worktree, model: () => undefined, hookTimeoutMs: 2000, warn: (_source, message) => assert.fail(message),
-    state: async source => ({ active: source === 'cli:gh', settings: { 'read-only': true } }),
+    state: async source => ({ active: source === 'piki:gh', settings: { 'read-only': true } }),
     runTool: async (call, execute) => { gated.push(`${call.source} ${call.tool} ${JSON.stringify(call.arguments)}`); return execute(call.signal); },
   };
   const extensions = new SessionExtensions(host, ['bash']);
   await extensions.ensure(loaded);
   t.after(() => extensions.shutdown());
-  const { selected } = extensions.select(['cli:gh']);
-  assert.deepEqual(selected.map(item => [item.source, item.tools.map(tool => tool.name)]), [['cli:gh', ['gh']]]);
+  const { selected } = extensions.select(['piki:gh']);
+  assert.deepEqual(selected.map(item => [item.source, item.tools.map(tool => tool.name)]), [['piki:gh', ['gh']]]);
   const tool = selected[0]!.tools[0]! as unknown as { execute(args: unknown, api: unknown, call: unknown): Promise<{ output: { text: string }[] }> };
   const result = await tool.execute({ args: ['pr', 'list', '--repo', 'acme/app'] }, { callId: 'call-1' }, { abortSignal: new AbortController().signal });
   assert.match(result.output[0]!.text, /arg=list/);
   assert.doesNotMatch(result.output[0]!.text, new RegExp(`cwd=${worktree}`), 'the workspace\'s read-only setting applies');
   await assert.rejects(tool.execute({ args: ['pr', 'merge', '1'] }, { callId: 'call-2' }, { abortSignal: new AbortController().signal }), /read-only/);
-  assert.deepEqual(gated, ['cli:gh gh {"args":["pr","list","--repo","acme/app"]}', 'cli:gh gh {"args":["pr","merge","1"]}'], 'each call goes through the session\'s gate');
+  assert.deepEqual(gated, ['piki:gh gh {"args":["pr","list","--repo","acme/app"]}', 'piki:gh gh {"args":["pr","merge","1"]}'], 'each call goes through the session\'s gate');
 });
 
 const migrations = new URL('../apps/server/migrations/sqlite/', import.meta.url);
-const cliMigration = '0048_cli_extensions.sql';
+const pikiMigration = '0048_piki_extensions.sql';
 
 test('the migration gives workspaces that already have a repository on a forge its tool\'s extension, once', () => {
   const files = readdirSync(migrations).filter(name => name.endsWith('.sql')).sort();
-  assert.ok(files.includes(cliMigration));
-  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0041_cli_extensions.sql'), 'Postgres has the same migration');
+  assert.ok(files.includes(pikiMigration));
+  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0041_piki_extensions.sql'), 'Postgres has the same migration');
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
-  for (const file of files.filter(name => name < cliMigration)) sqlite.exec(readFileSync(new URL(file, migrations), 'utf8'));
+  for (const file of files.filter(name => name < pikiMigration)) sqlite.exec(readFileSync(new URL(file, migrations), 'utf8'));
   sqlite.exec(`INSERT INTO users (id, display_name, git_name, git_email, auth_kind, created_at) VALUES ('owner', 'Owner', 'Owner', 'owner@example.test', 'test', '2026-01-01');
     INSERT INTO workspaces (id, name, owner_id, created_at) VALUES ('hub', 'Hub', 'owner', '2026-01-01'), ('lab', 'Lab', 'owner', '2026-01-01'),
       ('mixed', 'Mixed', 'owner', '2026-01-01'), ('plain', 'Plain', 'owner', '2026-01-01'), ('removed', 'Removed', 'owner', '2026-01-01');
     INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
       VALUES ('hub', 'npm:pi-memory', 'npm:pi-memory@1.0.0', 1, 1, 'approval', '{}', 'owner', '2026-01-02'),
-        ('removed', 'cli:gh', 'cli:gh', 1, 0, 'approval', '{}', 'owner', '2026-01-02');`);
+        ('removed', 'piki:gh', 'piki:gh', 1, 0, 'approval', '{}', 'owner', '2026-01-02');`);
   const repository = sqlite.prepare(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 'main', 0, '2026-01-03')`);
   repository.run('r1', 'hub', 'github', 'github.com', '1', 'acme/one');
@@ -289,14 +289,17 @@ test('the migration gives workspaces that already have a repository on a forge i
   repository.run('r5', 'mixed', 'azure-devops', 'dev.azure.com', '5', 'acme/App/five');
   repository.run('r6', 'plain', 'bitbucket', 'bitbucket.org', '6', 'acme/six');
   repository.run('r7', 'removed', 'github', 'github.com', '7', 'acme/seven');
-  sqlite.exec(readFileSync(new URL(cliMigration, migrations), 'utf8'));
+  sqlite.exec(`INSERT INTO connectors (id, owner_id, name, credential_hash, created_at, models_json, capabilities_json) VALUES ('host', 'owner', 'Host', 'hash', '2026-01-01', '[]', '{}');
+    INSERT INTO connector_configs (connector_id, builtin_extensions_json, updated_by, updated_at) VALUES ('host', '["codemode"]', 'owner', '2026-01-01');`);
+  sqlite.exec(readFileSync(new URL(pikiMigration, migrations), 'utf8'));
+  assert.equal(sqlite.prepare("SELECT builtin_extensions_json FROM connector_configs").get()!.builtin_extensions_json, '["pi:codemode"]', 'Pi\'s built-ins are named pi:<name>');
   const rows = sqlite.prepare('SELECT workspace_id, source, position, enabled, tools_mode, updated_by FROM workspace_extensions ORDER BY workspace_id, position').all()
     .map(row => [row.workspace_id, row.source, row.position, row.enabled, row.tools_mode, row.updated_by]);
   assert.deepEqual(rows, [
-    ['hub', 'npm:pi-memory@1.0.0', 1, 1, 'approval', 'owner'], ['hub', 'cli:gh', 2, 1, 'approval', 'owner'],
-    ['lab', 'cli:glab', 1, 1, 'approval', 'owner'],
-    ['mixed', 'cli:gh', 1, 1, 'approval', 'owner'], ['mixed', 'cli:azure-cli', 2, 1, 'approval', 'owner'],
-    ['removed', 'cli:gh', 1, 0, 'approval', 'owner'],
+    ['hub', 'npm:pi-memory@1.0.0', 1, 1, 'approval', 'owner'], ['hub', 'piki:gh', 2, 1, 'approval', 'owner'],
+    ['lab', 'piki:glab', 1, 1, 'approval', 'owner'],
+    ['mixed', 'piki:gh', 1, 1, 'approval', 'owner'], ['mixed', 'piki:azure-cli', 2, 1, 'approval', 'owner'],
+    ['removed', 'piki:gh', 1, 0, 'approval', 'owner'],
   ], 'one each, after what they had; a workspace that turned it off keeps it off');
   const updated = sqlite.prepare("SELECT updated_at FROM workspace_extensions WHERE workspace_id = 'lab'").get()!.updated_at as string;
   assert.match(updated, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);

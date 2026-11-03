@@ -1,8 +1,8 @@
-import { cliExtension } from "../../../../../packages/shared/src/cli-extensions.js";
+import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
 import { commandExtension, commandWords, positionals, type CliSpec } from "./command.js";
 
 /*
- * cli:azure-cli, the Azure CLI (docs/design/cli-extensions.md), with its azure-devops extension where the host
+ * piki:azure-cli, the Azure CLI (docs/design/piki-extensions.md), with its azure-devops extension where the host
  * has it: Azure DevOps repositories, pull requests, pipelines and boards.
  */
 
@@ -57,7 +57,7 @@ function requestWrites(args: readonly string[], method: readonly string[], body:
 }
 
 export const azureCliSpec: CliSpec = {
-  info: cliExtension("cli:azure-cli")!,
+  info: pikiExtension("piki:azure-cli")!,
   command: "az",
   windowsCommand: { file: "az.cmd", shim: true },
   description: [
@@ -95,4 +95,4 @@ export const azureCliSpec: CliSpec = {
   },
 };
 
-export const azureCliExtension = commandExtension(azureCliSpec);
+export const azurePikiExtension = commandExtension(azureCliSpec);
