@@ -333,16 +333,23 @@ test("the Windows sandbox's steps run on real Node: the CLI's own, never a deskt
   const inElectron = (environment: Record<string, string>) => {
     const script = `Object.defineProperty(process, "versions", { value: { ...process.versions, electron: "44.8.0" } });
 const { sandboxNodePath } = await import(${JSON.stringify(new URL("../apps/runner/src/platform.ts", import.meta.url).href)});
-process.stdout.write(JSON.stringify(sandboxNodePath() ?? null));`;
+const first = sandboxNodePath() ?? null;
+// Kept while the variable that found it stays (and the file is there); a changed variable is asked again.
+const again = sandboxNodePath() ?? null;
+process.env.PIKIBUN_SANDBOX_NODE = ${JSON.stringify(join(tmpdir(), "no-such-node.exe"))};
+process.stdout.write(JSON.stringify([first, again, sandboxNodePath() ?? null]));`;
     const run = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, ...environment } });
     assert.equal(run.status, 0, run.stderr);
-    return JSON.parse(run.stdout) as string | null;
+    return JSON.parse(run.stdout) as (string | null)[];
   };
   if (process.platform === "win32") {
     // A launcher on PATH or named by the variable is resolved to node.exe itself, whose folder the container is granted.
-    assert.equal(inElectron({ PIKIBUN_SANDBOX_NODE: process.execPath })?.toLowerCase(), process.execPath.toLowerCase());
-    assert.equal(inElectron({ PIKIBUN_SANDBOX_NODE: join(tmpdir(), "no-such-node.exe") }), null);
+    const [found, kept, changed] = inElectron({ PIKIBUN_SANDBOX_NODE: process.execPath });
+    assert.equal(found?.toLowerCase(), process.execPath.toLowerCase());
+    assert.equal(kept, found);
+    assert.equal(changed, null, "a changed PIKIBUN_SANDBOX_NODE is looked at again");
+    assert.deepEqual(inElectron({ PIKIBUN_SANDBOX_NODE: join(tmpdir(), "no-such-node.exe") })[0], null);
   } else {
-    assert.equal(inElectron({}), null, "only native Windows looks for Node beside an Electron app");
+    assert.deepEqual(inElectron({}), [null, null, null], "only native Windows looks for Node beside an Electron app");
   }
 });

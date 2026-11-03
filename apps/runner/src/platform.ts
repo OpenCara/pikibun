@@ -90,16 +90,26 @@ const SANDBOX_NODE_MAJOR = 24;
 export function sandboxNodePath(): string | undefined {
   if (!process.versions.electron) return process.execPath;
   if (!windows) return undefined;
+  // Each candidate is asked in a synchronous child process, and every session's backend asks: what was found is kept
+  // while it is still there. Nothing found isn't kept, so a Refresh after installing Node finds it.
+  if (foundNode && foundNode.override === process.env.PIKIBUN_SANDBOX_NODE && firstExecutable([foundNode.path])) return foundNode.path;
+  foundNode = undefined;
   const programs = [process.env.ProgramW6432, process.env.ProgramFiles];
   const candidates = process.env.PIKIBUN_SANDBOX_NODE ? [process.env.PIKIBUN_SANDBOX_NODE]
     : ["node", ...programs.map(root => root && join(root, "nodejs", "node.exe"))];
   for (const candidate of candidates) {
     if (!candidate) continue;
     const found = realNode(candidate);
-    if (found) return found;
+    if (found) {
+      foundNode = { path: found, override: process.env.PIKIBUN_SANDBOX_NODE };
+      return found;
+    }
   }
   return undefined;
 }
+
+/** The Node sandboxNodePath found last, and the PIKIBUN_SANDBOX_NODE it was found with. */
+let foundNode: { path: string; override: string | undefined } | undefined;
 
 /** Where to get Node.js for the sandbox's steps. */
 export const SANDBOX_NODE_HINT = "install Node.js 24 or newer (winget install --id OpenJS.NodeJS.LTS -e, or https://nodejs.org) so that node is on PATH, or set PIKIBUN_SANDBOX_NODE to its node.exe";
