@@ -75,7 +75,11 @@ export const azureCliSpec: CliSpec = {
   // Options may sit anywhere among the command's words, abbreviated, in any case: these look at every argument.
   refused(original) {
     const args = lower(original);
-    if (positionals(args).includes("get-access-token")) return "az account get-access-token would show a token";
+    // az runs a command named by a unique prefix of its words: `acc get` is `account get-access-token`. Refused where the
+    // words could be prefixes of those two, which may refuse a harmless call (a value `get` beside a value `a`).
+    const words = positionals(args);
+    const prefixOf = (word: string) => words.some(candidate => candidate.length > 0 && word.startsWith(candidate));
+    if (prefixOf("account") && prefixOf("get-access-token")) return "az account get-access-token would show a token";
     if (has(args, ["--expose-token"])) return "--expose-token would show a token";
     if (has(args, ["--debug"])) return "--debug would log its requests, with their credentials";
     return undefined;

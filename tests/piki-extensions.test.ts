@@ -149,12 +149,16 @@ test('refusals hold wherever options sit, clustered, abbreviated or in another c
   for (const args of [['auth', 'status', '-at'], ['auth', '--hostname', 'gitlab.com', 'status', '-t'], ['config', '--host', 'gitlab.com', 'get', 'token']]) {
     assert.ok(glabSpec.refused(args), `glab ${args.join(' ')}`);
   }
-  for (const args of [['account', '--subscription', 'X', 'get-access-token'], ['account', 'GET-ACCESS-TOKEN'], ['acr', 'login', '-n', 'r', '--EXPOSE-TOKEN'],
+  for (const args of [['account', '--subscription', 'X', 'get-access-token'], ['account', 'GET-ACCESS-TOKEN'],
+    ['account', 'get'], ['account', 'GET'], ['account', 'get-a'], ['account', 'get-access-t'], ['acc', 'get'], ['ac', 'g', '-o', 'json'], ['account', 'ge'], ['acr', 'login', '-n', 'r', '--EXPOSE-TOKEN'],
     ['acr', 'login', '-n', 'r', '--expose'], ['repos', 'list', '--deb'], ['repos', 'list', '--DEBUG']]) {
     assert.ok(azureCliSpec.refused(args), `az ${args.join(' ')}`);
   }
   assert.equal(ghSpec.refused(['auth', 'status', '-h', 'github.com']), undefined);
   assert.equal(azureCliSpec.refused(['repos', 'pr', 'list', '--detect', 'true']), undefined);
+  for (const args of [['account', 'show'], ['account', 'list'], ['devops', 'invoke', '--area', 'build', '--http-method', 'GET'], ['acr', 'show', '-n', 'registry']]) {
+    assert.equal(azureCliSpec.refused(args), undefined, `az ${args.join(' ')}`);
+  }
   // gh keeps the last of repeated fields: a second query is refused, not left unchecked.
   assert.match(apiWrites(['api', 'graphql', '-f', 'query=query { viewer { login } }', '-f', 'query=mutation { addStar(input: {}) { clientMutationId } }'])!, /exactly one query/);
   assert.match(apiWrites(['api', 'graphql', '-f', 'owner=acme'])!, /exactly one query/);

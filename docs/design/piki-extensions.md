@@ -33,7 +33,8 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    Arguments that would print its credentials (`gh auth token`, `--show-token`, `glab config get token`,
    `az account get-access-token`, `--expose-token`, `az --debug`) never run, even approved. These checks look at every
    argument, since all three commands take options between their command words (`auth --hostname x token`), gh and glab
-   cluster short options (`-at`), and az takes long options abbreviated and its words in any case; they would rather
+   cluster short options (`-at`), and az takes long options abbreviated, its words in any case and by unique prefix
+   (`acc get` is `account get-access-token`); they would rather
    refuse a harmless call (a label named `auth` beside a search for `token`) than miss one.
 5. **Read-only, a setting.** Each registers the Pi flag `read-only` (off by default). With it, only commands that read
    run: an allowlist of subcommands for gh and glab (`pr view`, `run view`, `ci trace`, …), their `api` with `GET` (or a
