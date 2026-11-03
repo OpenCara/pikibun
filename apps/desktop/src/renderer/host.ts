@@ -54,9 +54,9 @@ let modelDraft: { id: string; loaded: boolean; checked: Set<string> } | undefine
 const modelKey = (model: ModelChoice) => `${model.provider}/${model.modelId}`;
 const hostOf = (origin: string) => { try { return new URL(origin).host; } catch { return origin; } };
 
-function item(text: string, detail?: string, mark?: "ok" | "missing"): HTMLLIElement {
+function item(text: string, detail?: string, mark?: "ok" | "missing" | "optional"): HTMLLIElement {
   const li = document.createElement("li");
-  if (mark) { const icon = li.appendChild(document.createElement("span")); icon.className = `mark ${mark}`; icon.textContent = mark === "ok" ? "✓" : "✕"; icon.setAttribute("aria-label", mark === "ok" ? "Present" : "Missing"); }
+  if (mark) { const icon = li.appendChild(document.createElement("span")); icon.className = `mark ${mark}`; icon.textContent = mark === "ok" ? "✓" : mark === "optional" ? "–" : "✕"; icon.setAttribute("aria-label", mark === "ok" ? "Present" : mark === "optional" ? "Missing (optional)" : "Missing"); }
   li.appendChild(document.createElement("span")).textContent = text;
   if (detail) { const small = li.appendChild(document.createElement("span")); small.className = "muted"; small.textContent = detail; }
   return li;
@@ -185,7 +185,7 @@ function renderPrerequisites(connection: HostView): void {
   const inspection = connection.inspection;
   const shown = new Set<string>();
   element("prerequisites").replaceChildren(...listedPrerequisites(inspection).map(({ entry, sandbox }) => {
-    const li = item(entry.name, sandbox ? "for the sandbox" : undefined, entry.ok ? "ok" : "missing");
+    const li = item(entry.name, sandbox ? "for the sandbox" : entry.optional && !entry.ok ? "optional" : undefined, entry.ok ? "ok" : entry.optional ? "optional" : "missing");
     const key = entry.fix && JSON.stringify(entry.fix);
     if (!entry.ok && entry.fix && key && !shown.has(key)) { shown.add(key); li.appendChild(fixBlock(entry.fix)); }
     return li;

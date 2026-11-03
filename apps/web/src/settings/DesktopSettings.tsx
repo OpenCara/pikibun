@@ -252,7 +252,8 @@ function SetupAlert({ connection, view, bridge }: { connection: HostView; view: 
   const inspection = connection.inspection;
   if (!inspection) return null;
   // What the sandbox lacks too, where the host would run without it until then: those are what to install.
-  const missing = listedPrerequisites(inspection).map(item => item.entry).filter(item => !item.ok);
+  // Optional ones (npm, for extensions) don't keep this computer from hosting: the app's window lists them.
+  const missing = listedPrerequisites(inspection).map(item => item.entry).filter(item => !item.ok && !item.optional);
   const fixes = [...new Map(missing.flatMap(item => item.fix ? [[JSON.stringify(item.fix), item.fix] as const] : [])).values()];
   if (inspection.unsupportedFix) fixes.unshift(inspection.unsupportedFix);
   const noModels = !inspection.unsupported && !inspection.models.length && inspection.modelsError;

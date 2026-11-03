@@ -41,7 +41,13 @@ export interface PrerequisiteFix {
 }
 
 /** One binary or tool the chosen isolation mode needs, as connect-setup.ts checks it, and how to get it when missing. */
-export interface Prerequisite { name: string; ok: boolean; fix?: PrerequisiteFix }
+export interface Prerequisite {
+  name: string;
+  ok: boolean;
+  fix?: PrerequisiteFix;
+  /** Needed only for some work (npm for installing extensions): a host lacking it still starts, and lists it as optional. */
+  optional?: boolean;
+}
 
 // Messages between a desktop app and its connector host (desktop-host.ts), over the parent's IPC channel only. Pairing
 // codes travel here and nowhere else: never argv, environment, files or logs. Types and patterns only, so the app's

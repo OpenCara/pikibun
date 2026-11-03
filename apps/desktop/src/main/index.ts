@@ -22,6 +22,7 @@ import { utilityHost } from "./utility-host.js";
 import { createLocalWindow, createRemoteWindow, hardenRemoteSession, registerLocalScheme, serveLocalPages } from "./windows.js";
 import { chooseDistro, setupFixes, wslExe, wslHostArgs, wslStateDir, wslStatus } from "./wsl.js";
 import { parseSetupAction, setupPlan, type SetupAction } from "./setup-actions.js";
+import { withLoginShellPath } from "./shell-path.js";
 import type { WslStatus } from "../shared/bridge.js";
 
 const mac = process.platform === "darwin";
@@ -108,6 +109,12 @@ function main(): void {
   const nativeEnv: NodeJS.ProcessEnv | undefined = windowsHost
     ? { ...process.env, PIKIBUN_MXC_RUNTIME: process.env.PIKIBUN_MXC_RUNTIME || join(stateDir ?? join(homedir(), ".local", "share", "pikibun", "connector"), "mxc") }
     : undefined;
+  /**
+   * A native host's environment. A Mac host sees its owner's login-shell PATH (Homebrew, nvm), as `pikibun connect` in
+   * Terminal does: read as each host process launches (with the app, or when its sandbox changes; Stop and Start keep
+   * the process), so Node.js installed for extensions counts once Pikibun is reopened.
+   */
+  const hostEnv = (): Promise<NodeJS.ProcessEnv | undefined> => mac ? withLoginShellPath(process.env) : Promise.resolve(nativeEnv);
   /** WSL's distributions, as last listed: shown on Windows, refreshed whenever a WSL2 host launches or the owner looks. */
   let wsl: WslStatus | undefined;
   const refreshWsl = async () => {
@@ -161,7 +168,7 @@ function main(): void {
     /** A utility process here, or, for a Windows host in WSL2, the host inside the chosen distribution. */
     const launch = async () => {
       const choice = sandbox();
-      if (choice?.sandbox !== "wsl2") return utilityHost(hostEntry, directory ? ["--state-dir", directory] : [], nativeEnv);
+      if (choice?.sandbox !== "wsl2") return utilityHost(hostEntry, directory ? ["--state-dir", directory] : [], await hostEnv());
       const distro = chooseDistro(await refreshWsl(), choice.distro);
       if (!distro.ok) throw new HostLaunchError(distro.error, distro.fix);
       if (!existsSync(join(wslConnector, "dist", "desktop-host.mjs")) || !existsSync(join(wslConnector, "node_modules"))) {
