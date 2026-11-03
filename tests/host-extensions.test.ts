@@ -400,6 +400,52 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   assert.doesNotMatch((await results()).at(-1)!, /GONE!/);
 });
 
+test("a Pikibun extension's command runs with the host's own sign-in only where the session itself runs on its host", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+  const root = await realpath(await directory(t));
+  // A fake gh first on PATH, which says it ran.
+  await mkdir(join(root, "bin"));
+  await writeFile(join(root, "bin", "gh"), "#!/bin/sh\necho \"gh ran: $*\"\n", { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${join(root, "bin")}:${path}`;
+  t.after(() => { process.env.PATH = path; });
+  const installed = await loadInstalled(new ExtensionStore(join(root, "state")));
+  const answer = { extensions: parseWorkspaceExtensions([{ source: "piki:gh", tools: "automatic" }]), automaticTools: true };
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  const respond: FauxResponseFactory = async request => {
+    faux.appendResponses([respond]);
+    const last = request.messages.findLast(message => message.role !== "system");
+    if (last?.role === "toolResult") return fauxAssistantMessage("done");
+    return fauxAssistantMessage(fauxToolCall("gh", { args: ["pr", "list"] }), { stopReason: "toolUse" });
+  };
+  faux.setResponses([respond]);
+  const models = createModels(); models.setProvider(faux.provider);
+  const target: RunnerBinding = {
+    session: { id: "piki-session", workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Pikibun extensions", policyVersion: 1, status: "ready",
+      createdAt: "2026-01-01T00:00:00Z", repositories: [], repositoryMode: "clone", connectorId: "host-connector", connectorOwnerId: "test:alice" },
+    owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice", gitEmail: "alice@example.test", env: {}, githubConnected: false },
+    agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["read_file"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId: "faux-1", connectorId: "host-connector", connectorOwnerId: "test:alice" },
+  };
+  const service = new RunnerService({
+    dataDir: join(root, "runner"), sharedSecret: "extension-test-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787",
+    connectorId: "host-connector", allowFaux: true, unsandboxed: true,
+    authorize: async input => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => installed, workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const now = Math.floor(Date.now() / 1000);
+  const claims = async (action: RunnerAction, body = "") => ({ aud: "runner" as const, sessionId: target.session.id, actorId: "test:alice", ownerId: "test:alice", action,
+    policyVersion: 1, iat: now, exp: now + 60, jti: randomUUID(), bodyHash: await sha256(body), connectorId: "host-connector" });
+  const session = await service.provision(target, await claims("create"));
+  await session.submit(await claims("submit"), { content: "list them", requestId: "list", admissionId: await sha256("list"), options: { access: "approval" } }, "write");
+  for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
+  const card = (await session.view()).approvals.at(-1)!;
+  // The session runs on its host, so it has no sandbox to run gh in: the host's own gh runs, as every command there does.
+  assert.deepEqual([card.operation.kind, card.status, card.result], ["extension.tool", "executed", "gh ran: pr list"]);
+});
+
 test("tool name clashes are settled per selection: another version of an extension gets its tools in an open session", async t => {
   const root = await directory(t);
   const module = (version: string) => `import { Type } from "typebox";

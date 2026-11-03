@@ -99,20 +99,44 @@ export interface EgressGrant {
 /**
  * Credentialed APIs: hosts whose HTTPS the egress proxy terminates itself, with a certificate from the connector's own
  * authority that only sessions' sandboxes trust, so that it can add a credential outside the sandbox. Sandboxed tools
- * such as `gh` send a placeholder token (API_TOKEN_PLACEHOLDER) and never hold a real one. Every other host's HTTPS
- * stays an opaque tunnel.
+ * such as `gh`, `glab` and `az devops` send a placeholder token (API_TOKEN_PLACEHOLDER) and never hold a real one. Every
+ * other host's HTTPS stays an opaque tunnel.
  */
-export const credentialedApiHosts: readonly string[] = Object.freeze(["api.github.com"]);
-export type CredentialedApiProvider = "github";
+export const credentialedApiHosts: readonly string[] = Object.freeze(["api.github.com", "gitlab.com", "dev.azure.com"]);
+export type CredentialedApiProvider = "github" | "gitlab" | "azure-devops";
+/** Which forge each credentialed API host is: the provider of the workspace repositories whose owner's access it uses. */
+export const credentialedApiProviders: Readonly<Record<string, CredentialedApiProvider>> = Object.freeze({
+  "api.github.com": "github", "gitlab.com": "gitlab", "dev.azure.com": "azure-devops",
+});
 export interface EgressApi { host: string; provider: CredentialedApiProvider }
-/** What `GH_TOKEN` and `GITHUB_TOKEN` hold in a sandbox: the proxy puts the real credential in its place. */
+/**
+ * What `GH_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN` and `AZURE_DEVOPS_EXT_PAT` hold in a sandbox: the proxy puts the real
+ * credential in its place.
+ */
 export const API_TOKEN_PLACEHOLDER = "pikibun-egress-proxy-adds-the-credential";
+/**
+ * What a credentialed API is asked for: `read`, or `write`, which the proxy asks for only during one approved call of a
+ * Pikibun extension's command (`apiWriteToken`), and the control plane gives only to the session owner's own hosts.
+ */
+export type ApiAccessKind = "read" | "write";
+/**
+ * The placeholder a command gets for one approved call that may write as the session owner: the proxy knows `lease`
+ * only while that call runs, and refuses writes that carry the plain placeholder.
+ */
+export function apiWriteToken(lease: string): string { return `${API_TOKEN_PLACEHOLDER}.write.${lease}`; }
+/** The write lease a placeholder token names, if it is one (see apiWriteToken). */
+export function apiWriteLease(token: string): string | undefined {
+  return WRITE_LEASE.exec(token)?.[1];
+}
+const WRITE_LEASE = new RegExp(`${API_TOKEN_PLACEHOLDER}\\.write\\.([A-Za-z0-9_-]{32,64})`);
 /** Longest a proxy reuses an API credential: a revoked session or repository stops using it within this. */
 export const API_CREDENTIAL_CACHE_SECONDS = 60;
 /**
- * A session's credential for a credentialed API, from the control plane. For api.github.com: one token per GitHub App
- * installation, limited to reading the workspace's github.com repositories that the session owner can read (the
- * installation's account is `account`), never the owner's own sign-in token.
+ * A session's credential for a credentialed API, from the control plane. For reads of api.github.com: one token per
+ * GitHub App installation, limited to reading the workspace's github.com repositories that the session owner can read
+ * (the installation's account is `account`). The session owner's own sign-in (github.com) or personal access tokens
+ * (gitlab.com, one per Azure DevOps organization, its `account`) only ever go to the owner's own hosts: for writes of
+ * an approved call, and for every request to gitlab.com and dev.azure.com, whose tokens can't be limited to a repository.
  */
 export type ApiCredentialGrant =
   | { available: false; reason: string; cacheSeconds: number }
@@ -122,7 +146,7 @@ export interface ApiCredential {
   account: string;
   /** The full Authorization header for the API. */
   authorization: string;
-  /** The repositories (owner/name) the credential can read. */
+  /** The repositories (owner/name) the credential can read; empty for a credential chosen by its account alone. */
   repositories: string[];
   expiresAt: string;
 }

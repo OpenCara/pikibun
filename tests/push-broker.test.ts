@@ -1194,8 +1194,9 @@ async function networkGrant(f: Awaited<ReturnType<typeof fixture>>): Promise<Rec
 test('sandboxed GitHub API reads: a read-only installation token for the workspace\'s repositories the owner can read, never the owner\'s own', async t => {
   forgetRepositoryReadTokens();
   const f = await fixture(t, { host: { owner: approver } });
-  // The session's grant names the API its proxy answers itself.
-  assert.deepEqual((await networkGrant(f)).apis, [{ host: 'api.github.com', provider: 'github' }]);
+  // The session's grant names the APIs its proxy answers itself: those of its workspace's forges.
+  assert.deepEqual((await networkGrant(f)).apis, [{ host: 'api.github.com', provider: 'github' }, { host: 'gitlab.com', provider: 'gitlab' },
+    { host: 'dev.azure.com', provider: 'azure-devops' }]);
 
   const answer = await apiCredential(f);
   assert.equal(answer.status, 200, JSON.stringify(answer.body));
@@ -1286,4 +1287,37 @@ test('sandboxed GitHub API reads: a repository the app wasn\'t installed on is c
   // ...but asked again a minute later, now with both.
   Date.now = () => realNow() + 61_000;
   assert.deepEqual((await repositories()).sort(), ['owner/other', 'owner/repo']);
+});
+
+test('the session owner\'s own credentials: writes and personal access tokens go only to the owner\'s own host', async t => {
+  forgetRepositoryReadTokens();
+  const own = await fixture(t, { host: { owner } });
+  // An approved call's writes: the owner's own GitHub sign-in, for the workspace's repositories they can read.
+  const write = await apiCredential(own, { access: 'write' });
+  assert.equal(write.status, 200, JSON.stringify(write.body));
+  assert.deepEqual(write.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization, item.repositories]),
+    [['session-owner', 'Bearer owner-oauth-token', ['owner/repo']]]);
+  assert.equal(own.calls.filter(call => call.url.includes('/access_tokens')).length, 0, 'no installation token for writes');
+  // gitlab.com: the owner's personal access token; Azure DevOps: one per organization, as Basic credentials.
+  const gitlab = await apiCredential(own, { host: 'gitlab.com' });
+  assert.deepEqual(gitlab.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization, item.repositories]),
+    [['gitlab.com', 'Bearer owner-gitlab-token', []]]);
+  const azure = await apiCredential(own, { host: 'dev.azure.com', access: 'write' });
+  assert.deepEqual(azure.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization]),
+    [['contoso', `Basic ${Buffer.from(':owner-azure-devops-token').toString('base64')}`]]);
+  assert.equal((await apiCredential(own, { access: 'admin' })).status, 400);
+  // Without an account for the forge, the proxy says which one to connect.
+  own.sqlite.prepare("DELETE FROM git_credentials WHERE provider = 'gitlab'").run();
+  assert.match((await apiCredential(own, { host: 'gitlab.com' })).body.reason, /no GitLab \(gitlab\.com\) account in Pikibun/);
+
+  // A host someone else owns gets none of them, only the read-only installation tokens.
+  forgetRepositoryReadTokens();
+  const shared = await fixture(t, { host: { owner: approver } });
+  const refused = await apiCredential(shared, { access: 'write' });
+  assert.equal(refused.body.available, false);
+  assert.match(refused.body.reason, /only on the session owner's own hosts; on this one, use github_comment/);
+  assert.match((await apiCredential(shared, { host: 'gitlab.com' })).body.reason, /personal access token, which can't be limited to the workspace's repositories/);
+  assert.equal((await apiCredential(shared, { host: 'dev.azure.com' })).body.available, false);
+  assert.doesNotMatch(JSON.stringify(shared.calls), /owner-gitlab-token|owner-azure-devops-token/);
+  assert.equal((await apiCredential(shared)).body.available, true, 'reads of api.github.com still get installation tokens');
 });
