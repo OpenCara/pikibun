@@ -95,7 +95,7 @@ test("code mode runs where the host's configuration turns it on, and its scripts
     }`);
   const store = new ExtensionStore(join(root, "state"));
   await store.add(parseExtensionSource(join(root, "shout.ts")));
-  const [dev] = await loadInstalled(store);
+  const [dev] = await loadInstalled(store, []);
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
   const answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
   let config: HostConfig = { ...defaultHostConfig, builtinExtensions: ["codemode"] };

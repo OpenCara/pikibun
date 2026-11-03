@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { ConnectorInfo } from "../../../../packages/shared/src/connector";
 import { builtinExtensions, type BuiltinExtensionName } from "../../../../packages/shared/src/host-config";
-import { isBuiltinExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type HostExtensionsReport, type InstalledExtension } from "../../../../packages/shared/src/host-extensions";
+import { isCliExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type HostExtensionsReport, type InstalledExtension } from "../../../../packages/shared/src/host-extensions";
 import { api, segment } from "../api";
 import { Icon } from "../icons";
 import { Alert, Button, CardBody, Collapsible, confirmDialog, Feedback, Field, RelativeTime, ResourceState, Row, Section, Sheet, StatusBadge, useAction,
@@ -27,7 +27,7 @@ interface HostExtensionsResponse {
 const info = <div className="stack">
   <p>Pi extensions this host runs for the sessions on it: those a workspace chose that it has installed at the same version. They run in its connector, as your OS user, outside the sandbox.</p>
   <p>Install what your workspaces use here, or on the host with <code>pikibun extensions add</code>. A dev extension, installed there from a local path, runs only in your own sessions on this host.</p>
-  <p>Built-in extensions come with the connector, so there is nothing to install: <code>builtin:gh</code>, <code>builtin:glab</code> and <code>builtin:azure-cli</code> run the GitHub, GitLab and Azure CLIs where your workspaces use them, as you are signed in to them on this host (<code>gh auth login</code>, <code>glab auth login</code>, <code>az login</code>).</p>
+  <p>CLI extensions come with the connector too: <code>cli:gh</code>, <code>cli:glab</code> and <code>cli:azure-cli</code> run the GitHub, GitLab and Azure CLIs where your workspaces use them, as you are signed in to them on this host (<code>gh auth login</code>, <code>glab auth login</code>, <code>az login</code>).</p>
   <p>Extension tool calls need the approval of you or a member granted host commands, unless a workspace sets an extension's tools to automatic and you let workspaces do that here.</p>
   <p>Built-in extensions come with Pikibun. Turned on, every session on this host runs with them, in every workspace; the tools they call are the session's own, decided as usual.</p>
 </div>;
@@ -112,17 +112,17 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
         {data.report?.installed.map(extension => <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={<code>{extension.source}</code>}
           hint={extension.dev ? "Dev extension: your own sessions on this host" : extension.description ?? `${extension.modules.flatMap(module => module.tools).length} tools`}
           trailing={extension.error || extension.modules.some(module => module.error) ? <StatusBadge tone="danger">Error</StatusBadge>
-            : extension.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : isBuiltinExtensionSource(extension.source) ? <StatusBadge tone="neutral">Built in</StatusBadge>
+            : extension.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : isCliExtensionSource(extension.source) ? <StatusBadge tone="neutral">With the connector</StatusBadge>
             : waiting(extension.source) ? <StatusBadge tone="neutral" dot>Removing</StatusBadge> : <StatusBadge tone="success">Installed</StatusBadge>}>
           <ModuleDetails extension={extension} />
-          {owner && !extension.dev && !isBuiltinExtensionSource(extension.source) && data.report?.remoteInstalls && <CardBody><div className="inline"><span className="spacer" />
+          {owner && !extension.dev && !isCliExtensionSource(extension.source) && data.report?.remoteInstalls && <CardBody><div className="inline"><span className="spacer" />
             <Button variant="ghost" size="sm" icon="trash" disabled={action.busy || waiting(extension.source)} onClick={() => remove(extension.source)}>Remove</Button>
           </div></CardBody>}
         </Collapsible>)}
         {missing.map(item => <Row key={`${item.workspace.id} ${item.source}`} leading={<Icon name="alert" size={16} />} title={<code>{item.source}</code>}
-          hint={isBuiltinExtensionSource(item.source) ? `${item.workspace.name} uses it, built into newer connectors. Its sessions here run without it until this host's connector is updated (npx pikibun@latest connect)`
+          hint={isCliExtensionSource(item.source) ? `${item.workspace.name} uses it, which comes with newer connectors. Its sessions here run without it until this host's connector is updated (npx pikibun@latest connect)`
             : `${item.workspace.name} uses it${item.availability.status === "other-version" ? `; this host has ${item.availability.installed}` : "; this host doesn't have it"}. Its sessions here run without it`}
-          trailing={isBuiltinExtensionSource(item.source) ? <StatusBadge tone="warning">Update the connector</StatusBadge>
+          trailing={isCliExtensionSource(item.source) ? <StatusBadge tone="warning">Update the connector</StatusBadge>
             : waiting(item.source) ? <StatusBadge tone="neutral" dot>Installing</StatusBadge>
             : owner && data.report?.remoteInstalls !== false ? <Button variant="outline" size="sm" disabled={action.busy || !!connector.revokedAt}
               onClick={() => void request("install", item.source)}>{item.availability.status === "other-version" ? "Update" : "Install"}</Button>

@@ -1,8 +1,8 @@
-import { builtinExtension } from "../../../../../packages/shared/src/builtin-extensions.js";
-import { cliExtension, commandWords, type CliSpec } from "./cli.js";
+import { cliExtension } from "../../../../../packages/shared/src/cli-extensions.js";
+import { commandExtension, commandWords, positionals, type CliSpec } from "./command.js";
 
 /*
- * builtin:azure-cli, the Azure CLI (docs/design/builtin-extensions.md), with its azure-devops extension where the host
+ * cli:azure-cli, the Azure CLI (docs/design/cli-extensions.md), with its azure-devops extension where the host
  * has it: Azure DevOps repositories, pull requests, pipelines and boards.
  */
 
@@ -39,6 +39,16 @@ function values(args: readonly string[], names: readonly string[]): string[] {
 
 const has = (args: readonly string[], names: readonly string[]) => args.some(arg => names.some(name => isOption(arg, name)));
 
+/** Options that write a file, as given or abbreviated past what they share with others (`--output` is not `--output-file`). */
+const FILE_OPTIONS = [{ name: "--output-file", shortest: "--output-" }, { name: "--file", shortest: "--fil" }, { name: "--path", shortest: "--pat" }];
+const writesFile = (args: readonly string[]) => args.some(arg => {
+  const given = arg.split("=")[0]!;
+  return FILE_OPTIONS.some(option => option.name.startsWith(given) && given.startsWith(option.shortest));
+});
+
+/** az matches its command words and options without regard to case. */
+const lower = (args: readonly string[]) => args.map(arg => arg.toLowerCase());
+
 /** Why a request az sends itself (`az rest`, `az devops invoke`) may change something. */
 function requestWrites(args: readonly string[], method: readonly string[], body: readonly string[]): string | undefined {
   if (has(args, body)) return "it sends a request body";
@@ -47,7 +57,7 @@ function requestWrites(args: readonly string[], method: readonly string[], body:
 }
 
 export const azureCliSpec: CliSpec = {
-  info: builtinExtension("builtin:azure-cli")!,
+  info: cliExtension("cli:azure-cli")!,
   command: "az",
   windowsCommand: { file: "az.cmd", shim: true },
   description: [
@@ -62,14 +72,16 @@ export const azureCliSpec: CliSpec = {
   passEnv: name => name.startsWith("AZURE_") || name === "AZDEVOPS_EXT_PAT",
   setEnv: { AZURE_CORE_NO_COLOR: "true", AZURE_CORE_ONLY_SHOW_ERRORS: "true", AZURE_CORE_DISABLE_PROGRESS_BAR: "true", AZURE_CORE_SURVEY_MESSAGE: "false",
     PYTHONIOENCODING: "utf-8" },
-  refused(args) {
-    const words = commandWords(args).join(" ");
-    if (/^account get-access-token\b/.test(words)) return "az account get-access-token would show a token";
+  // Options may sit anywhere among the command's words, abbreviated, in any case: these look at every argument.
+  refused(original) {
+    const args = lower(original);
+    if (positionals(args).includes("get-access-token")) return "az account get-access-token would show a token";
     if (has(args, ["--expose-token"])) return "--expose-token would show a token";
-    if (args.includes("--debug")) return "--debug would log its requests, with their credentials";
+    if (has(args, ["--debug"])) return "--debug would log its requests, with their credentials";
     return undefined;
   },
-  writes(args) {
+  writes(original) {
+    const args = lower(original);
     if (args.length === 1 && args[0] === "--version") return undefined;
     // az reads an argument starting with @ from that file on the host.
     if (args.some(arg => arg.startsWith("@") || /^-[^=]*=@/.test(arg))) return "an argument reads a host file (@file)";
@@ -78,9 +90,9 @@ export const azureCliSpec: CliSpec = {
     if (words.some(word => SECRET_WORD.test(word))) return `az ${words.join(" ")} may show keys or secrets`;
     if (words.length === 1 && words[0] === "rest") return requestWrites(args, ["--method", "-m"], ["--body", "-b"]);
     if (words.join(" ") === "devops invoke") return requestWrites(args, ["--http-method"], ["--in-file"]);
-    if (args.some(arg => ["--output-file", "--file", "--path"].some(name => arg === name || arg.startsWith(`${name}=`)))) return "it writes a file";
+    if (writesFile(args)) return "it writes a file";
     return READ_VERB.test(words.at(-1)!) ? undefined : `az ${words.join(" ")} is not a command that only reads`;
   },
 };
 
-export const azureCliExtension = cliExtension(azureCliSpec);
+export const azureCliExtension = commandExtension(azureCliSpec);

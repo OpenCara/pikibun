@@ -1,4 +1,4 @@
-# Built-in extensions: gh, glab and az
+# CLI extensions: gh, glab and az
 
 Sessions on a sandboxed host have no network but the workspace's: they clone and push through the egress proxy, and read
 and act on GitHub through `github_read`, `github_comment`, `github_issue` and `github_merge`. What those don't cover (CI
@@ -7,13 +7,17 @@ with nothing to guide the agent or the person approving it. With this design the
 own that give sessions a forge's command-line tool, run on the host with its owner's sign-in to it, and a workspace gets
 the one for a forge when it binds its first repository there.
 
+They are not Pi's built-in extensions ([host extensions](host-extensions.md), rule 10), which a host's configuration
+turns on for every session on it: these are workspace extensions, chosen per workspace like any other, that happen to
+ship with the connector.
+
 ## Decisions
 
 1. **Extensions like any other** ([host extensions](host-extensions.md)): a workspace's owners and admins enable,
    disable and remove them, set their tools to approval or automatic, and set their settings; a session runs them where
    its workspace enables them; each tool call is an `extension.tool` card decided like a host command. Nothing new in
    sessions, cards or approvals.
-2. **Built into the connector.** Their source is `builtin:<name>` (`builtin:gh`, `builtin:glab`, `builtin:azure-cli`),
+2. **Built into the connector.** Their source is `cli:<name>` (`cli:gh`, `cli:glab`, `cli:azure-cli`),
    their package key the source itself, and their version the connector's: every connector that knows one has it, and
    reports it with what is installed, so hosts never install, update or remove them (the store, the CLI, the connector
    and the control plane all refuse to). They load through Pi's loader from their factory
@@ -27,7 +31,10 @@ the one for a forge when it binds its first repository there.
    session (for keyrings), proxies and CA bundles, and its own variables (`GH_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`, …;
    `GITLAB_TOKEN`, `GITLAB_HOST`, …; `AZURE_*`), never the connector's other environment, as `host_bash` doesn't.
    Arguments that would print its credentials (`gh auth token`, `--show-token`, `glab config get token`,
-   `az account get-access-token`, `--expose-token`, `az --debug`) never run, even approved.
+   `az account get-access-token`, `--expose-token`, `az --debug`) never run, even approved. These checks look at every
+   argument, since all three commands take options between their command words (`auth --hostname x token`), gh and glab
+   cluster short options (`-at`), and az takes long options abbreviated and its words in any case; they would rather
+   refuse a harmless call (a label named `auth` beside a search for `token`) than miss one.
 5. **Read-only, a setting.** Each registers the Pi flag `read-only` (off by default). With it, only commands that read
    run: an allowlist of subcommands for gh and glab (`pr view`, `run view`, `ci trace`, …), their `api` with `GET` (or a
    GraphQL query, no mutation, no `@file` fields, no `--input`, no method override, short options taking their values
@@ -38,15 +45,16 @@ the one for a forge when it binds its first repository there.
    configuration there could make a command that runs Git (`gh pr status`) run code. A workspace that sets the tools to
    automatic should set read-only too; the workspace page says so.
 6. **Added with the first repository of a forge.** Binding a repository whose provider is `github` or
-   `github-enterprise` adds `builtin:gh`, `gitlab` `builtin:glab`, and `azure-devops` `builtin:azure-cli`, when it is
+   `github-enterprise` adds `cli:gh`, `gitlab` `cli:glab`, and `azure-devops` `cli:azure-cli`, when it is
    the workspace's first repository of those providers and the workspace doesn't use that extension yet (nor 32
    extensions): enabled, tools with approval, at the end of its list, audited as `workspace.extension.updated` with
    `reason: repository`. One the workspace turned off stays off; one it removed comes back only with a later first
-   repository of its forge. Migrations `0047` (SQLite) and `0040` (Postgres) do the same once for workspaces that already
+   repository of its forge. Migrations `0048` (SQLite) and `0041` (Postgres) do the same once for workspaces that already
    have such repositories, as their owner.
-7. **Older connectors and control planes.** A connector that predates built-in extensions would refuse a workspace's
+7. **Older connectors and control planes.** A connector that predates CLI extensions would refuse a workspace's
    whole list for naming one, so the control plane leaves them out of the list it gives a connector whose last report
-   names none. A control plane that predates them refuses a report that names one (400): the connector then reports
+   names none. A report holds up to 16 CLI extensions besides the 64 installed sources a host may have. A control plane
+   that predates them refuses a report that names one (400): the connector then reports
    without them, until it reconnects. Sessions on an older connector run without them, and the workspace's and host's
    pages say to update it.
 
@@ -54,14 +62,14 @@ the one for a forge when it binds its first repository there.
 
 | Part | Where |
 |---|---|
-| Catalogue (names, tools, providers, install and sign-in hints) | `packages/shared/src/builtin-extensions.ts` |
-| `builtin:` sources | `packages/shared/src/host-extensions.ts` |
-| The command tool, its environment and output | `apps/runner/src/extensions/builtin/cli.ts` |
-| gh, glab, az: refused and read-only arguments | `apps/runner/src/extensions/builtin/{gh,glab,azure-cli}.ts` |
+| Catalogue (names, tools, providers, install and sign-in hints) | `packages/shared/src/cli-extensions.ts` |
+| `cli:` sources | `packages/shared/src/host-extensions.ts` |
+| The command tool, its environment and output | `apps/runner/src/extensions/cli/cli.ts` |
+| gh, glab, az: refused and read-only arguments | `apps/runner/src/extensions/cli/{gh,glab,azure-cli}.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
-| Added on binding; a connector's list; install requests refused | `apps/server/src/extensions.ts`, `repositories.ts`; migrations `0047`/`0040` |
+| Added on binding; a connector's list; install requests refused | `apps/server/src/extensions.ts`, `repositories.ts`; migrations `0048`/`0041` |
 | Workspace and host pages | `apps/web/src/settings/WorkspaceExtensions.tsx`, `HostExtensions.tsx` |
-| Tests | `tests/builtin-extensions.test.ts`, and in `extensions`, `repositories`, `local-connector` |
+| Tests | `tests/cli-extensions.test.ts`, and in `extensions`, `repositories`, `local-connector` |
 
 ## Later
 

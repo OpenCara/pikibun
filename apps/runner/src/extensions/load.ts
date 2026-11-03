@@ -8,7 +8,7 @@ import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { extensionLimits, type ExtensionModuleSummary, type InstalledExtension } from "../../../../packages/shared/src/host-extensions.js";
 import { retiredToolNames, toolNames } from "../../../../packages/shared/src/types.js";
 import type { ExtensionStore, InstalledSource } from "./store.js";
-import { builtinModulePath, connectorBuiltins, type BuiltinExtension } from "./builtin/index.js";
+import { cliModulePath, connectorCliExtensions, type CliExtension } from "./cli/index.js";
 
 /*
  * Loads Pi extensions through pi-coding-agent's own loader (docs/design/host-extensions.md): TypeScript, `pi` manifests and
@@ -93,14 +93,14 @@ export interface LoadedSource {
   installed: InstalledSource;
   /** Where its paths in the summary are relative to. */
   root: string;
-  /** Its modules' files; for a built-in extension, its module's path (`<builtin:name>`), whose factory is `factories`'. */
+  /** Its modules' files; for a CLI extension, its module's path (`<cli:name>`), whose factory is `factories`'. */
   files: string[];
   factories?: { path: string; factory: ExtensionFactory }[];
   summary: InstalledExtension;
 }
 
 /**
- * Runs the factories of `loaded`'s modules, as Pi's loader does when it loads them: from their files, or a built-in
+ * Runs the factories of `loaded`'s modules, as Pi's loader does when it loads them: from their files, or a CLI
  * extension's from the connector's own code.
  */
 export async function loadSource(loaded: Pick<LoadedSource, "files" | "factories">, cwd: string, eventBus: EventBus = createEventBus(),
@@ -115,14 +115,14 @@ export async function loadSource(loaded: Pick<LoadedSource, "files" | "factories
   return result;
 }
 
-/** A built-in extension as an installed source, which every connector of this version has. */
-async function loadBuiltin(builtin: BuiltinExtension, cwd: string): Promise<LoadedSource> {
-  const path = builtinModulePath(builtin.info.name);
-  const factories = [{ path, factory: builtin.factory }];
-  const summary: InstalledExtension = { source: builtin.info.source, dev: false, name: builtin.info.title, description: builtin.info.description, modules: [] };
+/** A CLI extension as an installed source, which every connector of this version has. */
+async function loadCliExtension(extension: CliExtension, cwd: string): Promise<LoadedSource> {
+  const path = cliModulePath(extension.info.name);
+  const factories = [{ path, factory: extension.factory }];
+  const summary: InstalledExtension = { source: extension.info.source, dev: false, name: extension.info.title, description: extension.info.description, modules: [] };
   try { summary.modules = summarizeModules("", [path], await loadSource({ files: [path], factories }, cwd), new Set()); }
   catch (error) { summary.error = message(error); }
-  return { installed: { source: builtin.info.source }, root: "", files: [path], factories, summary };
+  return { installed: { source: extension.info.source }, root: "", files: [path], factories, summary };
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, extensionLimits.text);
@@ -170,10 +170,10 @@ export function summarizeModules(root: string, files: string[], result: LoadExte
 }
 
 /**
- * Loads the connector's built-in extensions (`builtins`), then every installed source, to learn what they offer, with
+ * Loads the connector's CLI extensions (`cliExtensions`), then every installed source, to learn what they offer, with
  * `cwd` an empty directory: each module's factory runs, as Pi runs it when it starts.
  */
-export async function loadInstalled(store: ExtensionStore, builtins: readonly BuiltinExtension[] = connectorBuiltins): Promise<LoadedSource[]> {
+export async function loadInstalled(store: ExtensionStore, cliExtensions: readonly CliExtension[] = connectorCliExtensions): Promise<LoadedSource[]> {
   const loaded: LoadedSource[] = [];
   let installed: InstalledSource[] = [];
   let failure: unknown;
@@ -183,7 +183,7 @@ export async function loadInstalled(store: ExtensionStore, builtins: readonly Bu
   const { loadExtensions } = await piLoader();
   const cwd = await mkdtemp(join(tmpdir(), "pikibun-extensions-"));
   try {
-    for (const builtin of builtins) loaded.push(await loadBuiltin(builtin, cwd));
+    for (const extension of cliExtensions) loaded.push(await loadCliExtension(extension, cwd));
     for (const source of installed) {
       const dev = source.source.startsWith("local:");
       const location = store.location(source);

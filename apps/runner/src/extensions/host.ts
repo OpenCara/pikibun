@@ -1,6 +1,6 @@
-import { extensionLimits, isBuiltinExtensionSource, parseExtensionSourceSpec, parseWorkspaceExtensionsAnswer, type ExtensionRequest, type ExtensionRequestResult,
+import { extensionLimits, isCliExtensionSource, parseExtensionSourceSpec, parseWorkspaceExtensionsAnswer, type ExtensionRequest, type ExtensionRequestResult,
   type HostExtensionsReport, type WorkspaceExtensionsAnswer } from "../../../../packages/shared/src/host-extensions.js";
-import type { BuiltinExtension } from "./builtin/index.js";
+import type { CliExtension } from "./cli/index.js";
 import { loadInstalled, type LoadedSource } from "./load.js";
 import type { ExtensionSource, ExtensionStore } from "./store.js";
 
@@ -22,21 +22,21 @@ export class HostExtensions {
   #loaded: LoadedSource[] = [];
   #workspaces = new Map<string, { value: WorkspaceExtensionsAnswer; at: number; refresh?: Promise<WorkspaceExtensionsAnswer> }>();
 
-  /** `builtins`: the connector's built-in extensions (all of this version's by default). */
-  constructor(readonly store: ExtensionStore, readonly options: { remoteInstalls: boolean; now?: () => number; builtins?: readonly BuiltinExtension[] }) {}
+  /** `cliExtensions`: the connector's CLI extensions (all of this version's by default). */
+  constructor(readonly store: ExtensionStore, readonly options: { remoteInstalls: boolean; now?: () => number; cliExtensions?: readonly CliExtension[] }) {}
 
-  /** What the host has: its built-in extensions, then those installed, loaded once when the connector starts and again after each change. */
+  /** What the host has: its CLI extensions, then those installed, loaded once when the connector starts and again after each change. */
   get loaded(): readonly LoadedSource[] { return this.#loaded; }
 
-  async load(): Promise<void> { this.#loaded = await loadInstalled(this.store, this.options.builtins); }
+  async load(): Promise<void> { this.#loaded = await loadInstalled(this.store, this.options.cliExtensions); }
 
   /**
-   * The report without its built-in extensions, for a control plane that predates them (it refuses a report that names
+   * The report without its CLI extensions, for a control plane that predates them (it refuses a report that names
    * one).
    */
-  reportWithoutBuiltins(): HostExtensionsReport {
+  reportWithoutCliExtensions(): HostExtensionsReport {
     const report = this.report();
-    return { ...report, installed: report.installed.filter(item => !isBuiltinExtensionSource(item.source)) };
+    return { ...report, installed: report.installed.filter(item => !isCliExtensionSource(item.source)) };
   }
 
   /** Loads the installed extensions again when `pikibun extensions` changed them since. */
@@ -62,7 +62,7 @@ export class HostExtensions {
     const results: ExtensionRequestResult[] = [];
     for (const request of requests) {
       try {
-        if (isBuiltinExtensionSource(request.source)) throw new Error(`${request.source} is built into the connector: update the connector instead (npx pikibun@latest connect).`);
+        if (isCliExtensionSource(request.source)) throw new Error(`${request.source} is built into the connector: update the connector instead (npx pikibun@latest connect).`);
         if (request.action === "install") await this.store.add(parseExtensionSourceSpec(request.source) as ExtensionSource);
         else if ((await this.store.list()).some(item => item.source === request.source)) await this.store.remove(request.source);
         results.push({ id: request.id, ok: true });

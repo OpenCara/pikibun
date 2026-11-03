@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
-import { builtinExtensionsFor } from '../../../packages/shared/src/builtin-extensions.js';
-import { extensionAvailability, extensionLimits, extensionPackageKey, isBuiltinExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
+import { cliExtensionsFor } from '../../../packages/shared/src/cli-extensions.js';
+import { extensionAvailability, extensionLimits, extensionPackageKey, isCliExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type ExtensionToolMode, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, WorkerEnv } from './types.js';
@@ -67,21 +67,21 @@ export async function sessionExtensionSources(env: Env, row: { workspace_id: str
 }
 
 /**
- * Adds the built-in extensions for repositories of `provider` (builtin-extensions.ts) to a workspace that has just bound
+ * Adds the CLI extensions for repositories of `provider` (cli-extensions.ts) to a workspace that has just bound
  * its first one there, enabled, their tools with approval, at the end of its list, unless it already uses them or as many
  * extensions as it may. Returns the sources it added.
  */
-export async function addBuiltinExtensions(env: Env, workspaceId: string, provider: string, actor: string): Promise<string[]> {
+export async function addCliExtensions(env: Env, workspaceId: string, provider: string, actor: string): Promise<string[]> {
   const added: string[] = [];
-  for (const builtin of builtinExtensionsFor(provider)) {
-    const providers = builtin.providers;
+  for (const extension of cliExtensionsFor(provider)) {
+    const providers = extension.providers;
     const saved = await env.DB.query<{ source: string }>(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
       SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), 1, 'approval', '{}', ?, ?
       WHERE (SELECT COUNT(*) FROM workspace_repositories WHERE workspace_id = ? AND provider IN (${providers.map(() => '?').join(', ')})) = 1
         AND (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ?) < ?
       ON CONFLICT (workspace_id, package_key) DO NOTHING
       RETURNING source`)
-      .bind(workspaceId, builtin.source, builtin.source, workspaceId, actor, now(), workspaceId, ...providers, workspaceId, extensionLimits.workspace).first();
+      .bind(workspaceId, extension.source, extension.source, workspaceId, actor, now(), workspaceId, ...providers, workspaceId, extensionLimits.workspace).first();
     if (!saved) continue;
     added.push(saved.source);
     await auditStatement(env, actor, 'workspace.extension.updated', workspaceId, null,
@@ -90,9 +90,9 @@ export async function addBuiltinExtensions(env: Env, workspaceId: string, provid
   return added;
 }
 
-/** Whether a connector's last report names built-in extensions: one that predates them refuses a workspace's list naming one. */
-async function knowsBuiltins(env: Env, connectorId: string): Promise<boolean> {
-  return (await hostReport(env, connectorId))?.report.installed.some(item => isBuiltinExtensionSource(item.source)) === true;
+/** Whether a connector's last report names CLI extensions: one that predates them refuses a workspace's list naming one. */
+async function knowsCliExtensions(env: Env, connectorId: string): Promise<boolean> {
+  return (await hostReport(env, connectorId))?.report.installed.some(item => isCliExtensionSource(item.source)) === true;
 }
 
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
@@ -144,9 +144,9 @@ export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
     if (!connected) fail(404, 'not_found', 'Workspace not found.');
     const extensions = await workspaceExtensions(c.env, workspaceId);
-    // A connector that predates built-in extensions would refuse the whole list for naming one: it gets the others.
-    const shown = extensions.some(item => isBuiltinExtensionSource(item.source)) && !await knowsBuiltins(c.env, row.id)
-      ? extensions.filter(item => !isBuiltinExtensionSource(item.source)) : extensions;
+    // A connector that predates CLI extensions would refuse the whole list for naming one: it gets the others.
+    const shown = extensions.some(item => isCliExtensionSource(item.source)) && !await knowsCliExtensions(c.env, row.id)
+      ? extensions.filter(item => !isCliExtensionSource(item.source)) : extensions;
     return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id) });
   });
 }
@@ -259,7 +259,7 @@ export function registerExtensions(app: Hono<WorkerEnv>): void {
     let source: string;
     try { source = normalizeExtensionSource(input.source); }
     catch (error) { return fail(400, 'invalid_extension_request', error instanceof Error ? error.message : 'Invalid extension source.'); }
-    if (isBuiltinExtensionSource(source)) fail(400, 'builtin_extension', 'Built-in extensions come with the connector: update it (npx pikibun@latest connect) to get newer ones.');
+    if (isCliExtensionSource(source)) fail(400, 'cli_extension', 'CLI extensions come with the connector: update it (npx pikibun@latest connect) to get newer ones.');
     const reported = await hostReport(c.env, row.id);
     if (reported && !reported.report.remoteInstalls) fail(409, 'remote_installs_off', 'This host\'s connector refuses installs from Pikibun: install extensions on it with pikibun extensions.');
     const existing = await c.env.DB.query<{ id: string }>(`SELECT id FROM connector_extension_requests WHERE connector_id = ? AND status = 'pending' AND action = ? AND source = ?`)

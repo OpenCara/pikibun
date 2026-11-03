@@ -1,8 +1,8 @@
-import { builtinExtension } from "../../../../../packages/shared/src/builtin-extensions.js";
-import { apiWrites, cliExtension, commandWords, hasOption, type CliSpec } from "./cli.js";
+import { cliExtension } from "../../../../../packages/shared/src/cli-extensions.js";
+import { apiWrites, commandExtension, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
 /*
- * builtin:gh, the GitHub CLI (docs/design/builtin-extensions.md).
+ * cli:gh, the GitHub CLI (docs/design/cli-extensions.md).
  */
 
 /** Commands that only read, by group: every subcommand of a group set to true. */
@@ -29,7 +29,7 @@ const READS: Record<string, readonly string[] | true> = {
 };
 
 export const ghSpec: CliSpec = {
-  info: builtinExtension("builtin:gh")!,
+  info: cliExtension("cli:gh")!,
   command: "gh",
   windowsCommand: { file: "gh.exe", shim: false },
   description: [
@@ -43,11 +43,12 @@ export const ghSpec: CliSpec = {
   ].join(" "),
   passEnv: name => ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST", "GH_CONFIG_DIR"].includes(name),
   setEnv: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_NO_EXTENSION_UPDATE_NOTIFIER: "1", GH_SPINNER_DISABLED: "1", GH_PAGER: "cat" },
+  // Options may sit anywhere among the command's words, and short ones cluster (-at): these look at every argument.
   refused(args) {
-    const [group, command] = commandWords(args);
-    if (group === "auth" && command === "token") return "gh auth token would show its token";
-    if (group === "auth" && hasOption(args, ["-t", "--show-token"])) return "--show-token would show its token";
-    if (group === "config" && command === "get" && args.some(arg => /token/i.test(arg))) return "gh config get would show its token";
+    const words = positionals(args);
+    if (words.includes("auth") && words.includes("token")) return "gh auth token would show its token";
+    if (words.includes("auth") && (hasOption(args, ["--show-token"]) || hasShortOption(args, "t"))) return "--show-token would show its token";
+    if (words.includes("config") && words.includes("get") && args.some(arg => /token/i.test(arg))) return "gh config get would show its token";
     return undefined;
   },
   writes(args) {
@@ -64,4 +65,4 @@ export const ghSpec: CliSpec = {
   },
 };
 
-export const ghExtension = cliExtension(ghSpec);
+export const ghExtension = commandExtension(ghSpec);

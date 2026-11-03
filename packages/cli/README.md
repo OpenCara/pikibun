@@ -138,7 +138,7 @@ They live in the connector's state directory; npm runs none of their install scr
 
 Extensions run in the connector, as this machine's user, with your files, credentials and network, outside the sandbox. Install only code you trust. Their tool calls are approved like host commands. Pikibun's own `web_fetch` and `web_search` tools are retired: web search comes from extensions.
 
-Three extensions are built into the connector, so there is nothing to install: `builtin:gh`, `builtin:glab` and `builtin:azure-cli` give sessions the GitHub, GitLab and Azure CLIs (`gh`, `glab`, `az`) where their workspace uses them. Install those commands on this machine and sign in to them (`gh auth login`, `glab auth login`, `az login` and `az extension add --name azure-devops`); their tool calls act as you. `pikibun extensions list` shows them.
+Three extensions are built into the connector, so there is nothing to install: `cli:gh`, `cli:glab` and `cli:azure-cli` give sessions the GitHub, GitLab and Azure CLIs (`gh`, `glab`, `az`) where their workspace uses them. Install those commands on this machine and sign in to them (`gh auth login`, `glab auth login`, `az login` and `az extension add --name azure-devops`); their tool calls act as you. `pikibun extensions list` shows them.
 
 ## Chat options
 

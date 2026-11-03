@@ -1,8 +1,8 @@
-import { builtinExtension } from "../../../../../packages/shared/src/builtin-extensions.js";
-import { apiWrites, cliExtension, commandWords, hasOption, type CliSpec } from "./cli.js";
+import { cliExtension } from "../../../../../packages/shared/src/cli-extensions.js";
+import { apiWrites, commandExtension, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
 /*
- * builtin:glab, the GitLab CLI (docs/design/builtin-extensions.md).
+ * cli:glab, the GitLab CLI (docs/design/cli-extensions.md).
  */
 
 /** Commands that only read, by group: every subcommand of a group set to true. `ci view` is interactive, so it isn't one. */
@@ -24,7 +24,7 @@ const READS: Record<string, readonly string[] | true> = {
 };
 
 export const glabSpec: CliSpec = {
-  info: builtinExtension("builtin:glab")!,
+  info: cliExtension("cli:glab")!,
   command: "glab",
   windowsCommand: { file: "glab.exe", shim: false },
   description: [
@@ -38,10 +38,11 @@ export const glabSpec: CliSpec = {
   ].join(" "),
   passEnv: name => ["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN", "GITLAB_HOST", "GITLAB_URI", "GL_HOST", "GITLAB_API_HOST", "GLAB_CONFIG_DIR"].includes(name),
   setEnv: { NO_PROMPT: "1", GLAB_CHECK_UPDATE: "false", GLAB_SEND_TELEMETRY: "false", GLAMOUR_STYLE: "notty" },
+  // Options may sit anywhere among the command's words, and short ones cluster (-at): these look at every argument.
   refused(args) {
-    const [group, command] = commandWords(args);
-    if (group === "auth" && hasOption(args, ["-t", "--show-token"])) return "--show-token would show its token";
-    if (group === "config" && command === "get" && args.some(arg => /token/i.test(arg))) return "glab config get would show its token";
+    const words = positionals(args);
+    if (words.includes("auth") && (hasOption(args, ["--show-token"]) || hasShortOption(args, "t"))) return "--show-token would show its token";
+    if (words.includes("config") && words.includes("get") && args.some(arg => /token/i.test(arg))) return "glab config get would show its token";
     return undefined;
   },
   writes(args) {
@@ -57,4 +58,4 @@ export const glabSpec: CliSpec = {
   },
 };
 
-export const glabExtension = cliExtension(glabSpec);
+export const glabExtension = commandExtension(glabSpec);

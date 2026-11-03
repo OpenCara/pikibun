@@ -11,30 +11,30 @@ export const extensionToolModes = ["approval", "automatic"] as const;
 export type ExtensionToolMode = (typeof extensionToolModes)[number];
 
 /**
- * A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`; or `builtin:<name>`, an
- * extension built into the connector (builtin-extensions.ts), whose version is the connector's own.
+ * A pinned source, normalized: `npm:<name>@<exact version>` or `git:<https url>@<full commit>`; or `cli:<name>`, an
+ * extension built into the connector (cli-extensions.ts), whose version is the connector's own.
  */
 export type ExtensionSourceSpec = { kind: "npm"; package: string; version: string } | { kind: "git"; url: string; commit: string }
-  | { kind: "builtin"; name: string };
+  | { kind: "cli"; name: string };
 
 export const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 export const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 const COMMIT = /^[0-9a-f]{40}$/;
-/** A built-in extension's name. Any such name parses, so a control plane takes ones built into newer connectors. */
-export const BUILTIN_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+/** A CLI extension's name. Any such name parses, so a control plane takes ones built into newer connectors. */
+export const CLI_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 
 export class ExtensionSourceError extends Error {}
 
 /**
- * Parses `npm:<name>@<version>`, `git:<url>@<commit>` (an https URL, `https://` optional) or `builtin:<name>`; anything
+ * Parses `npm:<name>@<version>`, `git:<url>@<commit>` (an https URL, `https://` optional) or `cli:<name>`; anything
  * else is refused.
  */
 export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
   if (typeof spec !== "string" || spec.length > 512) throw new ExtensionSourceError("Invalid extension source");
-  if (spec.startsWith("builtin:")) {
-    const name = spec.slice(8);
-    if (!BUILTIN_NAME.test(name)) throw new ExtensionSourceError(`Invalid built-in extension name: ${name}`);
-    return { kind: "builtin", name };
+  if (spec.startsWith("cli:")) {
+    const name = spec.slice(4);
+    if (!CLI_NAME.test(name)) throw new ExtensionSourceError(`Invalid CLI extension name: ${name}`);
+    return { kind: "cli", name };
   }
   if (spec.startsWith("npm:")) {
     const rest = spec.slice(4);
@@ -59,16 +59,16 @@ export function parseExtensionSourceSpec(spec: string): ExtensionSourceSpec {
     if (!COMMIT.test(commit)) throw new ExtensionSourceError(`Pin a full commit, such as git:${url}@<40-character commit>: branches and tags could load different code later.`);
     return { kind: "git", url: parsed.href.replace(/\/$/, "").replace(/\.git$/, ""), commit };
   }
-  throw new ExtensionSourceError("An extension source is npm:<package>@<version>, git:<https URL>@<commit> or builtin:<name>.");
+  throw new ExtensionSourceError("An extension source is npm:<package>@<version>, git:<https URL>@<commit> or cli:<name>.");
 }
 
 export function extensionSourceString(spec: ExtensionSourceSpec): string {
-  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : spec.kind === "git" ? `git:${spec.url}@${spec.commit}` : `builtin:${spec.name}`;
+  return spec.kind === "npm" ? `npm:${spec.package}@${spec.version}` : spec.kind === "git" ? `git:${spec.url}@${spec.commit}` : `cli:${spec.name}`;
 }
 
 /** Whether `source` names an extension built into the connector: hosts never install or remove those. */
-export function isBuiltinExtensionSource(source: string): boolean {
-  return source.startsWith("builtin:");
+export function isCliExtensionSource(source: string): boolean {
+  return source.startsWith("cli:");
 }
 
 /** The normalized form of `spec`, or an error. */
@@ -82,7 +82,7 @@ export function normalizeExtensionSource(spec: string): string {
  */
 export function extensionPackageKey(source: string): string {
   const spec = parseExtensionSourceSpec(source);
-  return spec.kind === "npm" ? `npm:${spec.package}` : spec.kind === "git" ? `git:${spec.url}` : `builtin:${spec.name}`;
+  return spec.kind === "npm" ? `npm:${spec.package}` : spec.kind === "git" ? `git:${spec.url}` : `cli:${spec.name}`;
 }
 
 /** A Pi flag an extension registers: one of its settings. */
@@ -145,6 +145,8 @@ export const extensionLimits = Object.freeze({
   /** Sources a workspace uses, and a host installs. */
   workspace: 32,
   installed: 64,
+  /** CLI extensions a connector reports besides what it installed (cli-extensions.ts). */
+  connector: 16,
   modulesPerSource: 16,
   toolsPerModule: 64,
   flagsPerModule: 64,
@@ -242,7 +244,7 @@ function parseInstalled(value: unknown): InstalledExtension {
 export function parseHostExtensionsReport(value: unknown): HostExtensionsReport {
   if (!isPlainObject(value)) throw new Error("Invalid extensions report");
   only(value, ["installed", "remoteInstalls"], "extensions report");
-  if (typeof value.remoteInstalls !== "boolean" || !Array.isArray(value.installed) || value.installed.length > extensionLimits.installed) throw new Error("Invalid extensions report");
+  if (typeof value.remoteInstalls !== "boolean" || !Array.isArray(value.installed) || value.installed.length > extensionLimits.installed + extensionLimits.connector) throw new Error("Invalid extensions report");
   const installed = value.installed.map(parseInstalled);
   if (new Set(installed.map(item => item.source)).size !== installed.length) throw new Error("An extension is reported twice");
   return { installed, remoteInstalls: value.remoteInstalls };

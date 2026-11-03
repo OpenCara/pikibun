@@ -6,76 +6,76 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createExtensionRuntime, createEventBus } from '@earendil-works/pi-coding-agent';
-import { azureCliSpec } from '../apps/runner/src/extensions/builtin/azure-cli.js';
-import { apiWrites, cliEnvironment, commandWords, optionValues } from '../apps/runner/src/extensions/builtin/cli.js';
-import { ghSpec } from '../apps/runner/src/extensions/builtin/gh.js';
-import { glabSpec } from '../apps/runner/src/extensions/builtin/glab.js';
-import { connectorBuiltins } from '../apps/runner/src/extensions/builtin/index.js';
+import { azureCliSpec } from '../apps/runner/src/extensions/cli/azure-cli.js';
+import { apiWrites, cliEnvironment, commandWords, optionValues } from '../apps/runner/src/extensions/cli/command.js';
+import { ghSpec } from '../apps/runner/src/extensions/cli/gh.js';
+import { glabSpec } from '../apps/runner/src/extensions/cli/glab.js';
+import { connectorCliExtensions } from '../apps/runner/src/extensions/cli/index.js';
 import { SessionExtensions, type ExtensionHost } from '../apps/runner/src/extensions/adapter.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { loadInstalled, loadSource } from '../apps/runner/src/extensions/load.js';
 import { ExtensionStore, parseExtensionSource } from '../apps/runner/src/extensions/store.js';
-import { builtinExtension, builtinExtensions, builtinExtensionsFor } from '../packages/shared/src/builtin-extensions.js';
+import { cliExtension, cliExtensions, cliExtensionsFor } from '../packages/shared/src/cli-extensions.js';
 import { extensionAvailability, extensionPackageKey, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
   sessionExtensions } from '../packages/shared/src/host-extensions.js';
 
 async function directory(t: TestContext): Promise<string> {
-  const path = await realpath(await mkdtemp(join(tmpdir(), 'pikibun-builtin-')));
+  const path = await realpath(await mkdtemp(join(tmpdir(), 'pikibun-cli-')));
   t.after(() => rm(path, { recursive: true, force: true }));
   return path;
 }
 
-test('built-in sources parse as builtin:<name>, are their own package, and are never installed or removed on a host', async t => {
-  assert.equal(normalizeExtensionSource('builtin:gh'), 'builtin:gh');
-  assert.equal(extensionPackageKey('builtin:azure-cli'), 'builtin:azure-cli');
-  for (const bad of ['builtin:', 'builtin:GH', 'builtin:gh@1.0.0', 'builtin:../x']) assert.throws(() => normalizeExtensionSource(bad), /./, bad);
+test('CLI extension sources parse as cli:<name>, are their own package, and are never installed or removed on a host', async t => {
+  assert.equal(normalizeExtensionSource('cli:gh'), 'cli:gh');
+  assert.equal(extensionPackageKey('cli:azure-cli'), 'cli:azure-cli');
+  for (const bad of ['cli:', 'cli:GH', 'cli:gh@1.0.0', 'cli:../x']) assert.throws(() => normalizeExtensionSource(bad), /./, bad);
   // A name a newer connector may have still parses, so reports and lists that hold one are taken.
-  assert.equal(normalizeExtensionSource('builtin:some-future-cli'), 'builtin:some-future-cli');
-  assert.deepEqual(parseWorkspaceExtensions([{ source: 'builtin:gh' }, { source: 'npm:a@1.0.0' }]).map(item => item.source), ['builtin:gh', 'npm:a@1.0.0']);
-  assert.deepEqual(parseHostExtensionsReport({ installed: [{ source: 'builtin:gh', dev: false, modules: [] }], remoteInstalls: true }).installed[0]!.source, 'builtin:gh');
-  const installed = [{ source: 'builtin:gh', dev: false, modules: [] }];
-  assert.equal(extensionAvailability('builtin:gh', installed).status, 'installed');
-  assert.equal(extensionAvailability('builtin:glab', installed).status, 'missing', 'a connector that predates it lacks it');
-  assert.deepEqual(sessionExtensions(parseWorkspaceExtensions([{ source: 'builtin:gh' }, { source: 'builtin:glab' }]), installed, { ownerId: 'bob', connectorOwnerId: 'alice' })
-    .map(item => item.source), ['builtin:gh'], 'every member\'s sessions run it, not only the host owner\'s');
+  assert.equal(normalizeExtensionSource('cli:some-future-cli'), 'cli:some-future-cli');
+  assert.deepEqual(parseWorkspaceExtensions([{ source: 'cli:gh' }, { source: 'npm:a@1.0.0' }]).map(item => item.source), ['cli:gh', 'npm:a@1.0.0']);
+  assert.deepEqual(parseHostExtensionsReport({ installed: [{ source: 'cli:gh', dev: false, modules: [] }], remoteInstalls: true }).installed[0]!.source, 'cli:gh');
+  const installed = [{ source: 'cli:gh', dev: false, modules: [] }];
+  assert.equal(extensionAvailability('cli:gh', installed).status, 'installed');
+  assert.equal(extensionAvailability('cli:glab', installed).status, 'missing', 'a connector that predates it lacks it');
+  assert.deepEqual(sessionExtensions(parseWorkspaceExtensions([{ source: 'cli:gh' }, { source: 'cli:glab' }]), installed, { ownerId: 'bob', connectorOwnerId: 'alice' })
+    .map(item => item.source), ['cli:gh'], 'every member\'s sessions run it, not only the host owner\'s');
 
-  assert.deepEqual(builtinExtensions.map(item => item.source), ['builtin:gh', 'builtin:glab', 'builtin:azure-cli']);
-  assert.deepEqual(builtinExtensionsFor('github-enterprise').map(item => item.source), ['builtin:gh']);
-  assert.deepEqual(builtinExtensionsFor('azure-devops').map(item => item.tool), ['az']);
-  assert.deepEqual(builtinExtensionsFor('bitbucket'), []);
-  assert.equal(builtinExtension('builtin:nope'), undefined);
+  assert.deepEqual(cliExtensions.map(item => item.source), ['cli:gh', 'cli:glab', 'cli:azure-cli']);
+  assert.deepEqual(cliExtensionsFor('github-enterprise').map(item => item.source), ['cli:gh']);
+  assert.deepEqual(cliExtensionsFor('azure-devops').map(item => item.tool), ['az']);
+  assert.deepEqual(cliExtensionsFor('bitbucket'), []);
+  assert.equal(cliExtension('cli:nope'), undefined);
 
-  assert.throws(() => parseExtensionSource('builtin:gh'), /built into the connector/);
+  assert.throws(() => parseExtensionSource('cli:gh'), /built into the connector/);
   const root = await directory(t);
   const store = new ExtensionStore(join(root, 'extensions'), async () => { throw new Error('npm never runs'); });
-  await assert.rejects(store.add({ kind: 'builtin', name: 'gh' } as never), /come with the connector/);
-  await assert.rejects(store.remove('builtin:gh'), /can't be removed/);
+  await assert.rejects(store.add({ kind: 'cli', name: 'gh' } as never), /come with the connector/);
+  await assert.rejects(store.remove('cli:gh'), /can't be removed/);
   const host = new HostExtensions(store, { remoteInstalls: true });
-  assert.deepEqual(await host.apply([{ id: 'r1', action: 'install', source: 'builtin:gh' }]), [{ id: 'r1', ok: false,
-    error: 'builtin:gh is built into the connector: update the connector instead (npx pikibun@latest connect).' }]);
+  assert.deepEqual(await host.apply([{ id: 'r1', action: 'install', source: 'cli:gh' }]), [{ id: 'r1', ok: false,
+    error: 'cli:gh is built into the connector: update the connector instead (npx pikibun@latest connect).' }]);
 });
 
-test('every connector has its built-in extensions: each offers one tool and its read-only setting', async t => {
+test('every connector has its CLI extensions: each offers one tool and its read-only setting', async t => {
   const root = await directory(t);
   const store = new ExtensionStore(join(root, 'extensions'));
   const loaded = await loadInstalled(store);
-  assert.deepEqual(loaded.map(item => item.summary.source), ['builtin:gh', 'builtin:glab', 'builtin:azure-cli']);
+  assert.deepEqual(loaded.map(item => item.summary.source), ['cli:gh', 'cli:glab', 'cli:azure-cli']);
   for (const item of loaded) {
     assert.equal(item.summary.error, undefined);
     const [module] = item.summary.modules;
     assert.equal(module!.error, undefined, item.summary.source);
-    assert.deepEqual(module!.tools.map(tool => tool.name), [builtinExtension(item.summary.source)!.tool]);
+    assert.deepEqual(module!.tools.map(tool => tool.name), [cliExtension(item.summary.source)!.tool]);
     assert.deepEqual(module!.flags, [{ name: 'read-only', type: 'boolean', default: false, description: module!.flags[0]!.description }]);
     assert.deepEqual([module!.noops, module!.ignored, module!.events], [[], [], []]);
   }
   const host = new HostExtensions(store, { remoteInstalls: true });
   await host.load();
-  assert.deepEqual(host.report().installed.map(item => item.source), ['builtin:gh', 'builtin:glab', 'builtin:azure-cli']);
-  assert.deepEqual(host.reportWithoutBuiltins().installed, [], 'a control plane that predates them gets the report without them');
+  assert.deepEqual(host.report().installed.map(item => item.source), ['cli:gh', 'cli:glab', 'cli:azure-cli']);
+  assert.deepEqual(host.reportWithoutCliExtensions().installed, [], 'a control plane that predates them gets the report without them');
   // Nothing is installed in the store: the CLI's changes are compared with what is installed only.
   await host.refreshIfChanged();
   assert.equal(host.loaded.length, 3);
-  assert.equal(connectorBuiltins.length, 3);
+  assert.equal(connectorCliExtensions.length, 3);
 });
 
 test('arguments are read as the commands take them', () => {
@@ -141,6 +141,36 @@ test('glab and az: the same, with their own commands', () => {
   }
 });
 
+test('refusals hold wherever options sit, clustered, abbreviated or in another case (review of #154)', () => {
+  for (const args of [['auth', 'status', '-at'], ['auth', 'status', '-ta'], ['auth', '--hostname', 'github.com', 'token'], ['auth', '-h', 'github.com', 'token'],
+    ['auth', 'status', '--show-token=true'], ['config', '-h', 'github.com', 'get', 'oauth_token'], ['--repo', 'x', 'auth', 'token']]) {
+    assert.ok(ghSpec.refused(args), `gh ${args.join(' ')}`);
+  }
+  for (const args of [['auth', 'status', '-at'], ['auth', '--hostname', 'gitlab.com', 'status', '-t'], ['config', '--host', 'gitlab.com', 'get', 'token']]) {
+    assert.ok(glabSpec.refused(args), `glab ${args.join(' ')}`);
+  }
+  for (const args of [['account', '--subscription', 'X', 'get-access-token'], ['account', 'GET-ACCESS-TOKEN'], ['acr', 'login', '-n', 'r', '--EXPOSE-TOKEN'],
+    ['acr', 'login', '-n', 'r', '--expose'], ['repos', 'list', '--deb'], ['repos', 'list', '--DEBUG']]) {
+    assert.ok(azureCliSpec.refused(args), `az ${args.join(' ')}`);
+  }
+  assert.equal(ghSpec.refused(['auth', 'status', '-h', 'github.com']), undefined);
+  assert.equal(azureCliSpec.refused(['repos', 'pr', 'list', '--detect', 'true']), undefined);
+  // gh keeps the last of repeated fields: a second query is refused, not left unchecked.
+  assert.match(apiWrites(['api', 'graphql', '-f', 'query=query { viewer { login } }', '-f', 'query=mutation { addStar(input: {}) { clientMutationId } }'])!, /exactly one query/);
+  assert.match(apiWrites(['api', 'graphql', '-f', 'owner=acme'])!, /exactly one query/);
+  for (const args of [['pipelines', 'runs', 'artifact', 'list', '--output-f', 'x'], ['repos', 'list', '--fil', 'x'], ['repos', 'list', '--pat=x'], ['REPOS', 'PR', 'CREATE']]) {
+    assert.ok(azureCliSpec.writes(args), `az ${args.join(' ')}`);
+  }
+  assert.equal(azureCliSpec.writes(['repos', 'list', '--output', 'json']), undefined, '--output is not --output-file');
+  assert.equal(azureCliSpec.writes(['Repos', 'PR', 'List']), undefined);
+});
+
+test('a host\'s report holds its CLI extensions besides as many installed ones as it may have', () => {
+  const installed = Array.from({ length: 64 }, (_, index) => ({ source: `npm:extension-${index}@1.0.0`, dev: false, modules: [] }));
+  const report = parseHostExtensionsReport({ installed: [...connectorCliExtensions.map(item => ({ source: item.info.source, dev: false, modules: [] })), ...installed], remoteInstalls: true });
+  assert.equal(report.installed.length, 67);
+});
+
 test('the command gets its own sign-in and the host\'s tools from the connector\'s environment, never the connector\'s other secrets', () => {
   const env = cliEnvironment(ghSpec, { PATH: '/opt/bin:/usr/bin', HOME: '/home/alice', GH_TOKEN: 'gh-secret', HTTPS_PROXY: 'http://proxy:3128',
     PIKIBUN_CONNECTOR_TOKEN: 'never', OPENAI_API_KEY: 'never', AZURE_CONFIG_DIR: '/x' });
@@ -169,9 +199,9 @@ async function ghTool(t: TestContext, readOnly = false) {
   process.env.PATH = `${bin}:${path}`;
   process.env.PIKIBUN_TEST_SECRET = 'leaked';
   t.after(() => { process.env.PATH = path; delete process.env.PIKIBUN_TEST_SECRET; });
-  const builtin = connectorBuiltins.find(item => item.info.name === 'gh')!;
+  const extension = connectorCliExtensions.find(item => item.info.name === 'gh')!;
   const runtime = createExtensionRuntime();
-  const result = await loadSource({ files: ['<builtin:gh>'], factories: [{ path: '<builtin:gh>', factory: builtin.factory }] }, worktree, createEventBus(), runtime);
+  const result = await loadSource({ files: ['<cli:gh>'], factories: [{ path: '<cli:gh>', factory: extension.factory }] }, worktree, createEventBus(), runtime);
   if (readOnly) runtime.flagValues.set('read-only', true);
   const tool = result.extensions[0]!.tools.get('gh')!.definition;
   const call = (params: Record<string, unknown>) => tool.execute('call', params as never, new AbortController().signal, undefined, { cwd: worktree } as never)
@@ -212,44 +242,44 @@ test('a missing command says how its host\'s owner gets it', async t => {
   await assert.rejects(call({ args: ['status'] }), /gh isn't installed on this host, or isn't on its PATH\. Its owner installs it \(https:\/\/cli\.github\.com\) and signs in with gh auth login\./);
 });
 
-test('a session runs a built-in extension like any other: its tool, behind the session\'s gate, with the workspace\'s settings', async t => {
+test('a session runs a CLI extension like any other: its tool, behind the session\'s gate, with the workspace\'s settings', async t => {
   const { worktree } = await ghTool(t);
   const loaded = await loadInstalled(new ExtensionStore(join(worktree, '..', 'state')));
   const gated: string[] = [];
   const host: ExtensionHost = {
     directory: worktree, model: () => undefined, hookTimeoutMs: 2000, warn: (_source, message) => assert.fail(message),
-    state: async source => ({ active: source === 'builtin:gh', settings: { 'read-only': true } }),
+    state: async source => ({ active: source === 'cli:gh', settings: { 'read-only': true } }),
     runTool: async (call, execute) => { gated.push(`${call.source} ${call.tool} ${JSON.stringify(call.arguments)}`); return execute(call.signal); },
   };
   const extensions = new SessionExtensions(host, ['bash']);
   await extensions.ensure(loaded);
   t.after(() => extensions.shutdown());
-  const { selected } = extensions.select(['builtin:gh']);
-  assert.deepEqual(selected.map(item => [item.source, item.tools.map(tool => tool.name)]), [['builtin:gh', ['gh']]]);
+  const { selected } = extensions.select(['cli:gh']);
+  assert.deepEqual(selected.map(item => [item.source, item.tools.map(tool => tool.name)]), [['cli:gh', ['gh']]]);
   const tool = selected[0]!.tools[0]! as unknown as { execute(args: unknown, api: unknown, call: unknown): Promise<{ output: { text: string }[] }> };
   const result = await tool.execute({ args: ['pr', 'list', '--repo', 'acme/app'] }, { callId: 'call-1' }, { abortSignal: new AbortController().signal });
   assert.match(result.output[0]!.text, /arg=list/);
   assert.doesNotMatch(result.output[0]!.text, new RegExp(`cwd=${worktree}`), 'the workspace\'s read-only setting applies');
   await assert.rejects(tool.execute({ args: ['pr', 'merge', '1'] }, { callId: 'call-2' }, { abortSignal: new AbortController().signal }), /read-only/);
-  assert.deepEqual(gated, ['builtin:gh gh {"args":["pr","list","--repo","acme/app"]}', 'builtin:gh gh {"args":["pr","merge","1"]}'], 'each call goes through the session\'s gate');
+  assert.deepEqual(gated, ['cli:gh gh {"args":["pr","list","--repo","acme/app"]}', 'cli:gh gh {"args":["pr","merge","1"]}'], 'each call goes through the session\'s gate');
 });
 
 const migrations = new URL('../apps/server/migrations/sqlite/', import.meta.url);
-const builtinMigration = '0047_builtin_extensions.sql';
+const cliMigration = '0048_cli_extensions.sql';
 
 test('the migration gives workspaces that already have a repository on a forge its tool\'s extension, once', () => {
   const files = readdirSync(migrations).filter(name => name.endsWith('.sql')).sort();
-  assert.ok(files.includes(builtinMigration));
-  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0040_builtin_extensions.sql'), 'Postgres has the same migration');
+  assert.ok(files.includes(cliMigration));
+  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0041_cli_extensions.sql'), 'Postgres has the same migration');
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
-  for (const file of files.filter(name => name < builtinMigration)) sqlite.exec(readFileSync(new URL(file, migrations), 'utf8'));
+  for (const file of files.filter(name => name < cliMigration)) sqlite.exec(readFileSync(new URL(file, migrations), 'utf8'));
   sqlite.exec(`INSERT INTO users (id, display_name, git_name, git_email, auth_kind, created_at) VALUES ('owner', 'Owner', 'Owner', 'owner@example.test', 'test', '2026-01-01');
     INSERT INTO workspaces (id, name, owner_id, created_at) VALUES ('hub', 'Hub', 'owner', '2026-01-01'), ('lab', 'Lab', 'owner', '2026-01-01'),
       ('mixed', 'Mixed', 'owner', '2026-01-01'), ('plain', 'Plain', 'owner', '2026-01-01'), ('removed', 'Removed', 'owner', '2026-01-01');
     INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
       VALUES ('hub', 'npm:pi-memory', 'npm:pi-memory@1.0.0', 1, 1, 'approval', '{}', 'owner', '2026-01-02'),
-        ('removed', 'builtin:gh', 'builtin:gh', 1, 0, 'approval', '{}', 'owner', '2026-01-02');`);
+        ('removed', 'cli:gh', 'cli:gh', 1, 0, 'approval', '{}', 'owner', '2026-01-02');`);
   const repository = sqlite.prepare(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 'main', 0, '2026-01-03')`);
   repository.run('r1', 'hub', 'github', 'github.com', '1', 'acme/one');
@@ -259,14 +289,14 @@ test('the migration gives workspaces that already have a repository on a forge i
   repository.run('r5', 'mixed', 'azure-devops', 'dev.azure.com', '5', 'acme/App/five');
   repository.run('r6', 'plain', 'bitbucket', 'bitbucket.org', '6', 'acme/six');
   repository.run('r7', 'removed', 'github', 'github.com', '7', 'acme/seven');
-  sqlite.exec(readFileSync(new URL(builtinMigration, migrations), 'utf8'));
+  sqlite.exec(readFileSync(new URL(cliMigration, migrations), 'utf8'));
   const rows = sqlite.prepare('SELECT workspace_id, source, position, enabled, tools_mode, updated_by FROM workspace_extensions ORDER BY workspace_id, position').all()
     .map(row => [row.workspace_id, row.source, row.position, row.enabled, row.tools_mode, row.updated_by]);
   assert.deepEqual(rows, [
-    ['hub', 'npm:pi-memory@1.0.0', 1, 1, 'approval', 'owner'], ['hub', 'builtin:gh', 2, 1, 'approval', 'owner'],
-    ['lab', 'builtin:glab', 1, 1, 'approval', 'owner'],
-    ['mixed', 'builtin:gh', 1, 1, 'approval', 'owner'], ['mixed', 'builtin:azure-cli', 2, 1, 'approval', 'owner'],
-    ['removed', 'builtin:gh', 1, 0, 'approval', 'owner'],
+    ['hub', 'npm:pi-memory@1.0.0', 1, 1, 'approval', 'owner'], ['hub', 'cli:gh', 2, 1, 'approval', 'owner'],
+    ['lab', 'cli:glab', 1, 1, 'approval', 'owner'],
+    ['mixed', 'cli:gh', 1, 1, 'approval', 'owner'], ['mixed', 'cli:azure-cli', 2, 1, 'approval', 'owner'],
+    ['removed', 'cli:gh', 1, 0, 'approval', 'owner'],
   ], 'one each, after what they had; a workspace that turned it off keeps it off');
   const updated = sqlite.prepare("SELECT updated_at FROM workspace_extensions WHERE workspace_id = 'lab'").get()!.updated_at as string;
   assert.match(updated, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);

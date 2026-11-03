@@ -4,11 +4,11 @@ import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { BuiltinExtensionInfo } from "../../../../../packages/shared/src/builtin-extensions.js";
+import type { CliExtensionInfo } from "../../../../../packages/shared/src/cli-extensions.js";
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
 
 /*
- * A command-line tool as a Pi extension (docs/design/builtin-extensions.md): one tool that runs the command on the host
+ * A command-line tool as a Pi extension (docs/design/cli-extensions.md): one tool that runs the command on the host
  * with the arguments the model gives, without a shell, as the connector's OS user and with its sign-in to that command.
  * Arguments that would show the command's credentials never run. With the workspace's `read-only` setting, only
  * commands that read run, and outside the session's worktree, so that what a session wrote there (a repository's Git
@@ -17,7 +17,7 @@ import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
 
 /** What one command-line tool needs. */
 export interface CliSpec {
-  info: BuiltinExtensionInfo;
+  info: CliExtensionInfo;
   /** The executable; on Windows `windowsCommand` (a `.cmd` shim runs through cmd.exe, with plain arguments only). */
   command: string;
   windowsCommand?: { file: string; shim: boolean };
@@ -41,6 +41,19 @@ export function commandWords(args: readonly string[]): string[] {
     words.push(arg);
   }
   return words;
+}
+
+/**
+ * Every argument that isn't an option, wherever it is: the command's words, wherever options sit between them (gh, glab
+ * and az all take `auth --hostname x token`), and option values too. For refusals, which would rather refuse too much.
+ */
+export function positionals(args: readonly string[]): string[] {
+  return args.filter(arg => !arg.startsWith("-"));
+}
+
+/** Whether `args` hold the short option `-letter`, alone, in a cluster (`-at`) or with its value joined (`-tx`). */
+export function hasShortOption(args: readonly string[], letter: string): boolean {
+  return args.some(arg => /^-[^-]/.test(arg) && arg.slice(1).includes(letter));
 }
 
 /**
@@ -83,8 +96,10 @@ export function apiWrites(args: readonly string[]): string | undefined {
   const methods = optionValues(rest, ["-X", "--method"]).map(method => method.toUpperCase());
   if (endpoint === "graphql") {
     if (methods.some(method => method !== "POST")) return "api graphql only takes POST";
-    const query = fields.find(field => field.startsWith("query="));
-    if (!query) return "api graphql needs its query as -f query=...";
+    // The command keeps the last of repeated fields: exactly one query, and that one checked.
+    const queries = fields.filter(field => field.startsWith("query="));
+    if (queries.length !== 1) return "api graphql takes exactly one query field (-f query=...)";
+    const query = queries[0]!;
     if (/\b(?:mutation|subscription)\b/i.test(query)) return "api graphql runs a mutation";
     return undefined;
   }
@@ -210,7 +225,7 @@ async function worktreeDirectory(root: string, directory: string): Promise<strin
 const READ_ONLY = "read-only";
 
 /** The Pi extension for `spec`: its tool, and its `read-only` setting. */
-export function cliExtension(spec: CliSpec): ExtensionFactory {
+export function commandExtension(spec: CliSpec): ExtensionFactory {
   return (pi: ExtensionAPI) => {
     pi.registerFlag(READ_ONLY, { type: "boolean", default: false,
       description: `Run only ${spec.command} commands that read (lists, views, logs, GET requests), outside the session's worktree. Set it before running the tool automatically.` });
