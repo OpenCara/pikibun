@@ -248,3 +248,25 @@ test('every workspace starts with popular extensions, turned off, and existing o
   assert.equal(row.updated_by, alice.user.id, 'set by the workspace\'s owner');
   assert.match(row.updated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });
+
+test('a workspace at its 32 extensions that turned a session tool off: connectors that have it read all 33, older ones get the 32 (review of #168)', async () => {
+  const { connectorWorkspaceExtensions } = await import('../apps/server/src/extensions.js');
+  const { parseWorkspaceExtensions, parseWorkspaceExtensionsAnswer } = await import('../packages/shared/src/host-extensions.js');
+  const regular = Array.from({ length: 32 }, (_, index) => ({ source: `npm:extension-${index}@1.0.0`, enabled: true, tools: 'approval' as const, settings: {} }));
+  const off = { source: 'piki:schedule', enabled: false, tools: 'approval' as const, settings: {} };
+  const gh = { source: 'piki:gh', enabled: true, tools: 'approval' as const, settings: {} };
+  const all = [...regular, off];
+  // A connector of this release reports piki:schedule, and its parser takes the 33 entries.
+  const current = connectorWorkspaceExtensions(all, [{ source: 'piki:gh' }, { source: 'piki:schedule' }]);
+  assert.equal(current.length, 33);
+  assert.equal(parseWorkspaceExtensionsAnswer({ extensions: current, automaticTools: false }).extensions.length, 33);
+  // One that knows Pikibun extensions but predates session tools gets the 32 its parser takes.
+  assert.deepEqual(connectorWorkspaceExtensions(all, [{ source: 'piki:gh' }]).map(item => item.source), regular.map(item => item.source));
+  // One that predates Pikibun extensions gets none of them.
+  assert.deepEqual(connectorWorkspaceExtensions([...regular.slice(0, 31), gh, off], [{ source: 'npm:extension-0@1.0.0' }]).map(item => item.source), regular.slice(0, 31).map(item => item.source));
+  assert.deepEqual(connectorWorkspaceExtensions([gh, off], undefined), [], 'a connector that never reported');
+  // Session tools take no place, but regular extensions are still at most 32.
+  assert.throws(() => parseWorkspaceExtensions([...regular, { source: 'npm:one-too-many@1.0.0' }]), /Invalid extensions/);
+  assert.throws(() => parseWorkspaceExtensions([...regular.slice(1), { source: 'npm:one-too-many@1.0.0' }, { source: 'npm:two-too-many@1.0.0' }, off]), /Invalid extensions/,
+    'a session tool\'s place isn\'t one a regular extension can take');
+});

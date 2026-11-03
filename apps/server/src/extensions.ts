@@ -56,10 +56,10 @@ function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExte
   return ownerView ? report : { ...report, installed: report.installed.filter(item => !item.dev) };
 }
 
-/** SQL true while `user` (bound) is the owner or an admin of the workspace (bound before it). */
 /** The sources of Pikibun's session-tool extensions, which are also their package keys. */
 const sessionToolSources: readonly string[] = pikiSessionToolExtensions().map(item => item.source);
 
+/** SQL true while `user` (bound) is the owner or an admin of the workspace (bound before it). */
 const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
 
 /** Whether an extension tool card's `source` is one the session may run: an enabled extension of its workspace, or a dev extension of its host owner's own session. */
@@ -93,9 +93,16 @@ export async function addPikiExtensions(env: Env, workspaceId: string, provider:
   return added;
 }
 
-/** Whether a connector's last report names Pikibun extensions: one that predates them refuses a workspace's list naming one. */
-async function knowsPikiExtensions(env: Env, connectorId: string): Promise<boolean> {
-  return (await hostReport(env, connectorId))?.report.installed.some(item => isPikiExtensionSource(item.source)) === true;
+/**
+ * A workspace's extensions as a connector can read them, from its last report. One that predates Pikibun extensions
+ * would refuse the whole list for naming one: it gets the others. Session-tool extensions (piki:schedule, ...) go only to
+ * a connector that reports having them: they don't count towards the workspace's 32, and an older connector's parser
+ * would refuse a longer list, while it offers their tools whatever the workspace chose anyway.
+ */
+export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined): WorkspaceExtension[] {
+  const has = new Set((installed ?? []).map(item => item.source));
+  const knowsPiki = [...has].some(isPikiExtensionSource);
+  return extensions.filter(item => !isPikiExtensionSource(item.source) || (knowsPiki && (!sessionToolSources.includes(item.source) || has.has(item.source))));
 }
 
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
@@ -147,9 +154,8 @@ export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
     if (!connected) fail(404, 'not_found', 'Workspace not found.');
     const extensions = await workspaceExtensions(c.env, workspaceId);
-    // A connector that predates Pikibun extensions would refuse the whole list for naming one: it gets the others.
-    const shown = extensions.some(item => isPikiExtensionSource(item.source)) && !await knowsPikiExtensions(c.env, row.id)
-      ? extensions.filter(item => !isPikiExtensionSource(item.source)) : extensions;
+    const shown = extensions.some(item => isPikiExtensionSource(item.source))
+      ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed) : extensions;
     return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id) });
   });
 }
