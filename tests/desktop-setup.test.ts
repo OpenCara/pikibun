@@ -12,6 +12,7 @@ import type { HostProcess } from "../apps/desktop/src/main/host-process.js";
 import { remoteView } from "../apps/desktop/src/main/remote-view.js";
 import { SettingsStore } from "../apps/desktop/src/main/settings.js";
 import { parseSetupAction, setupPlan } from "../apps/desktop/src/main/setup-actions.js";
+import { listedPrerequisites } from "../apps/desktop/src/shared/prerequisites.js";
 import { NVM_INSTALL } from "../apps/desktop/src/main/wsl.js";
 
 // Getting a computer ready to host from the desktop app: each missing prerequisite's fix, what the app runs for it, and
@@ -70,7 +71,7 @@ test("missing Linux packages share one fix, with apt where the system has it", (
   assert.match(fixes.mxcSdk("C:\\mxc").command!, /npm install --prefix "C:\\mxc" @microsoft\/mxc-sdk@1\.0\.1/);
 });
 
-function fakeHost(inspection: () => HostInspection) {
+function fakeHost(inspection: () => HostInspection, providers: () => string | undefined = () => undefined) {
   const requests: Record<string, unknown>[] = [];
   let nextId = 1;
   const pending: { message: Record<string, unknown>; resolve: (value: unknown) => void }[] = [];
@@ -81,6 +82,7 @@ function fakeHost(inspection: () => HostInspection) {
       const id = nextId++;
       sent?.(id);
       if (message.type === "inspect") return { type: "result", id, ok: true, inspection: inspection() };
+      if (message.type === "providers" && providers()) return { type: "result", id, ok: false, error: { code: "unsupported", message: providers() } };
       if (message.type === "providers") return { type: "result", id, ok: true, providers: [{ id: "anthropic", name: "Anthropic", signedIn: false, methods: [{ type: "oauth", name: "Anthropic (Claude Pro/Max)", subscription: true }] }] };
       if (message.type === "login") return new Promise(resolve => pending.push({ message, resolve }));
       return { type: "result", id, ok: true };
@@ -254,4 +256,64 @@ test("a cancelled sign-in ends its questions, and a provider's errors and links 
   assert.ok(!failure.message.includes("xxxxxxxxxx"), failure.message);
   assert.match(failure.message, /^Sign-in failed: OpenAI Codex token exchange response missing fields/);
   assert.deepEqual(loginFailure(new Error("Login cancelled"), false), { cancelled: true, message: "Sign-in cancelled." });
+});
+
+test("a host that runs unsandboxed until its sandbox is ready lists what the sandbox lacks, and offers its fix", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "pikibun-desktop-sandbox-fix-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const settings = new SettingsStore(join(directory, "settings.json"));
+  const git = { name: "Git for Windows (git on PATH)", ok: true, fix: fixes.gitForWindows };
+  const mxc = { name: "Microsoft MXC SDK 1.0.1", ok: false, fix: fixes.mxcSdk("C:\\mxc") };
+  // Native Windows with Git but without the MXC SDK: it runs unsandboxed, needing only Git, until the SDK is there.
+  const inspection: HostInspection = { platform: "win32", stateDir: directory, mode: "unsandboxed", models: [], prerequisites: [git], sandboxPrerequisites: [git, mxc] };
+  assert.deepEqual(listedPrerequisites(inspection), [{ entry: git, sandbox: false }, { entry: mxc, sandbox: true }]);
+  assert.deepEqual(listedPrerequisites({ ...inspection, mode: "sandboxed", prerequisites: [git, { ...mxc, ok: true }], sandboxPrerequisites: [git, { ...mxc, ok: true }] }).map(item => item.sandbox), [false, false]);
+  assert.deepEqual(listedPrerequisites(undefined), []);
+
+  const ran: unknown[] = [];
+  const controller = new HostController({ id: "default", settings, fixtureModels: false, command: () => "", confirmUnsandboxed: async () => false,
+    sandbox: () => ({ sandbox: "native" }), runSetup: async action => { ran.push(action); return { ok: true }; } });
+  controller.attach(fakeHost(() => inspection).host);
+  await controller.refresh();
+  assert.deepEqual(listedPrerequisites(controller.view().inspection).at(-1)?.entry.fix?.action, { kind: "mxc-sdk" });
+  assert.deepEqual(await controller.setup({ kind: "mxc-sdk" }), { ok: true });
+  assert.deepEqual(ran, [{ kind: "mxc-sdk" }]);
+});
+
+test("Pi's providers are listed again after a failure once Refresh asks, and forgotten when the sandbox changes", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "pikibun-desktop-providers-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const settings = new SettingsStore(join(directory, "settings.json"));
+  let failure: string | undefined = "WSL2 isn't set up on this computer.";
+  const { host, pending } = fakeHost(() => ({ platform: "win32", stateDir: directory, mode: "sandboxed", models: [], prerequisites: [] }), () => failure);
+  const controller = new HostController({ id: "default", settings, fixtureModels: false, command: () => "", confirmUnsandboxed: async () => false,
+    sandbox: () => settings.connection("default")?.windows ?? { sandbox: "wsl2" } });
+  controller.attach(host);
+
+  // A host that can't start yet: why, and nothing listed.
+  assert.deepEqual(await controller.loadProviders(), { ok: false, error: failure });
+  assert.equal(controller.view().providers, undefined);
+  assert.equal(controller.view().providersError, failure);
+  // Set up meanwhile: Refresh lists them.
+  failure = undefined;
+  await controller.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.view().providersError, undefined);
+  assert.equal(controller.view().providers?.[0]?.id, "anthropic");
+
+  // No change of sandbox while a sign-in runs in the host process it would end.
+  const signingIn = controller.startSignIn("anthropic", "oauth");
+  await Promise.resolve();
+  assert.match(controller.sandboxRefusal() ?? "", /Finish or cancel the sign-in/);
+  assert.match((await controller.setSandbox({ sandbox: "native" }) as { error: string }).error, /Finish or cancel the sign-in/);
+  pending[0]!.resolve({ type: "result", id: 0, ok: false, error: { code: "cancelled", message: "Sign-in cancelled." } });
+  await signingIn;
+
+  // Another sandbox is another Pi: its providers and sign-in are its own, listed afresh.
+  failure = "Native Windows' Pi isn't ready.";
+  assert.deepEqual(await controller.setSandbox({ sandbox: "native" }), { ok: true });
+  assert.equal(controller.view().signIn, undefined);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.view().providers, undefined, "the previous environment's providers are gone");
+  assert.equal(controller.view().providersError, failure);
 });

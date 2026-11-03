@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { ConnectorPairing } from "../../../../packages/shared/src/connector";
 import { api } from "../api";
+import { listedPrerequisites } from "../../../desktop/src/shared/prerequisites";
 import { check, useDesktop, type DesktopBridge, type DesktopView } from "../desktop";
 import { Alert, Button, CardBody, Collapsible, CopyField, EmptyState, Feedback, Field, Loading, Row, Section, SegmentedControl, StatusBadge, useAction, type Tone } from "../ui";
 import "./settings.css";
@@ -250,7 +251,8 @@ function ConnectionRow({ connection, view, bridge }: { connection: HostView; vie
 function SetupAlert({ connection, view, bridge }: { connection: HostView; view: DesktopView; bridge: DesktopBridge }) {
   const inspection = connection.inspection;
   if (!inspection) return null;
-  const missing = inspection.prerequisites.filter(item => !item.ok);
+  // What the sandbox lacks too, where the host would run without it until then: those are what to install.
+  const missing = listedPrerequisites(inspection).map(item => item.entry).filter(item => !item.ok);
   const fixes = [...new Map(missing.flatMap(item => item.fix ? [[JSON.stringify(item.fix), item.fix] as const] : [])).values()];
   if (inspection.unsupportedFix) fixes.unshift(inspection.unsupportedFix);
   const noModels = !inspection.unsupported && !inspection.models.length && inspection.modelsError;

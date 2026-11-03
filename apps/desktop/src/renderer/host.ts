@@ -1,4 +1,5 @@
 import { stateLabels, type HostsView, type HostView, type LoginMethodType, type ModelChoice, type Outcome, type PikibunBridge, type PrerequisiteFix, type SandboxChoice, type SetupAction, type SignInView } from "../shared/bridge.js";
+import { listedPrerequisites } from "../shared/prerequisites.js";
 import { element, setText } from "./dom.js";
 
 declare global { interface Window { pikibun: PikibunBridge } }
@@ -36,10 +37,12 @@ const signInAnswer = element<HTMLInputElement>("sign-in-answer");
 const signInChoice = element<HTMLSelectElement>("sign-in-choice");
 const signInCancel = element<HTMLButtonElement>("sign-in-cancel");
 let busy = false;
-/** Connections whose Pi providers this page has asked for, once each. */
+/** Connections whose Pi providers this page has asked for, once each: after that, Refresh lists them again. */
 const providersAsked = new Set<string>();
-/** The sign-in question the form shows, so a re-render keeps what the owner is typing. */
-let shownPrompt: number | undefined;
+/** The sign-in question the form shows, as `connection:prompt` (every sign-in numbers its prompts from 1). */
+let shownPrompt: string | undefined;
+/** What the owner typed for each question still open, so switching servers and back keeps it. */
+const drafts = new Map<string, string>();
 let current: HostsView | undefined;
 /** The connection the page shows; the primary one until the owner picks another. */
 let selected: string | undefined;
@@ -174,12 +177,15 @@ function fixBlock(fix: PrerequisiteFix): HTMLElement {
   return box;
 }
 
-/** The prerequisites, each missing one with its fix; a fix shared by several (Linux packages) is shown once. */
+/**
+ * The prerequisites, each missing one with its fix; a fix shared by several (Linux packages) is shown once. A host that
+ * runs unsandboxed because its sandbox isn't ready also lists what that sandbox lacks, with those fixes.
+ */
 function renderPrerequisites(connection: HostView): void {
   const inspection = connection.inspection;
   const shown = new Set<string>();
-  element("prerequisites").replaceChildren(...(inspection?.prerequisites ?? []).map(entry => {
-    const li = item(entry.name, undefined, entry.ok ? "ok" : "missing");
+  element("prerequisites").replaceChildren(...listedPrerequisites(inspection).map(({ entry, sandbox }) => {
+    const li = item(entry.name, sandbox ? "for the sandbox" : undefined, entry.ok ? "ok" : "missing");
     const key = entry.fix && JSON.stringify(entry.fix);
     if (!entry.ok && entry.fix && key && !shown.has(key)) { shown.add(key); li.appendChild(fixBlock(entry.fix)); }
     return li;
@@ -232,7 +238,7 @@ function notice(entry: SignInView["notices"][number]): HTMLLIElement {
 
 /** Pi's sign-in to a provider on this host: which one and how, then what the flow shows and asks. */
 function renderSignIn(connection: HostView): void {
-  if (!connection.providers && !providersAsked.has(connection.id)) {
+  if (!connection.providers && !connection.providersError && !providersAsked.has(connection.id)) {
     providersAsked.add(connection.id);
     void bridge.providers(connection.id);
   }
@@ -244,8 +250,8 @@ function renderSignIn(connection: HostView): void {
   setOptions(signInMethod, (chosen?.methods ?? []).map(method => [method.type, `${method.name}${method.subscription ? " (subscription)" : ""}`]));
   for (const control of [signInProvider, signInMethod]) control.disabled = running || !providers.length;
   signInStart.disabled = running || !chosen;
-  setText(element("sign-in-note"), connection.providers && !providers.length
-    ? "Pi on this computer offers no provider to sign in to."
+  setText(element("sign-in-note"), connection.providersError ? `${connection.providersError} Choose Refresh once this computer is ready.`
+    : connection.providers && !providers.length ? "Pi on this computer offers no provider to sign in to."
     : "Pikibun runs Pi's own sign-in here, as Pi's /login does: the credential is saved in Pi's configuration on this computer and never sent to Pikibun. No separate Pi install is needed.");
 
   element("sign-in-flow").hidden = !signIn;
@@ -256,9 +262,10 @@ function renderSignIn(connection: HostView): void {
   const prompt = signIn.prompt;
   signInPrompt.hidden = !prompt;
   if (!prompt) { shownPrompt = undefined; return; }
-  if (shownPrompt === prompt.id) return;
-  // A new question: an empty field (or the first option) and the owner's attention.
-  shownPrompt = prompt.id;
+  const key = `${connection.id}:${prompt.id}`;
+  if (shownPrompt === key) return;
+  // Another question, or another server's: what was typed for it (else an empty field) and the owner's attention.
+  shownPrompt = key;
   const detail = prompt.detail;
   setText(element("sign-in-question"), detail.message);
   signInAnswer.hidden = detail.type === "select";
@@ -267,7 +274,7 @@ function renderSignIn(connection: HostView): void {
     setOptions(signInChoice, detail.options.map(option => [option.id, option.description ? `${option.label} — ${option.description}` : option.label]));
     signInChoice.focus();
   } else {
-    signInAnswer.value = "";
+    signInAnswer.value = drafts.get(key) ?? "";
     signInAnswer.type = detail.type === "secret" ? "password" : "text";
     signInAnswer.placeholder = detail.placeholder ?? "";
     signInAnswer.focus();
@@ -334,6 +341,9 @@ function renderModels(connection: HostView): void {
 
 function render(view: HostsView): void {
   current = view;
+  // A draft lives only while its question is open (it may be an API key).
+  const open = new Set(view.connections.flatMap(entry => entry.signIn?.prompt ? [`${entry.id}:${entry.signIn.prompt.id}`] : []));
+  for (const key of drafts.keys()) if (!open.has(key)) drafts.delete(key);
   const connection = view.connections.find(entry => entry.id === selected) ?? view.connections[0];
   if (!connection) return;
   selected = connection.id;
@@ -474,13 +484,16 @@ signInStart.addEventListener("click", () => {
 signInPrompt.addEventListener("submit", event => {
   event.preventDefault();
   const prompt = current?.connections.find(entry => entry.id === id())?.signIn?.prompt;
-  if (!prompt) return;
+  // Only the question the form shows: an answer never goes to another server's sign-in.
+  if (!prompt || shownPrompt !== `${id()}:${prompt.id}`) return;
   const value = prompt.detail.type === "select" ? signInChoice.value : signInAnswer.value;
   signInAnswer.value = "";
+  drafts.delete(shownPrompt);
   void bridge.answerSignIn(id(), prompt.id, value).then(outcome => {
     if (!outcome.ok) { localError = outcome.error; if (current) render(current); }
   });
 });
+signInAnswer.addEventListener("input", () => { if (shownPrompt) drafts.set(shownPrompt, signInAnswer.value); });
 signInCancel.addEventListener("click", () => { void bridge.cancelSignIn(id()); });
 sandboxSelect.addEventListener("change", chooseSandbox);
 distroSelect.addEventListener("change", chooseSandbox);

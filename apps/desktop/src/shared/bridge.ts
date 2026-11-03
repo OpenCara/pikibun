@@ -115,6 +115,8 @@ export interface HostView {
   command: string;
   /** Pi's providers this host can sign in to, once listed. */
   providers?: LoginProvider[];
+  /** Why they couldn't be listed (the host can't start yet, say); Refresh tries again. */
+  providersError?: string;
   /** The latest sign-in, until another starts. */
   signIn?: SignInView;
 }

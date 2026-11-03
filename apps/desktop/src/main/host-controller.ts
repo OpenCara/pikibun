@@ -54,6 +54,10 @@ export class HostController {
   private readonly listeners = new Set<() => void>();
   private process?: HostProcess;
   private providers?: LoginProvider[];
+  /** Why Pi's providers couldn't be listed, until they are; Refresh tries again. */
+  private providersError?: string;
+  /** A window asked for the providers: Refresh and a change of sandbox list them again. */
+  private providersWanted = false;
   /** The latest sign-in, and while it runs, its request's id, which its events and answers name. */
   private signIn?: SignInView & { login?: number };
 
@@ -99,6 +103,7 @@ export class HostController {
     if (this.inspection) view.inspection = this.offered(this.inspection);
     if (this.error) view.error = this.error;
     if (this.providers) view.providers = this.providers.map(provider => ({ ...provider, methods: provider.methods.map(method => ({ ...method })) }));
+    if (this.providersError) view.providersError = this.providersError;
     if (this.signIn) {
       const { login: _login, ...signIn } = this.signIn;
       view.signIn = { ...signIn, notices: [...signIn.notices], ...(signIn.prompt ? { prompt: { ...signIn.prompt } } : {}) };
@@ -169,6 +174,8 @@ export class HostController {
           ...(result.error.fix ? { unsupportedFix: result.error.fix } : {}) };
       }
       else if (!result.ok) this.error = result.error.message;
+      // What Pi can sign in to may have changed too (Pi installed or signed in meanwhile, a host now able to start).
+      if (this.providersWanted && this.signIn?.state !== "running") void this.loadProviders();
       return this.inspection;
     } finally {
       this.inspecting--;
@@ -252,6 +259,8 @@ export class HostController {
     if (!this.connection) return "That server is no longer in the list.";
     if (!this.options.sandbox) return "Only Windows and macOS offer a choice of sandbox.";
     if (this.state !== "stopped") return "Stop the host first: its sandbox changes from its next start.";
+    // A sign-in runs in the host process a change of sandbox ends.
+    if (this.signIn?.state === "running") return "Finish or cancel the sign-in first: changing the sandbox ends it.";
     return undefined;
   }
 
@@ -284,6 +293,10 @@ export class HostController {
     this.options.settings.updateConnection(this.options.id, isWindowsChoice(choice) ? { windows: choice, resumeHost: undefined } : { mac: choice, resumeHost: undefined });
     this.inspection = undefined;
     this.error = undefined;
+    // Another sandbox can be another Pi (WSL2's or Windows'), with its own providers and credentials.
+    this.providers = undefined;
+    this.providersError = undefined;
+    this.signIn = undefined;
     this.log("info", choice.sandbox === "native" ? "Sessions run natively on Windows from the host's next start."
       : choice.sandbox === "seatbelt" ? "Sessions run in macOS's own sandbox (experimental) from the host's next start, or without one, after your consent, while it isn't ready."
       : choice.sandbox === "none" ? "Sessions run without a sandbox, after your consent, from the host's next start."
@@ -338,11 +351,18 @@ export class HostController {
   /** Lists Pi's providers this host can sign in to. */
   async loadProviders(): Promise<Outcome> {
     if (!this.process) return { ok: false, error: "The host is unavailable." };
+    this.providersWanted = true;
     const result = await this.process.request({ type: "providers" });
-    if (!result.ok) return { ok: false, error: result.error.message };
-    this.providers = result.providers ?? [];
+    if (result.ok) {
+      this.providers = result.providers ?? [];
+      this.providersError = undefined;
+    } else {
+      // A host that can't start yet (no WSL2, no Node.js in it) lists none until it can.
+      this.providers = undefined;
+      this.providersError = result.error.message;
+    }
     this.changed();
-    return { ok: true };
+    return result.ok ? { ok: true } : { ok: false, error: result.error.message };
   }
 
   /**
