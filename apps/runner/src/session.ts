@@ -38,7 +38,7 @@ import { MessageInputs, prepareMessageImages, type InputImage } from "./session/
 import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import {
-  hostGitLfs, Sandbox, SandboxProcessError, type CloneBackup, type SandboxAuthorize, type SnapshotFile,
+  hostGitLfs, Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
 } from "./sandbox.js";
 import { prepareImage } from "./images.js";
 import { performClonePush, PushError, pushSummary, type PushResult } from "./push.js";
@@ -471,7 +471,7 @@ export class RunnerSession {
       this.#egress = this.egressProxy(egressSocketPath(binding.session.id, directory));
       this.sandbox = new Sandbox(binding, join(directory, "sandbox"), config.resources, { egressSocket: this.#egress.socketPath,
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
-        ...(this.#mirrors ? { mirrors: () => this.#mirrors!.mounts() } : {}) });
+        ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
     this.#uploads = new SessionUploads(join(directory, "uploads"), this.sandbox);
     const report = config.reportActivity;
@@ -530,6 +530,11 @@ export class RunnerSession {
       if (egressReadServices.includes(request.service) && refused(error)) this.#mirrors?.forget(request.bindingId);
       throw error;
     }
+  }
+
+  /** The mirrors a step that runs Git in a clone mounts now (SessionMirrors.mounts): none on a host without a cache. */
+  private async mirrorMounts(): Promise<MirrorMount[]> {
+    return this.#mirrors ? this.#mirrors.mounts() : [];
   }
 
   /** The host's mirror of `repository`, ready for this session to borrow from (SessionMirrors.mirror): its sandbox path. */
