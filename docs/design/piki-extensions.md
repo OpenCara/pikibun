@@ -94,7 +94,7 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    sandboxes Go programs such as `gh` and `glab` can't verify the proxy's certificate yet. Another member's session never
    gets the host's sign-in; a session with neither a sandbox nor (a) or (b) doesn't run the command, and says why.
 
-## Session tools: piki:schedule, and the built-in tools after it
+## Session tools: piki:schedule, piki:host-shell, and the built-in tools after it
 
 The session's own tools (`identity`, the file tools, `github_*`, `schedule`, `sessions`, `bash`, `host_bash`, ...) are
 moving to extensions one at a time ([#163](https://github.com/OpenCara/pikibun/issues/163)), so a workspace chooses every
@@ -117,10 +117,22 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     no settings, doesn't count it towards a workspace's 32, and refuses a host's requiring one. Connectors that predate
     one offer its tools whatever the workspace chose; its page says so.
 
-Next, in order: `source_read` (`piki:sources`), `sessions` (`piki:sessions`), `github_*` (`piki:github`), `git_push`
-(`piki:git`), then the file tools and `identity` (`piki:files`, which every session needs, so it can't be turned off).
-`bash` and `host_bash` are retired last, once the extensions that cover what sessions use them for (git, project tasks,
-search, file operations, host diagnostics) are in place: see #163.
+19. **Fail-closed tools.** A catalogue entry with `failClosed` (`piki:host-shell`, for `host_bash`) is off while either
+    the workspace's answer now or the last one the connector read (`HostExtensions.lastKnown`, however old) turns it off.
+    The connector otherwise falls back to no extensions after 5 minutes without the control plane, which would turn
+    such a tool back on. A connector that never read an answer (a control plane that predates extensions) leaves it on.
+    The last answer is kept in memory only: a connector restarted while the control plane is out of reach has none, so
+    such a tool is on there until it reads one. Messages and scheduled prompts reach a session only through the control
+    plane, so that leaves at most a message already running when the connector restarted; persisting the answer (in the
+    extension store, say) would close that too.
+20. **The order follows use.** A sample of recent sessions (#163) ran `host_bash` twice, both times for `gh`, which
+    `piki:gh` covers; `bash` ran read and search (32%), builds and tests (27%), git (23%) and waits for CI (9%), with
+    inline Python and Node scripts in most sessions. So `host_bash` became switchable first, while `bash` stays a
+    built-in tool, never switchable on its own: without it a session can't clone its repositories (`sessions.ts`).
+
+Next, in order: code search and line ranges (`piki:files`), git (`piki:git`), a wait for pull request checks, project
+tasks and scripts (`piki:tasks`); then `bash` becomes `piki:shell`, and `host_bash` is removed. The brokered tools
+(`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
 
 ## The prompt audit: piki:prompt-audit
 

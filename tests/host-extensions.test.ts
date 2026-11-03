@@ -294,6 +294,12 @@ test("a host carries out the installs its owner asks for in Pikibun, unless it r
   assert.equal((await cached.workspace("w", fetch)).extensions.length, 1, "a brief outage keeps the last answer");
   now = 6 * 60_000;
   assert.deepEqual(await cached.workspace("w", fetch), { extensions: [], automaticTools: false }, "a long one runs without extensions");
+  assert.equal(cached.lastKnown("w")!.extensions[0]!.source, "npm:pi-a@1.0.0", "the last answer read is kept, however old, for fail-closed session tools");
+  assert.equal(cached.lastKnown("other"), undefined, "none for a workspace never read");
+  answer = { extensions: [], automaticTools: false };
+  now = 7 * 60_000;
+  await cached.workspace("w", fetch);
+  assert.deepEqual(cached.lastKnown("w"), { extensions: [], automaticTools: false }, "a new answer replaces it");
 });
 
 test("an extension's tool waits for the host owner's decision, never runs in a Read-only message, and runs at once where the workspace and host allow it", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {

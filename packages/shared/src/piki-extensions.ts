@@ -35,6 +35,11 @@ export interface PikiExtensionInfo {
    * extension turned off, so a workspace that never chose, or a control plane that predates it, keeps them.
    */
   sessionTools?: readonly string[];
+  /**
+   * Session tools only: whose being off protects something (a shell). Then it is off, too, while the last answer the
+   * connector read from the control plane turned it off, however old, rather than on once that answer is too old to use.
+   */
+  failClosed?: boolean;
 }
 
 export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
@@ -57,6 +62,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   {
     name: "schedule", source: "piki:schedule", title: "Scheduled prompts", sessionTools: ["schedule"],
     description: "The schedule tool: the agent lists, creates, changes and deletes the session's scheduled prompts when its owner asks, such as a nightly check. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "host-shell", source: "piki:host-shell", title: "Host commands", sessionTools: ["host_bash"], failClosed: true,
+    description: "The host_bash tool: the agent runs commands on the host, outside the sandbox, each approved by the host's owner or a member they granted host commands. Recent sessions used it only for the GitHub CLI, which piki:gh covers. On unless turned off here.",
     providers: [],
   },
   {
@@ -85,9 +95,10 @@ export function pikiSessionToolExtensions(): PikiExtensionInfo[] {
  * The session tools `workspace` turns off: those of the session-tool extensions it lists disabled. One it doesn't list
  * is on (see `sessionTools`).
  */
-export function sessionToolsOff(workspace: readonly { source: string; enabled: boolean }[]): Set<string> {
+export function sessionToolsOff(workspace: readonly { source: string; enabled: boolean }[], options: { failClosedOnly?: boolean } = {}): Set<string> {
   const off = new Set<string>();
   for (const extension of pikiSessionToolExtensions()) {
+    if (options.failClosedOnly && !extension.failClosed) continue;
     if (workspace.some(item => item.source === extension.source && !item.enabled)) for (const tool of extension.sessionTools ?? []) off.add(tool);
   }
   return off;
