@@ -269,6 +269,9 @@ test("the rules: reads and GraphQL queries read, anything else writes; which pat
   assert.equal(graphqlWrites("mutation { addComment(input: {}) { clientMutationId } }"), true);
   assert.equal(graphqlWrites("query A { viewer { login } }\nmutation B { x }"), true);
   assert.equal(graphqlWrites("  subscription S { x }"), true);
+  assert.equal(graphqlWrites(",mutation{x}"), true);
+  assert.equal(graphqlWrites("query{a},mutation{b}"), true);
+  assert.equal(graphqlWrites("query Q($id: ID!) { node(id: $id) { ... on Issue { mutationCount } } }"), false);
   assert.equal(restRepository("/repos/acme/app/actions/runs"), "acme/app");
   assert.equal(restRepository("/repos/acme"), undefined);
   assert.equal(restRepository("/user"), undefined);
@@ -373,4 +376,25 @@ test("dev.azure.com: az devops's Basic placeholder gets the owner's token for th
   const create = await call(socketPath, "/contoso/App/_apis/git/repositories/r/pullrequests", { host: "dev.azure.com", method: "POST", body: "{}", headers: { authorization: basic } });
   assert.equal(create.status, 403);
   assert.match(JSON.parse(create.body).message, /the az tool \(piki:azure-cli\)/);
+  // An organization the session owner has no token for gets none, not another organization's (review of #158).
+  const other = await call(socketPath, "/elsewhere/_apis/projects", { host: "dev.azure.com", headers: { authorization: basic } });
+  assert.equal(other.status, 403);
+  assert.match(JSON.parse(other.body).message, /^elsewhere is not an organization of this workspace's repositories/);
+  assert.equal(upstream.length, 1);
+});
+
+test("GraphQL mutations count wherever they stand, commas and all: none reaches GitLab without a lease (review of #158)", async t => {
+  const gitlab: ApiCredentialGrant = { available: true, cacheSeconds: 60, credentials: [
+    { account: "gitlab.com", authorization: "Bearer glpat-owner", repositories: [], expiresAt: new Date(Date.now() + 3600_000).toISOString() }] };
+  const { socketPath, upstream } = await proxy(t, { apis: [{ host: "gitlab.com", provider: "gitlab" }], credential: async () => gitlab });
+  for (const query of [",mutation{destroyIssue(input:{id:1}){errors}}", "query{a},mutation{b}", "\ufeffmutation{b}", "fragment F on Issue{id} mutation{b}",
+    "query{a}\n,\n,mutation M{b}", "{a} subscription{b}", "query{a} \"unclosed", "{a}}mutation{b}"]) {
+    const answer = await call(socketPath, "/api/graphql", { host: "gitlab.com", method: "POST", body: JSON.stringify({ query }),
+      headers: { authorization: `Bearer ${API_TOKEN_PLACEHOLDER}`, "content-type": "application/json" } });
+    assert.equal(answer.status, 403, query);
+  }
+  assert.equal(upstream.length, 0);
+  const read = await call(socketPath, "/api/graphql", { host: "gitlab.com", method: "POST", body: JSON.stringify({ query: "query{project(fullPath:\"a/mutation\"){mutation: id}}" }),
+    headers: { authorization: `Bearer ${API_TOKEN_PLACEHOLDER}`, "content-type": "application/json" } });
+  assert.equal(read.status, 200, "a field or string named mutation is still a read");
 });

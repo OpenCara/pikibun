@@ -126,8 +126,9 @@ export type ApiAccessKind = "read" | "write";
 export function apiWriteToken(lease: string): string { return `${API_TOKEN_PLACEHOLDER}.write.${lease}`; }
 /** The write lease a placeholder token names, if it is one (see apiWriteToken). */
 export function apiWriteLease(token: string): string | undefined {
-  return new RegExp(`${API_TOKEN_PLACEHOLDER}\\.write\\.([A-Za-z0-9_-]{32,64})`).exec(token)?.[1];
+  return WRITE_LEASE.exec(token)?.[1];
 }
+const WRITE_LEASE = new RegExp(`${API_TOKEN_PLACEHOLDER}\\.write\\.([A-Za-z0-9_-]{32,64})`);
 /** Longest a proxy reuses an API credential: a revoked session or repository stops using it within this. */
 export const API_CREDENTIAL_CACHE_SECONDS = 60;
 /**

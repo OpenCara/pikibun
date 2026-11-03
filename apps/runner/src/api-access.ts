@@ -208,15 +208,20 @@ export const publicUpstream: ApiUpstream = async ({ url, method, headers, body, 
 };
 
 /**
- * The credential for a request about `repository` (owner/name): the one that covers it, or none. For a request about no
- * one repository: `account`'s (an organization, or the owner a GraphQL query names), or the first.
+ * The credential for a request: about `repository` (owner/name), the one that covers it, or none; about `account` (an
+ * Azure DevOps organization the path names), that account's, or none; otherwise the one for the owner a GraphQL query
+ * names, `owner`, or the first.
  */
-function credentialFor(credentials: ApiCredential[], repository: string | undefined, account: string | undefined): ApiCredential | undefined {
-  if (repository) {
-    const name = repository.toLowerCase();
+export function credentialFor(credentials: ApiCredential[], scope: { repository?: string; account?: string }, owner?: string): ApiCredential | undefined {
+  if (scope.repository) {
+    const name = scope.repository.toLowerCase();
     return credentials.find(credential => credential.repositories.some(item => item.toLowerCase() === name));
   }
-  const wanted = account?.toLowerCase();
+  if (scope.account !== undefined) {
+    const account = scope.account.toLowerCase();
+    return credentials.find(credential => credential.account.toLowerCase() === account);
+  }
+  const wanted = owner?.toLowerCase();
   return credentials.find(credential => credential.account.toLowerCase() === wanted) ?? credentials[0];
 }
 
@@ -371,13 +376,14 @@ export class ApiAccess {
           return refuse(403, `${write.reason}; ${method} ${pathname.slice(0, 200)} didn't reach ${rules.name}`);
         }
       }
-      credential = available.available ? credentialFor(available.credentials, scope.repository, scope.account ?? owner) : undefined;
+      credential = available.available ? credentialFor(available.credentials, scope, owner) : undefined;
       if (credential) {
         headers.authorization = credential.authorization;
         reason = access === "write" || rules.provider !== "github" ? `the session owner's token for ${credential.account}` : `read-only token for ${credential.account}`;
       } else if (open) reason = "without a credential";
       else if (!available.available) return refuse(403, `${available.reason}; ${host} is reachable only with that credential under this workspace's network policy`);
-      else return refuse(403, `${scope.repository ?? scope.account ?? pathname.slice(0, 200)} is not one of this workspace's repositories that the session owner can read`);
+      else if (scope.account !== undefined) return refuse(403, `${scope.account.slice(0, 100)} is not an organization of this workspace's repositories that the session owner has an account for`);
+      else return refuse(403, `${scope.repository ?? pathname.slice(0, 200)} is not one of this workspace's repositories that the session owner can read`);
     }
 
     let upstream: UpstreamResponse;
@@ -415,11 +421,25 @@ export class ApiAccess {
 }
 
 /**
- * Whether a GraphQL document defines a mutation or subscription: strings and comments are set aside, then an operation
- * definition starts the document or follows the end of another. The token's read-only scope is what refuses writes;
- * this only says so clearly before the API does.
+ * Whether a GraphQL document may define a mutation or subscription: strings and comments are set aside, then any word
+ * `mutation` or `subscription` outside every selection set (`{ ... }`) counts, wherever it stands. GraphQL ignores
+ * commas and a byte order mark as it does spaces, so an operation needn't start a line or follow a `}` (`,mutation{...}`,
+ * `query{a},mutation{b}`). A document it can't read as balanced braces counts too: the proxy rather refuses a read than
+ * lets a write through as one, and for gitlab.com and dev.azure.com, nothing but this stands between the session owner's
+ * own token and a write no one approved.
  */
 export function graphqlWrites(query: string): boolean {
   const text = query.replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|#[^\n\r]*/g, " ");
-  return /(?:^|\})\s*(?:mutation|subscription)\b/.test(text);
+  // A string or block string left open is no document to read.
+  if (/"/.test(text)) return true;
+  let depth = 0;
+  let outside = "";
+  for (const character of text) {
+    if (character === "{") depth++;
+    else if (character === "}") { depth--; if (depth < 0) return true; }
+    else if (depth === 0) outside += character;
+    if (depth === 0 && (character === "{" || character === "}")) outside += " ";
+  }
+  if (depth !== 0) return true;
+  return /(?:^|[^A-Za-z0-9_])(?:mutation|subscription)(?![A-Za-z0-9_])/.test(outside);
 }

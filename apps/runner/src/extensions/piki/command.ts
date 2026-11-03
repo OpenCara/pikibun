@@ -262,7 +262,9 @@ export const noPikiSession: PikiSession = Object.freeze({ hostSignIn: false });
 
 /**
  * The shell command that runs `command` with `args` and `env` in the sandbox, in `directory` of the worktree: every word
- * quoted, so nothing in them is the shell's; stdin closed, and its errors with its output.
+ * quoted, so nothing in them is the shell's; stdin closed, and its errors with its output. The command is looked for in
+ * /usr/local/bin too, where its own installers put gh and glab, before the sandbox's own PATH (/usr/bin:/bin on Linux).
+ * The directory goes to cd as `./<directory>`, so no name of it (`-`) is one of cd's own.
  */
 export function sandboxShellCommand(command: string, args: readonly string[], env: Record<string, string>, directory?: string): string {
   const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
@@ -270,7 +272,8 @@ export function sandboxShellCommand(command: string, args: readonly string[], en
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`Invalid variable name ${name}`);
     return quote(`${name}=${value}`);
   });
-  return `${directory && directory !== "." ? `cd -- ${quote(directory)} && ` : ""}exec env ${[...assignments, quote(command), ...args.map(quote)].join(" ")} </dev/null 2>&1`;
+  return `PATH="/usr/local/bin:$PATH" && export PATH && ${directory && directory !== "." ? `cd -- ${quote(`./${directory}`)} && ` : ""}`
+    + `exec env ${[...assignments, quote(command), ...args.map(quote)].join(" ")} </dev/null 2>&1`;
 }
 
 /** `directory` as the sandbox takes it: a relative path within the worktree, without `..`. */
