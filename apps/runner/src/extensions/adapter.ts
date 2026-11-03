@@ -25,8 +25,10 @@ export interface ExtensionHost {
   readonly directory: string;
   /** The host's Pi model registry, as `ctx.modelRegistry`; without one, extensions that use it fail when they do. */
   readonly modelRegistry?: ModelRegistry;
-  /** The model the session's conversation runs on, as Pi's `ctx.model`. */
+  /** The model the session's shared conversation runs on now, as Pi's `ctx.model`. */
   model(): Model<string> | undefined;
+  /** Its reasoning level now, as Pi's `pi.getThinkingLevel()`. */
+  thinkingLevel?(): string | undefined;
   /** Whether `source` applies to the session now, and its settings (flag values). */
   state(source: string): Promise<{ active: boolean; settings: ExtensionSettings }>;
   /**
@@ -188,7 +190,7 @@ export class SessionExtensions {
         if (result.errors.length) this.#broken.add(source);
         const runner = new ExtensionRunner(result.extensions, runtime, this.host.directory, SessionManager.inMemory(this.host.directory),
           this.host.modelRegistry ?? (undefined as never));
-        runner.bindCore(noActions(runner, message => this.host.warn(source, message)), contextActions(this.host));
+        runner.bindCore(noActions(runner, message => this.host.warn(source, message), this.host), contextActions(this.host));
         runner.onError(error => this.host.warn(source, `${error.event}: ${error.error}`));
         noticesOf(runner);
         const offered = new Set(loaded.summary.modules.flatMap(module => module.tools.map(tool => tool.name)));
@@ -331,7 +333,7 @@ async function applyState(host: ExtensionHost, source: string, runner: Extension
 }
 
 /** What Pi's print mode leaves an extension: actions that change the session do nothing here, and say so once. */
-function noActions(runner: ExtensionRunner, warn: (message: string) => void): ExtensionActions {
+function noActions(runner: ExtensionRunner, warn: (message: string) => void, host: ExtensionHost): ExtensionActions {
   const said = new Set<string>();
   const noop = (name: string) => () => { if (!said.has(name)) { said.add(name); warn(`${name}() does nothing in Pikibun`); } };
   return {
@@ -339,7 +341,7 @@ function noActions(runner: ExtensionRunner, warn: (message: string) => void): Ex
     setSessionName: noop("setSessionName"), getSessionName: () => undefined, setLabel: noop("setLabel"),
     getActiveTools: () => runner.getAllRegisteredTools().map(tool => tool.definition.name), getAllTools: () => [],
     getSettings: () => ({}) as never, setActiveTools: noop("setActiveTools"), refreshTools: () => {}, getCommands: () => [],
-    setModel: async () => { noop("setModel")(); return false; }, getThinkingLevel: () => "off" as never, setThinkingLevel: noop("setThinkingLevel"),
+    setModel: async () => { noop("setModel")(); return false; }, getThinkingLevel: () => (host.thinkingLevel?.() ?? "off") as never, setThinkingLevel: noop("setThinkingLevel"),
   } as ExtensionActions;
 }
 

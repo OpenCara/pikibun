@@ -83,7 +83,7 @@ the session's own, then maps what it registered:
 | `session_start`, `session_shutdown` | When the session opens and closes |
 | `registerFlag`, `getFlag` | The extension's settings, set by the workspace |
 | `exec` | Runs on the host, in the session's worktree |
-| `ctx.cwd`, `ctx.signal`, `ctx.model` | The session's worktree on the host, the call's signal, the session's model |
+| `ctx.cwd`, `ctx.signal`, `ctx.model`, `getThinkingLevel` | The session's worktree on the host, the call's signal, and the model and reasoning level of the message running (a message may switch them) |
 | `ctx.ui.*`, `registerCommand`, shortcuts, renderers, `setActiveTools`, `setModel`, `sendMessage`, `sendUserMessage`, `appendEntry`, session names and labels | No-ops, as in print mode; listed on the host's page |
 | `registerProvider`, `registerMcpServer`, `registerVirtualModel`, provider-request events, `session_before_switch`/`fork`/`tree`, `user_bash` | Ignored; listed on the host's page as unsupported |
 

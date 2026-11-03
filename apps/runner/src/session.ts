@@ -354,6 +354,11 @@ export class RunnerSession {
   readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" } }>();
   /** The session's Pi extensions (docs/design/host-extensions.md), where the host has any. */
   #hostExtensions?: SessionExtensions;
+  /**
+   * The shared conversation's model and reasoning level, as its extensions see them (`ctx.model`): read when the session
+   * opens and when each shared message starts, which may switch them.
+   */
+  #currentModel?: { provider: string; modelId: string; thinkingLevel?: string };
   /** The extensions being opened now (openExtensions): one opening at a time, so none is opened twice. */
   #opening: Promise<void> = Promise.resolve();
   /** Pi's built-in extensions (HostConfig.builtinExtensions), installed in the registry; each message selects those the host's configuration turns on. */
@@ -916,6 +921,7 @@ export class RunnerSession {
       doc.json = JSON.stringify(state);
     }, context);
     this.#shared = await this.sharedConversation();
+    await this.noteCurrentModel(this.#shared);
     this.closing = false;
     this.#opened = true;
     void this.#hostExtensions?.sessionStart().catch(() => {});
@@ -1279,11 +1285,26 @@ export class RunnerSession {
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
+    if (run.mode === "write") await this.noteCurrentModel(conversation);
     if (run.mode !== "write" || !this.#hostExtensions?.extensions.length) return;
     const text = typeof content === "string" ? content : (content ?? []).flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
     const images = typeof content === "string" ? [] : (content ?? []).flatMap(part => part.type === "image" ? [{ type: "image" as const, data: part.data, mimeType: part.mimeType }] : []);
     const prompts = extensions.length ? await this.#hostExtensions.beforeAgentStart(text, images.length ? images : undefined).catch(() => ({})) : {};
     await conversation.commit(async tx => { (await tx.doc(ExtensionPrompts, conversation.id)).prompts = prompts; }, context);
+  }
+
+  /**
+   * Notes the model and reasoning level `conversation` runs on now, for the session's extensions. Where it can't be read
+   * or has no model, they see the session's own model (`modelRef`) rather than an earlier message's, and the reason is logged.
+   */
+  private async noteCurrentModel(conversation: Conversation): Promise<void> {
+    const agent = await conversation.agent(context).catch(error => {
+      process.stderr.write(`Session ${this.binding.session.id}: cannot read the conversation's model for its extensions: ${String(error instanceof Error ? error.message : error).replace(/[\x00-\x1f]/g, " ").slice(0, 500)}\n`);
+      return undefined;
+    });
+    this.#currentModel = agent?.model
+      ? { provider: agent.model.provider, modelId: agent.model.modelId, ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) }
+      : undefined;
   }
 
   /**
@@ -1332,7 +1353,11 @@ export class RunnerSession {
     return {
       directory: this.sandbox.worktree,
       ...(this.config.extensions?.modelRegistry ? { modelRegistry: this.config.extensions.modelRegistry } : {}),
-      model: () => this.modelRef && this.config.extensions?.modelRegistry?.find(this.modelRef.provider, this.modelRef.modelId) as never,
+      model: () => {
+        const current = this.#currentModel ?? this.modelRef;
+        return current && this.config.extensions?.modelRegistry?.find(current.provider, current.modelId) as never;
+      },
+      thinkingLevel: () => this.#currentModel?.thinkingLevel,
       state: async source => {
         const item = (await this.extensionChoice()).chosen.find(candidate => candidate.source === source);
         return { active: !!item, settings: item?.required?.settings ?? item?.workspace?.settings ?? {} };
