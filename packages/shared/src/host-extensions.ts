@@ -122,7 +122,7 @@ export interface WorkspaceExtension {
 /**
  * Popular Pi extensions every workspace starts with, in this order, turned off and with tools on approval: its owners
  * and admins turn on the ones they want, once their hosts install them. Existing workspaces got them in migration
- * sqlite/0047 (postgres/0040), which lists the same sources. `pi-web-access` and `pi-web-search` both offer
+ * sqlite/0048 (postgres/0041), which lists the same sources. `pi-web-access` and `pi-web-search` both offer
  * `web_search`, so a workspace turns on one of them (with both, sessions keep the first's).
  */
 export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([

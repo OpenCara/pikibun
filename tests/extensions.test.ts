@@ -210,7 +210,7 @@ test('every workspace starts with popular extensions, turned off, and existing o
   await json(await alice.request('PUT', `/api/workspaces/${older.id}/extensions`, { source: 'npm:pi-memory@0.4.2' }));
   await json(await alice.request('PUT', `/api/workspaces/${older.id}/extensions`, { source: 'npm:pi-web-search@1.6.0', enabled: true }));
   for (let index = 0; index < 32; index++) await json(await alice.request('PUT', `/api/workspaces/${full.id}/extensions`, { source: `npm:extension-${index}@1.0.0` }));
-  f.sqlite.exec(readFileSync(new URL('../apps/server/migrations/sqlite/0047_default_extensions.sql', import.meta.url), 'utf8'));
+  f.sqlite.exec(readFileSync(new URL('../apps/server/migrations/sqlite/0048_default_extensions.sql', import.meta.url), 'utf8'));
   const listed = async (id: string) => (await json<{ extensions: WorkspaceExtension[] }>(await alice.request('GET', `/api/workspaces/${id}/extensions`))).extensions;
   assert.deepEqual(await listed(older.id), [
     { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'approval', settings: {} },

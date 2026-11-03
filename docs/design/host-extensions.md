@@ -34,7 +34,7 @@ its host has.
    Secrets never go there: the extension reads them on the host (its environment, files, or Pi's `auth.json`), which the
    host's owner sets up.
 9. **Popular ones, off.** Every workspace starts with `pi-web-access`, `pi-web-search` and `cc-safety-net`, pinned, turned
-   off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0047 (postgres/0040) added them to existing
+   off, tools on approval (`defaultWorkspaceExtensions`); migration sqlite/0048 (postgres/0041) added them to existing
    workspaces after their own, except where a workspace already used the package or was at its limit.
 10. **Web tools are extensions.** Pikibun's own `web_fetch` and `web_search` are retired (`retiredToolNames`): no session
    offers them, the server's `WEB_SEARCH` provider and the workspace's **Web search** setting are gone, and older
