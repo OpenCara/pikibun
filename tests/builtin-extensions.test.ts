@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { glob, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { Type } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
-import { SessionBuiltins } from "../apps/runner/src/extensions/builtin.js";
+import { createRegistry, defineExtension, defineTool, Harness, MemoryStorage, ToolResultEntry } from "@earendil-works/pi-durable";
+import { CODEMODE_SESSION_WORKERS, LimitedCodemodeSandbox, SessionBuiltins } from "../apps/runner/src/extensions/builtin.js";
 import { RunnerService } from "../apps/runner/src/server.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { defaultHostConfig, type HostConfig } from "../packages/shared/src/host-config.js";
@@ -25,6 +28,61 @@ test("a built-in extension steps aside where a workspace's extension offers a to
   assert.deepEqual(builtins.select(["codemode"], new Set(["codemode"])), []);
   // Scripts get no models.* tools: only the codemode tool itself.
   assert.deepEqual(builtins.extensions.get("codemode")!.tools!.map(tool => tool.name), ["codemode"]);
+});
+
+test("a script's VM stops once it has computed too long, while time its calls take doesn't count; long output goes to the worktree", async t => {
+  const context = BACKGROUND_CONTEXT;
+  const files = new Map<string, string>();
+  const builtins = new SessionBuiltins({ computeLimitMs: 400,
+    outputs: async () => ({ writeFile: async (path, content) => { files.set(path, content); } }) });
+  t.after(() => builtins.close());
+  const slow = defineTool({ name: "slow", description: "Waits a second.", parameters: Type.Object({}),
+    execute: async () => { await delay(1000); return { output: [{ type: "text", text: "slow done" }] }; } });
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  const respond: FauxResponseFactory = async request => {
+    faux.appendResponses([respond]);
+    const last = request.messages.findLast(message => message.role !== "system");
+    if (last?.role === "toolResult") return fauxAssistantMessage("done");
+    return fauxAssistantMessage(fauxToolCall("codemode", { code: typeof last?.content === "string" ? last.content : "" }), { stopReason: "toolUse" });
+  };
+  faux.setResponses([respond]);
+  const models = createModels(); models.setProvider(faux.provider);
+  const registry = createRegistry();
+  const workspace = defineExtension({ name: "workspace-tools", tools: [slow] });
+  registry.install(workspace);
+  const codemode = builtins.extensions.get("codemode")!;
+  registry.install(codemode);
+  const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
+  t.after(() => harness.close(context));
+  const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" }, extensions: [workspace, codemode], tools: [slow, ...codemode.tools!] } });
+  const run = async (code: string) => {
+    const settled = await (await root.submit({ type: "input", content: code }, context)).wait(context);
+    assert.equal(settled.status, "done");
+    return JSON.stringify((await root.context(context)).entries.filter(entry => entry.kind === ToolResultEntry.kind).at(-1));
+  };
+  const started = Date.now();
+  assert.match(await run("while (true) {}"), /computed for more than 0 seconds/);
+  assert.ok(Date.now() - started < 10_000);
+  // Waiting a second on a call, past the limit, is no computing.
+  assert.match(await run("const a = await tools.slow({});\nreturn a;"), /slow done/);
+  assert.doesNotMatch(await run("return 'x'.repeat(10)"), /computed for more than/);
+  // Output past the script's budget is cut, and kept whole in the worktree for read_file.
+  const cut = await run('// @options: {"max_output_tokens": 50}\nreturn Array.from({ length: 2000 }, (_, i) => "line " + i).join("\\n");');
+  const path = /Full output: (codemode-output\/[0-9a-f]{8}\/output\.txt)/.exec(cut)?.[1];
+  assert.ok(path, cut);
+  assert.match(files.get(path)!, /^line 0\nline 1\n[\s\S]*line 1999$/);
+});
+
+test("a session runs at most a few scripts at once", async t => {
+  const sandbox = new LimitedCodemodeSandbox();
+  t.after(() => sandbox.close());
+  const runs = Array.from({ length: CODEMODE_SESSION_WORKERS + 1 }, (_, index) => sandbox.start("await tools.wait({});", {
+    startedAt: Date.now(), seed: index, tools: [{ name: "wait" }], onCall: () => {} }));
+  const extra = await runs.at(-1)!.result;
+  assert.equal(extra.ok, false);
+  assert.match(JSON.stringify(extra), /already runs 2 code mode scripts/);
+  await sandbox.close();
+  for (const item of runs.slice(0, -1)) assert.equal((await item.result).ok, false);
 });
 
 test("code mode runs where the host's configuration turns it on, and its scripts' calls are decided like the model's own", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
@@ -57,6 +115,7 @@ test("code mode runs where the host's configuration turns it on, and its scripts
     if (last?.role === "toolResult") return fauxAssistantMessage(`done: ${last.content.map(part => part.type === "text" ? part.text : "").join("")}`);
     const text = typeof last?.content === "string" ? last.content : "";
     if (!offered.at(-1)!.includes("codemode")) return fauxAssistantMessage("no code mode");
+    if (text === "long") return fauxAssistantMessage(fauxToolCall("codemode", { code: '// @options: {"max_output_tokens": 50}\nreturn Array.from({ length: 2000 }, (_, i) => "line " + i).join("\\n");' }), { stopReason: "toolUse" });
     return fauxAssistantMessage(fauxToolCall("codemode", { code: `const [a, b] = await Promise.all([tools.shout({ text: ${JSON.stringify(text)} }), tools.shout({ text: "twice" })]);\nreturn a + " " + b;` }),
       { stopReason: "toolUse" });
   };
@@ -108,6 +167,17 @@ test("code mode runs where the host's configuration turns it on, and its scripts
   await idle();
   assert.ok(offered[0]!.includes("codemode") && offered[0]!.includes("shout"), offered[0]!.join());
   assert.match((await assistant())!, /HELLO! TWICE!/);
+
+  // Output past the script's budget is kept whole in the session's worktree, where read_file reads it.
+  await send("long");
+  await idle();
+  const toolText = (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text).at(-1)!;
+  const saved = /Full output: (codemode-output\/[0-9a-f]{8}\/output\.txt)/.exec(toolText)?.[1];
+  assert.ok(saved, toolText);
+  const found: string[] = [];
+  for await (const file of glob(`**/${saved}`, { cwd: join(root, "runner") })) found.push(file);
+  assert.equal(found.length, 1);
+  assert.match(await readFile(join(root, "runner", found[0]!), "utf8"), /^line 0\n[\s\S]*line 1999$/);
 
   // Turned off in the host's configuration: the next message offers no code mode.
   config = { ...config, builtinExtensions: [] };

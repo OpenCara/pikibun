@@ -19,7 +19,7 @@ import { sha256 } from "../../../packages/shared/src/crypto.js";
 import { sessionExtensions, type WorkspaceExtensionsAnswer } from "../../../packages/shared/src/host-extensions.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type SessionExtension } from "./extensions/adapter.js";
-import { SessionBuiltins } from "./extensions/builtin.js";
+import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { ATTACHMENTS_DIRECTORY, fileUploadLimits, parseUploadChunk, type UploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
@@ -975,7 +975,7 @@ export class RunnerSession {
     this.#registry = registry;
     if (!this.#packed) {
       // Installed whether or not the host's configuration turns them on now, so a script it resumes finds its tool.
-      this.#builtins = new SessionBuiltins();
+      this.#builtins = new SessionBuiltins({ outputs: api => this.codemodeOutputs(api) });
       for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
     }
     if (this.config.extensions && !this.#packed) {
@@ -1441,6 +1441,18 @@ export class RunnerSession {
     const { selected, created } = host.select(chosen.map(item => item.source));
     for (const extension of created) this.#registry?.install(extension);
     return selected;
+  }
+
+  /**
+   * Where a code mode call saves its full output: files in the worktree, written as the message's sender, which read_file
+   * reads; none in a Read-only message, whose result then says it couldn't be saved.
+   */
+  private async codemodeOutputs(api: ToolExecutionApi): Promise<OutputFiles | undefined> {
+    const attribution = await this.toolActor(api, true);
+    const state = await this.metadata();
+    const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
+    if (run.options?.access === "read") return undefined;
+    return { writeFile: (path, content) => this.sandbox.writeFile(path, content, async () => { await this.recheckTool(attribution); }) };
   }
 
   /** What the session gives its extensions: its worktree, their state and settings, and the gate of their tool calls. */
