@@ -55,6 +55,12 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "a8f1f8fe-f8a6-446d-8864-a8bc5df1e437"
+      }
+    },
+    "owner": "quabug"
   }
 }
