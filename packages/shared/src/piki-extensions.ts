@@ -81,7 +81,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "git", source: "piki:git", title: "Git", sessionTools: ["git", "git_push"],
-    description: "The git tool: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    description: "The git and git_push tools: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, each call approved as a command is, and pushes a clone's commit to another branch with approval. On unless turned off here.",
     providers: [],
   },
   {

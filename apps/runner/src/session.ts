@@ -840,7 +840,7 @@ export class RunnerSession {
     if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
       + "write a codemode script that calls them rather than piping commands through grep, head, sort or jq in bash.";
     // Sessions waited for CI with sleep in bash, then read the pull request again, in 9% of their shell commands (#163).
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read") && !off.has("github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
       + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes) rather than sleep in bash.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
@@ -2088,7 +2088,7 @@ export class RunnerSession {
       directory: Type.String(), branch: Type.String(), tag: Type.Optional(Type.String()),
       pull_request: Type.Optional(Type.Object({ title: Type.String(), body: Type.String(), base: Type.Optional(Type.String()) })),
     }), execute: async (args, api, call) => {
-        await this.requireSessionTool("git_push");
+      await this.requireSessionTool("git_push");
       const attribution = await this.toolActor(api, true);
       await this.permit(api, call, "git_push", args.tag === undefined ? `${args.directory} → ${args.branch}` : `${args.directory} → tag ${args.tag} on ${args.branch}`, { write: true });
       if (!validCloneDirectory(args.directory)) throw new RunnerError(400, "directory must be a clone's path in the worktree, such as app or src/app");
