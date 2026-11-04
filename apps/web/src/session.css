@@ -117,19 +117,22 @@
    * that don't fit beside it wrap onto the lines below rather than run past a narrow screen's edge.
    */
   .entry-tool-label { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
-  /* With badges, the label's line is as tall as a badge (22px), so the first line is that tall however they wrap. */
+  /*
+   * With badges after it, whichever they are, the label's line is as tall as a badge (22px), so the first line is that
+   * tall however they wrap, and the icons stay beside it rather than centered on all of them.
+   */
   .entry-tool-label > .truncate:not(:last-child) { margin-right: var(--space-1); line-height: 22px; }
-  /* Its icons stay beside that first line, rather than centered on all of them. */
-  .entry-tool > summary:has(.approval-marks) { align-items: flex-start; }
-  .entry-tool > summary:has(.approval-marks) > .icon { margin-top: 4px; }
+  .entry-tool > summary:has(> .entry-tool-label > .truncate:not(:last-child)) { align-items: flex-start; }
+  .entry-tool > summary:has(> .entry-tool-label > .truncate:not(:last-child)) > .icon { margin-top: 4px; }
   .entry-tool > summary > .icon:last-child { transition: transform 120ms ease; }
   .entry-tool[open] > summary > .icon:last-child { transform: rotate(90deg); }
   .entry-tool > pre { max-height: 420px; margin-top: var(--space-2); }
   .entry-tool > .entry-brief { margin-top: var(--space-1); }
   /* A paged transcript's way back: scrolling near it loads the next page too. */
   .transcript-earlier { display: flex; justify-content: center; }
-  /* Each badge wraps on its own in the tool row's label (.entry-tool-label); the element keeps their shared tooltip. */
-  .approval-marks { display: contents; }
+  .approval-marks { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+  /* In a tool row's label, each badge wraps on its own; the element keeps their shared tooltip. */
+  .entry-tool-label > .approval-marks { display: contents; }
 
   /* Bottom stack: pinned approvals, queue line, composer. */
   .session-bottom { display: grid; flex: 0 0 auto; gap: var(--space-3); padding: var(--space-2) 0 var(--space-4); }
