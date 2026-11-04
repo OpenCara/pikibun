@@ -38,10 +38,14 @@ export function viewFingerprint(view: GitHubIssueView): string {
       pull.reviewComments.map(comment => [comment.id, comment.body]), pull.checks.map(check => [check.name, check.status, check.conclusion])] : null])).digest("hex");
 }
 
+/** Whether a check passed, as the control plane's check list orders them (github-broker.ts). */
+const passed = (check: { status: string; conclusion: string | null }) => check.status === "completed" && ["success", "neutral", "skipped"].includes(check.conclusion ?? "");
+
 /**
  * A wait for `wait` that began at `first`, read at `startedSeconds`: given each later read and when it was made (in
  * seconds), whether the wait is over, and its outcome if so.
- * - `checks`: every check of the head commit has completed. A pull request closed or merged meanwhile ends it too, and
+ * - `checks`: every check of the head commit has completed, those its list left out included as far as the list shows
+ *   (see below). A pull request closed or merged meanwhile ends it too, and
  *   a head that has had no checks for `noChecksSeconds` since it was first read has none to wait for: a push during the
  *   wait starts that time again. An issue has no checks: it ends at once.
  * - `change`: anything `viewFingerprint` compares differs from the first read.
@@ -57,7 +61,10 @@ export function githubWaiter(wait: GitHubWait, first: GitHubIssueView, startedSe
     if (view.state !== "open") return "closed";
     if (pull.head.sha !== head) { head = pull.head.sha; headSince = nowSeconds; }
     if (!pull.checks.length) return nowSeconds - headSince >= githubWaitLimits.noChecksSeconds ? "no-checks" : undefined;
-    return pull.checks.every(check => check.status === "completed") ? "checks-completed" : undefined;
+    if (!pull.checks.every(check => check.status === "completed")) return undefined;
+    // The control plane lists failing and pending checks before passing ones and leaves out the end of the list: with
+    // a passing one listed, none left out is pending; with none, a left-out one may be.
+    return (view.omitted?.checks ?? 0) > 0 && !pull.checks.some(passed) ? undefined : "checks-completed";
   };
 }
 

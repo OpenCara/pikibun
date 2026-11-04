@@ -21,6 +21,12 @@ test("waiting for checks: until every check of the head commit completes, the pu
   assert.equal(waitOutcome("checks", first, view({}, pull({ checks: [check("completed", "success"), check("queued")] })), 60), undefined);
   assert.equal(waitOutcome("checks", first, view({}, pull({ checks: [check("completed", "failure")] })), 60), "checks-completed");
   assert.equal(waitOutcome("checks", first, view({ state: "closed" }, pull({ merged: true, checks: [check("in_progress")] })), 60), "closed");
+  // A long list leaves out its end: failing and pending checks come first, so left-out ones after a passing one passed too,
+  // while a list of only failures may have left out one still pending.
+  const failures = Array.from({ length: 100 }, (_, index) => ({ name: `lint-${index}`, status: "completed", conclusion: "failure" }));
+  assert.equal(waitOutcome("checks", first, view({ omitted: { checks: 1 } }, pull({ checks: failures })), 60), undefined);
+  assert.equal(waitOutcome("checks", first, view({ omitted: { checks: 5 } }, pull({ checks: [...failures.slice(1), check("completed", "success")] })), 60), "checks-completed");
+  assert.equal(waitOutcome("checks", first, view({}, pull({ checks: failures })), 60), "checks-completed", "nothing left out");
   // Right after a push the head has no checks yet: they are waited for, but not for ever.
   const pushed = view({}, pull());
   assert.equal(waitOutcome("checks", pushed, pushed, githubWaitLimits.noChecksSeconds - 1), undefined);
