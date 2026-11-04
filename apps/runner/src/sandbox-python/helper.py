@@ -327,6 +327,159 @@ def write_at(root, parts, content):
         os.close(parent)
 
 
+# The move_file, copy_file and delete_file tools (file-operations.ts): mirrors FILE_OPERATIONS_CORE there, so every
+# backend answers the same; change both together. Mirrors fileOperationLimits.
+COPY_ENTRIES = 10000
+COPY_BYTES = 50 * 1024 * 1024
+OPERATION_DEPTH = 64
+
+
+def entry_parts(value):
+    # An entry itself: its directory resolved as any written path is (through links that stay in the worktree), its
+    # last component never, so a link is moved, copied or deleted as a link.
+    if not isinstance(value, str) or not value or len(value) > 1024:
+        raise ValueError('invalid relative path')
+    if value.startswith('/') or '\\' in value or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError('invalid relative path')
+    if len(value) >= 2 and value[1] == ':':
+        raise ValueError('absolute paths are not allowed')
+    if value == '.':
+        raise ValueError('the worktree itself can\'t be moved, copied or deleted')
+    if any(p in ('', '.', '..') for p in value.split('/')):
+        raise ValueError('path traversal is not allowed')
+    parent, _, name = value.rpartition('/')
+    if name.lower() == '.git':
+        raise ValueError('Git metadata is protected')
+    return parts_for(parent or '.', True), name
+
+
+def remove_entry(parent, name, depth):
+    if depth > OPERATION_DEPTH:
+        raise ValueError('directory nesting limit exceeded')
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if stat.S_ISDIR(info.st_mode):
+        fd = os.open(name, DIR_FLAGS, dir_fd=parent)
+        try:
+            count = 1 + sum(remove_entry(fd, child, depth + 1) for child in os.listdir(fd))
+        finally:
+            os.close(fd)
+        os.rmdir(name, dir_fd=parent)
+        return count
+    os.unlink(name, dir_fd=parent)
+    return 1
+
+
+def copy_entry(source, name, target, new_name, info, counts, depth):
+    if depth > OPERATION_DEPTH:
+        raise ValueError('directory nesting limit exceeded')
+    counts['entries'] += 1
+    if counts['entries'] > COPY_ENTRIES:
+        raise ValueError('too many files to copy')
+    if stat.S_ISLNK(info.st_mode):
+        os.symlink(os.readlink(name, dir_fd=source), new_name, dir_fd=target)
+        counts['made'] = True
+    elif stat.S_ISDIR(info.st_mode):
+        os.mkdir(new_name, 0o700, dir_fd=target)
+        counts['made'] = True
+        source_fd = os.open(name, DIR_FLAGS, dir_fd=source)
+        try:
+            target_fd = os.open(new_name, DIR_FLAGS, dir_fd=target)
+            try:
+                for child in sorted(os.listdir(source_fd)):
+                    if child.lower() == '.git':
+                        raise ValueError('Git metadata is protected: clone the repository again rather than copy it')
+                    copy_entry(source_fd, child, target_fd, child, os.stat(child, dir_fd=source_fd, follow_symlinks=False), counts, depth + 1)
+            finally:
+                os.close(target_fd)
+        finally:
+            os.close(source_fd)
+    elif stat.S_ISREG(info.st_mode):
+        if info.st_nlink != 1:
+            raise ValueError('only regular, non-hardlinked files are supported')
+        if counts['bytes'] + info.st_size > COPY_BYTES:
+            raise ValueError('too much to copy: at most %d bytes of files' % COPY_BYTES)
+        data, mode = read_at(source, name, COPY_BYTES - counts['bytes'])
+        counts['bytes'] += len(data)
+        fd = os.open(new_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o700 if mode & 0o100 else 0o600, dir_fd=target)
+        counts['made'] = True
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    else:
+        raise ValueError('only files, directories and links can be copied')
+
+
+def file_operation(root, request):
+    kind = request['kind']
+    if kind == 'delete':
+        recursive = request['recursive']
+        if not isinstance(recursive, bool):
+            raise ValueError('invalid file operation')
+        parts, name = entry_parts(request['path'])
+        parent = walk(root, parts)
+        try:
+            try:
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                raise ValueError('no such file or directory') from None
+            if stat.S_ISDIR(info.st_mode) and not recursive:
+                fd = os.open(name, DIR_FLAGS, dir_fd=parent)
+                try:
+                    if os.listdir(fd):
+                        raise ValueError('the directory is not empty: delete it with recursive')
+                finally:
+                    os.close(fd)
+                os.rmdir(name, dir_fd=parent)
+                return {'entries': 1, 'bytes': 0}
+            return {'entries': remove_entry(parent, name, 0), 'bytes': 0}
+        finally:
+            os.close(parent)
+    if kind not in ('move', 'copy'):
+        raise ValueError('unsupported filesystem operation')
+    source_parts, source_name = entry_parts(request['from'])
+    target_parts, target_name = entry_parts(request['to'])
+    fold = (lambda parts: [part.lower() for part in parts]) if sys.platform == 'darwin' else (lambda parts: parts)
+    whole, inside = fold(source_parts + [source_name]), fold(target_parts + [target_name])
+    if inside[:len(whole)] == whole:
+        raise ValueError('the destination is the source or inside it')
+    source = walk(root, source_parts)
+    try:
+        try:
+            info = os.stat(source_name, dir_fd=source, follow_symlinks=False)
+        except FileNotFoundError:
+            raise ValueError('no such file or directory') from None
+        target = walk(root, target_parts, True)
+        try:
+            try:
+                os.stat(target_name, dir_fd=target, follow_symlinks=False)
+                raise ValueError('the destination exists already')
+            except FileNotFoundError:
+                pass
+            if kind == 'move':
+                os.rename(source_name, target_name, src_dir_fd=source, dst_dir_fd=target)
+                os.fsync(target)
+                return {'entries': 1, 'bytes': 0}
+            counts = {'entries': 0, 'bytes': 0, 'made': False}
+            try:
+                copy_entry(source, source_name, target, target_name, info, counts, 0)
+            except BaseException:
+                # What the copy made before it failed goes again; what was there before it stays, even something that
+                # appeared at the destination meanwhile, where the copy then made nothing.
+                if counts['made']:
+                    try:
+                        remove_entry(target, target_name, 0)
+                    except (OSError, ValueError):
+                        pass
+                raise
+            os.fsync(target)
+            return {'entries': counts['entries'], 'bytes': counts['bytes']}
+        finally:
+            os.close(target)
+    finally:
+        os.close(source)
+
+
 # Hardening shared by every Git invocation; session commands add the worktree and owner identity below.
 # Backends without bind mounts (macOS Seatbelt) see the session's Git directory where it is on the host, with a
 # gitdir: file at WORK/.git, and name their own Git and Bash; bubblewrap mounts it at WORK/.git and uses /usr/bin.
@@ -1171,6 +1324,9 @@ def main():
             return
         if kind == 'search':
             print(json.dumps(search(root, request), ensure_ascii=True))
+            return
+        if kind in ('move', 'copy', 'delete'):
+            print(json.dumps(file_operation(root, request), ensure_ascii=True))
             return
         parts = parts_for(request['path'], kind == 'write')
         if kind == 'write':

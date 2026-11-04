@@ -30,6 +30,7 @@ import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
+import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
 import { lineRange } from "./edits.js";
 import { pikiSessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { runnerModels } from "./provider.js";
@@ -821,6 +822,8 @@ export class RunnerSession {
     if (this.tools.some(tool => tool.name === "search")) instructions += "\n\nTo find and read code, use search (a regular expression or text across the worktree's files, "
       + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than grep, find, sed, cat or head in bash: "
       + "they need no approval and their output is already bounded.";
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "move_file")) instructions += "\n\nTo move, copy or delete files and directories, "
+      + "use move_file, copy_file and delete_file rather than mv, cp, rm or mkdir in bash (write_file makes the directories it needs): they need no approval.";
     if (mode !== "ask" && this.tools.some(tool => tool.name === "git") && !off.has("git")) instructions += "\n\nRun Git with the git tool rather than in bash: "
       + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
       + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "
@@ -2157,6 +2160,31 @@ export class RunnerSession {
           const recheck = () => this.recheckTool(attribution);
           await this.sandbox.writeFile(args.path, applyEdits(await this.sandbox.readFile(args.path, recheck), args.edits, args.path), recheck);
           return text({ ...attribution, edited: args.path, edits: args.edits.length });
+        } }),
+      // Moving, copying and deleting as mv, cp and rm did in bash (#163): writes like write_file, one at a time.
+      ...(["move_file", "copy_file"] as const).map(name => defineTool({ name, executionMode: "sequential",
+        description: name === "move_file"
+          ? "Move or rename a file, directory or link in the worktree, without a shell or approval (like write_file): from and to are worktree paths. A link is moved itself, never what it points to. The destination must not exist, its directories are made, and a directory can't go inside itself; nothing in .git is moved. In a read-only request it waits for the session owner to allow it."
+          : `Copy a file, or a directory with everything in it, in the worktree, without a shell or approval (like write_file): from and to are worktree paths. Links are copied as links. The destination must not exist and its directories are made; at most ${fileOperationLimits.entries} entries and ${fileOperationLimits.bytes / 1024 / 1024} MB of files, never a repository's .git (clone it again instead). In a read-only request it waits for the session owner to allow it.`,
+        parameters: Type.Object({ from: Type.String(), to: Type.String() }),
+        execute: async (args, api, call) => {
+          let request: FileOperationRequest;
+          try { request = fileOperationRequest(name === "move_file" ? "move" : "copy", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
+          const attribution = await this.toolActor(api, true);
+          await this.permit(api, call, name, `${args.from} → ${args.to}`.slice(0, 4096), { write: true });
+          const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
+          return text({ ...attribution, ...(name === "move_file" ? { moved: args.from, to: args.to } : { copied: args.from, to: args.to, ...result }) });
+        } })),
+      defineTool({ name: "delete_file", executionMode: "sequential",
+        description: "Delete a file, link or directory in the worktree, without a shell or approval (like write_file). A link is deleted itself, never what it points to. A directory with anything in it is deleted only with recursive: true, everything in it included. Never .git or the worktree itself. In a read-only request it waits for the session owner to allow it.",
+        parameters: Type.Object({ path: Type.String(), recursive: Type.Optional(Type.Boolean()) }),
+        execute: async (args, api, call) => {
+          let request: FileOperationRequest;
+          try { request = fileOperationRequest("delete", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
+          const attribution = await this.toolActor(api, true);
+          await this.permit(api, call, "delete_file", `${args.path}${args.recursive ? " (recursive)" : ""}`.slice(0, 4096), { write: true });
+          const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
+          return text({ ...attribution, deleted: args.path, entries: result.entries });
         } }),
       defineTool({ name: "bash", description: "Run an exact shell command in the session worktree. Waits for an exact human approval unless the owner enabled auto-approve for this request; then it runs at once and the result carries its output. It stops at the host's command time limit, which identity reports (commands.timeoutSeconds).", parameters: Type.Object({ command: Type.String() }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);

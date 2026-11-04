@@ -4,6 +4,7 @@ import type { FileContent } from "./images.js";
 import type { ClonePushWorkspace } from "./push.js";
 import type { CloneBackup, SandboxAuthorize, SandboxExecutionOptions, SandboxIdentity, SnapshotFile } from "./sandbox.js";
 import type { SearchRequest, SearchResult } from "./search.js";
+import type { FileOperationRequest, FileOperationResult } from "./file-operations.js";
 
 /**
  * What a session needs from where its work lives, whatever keeps it there: the bubblewrap sandbox on Linux
@@ -40,6 +41,8 @@ export interface SessionWorkspace {
   listFiles(path: string | undefined, authorize: SandboxAuthorize): Promise<string[]>;
   /** The search tool's search of the worktree's text files (search.ts), the same on every backend. */
   search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult>;
+  /** move_file, copy_file and delete_file (file-operations.ts), the same on every backend. */
+  fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult>;
   browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult>;
   execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options?: SandboxExecutionOptions): Promise<string>;
   /** The worktree's files, without the clones named in `clones` (an isolated workspace keeps those as bundles instead). */

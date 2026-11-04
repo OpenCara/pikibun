@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { SessionWorkspace } from "../apps/runner/src/workspace.js";
 import { searchRequest } from "../apps/runner/src/search.js";
+import { fileOperationRequest } from "../apps/runner/src/file-operations.js";
 import { workspaceKinds } from "./helpers/workspaces.js";
 
 /*
@@ -19,6 +20,7 @@ import { workspaceKinds } from "./helpers/workspaces.js";
  * Links are relative, as a repository's are: the Linux sandbox mounts the worktree at another path than the host's.
  *   git-link -> .git, loop -> loop
  *   hard.txt                    a hard link to ../outside/secret.txt
+ *   clone/README, clone/.git/HEAD   a repository the agent cloned
  * beside an `outside` directory holding secret.txt, which nothing may read, change or add to.
  */
 
@@ -35,6 +37,10 @@ const browse = (path: string): Operation => workspace => workspace.browse(path, 
 const content = (path: string): Operation => workspace => workspace.readContent(path, allow);
 const upload = (directory: string, name: string, data = "uploaded"): Operation => workspace => workspace.importFile(directory, name, Buffer.from(data), allow);
 const find = (args: Parameters<typeof searchRequest>[0]): Operation => workspace => workspace.search(searchRequest(args), allow);
+const move = (from: string, to: string): Operation => workspace => workspace.fileOperation(fileOperationRequest("move", { from, to }), allow);
+const copy = (from: string, to: string): Operation => workspace => workspace.fileOperation(fileOperationRequest("copy", { from, to }), allow);
+const remove = (path: string, recursive = false): Operation => workspace => workspace.fileOperation(fileOperationRequest("delete", { path, recursive }), allow);
+const names = (path: string): Operation => async workspace => (await workspace.listFiles(path, allow)).filter(name => name !== "n");
 /** Only the matches, where how many files a search read depends on what earlier cases left. */
 const found = (args: Parameters<typeof searchRequest>[0]): Operation => async workspace => (await workspace.search(searchRequest(args), allow)).matches;
 
@@ -143,6 +149,56 @@ const cases: Case[] = [
   ["refuses searching above the worktree", find({ pattern: "secret", path: "../outside" }), { refused: TRAVERSAL }],
   ["refuses searching through a link outside", find({ pattern: "secret", path: "out-dir" }), { refused: ESCAPES }],
   ["refuses an invalid regular expression", find({ pattern: "(", path: "src" }), { refused: /invalid regular expression/ }],
+
+  // move_file, copy_file and delete_file: entries in the worktree, never .git, never over something, never into themselves.
+  ["writes a tree to copy", write("tree/x/y.txt", "Y"), { ok: undefined }],
+  ["copies a file, making its directories", copy("inside/a.txt", "copies/a.txt"), { ok: { entries: 1, bytes: 1 } }],
+  ["copied it", read("copies/a.txt"), { ok: "A" }],
+  ["copies a directory with everything in it", copy("tree", "tree-copy"), { ok: { entries: 3, bytes: 1 } }],
+  ["copied its files", read("tree-copy/x/y.txt"), { ok: "Y" }],
+  ["copies a link as a link", copy("in-file", "in-file-copy"), { ok: { entries: 1, bytes: 0 } }],
+  ["which still points inside", read("in-file-copy"), { ok: "A" }],
+  ["copies a link to outside as a link only", copy("out-file", "out-file-copy"), { ok: { entries: 1, bytes: 0 } }],
+  ["which still can't be read through", read("out-file-copy"), { refused: ESCAPES }],
+  ["refuses copying over something", copy("inside/a.txt", "in-file"), { refused: /the destination exists already/ }],
+  ["refuses copying a directory into itself", copy("tree", "tree/inner"), { refused: /the destination is the source or inside it/ }],
+  ["refuses copying a hard link", copy("hard.txt", "hard-copy.txt"), { refused: NOT_REGULAR }],
+  ["refuses copying from outside through a link", copy("out-dir/secret.txt", "stolen.txt"), { refused: ESCAPES }],
+  ["refuses copying from above the worktree", copy("../outside/secret.txt", "stolen.txt"), { refused: TRAVERSAL }],
+  ["refuses copying .git", copy(".git", "git-copy"), { refused: GIT }],
+  ["refuses copying out of .git through a link", copy("git-link/HEAD", "head-copy"), { refused: REFUSED }],
+  ["refuses copying a clone's .git", copy("clone", "clone-copy"), { refused: /Git metadata is protected/ }],
+  ["left nothing of the copy it refused", async workspace => (await workspace.listFiles(".", allow)).filter(name => name.startsWith("clone")), { ok: ["clone"] }],
+  ["refuses copying into .git", copy("inside/a.txt", ".git/a.txt"), { refused: GIT }],
+  ["moves a file, making its directories", move("copies/a.txt", "moved/b.txt"), { ok: { entries: 1, bytes: 0 } }],
+  ["moved it", read("moved/b.txt"), { ok: "A" }],
+  ["from where it was", names("copies"), { ok: [] }],
+  ["moves a link itself", move("in-file-copy", "moved/link"), { ok: { entries: 1, bytes: 0 } }],
+  ["which now points to moved/inside/a.txt, missing", read("moved/link"), { refused: REFUSED }],
+  ["refuses moving over something", move("tree", "inside"), { refused: /the destination exists already/ }],
+  ["refuses moving a directory into itself", move("tree", "tree/x/tree"), { refused: /the destination is the source or inside it/ }],
+  ["refuses moving out of the worktree", move("tree", "../outside/tree"), { refused: TRAVERSAL }],
+  ["refuses moving out through a link", move("tree", "out-dir/tree"), { refused: ESCAPES }],
+  ["refuses moving in from outside through a link", move("out-dir/secret.txt", "stolen.txt"), { refused: ESCAPES }],
+  ["refuses moving .git", move(".git", "git-moved"), { refused: GIT }],
+  ["refuses moving a clone's .git", move("clone/.git", "git-moved"), { refused: GIT }],
+  ["refuses moving into .git", move("tree", ".git/tree"), { refused: GIT }],
+  ["refuses moving the worktree", move(".", "elsewhere"), { refused: /the worktree itself/ }],
+  ["refuses a missing source", move("missing.txt", "other.txt"), { refused: /no such file or directory/ }],
+  ["deletes a file", remove("moved/b.txt"), { ok: { entries: 1, bytes: 0 } }],
+  ["deleted it", read("moved/b.txt"), { refused: REFUSED }],
+  ["deletes a link to outside itself, not what it points to", remove("out-file"), { ok: { entries: 1, bytes: 0 } }],
+  ["refuses a directory with something in it, without recursive", remove("tree"), { refused: /the directory is not empty/ }],
+  ["deletes a directory with recursive", remove("tree", true), { ok: { entries: 3, bytes: 0 } }],
+  ["deleted everything in it", read("tree/x/y.txt"), { refused: REFUSED }],
+  ["deletes an empty directory", remove("copies"), { ok: { entries: 1, bytes: 0 } }],
+  ["deletes a clone, its .git with it", remove("clone", true), { ok: { entries: 4, bytes: 0 } }],
+  ["refuses deleting .git", remove(".git", true), { refused: GIT }],
+  ["refuses deleting in .git through a link", remove("git-link/HEAD"), { refused: REFUSED }],
+  ["refuses deleting outside through a link", remove("out-dir/secret.txt"), { refused: ESCAPES }],
+  ["refuses deleting above the worktree", remove("../outside/secret.txt"), { refused: TRAVERSAL }],
+  ["refuses deleting the worktree", remove(".", true), { refused: /the worktree itself/ }],
+  ["refuses deleting what isn't there", remove("missing.txt"), { refused: /no such file or directory/ }],
 ];
 
 for (const kind of workspaceKinds) {
@@ -164,6 +220,9 @@ for (const kind of workspaceKinds) {
     await symlink(".git", join(root, "git-link"));
     await symlink("loop", join(root, "loop"));
     await link(join(outside, "secret.txt"), join(root, "hard.txt"));
+    await mkdir(join(root, "clone", ".git"), { recursive: true });
+    await writeFile(join(root, "clone", ".git", "HEAD"), "ref: refs/heads/main\n");
+    await writeFile(join(root, "clone", "README"), "clone");
     const git = await readdir(join(root, ".git")).catch(() => readFile(join(root, ".git"), "utf8"));
 
     for (const [name, operation, expected] of cases) {
