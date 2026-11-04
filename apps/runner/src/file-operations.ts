@@ -65,24 +65,36 @@ class FileOperationRefusal extends Error {}
 function fileOperation(fs, op, limits) {
   const refuse = message => { throw new FileOperationRefusal(message); };
   const found = path => { try { return fs.lstat(path); } catch (error) { if (error && error.code === "ENOENT") return undefined; throw error; } };
+  // Node has no calls relative to an open directory, so a directory is gone into by path: it is still the directory that
+  // was looked at (same device and inode) after its listing, or the delete stops. Where this core runs, the boundary is
+  // elsewhere: the Windows helper's container, or none on an unsandboxed host, whose commands run as its user anyway.
   const removeAll = (path, depth) => {
     if (depth > limits.depth) refuse("directory nesting limit exceeded");
     const entry = fs.lstat(path);
     if (entry.directory && !entry.link) {
+      const names = fs.list(path);
+      const now = fs.lstat(path);
+      if (!now.directory || now.link || now.identity !== entry.identity) refuse("the directory changed while being deleted; try again");
       let count = 1;
-      for (const name of fs.list(path)) count += removeAll(fs.join(path, name), depth + 1);
+      for (const name of names) count += removeAll(fs.join(path, name), depth + 1);
       fs.rmdir(path);
       return count;
     }
     fs.unlink(path);
     return 1;
   };
+  const changed = error => !!error && ["ENOTDIR", "EISDIR", "EPERM"].includes(error.code);
   if (op.kind === "delete") {
     const entry = found(op.path);
     if (!entry) refuse("no such file or directory");
-    if (entry.directory && !entry.link && !op.recursive) {
-      if (fs.list(op.path).length) refuse("the directory is not empty: delete it with recursive");
-      fs.rmdir(op.path);
+    if (!op.recursive) {
+      // Only the entry itself, never what is in it, whatever it became since the look above (review of #185).
+      try { if (entry.directory && !entry.link) fs.rmdir(op.path); else fs.unlink(op.path); }
+      catch (error) {
+        if (error && (error.code === "ENOTEMPTY" || error.code === "EEXIST")) refuse("the directory is not empty: delete it with recursive");
+        if (changed(error)) refuse("it changed while being deleted; try again");
+        throw error;
+      }
       return { entries: 1, bytes: 0 };
     }
     return { entries: removeAll(op.path, 0), bytes: 0 };
@@ -148,8 +160,8 @@ function fileOperation(fs, op, limits) {
       if (bytes + entry.size > limits.bytes) refuse("too much to copy: at most " + limits.bytes + " bytes of files");
       const data = fs.read(from, limits.bytes - bytes);
       bytes += data.length;
-      fs.create(to, data, entry.executable);
-      made.push({ path: to, identity: fs.lstat(to).identity });
+      // The identity of the file it made, from its descriptor, not of whatever is at its path by now (review of #185).
+      made.push({ path: to, identity: fs.create(to, data, entry.executable) });
     } else refuse("only files, directories and links can be copied");
   };
   try { copy(op.source, op.target, source, 0); }
@@ -206,11 +218,20 @@ const fileOperationsFs = (fsCalls, path, caseInsensitive, windows) => ({
     } finally { fsCalls.closeSync(fd); }
   },
   // A file it couldn't write whole goes again, so a failed copy leaves no part of one.
+  // Answers the identity (device and inode) of the file it made.
   create: (target, data, executable) => {
     const fd = fsCalls.openSync(target, "wx", executable ? 0o700 : 0o600);
-    try { let written = 0; while (written < data.length) written += fsCalls.writeSync(fd, data, written, data.length - written); fsCalls.fsyncSync(fd); }
+    let identity;
+    try {
+      const made = fsCalls.fstatSync(fd, { bigint: true });
+      identity = made.dev + ":" + made.ino;
+      let written = 0;
+      while (written < data.length) written += fsCalls.writeSync(fd, data, written, data.length - written);
+      fsCalls.fsyncSync(fd);
+    }
     catch (error) { fsCalls.closeSync(fd); try { fsCalls.unlinkSync(target); } catch {} throw error; }
     fsCalls.closeSync(fd);
+    return identity;
   },
   join: path.join,
 });

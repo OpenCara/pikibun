@@ -456,14 +456,19 @@ def file_operation(root, request):
                 info = os.stat(name, dir_fd=parent, follow_symlinks=False)
             except FileNotFoundError:
                 raise ValueError('no such file or directory') from None
-            if stat.S_ISDIR(info.st_mode) and not recursive:
-                fd = os.open(name, DIR_FLAGS, dir_fd=parent)
+            if not recursive:
+                # Only the entry itself, never what is in it, whatever it became since the look above (review of #185).
                 try:
-                    if os.listdir(fd):
-                        raise ValueError('the directory is not empty: delete it with recursive')
-                finally:
-                    os.close(fd)
-                os.rmdir(name, dir_fd=parent)
+                    if stat.S_ISDIR(info.st_mode):
+                        os.rmdir(name, dir_fd=parent)
+                    else:
+                        os.unlink(name, dir_fd=parent)
+                except OSError as error:
+                    if error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                        raise ValueError('the directory is not empty: delete it with recursive') from None
+                    if error.errno in (errno.ENOTDIR, errno.EISDIR, errno.EPERM):
+                        raise ValueError('it changed while being deleted; try again') from None
+                    raise
                 return {'entries': 1, 'bytes': 0}
             return {'entries': remove_entry(parent, name, 0), 'bytes': 0}
         finally:
