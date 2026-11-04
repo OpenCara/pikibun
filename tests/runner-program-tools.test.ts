@@ -158,7 +158,7 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
   await session.submit(await ticket(id, "submit"), { content: "Run it.", requestId: "run", admissionId: await sha256("node admission") }, "write");
   const approval = await pendingApproval(session);
   assert.deepEqual(approval.operation, { kind: "bash",
-    command: "PATH=\"$PATH:/usr/local/bin\" NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true node '-e' 'console.log('\\''node-tool-'\\'' + (6 * 7))' </dev/null 2>&1" });
+    command: "PATH=\"$PATH\":'/usr/local/bin' NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true node '-e' 'console.log('\\''node-tool-'\\'' + (6 * 7))' </dev/null 2>&1" });
   await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
   let view = await session.view();

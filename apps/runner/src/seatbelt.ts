@@ -3,6 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { HELPER, type SandboxRequest } from "./sandbox.js";
 import { egressPort, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "./helper-workspace.js";
+import { connectorNode, type NodeToolchain } from "./node-toolchain.js";
 import { firstExecutable } from "./platform.js";
 
 /**
@@ -53,17 +54,21 @@ export interface SeatbeltTools {
   bash: string;
   /** Directories with tools and libraries the session may read and run. */
   roots: string[];
+  /** The connector's own Node.js's bin directory, whose installation is among `roots` (node-toolchain.ts). */
+  nodeBin?: string;
   path: string;
 }
 
 /** The host's tools for sessions; throws with what is missing. */
-export function seatbeltTools(): SeatbeltTools {
+export function seatbeltTools(node: NodeToolchain | undefined = connectorNode()): SeatbeltTools {
   const developer = developerDirectory();
   const python = xcrunFind("python3") ?? firstExecutable(["/opt/homebrew/bin/python3", "/usr/local/bin/python3"]);
   const git = xcrunFind("git") ?? firstExecutable(["/opt/homebrew/bin/git", "/usr/local/bin/git"]);
   if (!python || !git) throw new Error("The macOS sandbox needs Python 3 and Git from the developer tools: run xcode-select --install");
   const homebrew = ["/opt/homebrew", "/usr/local/Homebrew", "/usr/local/Cellar", "/usr/local/opt", "/usr/local/bin", "/usr/local/lib", "/usr/local/share"].filter(path => existsSync(path));
-  const roots = [...new Set([developer, ...homebrew, dirname(dirname(python)), dirname(dirname(git))].filter((path): path is string => !!path)
+  // The connector's own Node.js, wherever it is installed (nvm, Volta, a tarball): the node tool runs it.
+  const nodePrefix = node && node.prefix !== "/" ? node.prefix : undefined;
+  const roots = [...new Set([developer, ...homebrew, dirname(dirname(python)), dirname(dirname(git)), nodePrefix].filter((path): path is string => !!path)
     .map(path => { try { return realpathSync(path); } catch { return path; } }))];
   const binaries = [existsSync("/opt/homebrew/bin") ? "/opt/homebrew/bin" : undefined, existsSync("/usr/local/bin") ? "/usr/local/bin" : undefined];
   // The developer tools themselves, ahead of the /usr/bin shims: a shim runs xcrun, which wants a cache in the user's
@@ -73,7 +78,7 @@ export function seatbeltTools(): SeatbeltTools {
   const sdkResult = spawnSync("/usr/bin/xcrun", ["--show-sdk-path"], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
   const sdk = sdkResult.status === 0 && sdkResult.stdout.trim().startsWith("/") ? sdkResult.stdout.trim() : undefined;
   return {
-    ...(sdk ? { sdk } : {}), python, git, bash: "/bin/bash", roots,
+    ...(sdk ? { sdk } : {}), python, git, bash: "/bin/bash", roots, ...(nodePrefix ? { nodeBin: node!.bin } : {}),
     path: [...developerBins, "/usr/bin", "/bin", "/usr/sbin", "/sbin", ...binaries.filter((path): path is string => !!path)].join(":"),
   };
 }
@@ -177,6 +182,7 @@ export class SeatbeltBackend implements HelperBackend {
   }
 
   get path(): string { return this.#tools.path; }
+  get nodeBin(): string | undefined { return this.#tools.nodeBin; }
 
   // The host repository cache isn't available here, so clone steps never borrow from a mirror.
   supports(_kind: SandboxRequest["kind"]): boolean { return true; }

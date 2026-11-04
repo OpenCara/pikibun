@@ -123,7 +123,10 @@ export function nodeRequest(input: { program: unknown; args?: unknown; directory
   return { program, directory: workDirectory(input.directory), args };
 }
 
-/** The shell command that runs `request`, as its card shows it. */
-export function nodeShellCommand(request: NodeRequest): string {
-  return programShellCommand({ directory: request.directory, path: "/usr/local/bin", prefix: NODE_ENVIRONMENT, program: request.program, args: request.args });
+/**
+ * The shell command that runs `request`, as its card shows it. `bin`: where the session's commands find the connector's
+ * own Node.js (SessionWorkspace.nodeBin), looked in first; without it, the Node.js on their PATH.
+ */
+export function nodeShellCommand(request: NodeRequest, bin?: string): string {
+  return programShellCommand({ directory: request.directory, path: "/usr/local/bin", ...(bin ? { first: bin } : {}), prefix: NODE_ENVIRONMENT, program: request.program, args: request.args });
 }

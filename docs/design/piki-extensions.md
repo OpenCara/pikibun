@@ -169,9 +169,19 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     (npm's `-w` takes a workspace, pnpm's takes nothing), and through what launches a manager by name (`corepack
     <manager>`, `npx`, and the managers' `exec`, `x` and `dlx`). A program that runs any other way (a script) isn't
     followed: the check keeps the plain forms off the cards, and approval stands for the rest. Its calls are decided as `bash`'s, like
-    `git`'s. It runs the host's Node.js; a Node.js version per workspace, provisioned in the sandbox, is the next step.
+    `git`'s.
+24. **The connector's own Node.js.** The connector needs Node.js 24 or newer to run, so every host running the CLI
+    connector has one, while the sandbox's `/usr` may hold an older one or none (sessions spent 18 calls in 4 working
+    around Node 20). `node-toolchain.ts` finds it (`process.execPath`, through links, to its installation: the directory
+    above `bin`, holding `npm`, `npx` and `corepack` too) and the `node` tool puts its `bin` first on PATH. The Linux
+    sandbox mounts the installation read-only at `/opt/pikibun/node` for shell commands, unless it is in `/usr`, which
+    every sandbox sees; the macOS sandbox adds it to the directories steps may read and run. Nothing is downloaded, and
+    the session can't change it. Not given: the desktop app's connector runs on Electron's embedded Node, which can't run
+    as plain Node; the Windows sandbox and unsandboxed hosts run the Node.js on the commands' PATH, the host owner's
+    choice there. A version a project asks for (`.nvmrc`, `.node-version`, `engines.node`) would be provisioned next,
+    from the npm registry's `node-<platform>-<arch>` packages through the egress proxy.
 
-Next, in order: a Node.js version for `piki:node`, a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
+Next, in order: a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
 becomes `piki:shell`, and `host_bash` is removed. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
 
