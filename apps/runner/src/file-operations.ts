@@ -202,7 +202,11 @@ const fileOperationsFs = (fsCalls, path, caseInsensitive, windows) => ({
   // Windows makes a link as a file's or a directory's: a link to a directory is made again as one (review of #185).
   symlink: (value, target, from) => {
     let directory = false;
-    if (windows) try { directory = fsCalls.statSync(from).isDirectory(); } catch {}
+    if (windows) {
+      // A link that points nowhere doesn't say which kind it was: refused rather than guessed (review of #185).
+      try { directory = fsCalls.statSync(from).isDirectory(); }
+      catch { throw new FileOperationRefusal("on Windows a link that points nowhere can't be copied or moved: its kind (file or directory link) isn't known"); }
+    }
     fsCalls.symlinkSync(value, target, directory ? "dir" : undefined);
   },
   read: (target, limit) => {
