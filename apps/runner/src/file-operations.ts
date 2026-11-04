@@ -55,8 +55,10 @@ export function checkedFileOperation(value: unknown): FileOperationResult {
 
 /**
  * The operation itself, on host paths a backend resolved: `source` and `target` (or `path`), each an entry in a
- * directory of the worktree, with their worktree-relative parts in `sourceParts` and `targetParts`. `fs` is the
- * backend's (synchronous) file system; `limits` fileOperationLimits. The Python helper mirrors it: change both together.
+ * directory of the worktree, with their worktree-relative parts in `sourceParts` and `targetParts`, and `root`, the
+ * worktree. Nothing is made before every check has passed; a move never replaces what appeared at its destination
+ * since, and a failed copy removes only what it made. `fs` is the backend's (synchronous) file system; `limits`
+ * fileOperationLimits. The Python helper mirrors it: change both together.
  */
 export const FILE_OPERATIONS_CORE = String.raw`
 class FileOperationRefusal extends Error {}
@@ -91,15 +93,49 @@ function fileOperation(fs, op, limits) {
   const from = lower(op.sourceParts), to = lower(op.targetParts);
   if (to.length >= from.length && from.every((part, index) => part === to[index])) refuse("the destination is the source or inside it");
   if (found(op.target)) refuse("the destination exists already");
-  if (op.kind === "move") { fs.rename(op.source, op.target); return { entries: 1, bytes: 0 }; }
-  let entries = 0, bytes = 0, made = false;
+  // Only now, with every check passed, the destination's directories: real directories of the worktree, never links.
+  let parent = op.root;
+  for (const part of op.targetParts.slice(0, -1)) {
+    parent = fs.join(parent, part);
+    try { fs.mkdir(parent); } catch (error) { if (!error || error.code !== "EEXIST") throw error; }
+    const made = fs.lstat(parent);
+    if (!made.directory || made.link) refuse("path component is not a real directory");
+  }
+  const exists = error => !!error && (error.code === "EEXIST" || error.code === "ENOTEMPTY");
+  if (op.kind === "move") {
+    // Never over something that appeared since the check: a link is made again where it goes, a file gets a second
+    // name there before losing its first, and a directory takes the place of an empty one made for it, which a
+    // rename replaces only while it is still empty (Windows never renames over a directory, so it renames at once).
+    try {
+      if (source.link) { fs.symlink(fs.readlink(op.source), op.target); fs.unlink(op.source); }
+      else if (source.directory) {
+        if (!fs.windows) fs.mkdir(op.target);
+        try { fs.rename(op.source, op.target); }
+        catch (error) { if (!fs.windows) try { fs.rmdir(op.target); } catch {} throw error; }
+      } else {
+        try { fs.link(op.source, op.target); }
+        catch (error) {
+          // A file system without hard links: a rename, after the check above, at worst a narrow window.
+          if (!error || !["EPERM", "ENOTSUP", "EXDEV", "EMLINK", "ENOSYS"].includes(error.code) || found(op.target)) throw error;
+          fs.rename(op.source, op.target);
+          return { entries: 1, bytes: 0 };
+        }
+        fs.unlink(op.source);
+      }
+    } catch (error) { if (exists(error)) refuse("the destination exists already"); throw error; }
+    return { entries: 1, bytes: 0 };
+  }
+  let entries = 0, bytes = 0;
+  // What the copy made, in order: on failure each goes again, last first, a directory only while it is empty, so
+  // nothing another writer put there meanwhile is removed.
+  const made = [];
   const copy = (from, to, entry, depth) => {
     if (depth > limits.depth) refuse("directory nesting limit exceeded");
     if (++entries > limits.entries) refuse("too many files to copy");
-    if (entry.link) { fs.symlink(fs.readlink(from), to); made = true; }
+    if (entry.link) { fs.symlink(fs.readlink(from), to); made.push({ path: to }); }
     else if (entry.directory) {
       fs.mkdir(to);
-      made = true;
+      made.push({ path: to, directory: true });
       for (const name of fs.list(from).sort()) {
         // A clone's Git metadata is copied by cloning again, as everywhere else the file tools leave it alone.
         if (name.toLowerCase() === ".git") refuse("Git metadata is protected: clone the repository again rather than copy it");
@@ -111,14 +147,13 @@ function fileOperation(fs, op, limits) {
       const data = fs.read(from, limits.bytes - bytes);
       bytes += data.length;
       fs.create(to, data, entry.executable);
-      made = true;
+      made.push({ path: to });
     } else refuse("only files, directories and links can be copied");
   };
   try { copy(op.source, op.target, source, 0); }
   catch (error) {
-    // What a copy made before it failed goes again; what was there before it stays, even something that appeared at
-    // the destination meanwhile, where the copy then made nothing.
-    if (made) try { removeAll(op.target, 0); } catch {}
+    for (const entry of made.reverse()) { try { if (entry.directory) fs.rmdir(entry.path); else fs.unlink(entry.path); } catch {} }
+    if (exists(error)) refuse("the destination exists already");
     throw error;
   }
   return { entries, bytes };
@@ -130,14 +165,20 @@ function fileOperation(fs, op, limits) {
  * it. Its source is embedded in both.
  */
 export const FILE_OPERATIONS_FS = String.raw`
-const fileOperationsFs = (fsCalls, path, caseInsensitive) => ({
+const fileOperationsFs = (fsCalls, path, caseInsensitive, windows) => ({
   caseInsensitive,
+  windows,
   lstat: target => { const info = fsCalls.lstatSync(target); return { directory: info.isDirectory(), file: info.isFile(), link: info.isSymbolicLink(),
     nlink: info.nlink, size: info.size, executable: (info.mode & 0o100) !== 0 }; },
   list: target => fsCalls.readdirSync(target),
   rmdir: target => fsCalls.rmdirSync(target),
-  unlink: target => fsCalls.unlinkSync(target),
+  // Windows removes a link to a directory (or a junction) as a directory.
+  unlink: target => {
+    try { fsCalls.unlinkSync(target); }
+    catch (error) { if (!windows || !error || (error.code !== "EPERM" && error.code !== "EISDIR")) throw error; fsCalls.rmdirSync(target); }
+  },
   rename: (from, to) => fsCalls.renameSync(from, to),
+  link: (from, to) => fsCalls.linkSync(from, to),
   mkdir: target => fsCalls.mkdirSync(target, { mode: 0o700 }),
   readlink: target => fsCalls.readlinkSync(target),
   symlink: (value, target) => fsCalls.symlinkSync(value, target),
@@ -153,17 +194,24 @@ const fileOperationsFs = (fsCalls, path, caseInsensitive) => ({
       return data.subarray(0, read);
     } finally { fsCalls.closeSync(fd); }
   },
+  // A file it couldn't write whole goes again, so a failed copy leaves no part of one.
   create: (target, data, executable) => {
     const fd = fsCalls.openSync(target, "wx", executable ? 0o700 : 0o600);
     try { let written = 0; while (written < data.length) written += fsCalls.writeSync(fd, data, written, data.length - written); fsCalls.fsyncSync(fd); }
-    finally { fsCalls.closeSync(fd); }
+    catch (error) { fsCalls.closeSync(fd); try { fsCalls.unlinkSync(target); } catch {} throw error; }
+    fsCalls.closeSync(fd);
   },
   join: path.join,
 });
 `;
 
+/**
+ * An operation as FILE_OPERATIONS_CORE takes it: host paths of the entries, their worktree-relative parts, and the
+ * worktree's real path (`root`), below which it makes the destination's directories once every check has passed.
+ */
 export interface ResolvedFileOperation {
   kind: FileOperationRequest["kind"];
+  root?: string;
   source?: string;
   target?: string;
   path?: string;
@@ -186,7 +234,7 @@ const fsCalls = require("node:fs");
 const path = require("node:path");
 ${FILE_OPERATIONS_CORE}
 ${FILE_OPERATIONS_FS}
-try { parentPort.postMessage({ result: fileOperation(fileOperationsFs(fsCalls, path, process.platform === "win32" || process.platform === "darwin"), workerData.operation, workerData.limits) }); }
+try { parentPort.postMessage({ result: fileOperation(fileOperationsFs(fsCalls, path, process.platform === "win32" || process.platform === "darwin", process.platform === "win32"), workerData.operation, workerData.limits) }); }
 catch (error) {
   parentPort.postMessage({ error: error instanceof FileOperationRefusal ? error.message
     : error && error.code ? error.code + ": " + (error.syscall || "operation") + " failed" : "file operation failed" });

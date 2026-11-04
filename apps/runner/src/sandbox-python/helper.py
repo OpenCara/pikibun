@@ -5,6 +5,7 @@
 # It runs as `python3 -I -c <this file>`, embedded in the connector through sandbox-python.generated.ts
 # (`pnpm python:embed` writes it; tests/sandbox-python.test.ts checks it is current).
 import base64
+import errno
 import json
 import os
 import re
@@ -369,7 +370,7 @@ def remove_entry(parent, name, depth):
     return 1
 
 
-def copy_entry(source, name, target, new_name, info, counts, depth):
+def copy_entry(source, name, target, new_name, info, counts, depth, path):
     if depth > OPERATION_DEPTH:
         raise ValueError('directory nesting limit exceeded')
     counts['entries'] += 1
@@ -377,10 +378,10 @@ def copy_entry(source, name, target, new_name, info, counts, depth):
         raise ValueError('too many files to copy')
     if stat.S_ISLNK(info.st_mode):
         os.symlink(os.readlink(name, dir_fd=source), new_name, dir_fd=target)
-        counts['made'] = True
+        counts['made'].append((path, False))
     elif stat.S_ISDIR(info.st_mode):
         os.mkdir(new_name, 0o700, dir_fd=target)
-        counts['made'] = True
+        counts['made'].append((path, True))
         source_fd = os.open(name, DIR_FLAGS, dir_fd=source)
         try:
             target_fd = os.open(new_name, DIR_FLAGS, dir_fd=target)
@@ -388,7 +389,7 @@ def copy_entry(source, name, target, new_name, info, counts, depth):
                 for child in sorted(os.listdir(source_fd)):
                     if child.lower() == '.git':
                         raise ValueError('Git metadata is protected: clone the repository again rather than copy it')
-                    copy_entry(source_fd, child, target_fd, child, os.stat(child, dir_fd=source_fd, follow_symlinks=False), counts, depth + 1)
+                    copy_entry(source_fd, child, target_fd, child, os.stat(child, dir_fd=source_fd, follow_symlinks=False), counts, depth + 1, path + [child])
             finally:
                 os.close(target_fd)
         finally:
@@ -401,13 +402,47 @@ def copy_entry(source, name, target, new_name, info, counts, depth):
         data, mode = read_at(source, name, COPY_BYTES - counts['bytes'])
         counts['bytes'] += len(data)
         fd = os.open(new_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o700 if mode & 0o100 else 0o600, dir_fd=target)
-        counts['made'] = True
+        counts['made'].append((path, False))
         with os.fdopen(fd, 'wb') as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
     else:
         raise ValueError('only files, directories and links can be copied')
+
+
+def move_entry(source, name, target, new_name, info):
+    # Never over something that appeared since the check: a link is made again where it goes, a file gets a second name
+    # there before losing its first, and a directory takes the place of an empty one made for it, which a rename
+    # replaces only while it is still empty.
+    if stat.S_ISLNK(info.st_mode):
+        os.symlink(os.readlink(name, dir_fd=source), new_name, dir_fd=target)
+        os.unlink(name, dir_fd=source)
+    elif stat.S_ISDIR(info.st_mode):
+        os.mkdir(new_name, 0o700, dir_fd=target)
+        try:
+            os.rename(name, new_name, src_dir_fd=source, dst_dir_fd=target)
+        except BaseException:
+            try:
+                os.rmdir(new_name, dir_fd=target)
+            except OSError:
+                pass
+            raise
+    else:
+        try:
+            os.link(name, new_name, src_dir_fd=source, dst_dir_fd=target, follow_symlinks=False)
+        except OSError as error:
+            # A file system without hard links: a rename, after the check, at worst a narrow window.
+            if error.errno not in (errno.EPERM, errno.ENOTSUP, errno.EXDEV, errno.EMLINK, errno.ENOSYS):
+                raise
+            try:
+                os.stat(new_name, dir_fd=target, follow_symlinks=False)
+                raise ValueError('the destination exists already') from None
+            except FileNotFoundError:
+                pass
+            os.rename(name, new_name, src_dir_fd=source, dst_dir_fd=target)
+            return
+        os.unlink(name, dir_fd=source)
 
 
 def file_operation(root, request):
@@ -457,20 +492,34 @@ def file_operation(root, request):
             except FileNotFoundError:
                 pass
             if kind == 'move':
-                os.rename(source_name, target_name, src_dir_fd=source, dst_dir_fd=target)
+                try:
+                    move_entry(source, source_name, target, target_name, info)
+                except (FileExistsError, OSError) as error:
+                    if isinstance(error, FileExistsError) or error.errno == errno.ENOTEMPTY:
+                        raise ValueError('the destination exists already') from None
+                    raise
                 os.fsync(target)
                 return {'entries': 1, 'bytes': 0}
-            counts = {'entries': 0, 'bytes': 0, 'made': False}
+            counts = {'entries': 0, 'bytes': 0, 'made': []}
             try:
-                copy_entry(source, source_name, target, target_name, info, counts, 0)
-            except BaseException:
-                # What the copy made before it failed goes again; what was there before it stays, even something that
-                # appeared at the destination meanwhile, where the copy then made nothing.
-                if counts['made']:
+                copy_entry(source, source_name, target, target_name, info, counts, 0, [target_name])
+            except BaseException as error:
+                # What the copy made goes again, last first, a directory only while it is empty: what another writer
+                # put there meanwhile, or found at the destination, stays.
+                for path, directory in reversed(counts['made']):
                     try:
-                        remove_entry(target, target_name, 0)
-                    except (OSError, ValueError):
+                        parent = walk(target, path[:-1])
+                        try:
+                            if directory:
+                                os.rmdir(path[-1], dir_fd=parent)
+                            else:
+                                os.unlink(path[-1], dir_fd=parent)
+                        finally:
+                            os.close(parent)
+                    except OSError:
                         pass
+                if isinstance(error, FileExistsError):
+                    raise ValueError('the destination exists already') from None
                 raise
             os.fsync(target)
             return {'entries': counts['entries'], 'bytes': counts['bytes']}
