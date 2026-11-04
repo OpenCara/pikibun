@@ -490,7 +490,7 @@ async function main() {
   if (kind === "clone-push-pack") return clonePushPack(request);
   if (kind === "import") return print({ path: importAt(request) });
   if (kind === "move" || kind === "copy" || kind === "delete") {
-    try { return print(fileOperation(fileOperationsFs({ lstatSync, readdirSync, rmdirSync, unlinkSync, renameSync, linkSync, mkdirSync, readlinkSync, symlinkSync, openSync,
+    try { return print(fileOperation(fileOperationsFs({ lstatSync, statSync, readdirSync, rmdirSync, unlinkSync, renameSync, linkSync, mkdirSync, readlinkSync, symlinkSync, openSync,
       fstatSync, readSync, writeSync, fsyncSync, closeSync }, { join }, process.platform === "win32" || process.platform === "darwin", process.platform === "win32"), fileOperationRequest(request),
       ${JSON.stringify(fileOperationLimits)})); }
     catch (error) { if (error instanceof FileOperationRefusal) refuse(error.message); throw error; }
