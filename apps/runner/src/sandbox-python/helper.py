@@ -443,6 +443,14 @@ def move_entry(source, name, target, new_name, info):
         os.unlink(name, dir_fd=source)
 
 
+def walk_existing(root, parts):
+    # A directory the operation needs that isn't there: the same refusal on every backend (review of #185).
+    try:
+        return walk(root, parts)
+    except FileNotFoundError:
+        raise ValueError('no such file or directory') from None
+
+
 def file_operation(root, request):
     kind = request['kind']
     if kind == 'delete':
@@ -450,7 +458,7 @@ def file_operation(root, request):
         if not isinstance(recursive, bool):
             raise ValueError('invalid file operation')
         parts, name = entry_parts(request['path'])
-        parent = walk(root, parts)
+        parent = walk_existing(root, parts)
         try:
             try:
                 info = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -481,7 +489,7 @@ def file_operation(root, request):
     whole, inside = fold(source_parts + [source_name]), fold(target_parts + [target_name])
     if inside[:len(whole)] == whole:
         raise ValueError('the destination is the source or inside it')
-    source = walk(root, source_parts)
+    source = walk_existing(root, source_parts)
     try:
         try:
             info = os.stat(source_name, dir_fd=source, follow_symlinks=False)
