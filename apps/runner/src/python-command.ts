@@ -147,6 +147,8 @@ export function pythonRequest(input: { program: unknown; args?: unknown; directo
 export function pythonShellCommand(request: PythonRequest, platform: NodeJS.Platform = process.platform): string {
   // A virtual environment made on Windows keeps its programs in Scripts (review of #186).
   const venv = request.venv ? { firstHere: `${request.venv}/${platform === "win32" ? "Scripts" : "bin"}`, prefix: `VIRTUAL_ENV="$PWD"/${shellQuote(request.venv)} ` } : undefined;
+  // Windows' Python names its interpreter python, in a venv too (review of #186).
+  const program = platform === "win32" && request.venv && request.program === "python3" ? "python" : request.program;
   return programShellCommand({ directory: request.directory, path: "/usr/local/bin", ...(venv ? { firstHere: venv.firstHere } : {}),
-    prefix: `${venv?.prefix ?? ""}${PYTHON_ENVIRONMENT}`, program: request.program, args: request.args });
+    prefix: `${venv?.prefix ?? ""}${PYTHON_ENVIRONMENT}`, program, args: request.args });
 }
