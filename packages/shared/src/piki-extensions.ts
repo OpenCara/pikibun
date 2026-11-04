@@ -40,6 +40,11 @@ export interface PikiExtensionInfo {
    * connector read from the control plane turned it off, however old, rather than on once that answer is too old to use.
    */
   failClosed?: boolean;
+  /**
+   * Session tools only: tools every session needs (reading and writing its files), which its workspace can't turn off.
+   * The workspace page shows it as always on, and a workspace's choice to turn it off is refused and ignored.
+   */
+  core?: boolean;
 }
 
 export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
@@ -75,7 +80,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
-    name: "git", source: "piki:git", title: "Git", sessionTools: ["git"],
+    name: "git", source: "piki:git", title: "Git", sessionTools: ["git", "git_push"],
     description: "The git tool: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
     providers: [],
   },
@@ -87,6 +92,27 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   {
     name: "python", source: "piki:python", title: "Python", sessionTools: ["python"],
     description: "The python tool: the agent runs Python and its package and test tools (python3, pip, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "files", source: "piki:files", title: "Files", core: true,
+    sessionTools: ["identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file"],
+    description: "The file tools: the agent reads, searches, writes, edits, moves, copies and deletes the session's files, and reads who the session is for. Every session needs them, so they are always on.",
+    providers: [],
+  },
+  {
+    name: "github", source: "piki:github", title: "GitHub, through Pikibun", sessionTools: ["github_read", "github_comment", "github_issue", "github_merge"],
+    description: "The github_read, github_comment, github_issue and github_merge tools: the agent reads issues and pull requests, waits for their checks, and comments, opens issues and merges with approval, as the session owner, through Pikibun's broker. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "sources", source: "piki:sources", title: "Document sources", sessionTools: ["source_read"],
+    description: "The source_read tool: the agent reads the workspace's document sources (Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark, Tencent Docs) as the session owner. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "sessions", source: "piki:sessions", title: "Other sessions", sessionTools: ["sessions"],
+    description: "The sessions tool: the agent lists, reads, messages, starts, stops and archives the workspace's other sessions, as the message's sender, with their permissions. On unless turned off here.",
     providers: [],
   },
   {
@@ -118,6 +144,8 @@ export function pikiSessionToolExtensions(): PikiExtensionInfo[] {
 export function sessionToolsOff(workspace: readonly { source: string; enabled: boolean }[], options: { failClosedOnly?: boolean } = {}): Set<string> {
   const off = new Set<string>();
   for (const extension of pikiSessionToolExtensions()) {
+    // Core tools stay on whatever a workspace lists.
+    if (extension.core) continue;
     if (options.failClosedOnly && !extension.failClosed) continue;
     if (workspace.some(item => item.source === extension.source && !item.enabled)) for (const tool of extension.sessionTools ?? []) off.add(tool);
   }

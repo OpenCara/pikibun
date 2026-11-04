@@ -239,6 +239,14 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     session's agent tools, which still list `bash`. It is on by default; turning it off by default, and removing `bash`
     and `host_bash`, wait for the owner's go-ahead (#163).
 
+30. **Every session tool on a switch.** The brokered tools join the session-tool extensions as they are: `piki:github`
+    (`github_read`, `github_comment`, `github_issue`, `github_merge`), `piki:sources` (`source_read`), `piki:sessions`
+    (`sessions`), and `git_push` with `git` under `piki:git`. Each keeps its broker, its approvals and its checks; the
+    switch only decides whether sessions offer it, and each refuses a call by name (from a code mode script) while it is
+    off. The tools every session needs, `identity` and the file tools, are `piki:files`, marked `core`: always on, shown
+    as such, and a workspace's turning it off is refused by the control plane and ignored by connectors
+    (`sessionToolsOff`). With this, every tool a session has is a Pikibun or Pi extension a workspace chooses.
+
 Next, in order: other ecosystems as usage asks for them,
 codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.

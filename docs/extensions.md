@@ -39,9 +39,13 @@ Pikibun's own tools are becoming extensions, one by one ([#163](https://github.c
 | `piki:schedule` | `schedule` |
 | `piki:host-shell` | `host_bash` |
 | `piki:shell` | `bash` |
-| `piki:git` | `git` |
+| `piki:git` | `git`, `git_push` |
 | `piki:node` | `node` |
 | `piki:python` | `python` |
+| `piki:github` | `github_read`, `github_comment`, `github_issue`, `github_merge` |
+| `piki:sources` | `source_read` |
+| `piki:sessions` | `sessions` |
+| `piki:files` | `identity`, `list_files`, `read_file`, `search`, `write_file`, `edit_file`, `move_file`, `copy_file`, `delete_file`: always on |
 
 - **On unless turned off.** The workspace page lists them under **Extensions** whether or not the workspace ever chose them; owners and admins switch each **On** or off there. Sessions stop offering a tool that is off from their next message, and a call to it by name (from a code mode script, say) is refused.
 - **The session's own.** Their tools run as before: with the session's permissions, approval cards and Read-only rules, decided by the session's people, never as extension tool cards decided like host commands. So they have no **Approval**/**Automatic** choice and no settings, and a host's owner can't require them.
@@ -51,6 +55,7 @@ Pikibun's own tools are becoming extensions, one by one ([#163](https://github.c
 - **`git` instead of Git in `bash`.** The `git` tool takes Git's arguments as a list and runs exactly `git <arguments>` in a clone, with no shell, pager, editor or password prompt, so its card shows one Git command rather than a script. It runs only version-control subcommands, and refuses the options that make Git run another program. Its calls are approved as `bash` commands are (the owner's **Auto-approve** and auto-approved members included), even for subcommands that only read: a repository's own Git configuration, which the agent can write, can make `git status` run a program.
 - **`node` instead of Node.js in `bash`.** The `node` tool runs one program of Node.js's (`node`, `npm`, `npx`, `pnpm`, `yarn`, `corepack`) with its arguments as a list, in a clone, without a shell, colours or prompts. Commands that act on a package registry as an account (`publish`, `login`, `token`, `owner`, `dist-tag`, ...) are refused: sessions have no registry account. It runs the connector's own Node.js (24 or newer, which the connector needs anyway), with its `npm`, `npx` and `corepack`, ahead of any other: only its `node`, those package managers (and `pnpm` and `yarn` where installed globally) and its C headers are given to the sandbox, read-only, never the directory they are in: in the Linux sandbox below `/opt/pikibun/node` where the sandbox doesn't already see them (nvm, Volta, a tarball), and the macOS sandbox may read and run them. Elsewhere (the desktop app, which runs on Electron, Windows, and unsandboxed hosts) it runs the Node.js on the commands' PATH. A version a project asks for (`.nvmrc`, `engines`) isn't provisioned yet (#163). Its calls are approved as `bash` commands are, since `pnpm test` or `node script.js` run whatever the project or script says.
 - **`python` instead of Python in `bash`.** The `python` tool runs one of `python3`, `pip`, `pip3`, `uv`, `uvx`, `poetry` and `pytest` with its arguments as a list, without a shell, colours or prompts. With `venv` (`.venv`, made with `python3 -m venv .venv`) the environment's own programs run first, so packages install there rather than into the host's Python. Publishing and storing package index credentials (`uv publish`, `poetry publish`, `twine upload` however launched, `poetry config` of tokens) are refused. Its calls are approved as `bash` commands are.
+- **The brokered tools and the file tools.** `piki:github`, `piki:sources` and `piki:sessions` switch the tools that act as the session owner through Pikibun, and `piki:git` switches `git_push` with `git`. `piki:files` holds the tools every session needs to read and write its files: it is always on, and turning it off is refused.
 - **No place taken.** They don't count towards a workspace's 32 extensions.
 
 ## Prompt audit: piki:prompt-audit
