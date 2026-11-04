@@ -18,13 +18,16 @@ export const gitSubcommands = Object.freeze([
 ] as const);
 export type GitSubcommand = (typeof gitSubcommands)[number];
 
-/** The limits of one call: as many arguments as the gh tool takes, within the 64K a sandboxed command may be. */
-export const gitLimits = Object.freeze({ arguments: 256, argumentLength: 32 * 1024, commandLength: 60 * 1024 });
+/**
+ * The limits of one call: as many arguments as the gh tool takes, within the 8192 characters a bash operation may be
+ * (validateOperation, and the control plane's check), so a call too long says so before any card is made.
+ */
+export const gitLimits = Object.freeze({ arguments: 256, argumentLength: 8192, commandLength: 8192 });
 
 /**
  * Options of a subcommand that name a program for Git to run, or take settings or hooks that can (clone's --config,
  * --template), with their short forms (`short`). Git takes a long option's unambiguous abbreviation too (--upload-p),
- * so those count as well. A short form counts inside a cluster of short options (-ix) until a letter that takes a
+ * so any of those counts as well, down to its first letter (--e is --exec where nothing else starts so). A short form counts inside a cluster of short options (-ix) until a letter that takes a
  * value (`valued`), whose value is the rest (-bmain).
  */
 const refused: Partial<Record<GitSubcommand, { long: readonly string[]; short?: string; valued?: string }>> = {
@@ -70,7 +73,7 @@ export function gitRequest(input: { args: unknown; directory?: unknown }): GitRe
     if (arg === "--") break;
     if (!rules) continue;
     const name = arg.split("=")[0]!;
-    const long = rules.long.find(option => name === option || (name.length > 4 && name.startsWith("--") && option.startsWith(name)));
+    const long = rules.long.find(option => name === option || (name.length > 2 && name.startsWith("--") && option.startsWith(name)));
     if (long) throw new Error(`git ${subcommand} ${long} runs a program, or takes settings that do: the git tool doesn't take it`);
     if (rules.short && /^-[A-Za-z0-9]/.test(arg)) {
       for (const [index, letter] of [...arg.slice(1)].entries()) {
