@@ -115,10 +115,12 @@ function fileOperation(fs, op, limits) {
       } else {
         try { fs.link(op.source, op.target); }
         catch (error) {
-          // A file system without hard links: a rename, after the check above, at worst a narrow window.
-          if (!error || !["EPERM", "ENOTSUP", "EXDEV", "EMLINK", "ENOSYS"].includes(error.code) || found(op.target)) throw error;
-          fs.rename(op.source, op.target);
-          return { entries: 1, bytes: 0 };
+          // A file system without hard links has no move that can't replace what appears at the destination meanwhile:
+          // refused, rather than a rename that might (review of #185).
+          if (error && ["EPERM", "ENOTSUP", "EXDEV", "EMLINK", "ENOSYS"].includes(error.code)) {
+            refuse("this file system can't move a file without risking what appears at its destination: copy it, then delete the original");
+          }
+          throw error;
         }
         fs.unlink(op.source);
       }
@@ -132,7 +134,7 @@ function fileOperation(fs, op, limits) {
   const copy = (from, to, entry, depth) => {
     if (depth > limits.depth) refuse("directory nesting limit exceeded");
     if (++entries > limits.entries) refuse("too many files to copy");
-    if (entry.link) { fs.symlink(fs.readlink(from), to, from); made.push({ path: to }); }
+    if (entry.link) { fs.symlink(fs.readlink(from), to, from); made.push({ path: to, identity: fs.lstat(to).identity }); }
     else if (entry.directory) {
       fs.mkdir(to);
       made.push({ path: to, directory: true });
@@ -147,12 +149,16 @@ function fileOperation(fs, op, limits) {
       const data = fs.read(from, limits.bytes - bytes);
       bytes += data.length;
       fs.create(to, data, entry.executable);
-      made.push({ path: to });
+      made.push({ path: to, identity: fs.lstat(to).identity });
     } else refuse("only files, directories and links can be copied");
   };
   try { copy(op.source, op.target, source, 0); }
   catch (error) {
-    for (const entry of made.reverse()) { try { if (entry.directory) fs.rmdir(entry.path); else fs.unlink(entry.path); } catch {} }
+    // A file or link goes only while it is still the one the copy made (same device and inode): one another writer put in
+    // its place stays (review of #185).
+    for (const entry of made.reverse()) {
+      try { if (entry.directory) fs.rmdir(entry.path); else if (fs.lstat(entry.path).identity === entry.identity) fs.unlink(entry.path); } catch {}
+    }
     if (exists(error)) refuse("the destination exists already");
     throw error;
   }
@@ -168,8 +174,8 @@ export const FILE_OPERATIONS_FS = String.raw`
 const fileOperationsFs = (fsCalls, path, caseInsensitive, windows) => ({
   caseInsensitive,
   windows,
-  lstat: target => { const info = fsCalls.lstatSync(target); return { directory: info.isDirectory(), file: info.isFile(), link: info.isSymbolicLink(),
-    nlink: info.nlink, size: info.size, executable: (info.mode & 0o100) !== 0 }; },
+  lstat: target => { const info = fsCalls.lstatSync(target, { bigint: true }); return { directory: info.isDirectory(), file: info.isFile(), link: info.isSymbolicLink(),
+    nlink: Number(info.nlink), size: Number(info.size), executable: (info.mode & 0o100n) !== 0n, identity: info.dev + ":" + info.ino }; },
   list: target => fsCalls.readdirSync(target),
   rmdir: target => fsCalls.rmdirSync(target),
   // Windows removes a link to a directory (or a junction) as a directory.
