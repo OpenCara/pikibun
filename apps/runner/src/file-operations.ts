@@ -107,7 +107,7 @@ function fileOperation(fs, op, limits) {
     // name there before losing its first, and a directory takes the place of an empty one made for it, which a
     // rename replaces only while it is still empty (Windows never renames over a directory, so it renames at once).
     try {
-      if (source.link) { fs.symlink(fs.readlink(op.source), op.target); fs.unlink(op.source); }
+      if (source.link) { fs.symlink(fs.readlink(op.source), op.target, op.source); fs.unlink(op.source); }
       else if (source.directory) {
         if (!fs.windows) fs.mkdir(op.target);
         try { fs.rename(op.source, op.target); }
@@ -132,7 +132,7 @@ function fileOperation(fs, op, limits) {
   const copy = (from, to, entry, depth) => {
     if (depth > limits.depth) refuse("directory nesting limit exceeded");
     if (++entries > limits.entries) refuse("too many files to copy");
-    if (entry.link) { fs.symlink(fs.readlink(from), to); made.push({ path: to }); }
+    if (entry.link) { fs.symlink(fs.readlink(from), to, from); made.push({ path: to }); }
     else if (entry.directory) {
       fs.mkdir(to);
       made.push({ path: to, directory: true });
@@ -181,7 +181,12 @@ const fileOperationsFs = (fsCalls, path, caseInsensitive, windows) => ({
   link: (from, to) => fsCalls.linkSync(from, to),
   mkdir: target => fsCalls.mkdirSync(target, { mode: 0o700 }),
   readlink: target => fsCalls.readlinkSync(target),
-  symlink: (value, target) => fsCalls.symlinkSync(value, target),
+  // Windows makes a link as a file's or a directory's: a link to a directory is made again as one (review of #185).
+  symlink: (value, target, from) => {
+    let directory = false;
+    if (windows) try { directory = fsCalls.statSync(from).isDirectory(); } catch {}
+    fsCalls.symlinkSync(value, target, directory ? "dir" : undefined);
+  },
   read: (target, limit) => {
     const fd = fsCalls.openSync(target, "r");
     try {
