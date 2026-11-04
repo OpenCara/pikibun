@@ -209,7 +209,17 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     `FILE_OPERATIONS_CORE` does it in the Windows Node helper and, on unsandboxed hosts, in a worker thread; the
     conformance suite holds every backend to the same answers.
 
-Next, in order: `piki:python` and the other ecosystems,
+27. **Python without a shell.** `piki:python` turns on the `python` tool (`apps/runner/src/python-command.ts`), the
+    second ecosystem tool, built like `node`: a program (`python3`, `pip`, `pip3`, `uv`, `uvx`, `poetry`, `pytest`), its
+    arguments as a list and a directory, run as one quoted command with no colours or prompts and decided as `bash`'s.
+    `venv` names a virtual environment in that directory, whose `bin` goes first on PATH with `VIRTUAL_ENV` set, as
+    activating it would: the host's Python can't be installed into, and a venv's interpreter isn't one of the programs.
+    Refused: what acts on a package index as an account, `uv publish`, `poetry publish`, `poetry config` of
+    `http-basic.*`, `pypi-token.*` or `certificates.*`, and twine's `upload` and `register`, followed through what
+    launches twine by name (`python3 -m twine`, `uvx`, `uv run`, `uv tool run`, `poetry run`). Python is the host's, in
+    `/usr`, which every sandbox sees; uv and poetry where the host installed them.
+
+Next, in order: other ecosystems as usage asks for them,
 codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
 
