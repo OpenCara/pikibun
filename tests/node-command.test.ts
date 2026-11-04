@@ -34,3 +34,9 @@ test("the node tool's command quotes every argument and runs without colours or 
   assert.equal(nodeShellCommand({ program: "node", directory: ".", args: [] }),
     "PATH=\"$PATH:/usr/local/bin\" NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true node </dev/null 2>&1");
 });
+
+test("the node tool's calls fit a bash operation's 8192 characters, or are refused saying so", async () => {
+  const { validateOperation } = await import("../apps/runner/src/protocol.js");
+  assert.throws(() => nodeShellCommand({ program: "node", directory: ".", args: ["-e", "x".repeat(8150)] }), /over 8192 characters/);
+  assert.doesNotThrow(() => validateOperation({ kind: "bash", command: nodeShellCommand({ program: "node", directory: "app", args: ["-e", "x".repeat(8000)] }) }));
+});

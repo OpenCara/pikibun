@@ -4,8 +4,11 @@
  * becomes one sandboxed command, the program and its quoted arguments, which its approval card shows as it runs.
  */
 
-/** The limits of one call: as many arguments as the gh tool takes, within the 64K a sandboxed command may be. */
-export const programLimits = Object.freeze({ arguments: 256, argumentLength: 32 * 1024, commandLength: 60 * 1024 });
+/**
+ * The limits of one call: as many arguments as the gh tool takes, within the 8192 characters a bash operation may be
+ * (validateOperation, and the control plane's check), so a call too long says so before any card is made.
+ */
+export const programLimits = Object.freeze({ arguments: 256, argumentLength: 8192, commandLength: 8192 });
 
 /** `args` as such a tool takes it: a list of at most programLimits.arguments strings, without NUL characters. */
 export function programArguments(args: unknown, example: string): string[] {

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gitDirectory, gitLimits, gitRequest, gitShellCommand } from "../apps/runner/src/git-command.js";
+import { validateOperation } from "../apps/runner/src/protocol.js";
 
 test("the git tool takes Git's arguments as a list, starting with an allowed subcommand", () => {
   assert.deepEqual(gitRequest({ args: ["status"] }), { directory: ".", args: ["status"] });
@@ -22,6 +23,14 @@ test("the git tool refuses options that run a program, or take settings or hooks
   const refused: string[][] = [
     ["clone", "--upload-pack=touch x", "https://example.test/a"],
     ["clone", "--upload-p", "touch x", "https://example.test/a"],
+    ["clone", "--up", "touch x", "https://example.test/a"],
+    ["clone", "--co", "core.fsmonitor=touch x", "https://example.test/a"],
+    ["clone", "--co=core.fsmonitor=touch x", "https://example.test/a"],
+    ["clone", "--te=hooks", "https://example.test/a"],
+    ["rebase", "--ex=touch x", "main"],
+    ["rebase", "--e", "touch x", "main"],
+    ["grep", "--op", "foo"],
+    ["push", "--rec=touch x"],
     ["clone", "-u", "touch x", "https://example.test/a"],
     ["clone", "-qu", "touch x", "https://example.test/a"],
     ["clone", "-c", "core.fsmonitor=touch x", "https://example.test/a"],
@@ -50,6 +59,10 @@ test("the git tool refuses options that run a program, or take settings or hooks
     ["add", "-u"],
     ["fetch", "-u", "origin"],
     ["diff", "--text"],
+    ["rebase", "--empty=drop", "main"],
+    ["grep", "--or", "-e", "a"],
+    ["fetch", "--unshallow"],
+    ["clone", "--no-tags", "https://example.test/a"],
     ["grep", "-e", "-O", "foo"],
     ["log", "--", "--exec"],
     ["push", "origin", "HEAD:pikibun/session"],
@@ -69,5 +82,9 @@ test("the git tool's command quotes every argument and runs Git without a pager,
     "GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0 git --no-pager 'status' </dev/null 2>&1");
   assert.equal(gitShellCommand({ directory: "my app", args: ["commit", "-m", "It's $(done); `really`\nyes"] }),
     "cd -- './my app' && GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0 git --no-pager 'commit' '-m' 'It'\\''s $(done); `really`\nyes' </dev/null 2>&1");
-  assert.throws(() => gitShellCommand({ directory: ".", args: ["commit", "-m", "x".repeat(gitLimits.commandLength)] }), /over/);
+  // Within what a bash operation may be (validateOperation's 8192), so a long call is refused saying why, before any card.
+  assert.equal(gitLimits.commandLength, 8192);
+  assert.throws(() => gitRequest({ args: ["commit", "-m", "x".repeat(gitLimits.argumentLength + 1)] }), /at most 8192 characters/);
+  assert.throws(() => gitShellCommand({ directory: ".", args: ["commit", "-m", "x".repeat(8100)] }), /over 8192 characters/);
+  assert.doesNotThrow(() => validateOperation({ kind: "bash", command: gitShellCommand({ directory: "app", args: ["commit", "-m", "x".repeat(8000)] }) }));
 });
