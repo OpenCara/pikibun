@@ -378,10 +378,11 @@ def copy_entry(source, name, target, new_name, info, counts, depth, path):
         raise ValueError('too many files to copy')
     if stat.S_ISLNK(info.st_mode):
         os.symlink(os.readlink(name, dir_fd=source), new_name, dir_fd=target)
-        counts['made'].append((path, False))
+        made = os.stat(new_name, dir_fd=target, follow_symlinks=False)
+        counts['made'].append((path, (made.st_dev, made.st_ino)))
     elif stat.S_ISDIR(info.st_mode):
         os.mkdir(new_name, 0o700, dir_fd=target)
-        counts['made'].append((path, True))
+        counts['made'].append((path, None))
         source_fd = os.open(name, DIR_FLAGS, dir_fd=source)
         try:
             target_fd = os.open(new_name, DIR_FLAGS, dir_fd=target)
@@ -402,7 +403,8 @@ def copy_entry(source, name, target, new_name, info, counts, depth, path):
         data, mode = read_at(source, name, COPY_BYTES - counts['bytes'])
         counts['bytes'] += len(data)
         fd = os.open(new_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o700 if mode & 0o100 else 0o600, dir_fd=target)
-        counts['made'].append((path, False))
+        made = os.fstat(fd)
+        counts['made'].append((path, (made.st_dev, made.st_ino)))
         with os.fdopen(fd, 'wb') as stream:
             stream.write(data)
             stream.flush()
@@ -432,16 +434,12 @@ def move_entry(source, name, target, new_name, info):
         try:
             os.link(name, new_name, src_dir_fd=source, dst_dir_fd=target, follow_symlinks=False)
         except OSError as error:
-            # A file system without hard links: a rename, after the check, at worst a narrow window.
-            if error.errno not in (errno.EPERM, errno.ENOTSUP, errno.EXDEV, errno.EMLINK, errno.ENOSYS):
-                raise
-            try:
-                os.stat(new_name, dir_fd=target, follow_symlinks=False)
-                raise ValueError('the destination exists already') from None
-            except FileNotFoundError:
-                pass
-            os.rename(name, new_name, src_dir_fd=source, dst_dir_fd=target)
-            return
+            # A file system without hard links has no move that can't replace what appears at the destination meanwhile:
+            # refused, rather than a rename that might (review of #185).
+            if error.errno in (errno.EPERM, errno.ENOTSUP, errno.EXDEV, errno.EMLINK, errno.ENOSYS):
+                raise ValueError('this file system can\'t move a file without risking what appears at its destination: '
+                                 'copy it, then delete the original') from None
+            raise
         os.unlink(name, dir_fd=source)
 
 
@@ -506,14 +504,18 @@ def file_operation(root, request):
             except BaseException as error:
                 # What the copy made goes again, last first, a directory only while it is empty: what another writer
                 # put there meanwhile, or found at the destination, stays.
-                for path, directory in reversed(counts['made']):
+                # A file or link goes only while it is still the one the copy made (same device and inode): one another
+                # writer put in its place stays (review of #185).
+                for path, identity in reversed(counts['made']):
                     try:
                         parent = walk(target, path[:-1])
                         try:
-                            if directory:
+                            if identity is None:
                                 os.rmdir(path[-1], dir_fd=parent)
                             else:
-                                os.unlink(path[-1], dir_fd=parent)
+                                now = os.stat(path[-1], dir_fd=parent, follow_symlinks=False)
+                                if (now.st_dev, now.st_ino) == identity:
+                                    os.unlink(path[-1], dir_fd=parent)
                         finally:
                             os.close(parent)
                     except OSError:
