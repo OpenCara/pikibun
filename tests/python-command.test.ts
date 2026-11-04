@@ -41,6 +41,7 @@ test("the python tool refuses commands that act on a package index as an account
 test("the python tool's command quotes every argument, without colours or prompts, and runs a virtual environment's programs first", () => {
   assert.match(pythonShellCommand({ program: "pip", directory: ".", args: [], venv: ".venv" }, "win32"), /^PATH="\$PWD"\/'\.venv\/Scripts':/, "Windows keeps them in Scripts");
   assert.match(pythonShellCommand({ program: "python3", directory: ".", args: ["-V"], venv: ".venv" }, "win32"), / python '-V' /, "and names its interpreter python");
+  assert.match(pythonShellCommand({ program: "python3", directory: ".", args: ["-m", "venv", ".venv"] }, "win32"), / python '-m' 'venv' /, "installed too");
   assert.match(pythonShellCommand({ program: "python3", directory: ".", args: ["-V"], venv: ".venv" }, "linux"), / python3 '-V' /);
   assert.equal(pythonShellCommand({ program: "python3", directory: "app", args: ["-c", "print('hi')"] }),
     "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1 python3 '-c' 'print('\\''hi'\\'')' </dev/null 2>&1");
