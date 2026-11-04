@@ -67,3 +67,40 @@ test("search and read_file's line ranges: the agent finds code and reads around 
   assert.match(transcript, /invalid regular expression/);
   assert.match(transcript, /Found it\./);
 });
+
+test("move_file, copy_file and delete_file: the agent moves, copies and deletes without a shell or an approval", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-file-operations-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("write_file", { path: "src/a.ts", content: "export const a = 1;\n" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("copy_file", { from: "src", to: "backup/src" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("move_file", { from: "src/a.ts", to: "lib/a.ts" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("delete_file", { path: "backup" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("delete_file", { path: "backup", recursive: true })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("list_files", { path: "." })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Reorganized."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-file-operations-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "file-operations-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Move a.ts to lib.", requestId: "reorganize", admissionId: await sha256("file operations admission") }, "write");
+  await idle(session);
+  const view = await session.view();
+  const transcript = view.entries.map(entry => entry.text).join("\n");
+  assert.equal(view.approvals.length, 0, "no approval card");
+  assert.match(transcript, /"copied":"src","to":"backup\/src","entries":2,"bytes":20/);
+  assert.match(transcript, /"moved":"src\/a\.ts","to":"lib\/a\.ts"/);
+  assert.match(transcript, /the directory is not empty: delete it with recursive/);
+  assert.match(transcript, /"deleted":"backup","entries":3/);
+  assert.match(transcript, /"files":\[".git","lib","src"\]/);
+  assert.equal(await session.sandbox.readFile("lib/a.ts", async () => {}), "export const a = 1;\n");
+});

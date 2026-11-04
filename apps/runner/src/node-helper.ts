@@ -11,9 +11,10 @@
  * Not yet here: clone backups and restores (backups and moves of clone sessions), which the workspace refuses.
  */
 import { SEARCH_CORE } from "./search.js";
+import { FILE_OPERATIONS_CORE, FILE_OPERATIONS_FS, fileOperationLimits } from "./file-operations.js";
 export const NODE_HELPER = String.raw`
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -416,6 +417,34 @@ async function clonePushPack(request) {
 
 ${SEARCH_CORE}
 
+${FILE_OPERATIONS_CORE}
+${FILE_OPERATIONS_FS}
+
+// An entry itself (file-operations.ts): its directory resolved as any written path is, its last component never.
+function entryFor(value, create = false) {
+  if (typeof value !== "string" || !value || value.length > 1024) refuse("invalid relative path");
+  if (value.startsWith("/") || value.includes("\\") || /[\x00-\x1f\x7f]/.test(value)) refuse("invalid relative path");
+  if (value.length >= 2 && value[1] === ":") refuse("absolute paths are not allowed");
+  if (value === ".") refuse("the worktree itself can't be moved, copied or deleted");
+  if (value.split("/").some(part => part === "" || part === "." || part === "..")) refuse("path traversal is not allowed");
+  const index = value.lastIndexOf("/");
+  const name = value.slice(index + 1);
+  if (name.toLowerCase() === ".git") refuse("Git metadata is protected");
+  if (!windowsName(name)) refuse("invalid Windows file name");
+  const parts = partsFor(index < 0 ? "." : value.slice(0, index), true);
+  return { parts: [...parts, name], path: join(directoryAt(parts, create), name) };
+}
+
+function fileOperationRequest(request) {
+  if (request.kind === "delete") {
+    if (typeof request.recursive !== "boolean") refuse("invalid file operation");
+    return { kind: "delete", path: entryFor(request.path).path, recursive: request.recursive };
+  }
+  const source = entryFor(request.from);
+  const target = entryFor(request.to, true);
+  return { kind: request.kind, source: source.path, target: target.path, sourceParts: source.parts, targetParts: target.parts };
+}
+
 const searchFs = {
   lstat: path => { const info = lstatSync(path); return { directory: info.isDirectory(), file: info.isFile(), link: info.isSymbolicLink(), size: info.size }; },
   list: path => readdirSync(path),
@@ -460,6 +489,12 @@ async function main() {
   if (kind === "clone-push-prepare") return print(clonePushPrepare(request));
   if (kind === "clone-push-pack") return clonePushPack(request);
   if (kind === "import") return print({ path: importAt(request) });
+  if (kind === "move" || kind === "copy" || kind === "delete") {
+    try { return print(fileOperation(fileOperationsFs({ lstatSync, readdirSync, rmdirSync, unlinkSync, renameSync, mkdirSync, readlinkSync, symlinkSync, openSync,
+      fstatSync, readSync, writeSync, fsyncSync, closeSync }, { join }, process.platform === "win32" || process.platform === "darwin"), fileOperationRequest(request),
+      ${JSON.stringify(fileOperationLimits)})); }
+    catch (error) { if (error instanceof FileOperationRefusal) refuse(error.message); throw error; }
+  }
   const parts = partsFor(request.path, kind === "write");
   if (kind === "write") { writeAt(parts, request.content); return print(null); }
   if (kind === "read" || kind === "read-content") {
@@ -499,4 +534,5 @@ main().catch(error => {
 
 /** The request kinds the Node helper runs. */
 export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "search", "snapshot", "bash",
+  "move", "copy", "delete",
   "clone-head", "clone-push-prepare", "clone-push-pack"]);
