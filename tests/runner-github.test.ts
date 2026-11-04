@@ -564,3 +564,46 @@ test("another member's comments run at once while the control plane says the own
   await session.decide(await ticket(target.session.id, "approve"), waiting.id, { decision: "deny", operation: waiting.operation });
   await idle(session);
 });
+
+test("github_read waits for checks by reading again, and says how the wait ended", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-github-wait-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const reads: GitHubReadRequest[] = [];
+  const pullRequest = (status: string) => ({ draft: false, merged: false, mergeable: true, mergeableState: "clean", head: { ref: "f", sha: "a".repeat(40), repository: "acme/alpha" },
+    base: { ref: "main", sha: "b".repeat(40) }, reviews: [], reviewComments: [], checks: [{ name: "verify", status, conclusion: status === "completed" ? "success" : null }] });
+  const views: GitHubIssueView[] = ["queued", "in_progress", "completed", "completed"].map(status => ({ repository: "acme/alpha", number: 7, url: "https://github.com/acme/alpha/pull/7",
+    title: "Fix", state: "open", author: "alice", createdAt: "2026-01-01T00:00:00Z", body: "", labels: [], comments: [], pullRequest: pullRequest(status) }));
+  // Then a reviewer comments.
+  views.push({ ...views[3]!, comments: [{ id: 9, author: "bot", createdAt: "2026-01-01T01:00:00Z", body: "Approved.", url: "https://github.com/acme/alpha/pull/7#c9" }] });
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("github_read", { repository: "acme/alpha", issue: 7, wait: "checks", timeout_seconds: 60 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("github_read", { repository: "acme/alpha", issue: 7, wait: "change", timeout_seconds: 30 })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("CI passed."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-github-wait-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    githubRead: async request => { reads.push(request); return views[Math.min(reads.length - 1, views.length - 1)]!; },
+    githubWaitPollMs: 10,
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "github-wait-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Wait for CI.", requestId: "wait", admissionId: await sha256("github wait admission") }, "write");
+  await idle(session);
+  const results = (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
+  // Three reads of the one call until the check completed; then the change wait reads until the comment.
+  assert.equal(reads.length, 5);
+  assert.equal(new Set(reads.slice(0, 3).map(read => read.callId)).size, 1, "one call's reads");
+  assert.equal(new Set(reads.slice(3).map(read => read.callId)).size, 1);
+  assert.match(results[0]!, /"status":"completed"/);
+  assert.match(results[0]!, /"waited":\{"for":"checks","outcome":"checks-completed","seconds":\d+\}/);
+  assert.match(results[1]!, /"waited":\{"for":"change","outcome":"changed","seconds":\d+\}/);
+  assert.match(results[1]!, /Approved\./);
+  assert.equal((await session.view()).approvals.length, 0, "reads ask nobody");
+});
