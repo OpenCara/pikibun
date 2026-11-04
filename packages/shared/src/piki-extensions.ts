@@ -75,6 +75,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "node", source: "piki:node", title: "Node.js", sessionTools: ["node"],
+    description: "The node tool: the agent runs Node.js and its package managers (node, npm, npx, pnpm, yarn, corepack) with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
     name: "prompt-audit", source: "piki:prompt-audit", title: "Prompt audit",
     description: "Has a model of the host check each message from anyone but the host's owner before it reaches the agent, and refuses ones that reach for the host's credentials, files, environment or network. A message it can't check is refused too.",
     providers: [],

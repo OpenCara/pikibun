@@ -157,8 +157,18 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     filters, hooks), which the agent can write with `write_file`, can make `git status` run a program, so a
     read-only `git` without approval needs each backend to run Git with all of those turned off first. The runtime
     instructions point to it rather than Git in `bash`.
+23. **Node.js without a shell.** `piki:node` turns on the `node` tool (`apps/runner/src/node-command.ts`), the first
+    of the ecosystem tools that replace project tasks in `bash` (#163): a program of Node.js's (`node`, `npm`, `npx`,
+    `pnpm`, `yarn`, `corepack`), its arguments as a list and a directory, run as `program` and its quoted arguments with
+    no colours, no corepack or npx prompt, and `/usr/local/bin` after the sandbox's PATH, where Node.js installs. It
+    shares `program-command.ts` with `git`. The unit a workspace turns on is the toolchain, not one program: `node`
+    alone can't install a project, and `pnpm run` or `node script.js` run arbitrary code anyway, so an allowlist of
+    programs narrows nothing. What it refuses is a package manager's command (its first argument that isn't an option,
+    an option's value, a wrapper such as `recursive` or yarn's `npm`, or `workspace <name>`) that acts on a registry as
+    an account: `publish`, `login`, `token`, `owner`, `dist-tag` and the like. Its calls are decided as `bash`'s, like
+    `git`'s. It runs the host's Node.js; a Node.js version per workspace, provisioned in the sandbox, is the next step.
 
-Next, in order: a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
+Next, in order: a Node.js version for `piki:node`, a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
 becomes `piki:shell`, and `host_bash` is removed. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
 

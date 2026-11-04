@@ -27,6 +27,8 @@ import { parseUploadChunk, type UploadResult } from "../../../packages/shared/sr
 import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
 import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
+import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
+import { programLimits } from "./program-command.js";
 import { lineRange } from "./edits.js";
 import { pikiSessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { runnerModels } from "./provider.js";
@@ -820,6 +822,9 @@ export class RunnerSession {
       + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
       + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "
       + "It needs no quoting, and its approval card shows exactly the Git command it runs.";
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "node") && !off.has("node")) instructions += "\n\nRun Node.js, npm, npx, pnpm, yarn and corepack with the node tool rather than in bash: "
+      + "node {program: \"pnpm\", args: [\"install\"], directory: \"<name>\"}, node {program: \"pnpm\", args: [\"test\"], directory: \"<name>\"}, "
+      + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -2170,6 +2175,23 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "git", `${request.directory}: git ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "git" }, call.abortSignal), call));
         } }),
+      // Node.js and its package managers without a shell (piki:node, #163), decided as bash's are: they run the project's
+      // scripts and whatever a script says.
+      defineTool({ name: "node", description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+        executionMode: "sequential",
+        parameters: Type.Object({ program: StringEnum(nodePrograms), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()) }),
+        execute: async (args, api, call) => {
+          // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+          await this.requireSessionTool("node");
+          let request: NodeRequest;
+          let command: string;
+          try { request = nodeRequest(args); command = nodeShellCommand(request); }
+          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid node call"}. Nothing ran.`); }
+          const attribution = await this.toolActor(api, true);
+          await this.requireHostEnvironment();
+          const { unbounded } = await this.permit(api, call, "node", `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
+          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "node" }, call.abortSignal), call));
+        } }),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }) }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
         const repository = this.githubRepository(args.repository);
@@ -2435,10 +2457,10 @@ export class RunnerSession {
    * owner allows (see runExtensionTool).
    */
   /**
-   * `consent.tool`: the tool whose call this command is, where that isn't bash (git): the owner's "Allow for this
+   * `consent.tool`: the tool whose call this command is, where that isn't bash (git, node): the owner's "Allow for this
    * session" for it runs its commands without asking, as one for bash does.
    */
-  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean; tool?: "git" } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
+  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean; tool?: "git" | "node" } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
     this.requireUnfrozen();
     const operation = validateOperation(input);
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");

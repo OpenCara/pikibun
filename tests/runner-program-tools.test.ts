@@ -130,3 +130,47 @@ test("in a session from before the git tool, allowing git for the session runs t
   assert.match(await session.sandbox.readFile("first/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
   assert.match(await session.sandbox.readFile("second/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
 });
+
+test("the node tool runs Node.js without a shell, as one exact command card; piki:node turns it off", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-node-tool-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("node", { program: "npm", args: ["publish"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("node", { program: "node", args: ["-e", "console.log('node-tool-' + (6 * 7))"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Ran."),
+    fauxAssistantMessage([fauxToolCall("node", { program: "node", args: ["--version"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Off."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-node-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "node-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Run it.", requestId: "run", admissionId: await sha256("node admission") }, "write");
+  const approval = await pendingApproval(session);
+  assert.deepEqual(approval.operation, { kind: "bash",
+    command: "PATH=\"$PATH:/usr/local/bin\" NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true node '-e' 'console.log('\\''node-tool-'\\'' + (6 * 7))' </dev/null 2>&1" });
+  await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
+  await idle(session);
+  let view = await session.view();
+  assert.equal(view.approvals.length, 1, "the refused call left no card");
+  assert.equal(view.approvals[0]!.status, "executed");
+  assert.match(view.approvals[0]!.result!, /node-tool-42/);
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /npm publish acts on a package registry as an account/);
+
+  answer = { extensions: [{ source: "piki:node", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("node admission off") }, "write");
+  await idle(session);
+  view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool node is not available/);
+  assert.equal(view.approvals.length, 1);
+});
