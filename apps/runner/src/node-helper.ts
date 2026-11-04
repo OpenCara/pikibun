@@ -14,7 +14,7 @@ import { SEARCH_CORE } from "./search.js";
 import { FILE_OPERATIONS_CORE, FILE_OPERATIONS_FS, fileOperationLimits } from "./file-operations.js";
 export const NODE_HELPER = String.raw`
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -421,7 +421,7 @@ ${FILE_OPERATIONS_CORE}
 ${FILE_OPERATIONS_FS}
 
 // An entry itself (file-operations.ts): its directory resolved as any written path is, its last component never.
-function entryFor(value, create = false) {
+function entryFor(value) {
   if (typeof value !== "string" || !value || value.length > 1024) refuse("invalid relative path");
   if (value.startsWith("/") || value.includes("\\") || /[\x00-\x1f\x7f]/.test(value)) refuse("invalid relative path");
   if (value.length >= 2 && value[1] === ":") refuse("absolute paths are not allowed");
@@ -432,7 +432,7 @@ function entryFor(value, create = false) {
   if (name.toLowerCase() === ".git") refuse("Git metadata is protected");
   if (!windowsName(name)) refuse("invalid Windows file name");
   const parts = partsFor(index < 0 ? "." : value.slice(0, index), true);
-  return { parts: [...parts, name], path: join(directoryAt(parts, create), name) };
+  return { parts: [...parts, name], path: join(worktreeRoot(), ...parts, name) };
 }
 
 function fileOperationRequest(request) {
@@ -441,8 +441,8 @@ function fileOperationRequest(request) {
     return { kind: "delete", path: entryFor(request.path).path, recursive: request.recursive };
   }
   const source = entryFor(request.from);
-  const target = entryFor(request.to, true);
-  return { kind: request.kind, source: source.path, target: target.path, sourceParts: source.parts, targetParts: target.parts };
+  const target = entryFor(request.to);
+  return { kind: request.kind, root: worktreeRoot(), source: source.path, target: target.path, sourceParts: source.parts, targetParts: target.parts };
 }
 
 const searchFs = {
@@ -490,8 +490,8 @@ async function main() {
   if (kind === "clone-push-pack") return clonePushPack(request);
   if (kind === "import") return print({ path: importAt(request) });
   if (kind === "move" || kind === "copy" || kind === "delete") {
-    try { return print(fileOperation(fileOperationsFs({ lstatSync, readdirSync, rmdirSync, unlinkSync, renameSync, mkdirSync, readlinkSync, symlinkSync, openSync,
-      fstatSync, readSync, writeSync, fsyncSync, closeSync }, { join }, process.platform === "win32" || process.platform === "darwin"), fileOperationRequest(request),
+    try { return print(fileOperation(fileOperationsFs({ lstatSync, readdirSync, rmdirSync, unlinkSync, renameSync, linkSync, mkdirSync, readlinkSync, symlinkSync, openSync,
+      fstatSync, readSync, writeSync, fsyncSync, closeSync }, { join }, process.platform === "win32" || process.platform === "darwin", process.platform === "win32"), fileOperationRequest(request),
       ${JSON.stringify(fileOperationLimits)})); }
     catch (error) { if (error instanceof FileOperationRefusal) refuse(error.message); throw error; }
   }
