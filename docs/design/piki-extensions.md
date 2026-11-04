@@ -203,9 +203,13 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     (`apps/runner/src/file-operations.ts`) replace `mv`, `cp` and `rm` in `bash`, and need no approval, like
     `write_file`. A path names an entry itself: its directory is resolved like any written path (through links that stay
     in the worktree, never into `.git`), its last component never, so a link is moved, copied or deleted as a link.
-    A destination is never replaced and a directory never goes inside itself. A copy keeps links as links, refuses hard
-    links and special files, and never copies a `.git` (a clone is cloned again), within 10,000 entries and 50 MB, and
-    removes what it made if it fails; a delete of a non-empty directory needs `recursive`, which may delete a clone with
+    A destination is never replaced and a directory never goes inside itself, and nothing is made before every check
+    has passed. A move never replaces what appeared at its destination since its check: a link is made again there, a
+    file gets a second name there before losing its first (a rename only where the file system has no hard links), and a
+    directory takes the place of an empty one made for it, which a rename replaces only while it is still empty. A copy
+    keeps links as links, refuses hard links and special files, and never copies a `.git` (a clone is cloned again),
+    within 10,000 entries and 50 MB; if it fails it removes what it made, last first, a directory only while it is
+    empty, so nothing another writer put there meanwhile goes; a delete of a non-empty directory needs `recursive`, which may delete a clone with
     its `.git`. The Python helper does it with directory descriptors and `O_NOFOLLOW`, as its other steps do;
     `FILE_OPERATIONS_CORE` does it in the Windows Node helper and, on unsandboxed hosts, in a worker thread; the
     conformance suite holds every backend to the same answers.
