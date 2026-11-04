@@ -207,6 +207,8 @@ const cases: Case[] = [
   ["refuses deleting above the worktree", remove("../outside/secret.txt"), { refused: TRAVERSAL }],
   ["refuses deleting the worktree", remove(".", true), { refused: /the worktree itself/ }],
   ["refuses deleting what isn't there", remove("missing.txt"), { refused: /no such file or directory/ }],
+  ["refuses deleting in a directory that isn't there, in the same words", remove("missing-dir/x.txt"), { refused: /no such file or directory/ }],
+  ["refuses moving from a directory that isn't there, in the same words", move("missing-dir/x.txt", "x.txt"), { refused: /no such file or directory/ }],
 ];
 
 for (const kind of workspaceKinds) {
