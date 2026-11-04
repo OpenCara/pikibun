@@ -40,8 +40,19 @@ test("the python tool refuses commands that act on a package index as an account
 
 test("the python tool's command quotes every argument, without colours or prompts, and runs a virtual environment's programs first", () => {
   assert.match(pythonShellCommand({ program: "pip", directory: ".", args: [], venv: ".venv" }, "win32"), /^PATH="\$PWD"\/'\.venv\/Scripts':/, "Windows keeps them in Scripts");
+  assert.match(pythonShellCommand({ program: "python3", directory: ".", args: ["-V"], venv: ".venv" }, "win32"), / python '-V' /, "and names its interpreter python");
+  assert.match(pythonShellCommand({ program: "python3", directory: ".", args: ["-V"], venv: ".venv" }, "linux"), / python3 '-V' /);
   assert.equal(pythonShellCommand({ program: "python3", directory: "app", args: ["-c", "print('hi')"] }),
     "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1 python3 '-c' 'print('\\''hi'\\'')' </dev/null 2>&1");
   assert.equal(pythonShellCommand({ program: "pip", directory: ".", args: ["install", "requests"], venv: ".venv" }),
     "PATH=\"$PWD\"/'.venv/bin':\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' VIRTUAL_ENV=\"$PWD\"/'.venv' NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1 pip 'install' 'requests' </dev/null 2>&1");
+});
+
+test("a Linux host whose Python lacks venv and ensurepip is told to install python3-venv, without being kept from starting", async () => {
+  const { pythonVenvPrerequisite, assertPrerequisites } = await import("../apps/runner/src/connect-setup.js");
+  const missing = pythonVenvPrerequisite("linux", "/bin/false", true)!;
+  assert.deepEqual([missing.ok, missing.optional, missing.fix?.command, missing.fix?.action], [false, true, "sudo apt install python3-venv", { kind: "apt", packages: ["python3-venv"] }]);
+  assert.doesNotThrow(() => assertPrerequisites([missing], false, ""), "optional, like npm");
+  assert.equal(pythonVenvPrerequisite("darwin"), undefined);
+  assert.equal(pythonVenvPrerequisite("win32"), undefined);
 });
