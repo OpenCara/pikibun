@@ -92,11 +92,16 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
   const builtin = connector.config?.builtinExtensions ?? [];
   function setBuiltin(name: BuiltinExtensionName, on: boolean) {
     const next = builtinExtensions.map(item => item.name).filter(item => item === name ? on : builtin.includes(item));
-    const title = builtinExtensions.find(item => item.name === name)?.title ?? name;
+    const item = builtinExtensions.find(candidate => candidate.name === name);
+    const title = item?.title ?? name;
+    // A core one runs whatever is ticked on connectors of this release: the box only decides it on older ones.
+    const core = !!item && "core" in item && item.core === true;
     void action.run(async () => {
       await api(`/api/connectors/${segment(connector.id)}/config`, { method: "PATCH", body: { builtinExtensions: next } });
       refresh();
-    }, on ? `${title} is on: sessions on this host get it with their next message, within a minute.` : `${title} is off: sessions on this host run without it from their next message, within a minute.`);
+    }, core
+      ? on ? `${title} is on for older connectors too. Connectors of this release or later always run it.` : `${title} is off for older connectors only. Connectors of this release or later always run it.`
+      : on ? `${title} is on: sessions on this host get it with their next message, within a minute.` : `${title} is off: sessions on this host run without it from their next message, within a minute.`);
   }
   const required = connector.config?.requiredExtensions ?? [];
   const [configuring, setConfiguring] = useState<{ extension: RequiredExtension; flags: InstalledExtension["modules"][number]["flags"] } | null>(null);
