@@ -1,3 +1,5 @@
+import { programArguments, programLimits, programShellCommand, workDirectory } from "./program-command.js";
+
 /*
  * The git tool (piki:git, #163): Git without a shell. The agent gives Git's arguments as a list, and a directory of the
  * worktree to run in; the session runs exactly `git <arguments>` there, which its approval card shows as one sandboxed
@@ -18,11 +20,8 @@ export const gitSubcommands = Object.freeze([
 ] as const);
 export type GitSubcommand = (typeof gitSubcommands)[number];
 
-/**
- * The limits of one call: as many arguments as the gh tool takes, within the 8192 characters a bash operation may be
- * (validateOperation, and the control plane's check), so a call too long says so before any card is made.
- */
-export const gitLimits = Object.freeze({ arguments: 256, argumentLength: 8192, commandLength: 8192 });
+/** The limits of one call (programLimits). */
+export const gitLimits = programLimits;
 
 /**
  * Options of a subcommand that name a program for Git to run, or take settings or hooks that can (clone's --config,
@@ -49,15 +48,8 @@ export interface GitRequest {
 
 /** The git tool's call as it runs, or an error saying what it refused. */
 export function gitRequest(input: { args: unknown; directory?: unknown }): GitRequest {
-  const { args } = input;
-  if (!Array.isArray(args) || args.length === 0) throw new Error("args is Git's arguments as a list, starting with its subcommand, such as [\"status\"]");
-  if (args.length > gitLimits.arguments) throw new Error(`args holds at most ${gitLimits.arguments} arguments`);
-  for (const arg of args) {
-    if (typeof arg !== "string") throw new Error("each argument is a string");
-    if (arg.includes("\0")) throw new Error("arguments must not contain NUL characters");
-    if (arg.length > gitLimits.argumentLength) throw new Error(`an argument holds at most ${gitLimits.argumentLength} characters`);
-  }
-  const list = args as string[];
+  const list = programArguments(input.args, '["status"]');
+  if (list.length === 0) throw new Error("args is Git's arguments as a list, starting with its subcommand, such as [\"status\"]");
   const subcommand = list[0]!;
   if (!(gitSubcommands as readonly string[]).includes(subcommand)) {
     throw new Error(subcommand.startsWith("-")
@@ -85,18 +77,8 @@ export function gitRequest(input: { args: unknown; directory?: unknown }): GitRe
   return { directory: gitDirectory(input.directory), args: list };
 }
 
-/** `directory` as the git tool takes it: a relative path within the worktree, without `..`; "." by default. */
-export function gitDirectory(value: unknown): string {
-  if (value === undefined) return ".";
-  if (typeof value !== "string" || value.length > 1024 || value.includes("\0")) throw new Error("directory is a path within the session's worktree, such as app");
-  const parts = value.replaceAll("\\", "/").split("/").filter(part => part && part !== ".");
-  if (value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/.test(value) || value.startsWith("~") || parts.includes("..")) {
-    throw new Error("directory is a path within the session's worktree, such as app");
-  }
-  return parts.join("/") || ".";
-}
-
-const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+/** `directory` as the git tool takes it (workDirectory). */
+export const gitDirectory = workDirectory;
 
 /**
  * The shell command that runs `request`, as its card shows it: Git with every argument quoted, in its directory, with
@@ -104,8 +86,5 @@ const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
  * error output with the rest.
  */
 export function gitShellCommand(request: GitRequest): string {
-  const command = `${request.directory === "." ? "" : `cd -- ${quote(`./${request.directory}`)} && `}`
-    + `GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0 git --no-pager ${request.args.map(quote).join(" ")} </dev/null 2>&1`;
-  if (command.length > gitLimits.commandLength) throw new Error(`the command would be over ${gitLimits.commandLength} characters`);
-  return command;
+  return programShellCommand({ directory: request.directory, prefix: "GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0", program: "git --no-pager", args: request.args });
 }
