@@ -20,9 +20,15 @@ const PYTHON_ENVIRONMENT = "NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CH
 /** Options that take the next argument as their value, before the command or module they run. */
 const valued: Readonly<Record<string, ReadonlySet<string>>> = {
   python3: new Set(["-W", "-X", "-c", "-m"]),
-  uv: new Set(["--directory", "--project", "--config-file", "--cache-dir", "--python", "-p", "--color", "--with", "-w", "--from", "--index", "--index-url",
-    "--default-index", "--extra-index-url"]),
-  uvx: new Set(["--from", "--with", "-w", "--python", "-p", "--index", "--index-url", "--default-index", "--extra-index-url"]),
+  // uv's global options and those of run, tool run and uvx that take a value (review of #186).
+  uv: new Set(["--directory", "--project", "--config-file", "--cache-dir", "--python", "-p", "--color", "--with", "-w", "--with-requirements",
+    "--with-editable", "--from", "--package", "--extra", "--group", "--only-group", "--no-group", "--env-file", "--index", "--index-url",
+    "--default-index", "--extra-index-url", "--find-links", "-f", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease",
+    "--exclude-newer", "--config-setting", "-C", "--python-preference", "--allow-insecure-host", "--upgrade-package", "-P", "--reinstall-package",
+    "--refresh-package", "--no-binary-package", "--no-build-package", "--link-mode"]),
+  uvx: new Set(["--from", "--with", "-w", "--with-requirements", "--with-editable", "--python", "-p", "--index", "--index-url", "--default-index",
+    "--extra-index-url", "--find-links", "-f", "--index-strategy", "--keyring-provider", "--resolution", "--prerelease", "--exclude-newer",
+    "--config-setting", "-C", "--python-preference", "--allow-insecure-host", "--directory", "--project", "--cache-dir", "--color", "--config-file"]),
   poetry: new Set(["--directory", "-C", "--project", "-P"]),
 };
 
@@ -60,7 +66,7 @@ const packageName = (spec: string) => spec.split(/[=<>~!@[\s]/)[0]!.toLowerCase(
 
 /**
  * The command that acts on a package index as an account that `program` would run with `args`, if any: publishing
- * (`uv publish`, `poetry publish`, twine's `upload` and `register`), and storing credentials (`poetry config
+ * (`uv publish`, `poetry publish`, twine's `upload` and `register`), and storing credentials (`uv auth`, `poetry config
  * http-basic.*` or `pypi-token.*`), followed through what launches twine by name (`python3 -m twine`, `uvx twine`,
  * `uv tool run twine`, `uv run twine`, `poetry run twine`). A program that runs any other way (a script) isn't
  * followed: the check keeps the plain forms off the cards, while the card's approval is what stands for the rest.
@@ -93,6 +99,8 @@ export function packageIndexAccountCommand(program: string, args: readonly strin
   if (program === "uvx") return launch(0);
   if (program === "uv") {
     if (first?.arg === "publish") return "uv publish";
+    // uv auth login, logout and token store and show an index's credentials (review of #186).
+    if (first?.arg === "auth") return "uv auth";
     if (first?.arg === "tool" && found[1]?.arg === "run") return launch(found[1].index + 1);
     if (first?.arg === "run") return launch(first.index + 1);
     return undefined;
@@ -136,8 +144,9 @@ export function pythonRequest(input: { program: unknown; args?: unknown; directo
  * as an absolute path, so python3, pip and pytest are the environment's wherever a program goes, and VIRTUAL_ENV
  * names it, as activating it would.
  */
-export function pythonShellCommand(request: PythonRequest): string {
-  const venv = request.venv ? { firstHere: `${request.venv}/bin`, prefix: `VIRTUAL_ENV="$PWD"/${shellQuote(request.venv)} ` } : undefined;
+export function pythonShellCommand(request: PythonRequest, platform: NodeJS.Platform = process.platform): string {
+  // A virtual environment made on Windows keeps its programs in Scripts (review of #186).
+  const venv = request.venv ? { firstHere: `${request.venv}/${platform === "win32" ? "Scripts" : "bin"}`, prefix: `VIRTUAL_ENV="$PWD"/${shellQuote(request.venv)} ` } : undefined;
   return programShellCommand({ directory: request.directory, path: "/usr/local/bin", ...(venv ? { firstHere: venv.firstHere } : {}),
     prefix: `${venv?.prefix ?? ""}${PYTHON_ENVIRONMENT}`, program: request.program, args: request.args });
 }
