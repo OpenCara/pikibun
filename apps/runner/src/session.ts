@@ -29,7 +29,7 @@ import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
 import { programLimits } from "./program-command.js";
-import { githubWaitLimits, githubWaits, waitOutcome } from "./github-wait.js";
+import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { lineRange } from "./edits.js";
 import { pikiSessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { runnerModels } from "./provider.js";
@@ -2217,26 +2217,11 @@ export class RunnerSession {
         };
         const first = await read();
         if (!args.wait) return text({ ...attribution, ...first });
-        // A series of reads of the same call, each checked and audited by the control plane as the first was.
-        const started = Date.now();
-        const deadline = started + (args.timeout_seconds ?? githubWaitLimits.defaultSeconds) * 1000;
-        const poll = (this.config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000);
-        let view = first;
-        let outcome = waitOutcome(args.wait, first, view, 0);
-        let stopped: string | undefined;
-        while (!outcome) {
-          if (Date.now() + poll > deadline) { outcome = "timeout"; break; }
-          await sleep(poll, undefined, { signal: call.abortSignal });
-          try { view = await read(); }
-          catch (error) {
-            // The last read stands; the agent learns why the wait ended early (its message's hour ran out, say).
-            outcome = "stopped";
-            stopped = error instanceof Error ? error.message.slice(0, 500) : "the read failed";
-            break;
-          }
-          outcome = waitOutcome(args.wait, first, view, (Date.now() - started) / 1000);
-        }
-        return text({ ...attribution, ...view, waited: { for: args.wait, outcome, seconds: Math.round((Date.now() - started) / 1000), ...(stopped ? { reason: stopped } : {}) } });
+        // A series of reads of the same call, each checked and audited by the control plane as the first was. The last
+        // read stands if one fails (its message's hour ran out, say); stopping the message stops the wait.
+        const { view, waited } = await waitForGitHub({ wait: args.wait, first, read, timeoutMs: (args.timeout_seconds ?? githubWaitLimits.defaultSeconds) * 1000,
+          pollMs: this.config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000, now: Date.now, sleep: ms => sleep(ms, undefined, { signal: call.abortSignal }) });
+        return text({ ...attribution, ...view, waited });
       } }),
       defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), body: Type.String() }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
