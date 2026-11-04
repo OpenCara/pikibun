@@ -185,8 +185,21 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     choice there. A version a project asks for (`.nvmrc`, `.node-version`, `engines.node`) would be provisioned next,
     from the npm registry's `node-<platform>-<arch>` packages through the egress proxy.
 
-Next, in order: a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
-becomes `piki:shell`, and `host_bash` is removed. The brokered tools
+25. **Waiting on a pull request without `sleep`.** Sessions waited for CI with `sleep` in `bash` (9% of their shell
+    commands), and read the pull request again after 25 of 26. `github_read` takes `wait` (`apps/runner/src/github-wait.ts`):
+    `checks` ends once every check of the head commit has completed, the pull request is closed, or its head has had no
+    checks for 2 minutes since it was first read (none will come; a push during the wait starts that time again);
+    `change` ends once a digest of the view differs from the first read's: the state, title, description and labels,
+    the comments, reviews (with their states) and review comments with their contents, so an edit or a dismissal shows,
+    how many of each a full list left out, so a new item shows, the head commit and the checks' statuses; never
+    GitHub's own mergeable state, which it works out again by itself. The runner reads again every 30 seconds, up to
+    `timeout_seconds` (at most 30 minutes, within the hour a message's admission lets it read), its last sleep cut to
+    end at the deadline and a read after it, as the same call: the control plane checks and audits each read as it does one.
+    A read that fails during the wait (the admission ran out, say) ends it with the last view and the reason, and
+    stopping the message stops the wait. It runs in the runner, so codemode scripts, which have no timers, wait with it too.
+
+Next, in order: file operations (`move_file`, `copy_file`, `delete_file`), `piki:python` and the other ecosystems,
+codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
 
 ## The prompt audit: piki:prompt-audit

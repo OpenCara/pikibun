@@ -29,6 +29,7 @@ import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
 import { programLimits } from "./program-command.js";
+import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { lineRange } from "./edits.js";
 import { pikiSessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { runnerModels } from "./provider.js";
@@ -196,6 +197,8 @@ export type RunnerConfig = {
   githubComment?: (request: GitHubCommentRequest) => Promise<{ id: number; url: string }>;
   /** Reads an issue or pull request as the session owner, through the control plane. */
   githubRead?: (request: GitHubReadRequest) => Promise<GitHubIssueView>;
+  /** Tests only: how long github_read's wait waits between reads (githubWaitLimits.pollSeconds otherwise). */
+  githubWaitPollMs?: number;
   /** Reads an item of one of the workspace's document sources as the session owner, through the control plane. */
   sourceRead?: (request: SourceReadRequest) => Promise<SourceReadView>;
   /** Performs one merge, as githubComment; a refusal GitHub stated throws a RunnerError with status 422 and its reason. */
@@ -826,6 +829,9 @@ export class RunnerSession {
       + "node {program: \"pnpm\", args: [\"install\"], directory: \"<name>\"}, node {program: \"pnpm\", args: [\"test\"], directory: \"<name>\"}, "
       + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs."
       + (this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own), with its npm, npx and corepack, ahead of any other on PATH.` : "");
+    // Sessions waited for CI with sleep in bash, then read the pull request again, in 9% of their shell commands (#163).
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
+      + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes) rather than sleep in bash.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -2193,7 +2199,10 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "node", `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "node" }, call.abortSignal), call));
         } }),
-      defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }) }), execute: async (args, api, call) => {
+      defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools. "
+        + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
+        parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), wait: Type.Optional(StringEnum(githubWaits)),
+          timeout_seconds: Type.Optional(Type.Integer({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
         const repository = this.githubRepository(args.repository);
         await this.permit(api, call, "github_read", `${repository}#${args.issue}`);
@@ -2202,9 +2211,17 @@ export class RunnerSession {
         // The control plane reads only within a message's write admission.
         if (!run.admissionId) throw new RunnerError(403, "GitHub reads need a write message");
         const request: GitHubReadRequest = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId), repository, issue: args.issue };
-        await this.authorize(run.initiatedBy, "write");
-        const view = this.config.githubRead ? await this.config.githubRead(request) : await this.internalGitHub("read", request) as GitHubIssueView;
-        return text({ ...attribution, ...view });
+        const read = async () => {
+          await this.authorize(run.initiatedBy, "write");
+          return this.config.githubRead ? await this.config.githubRead(request) : await this.internalGitHub("read", request) as GitHubIssueView;
+        };
+        const first = await read();
+        if (!args.wait) return text({ ...attribution, ...first });
+        // A series of reads of the same call, each checked and audited by the control plane as the first was. The last
+        // read stands if one fails (its message's hour ran out, say); stopping the message stops the wait.
+        const { view, waited } = await waitForGitHub({ wait: args.wait, first, read, timeoutMs: (args.timeout_seconds ?? githubWaitLimits.defaultSeconds) * 1000,
+          pollMs: this.config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000, now: Date.now, sleep: ms => sleep(ms, undefined, { signal: call.abortSignal }) });
+        return text({ ...attribution, ...view, waited });
       } }),
       defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), body: Type.String() }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
