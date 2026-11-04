@@ -211,8 +211,11 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     within 10,000 entries and 50 MB; if it fails it removes what it made, last first, a directory only while it is
     empty and a file or link only while it is still the one it made (its device and inode), so nothing another writer
     put there meanwhile goes; a delete of a non-empty directory needs `recursive`, which may delete a clone with
-    its `.git`. The Python helper does it with directory descriptors and `O_NOFOLLOW`, as its other steps do;
-    `FILE_OPERATIONS_CORE` does it in the Windows Node helper and, on unsandboxed hosts, in a worker thread; the
+    its `.git`; without `recursive` only the entry itself goes (`rmdir` or `unlink`), whatever it became since it was
+    looked at. The Python helper does it with directory descriptors and `O_NOFOLLOW`, as its other steps do;
+    `FILE_OPERATIONS_CORE` does it in the Windows Node helper and, on unsandboxed hosts, in a worker thread, by path
+    (Node has no calls relative to an open directory), checking that a directory it goes into is still the one it looked
+    at; there the boundary is the Windows container, or none at all on an unsandboxed host; the
     conformance suite holds every backend to the same answers.
 
 27. **Python without a shell.** `piki:python` turns on the `python` tool (`apps/runner/src/python-command.ts`), the
