@@ -142,7 +142,7 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
           hint={connector.capabilities.builtinExtensions ? `${item.description} Tools: ${item.tools.join(", ")}${"core" in item && item.core
             ? ". Always on with connectors of this release or later; older ones run it only where it's ticked here." : ""}`
             : "This host's connector predates built-in extensions: its sessions run without them until it is updated (npx pikibun@latest connect)"}
-          trailing={<label className="check-row small"><input type="checkbox" className="checkbox" aria-label={`Run ${item.title} in every session on this host`}
+          trailing={<label className="check-row small"><input type="checkbox" className="checkbox" aria-label={"core" in item && item.core ? `Run ${item.title} on this host's older connectors too` : `Run ${item.title} in every session on this host`}
             checked={builtin.includes(item.name)} disabled={action.busy || !!connector.revokedAt} onChange={event => setBuiltin(item.name, event.target.checked)} />
             <span>{"core" in item && item.core ? "Older connectors too" : "Every session"}</span></label>} />)}
         {!connector.capabilities.extensions && <Row title="Update the host's connector" hint="This host's connector predates extensions: its sessions run none until it is updated (npx pikibun@latest connect)." />}
