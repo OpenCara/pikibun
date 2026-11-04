@@ -2194,6 +2194,8 @@ export class RunnerSession {
           return text({ ...attribution, deleted: args.path, entries: result.entries });
         } }),
       defineTool({ name: "bash", description: "Run an exact shell command in the session worktree. Waits for an exact human approval unless the owner enabled auto-approve for this request; then it runs at once and the result carries its output. It stops at the host's command time limit, which identity reports (commands.timeoutSeconds).", parameters: Type.Object({ command: Type.String() }), execute: async (args, api, call) => {
+        // A workspace that turned piki:shell off (fail-closed, like host_bash): refused before anything is recorded.
+        await this.requireSessionTool("bash");
         const attribution = await this.toolActor(api, true);
         // Before any card: a session on a host that no longer accepts that asks nobody for anything.
         await this.requireHostEnvironment();

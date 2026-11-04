@@ -70,6 +70,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "shell", source: "piki:shell", title: "Shell commands", sessionTools: ["bash"], failClosed: true,
+    description: "The bash tool: the agent runs shell commands in the session's sandbox, each approved. Sessions clone and commit with git, build and test with node and python, move files with the file tools and chain tools with code mode, so a workspace that needs none of the rest turns it off. On unless turned off here.",
+    providers: [],
+  },
+  {
     name: "git", source: "piki:git", title: "Git", sessionTools: ["git"],
     description: "The git tool: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
     providers: [],

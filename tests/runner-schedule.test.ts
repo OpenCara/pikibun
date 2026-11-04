@@ -225,7 +225,7 @@ test("piki:host-shell fails closed: host_bash stays off while the last answer re
   current = { extensions: [off], automaticTools: false }; last = current;
   await send("off");
   assert.ok(!offered[1]!.includes("host_bash"));
-  assert.ok(offered[1]!.includes("bash"), "bash stays: sessions still need it to clone and build");
+  assert.ok(offered[1]!.includes("bash"), "bash has its own switch, piki:shell");
   // The control plane out of reach for long: the connector answers no extensions, but the last answer read still holds.
   current = { extensions: [], automaticTools: false };
   await send("outage");
@@ -234,4 +234,53 @@ test("piki:host-shell fails closed: host_bash stays off while the last answer re
   last = current;
   await send("on");
   assert.ok(offered[3]!.includes("host_bash"));
+});
+
+test("piki:shell turns bash off, fail-closed, while git, node, python and the file tools stay", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-shell-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const offered: string[][] = [];
+  const noting = (context: { messages: { role: string; toolsAdded?: { name: string }[]; toolsRemoved?: { name: string }[] }[] }) => {
+    const tools = new Set<string>();
+    for (const message of context.messages) {
+      if (message.role !== "system") continue;
+      for (const tool of message.toolsAdded ?? []) tools.add(tool.name);
+      for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name);
+    }
+    offered.push([...tools]);
+    return fauxAssistantMessage("Noted.");
+  };
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([noting, noting, noting] as never);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const off = { source: "piki:shell", enabled: false, tools: "approval" as const, settings: {} };
+  let current: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  let last: WorkspaceExtensionsAnswer | undefined;
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-shell-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => current, lastKnown: () => last },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "shell-session";
+  const every = binding(id);
+  every.agent.tools = ["bash", "git", "node", "python", "read_file", "write_file", "move_file"];
+  const session = await service.provision(every, await ticket(id, "create"));
+  const send = async (requestId: string) => {
+    await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId, admissionId: await sha256(`shell ${requestId}`) }, "write");
+    await idle(session);
+  };
+  await send("on");
+  assert.ok(offered[0]!.includes("bash"));
+  current = { extensions: [off], automaticTools: false }; last = current;
+  await send("off");
+  assert.ok(!offered[1]!.includes("bash"));
+  for (const tool of ["git", "node", "python", "read_file", "write_file", "move_file"]) assert.ok(offered[1]!.includes(tool), tool);
+  // The control plane out of reach for long: the last answer read still keeps bash off.
+  current = { extensions: [], automaticTools: false };
+  await send("outage");
+  assert.ok(!offered[2]!.includes("bash"), "losing the control plane never turns bash back on");
 });
