@@ -185,8 +185,21 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     choice there. A version a project asks for (`.nvmrc`, `.node-version`, `engines.node`) would be provisioned next,
     from the npm registry's `node-<platform>-<arch>` packages through the egress proxy.
 
-Next, in order: a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
-becomes `piki:shell`, and `host_bash` is removed. The brokered tools
+25. **Waiting on a pull request without `sleep`.** Sessions waited for CI with `sleep` in `bash` (9% of their shell
+    commands), and read the pull request again after 25 of 26. `github_read` takes `wait` (`apps/runner/src/github-wait.ts`):
+    `checks` ends once every check of the head commit has completed, the pull request is closed, or its head has had no
+    checks for 2 minutes since it was first read (none will come; a push during the wait starts that time again);
+    `change` ends once a digest of the view differs from the first read's: the state, title, description and labels,
+    the comments, reviews (with their states) and review comments with their contents, so an edit or a dismissal shows,
+    how many of each a full list left out, so a new item shows, the head commit and the checks' statuses; never
+    GitHub's own mergeable state, which it works out again by itself. The runner reads again every 30 seconds, up to
+    `timeout_seconds` (at most 30 minutes, within the hour a message's admission lets it read), its last sleep cut to
+    end at the deadline and a read after it, as the same call: the control plane checks and audits each read as it does one.
+    A read that fails during the wait (the admission ran out, say) ends it with the last view and the reason, and
+    stopping the message stops the wait. It runs in the runner, so codemode scripts, which have no timers, wait with it too.
+
+Next, in order: file operations (`move_file`, `copy_file`, `delete_file`), `piki:python` and the other ecosystems,
+codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
 
 ## A browser: piki:browser
@@ -195,16 +208,16 @@ Agents that build web apps had no way to see them: `curl` gives the HTML, not th
 in `bash` needs a download the sandbox can't make, a display, and a way to drive it. `piki:browser` turns on the
 `browser` tool, the session's own (rule 16), and the session panel gets a **Browser** tab that shows what it saw.
 
-25. **One sandboxed command per call.** A sandboxed command has its own network namespace, and its processes end with
+26. **One sandboxed command per call.** A sandboxed command has its own network namespace, and its processes end with
     it (`--die-with-parent`, the session's cgroup), so a browser can't outlive a call without a second kind of sandbox
     that lives across commands, with its own lifetime, limits and cleanup. A call is instead one `bash` operation: the
     driver starts Chromium, opens the page, runs the actions, screenshots the page and exits. Everything a call needs
-    happens in it, `localhost` included, which is also why `serve` exists (rule 28). What carries over between calls
+    happens in it, `localhost` included, which is also why `serve` exists (rule 29). What carries over between calls
     is the profile in the session's home (cookies, storage: a sign-in), and the last page, which a call without a `url`
     opens again. It is decided as `bash` is, as `git` and `node` are (rule 22): pages run their scripts, `evaluate` runs
     the agent's, `serve` is a shell command. The card shows the driver, the Chromium it starts, the command's time limit
     and the call as JSON, within a bash operation's 8192 characters.
-26. **The driver.** `sandbox-python/browser.py`, standard-library Python like the helper, embedded through
+27. **The driver.** `sandbox-python/browser.py`, standard-library Python like the helper, embedded through
     `sandbox-python.generated.ts`, runs Chromium headless on a DevTools pipe (`--remote-debugging-pipe`: no port, no
     WebSocket client, nothing another process in the sandbox could connect to). Chromium's own sandbox can't start in
     ours (no user namespaces), so it runs with `--no-sandbox`: the session's sandbox is the boundary, as for every other
@@ -217,18 +230,18 @@ in `bash` needs a download the sandbox can't make, a display, and a way to drive
     unique CSS selector, the last 40 console messages, page errors, failed requests, and the screenshot. The driver
     takes the command's time limit, stops actions 5 seconds before it and reports by 1 second before, so a slow page
     still answers with what it got to.
-27. **The screenshot, to the model and the panel.** The report and screenshots go to the worktree's `browser-output/`
+28. **The screenshot, to the model and the panel.** The report and screenshots go to the worktree's `browser-output/`
     (the newest 30 calls), and the call's output is the report. The tool reads the screenshot back with `read_file`'s
     reader and preparation (scaled for the model), and answers with the report in place of the raw output, and the
     image. The **Browser** tab reads the same files through the file browser's API, so it needs nothing new of hosts or
     the control plane, takes the Files tab's collaborator role, and shows what is on the host now. A report is files
     the agent can change, so the tab and the tool take only what has a report's shape (`parseBrowserReport`), and a
     screenshot only at a `browser-output/` path.
-28. **`serve`.** A web app under test must listen in the same command as the browser, so a call can name a shell
+29. **`serve`.** A web app under test must listen in the same command as the browser, so a call can name a shell
     command, its directory and port: the driver starts it in its own process group, waits for the port (or its exit,
     with its output), browses, then stops the group, and returns the end of its output. PATH has the connector's
     Node.js first, as the `node` tool's does.
-29. **The host's Chromium, given read-only.** Sessions download nothing, so the browser is the host owner's
+30. **The host's Chromium, given read-only.** Sessions download nothing, so the browser is the host owner's
     (`browser-toolchain.ts`): `PIKIBUN_BROWSER`, else a system install (the distributions' `chromium` packages' real
     executable, not their wrapper scripts; Chrome and Edge in `/opt`), else the newest Playwright or Puppeteer download.
     Only an installation is taken: a real executable (ELF on Linux) beside one of Chromium's own files, in a directory
@@ -236,7 +249,7 @@ in `bash` needs a download the sandbox can't make, a display, and a way to drive
     else. The Linux sandbox binds it read-only at `/opt/pikibun/chromium` for shell commands, unless it is under `/usr`,
     and the driver at `/opt/pikibun/browser/pikibun-browser`, written at every open like the git shim. Hosts without the
     sandbox run the host's Chromium where it is, with the driver beside the session's files. Found once per connector.
-30. **Offered only where it runs.** A session whose workspace has no Chromium for its commands (none on the host, the
+31. **Offered only where it runs.** A session whose workspace has no Chromium for its commands (none on the host, the
     experimental macOS and Windows sandboxes, which would need their own policy for it) isn't offered the tool, nor
     told of it, rather than offered a tool that only fails; one the workspace turned off is refused by name, as rule 16
     says. Its network is the session's: Chromium goes through the egress proxy (loopback stays direct), so the
