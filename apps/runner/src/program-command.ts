@@ -38,11 +38,13 @@ export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}
 /**
  * The shell command that runs `program` with `args`, every one quoted, in `directory`, after `prefix` (fixed variable
  * assignments and options of the tool's own, never the agent's), with no input and its error output with the rest.
- * `path`: a directory to look in after the sandbox's PATH, such as /usr/local/bin, where toolchains install.
+ * `path`: a directory to look in after the sandbox's PATH, such as /usr/local/bin, where toolchains install; `first`, one
+ * to look in before it, such as the toolchain's own bin directory. An empty PATH is /usr/bin:/bin there, never an empty
+ * entry, which the shell would take for the command's directory.
  */
-export function programShellCommand(options: { directory: string; program: string; args: readonly string[]; prefix?: string; path?: string }): string {
+export function programShellCommand(options: { directory: string; program: string; args: readonly string[]; prefix?: string; path?: string; first?: string }): string {
   const command = `${options.directory === "." ? "" : `cd -- ${shellQuote(`./${options.directory}`)} && `}`
-    + `${options.path ? `PATH="$PATH:${options.path}" ` : ""}${options.prefix ? `${options.prefix} ` : ""}${options.program}`
+    + `${options.path || options.first ? `PATH=${options.first ? `${shellQuote(options.first)}:` : ""}"\${PATH:-/usr/bin:/bin}"${options.path ? `:${shellQuote(options.path)}` : ""} ` : ""}${options.prefix ? `${options.prefix} ` : ""}${options.program}`
     + `${options.args.length ? ` ${options.args.map(shellQuote).join(" ")}` : ""} </dev/null 2>&1`;
   if (command.length > programLimits.commandLength) throw new Error(`the command would be over ${programLimits.commandLength} characters`);
   return command;

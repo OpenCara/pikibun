@@ -21,6 +21,7 @@ import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
 import type { IsolatedWorkspace } from "./workspace.js";
 import { CREATE_FILE, OPEN_FILE, privateEntry } from "./platform.js";
 import { GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER } from "./sandbox-python.generated.js";
+import { connectorNode, sandboxNodeMount, type NodeToolchain, type SandboxNodeMount } from "./node-toolchain.js";
 
 export { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 
@@ -57,6 +58,8 @@ export interface SandboxExecutionOptions {
 interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal }
 
 export interface SandboxOptions {
+  /** The Node.js the node tool runs (node-toolchain.ts): the connector's own by default; null for none. */
+  node?: NodeToolchain | null;
   /**
    * Host path of the session's egress proxy socket (see EgressProxy). Shell commands get it read-only at EGRESS_SOCKET,
    * and the helper relays the sandbox's loopback EGRESS_PORT to it: their only way out of the network namespace.
@@ -380,6 +383,9 @@ export class Sandbox implements IsolatedWorkspace {
   readonly #gpuRoot: string;
   /** Whether shell commands get the `git` shim: on a cache host, or where git-lfs is installed, in sessions with a proxy. */
   readonly #shim: boolean;
+  /** The connector's Node.js (its node, package managers and headers), read-only for shell commands where the sandbox doesn't see it already. */
+  readonly #nodeMount: SandboxNodeMount | undefined;
+  readonly nodeBin: string | undefined;
   #initialization: Promise<void> | undefined;
   #mounts: Mounts | undefined;
   #closed = false;
@@ -410,6 +416,9 @@ export class Sandbox implements IsolatedWorkspace {
     this.#mirrors = options.mirrors;
     this.#gpuRoot = options.gpuRoot ?? "/";
     this.#shim = options.egressSocket !== undefined && (options.mirrors !== undefined || hostGitLfs() !== undefined);
+    const node = sandboxNodeMount(options.node === undefined ? connectorNode() : options.node ?? undefined);
+    this.#nodeMount = node?.mount;
+    this.nodeBin = node?.bin;
     const base = `/sessions/${key}`;
     this.#root = resolve(root);
     this.#identity = Object.freeze({ ownerId, githubLogin, gitName, gitEmail, home: `${base}/home`, worktree: `${base}/worktree`, env });
@@ -723,6 +732,8 @@ export class Sandbox implements IsolatedWorkspace {
       ...(egress ? ["--ro-bind-try", egress, EGRESS_SOCKET, "--ro-bind", join(this.#root, CA_BUNDLE_FILE), CA_BUNDLE] : []),
       ...(egress && this.#shim ? ["--ro-bind-try", join(this.#root, "bin"), SHIM_DIRECTORY] : []),
       ...mirrors.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
+      ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
+        ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),
       ...(gpu?.args ?? []),
       "--remount-ro", "/proc", "--remount-ro", "/dev", "--remount-ro", "/",
       "--chdir", this.worktree, "--clearenv",

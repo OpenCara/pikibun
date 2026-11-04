@@ -21,6 +21,11 @@ export interface SessionWorkspace {
    * which run in the runner. The same as `worktree` except in the Linux sandbox, which mounts it at another path.
    */
   readonly hostWorktree: string;
+  /**
+   * Where the session's commands find the Node.js the node tool runs, the connector's own (node-toolchain.ts): its bin
+   * directory as they see it. None where it isn't given to them, and the tool then runs the Node.js on their PATH.
+   */
+  readonly nodeBin?: string | undefined;
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>>;
   initialize(): Promise<void>;
   readFile(path: string, authorize: SandboxAuthorize): Promise<string>;

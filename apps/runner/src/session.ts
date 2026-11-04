@@ -824,7 +824,8 @@ export class RunnerSession {
       + "It needs no quoting, and its approval card shows exactly the Git command it runs.";
     if (mode !== "ask" && this.tools.some(tool => tool.name === "node") && !off.has("node")) instructions += "\n\nRun Node.js, npm, npx, pnpm, yarn and corepack with the node tool rather than in bash: "
       + "node {program: \"pnpm\", args: [\"install\"], directory: \"<name>\"}, node {program: \"pnpm\", args: [\"test\"], directory: \"<name>\"}, "
-      + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs.";
+      + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs."
+      + (this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own), with its npm, npx and corepack, ahead of any other on PATH.` : "");
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -2185,7 +2186,7 @@ export class RunnerSession {
           await this.requireSessionTool("node");
           let request: NodeRequest;
           let command: string;
-          try { request = nodeRequest(args); command = nodeShellCommand(request); }
+          try { request = nodeRequest(args); command = nodeShellCommand(request, this.sandbox.nodeBin); }
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid node call"}. Nothing ran.`); }
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();

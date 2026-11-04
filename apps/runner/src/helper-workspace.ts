@@ -76,6 +76,8 @@ export interface HelperBackend {
   supports(kind: SandboxRequest["kind"]): boolean;
   /** The PATH for session commands. */
   readonly path: string;
+  /** Where session commands find the connector's Node.js, which the node tool runs (SessionWorkspace.nodeBin), if they may. */
+  readonly nodeBin?: string | undefined;
   /** Writes the backend's files below `layout` (the helper script, shims); called at every initialization. */
   prepare(layout: HelperLayout): Promise<void>;
   launch(request: SandboxRequest, context: HelperContext, layout: HelperLayout): Promise<HelperLaunch>;
@@ -130,6 +132,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
   get home(): string { return this.#identity.home; }
   get worktree(): string { return this.#identity.worktree; }
   get hostWorktree(): string { return this.worktree; }
+  get nodeBin(): string | undefined { return this.#backend.nodeBin; }
   /** Where the session's files are; the backends' tests and the session's own steps use it. */
   get layout(): Readonly<HelperLayout> { return this.#layout; }
 
