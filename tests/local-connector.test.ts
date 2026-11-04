@@ -1407,8 +1407,8 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
     return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
   } });
   await startFixture(fixture);
-  assert.deepEqual((await syncs.next()).report.installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:prompt-audit']);
+  assert.deepEqual((await syncs.next()).report.installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:git', 'piki:prompt-audit']);
   assert.deepEqual((await syncs.next()).report.installed, [], 'tried again at once, without them');
-  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:prompt-audit'],
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:git', 'piki:prompt-audit'],
     'sessions still have them');
 });

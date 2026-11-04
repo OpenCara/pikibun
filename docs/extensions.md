@@ -30,7 +30,7 @@ Three workspace extensions come with the connector, so hosts never install them 
 - **Never their tokens.** Commands that would show the command's credentials (`gh auth token`, `--show-token`, `az account get-access-token`, `--expose-token`, `az --debug`) are refused. In the sandbox the token variables (`GH_TOKEN`, `GITLAB_TOKEN`, `AZURE_DEVOPS_EXT_PAT`) hold only a placeholder. On the host the command gets the host's `PATH`, `HOME`, proxies and its own sign-in variables, never the connector's other environment.
 - **Read-only.** Each has a **read-only** setting (**Edit**): then only commands that read run (lists, views, logs, `GET` requests and GraphQL queries; for `az`, `list`, `show` and `query`, and none that show keys or secrets), never with the owner's credential to write, and with the worktree read-only (on the host, outside the worktree, so nothing a session wrote there, a repository's Git configuration say, can make the command run code there). Turn it on before setting the extension's tools to **Automatic**.
 
-## Session tools: piki:schedule and piki:host-shell
+## Session tools: piki:schedule, piki:host-shell and piki:git
 
 Pikibun's own tools are becoming extensions, one by one ([#163](https://github.com/OpenCara/pikibun/issues/163)), so a workspace chooses them like any other. Each such **session-tool extension** turns one or more of the session's own tools on or off; the tools themselves don't change.
 
@@ -38,11 +38,13 @@ Pikibun's own tools are becoming extensions, one by one ([#163](https://github.c
 |---|---|
 | `piki:schedule` | `schedule` |
 | `piki:host-shell` | `host_bash` |
+| `piki:git` | `git` |
 
 - **On unless turned off.** The workspace page lists them under **Extensions** whether or not the workspace ever chose them; owners and admins switch each **On** or off there. Sessions stop offering a tool that is off from their next message, and a call to it by name (from a code mode script, say) is refused.
 - **The session's own.** Their tools run as before: with the session's permissions, approval cards and Read-only rules, decided by the session's people, never as extension tool cards decided like host commands. So they have no **Approval**/**Automatic** choice and no settings, and a host's owner can't require them.
 - **Nothing to install.** Every connector of this release has them. One that predates a session-tool extension offers its tools whatever the workspace chose. Where a session can't learn its workspace's choice for the moment, its tools stay on, except `host_bash`: once its connector has read that the workspace turned it off, it stays off until the connector reads otherwise, however long the control plane is out of reach.
-- **`host_bash` is the first to go.** In recent sessions it ran only the GitHub CLI, which [`piki:gh`](#pikibuns-built-in-extensions-gh-glab-and-az) does in the sandbox as the session owner. Turn it off where your sessions don't need commands on the host. `bash` stays a built-in tool for now: sessions clone, commit, build and test with it, until extensions for git, code search and project tasks take over (see #163).
+- **`host_bash` is the first to go.** In recent sessions it ran only the GitHub CLI, which [`piki:gh`](#pikibuns-built-in-extensions-gh-glab-and-az) does in the sandbox as the session owner. Turn it off where your sessions don't need commands on the host. `bash` stays a built-in tool for now: sessions build and test with it, until extensions for project tasks take over (see #163).
+- **`git` instead of Git in `bash`.** The `git` tool takes Git's arguments as a list and runs exactly `git <arguments>` in a clone, with no shell, pager, editor or password prompt, so its card shows one Git command rather than a script. It runs only version-control subcommands, and refuses the options that make Git run another program. Its calls are approved as `bash` commands are (the owner's **Auto-approve** and auto-approved members included), even for subcommands that only read: a repository's own Git configuration, which the agent can write, can make `git status` run a program.
 - **No place taken.** They don't count towards a workspace's 32 extensions.
 
 ## Prompt audit: piki:prompt-audit

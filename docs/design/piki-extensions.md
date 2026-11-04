@@ -144,7 +144,21 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     helper only. The conformance suite holds every backend to the same answers. They are built-in tools like `read_file`;
     they join `piki:files` when the file tools move there.
 
-Next, in order: git (`piki:git`), a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
+22. **Git without a shell.** `piki:git` turns on the `git` tool (`apps/runner/src/git-command.ts`): Git's arguments as
+    a list, starting with a subcommand of an allowlist of version-control ones (no `config`, `submodule`, `bisect`,
+    `filter-branch`, `difftool` and the like), none of Git's own options before it (`-c`, `-C`, `--git-dir`,
+    `--exec-path`), and none of the options that name a program or take settings or hooks that run one (`clone
+    --upload-pack`/`-u`, `--config`/`-c`, `--template`; `fetch`/`pull`/`ls-remote --upload-pack`; `push --receive-pack`/
+    `--exec`; `rebase --exec`/`-x`; `grep -O`), including their abbreviations and short-option clusters. A call becomes
+    one sandboxed command, `git --no-pager` and its quoted arguments in the clone's directory, with no editor or password
+    prompt, so it is a `bash` operation to the approval rules everywhere (the apps, the control plane, the host's
+    limits and grants), and needs `bash` in the session's agent, as every session has. It never skips approval for
+    subcommands that only read: the clone's own configuration (`core.fsmonitor`, `core.pager`, `diff.external`,
+    filters, hooks), which the agent can write with `write_file`, can make `git status` run a program, so a
+    read-only `git` without approval needs each backend to run Git with all of those turned off first. The runtime
+    instructions point to it rather than Git in `bash`.
+
+Next, in order: a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
 becomes `piki:shell`, and `host_bash` is removed. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
 
