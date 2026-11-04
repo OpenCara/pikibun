@@ -110,6 +110,17 @@ test("the connector's own Node.js: only its node, package managers and headers, 
     ],
   } });
 
+  // corepack enable links pnpm and yarn to corepack's own shims: given with corepack, while a link into another package isn't.
+  const enabled = join(root, "volta", "node", "24.11.0");
+  await install(enabled);
+  await writeFile(join(enabled, "lib", "node_modules", "corepack", "dist", "pnpm.js"), "");
+  await symlink("../lib/node_modules/corepack/dist/pnpm.js", join(enabled, "bin", "pnpm"));
+  await symlink("../lib/node_modules/npm/bin/npm-cli.js", join(enabled, "bin", "yarn"));
+  const shims = connectorNode(join(enabled, "bin", "node"), versions)!;
+  assert.deepEqual(shims.packages, ["npm", "corepack"]);
+  assert.deepEqual(shims.links.map(link => link.name), ["npm", "npx", "corepack", "pnpm"]);
+  assert.ok(sandboxNodeMount(shims)!.mount!.links.some(link => link.path === `${SANDBOX_NODE_DIRECTORY}/bin/pnpm` && link.target === "../lib/node_modules/corepack/dist/pnpm.js"));
+
   // A node in a home's own bin, or in ~/.local/bin: the home and ~/.local are never what is given.
   for (const prefix of [join(root, "alice"), join(root, "alice", ".local")]) {
     await mkdir(join(prefix, "bin"), { recursive: true });

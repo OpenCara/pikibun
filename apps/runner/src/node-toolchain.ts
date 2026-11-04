@@ -12,9 +12,14 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
  * installation is (a home's bin, ~/.local, ~/.nvm) then never decides what else of the host a session can read.
  */
 
-/** The package managers the node tool runs from the installation's lib/node_modules, by the names its bin directory links. */
-const PACKAGE_LINKS: Readonly<Record<string, string>> = Object.freeze({
-  npm: "npm", npx: "npm", corepack: "corepack", pnpm: "pnpm", pnpx: "pnpm", yarn: "yarn", yarnpkg: "yarn",
+/**
+ * The package managers the node tool runs from the installation's lib/node_modules, by the names its bin directory
+ * links, and the packages each may link into: its own, or corepack's, whose `corepack enable` links pnpm and yarn to
+ * its own shims (bin/pnpm → ../lib/node_modules/corepack/dist/pnpm.js).
+ */
+const PACKAGE_LINKS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  npm: ["npm"], npx: ["npm"], corepack: ["corepack"], pnpm: ["pnpm", "corepack"], pnpx: ["pnpm", "corepack"], yarn: ["yarn", "corepack"],
+  yarnpkg: ["yarn", "corepack"],
 });
 
 export interface NodeToolchain {
@@ -54,10 +59,13 @@ export function connectorNode(execPath = process.execPath, versions: NodeJS.Proc
     try { if (!lstatSync(path).isSymbolicLink()) continue; } catch { continue; }
     let target: string;
     try { target = readlinkSync(path); } catch { continue; }
-    // Only a link to a file of that package, within the installation's own lib/node_modules.
-    const inside = relative(join(modules, wanted), resolve(bin, target));
-    if (isAbsolute(target) || !inside || inside.startsWith("..") || isAbsolute(inside) || !directory(join(modules, wanted))) continue;
-    packages.add(wanted);
+    // Only a link to a file of one of those packages, within the installation's own lib/node_modules.
+    const owner = isAbsolute(target) ? undefined : wanted.find(pkg => {
+      const inside = relative(join(modules, pkg), resolve(bin, target));
+      return !!inside && !inside.startsWith("..") && !isAbsolute(inside) && directory(join(modules, pkg));
+    });
+    if (!owner) continue;
+    packages.add(owner);
     links.push({ name, target });
   }
   return { version: versions.node, prefix, bin, packages: [...packages], links, headers: directory(join(prefix, "include", "node")) };

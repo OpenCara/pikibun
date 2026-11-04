@@ -68,8 +68,10 @@ export function seatbeltTools(node: NodeToolchain | undefined = connectorNode())
   const homebrew = ["/opt/homebrew", "/usr/local/Homebrew", "/usr/local/Cellar", "/usr/local/opt", "/usr/local/bin", "/usr/local/lib", "/usr/local/share"].filter(path => existsSync(path));
   // The connector's own Node.js, wherever it is installed (nvm, Volta, a tarball): its node, package managers and headers,
   // never the directory they are in, which may be a home's ~/.local or the home itself.
-  const roots = [...new Set([developer, ...homebrew, dirname(dirname(python)), dirname(dirname(git)), ...(node ? toolchainPaths(node) : [])].filter((path): path is string => !!path)
-    .map(path => { try { return realpathSync(path); } catch { return path; } }))];
+  const roots = [...new Set([...[developer, ...homebrew, dirname(dirname(python)), dirname(dirname(git)), ...(node ? toolchainPaths(node) : [])].filter((path): path is string => !!path)
+    .map(path => { try { return realpathSync(path); } catch { return path; } }),
+    // The Node.js links themselves too (bin/npm), not only the files they resolve to; toolchainPaths' are real already.
+    ...(node ? toolchainPaths(node) : [])])];
   const binaries = [existsSync("/opt/homebrew/bin") ? "/opt/homebrew/bin" : undefined, existsSync("/usr/local/bin") ? "/usr/local/bin" : undefined];
   // The developer tools themselves, ahead of the /usr/bin shims: a shim runs xcrun, which wants a cache in the user's
   // temporary directory (denied), and so runs xcodebuild twice per call (over a second each) and prints errors.
