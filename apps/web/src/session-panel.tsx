@@ -12,6 +12,7 @@ import { Icon } from "./icons";
 import { Username, usePeople } from "./people";
 import { RepositoryClonePolicy } from "./repositories";
 import { FilesPanel } from "./session-files";
+import { BrowserPanel } from "./session-browser";
 import { SchedulesPanel } from "./session-schedules";
 import { ConnectionsSection } from "./session-connections";
 import { href } from "./router";
@@ -23,7 +24,9 @@ import { userIdFromInput, usernameWithId, withUsernames, type Person } from "../
 import { automaticNote, extensionToolArguments, extensionToolNotice } from "../../../packages/client/src/host-commands";
 
 export type AuditEvent = { id: string; actorId: string; action: string; detail: unknown; createdAt: string };
-export type PanelTab = "details" | "approvals" | "files" | "schedules" | "activity";
+export type PanelTab = "details" | "approvals" | "files" | "browser" | "schedules" | "activity";
+/** The tabs that show files' contents, for which the panel takes more room. */
+export const widePanelTabs: readonly PanelTab[] = ["files", "browser"];
 
 /** Session-level mutations reachable from both the header menu and the panel. */
 export interface SessionActions {
@@ -220,6 +223,7 @@ export function SessionPanel(props: PanelProps) {
         { value: "details", label: "Details" },
         { value: "approvals", label: pendingCount ? `Approvals ${pendingCount}` : "Approvals" },
         { value: "files", label: "Files" },
+        { value: "browser", label: "Browser" },
         { value: "schedules", label: "Schedules" },
         { value: "activity", label: "Activity" },
       ]} />
@@ -235,6 +239,7 @@ export function SessionPanel(props: PanelProps) {
         </div>
         : view ? <EmptyState title="No approvals">{AUTO_APPROVED_NOTE}</EmptyState> : <Loading />)}
       {tab === "files" && <FilesPanel session={props.session} />}
+      {tab === "browser" && <BrowserPanel session={props.session} changes={`${view?.entries.at(-1)?.id ?? ""}|${view?.entries.length ?? 0}`} />}
       {tab === "schedules" && <SchedulesPanel key={props.session.id} session={props.session} changed={() => { audit.refresh(); props.refresh(); }} />}
       {tab === "activity" && <Section title="Audit log" action={<Button variant="ghost" size="xs" icon="refresh" aria-label="Refresh activity" title="Refresh" disabled={audit.loading} onClick={audit.refresh} />} bare>
         <ResourceState {...audit} retry={audit.refresh}>
@@ -301,7 +306,7 @@ const permissionNeedText: Record<PermissionNeed, string> = {
   audience: "Sharing another session: this session's readers would see what the agent reads from a session they can't open themselves.",
 };
 /** Tools whose effect gets its own approval card after the permission, unless the message auto-approves. */
-const approvedTools: readonly string[] = ["bash", "git", "node", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
+const approvedTools: readonly string[] = ["bash", "git", "node", "browser", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
 
 function PermissionSummary({ request, pending }: { request: PermissionRequest; pending: boolean }) {
   return <>

@@ -13,6 +13,7 @@ import type { AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } 
 import { toolNames } from "../packages/shared/src/types.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
+import { browserAt, hostBrowser } from "../apps/runner/src/browser-toolchain.js";
 
 function binding(id: string): RunnerBinding {
   return {
@@ -173,4 +174,101 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool node is not available/);
   assert.equal(view.approvals.length, 1);
+});
+
+/** A Chromium for the browser tool's session test: PIKIBUN_TEST_BROWSER, or the host's own. */
+const chromium = process.env.PIKIBUN_TEST_BROWSER ? browserAt(process.env.PIKIBUN_TEST_BROWSER) : hostBrowser();
+
+test("the browser tool drives the host's Chromium as one exact command card, answering with the page and its screenshot; piki:browser turns it off", { skip: process.platform === "win32" || (!chromium && "no Chromium on this host (PIKIBUN_TEST_BROWSER names one)") }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-tool-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const port = 20_000 + Math.floor(Math.random() * 20_000);
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  let seen: unknown;
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("browser", { url: "javascript:alert(1)" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("write_file", { path: "site/index.html", content: "<!doctype html><title>Faux app</title><h1>Hello from the sandbox</h1><button>Go</button>" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("browser", { serve: { command: `python3 -m http.server ${port} --bind 127.0.0.1`, port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
+      actions: [{ action: "evaluate", expression: "document.querySelector('h1').textContent" }] })], { stopReason: "toolUse" }),
+    context => { seen = context.messages.at(-1); return fauxAssistantMessage("Seen."); },
+    fauxAssistantMessage([fauxToolCall("browser", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Off."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-browser-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+    browser: chromium,
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "browser-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Look at the app.", requestId: "look", admissionId: await sha256("browser admission") }, "write");
+  const approval = await pendingApproval(session);
+  assert.equal(approval.operation.kind, "bash");
+  const command = approval.operation.kind === "bash" ? approval.operation.command : "";
+  assert.ok(command.startsWith(`PATH="\${PATH:-/usr/bin:/bin}":'/usr/local/bin' '${session.sandbox.browser!.driver}' '--chrome' '${chromium!.executable}' '--time-limit' '30' '{"url":"http://127.0.0.1:${port}/"`), command);
+  await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
+  await idle(session);
+  let view = await session.view();
+  assert.equal(view.approvals.length, 1, "the refused call left no card");
+  assert.equal(view.approvals[0]!.status, "executed");
+  const transcript = view.entries.map(entry => entry.text).join("\n");
+  assert.match(transcript, /url is an http, https or file URL, or about:blank\. Nothing ran\./);
+  assert.match(transcript, /Seen\./);
+  // The model got the report, without the raw output, and the screenshot as an image.
+  const result = seen as { role: string; toolName: string; content: { type: string; text?: string; mimeType?: string }[] };
+  assert.equal(result.role, "toolResult");
+  assert.equal(result.toolName, "browser");
+  const answerText = JSON.parse(result.content.find(part => part.type === "text")!.text!) as { status: string; result?: string; report: { title: string; actions: { value?: string }[]; screenshot: string } };
+  assert.equal(answerText.status, "executed");
+  assert.equal(answerText.result, undefined);
+  assert.equal(answerText.report.title, "Faux app");
+  assert.equal(answerText.report.actions[0]!.value, "Hello from the sandbox");
+  assert.ok(result.content.some(part => part.type === "image" && /^image\/(png|jpeg|webp)$/.test(part.mimeType ?? "")), "the screenshot reached the model");
+  // The Browser tab reads the same report and screenshot from the worktree.
+  const listing = await session.sandbox.browse("browser-output", async () => {});
+  assert.equal(listing.type, "directory");
+  assert.ok(listing.type === "directory" && listing.entries.some(entry => entry.name === answerText.report.screenshot.split("/").at(-1)));
+
+  answer = { extensions: [{ source: "piki:browser", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Again?", requestId: "off", admissionId: await sha256("browser admission off") }, "write");
+  await idle(session);
+  view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
+  assert.equal(view.approvals.length, 1);
+});
+
+test("a session whose host has no Chromium isn't offered the browser tool", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-none-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("browser", { url: "https://example.com/" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("None."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-browser-none-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
+    browser: null,
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "browser-none-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  assert.equal(session.sandbox.browser, undefined);
+  await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser none admission") }, "write");
+  await idle(session);
+  const view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
+  assert.equal(view.approvals.length, 0);
 });

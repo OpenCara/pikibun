@@ -208,7 +208,7 @@
     background: var(--background);
   }
   .session-panel-header { display: flex; align-items: center; gap: var(--space-2); min-height: 48px; padding: 0 var(--space-3); border-bottom: 1px solid var(--border); }
-  /* Five tabs don't fit a phone's width: they scroll sideways rather than push the close button off screen. */
+  /* Six tabs don't fit a phone's width: they scroll sideways rather than push the close button off screen. */
   .session-panel-header > .segmented { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   .session-panel-header > .segmented::-webkit-scrollbar { display: none; }
   .session-panel-header > .segmented > button { flex: 0 0 auto; }
@@ -240,6 +240,31 @@
   .file-crumb:disabled { cursor: default; font-weight: var(--weight-medium); }
   .file-list .row-title { font-family: var(--mono); font-size: var(--font-sm); }
   .file-name { overflow-wrap: anywhere; }
+  /* Browser tab: the page's address and title over its screenshot, then what the call found, like a browser's devtools. */
+  .browser-panel { display: grid; gap: var(--space-3); min-width: 0; }
+  .browser-position { white-space: nowrap; }
+  .browser-address {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface1);
+    color: var(--foreground-muted);
+  }
+  .browser-url { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--foreground); font-family: var(--mono); font-size: var(--font-sm); text-overflow: ellipsis; white-space: nowrap; }
+  .browser-open { display: inline-flex; color: var(--foreground-muted); }
+  .browser-open:hover { color: var(--foreground); }
+  .browser-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+  .browser-title { min-width: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+  .browser-steps, .browser-log { display: grid; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3) var(--space-3) var(--space-6); }
+  .browser-log { padding-left: var(--space-3); list-style: none; }
+  .browser-steps code, .browser-log code { overflow-wrap: anywhere; }
+  .browser-step-detail { margin-top: var(--space-1); overflow-wrap: anywhere; }
+  .browser-log-text { overflow-wrap: anywhere; }
+  .browser-value { max-height: 40vh; margin: var(--space-1) 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
   /* Code: one scroll box holding the line numbers and the text, so they scroll together; the numbers stay put sideways. */
   .code-view {
     display: grid;
@@ -313,7 +338,7 @@
 
   @media (min-width: 1100px) {
     .session-screen.panel-open { grid-template-columns: minmax(0, 1fr) 360px; }
-    /* The Files tab shows file contents, so it takes more room. */
+    /* The Files and Browser tabs show file contents and screenshots, so they take more room. */
     .session-screen.panel-open.panel-wide { grid-template-columns: minmax(0, 1fr) min(560px, 45%); }
   }
   @media (max-width: 1099px) {

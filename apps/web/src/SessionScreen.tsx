@@ -26,7 +26,7 @@ import { preparingRepositories } from "../../../packages/client/src/repository-p
 import { NavigationButton } from "./navigation";
 import { navigate } from "./router";
 import { enterSends } from "./touch";
-import { ApprovalCard, AutoApprovedMarks, SessionPanel, useSessionActions, type AuditEvent, type PanelTab } from "./session-panel";
+import { ApprovalCard, AutoApprovedMarks, SessionPanel, useSessionActions, widePanelTabs, type AuditEvent, type PanelTab } from "./session-panel";
 import { splitToolCalls } from "../../../packages/client/src/transcript";
 import { COMPACTION_FAILED_TITLE, compactionFailureText } from "../../../packages/client/src/compaction";
 import {
@@ -309,7 +309,7 @@ function SessionPane({ id }: { id: string }) {
   const badge = startFailed ? <StatusBadge tone={session?.status === "error" ? "danger" : "running"} dot>{session?.status === "error" ? "Not started" : "Starting"}</StatusBadge>
     : !view && live.error ? <StatusBadge tone="warning" dot>Unavailable</StatusBadge>
     : streamBadge;
-  return <PeopleProvider people={people}><div className={panelOpen && session ? `session-screen panel-open${tab === "files" ? " panel-wide" : ""}` : "session-screen"}>
+  return <PeopleProvider people={people}><div className={panelOpen && session ? `session-screen panel-open${widePanelTabs.includes(tab) ? " panel-wide" : ""}` : "session-screen"}>
     <div className="session-pane">
       <ScreenHeader
         leading={<NavigationButton />}

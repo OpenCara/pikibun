@@ -28,6 +28,9 @@ import { requestKey, RunnerError, stableJson, validateOperation } from "./protoc
 import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
+import { browserRequest, browserShellCommand, browserTarget } from "./browser-command.js";
+import type { BrowserToolchain } from "./browser-toolchain.js";
+import { browserActions, browserKeys, browserLimits, parseBrowserReport, type BrowserRequest } from "../../../packages/shared/src/browser.js";
 import { programLimits } from "./program-command.js";
 import { lineRange } from "./edits.js";
 import { pikiSessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
@@ -235,6 +238,11 @@ export type RunnerConfig = {
    */
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;
+  /**
+   * The Chromium the browser tool runs (browser-toolchain.ts): the host's own, found once per connector, unless this
+   * names another, or null for none. Sessions without one aren't offered the tool.
+   */
+  browser?: BrowserToolchain | null;
   /** Owner-consented host mode: no isolation, so bash needs only per-command approval. */
   unsandboxed?: boolean;
   /**
@@ -480,7 +488,7 @@ export class RunnerSession {
       : config.gitRelay ? undefined
       : (request: Omit<GitDirectRequest, "sessionId">) => this.controlPlane("/api/internal/git/direct", { sessionId: binding.session.id, ...request });
     this.#direct = directGrant && new DirectGit({ grant: directGrant, onFallback: (request, reason) => this.#egress?.noteFallback(request.bindingId, reason) });
-    if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"));
+    if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"), { ...(config.browser !== undefined ? { browser: config.browser } : {}) });
     else if (config.sandboxBackend) {
       // macOS and native Windows sandboxes share the host's network: the proxy listens on a loopback port that wants
       // this session's token. They keep no host repository cache.
@@ -496,6 +504,7 @@ export class RunnerSession {
     } else {
       this.#egress = this.egressProxy(egressSocketPath(binding.session.id, directory));
       this.sandbox = new Sandbox(binding, join(directory, "sandbox"), config.resources, { egressSocket: this.#egress.socketPath,
+        ...(config.browser !== undefined ? { browser: config.browser } : {}),
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
@@ -826,6 +835,12 @@ export class RunnerSession {
       + "node {program: \"pnpm\", args: [\"install\"], directory: \"<name>\"}, node {program: \"pnpm\", args: [\"test\"], directory: \"<name>\"}, "
       + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs."
       + (this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own), with its npm, npx and corepack, ahead of any other on PATH.` : "");
+    if (mode !== "ask" && this.sandbox.browser && this.tools.some(tool => tool.name === "browser") && !off.has("browser")) instructions += "\n\nTo look at or test a web page, "
+      + "use the browser tool, a headless Chromium in the sandbox that answers with a screenshot, the page's text and its interactive elements: "
+      + "browser {url: \"https://example.com/\"}, or for the web app you work on, serve it in the same call, as each call is its own sandboxed command: "
+      + "browser {serve: {command: \"pnpm dev --port 5173\", port: 5173, directory: \"<name>\"}, url: \"http://localhost:5173/\", "
+      + "actions: [{action: \"click\", selector: \"text=Sign in\"}, {action: \"type\", selector: \"#email\", text: \"a@example.com\", submit: true}]}. "
+      + "Use the selectors its answer lists. Its approval card shows exactly the command it runs.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -1292,6 +1307,8 @@ export class RunnerSession {
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     // The session's own tools, less those its workspace turned off (Pikibun's session-tool extensions, such as piki:schedule).
     const off = run.mode === "write" ? await this.sessionToolsOff() : new Set<string>();
+    // A browser this host can't give the session's commands is never offered, rather than offered only to fail.
+    if (!this.sandbox.browser) off.add("browser");
     // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
     const builtins = run.mode === "write" && this.#builtins
       ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
@@ -1912,6 +1929,25 @@ export class RunnerSession {
   }
 
   /**
+   * A browser call's answer: its card as the other command tools give it, with the driver's report in place of its raw
+   * output, and the page's screenshot as an image. A call that didn't run, or whose output isn't a report, answers as
+   * bash would.
+   */
+  private async browserOutcome(approval: ApprovalRecord, recheck: () => Promise<void>, approvalText: (approval: StoredApproval) => ToolExecutionResult): Promise<ToolExecutionResult> {
+    const report = approval.status === "executed" && approval.result ? parseBrowserReport(approval.result.trim()) : undefined;
+    if (!report) return approvalText(approval as StoredApproval);
+    const output: ToolExecutionResult["output"] = [{ type: "text", text: JSON.stringify({ ...approval, result: undefined, admissionId: undefined, callId: undefined, report }) }];
+    if (report.screenshot) {
+      try {
+        const file = await this.sandbox.readContent(report.screenshot, recheck);
+        const prepared = "image" in file ? await prepareImage(file.image, file.mimeType) : undefined;
+        if (prepared && "image" in prepared) output.push({ type: "image", data: prepared.image.data, mimeType: prepared.image.mimeType });
+      } catch { /* The report names the screenshot, which read_file reads. */ }
+    }
+    return { output };
+  }
+
+  /**
    * Whether shell commands may run here: within provisioned limits (Linux --resources, or the Windows sandbox's job
    * objects; macOS has none), on the host itself (an owner-consented unsandboxed host, or the owner's session on a host
    * that accepts it), or as a faux test shell.
@@ -2193,6 +2229,52 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "node", `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "node" }, call.abortSignal), call));
         } }),
+      // A headless Chromium in the sandbox (piki:browser): one sandboxed command per call, decided as bash's are, since pages
+      // run their scripts, evaluate runs the agent's, and serve is a shell command. Offered only where the session has one.
+      defineTool({ name: "browser", description: "Drive a headless Chromium in the session's sandbox. It opens url (http, https, file, or about:blank; "
+        + "without one, the page the last call left), runs actions in order, and answers with the page as it ends: a screenshot, its URL, title, "
+        + "HTTP status, visible text, interactive elements each with a CSS selector, console messages, page errors and failed requests. Actions: "
+        + "goto {url}; click or hover {selector, or x and y}; type {text, selector?, submit?, clear?}; press {key}; select {selector, value}; "
+        + "scroll {selector, or x and y}; wait {selector, text or ms}; evaluate {expression} (JavaScript in the page; its value comes back); "
+        + "screenshot {full_page?}; back; forward; reload. A selector is CSS, or text=<visible text>. A failed action stops the rest. "
+        + "Each call starts the browser afresh with the session's own profile: cookies and storage persist, open pages and their state don't, "
+        + "so do a whole flow in one call. Its network is the sandbox's: other hosts through the session's proxy, as the workspace allows, and "
+        + "localhost only within the call, so start the web app under test with serve {command, port, directory?}: it runs from before the page "
+        + "opens until the call ends. Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
+        + "Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.",
+        executionMode: "sequential",
+        parameters: Type.Object({
+          url: Type.Optional(Type.String()),
+          actions: Type.Optional(Type.Array(Type.Object({
+            action: StringEnum(browserActions),
+            selector: Type.Optional(Type.String()), url: Type.Optional(Type.String()), text: Type.Optional(Type.String()),
+            key: Type.Optional(Type.String({ description: `${browserKeys.join(", ")}, or a single character` })), value: Type.Optional(Type.String()), expression: Type.Optional(Type.String()),
+            x: Type.Optional(Type.Integer()), y: Type.Optional(Type.Integer()), ms: Type.Optional(Type.Integer({ minimum: 0, maximum: browserLimits.waitMs })),
+            full_page: Type.Optional(Type.Boolean()), submit: Type.Optional(Type.Boolean()), clear: Type.Optional(Type.Boolean()),
+          }), { maxItems: browserLimits.actions })),
+          viewport: Type.Optional(Type.Object({ width: Type.Integer(), height: Type.Integer() })),
+          full_page: Type.Optional(Type.Boolean()),
+          timeout_seconds: Type.Optional(Type.Integer({ minimum: browserLimits.timeoutSeconds.min, maximum: browserLimits.timeoutSeconds.max })),
+          serve: Type.Optional(Type.Object({ command: Type.String(), port: Type.Integer({ minimum: 1, maximum: 65535 }), directory: Type.Optional(Type.String()),
+            timeout_seconds: Type.Optional(Type.Integer({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) })),
+        }),
+        execute: async (args, api, call) => {
+          // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+          await this.requireSessionTool("browser");
+          const browser = this.sandbox.browser;
+          if (!browser) throw new RunnerError(400, "This host has no browser for its sessions: its owner installs Chromium there (see Extensions → piki:browser). Nothing ran.");
+          let request: BrowserRequest;
+          let command: string;
+          try {
+            request = browserRequest(args as Record<string, unknown>);
+            command = browserShellCommand(request, browser, { seconds: (await this.commandOptions()).limits.seconds, nodeBin: this.sandbox.nodeBin });
+          } catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid browser call"}. Nothing ran.`); }
+          const attribution = await this.toolActor(api, true);
+          await this.requireHostEnvironment();
+          const { unbounded } = await this.permit(api, call, "browser", browserTarget(request), { write: true, shell: true });
+          const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "browser" }, call.abortSignal), call);
+          return this.browserOutcome(approval, () => this.recheckTool(attribution), approvalText);
+        } }),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }) }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
         const repository = this.githubRepository(args.repository);
@@ -2458,10 +2540,10 @@ export class RunnerSession {
    * owner allows (see runExtensionTool).
    */
   /**
-   * `consent.tool`: the tool whose call this command is, where that isn't bash (git, node): the owner's "Allow for this
+   * `consent.tool`: the tool whose call this command is, where that isn't bash (git, node, browser): the owner's "Allow for this
    * session" for it runs its commands without asking, as one for bash does.
    */
-  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean; tool?: "git" | "node" } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
+  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean; tool?: "git" | "node" | "browser" } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
     this.requireUnfrozen();
     const operation = validateOperation(input);
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");

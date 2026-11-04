@@ -20,8 +20,10 @@ import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
 import type { IsolatedWorkspace } from "./workspace.js";
 import { CREATE_FILE, OPEN_FILE, privateEntry } from "./platform.js";
-import { GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER } from "./sandbox-python.generated.js";
+import { BROWSER_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER } from "./sandbox-python.generated.js";
 import { connectorNode, sandboxNodeMount, type NodeToolchain, type SandboxNodeMount } from "./node-toolchain.js";
+import { connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBrowserMount, type BrowserToolchain } from "./browser-toolchain.js";
+import type { SessionBrowser } from "./browser-command.js";
 
 export { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 
@@ -60,6 +62,8 @@ interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: Abort
 export interface SandboxOptions {
   /** The Node.js the node tool runs (node-toolchain.ts): the connector's own by default; null for none. */
   node?: NodeToolchain | null;
+  /** The Chromium the browser tool runs (browser-toolchain.ts): the host's own by default; null for none. */
+  browser?: BrowserToolchain | null;
   /**
    * Host path of the session's egress proxy socket (see EgressProxy). Shell commands get it read-only at EGRESS_SOCKET,
    * and the helper relays the sandbox's loopback EGRESS_PORT to it: their only way out of the network namespace.
@@ -386,6 +390,10 @@ export class Sandbox implements IsolatedWorkspace {
   /** The connector's Node.js (its node, package managers and headers), read-only for shell commands where the sandbox doesn't see it already. */
   readonly #nodeMount: SandboxNodeMount | undefined;
   readonly nodeBin: string | undefined;
+  /** The host's Chromium installation, read-only for shell commands where the sandbox doesn't see it already. */
+  readonly #browserMount: { source: string; target: string } | undefined;
+  /** Where shell commands find the browser tool's driver and the host's Chromium; none where the host has no Chromium. */
+  readonly browser: SessionBrowser | undefined;
   #initialization: Promise<void> | undefined;
   #mounts: Mounts | undefined;
   #closed = false;
@@ -419,6 +427,9 @@ export class Sandbox implements IsolatedWorkspace {
     const node = sandboxNodeMount(options.node === undefined ? connectorNode() : options.node ?? undefined);
     this.#nodeMount = node?.mount;
     this.nodeBin = node?.bin;
+    const browser = sandboxBrowserMount(options.browser === undefined ? connectorBrowser() : options.browser ?? undefined);
+    this.#browserMount = browser?.mount;
+    this.browser = browser ? { driver: SANDBOX_BROWSER_DRIVER, chromium: browser.executable } : undefined;
     const base = `/sessions/${key}`;
     this.#root = resolve(root);
     this.#identity = Object.freeze({ ownerId, githubLogin, gitName, gitEmail, home: `${base}/home`, worktree: `${base}/worktree`, env });
@@ -484,6 +495,14 @@ export class Sandbox implements IsolatedWorkspace {
           await rm(shim, { force: true });
           await writeFile(shim, GIT_SHIM, { mode: 0o500 });
           await chmod(shim, 0o500);
+        }
+        // The browser tool's driver, beside the shim and as it is, out of the sandbox's reach: written afresh at every open.
+        if (this.browser) {
+          const driver = join(this.#root, "browser", "pikibun-browser");
+          await mkdir(join(this.#root, "browser"), { recursive: true, mode: 0o700 });
+          await rm(driver, { force: true });
+          await writeFile(driver, BROWSER_DRIVER, { mode: 0o500 });
+          await chmod(driver, 0o500);
         }
         // Beside the shim, out of the sandbox's reach; written at every open, so the host's current store applies.
         if (this.#egressSocket !== undefined) {
@@ -732,6 +751,9 @@ export class Sandbox implements IsolatedWorkspace {
       ...(egress ? ["--ro-bind-try", egress, EGRESS_SOCKET, "--ro-bind", join(this.#root, CA_BUNDLE_FILE), CA_BUNDLE] : []),
       ...(egress && this.#shim ? ["--ro-bind-try", join(this.#root, "bin"), SHIM_DIRECTORY] : []),
       ...mirrors.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
+      // The browser tool's driver and the host's Chromium, read-only, for shell commands only: the tool is one.
+      ...(request.kind === "bash" && this.browser ? ["--ro-bind-try", join(this.#root, "browser", "pikibun-browser"), SANDBOX_BROWSER_DRIVER] : []),
+      ...(request.kind === "bash" && this.#browserMount ? ["--ro-bind-try", this.#browserMount.source, this.#browserMount.target] : []),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
         ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),
       ...(gpu?.args ?? []),

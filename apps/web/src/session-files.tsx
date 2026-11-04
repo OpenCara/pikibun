@@ -134,7 +134,7 @@ const isSvg = (path: string) => /\.svg$/i.test(path);
  * An image at its natural size when it fits, else scaled to the panel; clicking switches between that and its actual
  * size. Transparent pixels show over a checkerboard.
  */
-function ImageView({ src, path }: { src: string; path: string }) {
+export function ImageView({ src, path }: { src: string; path: string }) {
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const [actual, setActual] = useState(false);
   const [failed, setFailed] = useState(false);

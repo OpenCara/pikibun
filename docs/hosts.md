@@ -110,6 +110,16 @@ With bubblewrap, every session runs in its own sandbox: no direct network (see [
 
 Shell commands (`bash`) also need resource limits. A connector started with `--resources PATH` (an operator-provisioned cgroup v2 configuration: CPU, memory, process and disk limits, described in [`apps/runner/src/resources.ts`](../apps/runner/src/resources.ts)) runs them in every session. Without it, the host's owner can let commands run without limits in their own sessions, through a [permission request](approvals.md#permission-requests). So can a member they [granted host commands](#host-admins-and-host-command-grants) there, in their own sessions, since that grant already lets them run any command on the host itself. Their commands still run in the sandbox, as the session's owner, but are decided like host commands: only by the host's owner or a member granted host commands, either with approve permission on the session. Under the session owner's **Auto-approve** they run without asking only with **Auto-approve host commands**, and once the grant ends, the next command is refused. In every other member's session on that host, `bash` is refused.
 
+### A browser for sessions
+
+The agent's [browser tool](extensions.md#the-browser-pikibrowser) runs a headless Chromium in the session's sandbox: the host's own, which its owner installs, since sessions download nothing. The connector looks for one when it starts:
+
+- `PIKIBUN_BROWSER`, the path of a Chromium executable (Chromium, Google Chrome, Microsoft Edge, or Chrome for Testing's `chrome-headless-shell`), set in the connector's environment. A path that isn't a Chromium installation leaves the host without one, rather than another browser.
+- Else a system install: Debian's and Fedora's `chromium` packages (`sudo apt install chromium`; Ubuntu's is a snap, which can't run in another sandbox), Google Chrome or Microsoft Edge in `/opt`.
+- Else the newest one Playwright or Puppeteer downloaded for the connector's user: `npx playwright install chromium-headless-shell` (or `chromium`), `npx @puppeteer/browsers install chrome-headless-shell@stable`.
+
+Only that browser's own installation directory is given to sandboxed commands, read-only (at `/opt/pikibun/chromium`), and only where they don't already see it under `/usr`. It runs with `python3` from `/usr`, as the sandbox's helper does, and the system's fonts. Restart the connector after installing one. Sessions on a host without one, or in the experimental macOS and Windows sandboxes, aren't offered the tool.
+
 ## Network access
 
 A sandbox's only way out is its session's **egress proxy**, which the connector runs on the host. Shell commands find it through `HTTPS_PROXY` (`http://127.0.0.1:41080` in the Linux sandbox; in the [experimental macOS and Windows sandboxes](#experimental-sandboxes-on-macos-and-windows), the session's own loopback port and credentials); file tools, commits and every other sandboxed step have no network at all.
