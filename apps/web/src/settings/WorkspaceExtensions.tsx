@@ -114,7 +114,8 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
         {pikiSessionToolExtensions().map(item => {
           const on = !data.extensions.some(extension => extension.source === item.source && !extension.enabled);
           return <Row key={item.source} leading={<Icon name="tool" size={16} />} title={<>{item.title} <code>{item.source}</code></>}
-            hint={<>{item.description} Hosts on older connectors offer {(item.sessionTools ?? []).map((tool, index) => <Fragment key={tool}>{index ? ", " : ""}<code>{tool}</code></Fragment>)} whatever is chosen here.</>}
+            hint={item.core ? item.description
+              : <>{item.description} Hosts on older connectors offer {(item.sessionTools ?? []).map((tool, index) => <Fragment key={tool}>{index ? ", " : ""}<code>{tool}</code></Fragment>)} whatever is chosen here.</>}
             trailing={item.core ? <StatusBadge tone="neutral">Always on</StatusBadge> : admin
               ? <label className="check-row small"><input type="checkbox" className="checkbox" checked={on} disabled={action.busy}
                 onChange={event => switchSessionTools(item.source, event.target.checked)} /><span>On</span></label>

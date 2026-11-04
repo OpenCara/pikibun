@@ -289,9 +289,12 @@ test("the brokered tools have their own switches; the file tools have none that 
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-brokered-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   let offered: string[] = [];
+  let instructions = "";
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
-  faux.setResponses([((context: { messages: { role: string; toolsAdded?: { name: string }[] }[] }) => {
+  faux.setResponses([((context: { systemPrompt?: string; messages: { role: string; content?: unknown; toolsAdded?: { name: string }[] }[] }) => {
     offered = context.messages.flatMap(message => message.role === "system" ? (message.toolsAdded ?? []).map(tool => tool.name) : []);
+    // All the model is given, instructions included, wherever the conversation puts them.
+    instructions = JSON.stringify(context);
     return fauxAssistantMessage("Noted.");
   }) as never]);
   const models = createModels();
@@ -314,4 +317,8 @@ test("the brokered tools have their own switches; the file tools have none that 
   await idle(session);
   for (const tool of ["github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "git", "git_push"]) assert.ok(!offered.includes(tool), tool);
   for (const tool of ["bash", "read_file", "write_file", "move_file", "search"]) assert.ok(offered.includes(tool), `${tool}: ${offered.join()}`);
+  // Nor are they recommended to it while off (review of #189).
+  assert.ok(instructions.includes("To find and read code"), "the instructions were read");
+  assert.ok(!instructions.includes("github_read with wait"), "no github_read advice while piki:github is off");
+  assert.ok(!instructions.includes("git_push publishes"), "no git_push advice while piki:git is off");
 });
