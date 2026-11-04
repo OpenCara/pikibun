@@ -182,7 +182,8 @@ test("the python tool runs Python without a shell, in a virtual environment it n
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("python", { program: "uv", args: ["publish"] })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["-m", "venv", "--without-pip", ".venv"] })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["-c", "import sys; print('venv-python', sys.prefix != sys.base_prefix)"], venv: ".venv" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["-c", "import os, subprocess, sys; os.chdir('/'); "
+      + "print('venv-python', sys.prefix != sys.base_prefix, subprocess.run(['python3', '-c', 'import sys; print(sys.prefix != sys.base_prefix)'], capture_output=True, text=True).stdout.strip())"], venv: ".venv" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Ran."),
     fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["--version"] })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Off."),
@@ -205,7 +206,8 @@ test("the python tool runs Python without a shell, in a virtual environment it n
   let view = await session.view();
   assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "python", status: "executed" }, { tool: "python", status: "executed" }],
     "the refused call ran nothing; the others ran under Auto-approve");
-  assert.match(view.entries.map(entry => entry.text).join("\n"), /venv-python True/);
+  // The environment's python3 also for a program that left its directory: on PATH as an absolute path (review of #186).
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /venv-python True True/);
   assert.match(view.entries.map(entry => entry.text).join("\n"), /uv publish acts on a package index as an account/);
 
   answer = { extensions: [{ source: "piki:python", enabled: false, tools: "approval", settings: {} }], automaticTools: false };

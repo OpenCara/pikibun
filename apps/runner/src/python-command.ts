@@ -38,6 +38,23 @@ function positionals(args: readonly string[], options: ReadonlySet<string> = new
   return found;
 }
 
+/**
+ * The program a launcher runs, from `args[from]` on: its first argument past options and their values, or the first
+ * one after a `--` (`uv run -- twine upload`), with where it is.
+ */
+function launched(args: readonly string[], from: number, options: ReadonlySet<string> = new Set()): { name: string; index: number } | undefined {
+  for (let index = from; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === "--") return index + 1 < args.length ? { name: packageName(args[index + 1]!), index: index + 1 } : undefined;
+    if (arg.startsWith("-")) { if (!arg.includes("=") && options.has(arg)) index++; continue; }
+    return { name: packageName(arg), index };
+  }
+  return undefined;
+}
+
+/** Python's interpreter by any of its names: python3, python, python3.12. A virtual environment has each. */
+const interpreter = (name: string) => /^python(3(\.\d+)?)?$/.test(name);
+
 /** A package's name without the version a launcher may give it: twine==5 is twine, twine@5 too. */
 const packageName = (spec: string) => spec.split(/[=<>~!@[\s]/)[0]!.toLowerCase();
 
@@ -54,7 +71,7 @@ export function packageIndexAccountCommand(program: string, args: readonly strin
     const command = positionals(args)[0]?.arg;
     return command === "upload" || command === "register" ? `twine ${command}` : undefined;
   }
-  if (program === "python3") {
+  if (interpreter(program)) {
     // python3 [options] -m module args: the module runs as a program.
     for (let index = 0; index < args.length; index++) {
       const arg = args[index]!;
@@ -65,23 +82,25 @@ export function packageIndexAccountCommand(program: string, args: readonly strin
     }
     return undefined;
   }
-  const found = positionals(args, valued[program]);
-  const launch = (at: number) => {
-    const next = found[at];
-    return next ? packageIndexAccountCommand(packageName(next.arg), args.slice(next.index + 1), depth + 1) : undefined;
+  const options = valued[program] ?? new Set<string>();
+  const found = positionals(args, options);
+  // What a launcher runs, past its options, its values and a "--": followed as that program would be.
+  const launch = (from: number) => {
+    const next = launched(args, from, options);
+    return next ? packageIndexAccountCommand(next.name, args.slice(next.index + 1), depth + 1) : undefined;
   };
-  const first = found[0]?.arg;
+  const first = found[0];
   if (program === "uvx") return launch(0);
   if (program === "uv") {
-    if (first === "publish") return "uv publish";
-    if (first === "tool" && found[1]?.arg === "run") return launch(2);
-    if (first === "run" || first === "tool") return launch(1);
+    if (first?.arg === "publish") return "uv publish";
+    if (first?.arg === "tool" && found[1]?.arg === "run") return launch(found[1].index + 1);
+    if (first?.arg === "run") return launch(first.index + 1);
     return undefined;
   }
   if (program === "poetry") {
-    if (first === "publish") return "poetry publish";
-    if (first === "config" && found.slice(1).some(({ arg }) => /^(http-basic|pypi-token|certificates)\./i.test(arg))) return "poetry config (credentials)";
-    if (first === "run") return launch(1);
+    if (first?.arg === "publish") return "poetry publish";
+    if (first?.arg === "config" && found.slice(1).some(({ arg }) => /^(http-basic|pypi-token|certificates)\./i.test(arg))) return "poetry config (credentials)";
+    if (first?.arg === "run") return launch(first.index + 1);
   }
   return undefined;
 }
@@ -114,10 +133,11 @@ export function pythonRequest(input: { program: unknown; args?: unknown; directo
 
 /**
  * The shell command that runs `request`, as its card shows it. With a virtual environment its bin comes first on PATH,
- * so python3, pip and pytest are the environment's, and VIRTUAL_ENV names it, as activating it would.
+ * as an absolute path, so python3, pip and pytest are the environment's wherever a program goes, and VIRTUAL_ENV
+ * names it, as activating it would.
  */
 export function pythonShellCommand(request: PythonRequest): string {
-  const venv = request.venv ? { first: `./${request.venv}/bin`, prefix: `VIRTUAL_ENV="$PWD"/${shellQuote(request.venv)} ` } : undefined;
-  return programShellCommand({ directory: request.directory, path: "/usr/local/bin", ...(venv ? { first: venv.first } : {}),
+  const venv = request.venv ? { firstHere: `${request.venv}/bin`, prefix: `VIRTUAL_ENV="$PWD"/${shellQuote(request.venv)} ` } : undefined;
+  return programShellCommand({ directory: request.directory, path: "/usr/local/bin", ...(venv ? { firstHere: venv.firstHere } : {}),
     prefix: `${venv?.prefix ?? ""}${PYTHON_ENVIRONMENT}`, program: request.program, args: request.args });
 }
