@@ -26,6 +26,7 @@ import { messageHash, parseChatImages, type ChatImage } from "../../../packages/
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
 import { requestKey, RunnerError, stableJson, validateOperation } from "./protocol.js";
 import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
+import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { lineRange } from "./edits.js";
 import { pikiSessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
 import { runnerModels } from "./provider.js";
@@ -768,22 +769,23 @@ export class RunnerSession {
       + "LFS objects are never uploaded from this session, so don't add or change LFS-tracked files in commits you push.";
   }
 
-  private agentInstructions(mode: "write" | "ask" | "read"): string {
+  /** `off`: the session's own tools its workspace turned off (sessionToolsOff), which the instructions don't point to. */
+  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set()): string {
     let instructions = this.binding.agent.instructions;
     if (this.#clone && !this.#egress) {
       // An unsandboxed host: commands run on its owner's machine, with its own Git, network and credentials.
       instructions += "\n\nTrusted runtime repository context:\n"
         + "The execution root is the session worktree, which starts empty; file-tool paths are relative to it. This host runs without a sandbox: "
-        + "clone the repositories you need into the worktree with plain Git in bash (for example git clone https://github.com/<owner>/<name>), "
+        + "clone the repositories you need into the worktree with plain Git (for example git clone https://github.com/<owner>/<name>), "
         + "and fetch, switch, commit and push as usual. Git uses this host's own network and credentials, and each command waits for approval."
         + (this.#cloneRepositories.length ? `\nThis workspace's repositories: ${this.#cloneRepositories.join(", ")}.` : "");
     } else if (this.#clone) {
       const branch = sessionBranch(this.binding.session);
       instructions += "\n\nTrusted runtime repository context:\n"
         + "The execution root is the isolated session worktree, which starts empty; file-tool paths are relative to it. "
-        + "Clone the repositories you need into it with plain Git in bash (for example git clone https://github.com/<owner>/<name>), "
+        + "Clone the repositories you need into it with plain Git (for example git clone https://github.com/<owner>/<name>), "
         + "and fetch, switch and create branches as usual. Git reaches this workspace's repositories through the session's egress proxy "
-        + "with the session owner's own access; no credentials are needed or available. Commit with git in bash. "
+        + "with the session owner's own access; no credentials are needed or available. Commit with Git. "
         + `This session's own branch is ${branch} (also in $PIKIBUN_SESSION_BRANCH): push your work to it with plain git, for example `
         + `git push origin HEAD:${branch}, in any of the workspace's repositories, without approval. Pushes of other branches are refused there.`
         + (this.#cloneRepositories.length ? `\nThis workspace's repositories: ${this.#cloneRepositories.join(", ")}.` : "")
@@ -814,6 +816,10 @@ export class RunnerSession {
     if (this.tools.some(tool => tool.name === "search")) instructions += "\n\nTo find and read code, use search (a regular expression or text across the worktree's files, "
       + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than grep, find, sed, cat or head in bash: "
       + "they need no approval and their output is already bounded.";
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "git") && !off.has("git")) instructions += "\n\nRun Git with the git tool rather than in bash: "
+      + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
+      + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "
+      + "It needs no quoting, and its approval card shows exactly the Git command it runs.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -1292,7 +1298,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [this.#extension, ...extensions.map(extension => extension.extension), ...builtins],
-        instructions: this.agentInstructions(access === "read" ? "read" : "write"),
+        instructions: this.agentInstructions(access === "read" ? "read" : "write", off),
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
@@ -2147,6 +2153,23 @@ export class RunnerSession {
         const { unbounded } = await this.permit(api, call, "bash", args.command, { write: true, shell: true });
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command: args.command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
       } }),
+      // Git without a shell (piki:git, #163): its call becomes one sandboxed command, `git` and its quoted arguments, decided
+      // as bash's are; Git's configuration in a clone, which the agent can write, can run programs, so no call skips that.
+      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+        executionMode: "sequential",
+        parameters: Type.Object({ args: Type.Array(Type.String(), { minItems: 1, maxItems: gitLimits.arguments }), directory: Type.Optional(Type.String()) }),
+        execute: async (args, api, call) => {
+          // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+          await this.requireSessionTool("git");
+          let request: GitRequest;
+          let command: string;
+          try { request = gitRequest(args); command = gitShellCommand(request); }
+          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid git call"}. Nothing ran.`); }
+          const attribution = await this.toolActor(api, true);
+          await this.requireHostEnvironment();
+          const { unbounded } = await this.permit(api, call, "git", `${request.directory}: git ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
+          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "git" }, call.abortSignal), call));
+        } }),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }) }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
         const repository = this.githubRepository(args.repository);
@@ -2411,7 +2434,11 @@ export class RunnerSession {
    * `consent.automatic`: an extension's tool call that runs without approval, as its workspace set it and its host's
    * owner allows (see runExtensionTool).
    */
-  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
+  /**
+   * `consent.tool`: the tool whose call this command is, where that isn't bash (git): the owner's "Allow for this
+   * session" for it runs its commands without asking, as one for bash does.
+   */
+  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean; tool?: "git" } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
     this.requireUnfrozen();
     const operation = validateOperation(input);
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");
@@ -2454,7 +2481,8 @@ export class RunnerSession {
       // A tool the owner allowed for the rest of the session runs their calls of it as Auto-approve would; host commands
       // never take a session grant, so each one still asks unless the owner holds automatic host commands on this host.
       const github = operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
-      const sessionGranted = toolName !== undefined && operation.kind !== "host.bash" && !github && state.grants?.tools.includes(toolName) === true;
+      const sessionGranted = toolName !== undefined && operation.kind !== "host.bash" && !github
+        && (state.grants?.tools.includes(toolName) === true || (operation.kind === "bash" && consent.tool !== undefined && state.grants?.tools.includes(consent.tool) === true));
       automatic = (run.options?.access === "auto" || sessionGranted) && run.initiatedBy === this.binding.owner.id
         && (!github || (admissionId !== undefined && (operation.kind !== "github.merge" || run.options?.autoMerge === true)))
         && (operation.kind !== "git.push" || admissionId !== undefined)

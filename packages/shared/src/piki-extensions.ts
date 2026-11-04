@@ -70,6 +70,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "git", source: "piki:git", title: "Git", sessionTools: ["git"],
+    description: "The git tool: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
     name: "prompt-audit", source: "piki:prompt-audit", title: "Prompt audit",
     description: "Has a model of the host check each message from anyone but the host's owner before it reaches the agent, and refuses ones that reach for the host's credentials, files, environment or network. A message it can't check is refused too.",
     providers: [],
