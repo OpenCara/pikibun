@@ -165,7 +165,10 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     alone can't install a project, and `pnpm run` or `node script.js` run arbitrary code anyway, so an allowlist of
     programs narrows nothing. What it refuses is a package manager's command (its first argument that isn't an option,
     an option's value, a wrapper such as `recursive` or yarn's `npm`, or `workspace <name>`) that acts on a registry as
-    an account: `publish`, `login`, `token`, `owner`, `dist-tag` and the like. Its calls are decided as `bash`'s, like
+    an account: `publish`, `login`, `token`, `owner`, `dist-tag`, `tag` and the like, with each manager's own options
+    (npm's `-w` takes a workspace, pnpm's takes nothing), and through what launches a manager by name (`corepack
+    <manager>`, `npx`, and the managers' `exec`, `x` and `dlx`). A program that runs any other way (a script) isn't
+    followed: the check keeps the plain forms off the cards, and approval stands for the rest. Its calls are decided as `bash`'s, like
     `git`'s. It runs the host's Node.js; a Node.js version per workspace, provisioned in the sandbox, is the next step.
 
 Next, in order: a Node.js version for `piki:node`, a wait for pull request checks, project tasks and scripts (`piki:tasks`); then `bash`
