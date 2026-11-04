@@ -173,10 +173,14 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
 24. **The connector's own Node.js.** The connector needs Node.js 24 or newer to run, so every host running the CLI
     connector has one, while the sandbox's `/usr` may hold an older one or none (sessions spent 18 calls in 4 working
     around Node 20). `node-toolchain.ts` finds it (`process.execPath`, through links, to its installation: the directory
-    above `bin`, holding `npm`, `npx` and `corepack` too) and the `node` tool puts its `bin` first on PATH. The Linux
-    sandbox mounts the installation read-only at `/opt/pikibun/node` for shell commands, unless it is in `/usr`, which
-    every sandbox sees; the macOS sandbox adds it to the directories steps may read and run. Nothing is downloaded, and
-    the session can't change it. Not given: the desktop app's connector runs on Electron's embedded Node, which can't run
+    above `bin`) and the `node` tool puts its `bin` first on PATH. Only what the tool runs is given, never the
+    directory it is in, which may be a home (`~/bin/node`) or `~/.local`: the `node` executable, the packages the bin
+    directory links to that are package managers (`npm` with `npx`, `corepack`, and `pnpm` and `yarn` where installed
+    globally; a link out of `lib/node_modules`, or to another package, is ignored), and `include/node` for native
+    builds. The Linux sandbox mounts each read-only below `/opt/pikibun/node` for shell commands, laid out as on the
+    host, with the links, unless they are in `/usr`, which every sandbox sees; the macOS sandbox adds each to the paths
+    steps may read and run. Nothing is downloaded, and the session can't change them. PATH falls back to
+    `/usr/bin:/bin` where it is empty, so it never holds an empty entry, the command's own directory. Not given: the desktop app's connector runs on Electron's embedded Node, which can't run
     as plain Node; the Windows sandbox and unsandboxed hosts run the Node.js on the commands' PATH, the host owner's
     choice there. A version a project asks for (`.nvmrc`, `.node-version`, `engines.node`) would be provisioned next,
     from the npm registry's `node-<platform>-<arch>` packages through the egress proxy.
