@@ -20,6 +20,9 @@ test("the python tool refuses commands that act on a package index as an account
     ["python3", ["-m", "twine", "upload", "dist/*"]], ["python3", ["-mtwine", "upload", "dist/*"]], ["python3", ["-W", "ignore", "-m", "twine", "register"]],
     ["uvx", ["twine", "upload", "dist/*"]], ["uvx", ["twine==5.0", "upload"]], ["uvx", ["--from", "x", "twine", "upload"]], ["uv", ["tool", "run", "twine", "upload"]],
     ["uv", ["run", "twine", "upload"]], ["poetry", ["run", "twine", "upload"]], ["uv", ["run", "python3", "-m", "twine", "upload"]],
+    // Past a "--", and through Python by any of its names (review of #186).
+    ["uv", ["run", "--", "twine", "upload"]], ["uv", ["tool", "run", "--", "twine", "upload"]], ["uvx", ["--", "twine", "upload"]], ["poetry", ["run", "--", "twine", "upload"]],
+    ["uv", ["run", "python", "-m", "twine", "upload"]], ["poetry", ["run", "python3.12", "-m", "twine", "register"]], ["uv", ["run", "--with", "x", "python", "-m", "twine", "upload"]],
   ];
   for (const [program, args] of refused) assert.throws(() => pythonRequest({ program, args }), /acts on a package index as an account/, `${program} ${args.join(" ")}`);
   const allowed: [string, string[]][] = [
@@ -35,5 +38,5 @@ test("the python tool's command quotes every argument, without colours or prompt
   assert.equal(pythonShellCommand({ program: "python3", directory: "app", args: ["-c", "print('hi')"] }),
     "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1 python3 '-c' 'print('\\''hi'\\'')' </dev/null 2>&1");
   assert.equal(pythonShellCommand({ program: "pip", directory: ".", args: ["install", "requests"], venv: ".venv" }),
-    "PATH='./.venv/bin':\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' VIRTUAL_ENV=\"$PWD\"/'.venv' NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1 pip 'install' 'requests' </dev/null 2>&1");
+    "PATH=\"$PWD\"/'.venv/bin':\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' VIRTUAL_ENV=\"$PWD\"/'.venv' NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1 pip 'install' 'requests' </dev/null 2>&1");
 });
