@@ -836,6 +836,9 @@ export class RunnerSession {
     if (mode !== "ask" && this.tools.some(tool => tool.name === "python") && !off.has("python")) instructions += "\n\nRun Python, pip, uv, poetry and pytest with the python tool "
       + "rather than in bash. Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
       + "python {program: \"pip\", args: [\"install\", \"-r\", \"requirements.txt\"], directory: \"<name>\", venv: \".venv\"}, python {program: \"pytest\", args: [\"-q\"], directory: \"<name>\", venv: \".venv\"}.";
+    // Code mode is core (#163): what pipes did between commands, a script does between tools.
+    if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
+      + "write a codemode script that calls them rather than piping commands through grep, head, sort or jq in bash.";
     // Sessions waited for CI with sleep in bash, then read the pull request again, in 9% of their shell commands (#163).
     if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
       + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes) rather than sleep in bash.";

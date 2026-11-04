@@ -136,9 +136,10 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
           title={<>{item.title} <code>{item.name}</code></>}
           hint={connector.capabilities.builtinExtensions ? `${item.description} Tools: ${item.tools.join(", ")}`
             : "This host's connector predates built-in extensions: its sessions run without them until it is updated (npx pikibun@latest connect)"}
-          trailing={<label className="check-row small"><input type="checkbox" className="checkbox" aria-label={`Run ${item.title} in every session on this host`}
-            checked={builtin.includes(item.name)} disabled={action.busy || !!connector.revokedAt} onChange={event => setBuiltin(item.name, event.target.checked)} />
-            <span>Every session</span></label>} />)}
+          trailing={"core" in item && item.core ? <StatusBadge tone="neutral">Always on</StatusBadge>
+            : <label className="check-row small"><input type="checkbox" className="checkbox" aria-label={`Run ${item.title} in every session on this host`}
+              checked={builtin.includes(item.name)} disabled={action.busy || !!connector.revokedAt} onChange={event => setBuiltin(item.name, event.target.checked)} />
+              <span>Every session</span></label>} />)}
         {!connector.capabilities.extensions && <Row title="Update the host's connector" hint="This host's connector predates extensions: its sessions run none until it is updated (npx pikibun@latest connect)." />}
         {connector.capabilities.extensions && !data.report && <Row title="Not reported yet" hint="The host reports its extensions once its connector is online" />}
         {data.report && !data.report.remoteInstalls && <Row title="Installs from Pikibun are off" hint="Its connector runs with --no-remote-installs: install extensions on the host with pikibun extensions" />}

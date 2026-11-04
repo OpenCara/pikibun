@@ -219,6 +219,14 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     launches twine by name (`python3 -m twine`, `uvx`, `uv run`, `uv tool run`, `poetry run`). Python is the host's, in
     `/usr`, which every sandbox sees; uv and poetry where the host installed them.
 
+28. **Code mode is core.** `pi:codemode` is the glue between tools that shell pipelines were: chaining calls, looping
+    over results, cutting and filtering output (215 pipe stages in the sample only trimmed output). Its catalogue entry
+    (`builtinExtensions`, host-config.ts) is marked `core`, so `SessionBuiltins.select` runs it in every session whatever
+    the host's configuration lists, and the host's page shows it as **Always on**; a workspace extension that offers a
+    `codemode` tool still replaces it, as it replaced the optional one. Its limits stay as they were (2 scripts per
+    session, 8 per host, 256 MiB, 2 minutes of compute), and each call a script makes is decided like the model's own.
+    The agent instructions point to it rather than pipes in `bash`.
+
 Next, in order: other ecosystems as usage asks for them,
 codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
