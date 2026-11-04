@@ -91,10 +91,13 @@ function modelFailure({ provider, modelId, status }: NonNullable<EntryView["erro
   return `The request to ${[provider, modelId].filter(Boolean).join("/") || "the model"} failed${status ? ` (HTTP ${status})` : ""}`;
 }
 
-/** One collapsed row for tool calls, tool results and system entries; expanding it shows the raw text. */
+/**
+ * One collapsed row for tool calls, tool results and system entries; expanding it shows the raw text. The label stays on
+ * one line; badges that don't fit beside it wrap onto the lines below (session.css).
+ */
 function ToolDetails({ role, icon, label, text, badges, trimmed }: { role?: string; icon: IconName; label: ReactNode; text: string; badges?: ReactNode; trimmed?: EntryView["trimmed"] }) {
   return <details className="entry-tool" data-role={role}>
-    <summary><Icon name={icon} size={14} /><span className="truncate">{label}</span>{badges}<Icon name="chevron-right" size={14} /></summary>
+    <summary><Icon name={icon} size={14} /><span className="entry-tool-label"><span className="truncate">{label}</span>{badges}</span><Icon name="chevron-right" size={14} /></summary>
     <pre>{text}</pre>
     {trimmed && <BriefNote trimmed={trimmed} />}
   </details>;
