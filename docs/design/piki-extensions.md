@@ -128,7 +128,8 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
 20. **The order follows use.** A sample of recent sessions (#163) ran `host_bash` twice, both times for `gh`, which
     `piki:gh` covers; `bash` ran read and search (32%), builds and tests (27%), git (23%) and waits for CI (9%), with
     inline Python and Node scripts in most sessions. So `host_bash` became switchable first, while `bash` stays a
-    built-in tool, never switchable on its own: without it a session can't clone its repositories (`sessions.ts`).
+    built-in tool, never switchable on its own: without it a session couldn't clone its repositories (`sessions.ts`), until
+    `git` came (note 29).
 
 21. **Search and line ranges, without a shell.** The `search` tool and `read_file`'s `offset`/`limit` replace the grep,
     find, sed -n, cat and head that took a third of sessions' shell commands, each approved. Like `read_file`, they need
@@ -235,6 +236,21 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     `codemode` tool still replaces it, as it replaced the optional one. Its limits stay as they were (2 scripts per
     session, 8 per host, 256 MiB, 2 minutes of compute), and each call a script makes is decided like the model's own.
     The agent instructions point to it rather than pipes in `bash`.
+
+29. **`bash` switchable.** With `git`, `node`, `python`, the file tools and code mode in place, `piki:shell` turns the
+    `bash` tool on or off per workspace, fail-closed like `piki:host-shell` (note 19): off while the workspace's answer
+    now or the last one its connector read turns it off. The `git`, `node` and `python` tools keep running without it:
+    their calls are `bash` operations to the approval rules, but not the `bash` tool, and the control plane checks the
+    session's agent tools, which still list `bash`. It is on by default; turning it off by default, and removing `bash`
+    and `host_bash`, wait for the owner's go-ahead (#163).
+
+30. **Every session tool on a switch.** The brokered tools join the session-tool extensions as they are: `piki:github`
+    (`github_read`, `github_comment`, `github_issue`, `github_merge`), `piki:sources` (`source_read`), `piki:sessions`
+    (`sessions`), and `git_push` with `git` under `piki:git`. Each keeps its broker, its approvals and its checks; the
+    switch only decides whether sessions offer it, and each refuses a call by name (from a code mode script) while it is
+    off. The tools every session needs, `identity` and the file tools, are `piki:files`, marked `core`: always on, shown
+    as such, and a workspace's turning it off is refused by the control plane and ignored by connectors
+    (`sessionToolsOff`). With this, every tool a session has is a Pikibun or Pi extension a workspace chooses.
 
 Next, in order: other ecosystems as usage asks for them,
 codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
