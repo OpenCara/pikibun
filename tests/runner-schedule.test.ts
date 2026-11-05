@@ -181,8 +181,8 @@ test("sessionToolsOff: only a session-tool extension the workspace lists turned 
   assert.deepEqual([...sessionToolsOff([{ source: "piki:gh", enabled: false }, { source: "npm:pi-web-access@0.46.0", enabled: false }])], [], "other extensions offer no session tools");
 });
 
-test("piki:host-shell fails closed: host_bash stays off while the last answer read turned it off, even once the connector falls back to no extensions", async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-shell-")));
+test("bash and host_bash are retired: their switches turn nothing on or off, while git, node, python and the file tools stay", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-shell-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const offered: string[][] = [];
   const noting = (context: { messages: { role: string; toolsAdded?: { name: string }[]; toolsRemoved?: { name: string }[] }[] }) => {
@@ -196,42 +196,75 @@ test("piki:host-shell fails closed: host_bash stays off while the last answer re
     return fauxAssistantMessage("Noted.");
   };
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
-  faux.setResponses([noting, noting, noting, noting] as never);
+  faux.setResponses([noting, noting] as never);
   const models = createModels();
   models.setProvider(faux.provider);
-  const off = { source: "piki:host-shell", enabled: false, tools: "approval" as const, settings: {} };
   let current: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
-  let last: WorkspaceExtensionsAnswer | undefined;
   const service = new RunnerService({
-    dataDir: directory, sharedSecret: "runner-host-shell-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    dataDir: directory, sharedSecret: "runner-shell-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    extensions: { installed: () => [], workspace: async () => current, lastKnown: () => last },
+    extensions: { installed: () => [], workspace: async () => current, lastKnown: () => current },
   });
   await service.initialize();
   t.after(() => service.close());
-  const id = "host-shell-session";
-  const session = await service.provision(binding(id), await ticket(id, "create"));
-  const admissionId = await sha256("host shell admission");
+  const id = "shell-session";
+  const value = binding(id);
+  // A stored agent may still name them.
+  value.agent.tools = ["bash", "host_bash", "node", "python", "read_file", "write_file", "move_file"];
+  const session = await service.provision(value, await ticket(id, "create"));
   const send = async (requestId: string) => {
-    await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId, admissionId }, "write");
+    await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId, admissionId: await sha256(requestId) }, "write");
     await idle(session);
   };
-
-  // Never read, or read without it: on, as before.
-  await send("never");
-  assert.ok(offered[0]!.includes("host_bash"));
-  // Turned off, and read so.
-  current = { extensions: [off], automaticTools: false }; last = current;
-  await send("off");
-  assert.ok(!offered[1]!.includes("host_bash"));
-  assert.ok(offered[1]!.includes("bash"), "bash stays: sessions still need it to clone and build");
-  // The control plane out of reach for long: the connector answers no extensions, but the last answer read still holds.
-  current = { extensions: [], automaticTools: false };
-  await send("outage");
-  assert.ok(!offered[2]!.includes("host_bash"), "losing the control plane never turns host_bash back on");
-  // Turned on again, and read so.
-  last = current;
+  // Turned on, explicitly, as a workspace may have left them.
+  const on = (source: string) => ({ source, enabled: true, tools: "approval" as const, settings: {} });
+  current = { extensions: [on("piki:shell"), on("piki:host-shell")], automaticTools: false };
   await send("on");
-  assert.ok(offered[3]!.includes("host_bash"));
+  // And off.
+  current = { extensions: [{ ...on("piki:shell"), enabled: false }, { ...on("piki:host-shell"), enabled: false }], automaticTools: false };
+  await send("off");
+  for (const tools of offered) {
+    assert.ok(!tools.includes("bash") && !tools.includes("host_bash"), tools.join());
+    for (const tool of ["node", "python", "read_file", "write_file", "move_file", "codemode"]) assert.ok(tools.includes(tool), `${tool}: ${tools.join()}`);
+  }
+  assert.equal(offered.length, 2);
+});
+
+test("the brokered tools have their own switches; the file tools have none that turns them off (piki:files is core)", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-brokered-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let offered: string[] = [];
+  let instructions = "";
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([((context: { systemPrompt?: string; messages: { role: string; content?: unknown; toolsAdded?: { name: string }[] }[] }) => {
+    offered = context.messages.flatMap(message => message.role === "system" ? (message.toolsAdded ?? []).map(tool => tool.name) : []);
+    // All the model is given, instructions included, wherever the conversation puts them.
+    instructions = JSON.stringify(context);
+    return fauxAssistantMessage("Noted.");
+  }) as never]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const disabled = (source: string) => ({ source, enabled: false, tools: "approval" as const, settings: {} });
+  const answer: WorkspaceExtensionsAnswer = { extensions: ["piki:github", "piki:sources", "piki:sessions", "piki:git", "piki:files"].map(disabled), automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-brokered-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "brokered-session";
+  const every = binding(id);
+  every.agent.tools = ["node", "git", "git_push", "github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "read_file", "write_file", "move_file", "search"];
+  const session = await service.provision(every, await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId: "brokered", admissionId: await sha256("brokered") }, "write");
+  await idle(session);
+  for (const tool of ["github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "git", "git_push"]) assert.ok(!offered.includes(tool), tool);
+  for (const tool of ["node", "read_file", "write_file", "move_file", "search"]) assert.ok(offered.includes(tool), `${tool}: ${offered.join()}`);
+  // Nor are they recommended to it while off (review of #189).
+  assert.ok(instructions.includes("To find and read code"), "the instructions were read");
+  assert.ok(!instructions.includes("github_read with wait"), "no github_read advice while piki:github is off");
+  assert.ok(!instructions.includes("git_push publishes"), "no git_push advice while piki:git is off");
 });

@@ -102,7 +102,7 @@ export function registryAccountCommand(program: string, args: readonly string[],
  * Fixed for every call: no colours in the output, no prompt from corepack or npx (input is closed, so either would only
  * fail), and Node's own toolchain directory after the sandbox's PATH.
  */
-const NODE_ENVIRONMENT = "NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true";
+export const NODE_ENVIRONMENT = "NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true";
 
 export interface NodeRequest {
   program: NodeProgram;

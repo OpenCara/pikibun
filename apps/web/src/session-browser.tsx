@@ -154,7 +154,7 @@ function BrowserReportView({ session, report, stamp, redacted }: { session: Sess
           {element.text && <span className="browser-log-text"> {element.text}</span>}
         </li>)}</ul>
       </Collapsible>}
-      {report.serve_output && <Collapsible title="Server output" hint={report.request?.serve?.command} leading={<Icon name="server" size={16} />}>
+      {report.serve_output && <Collapsible title="Server output" hint={report.request?.serve && [report.request.serve.program, ...(report.request.serve.args ?? [])].join(" ")} leading={<Icon name="server" size={16} />}>
         <pre className="browser-value">{report.serve_output}</pre>
       </Collapsible>}
       <Row title="Report" hint={<code>{`${BROWSER_OUTPUT}/${stamp}.json`}</code>} />

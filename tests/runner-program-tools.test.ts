@@ -75,7 +75,7 @@ test("the git tool runs Git without a shell: refused calls ask nobody, others ge
   await session.submit(await ticket(id, "submit"), { content: "Make a repository.", requestId: "init", admissionId: await sha256("git admission") }, "write");
 
   const approval = await pendingApproval(session);
-  assert.deepEqual(approval.operation, { kind: "bash", command: "GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0 git --no-pager 'init' '-q' 'my repo' </dev/null 2>&1" });
+  assert.deepEqual(approval.operation, { kind: "program", tool: "git", command: "GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0 git --no-pager 'init' '-q' 'my repo' </dev/null 2>&1" });
   await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
   let view = await session.view();
@@ -159,7 +159,7 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Run it.", requestId: "run", admissionId: await sha256("node admission") }, "write");
   const approval = await pendingApproval(session);
-  assert.deepEqual(approval.operation, { kind: "bash",
+  assert.deepEqual(approval.operation, { kind: "program", tool: "node",
     command: "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true node '-e' 'console.log('\\''node-tool-'\\'' + (6 * 7))' </dev/null 2>&1" });
   await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
@@ -177,6 +177,49 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
   assert.equal(view.approvals.length, 1);
 });
 
+test("the python tool runs Python without a shell, in a virtual environment it names; piki:python turns it off", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-python-tool-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("python", { program: "uv", args: ["publish"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["-m", "venv", "--without-pip", ".venv"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["-c", "import os, subprocess, sys; os.chdir('/'); "
+      + "print('venv-python', sys.prefix != sys.base_prefix, subprocess.run(['python3', '-c', 'import sys; print(sys.prefix != sys.base_prefix)'], capture_output=True, text=True).stdout.strip())"], venv: ".venv" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Ran."),
+    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["--version"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Off."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-python-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "python-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Run it.", requestId: "run", admissionId: await sha256("python admission"), options: { access: "auto" } }, "write");
+  await idle(session);
+  let view = await session.view();
+  assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "python", status: "executed" }, { tool: "python", status: "executed" }],
+    "the refused call ran nothing; the others ran under Auto-approve");
+  // The environment's python3 also for a program that left its directory: on PATH as an absolute path (review of #186).
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /venv-python True True/);
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /uv publish acts on a package index as an account/);
+
+  answer = { extensions: [{ source: "piki:python", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("python admission off") }, "write");
+  await idle(session);
+  view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool python is not available/);
+  assert.equal(view.entries.flatMap(entry => entry.autoApproved ?? []).length, 2);
+});
+
 /** A Chromium for the browser tool's session test: PIKIBUN_TEST_BROWSER, or the host's own. */
 const chromium = process.env.PIKIBUN_TEST_BROWSER ? browserAt(process.env.PIKIBUN_TEST_BROWSER) : hostBrowser();
 
@@ -190,7 +233,7 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("browser", { url: "javascript:alert(1)" })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("write_file", { path: "site/index.html", content: "<!doctype html><title>Faux app</title><h1>Hello from the sandbox</h1><button>Go</button>" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("browser", { serve: { command: `python3 -m http.server ${port} --bind 127.0.0.1`, port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
+    fauxAssistantMessage([fauxToolCall("browser", { serve: { program: "python3", args: ["-m", "http.server", String(port), "--bind", "127.0.0.1"], port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
       actions: [{ action: "evaluate", expression: "document.querySelector('h1').textContent" }] })], { stopReason: "toolUse" }),
     context => { seen = context.messages.at(-1); return fauxAssistantMessage("Seen."); },
     fauxAssistantMessage([fauxToolCall("browser", {})], { stopReason: "toolUse" }),
@@ -215,12 +258,12 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   const session = await service.provision(sandboxed, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Look at the app.", requestId: "look", admissionId: await sha256("browser admission") }, "write");
   const approval = await pendingApproval(session);
-  assert.equal(approval.operation.kind, "bash");
-  const command = approval.operation.kind === "bash" ? approval.operation.command : "";
-  // The driver and the host's Chromium where the sandbox gives them; PATH may name the connector's own Node.js first.
+  // A program operation of its own: the driver, and the host's Chromium where the sandbox gives it.
+  assert.equal(approval.operation.kind, "program");
+  assert.equal(approval.operation.kind === "program" && approval.operation.tool, "browser");
+  const command = approval.operation.kind === "program" ? approval.operation.command : "";
   assert.equal(session.sandbox.browser!.driver, SANDBOX_BROWSER_DRIVER);
-  assert.match(command, /^PATH=.*'\/usr\/local\/bin' /);
-  assert.ok(command.includes(` '${SANDBOX_BROWSER_DRIVER}' '--chrome' '${session.sandbox.browser!.chromium}' '--time-limit' '30' '{"url":"http://127.0.0.1:${port}/"`), command);
+  assert.ok(command.startsWith(`'${SANDBOX_BROWSER_DRIVER}' '--chrome' '${session.sandbox.browser!.chromium}' '--time-limit' '30' '{"url":"http://127.0.0.1:${port}/"`), command);
   await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
   let view = await session.view();

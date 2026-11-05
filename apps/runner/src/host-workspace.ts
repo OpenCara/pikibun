@@ -17,6 +17,7 @@ import type { SessionWorkspace } from "./workspace.js";
 import { searchInWorker, type SearchRequest, type SearchResult } from "./search.js";
 import { bashPath, CREATE_FILE, hostBashArgs, killTree, OPEN_DIRECTORY, OPEN_FILE, privateEntry, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
 import { readCloneBranches, type CloneBranch } from "./clone-branches.js";
+import { fileOperationInWorker, type FileOperationRequest, type FileOperationResult, type ResolvedFileOperation } from "./file-operations.js";
 import { ATTACHMENT_CANDIDATES, attachmentCandidate } from "../../../packages/shared/src/file-uploads.js";
 
 const MAX_ENTRIES = 10_000;
@@ -207,6 +208,7 @@ export class HostWorkspace implements SessionWorkspace {
 
   async execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options: SandboxExecutionOptions = {}): Promise<string> {
     switch (operation.kind) {
+      case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
         // Nothing can be mounted read-only on the host, so only writable approved commands run.
@@ -326,6 +328,36 @@ export class HostWorkspace implements SessionWorkspace {
   }
 
   /** Lexical checks, then symlink resolution: the resolved path must stay inside the worktree. */
+  /** An entry itself (file-operations.ts): its directory resolved as any written path is, its last component never. */
+  async #entry(value: string): Promise<{ parts: string[]; path: string }> {
+    if (!value || value.startsWith("/") || value.includes("\\") || /[\x00-\x1f\x7f]/.test(value)) throw hostError("invalid relative path");
+    if (value.length >= 2 && value[1] === ":") throw hostError("absolute paths are not allowed");
+    if (value === ".") throw hostError("the worktree itself can't be moved, copied or deleted");
+    if (value.split("/").some(part => ["", ".", ".."].includes(part))) throw hostError("path traversal is not allowed");
+    const index = value.lastIndexOf("/");
+    const name = value.slice(index + 1);
+    if (name.toLowerCase() === ".git") throw hostError("Git metadata is protected");
+    // Windows drops trailing dots and spaces and reads a colon as a stream: ".git." and ".git:x" would be .git there.
+    if (windows && (/[ .]$/.test(name) || name.includes(":"))) throw hostError("invalid Windows file name");
+    const parts = await this.#parts(index < 0 ? "." : value.slice(0, index), true);
+    return { parts: [...parts, name], path: join(await realpath(this.worktree), ...parts, name) };
+  }
+
+  /** move_file, copy_file and delete_file: in a worker thread (file-operations.ts), since this runs in the connector. */
+  async fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult> {
+    return this.#operation(authorize, async () => {
+      let resolved: ResolvedFileOperation;
+      if (request.kind === "delete") resolved = { kind: "delete", path: (await this.#entry(text(request.path, "path", 1024))).path, recursive: request.recursive === true };
+      else {
+        const source = await this.#entry(text(request.from, "path", 1024));
+        const target = await this.#entry(text(request.to, "path", 1024));
+        resolved = { kind: request.kind, root: await realpath(this.worktree), source: source.path, target: target.path, sourceParts: source.parts, targetParts: target.parts };
+      }
+      try { return await fileOperationInWorker(resolved); }
+      catch (error) { throw hostError(error instanceof Error ? error.message : "file operation failed"); }
+    });
+  }
+
   async #parts(value: string, writing: boolean): Promise<string[]> {
     if (value.startsWith("/") || value.includes("\\") || /[\x00-\x1f\x7f]/.test(value)) throw hostError("invalid relative path");
     if (value.length >= 2 && value[1] === ":") throw hostError("absolute paths are not allowed");

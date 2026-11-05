@@ -19,6 +19,7 @@ import {
   type SnapshotFile,
 } from "./sandbox.js";
 import { sandboxCertificates } from "./trust-store.js";
+import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
 import type { IsolatedWorkspace } from "./workspace.js";
 
 /** Where a helper backend keeps one session, all below its private root, at the same paths inside the sandbox. */
@@ -241,8 +242,14 @@ export class HelperWorkspace implements IsolatedWorkspace {
     return checkedSearch(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, { readOnly: true }, authorize)));
   }
 
+  /** move_file, copy_file and delete_file (file-operations.ts), in the helper. */
+  async fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult> {
+    return checkedFileOperation(JSON.parse(await this.#operation(request, { readOnly: false }, authorize)));
+  }
+
   async execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options: SandboxExecutionOptions = {}): Promise<string> {
     switch (operation.kind) {
+      case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
         // As on a Linux host without --resources: a command without hard limits runs only where the host's owner allowed it.

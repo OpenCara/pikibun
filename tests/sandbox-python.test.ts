@@ -7,6 +7,8 @@ import { EGRESS_PORT } from "../apps/runner/src/egress.js";
 import { GIT_LFS_PATHS, HELPER, MIRROR_ROOT } from "../apps/runner/src/sandbox.js";
 import { BROWSER_DRIVER, GIT_SHIM } from "../apps/runner/src/sandbox-python.generated.js";
 import { BROWSER_KEPT, BROWSER_OUTPUT } from "../packages/shared/src/browser.js";
+import { NODE_ENVIRONMENT, nodePrograms } from "../apps/runner/src/node-command.js";
+import { PYTHON_ENVIRONMENT, pythonPrograms } from "../apps/runner/src/python-command.js";
 
 /*
  * The sandbox's Python programs are .py files (apps/runner/src/sandbox-python), linted and type-checked as Python
@@ -29,6 +31,12 @@ test("the constants the Python programs share with the connector agree", () => {
   assert.match(source("git_shim.py"), new RegExp(`^EGRESS_PORT = ${EGRESS_PORT}$`, "m"));
   assert.match(source("browser.py"), new RegExp(`^OUTPUT = '${BROWSER_OUTPUT}'$`, "m"));
   assert.match(source("browser.py"), new RegExp(`^KEPT = ${BROWSER_KEPT}$`, "m"));
+  // What serve starts, and with what, as the node and python tools would.
+  const tuple = (items: readonly string[]) => `\\(${items.map(item => `'${item}'`).join(", ")}\\)`;
+  assert.match(source("browser.py"), new RegExp(`^NODE_PROGRAMS = ${tuple(nodePrograms)}$`, "m"));
+  assert.match(source("browser.py"), new RegExp(`^PYTHON_PROGRAMS = ${tuple(pythonPrograms)}$`, "m"));
+  assert.ok(source("browser.py").includes(`\nNODE_ENVIRONMENT = '${NODE_ENVIRONMENT}'\n`));
+  assert.ok(source("browser.py").includes(`\nPYTHON_ENVIRONMENT = '${PYTHON_ENVIRONMENT}'\n`));
   assert.match(source("git_shim.py"), new RegExp(`^GIT_LFS_PATHS = \\(${GIT_LFS_PATHS.map(path => `'${path}'`).join(", ")}\\)$`, "m"));
 });
 

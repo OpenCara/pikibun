@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyText, messageCut, resendText, rewindable } from "../packages/client/src/message-actions.js";
+import { copyText, messageCut, resendText, restoredDraft, rewindable } from "../packages/client/src/message-actions.js";
 import type { EntryView } from "../packages/shared/src/types.js";
 
 function entry(role: string, text: string, id = "3:12"): EntryView {
@@ -29,4 +29,15 @@ test("copying a message takes what it says, and sending one again leaves its ima
   assert.equal(copyText(entry("assistant", 'read_file({"path":"a"})')), "");
   assert.equal(resendText(entry("user", "What is in this screenshot?\n[image image/png]\n[image image/jpeg]")), "What is in this screenshot?");
   assert.equal(resendText(entry("user", "[image] is not an image line")), "[image] is not an image line");
+});
+
+test("a message handed back to the chat box, on the web and on mobile alike, goes below what is typed there", () => {
+  assert.equal(restoredDraft("", "Fix the flaky test"), "Fix the flaky test");
+  assert.equal(restoredDraft("and update the docs", "Fix the flaky test"), "and update the docs\n\nFix the flaky test");
+  // Only whitespace counts as empty.
+  assert.equal(restoredDraft("  \n", "Fix the flaky test"), "Fix the flaky test");
+  // A message that was only images brings no text back: what is typed stays as it is, without a blank gap below it.
+  assert.equal(restoredDraft("and update the docs", ""), "and update the docs");
+  assert.equal(restoredDraft("and update the docs", resendText(entry("user", "[image image/png]"))), "and update the docs");
+  assert.equal(restoredDraft("", ""), "");
 });

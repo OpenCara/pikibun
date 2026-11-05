@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { createConnector, controlPlaneOrigin, type LocalConnector } from "./connector.js";
-import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, savedPairing, unsandboxedWarning, type HostIsolation } from "./connect-setup.js";
+import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, unsandboxedWarning, type HostIsolation } from "./connect-setup.js";
 import { parentTransport, stdioTransport } from "./desktop-transport.js";
 import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "./desktop-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
@@ -83,7 +83,7 @@ async function inspect(allowFaux = false, allowInsecureLoopback = false, experim
   }
   const { mode, sandbox, sandboxPrerequisites, prerequisites } = chosen;
   // Listed after what the host needs to start: npm only matters for installing extensions, so it is optional.
-  const inspection: HostInspection = { platform: process.platform, stateDir, mode, prerequisites: [...prerequisites, npmPrerequisite()], models: [] };
+  const inspection: HostInspection = { platform: process.platform, stateDir, mode, prerequisites: [...prerequisites, npmPrerequisite(), ...[pythonVenvPrerequisite()].filter(item => item !== undefined)], models: [] };
   if (sandbox) inspection.sandbox = sandbox;
   if (sandboxPrerequisites) inspection.sandboxPrerequisites = sandboxPrerequisites;
   if (mode === "unsandboxed") inspection.unsandboxedWarning = unsandboxedWarning();

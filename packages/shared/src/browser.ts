@@ -24,7 +24,6 @@ export const browserLimits = Object.freeze({
   selector: 1024,
   text: 4096,
   expression: 4096,
-  serveCommand: 2048,
   /** Seconds a navigation or a wait may take; the command's own time limit bounds the whole call. */
   timeoutSeconds: { min: 1, max: 120, default: 30 },
   /** Seconds a serve command's port may take to answer. */
@@ -50,10 +49,16 @@ export interface BrowserAction {
   clear?: boolean;
 }
 
-/** The web app under test, started for the call: a shell command in a worktree directory, and the port it listens on. */
+/**
+ * The web app under test, started for the call without a shell: one of the node or python tools' programs, with its
+ * arguments, in a worktree directory (and for Python's, optionally a virtual environment there), and the port it
+ * listens on.
+ */
 export interface BrowserServe {
-  command: string;
+  program: string;
+  args?: string[];
   directory?: string;
+  venv?: string;
   port: number;
   timeout_seconds?: number;
 }
@@ -113,6 +118,32 @@ export const BROWSER_SCREENSHOT_PATH = new RegExp(`^${BROWSER_OUTPUT}/\\d{8}-\\d
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
+/** The fields of `value` named in `keys` that are of `type`, as an object holding only those. */
+function typed(value: Record<string, unknown>, type: "string" | "number" | "boolean", keys: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(keys.flatMap(key => typeof value[key] === type && (type !== "number" || Number.isFinite(value[key])) ? [[key, value[key]]] : []));
+}
+
+/** A report's copy of its call's request, rebuilt from what has the expected types: the Browser tab renders it. */
+function reportRequest(value: unknown): BrowserRequest | undefined {
+  if (!isObject(value)) return undefined;
+  const request: BrowserRequest = { ...typed(value, "string", ["url"]), ...typed(value, "boolean", ["full_page"]), ...typed(value, "number", ["timeout_seconds"]) };
+  if (Array.isArray(value.actions)) {
+    request.actions = value.actions.flatMap(item => isObject(item) && (browserActions as readonly unknown[]).includes(item.action) ? [{
+      action: item.action as BrowserActionName, ...typed(item, "string", ["url", "selector", "text", "key", "value", "expression"]),
+      ...typed(item, "number", ["x", "y", "ms"]), ...typed(item, "boolean", ["full_page", "submit", "clear"]),
+    }] : []);
+  }
+  if (isObject(value.viewport) && typeof value.viewport.width === "number" && typeof value.viewport.height === "number") {
+    request.viewport = { width: value.viewport.width, height: value.viewport.height };
+  }
+  const serve = value.serve;
+  if (isObject(serve) && typeof serve.program === "string" && typeof serve.port === "number") {
+    request.serve = { program: serve.program, port: serve.port, ...typed(serve, "string", ["directory", "venv"]), ...typed(serve, "number", ["timeout_seconds"]),
+      ...(Array.isArray(serve.args) ? { args: serve.args.filter((arg): arg is string => typeof arg === "string") } : {}) };
+  }
+  return request;
+}
+
 /**
  * `text` as a browser report, or undefined. The driver writes it, but the worktree is the agent's to change, so whoever
  * shows one takes only what has the expected shape.
@@ -137,7 +168,8 @@ export function parseBrowserReport(text: string): BrowserReport | undefined {
   if (isObject(value.page_size) && typeof value.page_size.width === "number" && typeof value.page_size.height === "number") {
     report.page_size = { width: value.page_size.width, height: value.page_size.height };
   }
-  if (isObject(value.request)) report.request = value.request as BrowserRequest;
+  const request = reportRequest(value.request);
+  if (request) report.request = request;
   const actions = list("actions", entry => typeof entry.action === "string" && typeof entry.ok === "boolean" ? {
     action: entry.action, ok: entry.ok,
     ...Object.fromEntries((["error", "value", "note"] as const).flatMap(key => text_(entry, key) !== undefined ? [[key, text_(entry, key)]] : [])),

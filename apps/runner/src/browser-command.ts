@@ -1,12 +1,14 @@
-import { browserActions, browserKeys, browserLimits, type BrowserAction, type BrowserActionName, type BrowserRequest } from "../../../packages/shared/src/browser.js";
-import { programShellCommand, shellQuote, workDirectory } from "./program-command.js";
+import { browserActions, browserKeys, browserLimits, type BrowserAction, type BrowserActionName, type BrowserRequest, type BrowserServe } from "../../../packages/shared/src/browser.js";
+import { nodePrograms, nodeRequest } from "./node-command.js";
+import { pythonPrograms, pythonRequest } from "./python-command.js";
+import { programShellCommand, shellQuote } from "./program-command.js";
 
 /*
  * The browser tool (piki:browser): a headless Chromium the agent drives in the session's Linux sandbox, never on the
  * host itself. A call is one sandboxed command, the driver (sandbox-python/browser.py) with the call as JSON: it opens
  * the page, runs the actions, and leaves a screenshot and a report in the worktree's browser-output directory. Like
- * node, its calls are decided as bash commands are: a page runs its own scripts, `evaluate` runs the agent's, and
- * `serve` is a shell command.
+ * the other program tools, its calls are decided as commands are: a page runs its own scripts, `evaluate` runs the
+ * agent's, and `serve` starts the app under test, one of the node or python tools' programs, without a shell.
  */
 
 /** Where a sandboxed session's commands find the browser tool's driver and the host's Chromium (SessionWorkspace.browser). */
@@ -107,6 +109,38 @@ function action(value: unknown, index: number): BrowserAction {
   return result;
 }
 
+/** The programs `serve` starts: the node and python tools' own. */
+export const servePrograms: readonly string[] = Object.freeze([...nodePrograms, ...pythonPrograms]);
+
+/**
+ * `serve` as it runs: one of the node or python tools' programs, checked as that tool checks it (no registry or package
+ * index account commands, a directory within the worktree, a virtual environment for Python's), and the port it
+ * listens on. The driver starts it without a shell, with that tool's environment.
+ */
+function serveRequest(serve: unknown): BrowserServe {
+  const keys = ["program", "args", "directory", "venv", "port", "timeout_seconds"];
+  if (!object(serve) || Object.keys(serve).some(key => !keys.includes(key) && serve[key] !== undefined)) {
+    throw new Error("serve is {program, args?, directory?, venv?, port, timeout_seconds?}");
+  }
+  if (typeof serve.program !== "string" || !servePrograms.includes(serve.program)) {
+    throw new Error(`serve.program is one of the node and python tools' programs: ${servePrograms.join(", ")}`);
+  }
+  const python = (pythonPrograms as readonly string[]).includes(serve.program);
+  if (!python && serve.venv !== undefined) throw new Error("serve.venv is a virtual environment, for Python's programs");
+  let launched: { program: string; args: string[]; directory: string; venv?: string };
+  try {
+    launched = python ? pythonRequest({ program: serve.program, args: serve.args, directory: serve.directory, venv: serve.venv })
+      : nodeRequest({ program: serve.program, args: serve.args, directory: serve.directory });
+  } catch (error) { throw new Error(`serve: ${error instanceof Error ? error.message : "invalid program"}`); }
+  const result: BrowserServe = { program: launched.program, ...(launched.args.length ? { args: launched.args } : {}),
+    ...(launched.directory !== "." ? { directory: launched.directory } : {}), ...(launched.venv ? { venv: launched.venv } : {}),
+    port: integer(serve.port, "serve.port", 1, 65535) };
+  if (serve.timeout_seconds !== undefined) {
+    result.timeout_seconds = integer(serve.timeout_seconds, "serve.timeout_seconds", browserLimits.serveSeconds.min, browserLimits.serveSeconds.max);
+  }
+  return result;
+}
+
 /** The browser tool's call as it runs, or an error saying what it refused. */
 export function browserRequest(input: Record<string, unknown>): BrowserRequest {
   const known = ["url", "actions", "viewport", "full_page", "timeout_seconds", "serve"];
@@ -125,37 +159,26 @@ export function browserRequest(input: Record<string, unknown>): BrowserRequest {
   }
   if (input.full_page !== undefined) request.full_page = flag(input.full_page, "full_page");
   if (input.timeout_seconds !== undefined) request.timeout_seconds = integer(input.timeout_seconds, "timeout_seconds", browserLimits.timeoutSeconds.min, browserLimits.timeoutSeconds.max);
-  if (input.serve !== undefined) {
-    const serve = input.serve;
-    if (!object(serve) || Object.keys(serve).some(key => !["command", "directory", "port", "timeout_seconds"].includes(key))) {
-      throw new Error("serve is {command, port, directory?, timeout_seconds?}");
-    }
-    request.serve = { command: text(serve.command, "serve.command", browserLimits.serveCommand), port: integer(serve.port, "serve.port", 1, 65535) };
-    if (serve.directory !== undefined) {
-      const directory = workDirectory(serve.directory);
-      if (directory !== ".") request.serve.directory = directory;
-    }
-    if (serve.timeout_seconds !== undefined) {
-      request.serve.timeout_seconds = integer(serve.timeout_seconds, "serve.timeout_seconds", browserLimits.serveSeconds.min, browserLimits.serveSeconds.max);
-    }
-  }
+  if (input.serve !== undefined) request.serve = serveRequest(input.serve);
   // Without a url, the driver opens again the page the last call left, so an empty call looks at it once more.
   return request;
 }
 
 /** What the browser call is about, for a permission card: its page, its actions, and what it serves. */
 export function browserTarget(request: BrowserRequest): string {
-  const parts = [request.url ?? "(the last page)", ...(request.actions ?? []).map(item => item.action), ...(request.serve ? [`serve: ${request.serve.command}`] : [])];
+  const serve = request.serve && [request.serve.program, ...(request.serve.args ?? [])].join(" ");
+  const parts = [request.url ?? "(the last page)", ...(request.actions ?? []).map(item => item.action), ...(serve ? [`serve: ${serve}`] : [])];
   return parts.join(" → ").slice(0, 8192);
 }
 
 /**
- * The shell command that runs `request` in the worktree, as its card shows it: the driver, the Chromium it starts, the
+ * The command that runs `request` in the worktree, as its card shows it: the driver, the Chromium it starts, the
  * command's time limit (so it reports, with a screenshot, before the sandbox stops it) and the call as JSON. `nodeBin`:
- * the connector's own Node.js where the session's commands get it (SessionWorkspace.nodeBin), first on PATH as the node
- * tool has it, with /usr/local/bin after, so a serve command finds the same Node.js and package managers.
+ * the connector's own Node.js where the session's commands get it (SessionWorkspace.nodeBin), which a Node.js program
+ * that serve starts finds first on PATH, as the node tool's do.
  */
 export function browserShellCommand(request: BrowserRequest, browser: SessionBrowser, options: { seconds: number; nodeBin?: string | undefined }): string {
-  return programShellCommand({ directory: ".", path: "/usr/local/bin", ...(options.nodeBin ? { first: options.nodeBin } : {}),
-    program: shellQuote(browser.driver), args: ["--chrome", browser.chromium, "--time-limit", String(Math.trunc(options.seconds)), JSON.stringify(request)] });
+  const node = request.serve && options.nodeBin && (nodePrograms as readonly string[]).includes(request.serve.program) ? ["--node-bin", options.nodeBin] : [];
+  return programShellCommand({ directory: ".", program: shellQuote(browser.driver),
+    args: ["--chrome", browser.chromium, "--time-limit", String(Math.trunc(options.seconds)), ...node, JSON.stringify(request)] });
 }

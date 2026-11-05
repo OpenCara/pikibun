@@ -21,7 +21,7 @@ export const VIEW_SETTLED_RESULT = 1000;
  * and their results (a pull request, the repinned session, the comment, issue or merge) are what people look for.
  */
 function inTranscript(approval: ApprovalRecord): boolean {
-  return approval.automatic === true && (approval.operation.kind === "bash" || approval.operation.kind === "host.bash");
+  return approval.automatic === true && (approval.operation.kind === "bash" || approval.operation.kind === "program" || approval.operation.kind === "host.bash");
 }
 
 function excerpt(result: string): string {

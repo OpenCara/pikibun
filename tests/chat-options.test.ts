@@ -122,7 +122,7 @@ test("the Auto-approve warning says what runs without asking on this host", () =
   assert.match(autoApproveWarning(base, true), /pull requests merged, as you without asking.*Branch protection and required checks on GitHub still apply/);
   assert.doesNotMatch(autoApproveWarning(base, false), /Auto-merge/);
   assert.match(autoApproveWarning({ ...base, capabilities: { ...base.capabilities, automaticGitHub: undefined } }, false), /GitHub comments and merges still need approval/);
-  assert.match(autoApproveWarning({ ...base, hostCommandAccess: "auto" }, false), /granted you automatic host commands, so host_bash also runs OUTSIDE the sandbox on Bob's Pi/);
-  assert.match(autoApproveWarning({ ...base, hostCommandAccess: "owner" }, false), /On someone else's host it still needs their approval/);
+  assert.match(autoApproveWarning({ ...base, hostCommandAccess: "auto" }, false), /granted you automatic host commands, so host commands, such as its extensions' tools, also run OUTSIDE the sandbox on Bob's Pi/);
+  assert.match(autoApproveWarning({ ...base, hostCommandAccess: "owner" }, false), /On someone else's host they still need their approval/);
   assert.match(autoApproveWarning(base, false), /or one whose owner granted you automatic host commands/);
 });

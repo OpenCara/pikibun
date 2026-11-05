@@ -1,3 +1,4 @@
+import { programToolNames, type ProgramToolName } from '../../../packages/shared/src/types.js';
 import { validExtensionToolOperation, validHostOperation } from '../../../packages/shared/src/host-operations.js';
 import type { GitHubMergeMethod, Operation, PermissionNeed, PullRequestRequest, ToolName } from '../../../packages/shared/src/types.js';
 import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, githubMergeMethods, permissionNeeds, toolNames } from '../../../packages/shared/src/types.js';
@@ -51,6 +52,9 @@ export function parseOperation(input: unknown): Operation {
       return { kind: input.kind, source: input.source, tool: input.tool, arguments: input.arguments, digest: input.digest };
     case 'git.commit': return { kind: value.kind, message: text(value.message, 'commit message', 4000) };
     case 'bash': return { kind: value.kind, command: text(value.command, 'command', 8192) };
+    case 'program':
+      if (Object.keys(value).length !== 3 || !(programToolNames as readonly unknown[]).includes(value.tool)) fail(400, 'invalid_operation', 'Unknown program tool.');
+      return { kind: value.kind, tool: value.tool as ProgramToolName, command: text(value.command, 'command', 8192) };
     case 'github.comment':
       return { kind: value.kind, repository: githubRepositoryName(value.repository), issue: issueNumber(value.issue), body: text(value.body, 'comment body', 60000) };
     case 'github.merge': {

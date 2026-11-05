@@ -92,11 +92,16 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
   const builtin = connector.config?.builtinExtensions ?? [];
   function setBuiltin(name: BuiltinExtensionName, on: boolean) {
     const next = builtinExtensions.map(item => item.name).filter(item => item === name ? on : builtin.includes(item));
-    const title = builtinExtensions.find(item => item.name === name)?.title ?? name;
+    const item = builtinExtensions.find(candidate => candidate.name === name);
+    const title = item?.title ?? name;
+    // A core one runs whatever is ticked on connectors of this release: the box only decides it on older ones.
+    const core = !!item && "core" in item && item.core === true;
     void action.run(async () => {
       await api(`/api/connectors/${segment(connector.id)}/config`, { method: "PATCH", body: { builtinExtensions: next } });
       refresh();
-    }, on ? `${title} is on: sessions on this host get it with their next message, within a minute.` : `${title} is off: sessions on this host run without it from their next message, within a minute.`);
+    }, core
+      ? on ? `${title} is on for older connectors too. Connectors of this release or later always run it.` : `${title} is off for older connectors only. Connectors of this release or later always run it.`
+      : on ? `${title} is on: sessions on this host get it with their next message, within a minute.` : `${title} is off: sessions on this host run without it from their next message, within a minute.`);
   }
   const required = connector.config?.requiredExtensions ?? [];
   const [configuring, setConfiguring] = useState<{ extension: RequiredExtension; flags: InstalledExtension["modules"][number]["flags"] } | null>(null);
@@ -134,11 +139,12 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
       {data && <div className="card">
         {connector.config && builtinExtensions.map(item => <Row key={`builtin ${item.name}`} leading={<Icon name="tool" size={16} />}
           title={<>{item.title} <code>{item.name}</code></>}
-          hint={connector.capabilities.builtinExtensions ? `${item.description} Tools: ${item.tools.join(", ")}`
+          hint={connector.capabilities.builtinExtensions ? `${item.description} Tools: ${item.tools.join(", ")}${"core" in item && item.core
+            ? ". Always on with connectors of this release or later; older ones run it only where it's ticked here." : ""}`
             : "This host's connector predates built-in extensions: its sessions run without them until it is updated (npx pikibun@latest connect)"}
-          trailing={<label className="check-row small"><input type="checkbox" className="checkbox" aria-label={`Run ${item.title} in every session on this host`}
+          trailing={<label className="check-row small"><input type="checkbox" className="checkbox" aria-label={"core" in item && item.core ? `Run ${item.title} on this host's older connectors too` : `Run ${item.title} in every session on this host`}
             checked={builtin.includes(item.name)} disabled={action.busy || !!connector.revokedAt} onChange={event => setBuiltin(item.name, event.target.checked)} />
-            <span>Every session</span></label>} />)}
+            <span>{"core" in item && item.core ? "Older connectors too" : "Every session"}</span></label>} />)}
         {!connector.capabilities.extensions && <Row title="Update the host's connector" hint="This host's connector predates extensions: its sessions run none until it is updated (npx pikibun@latest connect)." />}
         {connector.capabilities.extensions && !data.report && <Row title="Not reported yet" hint="The host reports its extensions once its connector is online" />}
         {data.report && !data.report.remoteInstalls && <Row title="Installs from Pikibun are off" hint="Its connector runs with --no-remote-installs: install extensions on the host with pikibun extensions" />}

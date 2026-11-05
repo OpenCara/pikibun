@@ -227,7 +227,7 @@ test("unsandboxed clone sessions clone and push with the host's own Git, so they
   assert.match(instructions, /https:\/\/github\.com\/acme\/project-1\.git/);
   assert.doesNotMatch(instructions, /git_push/);
   await assert.rejects(session.createApproval(OWNER, { kind: "git.push", repository: "acme/project-1", directory: "app", branch: "feature", commit: "a".repeat(40) }),
-    /push with git in bash/);
+    /push with the git tool/);
 });
 
 test("clone sessions pin nothing, commit with Git and push a clone's directory", linux, async t => {
@@ -253,7 +253,7 @@ test("clone sessions pin nothing, commit with Git and push a clone's directory",
   assert.match(instructions, /https:\/\/github\.com\/acme\/project-1\.git/);
   assert.match(instructions, /git_push \{directory, branch\}/);
   assert.doesNotMatch(instructions, /pinned commit/);
-  await assert.rejects(session.createApproval(OWNER, { kind: "git.commit", message: "x" }), /Commit and switch branches with git in bash/);
+  await assert.rejects(session.createApproval(OWNER, { kind: "git.commit", message: "x" }), /Commit and switch branches with the git tool/);
   await assert.rejects(session.createApproval(OWNER, { kind: "git.push", repository: "acme/project-1", branch: "feature", commit: "a".repeat(40) }), /a push names a clone.s directory/);
   // A session without pins or clones (from before either) can't name a clone directory.
   const plain = new RunnerSession(binding("plain-session", []), join(root, "plain"), config(join(root, "plain")));

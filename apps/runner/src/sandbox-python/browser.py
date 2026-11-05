@@ -7,8 +7,9 @@
 # host's Chromium (which the sandbox gives commands read-only) headless with a profile in the session's home, drives
 # it over the DevTools protocol on a pipe (--remote-debugging-pipe, so it opens no port), opens the request's page, runs
 # its actions, and leaves a screenshot and a JSON report of the page in the worktree's browser-output directory, which
-# the session panel's Browser tab shows. It prints that report as the call's output. A `serve` command, the web app
-# under test, runs beside it for the call only: a command's processes and network end with it.
+# the session panel's Browser tab shows. It prints that report as the call's output. `serve`, the web app under test,
+# runs beside it for the call only, as a command's processes and network end with it: one of the node or python tools'
+# programs, started without a shell, with that tool's environment.
 #
 # Only the standard library: it runs with the sandbox's /usr/bin/python3, 3.9 or newer.
 import base64
@@ -37,6 +38,12 @@ MAX_ENTRY = 500
 MAX_VALUE = 4000
 MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 DEFAULT_VIEWPORT = (1280, 800)
+# The node and python tools' programs, and what they run with: node-command.ts nodePrograms and NODE_ENVIRONMENT,
+# python-command.ts pythonPrograms and PYTHON_ENVIRONMENT (tests/sandbox-python.test.ts checks them).
+NODE_PROGRAMS = ('node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack')
+NODE_ENVIRONMENT = 'NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true'
+PYTHON_PROGRAMS = ('python3', 'pip', 'pip3', 'uv', 'uvx', 'poetry', 'pytest')
+PYTHON_ENVIRONMENT = 'NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1'
 # Chromium's flags: headless, no sandbox of its own (the session's sandbox has no user namespaces to give it, and is the
 # boundary), no shared memory (the sandbox's /dev/shm is read-only), and none of the background traffic a fresh profile
 # makes, which the session's proxy would only refuse.
@@ -628,11 +635,39 @@ def log_tail(path: str, limit: int = 3000) -> str:
         return ''
 
 
-def serve(spec: Dict[str, Any], log: str, deadline: float) -> 'subprocess.Popen[bytes]':
-    """Starts the web app under test, and waits until its port answers."""
+def serve_launch(spec: Dict[str, Any], node_bin: Optional[str]) -> Tuple[List[str], str, Dict[str, str]]:
+    """What starts `serve`'s program, as its own tool would run it: its arguments, where, and with what environment."""
+    program = spec['program']
+    directory = os.path.abspath(spec.get('directory') or '.')
+    env = dict(os.environ)
+    first: List[str] = []
+    if program in NODE_PROGRAMS:
+        fixed = NODE_ENVIRONMENT
+        if node_bin:
+            first.append(node_bin)
+    elif program in PYTHON_PROGRAMS:
+        fixed = PYTHON_ENVIRONMENT
+        if spec.get('venv'):
+            venv = os.path.join(directory, spec['venv'])
+            first.append(os.path.join(venv, 'bin'))
+            env['VIRTUAL_ENV'] = venv
+    else:
+        raise BrowserError('serve runs one of ' + ', '.join(NODE_PROGRAMS + PYTHON_PROGRAMS) + ', not ' + program)
+    for item in fixed.split():
+        name, value = item.split('=', 1)
+        env[name] = value
+    env['PATH'] = ':'.join(first + [os.environ.get('PATH') or '/usr/bin:/bin', '/usr/local/bin'])
+    return [program] + [str(arg) for arg in spec.get('args') or []], directory, env
+
+
+def serve(spec: Dict[str, Any], node_bin: Optional[str], log: str, deadline: float) -> 'subprocess.Popen[bytes]':
+    """Starts the web app under test, in a process group of its own to stop when the call ends, and waits for its port."""
+    args, directory, env = serve_launch(spec, node_bin)
     with open(log, 'wb') as output:
-        process = subprocess.Popen(['/bin/bash', '-c', spec['command']], cwd=spec.get('directory') or '.', stdin=subprocess.DEVNULL,
-                                   stdout=output, stderr=output, start_new_session=True)
+        try:
+            process = subprocess.Popen(args, cwd=directory, env=env, stdin=subprocess.DEVNULL, stdout=output, stderr=output, start_new_session=True)
+        except OSError as error:
+            raise BrowserError('serve could not start %s: %s' % (args[0], error.strerror or error)) from error
     wait = spec.get('timeout_seconds', 60)
     until = min(time.monotonic() + wait, deadline)
     while not port_open(spec['port']):
@@ -674,15 +709,18 @@ def last_url() -> Optional[str]:
 def main() -> int:
     args = sys.argv[1:]
     executable = None
+    node_bin = None
     seconds = 30
-    while len(args) > 1 and args[0] in ('--chrome', '--time-limit'):
+    while len(args) > 1 and args[0] in ('--chrome', '--time-limit', '--node-bin'):
         if args[0] == '--chrome':
             executable = args[1]
+        elif args[0] == '--node-bin':
+            node_bin = args[1]
         else:
             seconds = int(args[1])
         args = args[2:]
     if len(args) != 1 or not executable:
-        print(json.dumps({'error': "usage: pikibun-browser --chrome <chromium> [--time-limit <seconds>] '<request as JSON>'"}))
+        print(json.dumps({'error': "usage: pikibun-browser --chrome <chromium> [--time-limit <seconds>] [--node-bin <directory>] '<request as JSON>'"}))
         return 2
     started = time.monotonic()
     # Actions stop a few seconds before the command's own limit, which leaves the report (with a screenshot) time to be
@@ -710,7 +748,7 @@ def main() -> int:
     page = None
     try:
         if request.get('serve'):
-            server = serve(request['serve'], os.path.join(temporary, 'pikibun-browser-serve.log'), deadline)
+            server = serve(request['serve'], node_bin, os.path.join(temporary, 'pikibun-browser-serve.log'), deadline)
         chrome = Chrome(executable, profile, size, os.path.join(temporary, 'pikibun-browser-chrome.log'), deadline)
         page = Page(chrome, size)
         if url:

@@ -58,7 +58,9 @@ export function browserAt(path: string, options: { platform?: NodeJS.Platform; h
     accessSync(executable, constants.X_OK);
   } catch { return undefined; }
   const directory = dirname(executable);
-  const home = options.home ?? homedir();
+  // Through links too, as the executable is: a home at /home/jo that is /var/home/jo is still the home.
+  let home = options.home ?? homedir();
+  try { home = realpathSync(home); } catch { /* A home that isn't there holds no browser. */ }
   const inside = relative(directory, home);
   if (directory === sep || inside === "" || (!inside.startsWith("..") && !inside.startsWith(sep))) return undefined;
   if (platform !== "linux" || !elf(executable) || !MARKERS.some(name => has(join(directory, name)))) return undefined;

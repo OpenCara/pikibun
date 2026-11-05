@@ -2,7 +2,7 @@ import { validExtensionToolOperation, validHostOperation } from "../../../packag
 import { sha256, verifyToken } from "../../../packages/shared/src/crypto.js";
 import { validateUserEnv } from "../../../packages/shared/src/policy.js";
 import type { RunnerAction, RunnerBinding, RunnerTicket, Operation, Permission } from "../../../packages/shared/src/types.js";
-import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, githubMergeMethods, permissionNeeds, toolNames } from "../../../packages/shared/src/types.js";
+import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, githubMergeMethods, permissionNeeds, toolNames, programToolNames } from "../../../packages/shared/src/types.js";
 import { gitProviderHosts, gitProviders, repositoryLimits, repositoryPath, validCloneDirectory, validGitHost, validPushBranch, validPushTag, validRepositoryId, validRepositoryName, type SessionRepository, type TokenGitProvider } from "../../../packages/shared/src/repositories.js";
 import { validSessionBranch } from "../../../packages/shared/src/git-push.js";
 
@@ -117,6 +117,9 @@ export function validateOperation(value: unknown): Operation {
   const text = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !v.includes("\0");
   if (op.kind === "git.commit" && text(op.message, 4000) && Object.keys(op).length === 2) return op;
   if (op.kind === "bash" && text(op.command, 8192) && Object.keys(op).length === 2) return op;
+  if (op.kind === "program" && (programToolNames as readonly string[]).includes(op.tool) && text(op.command, 8192) && Object.keys(op).length === 3) {
+    return { kind: op.kind, tool: op.tool, command: op.command };
+  }
   const githubRepository = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/.test(value) && !value.endsWith("/.") && !value.endsWith("/..");
   if (op.kind === "github.comment" && githubRepository(op.repository)
     && Number.isSafeInteger(op.issue) && op.issue > 0 && text(op.body, 60000) && Object.keys(op).length === 4) return op;

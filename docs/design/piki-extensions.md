@@ -128,7 +128,8 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
 20. **The order follows use.** A sample of recent sessions (#163) ran `host_bash` twice, both times for `gh`, which
     `piki:gh` covers; `bash` ran read and search (32%), builds and tests (27%), git (23%) and waits for CI (9%), with
     inline Python and Node scripts in most sessions. So `host_bash` became switchable first, while `bash` stays a
-    built-in tool, never switchable on its own: without it a session can't clone its repositories (`sessions.ts`).
+    built-in tool, never switchable on its own: without it a session couldn't clone its repositories (`sessions.ts`), until
+    `git` came (note 29).
 
 21. **Search and line ranges, without a shell.** The `search` tool and `read_file`'s `offset`/`limit` replace the grep,
     find, sed -n, cat and head that took a third of sessions' shell commands, each approved. Like `read_file`, they need
@@ -151,7 +152,7 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     --upload-pack`/`-u`, `--config`/`-c`, `--template`; `fetch`/`pull`/`ls-remote --upload-pack`; `push --receive-pack`/
     `--exec`; `rebase --exec`/`-x`; `grep -O`), including their abbreviations and short-option clusters. A call becomes
     one sandboxed command, `git --no-pager` and its quoted arguments in the clone's directory, with no editor or password
-    prompt, so it is a `bash` operation to the approval rules everywhere (the apps, the control plane, the host's
+    prompt, so it is decided as a shell command everywhere (the apps, the control plane, the host's
     limits and grants), and needs `bash` in the session's agent, as every session has. It never skips approval for
     subcommands that only read: the clone's own configuration (`core.fsmonitor`, `core.pager`, `diff.external`,
     filters, hooks), which the agent can write with `write_file`, can make `git status` run a program, so a
@@ -198,25 +199,97 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     A read that fails during the wait (the admission ran out, say) ends it with the last view and the reason, and
     stopping the message stops the wait. It runs in the runner, so codemode scripts, which have no timers, wait with it too.
 
-Next, in order: file operations (`move_file`, `copy_file`, `delete_file`), `piki:python` and the other ecosystems,
-codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
-(`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
+26. **Moving, copying and deleting without a shell.** `move_file`, `copy_file` and `delete_file`
+    (`apps/runner/src/file-operations.ts`) replace `mv`, `cp` and `rm` in `bash`, and need no approval, like
+    `write_file`. A path names an entry itself: its directory is resolved like any written path (through links that stay
+    in the worktree, never into `.git`), its last component never, so a link is moved, copied or deleted as a link.
+    A destination is never replaced and a directory never goes inside itself, and nothing is made before every check
+    has passed. A move never replaces what appeared at its destination since its check: a link is made again there, a
+    file gets a second name there before losing its first (refused where the file system has no hard links), and a
+    directory takes the place of an empty one made for it, which a rename replaces only while it is still empty. A copy
+    keeps links as links, refuses hard links and special files, and never copies a `.git` (a clone is cloned again),
+    within 10,000 entries and 50 MB; if it fails it removes what it made, last first, a directory only while it is
+    empty and a file or link only while it is still the one it made (its device and inode), so nothing another writer
+    put there meanwhile goes; a delete of a non-empty directory needs `recursive`, which may delete a clone with
+    its `.git`; without `recursive` only the entry itself goes (`rmdir` or `unlink`), whatever it became since it was
+    looked at. The Python helper does it with directory descriptors and `O_NOFOLLOW`, as its other steps do;
+    `FILE_OPERATIONS_CORE` does it in the Windows Node helper and, on unsandboxed hosts, in a worker thread, by path
+    (Node has no calls relative to an open directory), checking that a directory it goes into is still the one it looked
+    at; there the boundary is the Windows container, or none at all on an unsandboxed host; the
+    conformance suite holds every backend to the same answers.
+
+27. **Python without a shell.** `piki:python` turns on the `python` tool (`apps/runner/src/python-command.ts`), the
+    second ecosystem tool, built like `node`: a program (`python3`, `pip`, `pip3`, `uv`, `uvx`, `poetry`, `pytest`), its
+    arguments as a list and a directory, run as one quoted command with no colours or prompts and decided as `bash`'s.
+    `venv` names a virtual environment in that directory, whose `bin` goes first on PATH with `VIRTUAL_ENV` set, as
+    activating it would: the host's Python can't be installed into, and a venv's interpreter isn't one of the programs.
+    Refused: what acts on a package index as an account, `uv publish`, `poetry publish`, `poetry config` of
+    `http-basic.*`, `pypi-token.*` or `certificates.*`, and twine's `upload` and `register`, followed through what
+    launches twine by name (`python3 -m twine`, `uvx`, `uv run`, `uv tool run`, `poetry run`). Python is the host's, in
+    `/usr`, which every sandbox sees; uv and poetry where the host installed them.
+
+28. **Code mode is core.** `pi:codemode` is the glue between tools that shell pipelines were: chaining calls, looping
+    over results, cutting and filtering output (215 pipe stages in the sample only trimmed output). Its catalogue entry
+    (`builtinExtensions`, host-config.ts) is marked `core`, so `SessionBuiltins.select` runs it in every session whatever
+    the host's configuration lists; a connector that predates it still goes by that list, so the host's page keeps its
+    checkbox for them (**Older connectors too**) rather than a capability flag older servers would refuse. A workspace extension that offers a
+    `codemode` tool still replaces it, as it replaced the optional one. Its limits stay as they were (2 scripts per
+    session, 8 per host, 256 MiB, 2 minutes of compute), and each call a script makes is decided like the model's own.
+    The agent instructions point to it rather than pipes in `bash`.
+
+29. **`bash` switchable.** With `git`, `node`, `python`, the file tools and code mode in place, `piki:shell` turns the
+    `bash` tool on or off per workspace, fail-closed like `piki:host-shell` (note 19): off while the workspace's answer
+    now or the last one its connector read turns it off. The `git`, `node` and `python` tools keep running without it:
+    their calls are `bash` operations to the approval rules, but not the `bash` tool, and the control plane checks the
+    session's agent tools, which still list `bash`. It is on by default; turning it off by default, and removing `bash`
+    and `host_bash`, wait for the owner's go-ahead (#163).
+
+30. **Every session tool on a switch.** The brokered tools join the session-tool extensions as they are: `piki:github`
+    (`github_read`, `github_comment`, `github_issue`, `github_merge`), `piki:sources` (`source_read`), `piki:sessions`
+    (`sessions`), and `git_push` with `git` under `piki:git`. Each keeps its broker, its approvals and its checks; the
+    switch only decides whether sessions offer it, and each refuses a call by name (from a code mode script) while it is
+    off. The tools every session needs, `identity` and the file tools, are `piki:files`, marked `core`: always on, shown
+    as such, and a workspace's turning it off is refused by the control plane and ignored by connectors
+    (`sessionToolsOff`). With this, every tool a session has is a Pikibun or Pi extension a workspace chooses.
+
+31. **A program tool's call is its own operation.** `git`, `node` and `python` calls were `bash` operations, so the
+    control plane checked them against `bash` in the session's agent, and an approval rule written for `bash` covered
+    them. They are now `{ kind: "program", tool, command }` (`ProgramOperation`, types.ts): the exact command, as before,
+    under its own tool's name. The runner (`validateOperation`) and the control plane (`parseOperation`) check it alike;
+    the control plane checks the call against its tool in the session's agent or its grants (a permission or "Allow for
+    this session" for `git` covers git's calls, never bash's); and everywhere else it is decided and run as a shell
+    command is (`decidedAsHostCommand`, `requesterAutoApproves`, the host's limits and grants, redaction, the
+    sandboxes' `execute`). A control plane that predates it refuses the kind, so such a call fails cleanly there.
+
+32. **No shell.** `bash` and `host_bash` are removed (#163): the runner defines neither tool, and the agent's
+    instructions recommend no shell. Both names join `retiredToolNames`, so stored agents and approvals that list them
+    stay valid while the control plane never gives them to a new session; cloning needs `git` (or, on a connector from
+    before, `bash`). `piki:shell` and `piki:host-shell` stay in the catalogue as `retired` entries: connectors still
+    report them, so the control plane still sends a workspace's choice to older connectors, which have the tools and
+    keep them off where it was turned off; workspace pages no longer list them. The runner refuses a new `host.bash`
+    operation (a restart already ended any that waited), and the session page no longer requests `bash` operations by
+    hand. A `bash` operation is still the sandbox's own: the program tools run through it, and an older session whose
+    agent lists `bash` can still have one requested. Extensions may name a tool `bash`, as any retired name, decided like
+    every extension tool, by the host's owner.
+
+Next: other ecosystems as usage asks for them (`rust`, `go`, `dotnet` first).
 
 ## A browser: piki:browser
 
-Agents that build web apps had no way to see them: `curl` gives the HTML, not the page its scripts make, and a browser
-in `bash` needs a download the sandbox can't make, a display, and a way to drive it. `piki:browser` turns on the
+Agents that build web apps had no way to see them: a page is what its scripts make of its HTML, and a browser needs a
+download the sandbox can't make, a display, and a way to drive it. `piki:browser` turns on the
 `browser` tool, the session's own (rule 16), and the session panel gets a **Browser** tab that shows what it saw.
 
 26. **One sandboxed command per call.** A sandboxed command has its own network namespace, and its processes end with
     it (`--die-with-parent`, the session's cgroup), so a browser can't outlive a call without a second kind of sandbox
-    that lives across commands, with its own lifetime, limits and cleanup. A call is instead one `bash` operation: the
+    that lives across commands, with its own lifetime, limits and cleanup. A call is instead one sandboxed command: the
     driver starts Chromium, opens the page, runs the actions, screenshots the page and exits. Everything a call needs
     happens in it, `localhost` included, which is also why `serve` exists (rule 29). What carries over between calls
     is the profile in the session's home (cookies, storage: a sign-in), and the last page, which a call without a `url`
-    opens again. It is decided as `bash` is, as `git` and `node` are (rule 22): pages run their scripts, `evaluate` runs
-    the agent's, `serve` is a shell command. The card shows the driver, the Chromium it starts, the command's time limit
-    and the call as JSON, within a bash operation's 8192 characters.
+    opens again. It is a program operation of its own (`{kind: "program", tool: "browser"}`), decided as the `git`, `node`
+    and `python` tools' are: pages run their scripts, `evaluate` runs the agent's, `serve` starts the app. The card shows
+    the driver, the Chromium it starts, the command's time limit and the call as JSON, within a command's 8192
+    characters.
 27. **The driver.** `sandbox-python/browser.py`, standard-library Python like the helper, embedded through
     `sandbox-python.generated.ts`, runs Chromium headless on a DevTools pipe (`--remote-debugging-pipe`: no port, no
     WebSocket client, nothing another process in the sandbox could connect to). Chromium's own sandbox can't start in
@@ -240,10 +313,15 @@ in `bash` needs a download the sandbox can't make, a display, and a way to drive
     the control plane, takes the Files tab's collaborator role, and shows what is on the host now. A report is files
     the agent can change, so the tab and the tool take only what has a report's shape (`parseBrowserReport`), and a
     screenshot only at a `browser-output/` path.
-29. **`serve`.** A web app under test must listen in the same command as the browser, so a call can name a shell
-    command, its directory and port: the driver starts it in its own process group, waits for the port (or its exit,
-    with its output), browses, then stops the group, and returns the end of its output. PATH has the connector's
-    Node.js first, as the `node` tool's does.
+29. **`serve`, without a shell.** A web app under test must listen in the same command as the browser, so a call can
+    name one of the `node` and `python` tools' programs, its arguments, directory (and for Python's, a virtual
+    environment) and port. It is checked by those tools' own requests (`nodeRequest`, `pythonRequest`), so what they
+    refuse it refuses too, and the driver starts it without a shell, in its own process group, with their environment
+    (`NODE_ENVIRONMENT` and the connector's own Node.js first, given as `--node-bin`; `PYTHON_ENVIRONMENT` and the
+    virtual environment's `bin`): sessions have no shell (#163), and `serve` doesn't bring one back. The driver waits
+    for the port (or the program's exit, with its output), browses, stops the group, and returns the end of its output.
+    A call that is stopped, or reaches its time limit, ends everything it started with it: the sandbox's PID namespace
+    goes with the command, and on a host with resource limits so does its cgroup.
 30. **The host's Chromium, given read-only.** Sessions download nothing, so the browser is the host owner's
     (`browser-toolchain.ts`): `PIKIBUN_BROWSER`, else a system install (the distributions' `chromium` packages' real
     executable, not their wrapper scripts; Chrome and Edge in `/opt`), else the newest Playwright or Puppeteer download.

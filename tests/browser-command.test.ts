@@ -31,13 +31,16 @@ const ELF = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]);
 test("the browser tool takes a page, actions and a server to serve, and refuses what it can't run before any card", () => {
   assert.deepEqual(browserRequest({ url: "http://localhost:5173/", actions: [{ action: "click", selector: "text=Sign in" },
     { action: "type", selector: "#email", text: "a@example.com", submit: true }, { action: "wait", ms: 500 }, { action: "screenshot", full_page: true }],
-  serve: { command: "pnpm dev --port 5173", port: 5173, directory: "./app/" }, viewport: { width: 390, height: 844 } }), {
+  serve: { program: "pnpm", args: ["dev", "--port", "5173"], port: 5173, directory: "./app/" }, viewport: { width: 390, height: 844 } }), {
     url: "http://localhost:5173/",
     actions: [{ action: "click", selector: "text=Sign in" }, { action: "type", selector: "#email", text: "a@example.com", submit: true },
       { action: "wait", ms: 500 }, { action: "screenshot", full_page: true }],
     viewport: { width: 390, height: 844 },
-    serve: { command: "pnpm dev --port 5173", port: 5173, directory: "app" },
+    serve: { program: "pnpm", args: ["dev", "--port", "5173"], directory: "app", port: 5173 },
   });
+  // Python's programs may name a virtual environment where they run.
+  assert.deepEqual(browserRequest({ serve: { program: "python3", args: ["-m", "http.server", "8000"], directory: "site", venv: ".venv", port: 8000 } }).serve,
+    { program: "python3", args: ["-m", "http.server", "8000"], directory: "site", venv: ".venv", port: 8000 });
   // Nothing at all looks again at the page the last call left.
   assert.deepEqual(browserRequest({}), {});
   assert.deepEqual(browserRequest({ url: "file:///work/app/dist/index.html", actions: [{ action: "click", x: 10, y: 20 }, { action: "back" }] }).actions,
@@ -57,9 +60,13 @@ test("the browser tool takes a page, actions and a server to serve, and refuses 
     [{ actions: [{ action: "wait", ms: 600_000 }] }, /from 0 to 60000/],
     [{ actions: [{ action: "evaluate", expression: "1", selector: "a" }] }, /evaluate takes expression, not selector/],
     [{ actions: Array.from({ length: 51 }, () => ({ action: "reload" })) }, /at most 50/],
-    [{ serve: { command: "pnpm dev", port: 5173, directory: "../elsewhere" } }, /within the session's worktree/],
-    [{ serve: { command: "pnpm dev" } }, /serve.port/],
-    [{ serve: { command: " ", port: 80 } }, /serve.command/],
+    [{ serve: { program: "pnpm", args: ["dev"], port: 5173, directory: "../elsewhere" } }, /serve: directory is a path within the session's worktree/],
+    [{ serve: { program: "pnpm", args: ["dev"] } }, /serve.port/],
+    // No shell: serve starts one of the node and python tools' programs, checked as those tools check them.
+    [{ serve: { command: "pnpm dev", port: 80 } }, /serve is \{program/],
+    [{ serve: { program: "bash", args: ["-c", "pnpm dev"], port: 80 } }, /serve.program is one of the node and python tools' programs/],
+    [{ serve: { program: "npm", args: ["publish"], port: 80 } }, /serve: npm publish acts on a package registry as an account/],
+    [{ serve: { program: "pnpm", args: ["dev"], venv: ".venv", port: 80 } }, /serve.venv is a virtual environment, for Python's programs/],
     [{ viewport: { width: 50, height: 800 } }, /viewport.width/],
     [{ timeout_seconds: 0 }, /timeout_seconds/],
     [{ headless: false }, /not headless/],
@@ -71,16 +78,19 @@ test("the browser tool's command runs the driver with the host's Chromium and th
   const browser = { driver: "/opt/pikibun/browser/pikibun-browser", chromium: "/opt/pikibun/chromium/chrome" };
   const request = browserRequest({ url: "https://example.com/it's", actions: [{ action: "click", selector: "text=More" }] });
   assert.equal(browserShellCommand(request, browser, { seconds: 600 }),
-    "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' '/opt/pikibun/browser/pikibun-browser' '--chrome' '/opt/pikibun/chromium/chrome' '--time-limit' '600' "
+    "'/opt/pikibun/browser/pikibun-browser' '--chrome' '/opt/pikibun/chromium/chrome' '--time-limit' '600' "
     + "'{\"url\":\"https://example.com/it'\\''s\",\"actions\":[{\"action\":\"click\",\"selector\":\"text=More\"}]}' </dev/null 2>&1");
-  // A serve command finds the connector's own Node.js first, as the node tool does.
-  assert.match(browserShellCommand({ serve: { command: "pnpm dev", port: 3000 } }, browser, { seconds: 30, nodeBin: "/opt/pikibun/node/bin" }),
-    /^PATH='\/opt\/pikibun\/node\/bin':"\$\{PATH:-\/usr\/bin:\/bin\}":'\/usr\/local\/bin' '\/opt\/pikibun\/browser\/pikibun-browser' '--chrome' '\/opt\/pikibun\/chromium\/chrome' '--time-limit' '30' /);
+  // A Node.js program serve starts finds the connector's own Node.js first, as the node tool's do; Python's don't need it.
+  assert.equal(browserShellCommand(browserRequest({ serve: { program: "pnpm", args: ["dev"], port: 3000 } }), browser, { seconds: 30, nodeBin: "/opt/pikibun/node/bin" }),
+    "'/opt/pikibun/browser/pikibun-browser' '--chrome' '/opt/pikibun/chromium/chrome' '--time-limit' '30' '--node-bin' '/opt/pikibun/node/bin' "
+    + "'{\"serve\":{\"program\":\"pnpm\",\"args\":[\"dev\"],\"port\":3000}}' </dev/null 2>&1");
+  assert.doesNotMatch(browserShellCommand(browserRequest({ serve: { program: "python3", args: ["-m", "http.server"], port: 8000 } }), browser,
+    { seconds: 30, nodeBin: "/opt/pikibun/node/bin" }), /--node-bin/);
   assert.doesNotThrow(() => validateOperation({ kind: "bash", command: browserShellCommand(request, browser, { seconds: 30 }) }));
   assert.throws(() => browserShellCommand(browserRequest({ actions: Array.from({ length: 3 }, () => ({ action: "evaluate", expression: "x".repeat(3000) })) }), browser, { seconds: 30 }),
     /over 8192 characters/);
   assert.equal(browserTarget(request), "https://example.com/it's → click");
-  assert.equal(browserTarget(browserRequest({ serve: { command: "pnpm dev", port: 3000 } })), "(the last page) → serve: pnpm dev");
+  assert.equal(browserTarget(browserRequest({ serve: { program: "pnpm", args: ["dev"], port: 3000 } })), "(the last page) → serve: pnpm dev");
 });
 
 test("a browser report is taken only as far as it has the expected shape: the worktree is the agent's to change", () => {
@@ -103,6 +113,12 @@ test("a browser report is taken only as far as it has the expected shape: the wo
     failed_requests: [{ url: "http://localhost:8765/missing.json", status: 404 }],
   });
   assert.equal(parseBrowserReport(JSON.stringify({ screenshot: "browser-output/../secret.png" }))?.screenshot, undefined);
+  // The call's request too, which the Browser tab renders: only what has the expected types.
+  assert.deepEqual(parseBrowserReport(JSON.stringify({ request: { url: {}, full_page: "yes", viewport: { width: 390 },
+    actions: [{ action: "type", text: null, selector: "#q" }, { action: "nonsense" }, "click"],
+    serve: { program: "pnpm", args: ["dev", 5173], port: 5173, directory: ["app"] } } }))?.request, {
+    actions: [{ action: "type", selector: "#q" }], serve: { program: "pnpm", port: 5173, args: ["dev"] },
+  });
   assert.equal(parseBrowserReport("Sandbox process failed"), undefined);
   assert.equal(parseBrowserReport("[1, 2]"), undefined);
 });
@@ -129,6 +145,9 @@ test("the host's Chromium: an installation, never a wrapper script, a lone binar
   assert.equal(browserAt(script, { platform: "linux", home }), undefined);
   assert.equal(browserAt(await install(join(root, "lone"), "chrome", ""), { platform: "linux", home }), undefined);
   assert.equal(browserAt(await install(home, "chrome"), { platform: "linux", home }), undefined, "never the home, which would be mounted whole");
+  // Nor the home named through a link, as /home/jo is /var/home/jo on some systems.
+  await symlink(home, join(root, "linked-home"));
+  assert.equal(browserAt(join(home, "chrome"), { platform: "linux", home: join(root, "linked-home") }), undefined);
   assert.equal(browserAt(join(root, "missing"), { platform: "linux", home }), undefined);
   await writeFile(join(root, "opt", "google", "chrome", "plain"), ELF, { mode: 0o644 });
   assert.equal(browserAt(join(root, "opt", "google", "chrome", "plain"), { platform: "linux", home }), undefined, "not executable");
@@ -202,7 +221,7 @@ test("the driver opens a served page, runs the actions, and leaves a screenshot 
   await chmod(driver, 0o700);
   const port = 20_000 + Math.floor(Math.random() * 20_000);
   const request = browserRequest({
-    serve: { command: `${python} -m http.server ${port} --bind 127.0.0.1`, port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
+    serve: { program: "python3", args: ["-m", "http.server", String(port), "--bind", "127.0.0.1"], port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
     actions: [{ action: "type", selector: "#name", text: "Ada" }, { action: "select", selector: "#color", value: "Green" },
       { action: "click", selector: "text=Greet" }, { action: "evaluate", expression: "document.getElementById('out').textContent" },
       { action: "screenshot" }, { action: "click", selector: "text=Second page" }, { action: "click", selector: "#missing" }, { action: "reload" }],
@@ -263,7 +282,7 @@ test("in the Linux sandbox, the driver runs the host's Chromium, given read-only
 <input id="name"><button type="submit">Greet</button></form><p id="out"></p>`, authorize);
   const port = 20_000 + Math.floor(Math.random() * 20_000);
   // The default command limits (30 seconds, 256 open files per process), as a host without a longer time limit has them.
-  const request = browserRequest({ serve: { command: `python3 -m http.server ${port} --bind 127.0.0.1`, port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
+  const request = browserRequest({ serve: { program: "python3", args: ["-m", "http.server", String(port), "--bind", "127.0.0.1"], port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
     actions: [{ action: "type", selector: "#name", text: "Ada" }, { action: "click", selector: "text=Greet" }, { action: "evaluate", expression: "document.getElementById('out').textContent" }] });
   const output = await run(browserShellCommand(request, sandbox.browser!, { seconds: 30, nodeBin: sandbox.nodeBin }));
   const report = parseBrowserReport(output.trim());
@@ -279,4 +298,42 @@ test("in the Linux sandbox, the driver runs the host's Chromium, given read-only
     assert.match(await run(`ls ${SANDBOX_BROWSER_DIRECTORY}`), /icudtl\.dat|\.pak/);
     await assert.rejects(run(`ls ${chromium!.directory}`), "the host's own path to it isn't there");
   }
+});
+
+test("a stopped browser call leaves nothing running: the sandbox ends Chromium and the served app with the command", { skip: linuxSandboxMissing() ?? ((!chromium && "no Chromium on this host (PIKIBUN_TEST_BROWSER names one)") || undefined) }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-stop-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sandbox = new Sandbox(binding("browser-stop"), join(root, "session"), undefined, { browser: chromium! });
+  t.after(() => sandbox.close());
+  await sandbox.initialize();
+  const authorize = async () => {};
+  await sandbox.writeFile("site/index.html", "<!doctype html><title>Long</title>", authorize);
+  // A port only this test uses marks the served app's process, wherever it ends up.
+  const port = 20_000 + Math.floor(Math.random() * 20_000);
+  const request = browserRequest({ serve: { program: "python3", args: ["-m", "http.server", String(port), "--bind", "127.0.0.1"], port, directory: "site" },
+    url: `http://127.0.0.1:${port}/`, actions: [{ action: "wait", ms: 60_000 }] });
+  const ours = async () => {
+    const found: string[] = [];
+    for (const pid of await readdir("/proc").catch(() => [] as string[])) {
+      if (!/^\d+$/.test(pid)) continue;
+      const command = (await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).split("\0").join(" ");
+      // The app by its port, the driver by its page's, and Chromium by its profile in this session's home: never another test's.
+      if ([`http.server ${port}`, `127.0.0.1:${port}`, `${sandbox.home}/`].some(marker => command.includes(marker))) found.push(`${pid}: ${command.slice(0, 200)}`);
+    }
+    return found;
+  };
+  const controller = new AbortController();
+  const running = sandbox.execute({ kind: "program", tool: "browser", command: browserShellCommand(request, sandbox.browser!, { seconds: 120 }) }, false, authorize,
+    { allowTestShell: true, signal: controller.signal });
+  // Stopped once the app and the browser are up.
+  for (let attempt = 0; attempt < 200 && !(await ours()).some(line => line.includes(`http.server ${port}`)); attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.ok((await ours()).length, "the call started");
+  controller.abort();
+  await assert.rejects(running, /Command stopped/);
+  let left = await ours();
+  for (let attempt = 0; attempt < 50 && left.length; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    left = await ours();
+  }
+  assert.deepEqual(left, [], "nothing of the call outlives it");
 });

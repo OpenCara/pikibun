@@ -11,7 +11,7 @@ import {
   accessUnavailable, autoApproveConfirmed, ChatOptionsBar, chatOptionsBody, confirmAutoApprove, initialSelection, modelUnavailable, mustConfirmAutoApprove, rememberChat,
   type ChatSelection,
 } from "./chat-options";
-import { forgetSentDraft, readDraft, restoreDraft, useDraft, writeDraft } from "./drafts";
+import { forgetSentDraft, restoreDraft, useDraft, writeDraft } from "./drafts";
 import { copyText, messageCut, resendText, rewindable, type MessageCut } from "../../../packages/client/src/message-actions";
 import { useConnections } from "./hosts";
 import { Icon, type IconName } from "./icons";
@@ -91,10 +91,13 @@ function modelFailure({ provider, modelId, status }: NonNullable<EntryView["erro
   return `The request to ${[provider, modelId].filter(Boolean).join("/") || "the model"} failed${status ? ` (HTTP ${status})` : ""}`;
 }
 
-/** One collapsed row for tool calls, tool results and system entries; expanding it shows the raw text. */
+/**
+ * One collapsed row for tool calls, tool results and system entries; expanding it shows the raw text. The label stays on
+ * one line; badges that don't fit beside it wrap onto the lines below (session.css).
+ */
 function ToolDetails({ role, icon, label, text, badges, trimmed }: { role?: string; icon: IconName; label: ReactNode; text: string; badges?: ReactNode; trimmed?: EntryView["trimmed"] }) {
   return <details className="entry-tool" data-role={role}>
-    <summary><Icon name={icon} size={14} /><span className="truncate">{label}</span>{badges}<Icon name="chevron-right" size={14} /></summary>
+    <summary><Icon name={icon} size={14} /><span className="entry-tool-label"><span className="truncate">{label}</span>{badges}</span><Icon name="chevron-right" size={14} /></summary>
     <pre>{text}</pre>
     {trimmed && <BriefNote trimmed={trimmed} />}
   </details>;
@@ -650,14 +653,15 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
     const confirmed = await confirmDialog({
       title: cut.before ? "Go back to before this message?" : "Go back to this reply?",
       message: <>{cut.before ? "This message and everything after it leave" : "Everything after this reply leaves"} the shared conversation, for everyone, and the agent continues from there.
-        {cut.before && " The message goes back into your chat box, when it's empty, to edit and send again."} Only the conversation goes back: files, commits and pushes stay as they are.</>,
+        {cut.before && " The message goes back into your chat box, below anything typed there, to edit and send again."} Only the conversation goes back: files, commits and pushes stay as they are.</>,
       confirmLabel: "Go back", destructive: true,
     });
     if (!confirmed) return;
     void rewinding.run(async () => {
       await api(`/api/sessions/${segment(id)}/revert`, { method: "POST", body: { entryId: cut.entryId } });
-      // Read again: something may have been typed while the dialog was open.
-      if (cut.before && !readDraft(id).trim()) setContent(resendText(entry));
+      // Below what the box holds now, typed before or while the dialog was open, which stays: through the session's
+      // draft, not this box's state, so a box that closed meanwhile (another session was opened) or opened again gets it.
+      if (cut.before) restoreDraft(id, resendText(entry));
       stick.current = true;
       refresh();
     });

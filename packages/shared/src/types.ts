@@ -19,14 +19,15 @@ export type AssignableWorkspaceRole = (typeof assignableWorkspaceRoles)[number];
 /** The four tiers of access to one session given to one member, least first; sessionRolePermissions (policy.ts) defines them. */
 export const sessionRoles = ["viewer", "member", "collaborator", "admin"] as const;
 export type SessionRole = (typeof sessionRoles)[number];
-export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "browser"] as const;
+export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "move_file", "copy_file", "delete_file", "python", "browser"] as const;
 export type ToolName = (typeof toolNames)[number];
 /**
  * Tools no session offers any more, still valid in stored agents and approvals: those of sessions that pinned their
- * repositories (the agent uses Git itself in bash), and the web tools, which extensions provide now
- * (docs/design/host-extensions.md). An extension may name a tool like a retired one.
+ * repositories (the agent uses the git tool), the web tools, which extensions provide now
+ * (docs/design/host-extensions.md), and the shells, bash and host_bash (#163). An extension may name a tool like a
+ * retired one.
  */
-export const retiredToolNames: readonly ToolName[] = ["git_status", "git_commit", "git_repin", "web_fetch", "web_search"];
+export const retiredToolNames: readonly ToolName[] = ["git_status", "git_commit", "git_repin", "web_fetch", "web_search", "bash", "host_bash"];
 export interface UserProfile {
   id: string;
   githubId: string | null;
@@ -407,6 +408,20 @@ export interface GitHubIssueResult {
   number: number;
   url: string;
 }
+/**
+ * The tools that run one program without a shell (#163): git, node, python, and browser, whose program is its driver
+ * (browser-command.ts). Each call is one sandboxed command, the program and its quoted arguments, decided by the same
+ * rules as a shell command, but approved as its own tool's: a permission or "Allow for this session" for git covers
+ * git's calls, never bash's.
+ */
+export const programToolNames = ["git", "node", "python", "browser"] as const;
+export type ProgramToolName = (typeof programToolNames)[number];
+/** One call of a program tool: the exact command it runs (program-command.ts), as its card shows it. Key order: kind, tool, command. */
+export interface ProgramOperation {
+  kind: "program";
+  tool: ProgramToolName;
+  command: string;
+}
 /** Runs outside isolation as the connector user; only the host owner, or a member they granted host commands to, may approve. */
 export interface HostCommandOperation {
   kind: "host.bash";
@@ -450,6 +465,7 @@ export type Operation =
   | ExtensionToolOperation
   | { kind: "git.commit"; message: string }
   | { kind: "bash"; command: string }
+  | ProgramOperation
   | { kind: "github.comment"; repository: string; issue: number; body: string }
   | GitHubMergeOperation
   | GitHubIssueOperation

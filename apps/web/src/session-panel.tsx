@@ -306,7 +306,7 @@ const permissionNeedText: Record<PermissionNeed, string> = {
   audience: "Sharing another session: this session's readers would see what the agent reads from a session they can't open themselves.",
 };
 /** Tools whose effect gets its own approval card after the permission, unless the message auto-approves. */
-const approvedTools: readonly string[] = ["bash", "git", "node", "browser", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
+const approvedTools: readonly string[] = ["bash", "git", "node", "python", "browser", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
 
 function PermissionSummary({ request, pending }: { request: PermissionRequest; pending: boolean }) {
   return <>
@@ -429,7 +429,8 @@ function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView
     {(extensions.builtin ?? []).map(name => {
       const item = builtinExtensions.find(candidate => candidate.name === name);
       return <Row key={`builtin ${name}`} leading={<Icon name="tool" size={16} />} title={item ? <>{item.title} <code>{name}</code></> : <code>{name}</code>}
-        hint={item ? `Built in, as the host's configuration turns it on. Tools: ${item.tools.join(", ")}` : "Built in, as the host's configuration turns it on"}
+        hint={item ? `${"core" in item && item.core ? "Built in, in every session" : "Built in, as the host's configuration turns it on"}. Tools: ${item.tools.join(", ")}`
+          : "Built in, as the host's configuration turns it on"}
         trailing={<StatusBadge tone="success">Running</StatusBadge>} />;
     })}
   </Section>;
@@ -699,25 +700,23 @@ function ExportSection({ session }: { session: SessionRecord }) {
   </Section>;
 }
 
-type ManualKind = "bash" | "github.comment";
+type ManualKind = "github.comment";
 
 function OperationSection({ session, changed }: { session: SessionRecord; changed: () => void }) {
   const form = useAction();
   const [approval, setApproval] = useState<Pick<ApprovalRecord, "id" | "status"> | null>(null);
-  const [kind, setKind] = useState<ManualKind>("bash");
-  const [command, setCommand] = useState("");
+  const [kind, setKind] = useState<ManualKind>("github.comment");
   const [repository, setRepository] = useState("");
   const [issue, setIssue] = useState("");
   const [body, setBody] = useState("");
   const issueNumber = Number(issue);
-  const operationReady = kind === "bash" ? Boolean(command.trim())
-    : /^[^/\s]+\/[^/\s]+$/.test(repository.trim()) && Number.isSafeInteger(issueNumber) && issueNumber > 0 && Boolean(body.trim());
+  // Shell commands went with bash (#163): a person requests a GitHub comment here.
+  const operationReady = /^[^/\s]+\/[^/\s]+$/.test(repository.trim()) && Number.isSafeInteger(issueNumber) && issueNumber > 0 && Boolean(body.trim());
 
   function requestOperation(event: FormEvent) {
     event.preventDefault();
     if (!operationReady || form.busy) return;
-    const operation: Operation = kind === "bash" ? { kind, command }
-      : { kind, repository: repository.trim(), issue: issueNumber, body };
+    const operation: Operation = { kind, repository: repository.trim(), issue: issueNumber, body };
     setApproval(null);
     void form.run(async () => {
       const result = await api<{ approval: ApprovalRecord }>(`/api/sessions/${segment(session.id)}/operations`, { method: "POST", body: operation });
@@ -732,10 +731,9 @@ function OperationSection({ session, changed }: { session: SessionRecord; change
         <fieldset disabled={form.busy} className="stack">
           <Field label="Operation">
             <select className="select" value={kind} onChange={event => setKind(event.target.value as ManualKind)}>
-              <option value="bash">Bash command</option><option value="github.comment">GitHub comment</option>
+              <option value="github.comment">GitHub comment</option>
             </select>
           </Field>
-          {kind === "bash" && <Field label="Command"><textarea className="textarea mono" required autoComplete="off" value={command} onChange={event => setCommand(event.target.value)} /></Field>}
           {kind === "github.comment" && <>
             <Field label="Repository" hint="owner/name"><input className="input" required autoComplete="off" value={repository} onChange={event => setRepository(event.target.value)} /></Field>
             <Field label="Issue number"><input className="input" required type="number" min="1" step="1" value={issue} onChange={event => setIssue(event.target.value)} /></Field>

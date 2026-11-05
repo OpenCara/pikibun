@@ -17,7 +17,7 @@ import type {} from "../../../../packages/shared/src/sharing";
 import type { ApprovalRecord, EntryView, SessionRecord, SessionView as LiveView, SubmitResult, UserProfile } from "../../../../packages/shared/src/types";
 import { useAppData } from "../lib/app-data";
 import { useSession } from "../lib/auth";
-import { forgetSentDraft, readDraft, saveDraft, useDraft } from "../lib/drafts";
+import { forgetSentDraft, restoreDraft, saveDraft, useDraft } from "../lib/drafts";
 import { useKeyboardVisible, useOpenSession } from "../lib/layout";
 import { useLiveSession } from "../lib/live-session";
 import { watchSession } from "../lib/notifications";
@@ -436,13 +436,14 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
     if (working) { void rewinding.run(async () => { throw new Error("Stop the session's work to go back to an earlier message."); }); return; }
     const confirmed = await confirm({
       title: before ? "Go back to before this message?" : "Go back to this reply?",
-      message: `${before ? "This message and everything after it leave" : "Everything after this reply leaves"} the shared conversation, for everyone, and the agent continues from there.${before ? " The message goes back into your chat box, when it's empty, to edit and send again." : ""} Only the conversation goes back: files, commits and pushes stay as they are.`,
+      message: `${before ? "This message and everything after it leave" : "Everything after this reply leaves"} the shared conversation, for everyone, and the agent continues from there.${before ? " The message goes back into your chat box, below anything typed there, to edit and send again." : ""} Only the conversation goes back: files, commits and pushes stay as they are.`,
       confirmLabel: "Go back", destructive: true,
     });
     if (!confirmed) return;
     void rewinding.run(async () => {
       await api(`/api/sessions/${segment(id)}/revert`, { method: "POST", body: { entryId } });
-      if (before && !readDraft(id).trim()) setContent(resendText(entry));
+      // Below what the box holds now, which stays: through the session's draft, so a box that closed meanwhile still gets it.
+      if (before) restoreDraft(id, resendText(entry));
       stick.current = true;
       refresh();
     });

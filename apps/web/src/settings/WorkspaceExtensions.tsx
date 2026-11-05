@@ -111,11 +111,12 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
     ? <Button variant="outline" size="sm" icon="plus" onClick={() => setEditing("new")}>Add extension</Button> : undefined}>
     <ResourceState loading={resource.loading && !data} error={resource.error} retry={resource.refresh}>
       {data && <div className="card">
-        {pikiSessionToolExtensions().map(item => {
+        {pikiSessionToolExtensions().filter(item => !item.retired).map(item => {
           const on = !data.extensions.some(extension => extension.source === item.source && !extension.enabled);
           return <Row key={item.source} leading={<Icon name="tool" size={16} />} title={<>{item.title} <code>{item.source}</code></>}
-            hint={<>{item.description} Hosts on older connectors offer {(item.sessionTools ?? []).map((tool, index) => <Fragment key={tool}>{index ? ", " : ""}<code>{tool}</code></Fragment>)} whatever is chosen here.</>}
-            trailing={admin
+            hint={item.core ? item.description
+              : <>{item.description} Hosts on older connectors offer {(item.sessionTools ?? []).map((tool, index) => <Fragment key={tool}>{index ? ", " : ""}<code>{tool}</code></Fragment>)} whatever is chosen here.</>}
+            trailing={item.core ? <StatusBadge tone="neutral">Always on</StatusBadge> : admin
               ? <label className="check-row small"><input type="checkbox" className="checkbox" checked={on} disabled={action.busy}
                 onChange={event => switchSessionTools(item.source, event.target.checked)} /><span>On</span></label>
               : on ? <StatusBadge tone="success">On</StatusBadge> : <StatusBadge tone="neutral">Off</StatusBadge>} />;

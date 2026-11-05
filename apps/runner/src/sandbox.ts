@@ -22,6 +22,7 @@ import type { IsolatedWorkspace } from "./workspace.js";
 import { CREATE_FILE, OPEN_FILE, privateEntry } from "./platform.js";
 import { BROWSER_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER } from "./sandbox-python.generated.js";
 import { connectorNode, sandboxNodeMount, type NodeToolchain, type SandboxNodeMount } from "./node-toolchain.js";
+import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
 import { connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBrowserMount, type BrowserToolchain } from "./browser-toolchain.js";
 import type { SessionBrowser } from "./browser-command.js";
 
@@ -183,6 +184,7 @@ type Request =
   | { kind: "read" | "read-content" | "list" | "browse"; path: string }
   | SearchRequest
   | { kind: "write"; path: string; content: string }
+  | FileOperationRequest
   | { kind: "import"; directory: string; name: string; data: string }
   | { kind: "snapshot"; clones?: string[]; skipCaches?: true }
   | { kind: "bash"; command: string }
@@ -586,8 +588,14 @@ export class Sandbox implements IsolatedWorkspace {
     return checkedSearch(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, true, authorize)));
   }
 
+  /** move_file, copy_file and delete_file (file-operations.ts), in the helper. */
+  async fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult> {
+    return checkedFileOperation(JSON.parse(await this.#operation(request, false, authorize)));
+  }
+
   async execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options: SandboxExecutionOptions = {}): Promise<string> {
     switch (operation.kind) {
+      case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
         const bounded = options.allowTestShell !== true && (!!this.#resources || options.unbounded !== true);
