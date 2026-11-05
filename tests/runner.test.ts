@@ -457,9 +457,10 @@ test("connected writes durably bind Worker admission to every model approval wit
     const faux = fauxProvider({ models: [{ id: model.modelId }] });
     faux.setResponses([
       fauxAssistantMessage([
-        fauxToolCall("node", testCommandArgs("echo review")),
-        fauxToolCall("node", testCommandArgs("true")),
+        // Three calls that wait on their cards at once (the program tools run one call at a time, as bash didn't).
         fauxToolCall("github_comment", { repository: "example/repo", issue: 1, body: "Review this comment" }),
+        fauxToolCall("github_comment", { repository: "example/repo", issue: 3, body: "And this one" }),
+        fauxToolCall("github_comment", { repository: "example/repo", issue: 4, body: "And a third" }),
       ], { stopReason: "toolUse" }),
       fauxAssistantMessage("Approval requests recorded."),
     ]);
@@ -481,7 +482,7 @@ test("connected writes durably bind Worker admission to every model approval wit
   const view = await session.view();
   assert.equal(view.approvals.length, 3);
   assert.ok(view.approvals.every(approval => approval.requestedBy === "test:bob" && approval.admissionId === admissionId));
-  assert.deepEqual(view.approvals.map(approval => approval.operation.kind).sort(), ["github.comment", "program", "program"]);
+  assert.deepEqual(view.approvals.map(approval => approval.operation.kind).sort(), ["github.comment", "github.comment", "github.comment"]);
   assert.ok(view.entries.every(entry => !entry.text.includes(admissionId)), "proof must not appear in user, tool-result, or model transcript content");
   const explicit = await session.createApproval("test:bob", { kind: "github.comment", repository: "example/repo", issue: 2, body: "Explicit operation" });
   assert.equal(explicit.admissionId, undefined, "explicit operations use the Worker's authenticated-request pin instead");
