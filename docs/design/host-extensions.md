@@ -148,8 +148,12 @@ starts in Pikibun asks for the same trust; it is recorded in the audit log.
 ## Where things show
 
 - **Workspace → Extensions** (owners and admins edit, members read): the workspace's extensions, each with its source,
-  **Enabled**, **Tools** (approval, automatic) and settings; per host shared with the workspace, whether it has each one
-  (installed, missing, other version).
+  its description and the tools it offers (as the first host that has it at that version reports them, or the catalogue
+  for Pikibun's own), **Enabled**, **Tools** (approval, automatic) and settings; per host shared with the workspace,
+  whether it has each one (installed, missing, other version). Above them, **Tools sessions can use**: the session's own
+  tools that are on, the core built-ins (`codemode`) and the enabled extensions' tools, with names settled as sessions
+  settle them (`settleToolNames`: the session's own first, then the workspace's order; an extension's tool replaces a
+  built-in's), computed in the app from the same response (`packages/shared/src/workspace-tools.ts`).
 - **Host → Configuration → Extensions**: Pi's built-in extensions, each with an **Every session** switch for the owner and
   admins; what the host has installed and what each offers or ignores; the owner's **Install**, **Update**, **Remove**; **Let workspaces run extension tools without approval** (owner only). Per workspace
   the host is shared with, extensions it uses that the host lacks, with **Install** or **Update** for the owner.
