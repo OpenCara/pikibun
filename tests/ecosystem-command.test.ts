@@ -34,6 +34,14 @@ test("commands that act on a package registry as an account are refused, through
     // --install takes no value: the toolchain still comes before the program (review of #194).
     ["rustup", ["run", "--install", "stable", "cargo", "publish"], "cargo publish"],
     ["rustup", ["run", "stable", "--install", "cargo", "+nightly", "login"], "cargo login"],
+    // A -- before the toolchain or the program, and rustup's own +toolchain (review of #194).
+    ["rustup", ["run", "stable", "--", "cargo", "publish"], "cargo publish"],
+    ["rustup", ["run", "--", "stable", "cargo", "publish"], "cargo publish"],
+    ["rustup", ["+nightly", "run", "stable", "cargo", "publish"], "cargo publish"],
+    ["cargo", ["--manifest-path", "Cargo.toml", "publish"], "cargo publish"],
+    ["dotnet", ["nuget", "add", "source", "https://example.test/v3/index.json", "-p:secret"], "dotnet nuget add source with a password"],
+    ["dotnet", ["nuget", "add", "source", "https://example.test/v3/index.json", "--password:secret"], "dotnet nuget add source with a password"],
+    ["dotnet", ["nuget", "update", "source", "feed", "-p=secret"], "dotnet nuget update source with a password"],
     ["dotnet", ["nuget", "push", "app.nupkg", "--api-key", "x"], "dotnet nuget push"],
     ["dotnet", ["nuget", "delete", "App", "1.0.0"], "dotnet nuget delete"],
     ["dotnet", ["nuget", "add", "source", "https://example.test/v3/index.json", "-u", "me", "-p", "secret"], "dotnet nuget add source with a password"],
@@ -43,7 +51,8 @@ test("commands that act on a package registry as an account are refused, through
   }
   for (const [program, args] of [
     ["cargo", ["build"]], ["cargo", ["test", "--", "publish"]], ["cargo", ["package"]], ["cargo", ["--config", "publish", "build"]],
-    ["rustup", ["run", "stable", "cargo", "build"]], ["rustup", ["show"]], ["go", ["test", "./..."]], ["gofmt", ["-l", "."]],
+    ["rustup", ["run", "stable", "cargo", "build"]], ["rustup", ["run", "stable", "--", "cargo", "build"]], ["rustup", ["run", "stable", "cargo", "test", "--", "publish"]],
+    ["rustup", ["+nightly", "show"]], ["rustup", ["show"]], ["dotnet", ["nuget", "add", "source", "feed", "--protocol-version", "3"]], ["go", ["test", "./..."]], ["gofmt", ["-l", "."]],
     ["dotnet", ["build"]], ["dotnet", ["nuget", "add", "source", "https://example.test/v3/index.json"]], ["dotnet", ["nuget", "list", "source"]], ["dotnet", ["pack"]],
   ] as const) {
     assert.equal(registryAccountCommand(program, args), undefined, `${program} ${args.join(" ")}`);

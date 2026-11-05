@@ -35,8 +35,11 @@ const ecosystems: Readonly<Record<EcosystemTool, Ecosystem>> = {
   },
 };
 
-/** cargo's options before its command that take the next argument as their value. */
-const cargoValued = new Set(["--color", "--config", "-Z", "-C", "--explain"]);
+/**
+ * cargo's options before its command that take the next argument as their value, and, as hardening, two that only its
+ * commands take (review of #194).
+ */
+const cargoValued = new Set(["--color", "--config", "-Z", "-C", "--explain", "--manifest-path", "--target-dir"]);
 
 /** The positional arguments before --, skipping options and the values of those in `valued`. */
 function positionals(args: readonly string[], valued: ReadonlySet<string> = new Set()): { arg: string; index: number }[] {
@@ -66,10 +69,17 @@ export function registryAccountCommand(program: string, args: readonly string[],
     return undefined;
   }
   if (program === "rustup") {
-    // rustup run [--install] <toolchain> <program> <args...>: its options take no value (review of #194).
-    const found = positionals(args);
-    if (found[0]?.arg === "run" && found[2]) return registryAccountCommand(found[2].arg, args.slice(found[2].index + 1), depth + 1);
-    return undefined;
+    // rustup [+toolchain] run [--install] [--] <toolchain> [--] <program> <args...>: rustup's options take no value, and
+    // a -- before the toolchain or the program only ends them (review of #194). What follows the program is its own.
+    const rest = args[0]?.startsWith("+") ? args.slice(1) : args;
+    let index = 0;
+    const next = (): string | undefined => {
+      while (index < rest.length && rest[index]!.startsWith("-")) index++;
+      return index < rest.length ? rest[index++] : undefined;
+    };
+    if (next() !== "run" || next() === undefined) return undefined;
+    const launched = next();
+    return launched === undefined ? undefined : registryAccountCommand(launched, rest.slice(index), depth + 1);
   }
   if (program === "dotnet") {
     const found = positionals(args);
@@ -77,7 +87,7 @@ export function registryAccountCommand(program: string, args: readonly string[],
     const verb = found[1]?.arg;
     if (verb === "push" || verb === "delete") return `dotnet nuget ${verb}`;
     if ((verb === "add" || verb === "update") && found[2]?.arg === "source"
-      && args.some(arg => arg === "-p" || arg === "--password" || arg.startsWith("--password="))) return `dotnet nuget ${verb} source with a password`;
+      && args.some(arg => /^(?:-p|--password)(?:[:=].*)?$/s.test(arg))) return `dotnet nuget ${verb} source with a password`;
   }
   return undefined;
 }
