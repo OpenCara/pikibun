@@ -602,8 +602,9 @@ export class LocalConnector {
     if (!extensions) return;
     let results: ExtensionRequestResult[] = [];
     // A control plane that predates the browser's status, or Pikibun extensions, refuses a report naming them: it gets the
-    // report without the status, then without them.
-    let browserStatus = true;
+    // report without the status, then without them. A status it refused is left out only until it changes, so one the
+    // control plane refused for itself never hides the next from the host's owner.
+    let refusedStatus: string | undefined;
     let pikiExtensions = true;
     const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
     while (!signal.aborted) {
@@ -611,18 +612,23 @@ export class LocalConnector {
         await extensions.refreshIfChanged();
         // The owner's browser choice, applied as the report goes: a change, an install or a finished download shows within a round.
         if (this.browser) await this.browser.apply((await this.hostConfig.current()).browser).catch(() => {});
+        const status = this.browser?.status();
+        const statusKey = status && JSON.stringify(status);
+        let withStatus = status !== undefined && statusKey !== refusedStatus;
         const report = () => {
           const base = pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions();
-          return browserStatus && this.browser ? { ...base, browser: this.browser.status() } : base;
+          return withStatus ? { ...base, browser: status } : base;
         };
         const sync = async () => parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions", { report: report(), results }));
         let answer: ReturnType<typeof parseExtensionsSyncAnswer> | undefined;
         while (!answer) {
           try { answer = await sync(); }
           catch (error) {
-            if (!refusedReport(error) || (!browserStatus && !pikiExtensions)) throw error;
-            if (browserStatus) browserStatus = false;
-            else pikiExtensions = false;
+            if (!refusedReport(error) || (!withStatus && !pikiExtensions)) throw error;
+            if (withStatus) {
+              withStatus = false;
+              refusedStatus = statusKey;
+            } else pikiExtensions = false;
           }
         }
         results = [];

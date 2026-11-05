@@ -1441,6 +1441,34 @@ test('a connected host\'s sessions get the browser its owner chose, and its repo
   assert.deepEqual([(config.browser as () => unknown)(), config.browserStatus!()], [undefined, { source: 'off', state: 'off', downloadable: true }]);
 });
 
+test('a browser status the control plane refuses is left out only until it changes, so the next reaches the host\'s owner', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-refused-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ExtensionStore(join(root, 'extensions'), async (args, cwd) => {
+    await mkdir(join(cwd, 'node_modules', 'pi-hello'), { recursive: true });
+    await writeFile(join(cwd, 'node_modules', 'pi-hello', 'package.json'), JSON.stringify({ name: 'pi-hello', version: '1.0.0', pi: { extensions: ['./index.js'] } }));
+    await writeFile(join(cwd, 'node_modules', 'pi-hello', 'index.js'), 'export default function () {}');
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ dependencies: { 'pi-hello': args.at(-1)!.split('@').at(-1) } }));
+  });
+  let found: { executable: string; directory: string } | undefined;
+  const syncs = mailbox<{ browser?: { state: string } }>();
+  let round = 0;
+  const fixture = await connectorFixture(t, { extensions: new HostExtensions(store, { remoteInstalls: true, pikiExtensions: [] }), browser: { detect: () => found },
+    extensionsSync: body => {
+      const report = (body as { report: { browser?: { state: string } } }).report;
+      syncs.push(report);
+      // This control plane takes browser statuses, but refuses this one (say, one it finds too long).
+      if (report.browser?.state === 'missing') return Response.json({ error: 'Invalid browser status' }, { status: 400 });
+      // A request makes the next round come at once; meanwhile Chromium is installed on the host.
+      found = { executable: '/usr/lib/chromium/chromium', directory: '/usr/lib/chromium' };
+      return Response.json({ requests: round++ ? [] : [{ id: 'request-1', action: 'install', source: 'npm:pi-hello@1.0.0' }] });
+    } });
+  await startFixture(fixture);
+  assert.equal((await syncs.next()).browser?.state, 'missing');
+  assert.equal((await syncs.next()).browser, undefined, 'tried again at once, without it');
+  assert.equal((await syncs.next()).browser?.state, 'ready', 'the next status is reported');
+});
+
 test('a connected host reports its Pikibun extensions, and leaves them out for a control plane that refuses them', { timeout: 10000 }, async t => {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-cli-'));
   t.after(() => rm(root, { recursive: true, force: true }));

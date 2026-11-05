@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { crc32, deflateRawSync } from "node:zlib";
 import { CHROME_FOR_TESTING_VERSIONS, downloadedHeadlessShells, downloadHeadlessShell, extractZip, latestHeadlessShell } from "../apps/runner/src/browser-download.ts";
 import { HostBrowserSource } from "../apps/runner/src/browser-host.ts";
-import { browserUnavailableReason, browserUnavailableText, parseHostBrowserStatus } from "../packages/shared/src/browser.ts";
+import { browserUnavailableReason, browserUnavailableText, hostBrowserStatusLimits, parseHostBrowserStatus } from "../packages/shared/src/browser.ts";
 import { parseHostExtensionsReport } from "../packages/shared/src/host-extensions.ts";
 
 const ELF = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, ...Array(56).fill(0)]);
@@ -166,13 +166,17 @@ test("a host set to download Chromium downloads it in the background, keeps it u
   assert.equal((await source.apply({ source: "download" })).version, "131.0.6778.85", "the one there stays in use while the next downloads");
   await source.settled();
   assert.equal(source.status().version, "132.0.6834.83");
-  assert.deepEqual(await readdir(root), ["132.0.6834.83"], "the older one is removed");
-  // A failed update leaves the one there in use.
+  assert.equal(source.current()?.executable, join(root, "132.0.6834.83", "chrome-headless-shell-linux64", "chrome-headless-shell"));
+  // The one it replaced stays, whole, while commands that started with it may still run it.
+  assert.deepEqual((await readdir(root)).sort(), ["131.0.6778.85", "132.0.6834.83"]);
+  assert.ok((await stat(executable)).isFile());
+  // At the next check, a day later, it goes; a failed update leaves the one in use.
   state.version = "133.0.0.1";
   now += 24 * 3600_000;
   await source.apply({ source: "download" });
   await source.settled();
   assert.deepEqual([source.status().state, source.status().version], ["ready", "132.0.6834.83"]);
+  assert.deepEqual(await readdir(root), ["132.0.6834.83"]);
   // Found on the host, the download is what `auto` falls back on.
   assert.deepEqual(await source.apply({ source: "auto" }), { source: "auto", state: "ready", version: "132.0.6834.83",
     executable: join(root, "132.0.6834.83", "chrome-headless-shell-linux64", "chrome-headless-shell"), downloadable: true });
@@ -205,6 +209,10 @@ test("a host's browser stands as its sandbox and platform allow: none outside th
   await chmod(join(directory, "chrome"), 0o755);
   assert.match((await home.apply({ source: "path", path: join(directory, "chrome") })).error!, /home directory/);
   assert.deepEqual(await path.apply({ source: "path", path: join(directory, "chrome") }), { source: "path", state: "ready", executable: join(directory, "chrome"), downloadable: true });
+  // However long the path its owner gave, what the connector reports is within what the control plane takes.
+  const long = await path.apply({ source: "path", path: `/${"a".repeat(4000)}/chrome` });
+  assert.deepEqual([long.state, long.error!.length, long.error!.startsWith("Nothing is at /aaa"), long.error!.endsWith("…")], ["missing", hostBrowserStatusLimits.text, true, true]);
+  assert.deepEqual(parseHostBrowserStatus(long), long);
 });
 
 test("a host's browser status is reported within bounds, and a session's reason to have none is a fixed one", () => {

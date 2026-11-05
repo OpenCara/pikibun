@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { HostBrowserConfig, HostBrowserStatus } from "../../../packages/shared/src/browser.js";
+import { hostBrowserStatusLimits, type HostBrowserConfig, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import { downloadedHeadlessShells, downloadHeadlessShell, latestHeadlessShell, pruneHeadlessShells } from "./browser-download.js";
 import { hostBrowser, inspectBrowser, type BrowserToolchain } from "./browser-toolchain.js";
 
@@ -69,9 +69,16 @@ export class HostBrowserSource {
   /** Stops a download under way, as the connector stops. */
   close(): void { this.#abort.abort(); }
 
+  /**
+   * Within what the control plane takes (hostBrowserStatusLimits), so a long path in an error never gets the report
+   * refused: an error is cut short, and an executable path too long to report is left out.
+   */
   private set(status: Omit<HostBrowserStatus, "source" | "downloadable">, browser?: BrowserToolchain): void {
     this.#current = status.state === "ready" ? browser : undefined;
-    this.#status = { source: this.#config.source, downloadable: this.downloadable, ...status, ...(browser && status.state === "ready" ? { executable: browser.executable } : {}) };
+    const clip = (text: string) => text.length > hostBrowserStatusLimits.text ? `${text.slice(0, hostBrowserStatusLimits.text - 1)}…` : text;
+    const executable = browser && status.state === "ready" && browser.executable.length <= hostBrowserStatusLimits.executable ? browser.executable : undefined;
+    this.#status = { source: this.#config.source, downloadable: this.downloadable, state: status.state,
+      ...(executable ? { executable } : {}), ...(status.version ? { version: clip(status.version) } : {}), ...(status.error ? { error: clip(status.error) } : {}) };
   }
 
   private async evaluate(): Promise<void> {
@@ -119,11 +126,12 @@ export class HostBrowserSource {
     const options = { ...(this.options.fetch ? { fetch: this.options.fetch } : {}), signal };
     const task = (async () => {
       try {
+        // Only what no command can still be running goes: the one in use stays, and so does the one it replaced at the
+        // last check, until this one, a day later (a command runs an hour at most). Older ones, and what a stopped
+        // download left, go now. A new one is published first, then sessions switch to it (below), never the reverse.
+        await pruneHeadlessShells(this.options.root, have ? [have] : []);
         const release = await latestHeadlessShell(options);
-        if (release.version !== have) {
-          await downloadHeadlessShell(this.options.root, release, options);
-          await pruneHeadlessShells(this.options.root, release.version);
-        }
+        if (release.version !== have) await downloadHeadlessShell(this.options.root, release, options);
         this.#failure = undefined;
       } catch (error) {
         // A failed update leaves the one there in use; a failed first download is tried again later.

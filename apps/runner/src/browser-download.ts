@@ -116,10 +116,10 @@ export async function downloadHeadlessShell(root: string, release: BrowserReleas
   return browser;
 }
 
-/** Removes from `root` every download but `keep`'s, and anything a stopped one left. */
-export async function pruneHeadlessShells(root: string, keep: string): Promise<void> {
+/** Removes from `root` every download but those of the versions in `keep`, and anything a stopped one left. */
+export async function pruneHeadlessShells(root: string, keep: readonly string[]): Promise<void> {
   for (const name of await readdir(root).catch(() => [] as string[])) {
-    if (name !== keep) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});
+    if (!keep.includes(name)) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});
   }
 }
 

@@ -53,11 +53,11 @@ function availability(extensions: readonly WorkspaceExtension[], installed: read
 
 /**
  * A host's report as someone other than its owner sees it: without its dev extensions, whose paths are its owner's files,
- * nor where its browser is on it.
+ * nor where its browser is on it, nor what went wrong with it, which names a path its owner gave.
  */
 function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExtensionsReport {
   if (ownerView) return report;
-  const browser = report.browser && (({ executable: _, ...rest }) => rest)(report.browser);
+  const browser = report.browser && (({ executable: _, error: __, ...rest }) => rest)(report.browser);
   return { ...report, installed: report.installed.filter(item => !item.dev), ...(browser ? { browser } : {}) };
 }
 

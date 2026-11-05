@@ -182,6 +182,12 @@ test('a host reports how its browser stands: its owner sees where it is on the h
   type Listing = { hosts: { id: string; report?: HostExtensionsReport }[] };
   assert.deepEqual((await json<Listing>(await s.bob.request('GET', `/api/workspaces/${s.workspaceId}/extensions`))).hosts[0]!.report!.browser,
     { source: 'path', state: 'ready', downloadable: true });
+  // Nor what went wrong, which names a path its owner gave.
+  const missing = { source: 'path', state: 'missing', error: 'Nothing is at /home/alice/clients/acme/chrome', downloadable: true } as const;
+  await json(await self(f, s.connector, 'extensions', { report: { ...report([]), browser: missing }, results: [] }));
+  assert.deepEqual((await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`))).report.browser, missing);
+  assert.deepEqual((await json<Listing>(await s.bob.request('GET', `/api/workspaces/${s.workspaceId}/extensions`))).hosts[0]!.report!.browser,
+    { source: 'path', state: 'missing', downloadable: true });
   // Within bounds, or the whole report is refused; a connector that predates it reports none.
   for (const invalid of [{ ...browser, state: 'broken' }, { ...browser, error: 'x'.repeat(1025) }, { ...browser, extra: true }]) {
     await denied(await self(f, s.connector, 'extensions', { report: { ...report([]), browser: invalid }, results: [] }), 400, 'invalid_extensions');

@@ -359,11 +359,14 @@ download the sandbox can't make, a display, and a way to drive it. `piki:browser
     why: nothing there, a wrapper script, a home directory, no Chromium files beside it), `download` (rule 34) or `off`.
     The connector (`HostBrowserSource`, `browser-host.ts`) applies it as it connects, before its sessions open, and
     before each extensions report, every half minute, and reports how it stands with them (`HostBrowserStatus`: ready,
-    missing, downloading, failed, off, unsupported where its sessions have no Linux sandbox). The executable, version
-    and error are the owner's to see; the workspaces' listing leaves the path out. Sessions look the browser up for each
+    missing, downloading, failed, off, unsupported where its sessions have no Linux sandbox), each text within what
+    the control plane takes, so a long path in an error never gets the report refused. The executable and the error
+    (which may name a path the owner gave) are the owner's to see: the host's admins and the workspaces' listing get the
+    rest. Sessions look the browser up for each
     command and each message's tools, so an install, a change of choice or a finished download reaches open sessions at
     their next message. A control plane that predates the status refuses a report naming it, and the connector reports
-    without it from then on, as it does without Pikibun extensions for one older still.
+    without it until the status changes, then tries again, so a status refused for itself doesn't hide the next; it
+    reports without Pikibun extensions for a control plane older still.
 34. **Downloading Chrome for Testing.** `download` fetches Chrome for Testing's Stable `chrome-headless-shell` for
     linux64, the build Google publishes for automation (Puppeteer's default): its version from Chrome for Testing's JSON
     API on `googlechromelabs.github.io`, its zip from `storage.googleapis.com/chrome-for-testing-public/` only, at
@@ -374,7 +377,9 @@ download the sandbox can't make, a display, and a way to drive it. `piki:browser
     run. It goes to the connector's state (`<state>/browser/<version>`), the host's one copy, which the sandbox gives
     sessions read-only as it would a system install. A failed first download is tried again after ten minutes, or at
     once when the owner chooses again; once a day the connector checks for a newer Stable, downloads it beside the one
-    in use, switches, and removes the old, and a failed update keeps the one in use. Chrome for Testing builds Linux
+    in use and switches sessions to it once it is in place, and a failed update keeps the one in use. The one replaced
+    stays until the next check, a day later, since a command that started with it (an hour at most) may still run it,
+    and the sandbox skips a mount whose source is gone. Chrome for Testing builds Linux
     for x86-64 only, so ARM hosts install their distribution's `chromium`; and Chromium links system libraries (NSS,
     GBM, ALSA) that a minimal server may lack, which the hosts guide names rather than the connector installing
     packages.

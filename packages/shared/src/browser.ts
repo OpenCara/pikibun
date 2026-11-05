@@ -245,16 +245,19 @@ export type BrowserState = (typeof browserStates)[number];
 export interface HostBrowserStatus {
   source: BrowserSource;
   state: BrowserState;
-  /** The Chromium sessions run, as its host has it: its owner's to see, not the workspaces'. */
+  /** The Chromium sessions run, as its host has it: its owner's to see, not its admins' or the workspaces'. */
   executable?: string;
   /** Its version, where the connector knows it: one it downloaded. */
   version?: string;
+  /** What went wrong, for its owner alone too: it may name a path they gave. */
   error?: string;
   /** The connector can download one on this host (Linux on x86-64, which Chrome for Testing builds for). */
   downloadable: boolean;
 }
 
 const BROWSER_TEXT_LIMIT = 1024;
+/** How long a status's paths and texts may be: a connector keeps its own within them (a path its owner gave may not be). */
+export const hostBrowserStatusLimits = Object.freeze({ executable: BROWSER_PATH_LIMIT, text: BROWSER_TEXT_LIMIT });
 
 /** A reported browser status, as the control plane accepts it. */
 export function parseHostBrowserStatus(value: unknown): HostBrowserStatus {
