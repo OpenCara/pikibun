@@ -222,6 +222,7 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-ecosystem-tools-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   let instructions = "";
+  let offInstructions = "";
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
     ((context: unknown) => {
@@ -231,7 +232,10 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
     fauxAssistantMessage([fauxToolCall("dotnet", { program: "dotnet", args: ["nuget", "push", "app.nupkg"] })], { stopReason: "toolUse" }),
     fauxAssistantMessage([fauxToolCall("go", { program: "go", args: ["test", "./..."], directory: "app" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Asked."),
-    fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["--version"] })], { stopReason: "toolUse" }),
+    ((context: unknown) => {
+      offInstructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["--version"] })], { stopReason: "toolUse" });
+    }) as never,
     fauxAssistantMessage("Off."),
   ]);
   const models = createModels();
@@ -260,7 +264,7 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
   const said = view.entries.map(entry => entry.text).join("\n");
   assert.match(said, /cargo publish acts on a package registry as an account/);
   assert.match(said, /dotnet nuget push acts on a package registry as an account/);
-  assert.match(instructions, /Run cargo, rustc and rustup, go and gofmt, dotnet with the rust, go, dotnet tools/, "the agent is told how to use them");
+  assert.match(instructions, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet with the rust, go, dotnet tools: .*such as rust \{program/, "the agent is told how to use them");
 
   answer = { extensions: [{ source: "piki:rust", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("ecosystem admission off") }, "write");
@@ -268,4 +272,6 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool rust is not available/);
   assert.equal(view.approvals.length, 1);
+  // Its example is of a tool the session still has (review of #194).
+  assert.match(offInstructions, /Run go and gofmt, dotnet with the go, dotnet tools: .*such as go \{program/);
 });

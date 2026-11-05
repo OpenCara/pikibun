@@ -31,6 +31,9 @@ test("commands that act on a package registry as an account are refused, through
     ["cargo", ["--color", "never", "publish", "--dry-run"], "cargo publish"],
     ["cargo", ["-Z", "unstable-options", "publish"], "cargo publish"],
     ["rustup", ["run", "stable", "cargo", "publish"], "cargo publish"],
+    // --install takes no value: the toolchain still comes before the program (review of #194).
+    ["rustup", ["run", "--install", "stable", "cargo", "publish"], "cargo publish"],
+    ["rustup", ["run", "stable", "--install", "cargo", "+nightly", "login"], "cargo login"],
     ["dotnet", ["nuget", "push", "app.nupkg", "--api-key", "x"], "dotnet nuget push"],
     ["dotnet", ["nuget", "delete", "App", "1.0.0"], "dotnet nuget delete"],
     ["dotnet", ["nuget", "add", "source", "https://example.test/v3/index.json", "-u", "me", "-p", "secret"], "dotnet nuget add source with a password"],

@@ -66,8 +66,8 @@ export function registryAccountCommand(program: string, args: readonly string[],
     return undefined;
   }
   if (program === "rustup") {
-    // rustup run <toolchain> <program> <args...>
-    const found = positionals(args, new Set(["--install"]));
+    // rustup run [--install] <toolchain> <program> <args...>: its options take no value (review of #194).
+    const found = positionals(args);
     if (found[0]?.arg === "run" && found[2]) return registryAccountCommand(found[2].arg, args.slice(found[2].index + 1), depth + 1);
     return undefined;
   }

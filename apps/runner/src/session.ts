@@ -838,9 +838,12 @@ export class RunnerSession {
       + "rather than in bash. Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
       + "python {program: \"pip\", args: [\"install\", \"-r\", \"requirements.txt\"], directory: \"<name>\", venv: \".venv\"}, python {program: \"pytest\", args: [\"-q\"], directory: \"<name>\", venv: \".venv\"}.";
     const ecosystems = ecosystemTools.filter(tool => this.tools.some(item => item.name === tool) && !off.has(tool));
-    if (mode !== "ask" && ecosystems.length) instructions += `\n\nRun ${ecosystems.map(tool => ({ rust: "cargo, rustc and rustup", go: "go and gofmt", dotnet: "dotnet" })[tool]).join(", ")} `
+    // The example is of a tool the session has (review of #194).
+    const example = { rust: "rust {program: \"cargo\", args: [\"test\"], directory: \"<name>\"}", go: "go {program: \"go\", args: [\"test\", \"./...\"], directory: \"<name>\"}",
+      dotnet: "dotnet {program: \"dotnet\", args: [\"test\"], directory: \"<name>\"}" };
+    if (mode !== "ask" && ecosystems.length) instructions += `\n\nRun ${ecosystems.map(tool => ({ rust: "cargo, rustc, rustup and rustfmt", go: "go and gofmt", dotnet: "dotnet" })[tool]).join(", ")} `
       + `with the ${ecosystems.join(", ")} tool${ecosystems.length > 1 ? "s" : ""}: the program, its arguments as a list and the clone's directory, `
-      + "such as rust {program: \"cargo\", args: [\"test\"], directory: \"<name>\"}.";
+      + `such as ${example[ecosystems[0]!]}.`;
     // Code mode is core (#163): what pipes did between commands, a script does between tools.
     if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
       + "write a codemode script that calls them rather than piping commands through grep, head, sort or jq in bash.";
