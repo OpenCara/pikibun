@@ -26,6 +26,8 @@ The tools an agent can use:
 | `sessions` | List, read, message, start, stop and archive the workspace's other sessions, as the message's sender (see [Working across sessions](sessions.md#working-across-sessions)); a workspace turns it off by turning off [`piki:sessions`](extensions.md#session-tools) | A shared message; permission in **Read only** messages for changes, and to pass content between sessions whose readers differ |
 | Extension tools | Whatever the workspace's [extensions](extensions.md) offer, run on the host outside the sandbox | The approval of the host owner, or of a member they [granted host commands](hosts.md#host-admins-and-host-command-grants), unless the workspace runs the extension's tools automatically and the host's owner allows that |
 
+A workspace's page lists the tools its sessions can use, with what each does and where it comes from, under **Settings → Workspaces →** the workspace **→ Extensions → Tools sessions can use** (see [Extensions](extensions.md)).
+
 There is no shell tool: `bash` and `host_bash` were removed (#163). Sessions run Git, Node.js and Python with their own tools, move, copy and delete with the file tools, and chain tools with code mode. Saved agents and approvals that name them stay readable.
 
 "Approval" is skipped for messages the session owner sends with **Auto-approve**: always for commands, pushes, GitHub comments, merges and issues, and for extension tools only on the owner's own host or one whose owner granted them automatic host commands. Side asks offer only the read-only tools.
