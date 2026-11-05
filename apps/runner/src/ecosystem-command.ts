@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { programArguments, programShellCommand, workDirectory } from "./program-command.js";
 
 /*
@@ -110,8 +111,20 @@ export function ecosystemRequest(tool: EcosystemTool, input: { program: unknown;
   return { tool, program: input.program, directory: workDirectory(input.directory), args };
 }
 
-/** The shell command that runs `request`, as its card shows it. */
-export function ecosystemShellCommand(request: EcosystemRequest): string {
+/**
+ * Where a rustup installed for the whole system keeps its toolchains, as the official rust image does
+ * (RUSTUP_HOME=/usr/local/rustup, its proxies in /usr/local/cargo/bin). The sandbox sees /usr read-only, but its HOME is
+ * the session's own, where a proxy would look by default and find no toolchain (review of #194).
+ */
+export const SYSTEM_RUSTUP_HOME = "/usr/local/rustup";
+
+/**
+ * The shell command that runs `request`, as its card shows it. `system.rustupHome`: whether the host has a system-wide
+ * rustup (SYSTEM_RUSTUP_HOME), whose toolchains a rust call then uses unless the session's environment names another
+ * RUSTUP_HOME. CARGO_HOME stays the session's own, so its registry cache and any credentials stay in the session.
+ */
+export function ecosystemShellCommand(request: EcosystemRequest, system: { rustupHome?: boolean } = { rustupHome: existsSync(SYSTEM_RUSTUP_HOME) }): string {
   const ecosystem = ecosystems[request.tool];
-  return programShellCommand({ directory: request.directory, path: ecosystem.path, prefix: ecosystem.environment, program: request.program, args: request.args });
+  const rustup = request.tool === "rust" && system.rustupHome ? ` RUSTUP_HOME="\${RUSTUP_HOME:-${SYSTEM_RUSTUP_HOME}}"` : "";
+  return programShellCommand({ directory: request.directory, path: ecosystem.path, prefix: `${ecosystem.environment}${rustup}`, program: request.program, args: request.args });
 }

@@ -277,7 +277,10 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     (`cargo`, `rustc`, `rustup`, `rustfmt`; `go`, `gofmt`; `dotnet`), its arguments as a list and a directory, run as one
     quoted command with no colours, progress bars, telemetry or first-run banners, each a `program` operation decided as
     commands are. The toolchains' usual directories go after the sandbox's PATH (`programShellCommand` takes a list now);
-    a rustup install in a home directory isn't seen by the sandbox. Refused: what acts on a package registry as an
+    a rustup install in a home directory isn't seen by the sandbox. A system-wide rustup (`/usr/local/rustup`, as the
+    official `rust` image) is: its proxies would look in the session's own `HOME`, so where that directory exists a rust
+    call sets `RUSTUP_HOME="${RUSTUP_HOME:-/usr/local/rustup}"`, the session's own value first; `CARGO_HOME` stays the
+    session's. Refused: what acts on a package registry as an
     account, `cargo publish`, `login`, `logout`, `owner` and `yank`, followed through `cargo +toolchain` and `rustup run`,
     and `dotnet nuget push`, `delete`, and `add`/`update source` with a password. Go has no such command. Not in the
     Windows sandbox, whose container reaches none of them, as `python` isn't.

@@ -14,7 +14,7 @@ test("rust, go and dotnet take their own programs, arguments as a list and a wor
 });
 
 test("each runs one quoted program with its toolchain directories after PATH and no colours, telemetry or input", () => {
-  assert.equal(ecosystemShellCommand(ecosystemRequest("rust", { program: "cargo", args: ["build", "--message-format=short"] })),
+  assert.equal(ecosystemShellCommand(ecosystemRequest("rust", { program: "cargo", args: ["build", "--message-format=short"] }), { rustupHome: false }),
     "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/cargo/bin':'/usr/local/bin' NO_COLOR=1 CARGO_TERM_COLOR=never CARGO_TERM_PROGRESS_WHEN=never cargo 'build' '--message-format=short' </dev/null 2>&1");
   assert.equal(ecosystemShellCommand(ecosystemRequest("dotnet", { program: "dotnet", args: ["test", "$(rm -rf ~)"], directory: "src/App" })),
     "cd -- './src/App' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/share/dotnet':'/usr/lib/dotnet':'/usr/local/share/dotnet':'/usr/local/bin' "
@@ -66,4 +66,35 @@ test("a toolchain directory list never puts an empty entry on PATH, which the sh
     "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/go/bin' go 'version' </dev/null 2>&1");
   assert.equal(programShellCommand({ directory: ".", program: "go", args: [], path: "" }), "go </dev/null 2>&1");
   assert.equal(programShellCommand({ directory: ".", program: "go", args: [], path: [""] }), "go </dev/null 2>&1");
+});
+
+test("with a system-wide rustup, rust calls use its toolchains unless the session names another RUSTUP_HOME; go and dotnet are untouched", () => {
+  const cargo = ecosystemRequest("rust", { program: "cargo", args: ["test"] });
+  assert.equal(ecosystemShellCommand(cargo, { rustupHome: true }),
+    "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/cargo/bin':'/usr/local/bin' NO_COLOR=1 CARGO_TERM_COLOR=never CARGO_TERM_PROGRESS_WHEN=never "
+    + "RUSTUP_HOME=\"${RUSTUP_HOME:-/usr/local/rustup}\" cargo 'test' </dev/null 2>&1");
+  assert.doesNotMatch(ecosystemShellCommand(cargo, { rustupHome: false }), /RUSTUP_HOME/);
+  assert.doesNotMatch(ecosystemShellCommand(ecosystemRequest("go", { program: "go", args: ["test"] }), { rustupHome: true }), /RUSTUP_HOME/);
+  assert.doesNotMatch(ecosystemShellCommand(cargo, { rustupHome: true }), /CARGO_HOME/, "the session keeps its own cargo home");
+});
+
+test("a rustup proxy finds the system toolchain through RUSTUP_HOME, and the session's own setting wins", { skip: process.platform === "win32" }, async () => {
+  const { mkdtemp, mkdir, writeFile, chmod, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const root = await mkdtemp(join(tmpdir(), "pikibun-rustup-"));
+  try {
+    // A stand-in for a rustup proxy: it says which RUSTUP_HOME it would read.
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "cargo"), "#!/bin/sh\necho \"rustup-home=${RUSTUP_HOME:-$HOME/.rustup}\"\n");
+    await chmod(join(bin, "cargo"), 0o755);
+    const command = ecosystemShellCommand(ecosystemRequest("rust", { program: "cargo", args: ["--version"] }), { rustupHome: true });
+    const run = (env: Record<string, string>) => execFileSync("/bin/sh", ["-c", command], { cwd: root, env: { PATH: bin, HOME: join(root, "home"), ...env }, encoding: "utf8" });
+    assert.equal(run({}), "rustup-home=/usr/local/rustup\n");
+    assert.equal(run({ RUSTUP_HOME: "/opt/rustup" }), "rustup-home=/opt/rustup\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
