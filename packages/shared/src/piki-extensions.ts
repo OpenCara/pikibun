@@ -45,6 +45,12 @@ export interface PikiExtensionInfo {
    * The workspace page shows it as always on, and a workspace's choice to turn it off is refused and ignored.
    */
   core?: boolean;
+  /**
+   * Session tools only: a switch for tools sessions no longer have (bash, host_bash). Kept in the catalogue so the
+   * control plane still sends a workspace's choice to connectors that predate the removal, which still offer the tool;
+   * workspace pages don't list it.
+   */
+  retired?: boolean;
 }
 
 export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
@@ -70,13 +76,16 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
-    name: "host-shell", source: "piki:host-shell", title: "Host commands", sessionTools: ["host_bash"], failClosed: true,
-    description: "The host_bash tool: the agent runs commands on the host, outside the sandbox, each approved by the host's owner or a member they granted host commands. Recent sessions used it only for the GitHub CLI, which piki:gh covers. On unless turned off here.",
+    // Retired with host_bash (#163): kept so connectors still report it and the control plane still sends a workspace's
+    // choice to older connectors, which have the tool, and keep it off there; no workspace page lists it.
+    name: "host-shell", source: "piki:host-shell", title: "Host commands", sessionTools: ["host_bash"], failClosed: true, retired: true,
+    description: "The host_bash tool, retired: sessions no longer run commands on the host. Connectors from before its removal still offer it unless turned off.",
     providers: [],
   },
   {
-    name: "shell", source: "piki:shell", title: "Shell commands", sessionTools: ["bash"], failClosed: true,
-    description: "The bash tool: the agent runs shell commands in the session's sandbox, each approved. Sessions clone and commit with git, build and test with node and python, move files with the file tools and chain tools with code mode, so a workspace that needs none of the rest turns it off. On unless turned off here.",
+    // Retired with bash (#163), as piki:host-shell is.
+    name: "shell", source: "piki:shell", title: "Shell commands", sessionTools: ["bash"], failClosed: true, retired: true,
+    description: "The bash tool, retired: sessions clone and commit with git, build and test with node and python, move files with the file tools and chain tools with code mode. Connectors from before its removal still offer it unless turned off.",
     providers: [],
   },
   {

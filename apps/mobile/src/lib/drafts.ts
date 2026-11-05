@@ -1,3 +1,4 @@
+import { restoredDraft } from "@pikibun/client";
 import { useEffect, useState } from "react";
 
 /**
@@ -31,7 +32,27 @@ export function forgetSentDraft(sessionId: string, sent: string) {
   for (const listener of listeners.get(sessionId) ?? []) listener(sent);
 }
 
-/** A session's chat box text: starts from its draft, is remembered as it changes, and drops a sent text when told. */
+/** Chat boxes open on a session, handed text that comes back to them (see restoreDraft). */
+const restorers = new Map<string, Set<(merge: (current: string) => string) => void>>();
+
+/**
+ * Puts text back into a session's chat box, below anything typed there: a message taken back by going back to before
+ * it. Open boxes of the session take it at once and remember it as their draft; with none open, the draft keeps it for
+ * the next one.
+ */
+export function restoreDraft(sessionId: string, text: string) {
+  // A message that was only images brings no text back: nothing to add, not a blank gap below what is typed.
+  if (!text.trim()) return;
+  const merge = (current: string) => restoredDraft(current, text);
+  const open = restorers.get(sessionId);
+  if (open?.size) for (const restore of open) restore(merge);
+  else saveDraft(sessionId, merge(readDraft(sessionId)));
+}
+
+/**
+ * A session's chat box text: starts from its draft, is remembered as it changes, drops a sent text when told, and takes
+ * text handed back to it (see restoreDraft).
+ */
 export function useDraft(sessionId: string) {
   const [initial] = useState(() => readDraft(sessionId));
   const [content, setContent] = useState(initial);
@@ -41,12 +62,18 @@ export function useDraft(sessionId: string) {
     const own = listeners.get(sessionId) ?? new Set();
     own.add(drop);
     listeners.set(sessionId, own);
+    const restore = (merge: (current: string) => string) => setContent(merge);
+    const restoring = restorers.get(sessionId) ?? new Set();
+    restoring.add(restore);
+    restorers.set(sessionId, restoring);
     // A send that finished between this box reading its draft and listening: catch up with what is stored now.
     const stored = readDraft(sessionId);
     if (stored !== initial) setContent(current => current === initial ? stored : current);
     return () => {
       own.delete(drop);
       if (!own.size) listeners.delete(sessionId);
+      restoring.delete(restore);
+      if (!restoring.size) restorers.delete(sessionId);
     };
   }, [sessionId, initial]);
   useEffect(() => { saveDraft(sessionId, content); }, [sessionId, content]);

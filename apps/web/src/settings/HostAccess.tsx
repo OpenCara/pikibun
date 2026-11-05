@@ -131,8 +131,8 @@ export function HostCommandGrantsSection({ connector, refresh }: { connector: Co
       if (!await confirmDialog({
         title: withSessions ? "Grant sessions on the host?" : auto ? "Grant automatic host commands?" : "Grant host command approval?",
         message: (auto
-          ? `${who} will be able to run host_bash on ${connector.name} OUTSIDE the sandbox without anyone approving each command, whenever they send a message with Auto-approve. Commands run on the owner's machine as its user, with its files, credentials and network, and no resource limits.`
-          : `${who} will be able to approve host_bash commands on ${connector.name}, which run OUTSIDE the sandbox on the owner's machine with its files, credentials and network.`)
+          ? `${who} will be able to run host commands on ${connector.name}, such as its extensions' tools, OUTSIDE the sandbox without anyone approving each command, whenever they send a message with Auto-approve. Commands run on the owner's machine as its user, with its files, credentials and network, and no resource limits.`
+          : `${who} will be able to approve host commands on ${connector.name}, such as its extensions' tools, which run OUTSIDE the sandbox on the owner's machine with its files, credentials and network.`)
           + (withSessions ? ` They will also be able to start their own sessions directly on ${connector.name}, without the sandbox: every command of those sessions runs as its user${auto ? ", without asking under their Auto-approve" : ", once approved"}, and their clones use its Git and credentials.` : "")
           + (lendsShell ? ` As ${connector.name} has no resource limits for commands, the shell commands of their own sandboxed sessions will run there without them too${auto ? ", without asking under their Auto-approve" : ", each once approved like a host command"}.` : "")
           + (dropsSessions ? ` This replaces their current grant, which includes sessions on the host: they will no longer start sessions directly on ${connector.name}, and the next command of any they have there will stop.` : ""),
@@ -156,7 +156,7 @@ export function HostCommandGrantsSection({ connector, refresh }: { connector: Co
     }, "Host command access removed.");
   }
 
-  return <Section title="Host command access" bare info="host_bash runs OUTSIDE the sandbox, on this machine as its user. By default only the owner decides those commands. Grant members of a shared workspace the right to approve them, or to run their own without asking under Auto-approve. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run shell commands without them, decided like host commands. Grants end when they expire, when you remove them, or when the host stops being shared there.">
+  return <Section title="Host command access" bare info="Host commands, such as the tools of this host's extensions, run OUTSIDE the sandbox, on this machine as its user. By default only the owner decides those commands. Grant members of a shared workspace the right to approve them, or to run their own without asking under Auto-approve. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run shell commands without them, decided like host commands. Grants end when they expire, when you remove them, or when the host stops being shared there.">
     <div className="card">
       {!grants.length && <Row title="Only the owner" hint="No one else decides host commands on this host" />}
       {grants.map(item => <Row key={`${item.workspaceId}:${item.userId ?? ""}`}
