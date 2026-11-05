@@ -19,12 +19,13 @@ import { defaultHostConfig, type HostConfig } from "../packages/shared/src/host-
 import { parseWorkspaceExtensions } from "../packages/shared/src/host-extensions.js";
 import type { ApprovalRecord, RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
 
-test("a built-in extension steps aside where a workspace's extension offers a tool by its name", async t => {
+test("code mode is core: every session runs it, whatever the host's configuration lists, unless a workspace's extension offers its tool", async t => {
   const builtins = new SessionBuiltins();
   t.after(() => builtins.close());
   assert.deepEqual([...builtins.extensions.keys()], ["pi:codemode"]);
-  assert.deepEqual(builtins.select([], new Set()), []);
+  assert.deepEqual(builtins.select([], new Set()).map(item => item.name), ["pi:codemode"], "on though the host's configuration lists nothing");
   assert.deepEqual(builtins.select(["pi:codemode"], new Set()).map(item => item.name), ["pi:codemode"]);
+  assert.deepEqual(builtins.select([], new Set(["codemode"])), [], "a workspace's extension offering codemode still replaces it");
   assert.deepEqual(builtins.select(["pi:codemode"], new Set(["codemode"])), []);
   // Scripts get no models.* tools: only the codemode tool itself.
   assert.deepEqual(builtins.extensions.get("pi:codemode")!.tools!.map(tool => tool.name), ["codemode"]);
@@ -85,7 +86,7 @@ test("a session runs at most a few scripts at once", async t => {
   for (const item of runs.slice(0, -1)) assert.equal((await item.result).ok, false);
 });
 
-test("code mode runs where the host's configuration turns it on, and its scripts' calls are decided like the model's own", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+test("code mode runs in every session, and its scripts' calls are decided like the model's own", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-builtin-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(join(root, "shout.ts"), `import { Type } from "typebox";
@@ -179,11 +180,10 @@ test("code mode runs where the host's configuration turns it on, and its scripts
   assert.equal(found.length, 1);
   assert.match(await readFile(join(root, "runner", found[0]!), "utf8"), /^line 0\n[\s\S]*line 1999$/);
 
-  // Turned off in the host's configuration: the next message offers no code mode.
+  // Left out of the host's configuration: code mode is core, so the next message still offers it.
   config = { ...config, builtinExtensions: [] };
-  assert.equal((await session.view()).extensions?.builtin, undefined);
+  assert.deepEqual((await session.view()).extensions?.builtin, ["pi:codemode"]);
   await send("later");
   await idle();
-  assert.ok(!offered.at(-1)!.includes("codemode"), offered.at(-1)!.join());
-  assert.equal(await assistant(), "no code mode");
+  assert.ok(offered.at(-1)!.includes("codemode"), offered.at(-1)!.join());
 });

@@ -2,6 +2,7 @@ import { access, constants } from "node:fs/promises";
 import { homedir, release, userInfo } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readConnectorState } from "./connector.js";
 import { createFauxLocalModels, loadLocalPiModels, readPiSettings, type LocalModels } from "./local-pi.js";
 import type { Prerequisite } from "./desktop-protocol.js";
@@ -96,6 +97,20 @@ export function npmPrerequisite(platform: NodeJS.Platform = process.platform, pa
   const found = spawnSync(platform === "win32" ? "npm.cmd" : "npm", ["--version"], { stdio: "ignore", timeout: 15_000, windowsHide: true,
     shell: platform === "win32", env: { ...process.env, PATH: path } }).status === 0;
   return { name: "Node.js and npm on PATH, to install extensions from npm or Git", ok: found, optional: true, ...(found ? {} : { fix: fixes.node(platform) }) };
+}
+
+/**
+ * Linux: Python's venv and ensurepip in the sandbox's Python (/usr/bin/python3), which the python tool's virtual
+ * environments need (`python3 -m venv .venv`, then pip in it); Debian and Ubuntu ship them apart, as python3-venv.
+ * Optional, like npm: sessions run without it, only not Python projects' installs. None elsewhere: macOS's developer
+ * tools and Windows' Python have them.
+ */
+export function pythonVenvPrerequisite(platform: NodeJS.Platform = process.platform, python = "/usr/bin/python3",
+  apt = existsSync("/usr/bin/apt-get")): Prerequisite | undefined {
+  if (platform !== "linux") return undefined;
+  const found = spawnSync(python, ["-I", "-c", "import ensurepip, venv"], { stdio: "ignore", timeout: 15_000, env: { PATH: "/usr/bin:/bin" } }).status === 0;
+  return { name: "Python's venv and ensurepip (python3-venv), for the python tool's virtual environments", ok: found, optional: true,
+    ...(found ? {} : { fix: aptFix(["python3-venv"], apt) }) };
 }
 
 /** Fails with the missing prerequisites; `sandboxHint` offers the unsandboxed mode where the front end has one. */

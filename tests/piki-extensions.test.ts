@@ -41,7 +41,7 @@ test('Pikibun extension sources parse as piki:<name>, are their own package, and
   assert.deepEqual(sessionExtensions(parseWorkspaceExtensions([{ source: 'piki:gh' }, { source: 'piki:glab' }]), installed, { ownerId: 'bob', connectorOwnerId: 'alice' })
     .map(item => item.source), ['piki:gh'], 'every member\'s sessions run it, not only the host owner\'s');
 
-  assert.deepEqual(pikiExtensions.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:git', 'piki:node', 'piki:prompt-audit']);
+  assert.deepEqual(pikiExtensions.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit']);
   assert.deepEqual(pikiExtensionsFor('github-enterprise').map(item => item.source), ['piki:gh']);
   assert.deepEqual(pikiExtensionsFor('azure-devops').map(item => item.tool), ['az']);
   assert.deepEqual(pikiExtensionsFor('bitbucket'), []);
@@ -61,7 +61,7 @@ test('every connector has its Pikibun extensions: each command-line one offers o
   const root = await directory(t);
   const store = new ExtensionStore(join(root, 'extensions'));
   const loaded = await loadInstalled(store);
-  assert.deepEqual(loaded.map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:git', 'piki:node', 'piki:prompt-audit']);
+  assert.deepEqual(loaded.map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit']);
   for (const item of loaded) {
     assert.equal(item.summary.error, undefined);
     const [module] = item.summary.modules;
@@ -83,7 +83,7 @@ test('every connector has its Pikibun extensions: each command-line one offers o
   }
   const host = new HostExtensions(store, { remoteInstalls: true });
   await host.load();
-  assert.deepEqual(host.report().installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:git', 'piki:node', 'piki:prompt-audit']);
+  assert.deepEqual(host.report().installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit']);
   assert.deepEqual(host.reportWithoutPikiExtensions().installed, [], 'a control plane that predates them gets the report without them');
   // Nothing is installed in the store: the CLI's changes are compared with what is installed only.
   await host.refreshIfChanged();
