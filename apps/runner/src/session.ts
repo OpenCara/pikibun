@@ -821,27 +821,27 @@ export class RunnerSession {
       + "missing unless they were made again since. Clone the repositories you need again, and check that a file exists before relying on it.";
     // Sessions read and searched code with grep, sed -n and head in a third of their shell commands (#163), each one approved.
     if (this.tools.some(tool => tool.name === "search")) instructions += "\n\nTo find and read code, use search (a regular expression or text across the worktree's files, "
-      + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than grep, find, sed, cat or head in bash: "
+      + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than reading whole files: "
       + "they need no approval and their output is already bounded.";
     if (mode !== "ask" && this.tools.some(tool => tool.name === "move_file")) instructions += "\n\nTo move, copy or delete files and directories, "
-      + "use move_file, copy_file and delete_file rather than mv, cp, rm or mkdir in bash (write_file makes the directories it needs): they need no approval.";
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "git") && !off.has("git")) instructions += "\n\nRun Git with the git tool rather than in bash: "
+      + "use move_file, copy_file and delete_file (write_file makes the directories it needs): they need no approval.";
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "git") && !off.has("git")) instructions += "\n\nRun Git with the git tool: "
       + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
       + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "
       + "It needs no quoting, and its approval card shows exactly the Git command it runs.";
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "node") && !off.has("node")) instructions += "\n\nRun Node.js, npm, npx, pnpm, yarn and corepack with the node tool rather than in bash: "
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "node") && !off.has("node")) instructions += "\n\nRun Node.js, npm, npx, pnpm, yarn and corepack with the node tool: "
       + "node {program: \"pnpm\", args: [\"install\"], directory: \"<name>\"}, node {program: \"pnpm\", args: [\"test\"], directory: \"<name>\"}, "
       + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs."
       + (this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own), with its npm, npx and corepack, ahead of any other on PATH.` : "");
     if (mode !== "ask" && this.tools.some(tool => tool.name === "python") && !off.has("python")) instructions += "\n\nRun Python, pip, uv, poetry and pytest with the python tool "
-      + "rather than in bash. Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
+      + "(there is no shell). Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
       + "python {program: \"pip\", args: [\"install\", \"-r\", \"requirements.txt\"], directory: \"<name>\", venv: \".venv\"}, python {program: \"pytest\", args: [\"-q\"], directory: \"<name>\", venv: \".venv\"}.";
     // Code mode is core (#163): what pipes did between commands, a script does between tools.
     if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
-      + "write a codemode script that calls them rather than piping commands through grep, head, sort or jq in bash.";
-    // Sessions waited for CI with sleep in bash, then read the pull request again, in 9% of their shell commands (#163).
+      + "write a codemode script that calls them: there is no shell to pipe commands through.";
+    // Sessions waited for CI with sleep in a shell, then read the pull request again, in 9% of their shell commands (#163).
     if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read") && !off.has("github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
-      + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes) rather than sleep in bash.";
+      + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes).";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -2169,7 +2169,7 @@ export class RunnerSession {
           await this.sandbox.writeFile(args.path, applyEdits(await this.sandbox.readFile(args.path, recheck), args.edits, args.path), recheck);
           return text({ ...attribution, edited: args.path, edits: args.edits.length });
         } }),
-      // Moving, copying and deleting as mv, cp and rm did in bash (#163): writes like write_file, one at a time.
+      // Moving, copying and deleting as mv, cp and rm did in the retired shell (#163): writes like write_file, one at a time.
       ...(["move_file", "copy_file"] as const).map(name => defineTool({ name, executionMode: "sequential",
         description: name === "move_file"
           ? "Move or rename a file, directory or link in the worktree, without a shell or approval (like write_file): from and to are worktree paths. A link is moved itself, never what it points to. The destination must not exist, its directories are made, and a directory can't go inside itself; nothing in .git is moved. In a read-only request it waits for the session owner to allow it."
@@ -2194,18 +2194,9 @@ export class RunnerSession {
           const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
           return text({ ...attribution, deleted: args.path, entries: result.entries });
         } }),
-      defineTool({ name: "bash", description: "Run an exact shell command in the session worktree. Waits for an exact human approval unless the owner enabled auto-approve for this request; then it runs at once and the result carries its output. It stops at the host's command time limit, which identity reports (commands.timeoutSeconds).", parameters: Type.Object({ command: Type.String() }), execute: async (args, api, call) => {
-        // A workspace that turned piki:shell off (fail-closed, like host_bash): refused before anything is recorded.
-        await this.requireSessionTool("bash");
-        const attribution = await this.toolActor(api, true);
-        // Before any card: a session on a host that no longer accepts that asks nobody for anything.
-        await this.requireHostEnvironment();
-        const { unbounded } = await this.permit(api, call, "bash", args.command, { write: true, shell: true });
-        return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command: args.command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
-      } }),
       // Git without a shell (piki:git, #163): its call becomes one sandboxed command, `git` and its quoted arguments, decided
       // as bash's are; Git's configuration in a clone, which the agent can write, can run programs, so no call skips that.
-      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: Type.Object({ args: Type.Array(Type.String(), { minItems: 1, maxItems: gitLimits.arguments }), directory: Type.Optional(Type.String()) }),
         execute: async (args, api, call) => {
@@ -2222,7 +2213,7 @@ export class RunnerSession {
         } }),
       // Node.js and its package managers without a shell (piki:node, #163), decided as bash's are: they run the project's
       // scripts and whatever a script says.
-      defineTool({ name: "node", description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      defineTool({ name: "node", description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: Type.Object({ program: StringEnum(nodePrograms), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()) }),
         execute: async (args, api, call) => {
@@ -2239,7 +2230,7 @@ export class RunnerSession {
         } }),
       // Python and its package and test tools without a shell (piki:python, #163), decided as bash's are, like node's.
       // Not in the Windows sandbox, whose container reaches no Python yet (review of #186).
-      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: Type.Object({ program: StringEnum(pythonPrograms), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()),
           venv: Type.Optional(Type.String()) }),
@@ -2400,17 +2391,6 @@ export class RunnerSession {
           await sleep(WAIT_POLL_MS, undefined, { signal: call.abortSignal });
         }
       } }),
-      defineTool({ name: "host_bash", executionMode: "sequential",
-        description: "Run any command OUTSIDE the sandbox on the host, with its tools, files, credentials and network. Uses the session worktree as cwd and the host home/PATH. Requires exact approval by the host owner or a member they granted host commands; auto-approve skips it only in the session of the host owner or of a member granted automatic host commands. No CPU/memory/disk quotas. Default 300 seconds, maximum 3600. Never use as an implicit fallback.",
-        parameters: Type.Object({ command: Type.String(), timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })) }),
-        execute: async (args, api, call) => {
-          // Before anything is recorded for the call: a refused one leaves nothing behind.
-          await this.requireSessionTool("host_bash");
-          const attribution = await this.toolActor(api, true);
-          await this.permit(api, call, "host_bash", args.command, { write: true });
-          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy,
-            { kind: "host.bash", command: args.command, timeoutSeconds: args.timeout_seconds ?? 300 }, String(api.taskId), { permitted: true }), call));
-        } }),
     ];
   }
 
@@ -2542,21 +2522,23 @@ export class RunnerSession {
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");
     // Sessions commit and switch branches with Git itself, and push a clone's directory.
     if (operation.kind === "git.commit" || operation.kind === "git.repin" || (operation.kind === "git.push" && operation.directory === undefined)) {
-      throw new RunnerError(400, "Commit and switch branches with git in bash; a push names a clone's directory");
+      throw new RunnerError(400, "Commit and switch branches with the git tool; a push names a clone's directory");
     }
+    // host_bash is retired (#163): nothing asks to run a command on the host any more. A restart already ended the
+    // host commands that were waiting, so none is left to decide.
+    if (operation.kind === "host.bash") throw new RunnerError(400, "Commands on the host were removed with host_bash; run programs with the git, node and python tools");
     this.requireShellCapability(operation, consent.unbounded);
-    if ((operation.kind === "host.bash" || operation.kind === "extension.tool") && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
+    if (operation.kind === "extension.tool" && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
       throw new RunnerError(403, "Host commands require a connected host with a known owner");
     }
     // Only the session's own extension tools ask for these, each from its call.
     if (operation.kind === "extension.tool" && (!consent.permitted || toolTaskId === undefined)) throw new RunnerError(400, "Extension tool calls come only from their tools");
     if (operation.kind === "git.push" && !this.#clone) throw new RunnerError(400, "Only clone sessions push a clone's directory");
     // On a host without the sandbox the agent pushes with the host's own Git: an approved push would only fail.
-    if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with git in bash");
+    if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with the git tool");
     const toolName = operation.kind === "extension.tool" ? undefined : operation.kind === "program" ? operation.tool : ({ "git.commit": "git_commit", bash: "bash", "github.comment": "github_comment", "github.merge": "github_merge", "github.issue": "github_issue", "git.push": "git_push", "git.repin": "git_repin", "host.bash": "host_bash" } as const)[operation.kind];
-    // Host commands never take a session grant (see `permit`), so a session-wide one left from before doesn't enable them.
     if (!consent.permitted && (toolName === undefined || (!this.binding.agent.tools.includes(toolName)
-      && !(toolName !== "host_bash" && (await this.metadata()).grants?.tools.includes(toolName))))) {
+      && !(await this.metadata()).grants?.tools.includes(toolName)))) {
       throw new RunnerError(403, "Operation not enabled by pinned agent version");
     }
     await this.authorize(actorId, "write");
@@ -2579,7 +2561,7 @@ export class RunnerSession {
       // A tool the owner allowed for the rest of the session runs their calls of it as Auto-approve would; host commands
       // never take a session grant, so each one still asks unless the owner holds automatic host commands on this host.
       const github = operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
-      const sessionGranted = toolName !== undefined && operation.kind !== "host.bash" && !github
+      const sessionGranted = toolName !== undefined && !github
         && state.grants?.tools.includes(toolName) === true;
       automatic = (run.options?.access === "auto" || sessionGranted) && run.initiatedBy === this.binding.owner.id
         && (!github || (admissionId !== undefined && (operation.kind !== "github.merge" || run.options?.autoMerge === true)))
@@ -3226,7 +3208,7 @@ export class RunnerSession {
   /** Credential → push → completion. The credential stays in this frame; results carry only fixed, credential-free text. */
   private async runPush(id: string, operation: GitPushOperation, auth: { actorId: string; capability?: string; admissionId?: string }, recheck: SandboxAuthorize, signal?: AbortSignal): Promise<{ status: "executed" | "failed" | "interrupted"; result: string }> {
     if (!this.#clone || operation.directory === undefined) return { status: "failed", result: "Push failed: a push names a clone's directory. Nothing was pushed." };
-    if (!this.#egress) return { status: "failed", result: "Push failed: on a host without the sandbox, push with git in bash. Nothing was pushed." };
+    if (!this.#egress) return { status: "failed", result: "Push failed: on a host without the sandbox, push with the git tool. Nothing was pushed." };
     const request: PushCredentialRequest = { sessionId: this.binding.session.id, approvalId: id, actorId: auth.actorId, operation,
       ...(auth.capability !== undefined ? { capability: auth.capability } : {}), ...(auth.admissionId !== undefined ? { admissionId: auth.admissionId } : {}) };
     let credential: PushCredential | HostPushCredential;

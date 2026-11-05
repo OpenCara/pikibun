@@ -54,15 +54,9 @@ Model credentials stay in Pi on your host. Pairing keeps the host private to you
 
 The connector offers the models matched by `enabledModels` in Pi's `settings.json` (the same patterns Pi uses for model cycling, e.g. `"anthropic/*"`, `"*/claude-opus-5-5*"`), or every authenticated Pi model when that list is unset. `--model PROVIDER/MODEL` (repeatable) overrides both. In the web app, you and the host's admins can also disable any of these models, for everyone who uses the host, without restarting the connector (**Settings → Hosts →** the host **→ Models**).
 
-## Host commands from chat
+## Host commands
 
-Ask the agent to use `host_bash` when you need a host-installed SDK or network access, for example `dotnet --info`. Ordinary `bash` remains in the offline sandbox; a missing SDK does not silently turn a sandbox command into a host command. Update the connector to a version advertising `hostCommands` to expose this tool.
-
-**Host commands run outside the sandbox as the connector's OS user.** They can read or change host files and credentials, access the network, and launch other processes. They have no CPU, memory, process-count or disk quotas. Pikibun passes the host's `PATH` and `HOME`, not the connector's entire environment, and starts Bash without shell profiles, in the session worktree. Use an absolute SDK path or configure the connector's `PATH` if a tool is only available in your interactive shell.
-
-Commands run in the session's worktree, whose files and Git configuration the agent can change: builds, package scripts, Git hooks and settings such as `core.fsmonitor` there can run the agent's code on the host, even for a command that looks harmless like `git status`. Approve a host command only if you would run it yourself in that directory.
-
-Each exact command and timeout needs the approval of the **host owner**, or of a member they (or one of the host's admins) granted host commands, in the session. On a shared host, the approver must also have approve access to the session. The session owner's **Auto-approve** skips this decision only when they own the host too, or hold an automatic host command grant on it; without one it never authorizes commands on someone else's host. Commands default to a five-minute timeout (`timeout_seconds`, 1-3600); timeout, cancellation and output limits terminate the process group, but cannot contain an unrestricted command that deliberately detaches processes.
+Sessions have no shell on the host: `host_bash` was removed. What runs outside the sandbox as the connector's OS user are the tools of the workspace's [extensions](../../docs/extensions.md), and every command of a session that runs on the host itself. Each needs the approval of the **host owner**, or of a member they (or one of the host's admins) granted host commands; see [host commands](../../docs/host-commands.md). For an SDK the sandbox lacks, install it where the sandbox sees it (`/usr` or `/usr/local`).
 
 ## macOS, Windows and hosts without bubblewrap
 

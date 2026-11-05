@@ -695,25 +695,23 @@ function ExportSection({ session }: { session: SessionRecord }) {
   </Section>;
 }
 
-type ManualKind = "bash" | "github.comment";
+type ManualKind = "github.comment";
 
 function OperationSection({ session, changed }: { session: SessionRecord; changed: () => void }) {
   const form = useAction();
   const [approval, setApproval] = useState<Pick<ApprovalRecord, "id" | "status"> | null>(null);
-  const [kind, setKind] = useState<ManualKind>("bash");
-  const [command, setCommand] = useState("");
+  const [kind, setKind] = useState<ManualKind>("github.comment");
   const [repository, setRepository] = useState("");
   const [issue, setIssue] = useState("");
   const [body, setBody] = useState("");
   const issueNumber = Number(issue);
-  const operationReady = kind === "bash" ? Boolean(command.trim())
-    : /^[^/\s]+\/[^/\s]+$/.test(repository.trim()) && Number.isSafeInteger(issueNumber) && issueNumber > 0 && Boolean(body.trim());
+  // Shell commands went with bash (#163): a person requests a GitHub comment here.
+  const operationReady = /^[^/\s]+\/[^/\s]+$/.test(repository.trim()) && Number.isSafeInteger(issueNumber) && issueNumber > 0 && Boolean(body.trim());
 
   function requestOperation(event: FormEvent) {
     event.preventDefault();
     if (!operationReady || form.busy) return;
-    const operation: Operation = kind === "bash" ? { kind, command }
-      : { kind, repository: repository.trim(), issue: issueNumber, body };
+    const operation: Operation = { kind, repository: repository.trim(), issue: issueNumber, body };
     setApproval(null);
     void form.run(async () => {
       const result = await api<{ approval: ApprovalRecord }>(`/api/sessions/${segment(session.id)}/operations`, { method: "POST", body: operation });
@@ -728,10 +726,9 @@ function OperationSection({ session, changed }: { session: SessionRecord; change
         <fieldset disabled={form.busy} className="stack">
           <Field label="Operation">
             <select className="select" value={kind} onChange={event => setKind(event.target.value as ManualKind)}>
-              <option value="bash">Bash command</option><option value="github.comment">GitHub comment</option>
+              <option value="github.comment">GitHub comment</option>
             </select>
           </Field>
-          {kind === "bash" && <Field label="Command"><textarea className="textarea mono" required autoComplete="off" value={command} onChange={event => setCommand(event.target.value)} /></Field>}
           {kind === "github.comment" && <>
             <Field label="Repository" hint="owner/name"><input className="input" required autoComplete="off" value={repository} onChange={event => setRepository(event.target.value)} /></Field>
             <Field label="Issue number"><input className="input" required type="number" min="1" step="1" value={issue} onChange={event => setIssue(event.target.value)} /></Field>

@@ -165,7 +165,6 @@ async function versionBatch(env: Env, statements: Query<AgentRow>[], versionInde
 /** New broker and host tools require an explicit connector capability. */
 function carries(capabilities: ConnectorCapabilities, tool: ToolName): boolean {
   if (retiredToolNames.includes(tool)) return false;
-  if (tool === 'host_bash') return capabilities.hostCommands === true;
   if (tool === 'git_push') return capabilities.gitPush === true;
   if (tool === 'github_read' || tool === 'github_merge') return capabilities.github === true;
   if (tool === 'github_issue') return capabilities.githubIssues === true;

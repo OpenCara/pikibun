@@ -23,10 +23,11 @@ export const toolNames = ["identity", "list_files", "read_file", "write_file", "
 export type ToolName = (typeof toolNames)[number];
 /**
  * Tools no session offers any more, still valid in stored agents and approvals: those of sessions that pinned their
- * repositories (the agent uses Git itself in bash), and the web tools, which extensions provide now
- * (docs/design/host-extensions.md). An extension may name a tool like a retired one.
+ * repositories (the agent uses the git tool), the web tools, which extensions provide now
+ * (docs/design/host-extensions.md), and the shells, bash and host_bash (#163). An extension may name a tool like a
+ * retired one.
  */
-export const retiredToolNames: readonly ToolName[] = ["git_status", "git_commit", "git_repin", "web_fetch", "web_search"];
+export const retiredToolNames: readonly ToolName[] = ["git_status", "git_commit", "git_repin", "web_fetch", "web_search", "bash", "host_bash"];
 export interface UserProfile {
   id: string;
   githubId: string | null;

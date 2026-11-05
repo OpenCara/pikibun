@@ -1310,13 +1310,13 @@ test('every session clones: older connectors are refused, and a session whose ag
   assert.equal(unsandboxed.cloneUnavailable, undefined);
   // A connector from before sessions cloned can't run one.
   await denied(await start(admin, await host({ plainGit: undefined }, false)), 409, 'connector_update_required');
-  // A session started from a saved agent without bash, before agents were removed, works in an empty worktree too.
+  // A session started from a saved agent without git or bash, before agents were removed, works in an empty worktree too.
   const { models } = await json<{ models: ModelDefinition[] }>(await admin.request('GET', `/api/workspaces/${team.id}/models`));
   const model = models.find(item => item.connectorId === ownHost.connectorId)!;
   const filesOnlyId = seedSavedAgentSession(f.sqlite, own.id, seedAgentVersion(f.sqlite, { authorId: admin.user.id, modelId: model.id, tools: ['read_file'] }));
   const { session: filesOnly } = await json<{ session: SessionRecord }>(await admin.request('GET', `/api/sessions/${filesOnlyId}`));
   assert.equal(filesOnly.repositoryMode, 'clone');
-  assert.match(filesOnly.cloneUnavailable ?? '', /doesn't have the bash tool/);
+  assert.match(filesOnly.cloneUnavailable ?? '', /doesn't have the git tool/);
   assert.throws(() => f.sqlite.prepare("UPDATE sessions SET repository_mode = NULL WHERE id = ?").run(own.id), /immutable/);
 });
 

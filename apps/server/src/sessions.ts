@@ -481,7 +481,8 @@ function pollingEvents(c: AppContext, row: SessionRow): Response {
  */
 export async function cloneUnavailable(env: Env, capabilities: ConnectorCapabilities,
   row: Pick<SessionRow, 'connector_id' | 'connector_owner_id' | 'workspace_id' | 'owner_id'>, tools: readonly string[]): Promise<string | undefined> {
-  if (!tools.includes('bash')) return 'This session\'s agent doesn\'t have the bash tool, so it can\'t clone the workspace\'s repositories and works in an empty worktree.';
+  // Sessions clone with the git tool; bash, which cloned before it, is retired (#163) but still clones on older connectors.
+  if (!tools.includes('git') && !tools.includes('bash')) return 'This session\'s agent doesn\'t have the git tool, so it can\'t clone the workspace\'s repositories and works in an empty worktree.';
   if (!await runsShellCommands(env, capabilities, row, row.owner_id)) {
     return 'This session\'s host has no resource limits, so it runs shell commands only for its owner and for members they granted host commands: '
       + 'the agent can\'t clone the workspace\'s repositories and works in an empty worktree.';

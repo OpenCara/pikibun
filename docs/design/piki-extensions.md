@@ -261,9 +261,18 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     command is (`decidedAsHostCommand`, `requesterAutoApproves`, the host's limits and grants, redaction, the
     sandboxes' `execute`). A control plane that predates it refuses the kind, so such a call fails cleanly there.
 
-Next, in order: other ecosystems as usage asks for them,
-codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
-(`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
+32. **No shell.** `bash` and `host_bash` are removed (#163): the runner defines neither tool, and the agent's
+    instructions recommend no shell. Both names join `retiredToolNames`, so stored agents and approvals that list them
+    stay valid while the control plane never gives them to a new session; cloning needs `git` (or, on a connector from
+    before, `bash`). `piki:shell` and `piki:host-shell` stay in the catalogue as `retired` entries: connectors still
+    report them, so the control plane still sends a workspace's choice to older connectors, which have the tools and
+    keep them off where it was turned off; workspace pages no longer list them. The runner refuses a new `host.bash`
+    operation (a restart already ended any that waited), and the session page no longer requests `bash` operations by
+    hand. A `bash` operation is still the sandbox's own: the program tools run through it, and an older session whose
+    agent lists `bash` can still have one requested. Extensions may name a tool `bash`, as any retired name, decided like
+    every extension tool, by the host's owner.
+
+Next: other ecosystems as usage asks for them (`rust`, `go`, `dotnet` first).
 
 ## The prompt audit: piki:prompt-audit
 
