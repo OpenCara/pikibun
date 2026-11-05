@@ -15,7 +15,7 @@ export type PythonProgram = (typeof pythonPrograms)[number];
  * Fixed for every call: no colours, no prompt (input is closed, so one would only fail), no pip version check, and
  * the host's toolchain directory after the sandbox's PATH, where uv and poetry install.
  */
-const PYTHON_ENVIRONMENT = "NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1";
+export const PYTHON_ENVIRONMENT = "NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1";
 
 /** Options that take the next argument as their value, before the command or module they run. */
 const valued: Readonly<Record<string, ReadonlySet<string>>> = {

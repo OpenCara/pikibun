@@ -458,7 +458,8 @@ export async function restoreSession(config: RestoreConfig, input: RunnerBinding
     }
     await prepare(stage, backup.manifest, { conversationOnly: backup.conversationOnly });
     if (stableJson(JSON.parse(await readPrivate(join(stage, "binding.json"), MAX_BYTES))) !== stableJson(binding)) throw new RunnerError(409, "Preparation changed the target binding");
-    const sandbox = new Sandbox(binding, join(stage, "sandbox"));
+    // Initialized only to settle its layout: it runs no commands, so it needs no browser (the session writes its driver when it opens).
+    const sandbox = new Sandbox(binding, join(stage, "sandbox"), undefined, { browser: null });
     try { await sandbox.initialize(); } finally { await sandbox.close(); }
     await writePrivate(join(stage, MARKER), JSON.stringify(receipt));
     await syncTree(stage, await mountIdentity(parent));

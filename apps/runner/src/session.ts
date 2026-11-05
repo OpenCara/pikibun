@@ -29,6 +29,10 @@ import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
 import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
+import { browserRequest, browserShellCommand, browserTarget, servePrograms } from "./browser-command.js";
+import type { BrowserToolchain } from "./browser-toolchain.js";
+import { browserActions, browserKeys, browserLimits, browserUnavailableReason, browserUnavailableText, parseBrowserReport, type BrowserRequest,
+  type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import { ecosystemPrograms, ecosystemRequest, ecosystemShellCommand, ecosystemTools, type EcosystemRequest, type EcosystemTool } from "./ecosystem-command.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
@@ -241,6 +245,14 @@ export type RunnerConfig = {
    */
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;
+  /**
+   * The Chromium the browser tool runs in the Linux sandbox (browser-toolchain.ts): the host's own, found once per
+   * process, unless this names another, the one a connector has now (HostBrowserSource), or null for none. Sessions
+   * without the sandbox, or without one, aren't offered the tool.
+   */
+  browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
+  /** How the connector's browser stands (HostBrowserSource): why a session has none, for its people and its agent. */
+  browserStatus?: () => HostBrowserStatus | undefined;
   /** Owner-consented host mode: no isolation, so bash needs only per-command approval. */
   unsandboxed?: boolean;
   /**
@@ -502,6 +514,7 @@ export class RunnerSession {
     } else {
       this.#egress = this.egressProxy(egressSocketPath(binding.session.id, directory));
       this.sandbox = new Sandbox(binding, join(directory, "sandbox"), config.resources, { egressSocket: this.#egress.socketPath,
+        ...(config.browser !== undefined ? { browser: config.browser } : {}),
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
@@ -778,7 +791,7 @@ export class RunnerSession {
   }
 
   /** `off`: the session's own tools its workspace turned off (sessionToolsOff), which the instructions don't point to. */
-  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set()): string {
+  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason): string {
     let instructions = this.binding.agent.instructions;
     if (this.#clone && !this.#egress) {
       // An unsandboxed host: commands run on its owner's machine, with its own Git, network and credentials.
@@ -850,6 +863,15 @@ export class RunnerSession {
     // Sessions waited for CI with sleep in a shell, then read the pull request again, in 9% of their shell commands (#163).
     if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read") && !off.has("github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
       + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes).";
+    if (mode !== "ask" && this.sandbox.browser && this.tools.some(tool => tool.name === "browser") && !off.has("browser")) instructions += "\n\nTo look at or test a web page, "
+      + "use the browser tool, a headless Chromium in the sandbox that answers with a screenshot, the page's text and its interactive elements: "
+      + "browser {url: \"https://example.com/\"}, or for the web app you work on, serve it in the same call, as each call is its own sandboxed command: "
+      + "browser {serve: {program: \"pnpm\", args: [\"dev\", \"--port\", \"5173\"], directory: \"<name>\", port: 5173}, url: \"http://localhost:5173/\", "
+      + "actions: [{action: \"click\", selector: \"text=Sign in\"}, {action: \"type\", selector: \"#email\", text: \"a@example.com\", submit: true}]}. "
+      + "Use the selectors its answer lists. Its approval card shows exactly the command it runs.";
+    // The workspace has the browser on, but this session can't run it: the agent says why rather than guessing.
+    else if (mode !== "ask" && browserUnavailable) instructions += `\n\nThis session has no browser tool: ${browserUnavailableText(browserUnavailable)} `
+      + "If you're asked to look at or test a web page, say so, and use what you have instead (fetching it, or running its tests).";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -1316,6 +1338,10 @@ export class RunnerSession {
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     // The session's own tools, less those its workspace turned off (Pikibun's session-tool extensions, such as piki:schedule).
     const off = run.mode === "write" ? await this.sessionToolsOff() : new Set<string>();
+    // The browser runs only in the session's sandbox, with the host's Chromium: elsewhere it is never offered, rather than
+    // offered to fail. Where the workspace has it on, the agent learns why it has none.
+    const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.browserUnavailable() : undefined;
+    if (!this.sandbox.browser) off.add("browser");
     // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
     const builtins = run.mode === "write" && this.#builtins
       ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
@@ -1328,7 +1354,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [this.#extension, ...extensions.map(extension => extension.extension), ...builtins],
-        instructions: this.agentInstructions(access === "read" ? "read" : "write", off),
+        instructions: this.agentInstructions(access === "read" ? "read" : "write", off, browserUnavailable),
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
@@ -1368,6 +1394,21 @@ export class RunnerSession {
     const installed = config.installed().map(item => item.summary);
     return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
       automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
+  }
+
+  /**
+   * Why this session has no browser, if it hasn't: it runs on its host itself, in a sandbox other than Linux's, or its
+   * host's browser is off, missing, downloading or failed to download (HostBrowserSource). A fixed reason: what the host
+   * reports of its files stays its owner's.
+   */
+  private browserUnavailable(): BrowserUnavailableReason | undefined {
+    if (this.sandbox.browser) return undefined;
+    if (this.#onHost) return "on-host";
+    if (this.config.sandboxBackend) return "sandbox";
+    // A runner no connector runs knows nothing of the host's browser, and has nobody to set one up: it says nothing.
+    const status = this.config.browserStatus?.();
+    if (!status) return undefined;
+    return browserUnavailableReason(status.state) ?? "missing";
   }
 
   /**
@@ -1936,6 +1977,25 @@ export class RunnerSession {
   }
 
   /**
+   * A browser call's answer: its card as the other command tools give it, with the driver's report in place of its raw
+   * output, and the page's screenshot as an image. A call that didn't run, or whose output isn't a report, answers as
+   * bash would.
+   */
+  private async browserOutcome(approval: ApprovalRecord, recheck: () => Promise<void>, approvalText: (approval: StoredApproval) => ToolExecutionResult): Promise<ToolExecutionResult> {
+    const report = approval.status === "executed" && approval.result ? parseBrowserReport(approval.result.trim()) : undefined;
+    if (!report) return approvalText(approval as StoredApproval);
+    const output: ToolExecutionResult["output"] = [{ type: "text", text: JSON.stringify({ ...approval, result: undefined, admissionId: undefined, callId: undefined, report }) }];
+    if (report.screenshot) {
+      try {
+        const file = await this.sandbox.readContent(report.screenshot, recheck);
+        const prepared = "image" in file ? await prepareImage(file.image, file.mimeType) : undefined;
+        if (prepared && "image" in prepared) output.push({ type: "image", data: prepared.image.data, mimeType: prepared.image.mimeType });
+      } catch { /* The report names the screenshot, which read_file reads. */ }
+    }
+    return { output };
+  }
+
+  /**
    * Whether shell commands may run here: within provisioned limits (Linux --resources, or the Windows sandbox's job
    * objects; macOS has none), on the host itself (an owner-consented unsandboxed host, or the owner's session on a host
    * that accepts it), or as a faux test shell.
@@ -2254,6 +2314,55 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
         } })]),
+      // A headless Chromium in the session's sandbox (piki:browser): one sandboxed command per call, a program operation of
+      // its own decided as the other program tools' are, since pages run their scripts, evaluate runs the agent's, and serve
+      // starts the app under test. Offered only in the Linux sandbox, with a Chromium: never on the host itself.
+      defineTool({ name: "browser", description: "Drive a headless Chromium in the session's sandbox. It opens url (http, https, file, or about:blank; "
+        + "without one, the page the last call left), runs actions in order, and answers with the page as it ends: a screenshot, its URL, title, "
+        + "HTTP status, visible text, interactive elements each with a CSS selector, console messages, page errors and failed requests. Actions: "
+        + "goto {url}; click or hover {selector, or x and y}; type {text, selector?, submit?, clear?}; press {key}; select {selector, value}; "
+        + "scroll {selector, or x and y}; wait {selector, text or ms}; evaluate {expression} (JavaScript in the page; its value comes back); "
+        + "screenshot {full_page?}; back; forward; reload. A selector is CSS, or text=<visible text>. A failed action stops the rest. "
+        + "Each call starts the browser afresh with the session's own profile: cookies and storage persist, open pages and their state don't, "
+        + "so do a whole flow in one call. Its network is the sandbox's: other hosts through the session's proxy, as the workspace allows, and "
+        + "localhost only within the call, so start the web app under test with serve {program, args, directory?, venv?, port}: one of the node and "
+        + `python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, which runs from before `
+        + "the page opens until the call ends. Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
+        + "It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.",
+        executionMode: "sequential",
+        parameters: Type.Object({
+          url: Type.Optional(Type.String()),
+          actions: Type.Optional(Type.Array(Type.Object({
+            action: StringEnum(browserActions),
+            selector: Type.Optional(Type.String()), url: Type.Optional(Type.String()), text: Type.Optional(Type.String()),
+            key: Type.Optional(Type.String({ description: `${browserKeys.join(", ")}, or a single character` })), value: Type.Optional(Type.String()), expression: Type.Optional(Type.String()),
+            x: Type.Optional(Type.Integer()), y: Type.Optional(Type.Integer()), ms: Type.Optional(Type.Integer({ minimum: 0, maximum: browserLimits.waitMs })),
+            full_page: Type.Optional(Type.Boolean()), submit: Type.Optional(Type.Boolean()), clear: Type.Optional(Type.Boolean()),
+          }), { maxItems: browserLimits.actions })),
+          viewport: Type.Optional(Type.Object({ width: Type.Integer(), height: Type.Integer() })),
+          full_page: Type.Optional(Type.Boolean()),
+          timeout_seconds: Type.Optional(Type.Integer({ minimum: browserLimits.timeoutSeconds.min, maximum: browserLimits.timeoutSeconds.max })),
+          serve: Type.Optional(Type.Object({ program: StringEnum([...servePrograms]), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })),
+            directory: Type.Optional(Type.String()), venv: Type.Optional(Type.String()), port: Type.Integer({ minimum: 1, maximum: 65535 }),
+            timeout_seconds: Type.Optional(Type.Integer({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) })),
+        }),
+        execute: async (args, api, call) => {
+          // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+          await this.requireSessionTool("browser");
+          const browser = this.sandbox.browser;
+          if (!browser) throw new RunnerError(400, `This session has no browser: ${browserUnavailableText(this.browserUnavailable() ?? "missing")} Nothing ran.`);
+          let request: BrowserRequest;
+          let command: string;
+          try {
+            request = browserRequest(args as Record<string, unknown>);
+            command = browserShellCommand(request, browser, { seconds: (await this.commandOptions()).limits.seconds, nodeBin: this.sandbox.nodeBin });
+          } catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid browser call"}. Nothing ran.`); }
+          const attribution = await this.toolActor(api, true);
+          await this.requireHostEnvironment();
+          const { unbounded } = await this.permit(api, call, "browser", browserTarget(request), { write: true, shell: true });
+          const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call);
+          return this.browserOutcome(approval, () => this.recheckTool(attribution), approvalText);
+        } }),
       // Rust, Go and .NET without a shell (piki:rust, piki:go, piki:dotnet, #163), decided as node's and python's are.
       // Not in the Windows sandbox, whose container reaches none of them, as python isn't.
       ...(process.platform === "win32" && this.sandbox.isolated ? [] : ecosystemTools.map(tool => this.ecosystemTool(tool))),
@@ -3093,8 +3202,12 @@ export class RunnerSession {
         && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
       // As the next message selects them: after the workspace's, which may replace one.
       const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
-      return running.length || missing.length || builtin.length || missingRequired.length
-        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}) } } : {};
+      // Pikibun's own the workspace has on that this session can't offer: the browser, without Chromium on the host, say.
+      const browserReason = sessionToolsOff(answer.extensions).has("browser") ? undefined : this.browserUnavailable();
+      const unavailable = browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : [];
+      return running.length || missing.length || builtin.length || missingRequired.length || unavailable.length
+        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}),
+          ...(unavailable.length ? { unavailable } : {}) } } : {};
     } catch { return {}; }
   }
 

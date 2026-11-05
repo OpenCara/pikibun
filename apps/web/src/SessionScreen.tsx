@@ -4,6 +4,7 @@ import type { ConnectorInfo } from "../../../packages/shared/src/connector";
 import type { ApprovalRecord, EntryView, SessionRecord, SessionView, SubmitResult, UserProfile, WithdrawResult } from "../../../packages/shared/src/types";
 import { redactSecrets, REDACTED } from "../../../packages/shared/src/redaction";
 import { managesSession } from "../../../packages/shared/src/policy";
+import { browserUnavailableText } from "../../../packages/shared/src/browser";
 import { api, segment } from "./api";
 import { useApp } from "./app-context";
 import { AttachButton, AttachmentStrip, encodeImages, forgetHandedOverImages, handedOverFiles, handedOverImages, imageBlobs, imagesUnavailable, restoreImages, useAttachments, useFileAttachmentOptions, useImageReceiver, withFilesNote, type Attachments } from "./attachments";
@@ -26,7 +27,7 @@ import { preparingRepositories } from "../../../packages/client/src/repository-p
 import { NavigationButton } from "./navigation";
 import { navigate } from "./router";
 import { enterSends } from "./touch";
-import { ApprovalCard, AutoApprovedMarks, SessionPanel, useSessionActions, type AuditEvent, type PanelTab } from "./session-panel";
+import { ApprovalCard, AutoApprovedMarks, SessionPanel, useSessionActions, widePanelTabs, type AuditEvent, type PanelTab } from "./session-panel";
 import { splitToolCalls } from "../../../packages/client/src/transcript";
 import { COMPACTION_FAILED_TITLE, compactionFailureText } from "../../../packages/client/src/compaction";
 import {
@@ -212,6 +213,10 @@ function SessionPane({ id }: { id: string }) {
   const frozen = session?.frozen === true;
   const canApprove = permissions.includes("approve") && !archived && !frozen;
   const isOwner = session?.ownerId === user.id;
+  // The workspace has the browser on but the host has no Chromium for it (yet): its owner can set one up. Where the host
+  // can't run it at all (its sandbox, a session on the host itself) or its owner turned it off, the panel says so instead.
+  const browserWarning = !archived && !frozen ? view?.extensions?.unavailable?.find(item => item.source === "piki:browser" && ["missing", "failed", "downloading"].includes(item.reason)) : undefined;
+  const [dismissedBrowser, setDismissedBrowser] = useState<string>();
   const [renaming, setRenaming] = useState(false);
   const hosts = useConnections(session?.connectorId ? `/api/workspaces/${segment(session.workspaceId)}/connectors` : null);
   const host = hosts.data?.connectors.find(item => item.id === session?.connectorId);
@@ -312,7 +317,7 @@ function SessionPane({ id }: { id: string }) {
   const badge = startFailed ? <StatusBadge tone={session?.status === "error" ? "danger" : "running"} dot>{session?.status === "error" ? "Not started" : "Starting"}</StatusBadge>
     : !view && live.error ? <StatusBadge tone="warning" dot>Unavailable</StatusBadge>
     : streamBadge;
-  return <PeopleProvider people={people}><div className={panelOpen && session ? `session-screen panel-open${tab === "files" ? " panel-wide" : ""}` : "session-screen"}>
+  return <PeopleProvider people={people}><div className={panelOpen && session ? `session-screen panel-open${widePanelTabs.includes(tab) ? " panel-wide" : ""}` : "session-screen"}>
     <div className="session-pane">
       <ScreenHeader
         leading={<NavigationButton />}
@@ -346,6 +351,10 @@ function SessionPane({ id }: { id: string }) {
         pinned={<>
           {view.repositories && <RepositoryPreparationCard sessionId={id} preparation={view.repositories}
             canRestart={isOwner && !archived && permissions.includes("manage")} onRestarted={refreshAll} />}
+          {browserWarning && canWrite && dismissedBrowser !== id && <Alert variant={browserWarning.reason === "downloading" ? "info" : "warning"}
+            title={browserWarning.reason === "downloading" ? "The browser isn't ready yet" : "No browser on this host"}
+            actions={<Button variant="ghost" size="sm" onClick={() => setDismissedBrowser(id)}>Dismiss</Button>}>
+            The workspace has the browser tool on, but this session can't use it. {browserUnavailableText(browserWarning.reason)}</Alert>}
           {session.hostUnsandboxed && (canWrite || canApprove) && (session.hostEnvironment
             ? <Alert variant="error" title="Runs on the host">This session runs directly on its host, without the sandbox. Approved commands and commits execute on the host owner's machine with their full user permissions, network access and no resource limits; only the host owner, or members they granted host commands, decide them.</Alert>
             : <Alert variant="error" title="Unsandboxed host">This session's host runs without a sandbox. Approved commands and commits execute directly on the host owner's machine with their full user permissions, network access and no resource limits.</Alert>)}

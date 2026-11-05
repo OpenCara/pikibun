@@ -373,6 +373,8 @@ type FixtureOptions = {
   /** The host's extensions, and the control plane's answer to each sync of them; none to install without it. */
   extensions?: HostExtensions;
   extensionsSync?: (body: unknown) => Response | Promise<Response>;
+  /** How the host's browser is found; none unless given, whatever this machine has. */
+  browser?: NonNullable<Parameters<typeof createConnector>[0]['browser']>;
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -391,6 +393,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
   const connector = createConnector({
     dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
+    browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
     acquireLease: path => {
       assert.equal(path, dataDir);
       leases.acquired++;
@@ -543,7 +546,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.equal(config.connectorId, credentials.connectorId);
   // The host's Git credentials stay unused until its owner turns them on in Pikibun.
   await assert.rejects(config.hostGitCredential!('https://github.com/acme/alpha.git'), /hasn't turned on its Git credentials/);
-  assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [] });
+  assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } });
   assert.equal(config.allowFaux, false);
   assert.equal(config.allowTestShell, false);
   assert.equal(config.compaction, undefined, 'without Pi settings, sessions compact by pi-durable\'s defaults');
@@ -563,7 +566,7 @@ const advertisedBase = { ...publicCapabilities, chatOptions: true, chatImages: t
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;
-  const configured = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 40_000 }, builtinExtensions: [], requiredExtensions: [] };
+  const configured = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 40_000 }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } };
   const fixture = await connectorFixture(t, { gpu: 'dxg', hostConfig: () => Response.json({ config: configured }), pushCredential: () => Response.json(issued) });
   await startFixture(fixture);
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
@@ -597,7 +600,7 @@ test('a host keeps the repository cache its configuration names for the whole co
 test('a host reads the largest configuration the control plane saves: compaction counts for every model, with the longest names', { timeout: 10000 }, async t => {
   const modelOverrides = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`${String(index).padStart(80, 'p')}/${'m'.repeat(200)}`,
     { reserveTokens: 10_000_000, keepRecentTokens: 10_000_000 }]));
-  const configured = { commandTimeoutSeconds: 600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 10_000_000, modelOverrides }, builtinExtensions: [], requiredExtensions: [] };
+  const configured = { commandTimeoutSeconds: 600, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: { reserveTokens: 10_000_000, modelOverrides }, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } };
   const body = JSON.stringify({ config: configured });
   assert.ok(body.length > 64 * 1024, 'more than other callbacks take');
   const fixture = await connectorFixture(t, { hostConfig: () => new Response(body, { headers: { 'content-type': 'application/json' } }) });
@@ -612,7 +615,7 @@ test('without a configuration from the control plane, a host runs with the defau
       await startFixture(fixture);
       const config = fixture.runtimes[0]!.config;
       assert.equal(config.repositoryCache, undefined);
-      assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [] });
+      assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } });
       const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
       assert.deepEqual(JSON.parse(manifest.body).capabilities, advertisedBase);
     });
@@ -692,7 +695,8 @@ test('a chunk the desktop app hands the host runs once, as relayed, after the co
   const granted = (await rpc('upload', body, 'direct-1')).ticket;
   verify = async () => Response.json({ ticket: granted, size: 2, path: '/v1/sessions/session/upload' });
   const reply = await fixture.connector.direct({ grant: 'grant', body });
-  assert.deepEqual(JSON.parse(fixture.allCalls.at(-1)!.body), { grant: 'grant' });
+  // Checked by the control plane (whatever the host reports meanwhile, such as its extensions).
+  assert.deepEqual(JSON.parse(fixture.allCalls.filter(call => call.request.url.endsWith('/api/connectors/self/uploads/verify')).at(-1)!.body), { grant: 'grant' });
   assert.deepEqual([reply.status, JSON.parse(reply.body)], [200, { received: 2, path: 'attachments/a.txt' }]);
   const executed = fixture.runtimes[0]!.requests.at(-1)!;
   assert.equal(new URL(executed.url).pathname, '/v1/sessions/session/upload');
@@ -1389,26 +1393,101 @@ test('a connected host reports its extensions, carries out the installs its owne
     return Response.json({ requests });
   } });
   await startFixture(fixture);
-  assert.deepEqual(await syncs.next(), { report: { installed: [], remoteInstalls: true }, results: [] });
+  // With how its browser stands: none found here, and none chosen.
+  assert.deepEqual(await syncs.next(), { report: { installed: [], remoteInstalls: true, browser: { source: 'auto', state: 'missing', downloadable: true,
+    error: 'No Chromium found on this host: install your distribution\'s chromium or Google Chrome, give the path of one, or download one here' } }, results: [] });
   const second = await syncs.next();
   assert.deepEqual(second.results, [{ id: 'request-1', ok: true }]);
   assert.deepEqual(second.report.installed.map(item => item.source), ['npm:pi-hello@1.0.0']);
   assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['npm:pi-hello@1.0.0'], 'sessions see it at once');
 });
 
+test('a connected host\'s sessions get the browser its owner chose, and its report says how that stands, its path included', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-browser-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // A Chromium installation as the connector checks one: an ELF executable beside Chromium's own files.
+  const directory = join(root, 'chromium');
+  await mkdir(directory);
+  await writeFile(join(directory, 'chrome'), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]), { mode: 0o755 });
+  await writeFile(join(directory, 'icudtl.dat'), '');
+  let browser: unknown = { source: 'path', path: join(directory, 'chrome') };
+  const syncs = mailbox<{ report: { browser?: unknown } }>();
+  const fixture = await connectorFixture(t, {
+    extensions: new HostExtensions(new ExtensionStore(join(root, 'extensions')), { remoteInstalls: true, pikiExtensions: [] }),
+    browser: { home: join(root, 'home'), detect: () => ({ executable: '/usr/lib/chromium/chromium', directory: '/usr/lib/chromium' }) },
+    hostConfig: () => Response.json({ config: { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {},
+      builtinExtensions: [], requiredExtensions: [], browser } }),
+    extensionsSync: body => { syncs.push(body as never); return Response.json({ requests: [] }); },
+  });
+  await startFixture(fixture);
+  // Applied as the host connects, before its sessions open: they get it, looked up for each command.
+  const config = fixture.runtimes[0]!.config;
+  assert.equal(typeof config.browser, 'function');
+  assert.deepEqual((config.browser as () => unknown)(), { executable: join(directory, 'chrome'), directory });
+  assert.deepEqual((await syncs.next()).report.browser, { source: 'path', state: 'ready', executable: join(directory, 'chrome'), downloadable: true });
+  assert.equal(config.browserStatus!()!.state, 'ready');
+  // A path that isn't a Chromium installation is none, never another browser, and the report says why.
+  await rm(join(directory, 'icudtl.dat'));
+  browser = { source: 'path', path: join(directory, 'chrome') };
+  const connector = fixture.connector as unknown as { browser: { apply(config: unknown): Promise<unknown> } };
+  await connector.browser.apply(browser);
+  assert.equal((config.browser as () => unknown)(), undefined);
+  assert.deepEqual(config.browserStatus!(), { source: 'path', state: 'missing', downloadable: true,
+    error: `${directory} doesn't hold Chromium's own files (icudtl.dat or its .pak files) beside chrome` });
+  // Found on the host; or off.
+  await connector.browser.apply({ source: 'auto' });
+  assert.deepEqual((config.browser as () => unknown)(), { executable: '/usr/lib/chromium/chromium', directory: '/usr/lib/chromium' });
+  await connector.browser.apply({ source: 'off' });
+  assert.deepEqual([(config.browser as () => unknown)(), config.browserStatus!()], [undefined, { source: 'off', state: 'off', downloadable: true }]);
+});
+
+test('a browser status the control plane refuses is left out only until it changes, so the next reaches the host\'s owner', { timeout: 10000 }, async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-refused-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ExtensionStore(join(root, 'extensions'), async (args, cwd) => {
+    await mkdir(join(cwd, 'node_modules', 'pi-hello'), { recursive: true });
+    await writeFile(join(cwd, 'node_modules', 'pi-hello', 'package.json'), JSON.stringify({ name: 'pi-hello', version: '1.0.0', pi: { extensions: ['./index.js'] } }));
+    await writeFile(join(cwd, 'node_modules', 'pi-hello', 'index.js'), 'export default function () {}');
+    await writeFile(join(cwd, 'package.json'), JSON.stringify({ dependencies: { 'pi-hello': args.at(-1)!.split('@').at(-1) } }));
+  });
+  let found: { executable: string; directory: string } | undefined;
+  const syncs = mailbox<{ browser?: { state: string } }>();
+  let round = 0;
+  const fixture = await connectorFixture(t, { extensions: new HostExtensions(store, { remoteInstalls: true, pikiExtensions: [] }), browser: { detect: () => found },
+    extensionsSync: body => {
+      const report = (body as { report: { browser?: { state: string } } }).report;
+      syncs.push(report);
+      // This control plane takes browser statuses, but refuses this one (say, one it finds too long).
+      if (report.browser?.state === 'missing') return Response.json({ error: 'Invalid browser status' }, { status: 400 });
+      // A request makes the next round come at once; meanwhile Chromium is installed on the host.
+      found = { executable: '/usr/lib/chromium/chromium', directory: '/usr/lib/chromium' };
+      return Response.json({ requests: round++ ? [] : [{ id: 'request-1', action: 'install', source: 'npm:pi-hello@1.0.0' }] });
+    } });
+  await startFixture(fixture);
+  assert.equal((await syncs.next()).browser?.state, 'missing');
+  assert.equal((await syncs.next()).browser, undefined, 'tried again at once, without it');
+  assert.equal((await syncs.next()).browser?.state, 'ready', 'the next status is reported');
+});
+
 test('a connected host reports its Pikibun extensions, and leaves them out for a control plane that refuses them', { timeout: 10000 }, async t => {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-cli-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const syncs = mailbox<{ report: { installed: { source: string }[] } }>();
+  const syncs = mailbox<{ report: { installed: { source: string }[]; browser?: unknown } }>();
   const fixture = await connectorFixture(t, { extensions: new HostExtensions(new ExtensionStore(join(root, 'extensions')), { remoteInstalls: true }), extensionsSync: body => {
     syncs.push(body as never);
-    // A control plane that predates Pikibun extensions refuses a report that names one.
-    const refused = (body as { report: { installed: { source: string }[] } }).report.installed.some(item => item.source.startsWith('piki:'));
+    // A control plane that predates Pikibun extensions refuses a report that names one, or the browser's status.
+    const report = (body as { report: { installed: { source: string }[]; browser?: unknown } }).report;
+    const refused = report.browser !== undefined || report.installed.some(item => item.source.startsWith('piki:'));
     return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
   } });
   await startFixture(fixture);
-  assert.deepEqual((await syncs.next()).report.installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit']);
-  assert.deepEqual((await syncs.next()).report.installed, [], 'tried again at once, without them');
-  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit'],
+  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:browser', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit'];
+  const first = (await syncs.next()).report;
+  assert.deepEqual([first.installed.map(item => item.source), (first.browser as { state: string }).state], [all, 'missing']);
+  // A control plane that has Pikibun extensions but predates the browser's status takes this one.
+  const second = (await syncs.next()).report;
+  assert.deepEqual([second.installed.map(item => item.source), second.browser], [all, undefined], 'tried again at once, without the browser\'s status');
+  assert.deepEqual((await syncs.next()).report, { installed: [], remoteInstalls: true }, 'and again, without them');
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:browser', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit'],
     'sessions still have them');
 });

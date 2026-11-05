@@ -19,7 +19,7 @@ export type AssignableWorkspaceRole = (typeof assignableWorkspaceRoles)[number];
 /** The four tiers of access to one session given to one member, least first; sessionRolePermissions (policy.ts) defines them. */
 export const sessionRoles = ["viewer", "member", "collaborator", "admin"] as const;
 export type SessionRole = (typeof sessionRoles)[number];
-export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet"] as const;
+export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "browser"] as const;
 export type ToolName = (typeof toolNames)[number];
 /**
  * Tools no session offers any more, still valid in stored agents and approvals: those of sessions that pinned their
@@ -409,11 +409,12 @@ export interface GitHubIssueResult {
   url: string;
 }
 /**
- * The tools that run one program without a shell (#163): git, node and python. Each call is one sandboxed command, the
- * program and its quoted arguments, decided by the same rules as a shell command, but approved as its own tool's: a
- * permission or "Allow for this session" for git covers git's calls, never bash's.
+ * The tools that run one program without a shell (#163): git, node, python, and browser, whose program is its driver
+ * (browser-command.ts). Each call is one sandboxed command, the program and its quoted arguments, decided by the same
+ * rules as a shell command, but approved as its own tool's: a permission or "Allow for this session" for git covers
+ * git's calls, never bash's.
  */
-export const programToolNames = ["git", "node", "python", "rust", "go", "dotnet"] as const;
+export const programToolNames = ["git", "node", "python", "rust", "go", "dotnet", "browser"] as const;
 export type ProgramToolName = (typeof programToolNames)[number];
 /** One call of a program tool: the exact command it runs (program-command.ts), as its card shows it. Key order: kind, tool, command. */
 export interface ProgramOperation {
@@ -848,7 +849,12 @@ export interface SessionView {
    * can't run, while the session takes no messages. Absent from runners that predate extensions, and where the host has
    * none to tell.
    */
-  extensions?: { running: { source: string; dev: boolean; tools: string[]; required?: true }[]; missing: string[]; builtin?: string[]; missingRequired?: string[] };
+  extensions?: { running: { source: string; dev: boolean; tools: string[]; required?: true }[]; missing: string[]; builtin?: string[]; missingRequired?: string[];
+    /**
+     * Pikibun's session-tool extensions the workspace has on whose tools this session can't offer, and why, as a fixed
+     * reason (for piki:browser, browserUnavailableReasons in browser.ts): the browser without Chromium on the host, say.
+     */
+    unavailable?: { source: string; tools: string[]; reason: string }[] };
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];

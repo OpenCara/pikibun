@@ -27,7 +27,7 @@ export const python = which("python3");
 const posix = process.platform !== "win32" && !!git && !!bash;
 
 /** Why the Linux sandbox can't run here, if it can't: bubblewrap missing, or no user namespaces for it. */
-function linuxSandboxMissing(): string | undefined {
+export function linuxSandboxMissing(): string | undefined {
   if (process.platform !== "linux") return "the Linux sandbox runs only on Linux";
   if (!existsSync("/usr/bin/bwrap")) return "bubblewrap (/usr/bin/bwrap) is not installed";
   if (!existsSync("/usr/bin/python3")) return "/usr/bin/python3 is not installed";

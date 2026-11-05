@@ -4,11 +4,12 @@ import { builtinExtensions, hostConfigLimits, type BuiltinExtensionName, type Re
 import { isPikiExtensionSource, missingRequiredExtensions, normalizeExtensionSource, type ExtensionAvailability, type ExtensionSettings, type HostExtensionsReport,
   type InstalledExtension } from "../../../../packages/shared/src/host-extensions";
 import { pikiExtension } from "../../../../packages/shared/src/piki-extensions";
+import { defaultHostBrowserConfig, type BrowserSource, type HostBrowserConfig, type HostBrowserStatus } from "../../../../packages/shared/src/browser";
 import { ExtensionSettingsFields } from "./ExtensionSettingsFields";
 import { api, segment } from "../api";
 import { Icon } from "../icons";
-import { Alert, Button, CardBody, Collapsible, confirmDialog, Feedback, Field, RelativeTime, ResourceState, Row, Section, Sheet, StatusBadge, useAction,
-  useResource } from "../ui";
+import { Alert, Button, CardBody, Collapsible, confirmDialog, Feedback, Field, RelativeTime, ResourceState, Row, Section, SegmentedControl, Sheet, StatusBadge,
+  useAction, useResource } from "../ui";
 
 /*
  * A host's extensions (docs/design/host-extensions.md): what it has installed and what each offers, ignores or does
@@ -38,6 +39,74 @@ const info = <div className="stack">
   <p>Require an extension of every session to run it on this host whatever each workspace chose, yours included, with the settings you give it here. Guards belong here: <code>piki:prompt-audit</code>, which has a model check other members' messages before they reach the agent, or a tool-call guard such as <code>npm:cc-safety-net</code>. While this host can't run one you require, its sessions take no messages.</p>
 </div>;
 
+const BROWSER = "piki:browser";
+
+const browserHints: Readonly<Record<HostBrowserStatus["state"], string>> = {
+  ready: "Sessions in this host's sandbox can open web pages with it",
+  missing: "No Chromium for it on this host: its sessions have no browser until you set one up below",
+  downloading: "Downloading Chromium for it: its sessions get the browser once it is ready",
+  failed: "Chromium's download failed: it is tried again in a few minutes, or set one up another way below",
+  off: "Off on this host: its sessions have no browser",
+  unsupported: "It runs in the Linux sandbox only, which this host's sessions don't have",
+};
+
+function BrowserBadge({ status }: { status: HostBrowserStatus }) {
+  switch (status.state) {
+    case "ready": return <StatusBadge tone="success">Ready</StatusBadge>;
+    case "downloading": return <StatusBadge tone="neutral" dot>Downloading</StatusBadge>;
+    case "missing": return <StatusBadge tone="warning">No Chromium</StatusBadge>;
+    case "failed": return <StatusBadge tone="danger">Download failed</StatusBadge>;
+    case "off": return <StatusBadge tone="neutral">Off</StatusBadge>;
+    case "unsupported": return <StatusBadge tone="neutral">Not on this host</StatusBadge>;
+  }
+}
+
+const browserSources: { value: BrowserSource; label: string; hint: string }[] = [
+  { value: "auto", label: "Find it", hint: "Looks on this host: PIKIBUN_BROWSER, your distribution's chromium, Google Chrome or Chromium, then Playwright's and Puppeteer's downloads, then one downloaded here" },
+  { value: "path", label: "This path", hint: "Runs the Chromium executable you name, and no other" },
+  { value: "download", label: "Download", hint: "The connector downloads Chrome for Testing's headless shell (about 110 MB) into its own folder, and keeps it up to date" },
+  { value: "off", label: "Off", hint: "Sessions on this host get no browser" },
+];
+
+/**
+ * Where piki:browser's Chromium comes from on the host (HostConfig.browser): found there, at a path its owner gives,
+ * downloaded by its connector, or none; with how it stands, as the connector last reported. Each session's sandbox gets
+ * it read-only; the connector applies a change as it next reports, within a minute.
+ */
+function BrowserSetup({ connector, status, owner, busy, save }: { connector: ConnectorInfo; status?: HostBrowserStatus; owner: boolean; busy: boolean;
+  save: (browser: HostBrowserConfig) => void }) {
+  const saved = connector.config?.browser ?? defaultHostBrowserConfig;
+  const [source, setSource] = useState<BrowserSource>(saved.source);
+  const [path, setPath] = useState(saved.path ?? "");
+  useEffect(() => { setSource(saved.source); setPath(saved.path ?? ""); }, [saved.source, saved.path]);
+  const chosen = path.trim();
+  const pathError = source === "path" && chosen && !chosen.startsWith("/") ? "The executable's absolute path, such as /usr/lib/chromium/chromium" : undefined;
+  const changed = source !== saved.source || (source === "path" && chosen !== (saved.path ?? ""));
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!changed || pathError || (source === "path" && !chosen)) return;
+    save(source === "path" ? { source, path: chosen } : { source });
+  }
+  const current = status && status.source === saved.source ? status : undefined;
+  return <CardBody><div className="stack">
+    {current?.state === "ready" && <p className="small">Sessions run {current.executable ? <code>{current.executable}</code> : "the host's Chromium"}{current.version ? ` (${current.version})` : ""}, read-only in their sandbox.</p>}
+    {current && current.state !== "ready" && current.state !== "off" && <Alert variant={current.state === "downloading" ? "info" : "warning"}
+      title={current.state === "downloading" ? "Downloading Chromium" : current.state === "failed" ? "Chromium's download failed" : current.state === "unsupported" ? "Not on this host" : "No Chromium for the browser"}>
+      {current.error ?? browserHints[current.state]}{current.state === "missing" && current.downloadable && saved.source === "path" ? ". Or have the host find one, or download one." : ""}</Alert>}
+    {status && !current && <p className="muted small">The host applies your choice as it next reports, within a minute.</p>}
+    {owner ? <form className="stack" onSubmit={submit}>
+      <SegmentedControl label="Where the browser's Chromium comes from" value={source} onChange={setSource} options={browserSources.map(({ value, label, hint }) => ({ value, label, hint }))} />
+      <p className="muted small">{browserSources.find(item => item.value === source)?.hint}{source === "download" && status && !status.downloadable
+        ? ". Chrome for Testing builds it for Linux on x86-64 only: on this host, install your distribution's chromium and find it instead." : ""}</p>
+      {source === "path" && <Field label="Chromium executable" error={pathError} hint="The program itself, beside Chromium's own files (icudtl.dat, its .pak files): /usr/lib/chromium/chromium rather than the /usr/bin/chromium script">
+        <input className="input" required spellCheck={false} autoComplete="off" placeholder="/usr/lib/chromium/chromium" maxLength={4096} value={path} onChange={event => setPath(event.target.value)} />
+      </Field>}
+      <div className="inline"><span className="spacer" />
+        <Button type="submit" variant="default" size="sm" disabled={!changed || busy || !!pathError || (source === "path" && !chosen) || !!connector.revokedAt}>Save</Button></div>
+    </form> : <p className="muted small">Only the host's owner chooses where its Chromium comes from.</p>}
+  </div></CardBody>;
+}
+
 function ModuleDetails({ extension }: { extension: InstalledExtension }) {
   if (extension.error) return <Row title="Doesn't load" hint={extension.error} trailing={<StatusBadge tone="danger">Error</StatusBadge>} />;
   return <>{extension.modules.map(module => <CardBody key={module.path}>
@@ -61,12 +130,14 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
   const data = resource.data;
   const owner = data?.role === "owner";
   const pending = data?.requests.filter(request => request.status === "pending") ?? [];
-  // While requests wait for the host, look again every few seconds.
+  // While requests wait for the host, or it applies a browser choice or downloads one, look again every few seconds.
+  const browser = data?.report?.browser;
+  const browserChanging = !!browser && !!connector.config && (browser.source !== connector.config.browser.source || browser.state === "downloading");
   useEffect(() => {
-    if (!pending.length) return;
+    if (!pending.length && !browserChanging) return;
     const timer = setInterval(resource.refresh, 5000);
     return () => clearInterval(timer);
-  }, [pending.length, resource.refresh]);
+  }, [pending.length, browserChanging, resource.refresh]);
 
   async function request(requestAction: "install" | "remove", source: string): Promise<boolean> {
     let done = false;
@@ -106,6 +177,15 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
   const required = connector.config?.requiredExtensions ?? [];
   const [configuring, setConfiguring] = useState<{ extension: RequiredExtension; flags: InstalledExtension["modules"][number]["flags"] } | null>(null);
   /** Saves the extensions the host requires; true once saved. */
+  function saveBrowser(browser: HostBrowserConfig) {
+    void action.run(async () => {
+      await api(`/api/connectors/${segment(connector.id)}/config`, { method: "PATCH", body: { browser } });
+      refresh();
+      // The connector applies it as it next reports, within a minute: the section looks again until it has.
+      setTimeout(resource.refresh, 35_000);
+    }, browser.source === "download" ? "Saved: the host starts downloading Chromium within a minute, and keeps it up to date" : "Saved: the host applies it within a minute");
+  }
+
   async function saveRequired(next: RequiredExtension[], notice: string): Promise<boolean> {
     let done = false;
     await action.run(async () => {
@@ -150,10 +230,13 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
         {data.report && !data.report.remoteInstalls && <Row title="Installs from Pikibun are off" hint="Its connector runs with --no-remote-installs: install extensions on the host with pikibun extensions" />}
         {data.report && !data.report.installed.length && <Row title="No extensions installed" hint="Install those your workspaces use, below" />}
         {data.report?.installed.map(extension => <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={<code>{extension.source}</code>}
-          hint={extension.dev ? "Dev extension: your own sessions on this host" : extension.description ?? `${extension.modules.flatMap(module => module.tools).length} tools`}
+          hint={extension.source === BROWSER && data.report?.browser ? browserHints[data.report.browser.state]
+            : extension.dev ? "Dev extension: your own sessions on this host" : extension.description ?? `${extension.modules.flatMap(module => module.tools).length} tools`}
           trailing={extension.error || extension.modules.some(module => module.error) ? <StatusBadge tone="danger">Error</StatusBadge>
+            : extension.source === BROWSER && data.report?.browser ? <BrowserBadge status={data.report.browser} />
             : extension.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : isPikiExtensionSource(extension.source) ? <StatusBadge tone="neutral">With the connector</StatusBadge>
             : waiting(extension.source) ? <StatusBadge tone="neutral" dot>Removing</StatusBadge> : <StatusBadge tone="success">Installed</StatusBadge>}>
+          {extension.source === BROWSER && connector.config && <BrowserSetup connector={connector} status={data.report?.browser} owner={owner} busy={action.busy} save={saveBrowser} />}
           <ModuleDetails extension={extension} />
           {!extension.dev && !extension.error && !pikiExtension(extension.source)?.sessionTools && (owner || isRequired(extension.source)) && <CardBody><div className="inline">
             {owner ? <label className="check-row small"><input type="checkbox" className="checkbox" checked={isRequired(extension.source)}
