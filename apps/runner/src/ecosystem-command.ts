@@ -120,6 +120,11 @@ export function ecosystemRequest(tool: EcosystemTool, input: { program: unknown;
  */
 export const SYSTEM_RUSTUP_HOME = "/usr/local/rustup";
 
+/** The directories each tool looks in after the sandbox's PATH (and, for rust, SYSTEM_RUSTUP_HOME's toolchains). */
+export function ecosystemPath(tool: EcosystemTool): readonly string[] {
+  return ecosystems[tool].path;
+}
+
 /**
  * The shell command that runs `request`, as its card shows it. `system.rustupHome`: whether the host has a system-wide
  * rustup (SYSTEM_RUSTUP_HOME), whose toolchains a rust call then uses unless the session's environment names another

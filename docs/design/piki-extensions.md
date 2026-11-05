@@ -280,7 +280,8 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     a rustup install in a home directory isn't seen by the sandbox. A system-wide rustup (`/usr/local/rustup`, as the
     official `rust` image) is: its proxies would look in the session's own `HOME`, so where that directory exists a rust
     call sets `RUSTUP_HOME="${RUSTUP_HOME:-/usr/local/rustup}"`, the session's own value first; `CARGO_HOME` stays the
-    session's. Refused: what acts on a package registry as an
+    session's. The macOS sandbox reads only its tool roots: `/usr/local/go`, `/usr/local/cargo` and `/usr/local/rustup`
+    join Homebrew's there (`SEATBELT_LOCAL_ROOTS`, seatbelt.ts), where they exist. Refused: what acts on a package registry as an
     account, `cargo publish`, `login`, `logout`, `owner` and `yank`, followed through `cargo +toolchain` and `rustup run`,
     and `dotnet nuget push`, `delete`, and `add`/`update source` with a password. Go has no such command. Not in the
     Windows sandbox, whose container reaches none of them, as `python` isn't.

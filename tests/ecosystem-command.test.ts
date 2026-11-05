@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ecosystemPrograms, ecosystemRequest, ecosystemShellCommand, registryAccountCommand } from "../apps/runner/src/ecosystem-command.js";
+import { SYSTEM_RUSTUP_HOME, ecosystemPath, ecosystemPrograms, ecosystemRequest, ecosystemShellCommand, ecosystemTools, registryAccountCommand } from "../apps/runner/src/ecosystem-command.js";
+import { SEATBELT_LOCAL_ROOTS } from "../apps/runner/src/seatbelt.js";
 import { programShellCommand } from "../apps/runner/src/program-command.js";
 import { existsSync } from "node:fs";
 
@@ -101,4 +102,13 @@ test("a rustup proxy finds the system toolchain through RUSTUP_HOME, and the ses
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("the macOS sandbox may read and run every toolchain directory below /usr/local the ecosystem tools look in", () => {
+  const local = [...ecosystemTools.flatMap(tool => ecosystemPath(tool)), SYSTEM_RUSTUP_HOME, "/usr/local/go", "/usr/local/share/dotnet"].filter(path => path.startsWith("/usr/local/"));
+  for (const path of local) {
+    assert.ok(SEATBELT_LOCAL_ROOTS.some(root => path === root || path.startsWith(`${root}/`)), `${path} is under a root the sandbox reads`);
+  }
+  // Go's installer puts the whole toolchain there (bin, pkg/tool, src), not only links in /usr/local/bin (review of #194).
+  assert.ok(SEATBELT_LOCAL_ROOTS.includes("/usr/local/go"));
 });
