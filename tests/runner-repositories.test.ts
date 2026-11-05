@@ -227,7 +227,7 @@ test("unsandboxed clone sessions clone and push with the host's own Git, so they
   assert.match(instructions, /https:\/\/github\.com\/acme\/project-1\.git/);
   assert.doesNotMatch(instructions, /git_push/);
   await assert.rejects(session.createApproval(OWNER, { kind: "git.push", repository: "acme/project-1", directory: "app", branch: "feature", commit: "a".repeat(40) }),
-    /push with git in bash/);
+    /push with the git tool/);
 });
 
 test("clone sessions pin nothing, commit with Git and push a clone's directory", linux, async t => {

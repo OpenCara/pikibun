@@ -201,7 +201,7 @@ if (connectedRuntime) {
     for (const mode of ["submit", "ask"]) {
       await bob.request("POST", `/api/sessions/${sessionId}/${mode}`, { content: "TEST_IDENTITY", requestId: `viewer-${mode}` }, [403]);
     }
-    await bob.request("POST", `/api/sessions/${sessionId}/operations`, { kind: "bash", command: "true" }, [403]);
+    await bob.request("POST", `/api/sessions/${sessionId}/operations`, { kind: "program", tool: "git", command: "true" }, [403]);
     await bob.request("POST", `/api/sessions/${sessionId}/approvals/${crypto.randomUUID()}`, { decision: "approve" }, [403]);
     await bob.request("POST", `/api/sessions/${sessionId}/grants`, { userId: bob.user.id, permissions: ["write", "manage"] }, [403]);
     await bob.request("POST", `/api/sessions/${sessionId}/restart`, {}, [403]);
@@ -403,13 +403,13 @@ await check("collaborative writes execute as owner; another user's worktree stay
 await check("write access does not grant approval; approved git commits use owner identity", async () => {
   // The session's own Git metadata is read-only to commands: commits happen in repositories the agent makes or clones.
   const commit = `git init -q integration && cd integration && git commit -q --allow-empty -m 'Integration ${run}'`;
-  const approval: ApprovalRecord = (await bob.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "bash", command: commit })).approval;
+  const approval: ApprovalRecord = (await bob.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "program", tool: "git", command: commit })).approval;
   assert.equal(approval.status, "pending");
   assert.ok(approval.reviewHash, "the Worker must commit to the displayed operation and requester");
   await bob.request("POST", `/api/sessions/${aliceSession.id}/approvals/${approval.id}`, { decision: "approve", reviewHash: approval.reviewHash }, [403]);
   const decided: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/approvals/${approval.id}`, { decision: "approve", reviewHash: approval.reviewHash })).approval;
   assert.ok(["approved", "executing", "executed"].includes(decided.status));
-  const query: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "bash", command: "cd integration && git log -1 --format='%an <%ae>|%cn <%ce>'" })).approval;
+  const query: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "program", tool: "git", command: "cd integration && git log -1 --format='%an <%ae>|%cn <%ce>'" })).approval;
   const approved: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/approvals/${query.id}`, { decision: "approve", reviewHash: query.reviewHash })).approval;
   assert.ok(["executing", "executed"].includes(approved.status));
   const inspected = await alice.settledCard(aliceSession.id, query.id);
