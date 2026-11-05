@@ -249,6 +249,7 @@ export class HelperWorkspace implements IsolatedWorkspace {
 
   async execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options: SandboxExecutionOptions = {}): Promise<string> {
     switch (operation.kind) {
+      case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
         // As on a Linux host without --resources: a command without hard limits runs only where the host's owner allowed it.

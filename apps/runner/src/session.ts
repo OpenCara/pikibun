@@ -1977,7 +1977,7 @@ export class RunnerSession {
    * session, or a member they granted host commands for theirs (see grantedShell and requireShellGrant).
    */
   private requireShellCapability(operation: Operation, unbounded = false): void {
-    if (operation.kind === "bash" && !unbounded && !this.shellAllowed()) {
+    if ((operation.kind === "bash" || operation.kind === "program") && !unbounded && !this.shellAllowed()) {
       throw new RunnerError(403, "Production shell requires a quota-backed runner; bash needs verified resources or explicitly enabled faux test sessions");
     }
   }
@@ -2218,7 +2218,7 @@ export class RunnerSession {
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
           const { unbounded } = await this.permit(api, call, "git", `${request.directory}: git ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "git" }, call.abortSignal), call));
+          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
         } }),
       // Node.js and its package managers without a shell (piki:node, #163), decided as bash's are: they run the project's
       // scripts and whatever a script says.
@@ -2235,7 +2235,7 @@ export class RunnerSession {
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
           const { unbounded } = await this.permit(api, call, "node", `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "node" }, call.abortSignal), call));
+          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "node", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
         } }),
       // Python and its package and test tools without a shell (piki:python, #163), decided as bash's are, like node's.
       // Not in the Windows sandbox, whose container reaches no Python yet (review of #186).
@@ -2253,7 +2253,7 @@ export class RunnerSession {
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
           const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "python" }, call.abortSignal), call));
+          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
         } })]),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools. "
         + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
@@ -2451,7 +2451,7 @@ export class RunnerSession {
    * shutdown like host commands: closing the session stops it. A refusal or a non-zero exit is a definite outcome the
    * agent can act on; anything else may have had partial effects.
    */
-  private startShellOperation(id: string, operation: Extract<Operation, { kind: "bash" }>, unbounded: boolean, recheck: SandboxAuthorize): Promise<void> {
+  private startShellOperation(id: string, operation: Extract<Operation, { kind: "bash" | "program" }>, unbounded: boolean, recheck: SandboxAuthorize): Promise<void> {
     const entry = { controller: new AbortController(), done: Promise.resolve() };
     const generation = this.generation;
     entry.done = (async () => {
@@ -2536,11 +2536,7 @@ export class RunnerSession {
    * `consent.automatic`: an extension's tool call that runs without approval, as its workspace set it and its host's
    * owner allows (see runExtensionTool).
    */
-  /**
-   * `consent.tool`: the tool whose call this command is, where that isn't bash (git, node, python): the owner's "Allow for this
-   * session" for it runs its commands without asking, as one for bash does.
-   */
-  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean; tool?: "git" | "node" | "python" } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
+  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
     this.requireUnfrozen();
     const operation = validateOperation(input);
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");
@@ -2557,7 +2553,7 @@ export class RunnerSession {
     if (operation.kind === "git.push" && !this.#clone) throw new RunnerError(400, "Only clone sessions push a clone's directory");
     // On a host without the sandbox the agent pushes with the host's own Git: an approved push would only fail.
     if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with git in bash");
-    const toolName = operation.kind === "extension.tool" ? undefined : ({ "git.commit": "git_commit", bash: "bash", "github.comment": "github_comment", "github.merge": "github_merge", "github.issue": "github_issue", "git.push": "git_push", "git.repin": "git_repin", "host.bash": "host_bash" } as const)[operation.kind];
+    const toolName = operation.kind === "extension.tool" ? undefined : operation.kind === "program" ? operation.tool : ({ "git.commit": "git_commit", bash: "bash", "github.comment": "github_comment", "github.merge": "github_merge", "github.issue": "github_issue", "git.push": "git_push", "git.repin": "git_repin", "host.bash": "host_bash" } as const)[operation.kind];
     // Host commands never take a session grant (see `permit`), so a session-wide one left from before doesn't enable them.
     if (!consent.permitted && (toolName === undefined || (!this.binding.agent.tools.includes(toolName)
       && !(toolName !== "host_bash" && (await this.metadata()).grants?.tools.includes(toolName))))) {
@@ -2584,7 +2580,7 @@ export class RunnerSession {
       // never take a session grant, so each one still asks unless the owner holds automatic host commands on this host.
       const github = operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
       const sessionGranted = toolName !== undefined && operation.kind !== "host.bash" && !github
-        && (state.grants?.tools.includes(toolName) === true || (operation.kind === "bash" && consent.tool !== undefined && state.grants?.tools.includes(consent.tool) === true));
+        && state.grants?.tools.includes(toolName) === true;
       automatic = (run.options?.access === "auto" || sessionGranted) && run.initiatedBy === this.binding.owner.id
         && (!github || (admissionId !== undefined && (operation.kind !== "github.merge" || run.options?.autoMerge === true)))
         && (operation.kind !== "git.push" || admissionId !== undefined)
@@ -2606,7 +2602,7 @@ export class RunnerSession {
     const id = toolTaskId ? `tool-${toolTaskId}` : randomUUID();
     const approval: StoredApproval = { id, sessionId: this.binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)), createdAt: new Date().toISOString(),
       ...(automatic ? { status: "executing", decidedBy: this.binding.owner.id, automatic: true } : { status: "pending" }),
-      ...(consent.unbounded && operation.kind === "bash" ? { unbounded: true } : {}), ...(callId ? { callId } : {}) };
+      ...(consent.unbounded && (operation.kind === "bash" || operation.kind === "program") ? { unbounded: true } : {}), ...(callId ? { callId } : {}) };
     if (admissionId !== undefined) approval.admissionId = admissionId;
     let created = false;
     // The tool call waits on its card: registered first, so a decision never finds the card without its call.
@@ -2719,7 +2715,7 @@ export class RunnerSession {
       // Host commands, the commands of a session that runs directly on the host, and those that run without the host's
       // missing limits in a member's session, on the strength of their grant, take host command authority to decide.
       await this.requireHostDecider(ticket.actorId, approval);
-      const granted = approval.operation.kind === "bash" && approval.unbounded === true && grantedShell(this.hostCommandSession());
+      const granted = (approval.operation.kind === "bash" || approval.operation.kind === "program") && approval.unbounded === true && grantedShell(this.hostCommandSession());
       if (approval.operation.kind === "git.repin" && ticket.actorId !== this.binding.owner.id) {
         throw new RunnerError(403, "Only the session owner can decide a repin");
       }
@@ -2778,7 +2774,7 @@ export class RunnerSession {
         });
         return (await this.metadata()).approvals[id]!;
       }
-      if (approval.operation.kind === "bash") {
+      if (approval.operation.kind === "bash" || approval.operation.kind === "program") {
         // A command may run for the host's whole time limit, far past the connector's 30-second RPC deadline: report
         // executing now and settle in the background, as host commands do. The call waiting on the card gets its outcome.
         const operation = approval.operation;
