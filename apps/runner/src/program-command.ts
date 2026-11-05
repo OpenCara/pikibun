@@ -44,7 +44,8 @@ export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}
  * entry, which the shell would take for the command's directory.
  */
 export function programShellCommand(options: { directory: string; program: string; args: readonly string[]; prefix?: string; path?: string | readonly string[]; first?: string; firstHere?: string }): string {
-  const after = typeof options.path === "string" ? [options.path] : options.path ?? [];
+  // Never an empty entry, which the shell would take for the command's directory (review of #194).
+  const after = (typeof options.path === "string" ? [options.path] : options.path ?? []).filter(item => item !== "");
   const first = options.first ? shellQuote(options.first) : options.firstHere ? `"$PWD"/${shellQuote(options.firstHere)}` : "";
   const command = `${options.directory === "." ? "" : `cd -- ${shellQuote(`./${options.directory}`)} && `}`
     + `${after.length || first ? `PATH=${first ? `${first}:` : ""}"\${PATH:-/usr/bin:/bin}"${after.map(item => `:${shellQuote(item)}`).join("")} ` : ""}${options.prefix ? `${options.prefix} ` : ""}${options.program}`

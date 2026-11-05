@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ecosystemPrograms, ecosystemRequest, ecosystemShellCommand, registryAccountCommand } from "../apps/runner/src/ecosystem-command.js";
+import { programShellCommand } from "../apps/runner/src/program-command.js";
 
 test("rust, go and dotnet take their own programs, arguments as a list and a worktree directory", () => {
   assert.deepEqual(ecosystemPrograms.rust, ["cargo", "rustc", "rustup", "rustfmt"]);
@@ -58,4 +59,11 @@ test("commands that act on a package registry as an account are refused, through
     assert.equal(registryAccountCommand(program, args), undefined, `${program} ${args.join(" ")}`);
   }
   assert.throws(() => ecosystemRequest("rust", { program: "cargo", args: ["publish"] }), /cargo publish acts on a package registry as an account, which sessions don't have: the rust tool doesn't run it/);
+});
+
+test("a toolchain directory list never puts an empty entry on PATH, which the shell would take for the command's directory", () => {
+  assert.equal(programShellCommand({ directory: ".", program: "go", args: ["version"], path: ["", "/usr/local/go/bin", ""] }),
+    "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/go/bin' go 'version' </dev/null 2>&1");
+  assert.equal(programShellCommand({ directory: ".", program: "go", args: [], path: "" }), "go </dev/null 2>&1");
+  assert.equal(programShellCommand({ directory: ".", program: "go", args: [], path: [""] }), "go </dev/null 2>&1");
 });
