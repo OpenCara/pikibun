@@ -801,7 +801,7 @@ export class RunnerSession {
           + this.#cloneFailures.map(failure => `${failure.path} (${failure.reason})`).join(", ")
           + ". Their backed-up work (branches, and the working tree as a commit) is in Git bundles under .git/pikibun-clones, listed in its "
           + "manifest.json; Pikibun tries again when the session next opens, as long as nothing else is at their paths." : "");
-      if (this.binding.agent.tools.includes("git_push"))
+      if (this.binding.agent.tools.includes("git_push") && !off.has("git_push"))
         instructions += "\ngit_push publishes a clone's checked-out commit, as it is, to another branch of the workspace repository it was cloned from, "
           + "with approval: git_push {directory, branch}, where directory is the clone's path in the worktree. Pushes are fast-forward only (never forced); "
           + "if the branch moved, fetch and merge or rebase first. Optionally request a pull request with pull_request {title, body, base?}; "
@@ -810,7 +810,7 @@ export class RunnerSession {
           + "git_push {directory, branch, tag}: it creates that tag at the commit and moves no branch. Tags are never moved; "
           + "plain git push of tags is refused.";
     }
-    if (this.binding.agent.tools.includes("source_read") && this.#sources.length) {
+    if (this.binding.agent.tools.includes("source_read") && !off.has("source_read") && this.#sources.length) {
       instructions += "\n\nThis workspace's document sources, which source_read reads as the session owner (a page or document as text, "
         + "a folder, database or wiki page as the items in it); pass item, an id or link from an earlier result, to read one under a source: "
         + this.#sources.map(source => `${JSON.stringify(source.title)} (${documentKindNames[source.kind]} ${source.type}, source ${source.id})`).join(", ") + ". "
@@ -840,7 +840,7 @@ export class RunnerSession {
     if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
       + "write a codemode script that calls them rather than piping commands through grep, head, sort or jq in bash.";
     // Sessions waited for CI with sleep in bash, then read the pull request again, in 9% of their shell commands (#163).
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read") && !off.has("github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
       + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes) rather than sleep in bash.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
@@ -2088,6 +2088,7 @@ export class RunnerSession {
       directory: Type.String(), branch: Type.String(), tag: Type.Optional(Type.String()),
       pull_request: Type.Optional(Type.Object({ title: Type.String(), body: Type.String(), base: Type.Optional(Type.String()) })),
     }), execute: async (args, api, call) => {
+      await this.requireSessionTool("git_push");
       const attribution = await this.toolActor(api, true);
       await this.permit(api, call, "git_push", args.tag === undefined ? `${args.directory} → ${args.branch}` : `${args.directory} → tag ${args.tag} on ${args.branch}`, { write: true });
       if (!validCloneDirectory(args.directory)) throw new RunnerError(400, "directory must be a clone's path in the worktree, such as app or src/app");
@@ -2258,6 +2259,7 @@ export class RunnerSession {
         + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
         parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), wait: Type.Optional(StringEnum(githubWaits)),
           timeout_seconds: Type.Optional(Type.Integer({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }), execute: async (args, api, call) => {
+        await this.requireSessionTool("github_read");
         const attribution = await this.toolActor(api, false);
         const repository = this.githubRepository(args.repository);
         await this.permit(api, call, "github_read", `${repository}#${args.issue}`);
@@ -2279,11 +2281,13 @@ export class RunnerSession {
         return text({ ...attribution, ...view, waited });
       } }),
       defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), body: Type.String() }), execute: async (args, api, call) => {
+        await this.requireSessionTool("github_comment");
         const attribution = await this.toolActor(api, true);
         await this.permit(api, call, "github_comment", `${args.repository}#${args.issue}`, { write: true });
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.comment", ...args }, String(api.taskId), { permitted: true }), call));
       } }),
       defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), pull: Type.Integer({ minimum: 1 }), sha: Type.String(), method: StringEnum(githubMergeMethods) }), execute: async (args, api, call) => {
+        await this.requireSessionTool("github_merge");
         const attribution = await this.toolActor(api, true);
         const repository = this.githubRepository(args.repository);
         if (!/^[0-9a-f]{40}$/.test(args.sha)) throw new RunnerError(400, "sha must be the pull request's full 40-character head commit, as github_read reports it");
@@ -2291,6 +2295,7 @@ export class RunnerSession {
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.merge", repository, pull: args.pull, sha: args.sha, method: args.method }, String(api.taskId), { permitted: true }), call));
       } }),
       defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker once a human approves it, or at once under the owner's auto-approve. Use this instead of gh issue create: the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), title: Type.String(), body: Type.String() }), execute: async (args, api, call) => {
+        await this.requireSessionTool("github_issue");
         const attribution = await this.toolActor(api, true);
         const repository = this.githubRepository(args.repository);
         if (!args.title.trim() || /[\r\n]/.test(args.title) || args.title.length > GITHUB_ISSUE_TITLE_LIMIT) throw new RunnerError(400, `title must be one non-empty line of at most ${GITHUB_ISSUE_TITLE_LIMIT} characters`);
@@ -2300,6 +2305,7 @@ export class RunnerSession {
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.issue", repository, title: args.title, body: args.body }, String(api.taskId), { permitted: true }), call));
       } }),
       defineTool({ name: "source_read", description: "Read one of the workspace's document sources (source, its id as the instructions list it: Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark or Tencent Docs) as the session owner, through Pikibun: a page or document as text (Markdown where the provider gives it), a folder, database or wiki page as the items in it. Pass item (an id or link from an earlier result) to read an item under that source; others are refused. Long content is cut and marked truncated. Read-only; no credentials enter tools.", parameters: Type.Object({ source: Type.String(), item: Type.Optional(Type.String()) }), execute: async (args, api, call) => {
+        await this.requireSessionTool("source_read");
         const attribution = await this.toolActor(api, false);
         if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(args.source)) throw new RunnerError(400, "source must be a source id, as the instructions list it");
         if (args.item !== undefined && !validSourceItem(args.item)) throw new RunnerError(400, "item must be an id or link of one line, as an earlier result gives it");
@@ -2350,6 +2356,7 @@ export class RunnerSession {
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.readEntries })),
         timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
       }), execute: async (args, api, call) => {
+        await this.requireSessionTool("sessions");
         const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
           modelId: args.model, thinkingLevel: args.thinking, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as

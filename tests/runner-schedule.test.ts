@@ -267,7 +267,7 @@ test("piki:shell turns bash off, fail-closed, while git, node, python and the fi
   t.after(() => service.close());
   const id = "shell-session";
   const every = binding(id);
-  every.agent.tools = ["bash", "git", "node", "python", "read_file", "write_file", "move_file"];
+  every.agent.tools = ["bash", "git", "node", "python", "read_file", "write_file", "move_file", "git_push", "github_read", "github_comment", "source_read", "sessions"];
   const session = await service.provision(every, await ticket(id, "create"));
   const send = async (requestId: string) => {
     await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId, admissionId: await sha256(`shell ${requestId}`) }, "write");
@@ -283,4 +283,42 @@ test("piki:shell turns bash off, fail-closed, while git, node, python and the fi
   current = { extensions: [], automaticTools: false };
   await send("outage");
   assert.ok(!offered[2]!.includes("bash"), "losing the control plane never turns bash back on");
+});
+
+test("the brokered tools have their own switches; the file tools have none that turns them off (piki:files is core)", async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-brokered-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let offered: string[] = [];
+  let instructions = "";
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([((context: { systemPrompt?: string; messages: { role: string; content?: unknown; toolsAdded?: { name: string }[] }[] }) => {
+    offered = context.messages.flatMap(message => message.role === "system" ? (message.toolsAdded ?? []).map(tool => tool.name) : []);
+    // All the model is given, instructions included, wherever the conversation puts them.
+    instructions = JSON.stringify(context);
+    return fauxAssistantMessage("Noted.");
+  }) as never]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const disabled = (source: string) => ({ source, enabled: false, tools: "approval" as const, settings: {} });
+  const answer: WorkspaceExtensionsAnswer = { extensions: ["piki:github", "piki:sources", "piki:sessions", "piki:git", "piki:files"].map(disabled), automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-brokered-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "brokered-session";
+  const every = binding(id);
+  every.agent.tools = ["bash", "git", "git_push", "github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "read_file", "write_file", "move_file", "search"];
+  const session = await service.provision(every, await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId: "brokered", admissionId: await sha256("brokered") }, "write");
+  await idle(session);
+  for (const tool of ["github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "git", "git_push"]) assert.ok(!offered.includes(tool), tool);
+  for (const tool of ["bash", "read_file", "write_file", "move_file", "search"]) assert.ok(offered.includes(tool), `${tool}: ${offered.join()}`);
+  // Nor are they recommended to it while off (review of #189).
+  assert.ok(instructions.includes("To find and read code"), "the instructions were read");
+  assert.ok(!instructions.includes("github_read with wait"), "no github_read advice while piki:github is off");
+  assert.ok(!instructions.includes("git_push publishes"), "no git_push advice while piki:git is off");
 });
