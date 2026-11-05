@@ -233,7 +233,12 @@ const fileOperationsFs = (fsCalls, path, caseInsensitive, windows) => ({
       while (written < data.length) written += fsCalls.writeSync(fd, data, written, data.length - written);
       fsCalls.fsyncSync(fd);
     }
-    catch (error) { fsCalls.closeSync(fd); try { fsCalls.unlinkSync(target); } catch {} throw error; }
+    catch (error) {
+      fsCalls.closeSync(fd);
+      // Only while what is at its path is still the file it made: one another writer put there meanwhile stays (review of #185).
+      try { const now = fsCalls.lstatSync(target, { bigint: true }); if (identity !== undefined && now.dev + ":" + now.ino === identity) fsCalls.unlinkSync(target); } catch {}
+      throw error;
+    }
     fsCalls.closeSync(fd);
     return identity;
   },
