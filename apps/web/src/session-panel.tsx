@@ -424,7 +424,8 @@ function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView
     {(extensions.builtin ?? []).map(name => {
       const item = builtinExtensions.find(candidate => candidate.name === name);
       return <Row key={`builtin ${name}`} leading={<Icon name="tool" size={16} />} title={item ? <>{item.title} <code>{name}</code></> : <code>{name}</code>}
-        hint={item ? `Built in, as the host's configuration turns it on. Tools: ${item.tools.join(", ")}` : "Built in, as the host's configuration turns it on"}
+        hint={item ? `${"core" in item && item.core ? "Built in, in every session" : "Built in, as the host's configuration turns it on"}. Tools: ${item.tools.join(", ")}`
+          : "Built in, as the host's configuration turns it on"}
         trailing={<StatusBadge tone="success">Running</StatusBadge>} />;
     })}
   </Section>;

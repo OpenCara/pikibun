@@ -58,6 +58,8 @@ function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExte
 
 /** The sources of Pikibun's session-tool extensions, which are also their package keys. */
 const sessionToolSources: readonly string[] = pikiSessionToolExtensions().map(item => item.source);
+/** Those every session needs (piki:files), which a workspace can't turn off. */
+const coreSources: readonly string[] = pikiSessionToolExtensions().filter(item => item.core).map(item => item.source);
 
 /** SQL true while `user` (bound) is the owner or an admin of the workspace (bound before it). */
 const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
@@ -197,6 +199,7 @@ export function registerExtensions(app: Hono<WorkerEnv>): void {
     // workspace's places, nor run as extension tools, so they keep approval and no settings.
     const sessionTool = sessionToolSources.includes(key);
     if (sessionTool) extension = { ...extension, tools: 'approval', settings: {} };
+    if (coreSources.includes(key) && !extension.enabled) fail(400, 'invalid_extension', `${key} offers the tools every session needs; it can't be turned off.`);
     const saved = await c.env.DB.query(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
       SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), ?, ?, ?, ?, ?
       WHERE ${adminSql} AND (? = 1 OR (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ? AND package_key NOT IN (${sessionToolSources.map(() => '?').join(', ')})) < ?

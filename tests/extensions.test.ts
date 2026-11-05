@@ -112,6 +112,8 @@ test('a workspace\'s owners and admins choose its extensions, one version of eac
   // keeps no tool mode or settings, which mean nothing for it.
   const switched = await json<Listing>(await s.alice.request('PUT', path, { source: 'piki:schedule', enabled: false, tools: 'automatic', settings: { strict: true } }));
   assert.deepEqual(switched.extensions.find(item => item.source === 'piki:schedule'), { source: 'piki:schedule', enabled: false, tools: 'approval', settings: {} });
+  // piki:files offers the tools every session needs: it can't be turned off (#163).
+  await denied(await s.alice.request('PUT', path, { source: 'piki:files', enabled: false }), 400, 'invalid_extension');
   await denied(await s.alice.request('PUT', path, { source: 'npm:one-too-many@1.0.0' }), 409, 'extension_limit');
   await json(await s.alice.request('PUT', path, { source: 'npm:extension-1@2.0.0' }), 200);
   const audits = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'workspace.extension.%'").all().map(row => row.action);
