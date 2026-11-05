@@ -41,7 +41,7 @@ export function grantedShell(session: HostCommandSession): boolean {
 export function decidedAsHostCommand(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
   // An extension's tool runs in the connector, as the host's OS user, as a host command does.
   if (operation.kind === "host.bash" || operation.kind === "extension.tool") return true;
-  return operation.kind === "bash" && (session.hostEnvironment === true || (unbounded && grantedShell(session)));
+  return (operation.kind === "bash" || operation.kind === "program") && (session.hostEnvironment === true || (unbounded && grantedShell(session)));
 }
 
 /**
@@ -52,7 +52,7 @@ export function decidedAsHostCommand(operation: { kind: string }, session: HostC
  * the host and the apps all decide by this one rule.
  */
 export function requesterAutoApproves(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
-  if (operation.kind === "bash") return !unbounded && !decidedAsHostCommand(operation, session, unbounded);
+  if (operation.kind === "bash" || operation.kind === "program") return !unbounded && !decidedAsHostCommand(operation, session, unbounded);
   return operation.kind === "git.push" || operation.kind === "github.comment" || operation.kind === "github.issue";
 }
 

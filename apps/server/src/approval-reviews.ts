@@ -15,7 +15,7 @@ type ReviewRow = {
 type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; auto_merge?: number; expires_at: number };
 /** What decides whether an admission is the session owner's Auto-approve message. */
 type AdmissionAccess = Pick<AdmissionRow, 'session_id' | 'actor_id' | 'mode' | 'access'>;
-const operationTools: Record<Exclude<Operation['kind'], 'permission' | 'extension.tool'>, ToolName> = {
+const operationTools: Record<Exclude<Operation['kind'], 'permission' | 'extension.tool' | 'program'>, ToolName> = {
   'github.comment': 'github_comment', 'github.merge': 'github_merge', 'github.issue': 'github_issue', 'git.commit': 'git_commit', bash: 'bash', 'git.push': 'git_push', 'git.repin': 'git_repin', 'host.bash': 'host_bash',
 };
 const statuses: readonly string[] = ['pending', 'approved', 'denied', 'executing', 'executed', 'interrupted', 'failed'];
@@ -60,7 +60,8 @@ async function sessionTools(env: Env, row: SessionRow): Promise<(operation: Oper
     // An extension's tool comes from the session's extensions, never from the pinned agent: an enabled one of its
     // workspace, or its host owner's dev extension in their own session. Each card is its own call's.
     if (operation.kind === 'extension.tool') return approvalId.startsWith('tool-') && extensions(operation.source);
-    const tool = operationTools[operation.kind];
+    // A program tool's call is its own tool's (git, node, python), never bash's.
+    const tool = operation.kind === 'program' ? operation.tool : operationTools[operation.kind];
     const call = approvalId.startsWith('tool-') ? approvalId.slice('tool-'.length) : undefined;
     // Host commands never take a session grant: each one is allowed for its own call.
     return agentTools.includes(tool) || grants.some(grant => grant.tool === tool && ((grant.call_id === '' && tool !== 'host_bash') || grant.call_id === call))
@@ -181,7 +182,7 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       approval.permission = { decidedBy: decider, ...(scope ? { scope } : {}) };
     }
     if (raw.unbounded !== undefined) {
-      if (raw.unbounded !== true || operation.kind !== 'bash') fail(502, 'invalid_runner_response', 'The runtime returned an invalid unbounded command.');
+      if (raw.unbounded !== true || (operation.kind !== 'bash' && operation.kind !== 'program')) fail(502, 'invalid_runner_response', 'The runtime returned an invalid unbounded command.');
       approval.unbounded = true;
     }
     if (explicit && (requestedBy !== explicit.requestedBy || JSON.stringify(operation) !== JSON.stringify(explicit.operation) || raw.admissionId !== undefined)) {

@@ -271,6 +271,7 @@ export function redactSecrets(text: string, options: RedactOptions = {}): string
 export function redactOperation(operation: Operation): Operation {
   switch (operation.kind) {
     case "bash": return { ...operation, command: redactSecrets(operation.command, { command: true }) };
+    case "program": return { ...operation, command: redactSecrets(operation.command, { command: true }) };
     case "permission": return { ...operation, target: redactSecrets(operation.target, { command: true }) };
     case "git.commit": return { ...operation, message: redactSecrets(operation.message) };
     case "github.comment": return { ...operation, body: redactSecrets(operation.body) };

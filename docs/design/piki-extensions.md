@@ -152,7 +152,7 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     --upload-pack`/`-u`, `--config`/`-c`, `--template`; `fetch`/`pull`/`ls-remote --upload-pack`; `push --receive-pack`/
     `--exec`; `rebase --exec`/`-x`; `grep -O`), including their abbreviations and short-option clusters. A call becomes
     one sandboxed command, `git --no-pager` and its quoted arguments in the clone's directory, with no editor or password
-    prompt, so it is a `bash` operation to the approval rules everywhere (the apps, the control plane, the host's
+    prompt, so it is decided as a shell command everywhere (the apps, the control plane, the host's
     limits and grants), and needs `bash` in the session's agent, as every session has. It never skips approval for
     subcommands that only read: the clone's own configuration (`core.fsmonitor`, `core.pager`, `diff.external`,
     filters, hooks), which the agent can write with `write_file`, can make `git status` run a program, so a
@@ -251,6 +251,15 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     off. The tools every session needs, `identity` and the file tools, are `piki:files`, marked `core`: always on, shown
     as such, and a workspace's turning it off is refused by the control plane and ignored by connectors
     (`sessionToolsOff`). With this, every tool a session has is a Pikibun or Pi extension a workspace chooses.
+
+31. **A program tool's call is its own operation.** `git`, `node` and `python` calls were `bash` operations, so the
+    control plane checked them against `bash` in the session's agent, and an approval rule written for `bash` covered
+    them. They are now `{ kind: "program", tool, command }` (`ProgramOperation`, types.ts): the exact command, as before,
+    under its own tool's name. The runner (`validateOperation`) and the control plane (`parseOperation`) check it alike;
+    the control plane checks the call against its tool in the session's agent or its grants (a permission or "Allow for
+    this session" for `git` covers git's calls, never bash's); and everywhere else it is decided and run as a shell
+    command is (`decidedAsHostCommand`, `requesterAutoApproves`, the host's limits and grants, redaction, the
+    sandboxes' `execute`). A control plane that predates it refuses the kind, so such a call fails cleanly there.
 
 Next, in order: other ecosystems as usage asks for them,
 codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools

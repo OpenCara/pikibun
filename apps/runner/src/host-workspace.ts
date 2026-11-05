@@ -208,6 +208,7 @@ export class HostWorkspace implements SessionWorkspace {
 
   async execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options: SandboxExecutionOptions = {}): Promise<string> {
     switch (operation.kind) {
+      case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
         // Nothing can be mounted read-only on the host, so only writable approved commands run.

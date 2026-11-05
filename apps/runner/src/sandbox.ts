@@ -576,6 +576,7 @@ export class Sandbox implements IsolatedWorkspace {
 
   async execute(operation: Operation, readOnly: boolean, authorize: SandboxAuthorize, options: SandboxExecutionOptions = {}): Promise<string> {
     switch (operation.kind) {
+      case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
         const bounded = options.allowTestShell !== true && (!!this.#resources || options.unbounded !== true);

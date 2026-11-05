@@ -407,6 +407,19 @@ export interface GitHubIssueResult {
   number: number;
   url: string;
 }
+/**
+ * The tools that run one program without a shell (#163): git, node and python. Each call is one sandboxed command, the
+ * program and its quoted arguments, decided by the same rules as a shell command, but approved as its own tool's: a
+ * permission or "Allow for this session" for git covers git's calls, never bash's.
+ */
+export const programToolNames = ["git", "node", "python"] as const;
+export type ProgramToolName = (typeof programToolNames)[number];
+/** One call of a program tool: the exact command it runs (program-command.ts), as its card shows it. Key order: kind, tool, command. */
+export interface ProgramOperation {
+  kind: "program";
+  tool: ProgramToolName;
+  command: string;
+}
 /** Runs outside isolation as the connector user; only the host owner, or a member they granted host commands to, may approve. */
 export interface HostCommandOperation {
   kind: "host.bash";
@@ -450,6 +463,7 @@ export type Operation =
   | ExtensionToolOperation
   | { kind: "git.commit"; message: string }
   | { kind: "bash"; command: string }
+  | ProgramOperation
   | { kind: "github.comment"; repository: string; issue: number; body: string }
   | GitHubMergeOperation
   | GitHubIssueOperation

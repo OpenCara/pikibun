@@ -9,7 +9,7 @@ import { requesterAutoApproves } from "../../shared/src/host-operations";
  * decides one (see `decidesHostCommands`); approve permission on the session isn't enough.
  */
 export function isHostCommand(operation: Pick<Operation, "kind">, session: Pick<SessionRecord, "hostEnvironment">): boolean {
-  return operation.kind === "host.bash" || operation.kind === "extension.tool" || (operation.kind === "bash" && session.hostEnvironment === true);
+  return operation.kind === "host.bash" || operation.kind === "extension.tool" || ((operation.kind === "bash" || operation.kind === "program") && session.hostEnvironment === true);
 }
 
 /**
