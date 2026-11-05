@@ -5,9 +5,8 @@ import { isPikiExtensionSource } from '../../../packages/shared/src/host-extensi
 import { defaultHostBrowserConfig, parseHostBrowserConfig } from '../../../packages/shared/src/browser.js';
 import { pikiExtension } from '../../../packages/shared/src/piki-extensions.js';
 import type { Env, WorkerEnv } from './types.js';
-import { auditStatement } from './db.js';
+import { auditStatement, managedConnector } from './authority/index.js';
 import { fail, jsonObject, now } from './http.js';
-import { managedConnector } from './host-access.js';
 
 /*
  * How a host runs its sessions (HostConfig): its command time limit, whether sandboxed commands get its GPU, whether

@@ -3,7 +3,7 @@ import type { ConnectorCapabilities } from '../../../packages/shared/src/connect
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
 import { checkBrowseResult, InvalidBrowseResult, type BrowseResult } from '../../../packages/shared/src/file-browser.js';
 import type { SessionFiles } from '../../../packages/shared/src/types.js';
-import { requireSession } from './db.js';
+import { requireSession } from './authority/index.js';
 import { fail, identifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import type { Env, SessionRow, WorkerEnv } from './types.js';

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import type { Env } from '../apps/server/src/types.js';
 import { exportSession, exportWorkspace } from '../apps/server/src/data-export.js';
-import { encryptToken } from '../apps/server/src/vault.js';
+import { encryptToken } from '../apps/server/src/authority/vault.js';
 import { DumpImportError, dumpWorkspaceId, importDumpFromCommandLine, importFromDump } from '../apps/server/src/workspace-databases/import.js';
 import { databaseSecretContext } from '../apps/server/src/workspace-databases/store.js';
 import type { WorkspaceDatabaseProvider, WorkspaceDatabaseTarget, WorkspaceImport } from '../apps/server/src/workspace-databases/types.js';

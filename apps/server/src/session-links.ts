@@ -6,11 +6,12 @@ import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
 import { briefEntry, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
-import { auditStatement, getUser, requireSession, requireSessionManager, sessionAccess } from './db.js';
+import {
+  auditStatement, decryptToken, encryptToken, requireConnectorSession, requireSession, requireSessionManager, sessionAccess,
+} from './authority/index.js';
+import { getUser } from './db.js';
 import { appOrigin, fail, identifier, now, randomToken } from './http.js';
 import { ownerViewRequest, runnerJSON } from './runner.js';
-import { requireConnectorSession } from './connectors.js';
-import { decryptToken, encryptToken } from './vault.js';
 
 /**
  * Share links: the session owner can let anyone who has a session's link view its shared conversation, read-only and

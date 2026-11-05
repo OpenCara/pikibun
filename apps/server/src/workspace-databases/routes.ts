@@ -1,8 +1,7 @@
 import type { Hono } from 'hono';
 import type { Env, WorkerEnv, WorkspaceRow } from '../types.js';
-import { auditStatement, requireMember } from '../db.js';
+import { assertVaultConfigured, auditStatement, encryptToken, requireMember } from '../authority/index.js';
 import { fail, id, identifier, jsonObject, now } from '../http.js';
-import { assertVaultConfigured, encryptToken } from '../vault.js';
 import { DumpImportError, importDump, maxUploadedDumpBytes, type ImportSummary } from './import.js';
 import { databaseConsented } from '../backups.js';
 import { isAutomaticBackupInterval } from '../automatic-backups.js';

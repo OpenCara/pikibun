@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { deflateRawSync } from 'node:zlib';
 import test, { type TestContext } from 'node:test';
 import { HTTPException } from 'hono/http-exception';
-import { docxText } from '../apps/server/src/office.js';
-import { onedriveAdapter } from '../apps/server/src/onedrive.js';
-import { tencentDocsAdapter } from '../apps/server/src/tencent-docs.js';
-import { oauthSecret } from '../apps/server/src/source-oauth.js';
+import { docxText } from '../apps/server/src/authority/sources/office.js';
+import { onedriveAdapter } from '../apps/server/src/authority/sources/onedrive.js';
+import { tencentDocsAdapter } from '../apps/server/src/authority/sources/tencent-docs.js';
+import { oauthSecret } from '../apps/server/src/authority/sources/source-oauth.js';
 import { dropboxItem, onedriveItem, tencentDocsItem } from '../packages/shared/src/sources.js';
 
 async function code(promise: Promise<unknown>): Promise<{ status: number; code: string }> {

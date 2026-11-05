@@ -4,11 +4,12 @@ import type { RunnerBinding } from '../../../packages/shared/src/types.js';
 import { permissions } from '../../../packages/shared/src/types.js';
 import type { ConnectorCapabilities, RestoreInput } from '../../../packages/shared/src/connector.js';
 import type { AgentRow, AppContext, SessionRow, WorkerEnv } from './types.js';
-import { agentVersion, auditStatement, modelDefinition, requireNoMigration, requireSessionCreator, requireUnfrozen, runnerSessionRecord, sessionAccess, sessionCreatorSQL, sessionRecord, successorBranch } from './db.js';
+import { agentVersion, modelDefinition, requireNoMigration, requireUnfrozen, runnerSessionRecord, sessionRecord, successorBranch } from './db.js';
+import {
+  auditStatement, authenticateConnector, requireConnectorSession, requireSessionCreator, runsShellCommands, sessionAccess, sessionCreatorSQL,
+} from './authority/index.js';
 import { fail, id, identifier, jsonObject, now, randomToken, testMode, text } from './http.js';
 import { bindingForSession } from './sessions.js';
-import { authenticateConnector, requireConnectorSession } from './connectors.js';
-import { runsShellCommands } from './host-access.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { boundedSnapshotText, MAX_BACKUP_BYTES, repositoryIdentity, validateSnapshot } from './restore-snapshot.js';
 import { migratedAgentVersion, requireModel } from './catalog.js';

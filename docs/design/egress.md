@@ -79,7 +79,7 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
 - **`/__pikibun/status`** shows the policy, the relayed repositories and the last 50 decisions (the proxy keeps
   200 in memory).
 
-### The control plane (`apps/server/src/network.ts`)
+### The control plane (`apps/server/src/authority/network.ts`)
 
 - `GET|PUT /api/workspaces/:id/network-policy`: members read, owners and admins write (audited as
   `workspace.network_policy.updated`). Stored in `workspace_network_policies`; no row means `off`. Included in
@@ -374,7 +374,7 @@ host, the host's proxy makes the request at the forge itself.
   (`sessionBranchRefusal`). The answer (`GitDirectGrant`) is either `direct: false`, and the request is relayed as
   before, or a remote, an `Authorization` header (null for none), what kind of credential it is, its expiry and how long
   it may be reused. A runner configured with a relay of its own and no way to ask relays everything.
-- **Deciding** (`apps/server/src/network.ts`, `gitDirect`). The same authority as for a relayed request
+- **Deciding** (`apps/server/src/authority/network.ts`, `gitDirect`). The same authority as for a relayed request
   (`gitAuthority`: the session, its owner, connector and connection, the binding, the owner's account), then:
   - reads and LFS downloads verify the repository with the owner's account (`verifyRepository`, so renames and transfers
     still fail closed) and, for LFS, the workspace's switch. A **public** repository is read without a credential, on
@@ -458,7 +458,7 @@ could use it. Instead the proxy adds the credential, the way the Git relay does,
   reads and writes alike, then go with the session's **write** credential where the control plane gives one, and a write
   without a lease, or with one it doesn't know, is refused. Sandbox operations run one at a time per session, so no
   other command of the session runs while a lease holds.
-- **The credential** (`apps/server/src/api-access.ts`, `apiCredential`; `POST /api/connectors/self/api/credential` or
+- **The credential** (`apps/server/src/authority/api-access.ts`, `apiCredential`; `POST /api/connectors/self/api/credential` or
   `/api/internal/api/credential`, with `access: write` for a lease's). The session's authority as for its Git requests
   (owner, not archived, connector and connection), a clone session, then the workspace's repositories of the host's
   forge:

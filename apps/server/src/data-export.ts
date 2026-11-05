@@ -1,4 +1,7 @@
-import { workspaceApprovalSettings, type WorkspaceApprovalSettings } from './requester-auto-approve.js';
+import {
+  auditStatement, publicIdentity, publicRepository, type RepositorySettingsRow, repositorySettingsSelect, requireMember, requireSession,
+  workspaceApprovalSettings, type WorkspaceApprovalSettings, workspaceNetworkPolicy, workspaceSessionAccess,
+} from './authority/index.js';
 import type { Hono } from 'hono';
 import type {
   AgentVersion, BackupLocation, ModelDefinition, PushIdentity, SessionRecord, WorkspaceDatabase, WorkspaceRole,
@@ -7,11 +10,8 @@ import type { NetworkPolicy } from '../../../packages/shared/src/network.js';
 import type { WorkspaceRepository } from '../../../packages/shared/src/repositories.js';
 import type { Database, SqlValue } from './db/types.js';
 import type { AgentRow, ModelRow, PushIdentityRow, SessionRow, WorkerEnv, WorkspaceRow } from './types.js';
-import { agentVersion, auditStatement, modelDefinition, requireMember, requireSession, sessionRecord, workspaceSessionAccess } from './db.js';
+import { agentVersion, modelDefinition, sessionRecord } from './db.js';
 import { fail, identifier, now } from './http.js';
-import { publicRepository, repositorySettingsSelect, type RepositorySettingsRow } from './repositories.js';
-import { workspaceNetworkPolicy } from './network.js';
-import { publicIdentity } from './push/identities.js';
 import { publicWorkspaceDatabase, type WorkspaceDatabaseRow } from './workspace-databases/store.js';
 
 /*

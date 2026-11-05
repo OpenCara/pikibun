@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
-import { sessionExtensionSources } from '../apps/server/src/extensions.js';
+import { sessionExtensionSources } from '../apps/server/src/authority/extension-policy.js';
 import type { Env } from '../apps/server/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';

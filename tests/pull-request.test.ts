@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { pullRequestLabel, pullRequestRepository } from "../apps/web/src/pull-request.js";
-import { githubPullRequest, pullRequestState } from "../apps/server/src/pull-request-states.js";
+import { githubPullRequest, pullRequestState } from "../apps/server/src/authority/pull-request-states.js";
 import { pullRequestStateLabels } from "../packages/shared/src/pull-requests.js";
 
 test("a pull request URL names its repository on each provider, and nothing it doesn't recognize", () => {

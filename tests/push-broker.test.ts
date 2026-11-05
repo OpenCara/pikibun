@@ -3,12 +3,13 @@ import { generateKeyPairSync } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { app } from '../apps/server/src/index.js';
-import { listSessionAccess, runnerSessionRecord, sessionAccess, sessionPullRequest, sessionRecord } from '../apps/server/src/db.js';
-import { settlePushCredentials } from '../apps/server/src/push/broker.js';
-import { forgetRepositoryReadTokens } from '../apps/server/src/push/mint.js';
-import { refreshPullRequestStates } from '../apps/server/src/pull-request-states.js';
+import { listSessionAccess, sessionAccess } from '../apps/server/src/authority/access.js';
+import { runnerSessionRecord, sessionPullRequest, sessionRecord } from '../apps/server/src/db.js';
+import { settlePushCredentials } from '../apps/server/src/authority/push/broker.js';
+import { forgetRepositoryReadTokens } from '../apps/server/src/authority/push/mint.js';
+import { refreshPullRequestStates } from '../apps/server/src/authority/pull-request-states.js';
 import type { Env } from '../apps/server/src/types.js';
-import { decryptToken, encryptToken } from '../apps/server/src/vault.js';
+import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { testDatabase } from './helpers/control-plane.js';
 

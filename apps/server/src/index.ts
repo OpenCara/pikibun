@@ -1,8 +1,11 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { WorkerEnv } from './types.js';
-import { authenticate, csrfGuard, localOwner, registerAuth } from './auth.js';
-import { registerPasswordAuth } from './password-auth.js';
+import {
+  assertVaultConfigured, authenticate, csrfGuard, localOwner, registerAdmin, registerAuth, registerGitAccounts, registerHostAccess,
+  registerNetworkPolicies, registerOidc, registerPasswordAuth, registerPushIdentities, registerRepositories, registerRequesterAutoApprove,
+  registerSourceOAuth, registerSources, registerWorkspaceConnections,
+} from './authority/index.js';
 import { registerCatalog } from './catalog.js';
 import { registerSessions } from './sessions.js';
 import { registerScheduledPrompts } from './scheduled-prompts.js';
@@ -13,28 +16,16 @@ import { registerBackups } from './backups.js';
 import { registerSessionFiles } from './session-files.js';
 import { registerFileUploads } from './file-uploads.js';
 import { registerInternal } from './internal.js';
-import { assertVaultConfigured } from './vault.js';
 import { fail, localMode, passwordAuthEnabled, signupMode, testMode } from './http.js';
 import { registerConnectorCredentials, registerConnectors } from './connectors.js';
-import { registerHostAccess } from './host-access.js';
 import { registerHostConfig } from './host-config.js';
 import { registerHostModels } from './host-models.js';
 import { registerConnectorExtensions, registerExtensions } from './extensions.js';
 import { registerRestoreRoutes } from './restore-routes.js';
 import { registerHostMigrations } from './host-migrations.js';
-import { registerRepositories } from './repositories.js';
-import { registerSources } from './sources.js';
-import { registerWorkspaceConnections } from './workspace-connections.js';
-import { registerSourceOAuth } from './source-oauth.js';
-import { registerGitAccounts } from './git/accounts.js';
-import { registerOidc } from './push/oidc.js';
-import { registerPushIdentities } from './push/identities.js';
 import { registerWorkspaceDatabases } from './workspace-databases/routes.js';
 import { registerDataExports } from './data-export.js';
-import { registerNetworkPolicies } from './network.js';
 import { registerTranscriptSettings } from './transcript-settings.js';
-import { registerRequesterAutoApprove } from './requester-auto-approve.js';
-import { registerAdmin } from './admin.js';
 import { registerNotifications } from './notifications.js';
 import { registerWorkspaceInvites } from './workspace-invites.js';
 import { compression } from './compression.js';
