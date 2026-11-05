@@ -95,6 +95,21 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "rust", source: "piki:rust", title: "Rust", sessionTools: ["rust"],
+    description: "The rust tool: the agent runs cargo, rustc, rustup and rustfmt with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "go", source: "piki:go", title: "Go", sessionTools: ["go"],
+    description: "The go tool: the agent runs go and gofmt with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "dotnet", source: "piki:dotnet", title: ".NET", sessionTools: ["dotnet"],
+    description: "The dotnet tool: the agent runs the .NET CLI with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
     name: "files", source: "piki:files", title: "Files", core: true,
     sessionTools: ["identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file"],
     description: "The file tools: the agent reads, searches, writes, edits, moves, copies and deletes the session's files, and reads who the session is for. Every session needs them, so they are always on.",
