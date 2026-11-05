@@ -29,8 +29,9 @@ export interface SessionWorkspace {
   readonly nodeBin?: string | undefined;
   /**
    * Where the session's commands find the browser tool's driver and the host's Chromium (browser-toolchain.ts), as they
-   * see them. None where the host has no Chromium, or its sandbox can't give it to them yet (macOS and Windows): the
-   * session then isn't offered the tool.
+   * see them. Only the Linux sandbox has them, where the host has a Chromium: the browser runs only in the session's
+   * sandbox, never on the host itself (so not in a host workspace), and the macOS and Windows sandboxes can't give it
+   * yet. Without them the session isn't offered the tool.
    */
   readonly browser?: SessionBrowser | undefined;
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>>;

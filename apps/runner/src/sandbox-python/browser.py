@@ -3,7 +3,8 @@
 # embedded in the connector through sandbox-python.generated.ts (`pnpm python:embed` writes it; tests/sandbox-python.test.ts
 # checks it is current).
 #
-# One call is one sandboxed command: it starts the host's Chromium headless with a profile in the session's home, drives
+# It runs only in the session's Linux sandbox, never on the host itself. One call is one sandboxed command: it starts the
+# host's Chromium (which the sandbox gives commands read-only) headless with a profile in the session's home, drives
 # it over the DevTools protocol on a pipe (--remote-debugging-pipe, so it opens no port), opens the request's page, runs
 # its actions, and leaves a screenshot and a JSON report of the page in the worktree's browser-output directory, which
 # the session panel's Browser tab shows. It prints that report as the call's output. A `serve` command, the web app
@@ -233,6 +234,13 @@ class Chrome:
         fonts = fonts_config()
         if fonts:
             env['FONTCONFIG_FILE'] = fonts
+        # Chromium binds its profile's singleton socket in TMPDIR, and a Unix socket's path holds at most 107 bytes: the
+        # session's own (/sessions/<64 hex digits>/home/.tmp) leaves too few, and Chrome and Chromium (but not the headless
+        # shell) crash at start. So Chromium runs in a directory of its own there, which TMPDIR names by a short path.
+        work = os.path.join(env.get('TMPDIR') or os.path.join(env.get('HOME', '.'), '.tmp'), 'pikibun-browser')
+        os.makedirs(work, exist_ok=True)
+        if os.path.isdir('/proc/self/cwd'):
+            env['TMPDIR'] = '/proc/self/cwd'
         proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
         flags = list(CHROME_FLAGS) + ['--user-data-dir=' + profile, '--window-size=%d,%d' % viewport]
         if proxy:
@@ -246,7 +254,7 @@ class Chrome:
         self.log = open(log, 'wb')
         try:
             self.process = subprocess.Popen([executable] + flags + ['about:blank'], stdin=subprocess.DEVNULL, stdout=self.log,
-                                            stderr=self.log, env=env, preexec_fn=child, pass_fds=(3, 4), start_new_session=True)
+                                            stderr=self.log, env=env, cwd=work, preexec_fn=child, pass_fds=(3, 4), start_new_session=True)
         except OSError as error:
             raise BrowserError('cannot start ' + executable + ': ' + (error.strerror or str(error))) from error
         finally:

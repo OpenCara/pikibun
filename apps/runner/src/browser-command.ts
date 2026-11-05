@@ -2,13 +2,14 @@ import { browserActions, browserKeys, browserLimits, type BrowserAction, type Br
 import { programShellCommand, shellQuote, workDirectory } from "./program-command.js";
 
 /*
- * The browser tool (piki:browser): a headless Chromium the agent drives in the session's sandbox. A call is one sandboxed
- * command, the driver (sandbox-python/browser.py) with the call as JSON: it opens the page, runs the actions, and leaves
- * a screenshot and a report in the worktree's browser-output directory. Like node, its calls are decided as bash
- * commands are: a page runs its own scripts, `evaluate` runs the agent's, and `serve` is a shell command.
+ * The browser tool (piki:browser): a headless Chromium the agent drives in the session's Linux sandbox, never on the
+ * host itself. A call is one sandboxed command, the driver (sandbox-python/browser.py) with the call as JSON: it opens
+ * the page, runs the actions, and leaves a screenshot and a report in the worktree's browser-output directory. Like
+ * node, its calls are decided as bash commands are: a page runs its own scripts, `evaluate` runs the agent's, and
+ * `serve` is a shell command.
  */
 
-/** Where a session's commands find the browser tool's driver and the host's Chromium, as they see them (SessionWorkspace.browser). */
+/** Where a sandboxed session's commands find the browser tool's driver and the host's Chromium (SessionWorkspace.browser). */
 export interface SessionBrowser {
   /** The driver, an executable Python program. */
   driver: string;

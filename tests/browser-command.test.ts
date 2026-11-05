@@ -5,10 +5,26 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browserRequest, browserShellCommand, browserTarget } from "../apps/runner/src/browser-command.js";
-import { browserAt, downloadedBrowsers, hostBrowser, sandboxBrowserMount, SANDBOX_BROWSER_DIRECTORY } from "../apps/runner/src/browser-toolchain.js";
+import { browserAt, downloadedBrowsers, hostBrowser, sandboxBrowserMount, SANDBOX_BROWSER_DIRECTORY, SANDBOX_BROWSER_DRIVER } from "../apps/runner/src/browser-toolchain.js";
 import { BROWSER_DRIVER } from "../apps/runner/src/sandbox-python.generated.js";
 import { validateOperation } from "../apps/runner/src/protocol.js";
+import { HostWorkspace } from "../apps/runner/src/host-workspace.js";
+import { Sandbox } from "../apps/runner/src/sandbox.js";
 import { BROWSER_KEPT, BROWSER_OUTPUT, parseBrowserReport } from "../packages/shared/src/browser.js";
+import type { RunnerBinding } from "../packages/shared/src/types.js";
+import { linuxSandboxMissing } from "./helpers/workspaces.js";
+
+/** A session of the deterministic test provider, whose sandboxed commands may run without the host's resource limits. */
+function binding(id: string): RunnerBinding {
+  return {
+    session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Browser", policyVersion: 1, status: "ready",
+      createdAt: "2026-01-01T00:00:00Z", repositories: [] },
+    owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice Owner", gitEmail: "alice@example.test", env: {}, githubConnected: false },
+    agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "",
+      tools: ["browser"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
+    model: { id: "model-1", workspaceId: "workspace", name: "Faux", provider: "faux", modelId: "faux-1" },
+  };
+}
 
 const ELF = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]);
 
@@ -60,9 +76,6 @@ test("the browser tool's command runs the driver with the host's Chromium and th
   // A serve command finds the connector's own Node.js first, as the node tool does.
   assert.match(browserShellCommand({ serve: { command: "pnpm dev", port: 3000 } }, browser, { seconds: 30, nodeBin: "/opt/pikibun/node/bin" }),
     /^PATH='\/opt\/pikibun\/node\/bin':"\$\{PATH:-\/usr\/bin:\/bin\}":'\/usr\/local\/bin' '\/opt\/pikibun\/browser\/pikibun-browser' '--chrome' '\/opt\/pikibun\/chromium\/chrome' '--time-limit' '30' /);
-  // A host workspace's driver may be under a path with spaces.
-  assert.match(browserShellCommand({}, { driver: "/Users/Jo Doe/pikibun/browser/pikibun-browser", chromium: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" }, { seconds: 30 }),
-    / '\/Users\/Jo Doe\/pikibun\/browser\/pikibun-browser' '--chrome' '\/Applications\/Google Chrome\.app\/Contents\/MacOS\/Google Chrome' /);
   assert.doesNotThrow(() => validateOperation({ kind: "bash", command: browserShellCommand(request, browser, { seconds: 30 }) }));
   assert.throws(() => browserShellCommand(browserRequest({ actions: Array.from({ length: 3 }, () => ({ action: "evaluate", expression: "x".repeat(3000) })) }), browser, { seconds: 30 }),
     /over 8192 characters/);
@@ -131,7 +144,23 @@ test("the host's Chromium: an installation, never a wrapper script, a lone binar
   assert.ok(hostBrowser({ env: {}, platform: "linux", home }));
   assert.equal(hostBrowser({ env: { PIKIBUN_BROWSER: older }, platform: "linux", home })?.executable, older);
   assert.equal(hostBrowser({ env: { PIKIBUN_BROWSER: script }, platform: "linux", home }), undefined, "never another browser than the one named");
+  // Only Linux: the browser runs only in the Linux sandbox.
   assert.equal(hostBrowser({ env: {}, platform: "win32", home }), undefined);
+  assert.equal(hostBrowser({ env: { PIKIBUN_BROWSER: chrome }, platform: "darwin", home }), undefined);
+  assert.equal(browserAt(chrome, { platform: "darwin", home }), undefined);
+});
+
+test("only the session's Linux sandbox has a browser: never a session on the host itself", { skip: process.platform !== "linux" }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-where-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const chrome = { executable: "/opt/google/chrome/chrome", directory: "/opt/google/chrome" };
+  assert.deepEqual(new Sandbox(binding("in-opt"), join(root, "opt"), undefined, { browser: chrome }).browser,
+    { driver: SANDBOX_BROWSER_DRIVER, chromium: `${SANDBOX_BROWSER_DIRECTORY}/chrome` });
+  assert.deepEqual(new Sandbox(binding("in-usr"), join(root, "usr"), undefined, { browser: { executable: "/usr/lib/chromium/chromium", directory: "/usr/lib/chromium" } }).browser,
+    { driver: SANDBOX_BROWSER_DRIVER, chromium: "/usr/lib/chromium/chromium" });
+  assert.equal(new Sandbox(binding("none"), join(root, "none"), undefined, { browser: null }).browser, undefined);
+  // A session on the host runs its commands there as the host's user: Chromium's DevTools would reach the host's files.
+  assert.equal((new HostWorkspace(binding("host"), join(root, "host")) as { browser?: unknown }).browser, undefined);
 });
 
 test("the Linux sandbox gives commands the Chromium installation alone, read-only, unless they see it in /usr", () => {
@@ -149,7 +178,9 @@ test("the driver opens a served page, runs the actions, and leaves a screenshot 
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-driver-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const worktree = join(root, "worktree");
-  const home = join(root, "home");
+  // As deep as a session's home in the sandbox (/sessions/<64 hex digits>/home): its TMPDIR leaves no room for Chromium's
+  // singleton socket, which crashes Chrome and Chromium (not the headless shell) unless the driver gives it a short path.
+  const home = join(root, "sessions", "0".repeat(64), "home");
   await mkdir(join(worktree, "site"), { recursive: true });
   await mkdir(join(home, ".tmp"), { recursive: true });
   // A heading with the button's text: text= takes the button, which the agent can act on.
@@ -217,4 +248,35 @@ test("the driver opens a served page, runs the actions, and leaves a screenshot 
   const reopened = parseBrowserReport(again);
   assert.equal(reopened?.reopened, `http://127.0.0.1:${port}/second.html`);
   assert.match(reopened?.error ?? "", /ERR_CONNECTION_REFUSED.*only within the same call, started with serve/);
+});
+
+test("in the Linux sandbox, the driver runs the host's Chromium, given read-only, with the session's own files", { skip: linuxSandboxMissing() ?? ((!chromium && "no Chromium on this host (PIKIBUN_TEST_BROWSER names one)") || undefined) }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-sandbox-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sandbox = new Sandbox(binding("browser-sandbox"), join(root, "session"), undefined, { browser: chromium! });
+  t.after(() => sandbox.close());
+  await sandbox.initialize();
+  const authorize = async () => {};
+  const run = (command: string) => sandbox.execute({ kind: "bash", command }, false, authorize, { allowTestShell: true });
+  await sandbox.writeFile("site/index.html", `<!doctype html><title>Sandboxed app</title><h2>Greet</h2>
+<form onsubmit="event.preventDefault(); document.getElementById('out').textContent = 'Hi ' + document.getElementById('name').value">
+<input id="name"><button type="submit">Greet</button></form><p id="out"></p>`, authorize);
+  const port = 20_000 + Math.floor(Math.random() * 20_000);
+  // The default command limits (30 seconds, 256 open files per process), as a host without a longer time limit has them.
+  const request = browserRequest({ serve: { command: `python3 -m http.server ${port} --bind 127.0.0.1`, port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
+    actions: [{ action: "type", selector: "#name", text: "Ada" }, { action: "click", selector: "text=Greet" }, { action: "evaluate", expression: "document.getElementById('out').textContent" }] });
+  const output = await run(browserShellCommand(request, sandbox.browser!, { seconds: 30, nodeBin: sandbox.nodeBin }));
+  const report = parseBrowserReport(output.trim());
+  assert.ok(report && !report.error, output.slice(0, 4000));
+  assert.equal(report.title, "Sandboxed app");
+  assert.equal(report.actions?.[2]?.value, "Hi Ada");
+  const screenshot = await sandbox.readContent(report.screenshot!, authorize);
+  assert.ok("image" in screenshot && screenshot.mimeType === "image/png");
+  // Its driver and installation are the host's, read-only, and only the installation is there.
+  await assert.rejects(run(`touch ${SANDBOX_BROWSER_DRIVER}`));
+  if (sandbox.browser!.chromium.startsWith(`${SANDBOX_BROWSER_DIRECTORY}/`)) {
+    await assert.rejects(run(`touch ${SANDBOX_BROWSER_DIRECTORY}/written`));
+    assert.match(await run(`ls ${SANDBOX_BROWSER_DIRECTORY}`), /icudtl\.dat|\.pak/);
+    await assert.rejects(run(`ls ${chromium!.directory}`), "the host's own path to it isn't there");
+  }
 });

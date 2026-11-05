@@ -242,8 +242,9 @@ export type RunnerConfig = {
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;
   /**
-   * The Chromium the browser tool runs (browser-toolchain.ts): the host's own, found once per connector, unless this
-   * names another, or null for none. Sessions without one aren't offered the tool.
+   * The Chromium the browser tool runs in the Linux sandbox (browser-toolchain.ts): the host's own, found once per
+   * connector, unless this names another, or null for none. Sessions without the sandbox, or without one, aren't offered
+   * the tool.
    */
   browser?: BrowserToolchain | null;
   /** Owner-consented host mode: no isolation, so bash needs only per-command approval. */
@@ -491,7 +492,7 @@ export class RunnerSession {
       : config.gitRelay ? undefined
       : (request: Omit<GitDirectRequest, "sessionId">) => this.controlPlane("/api/internal/git/direct", { sessionId: binding.session.id, ...request });
     this.#direct = directGrant && new DirectGit({ grant: directGrant, onFallback: (request, reason) => this.#egress?.noteFallback(request.bindingId, reason) });
-    if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"), { ...(config.browser !== undefined ? { browser: config.browser } : {}) });
+    if (this.#onHost) this.sandbox = new HostWorkspace(binding, join(directory, "sandbox"));
     else if (config.sandboxBackend) {
       // macOS and native Windows sandboxes share the host's network: the proxy listens on a loopback port that wants
       // this session's token. They keep no host repository cache.
@@ -1313,7 +1314,7 @@ export class RunnerSession {
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     // The session's own tools, less those its workspace turned off (Pikibun's session-tool extensions, such as piki:schedule).
     const off = run.mode === "write" ? await this.sessionToolsOff() : new Set<string>();
-    // A browser this host can't give the session's commands is never offered, rather than offered only to fail.
+    // The browser runs only in the session's sandbox, with the host's Chromium: elsewhere it is never offered, rather than offered to fail.
     if (!this.sandbox.browser) off.add("browser");
     // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
     const builtins = run.mode === "write" && this.#builtins
@@ -2235,8 +2236,9 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "node", `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "node" }, call.abortSignal), call));
         } }),
-      // A headless Chromium in the sandbox (piki:browser): one sandboxed command per call, decided as bash's are, since pages
-      // run their scripts, evaluate runs the agent's, and serve is a shell command. Offered only where the session has one.
+      // A headless Chromium in the session's sandbox (piki:browser): one sandboxed command per call, decided as bash's are,
+      // since pages run their scripts, evaluate runs the agent's, and serve is a shell command. Offered only in the Linux
+      // sandbox, with a Chromium: never on the host itself.
       defineTool({ name: "browser", description: "Drive a headless Chromium in the session's sandbox. It opens url (http, https, file, or about:blank; "
         + "without one, the page the last call left), runs actions in order, and answers with the page as it ends: a screenshot, its URL, title, "
         + "HTTP status, visible text, interactive elements each with a CSS selector, console messages, page errors and failed requests. Actions: "
@@ -2268,7 +2270,7 @@ export class RunnerSession {
           // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
           await this.requireSessionTool("browser");
           const browser = this.sandbox.browser;
-          if (!browser) throw new RunnerError(400, "This host has no browser for its sessions: its owner installs Chromium there (see Extensions → piki:browser). Nothing ran.");
+          if (!browser) throw new RunnerError(400, "This session has no browser: it runs only in the session's Linux sandbox, with Chromium installed on the host (see Extensions → piki:browser). Nothing ran.");
           let request: BrowserRequest;
           let command: string;
           try {

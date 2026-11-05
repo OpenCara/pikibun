@@ -118,7 +118,7 @@ The agent's [browser tool](extensions.md#the-browser-pikibrowser) runs a headles
 - Else a system install: Debian's and Fedora's `chromium` packages (`sudo apt install chromium`; Ubuntu's is a snap, which can't run in another sandbox), Google Chrome or Microsoft Edge in `/opt`.
 - Else the newest one Playwright or Puppeteer downloaded for the connector's user: `npx playwright install chromium-headless-shell` (or `chromium`), `npx @puppeteer/browsers install chrome-headless-shell@stable`.
 
-Only that browser's own installation directory is given to sandboxed commands, read-only (at `/opt/pikibun/chromium`), and only where they don't already see it under `/usr`. It runs with `python3` from `/usr`, as the sandbox's helper does, and the system's fonts. Restart the connector after installing one. Sessions on a host without one, or in the experimental macOS and Windows sandboxes, aren't offered the tool.
+Only that browser's own installation directory is given to sandboxed commands, read-only (at `/opt/pikibun/chromium`), and only where they don't already see it under `/usr`. It runs with `python3` from `/usr`, as the sandbox's helper does, and the system's fonts. Restart the connector after installing one. Sessions on a host without one aren't offered the tool, and neither are sessions without the Linux sandbox: the browser never runs on the host itself, as its user.
 
 ## Network access
 
@@ -188,7 +188,7 @@ The connector prints the risks and asks you to type `unsandboxed` before it star
 - Commands use this machine's network directly: the workspace's [network access](#network-access) doesn't apply.
 - Anyone you share the host with, and anyone with approve permission on a session that runs on it, can cause approved commands to run on your machine.
 
-Pikibun labels such a host **Unsandboxed** to everyone who can see it.
+Pikibun labels such a host **Unsandboxed** to everyone who can see it. Its sessions get no [browser tool](extensions.md#the-browser-pikibrowser), which runs only in the sandbox.
 
 ## Repository cache (preview)
 

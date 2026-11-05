@@ -3,7 +3,7 @@ import type { HostCommandOperation } from "../../../packages/shared/src/types.js
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { BigIntStats, Stats } from "node:fs";
-import { chmod, lstat, mkdir, open, readdir, realpath, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Operation, RunnerBinding } from "../../../packages/shared/src/types.js";
@@ -17,9 +17,6 @@ import type { SessionWorkspace } from "./workspace.js";
 import { searchInWorker, type SearchRequest, type SearchResult } from "./search.js";
 import { bashPath, CREATE_FILE, hostBashArgs, killTree, OPEN_DIRECTORY, OPEN_FILE, privateEntry, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
 import { readCloneBranches, type CloneBranch } from "./clone-branches.js";
-import { connectorBrowser, type BrowserToolchain } from "./browser-toolchain.js";
-import type { SessionBrowser } from "./browser-command.js";
-import { BROWSER_DRIVER } from "./sandbox-python.generated.js";
 import { ATTACHMENT_CANDIDATES, attachmentCandidate } from "../../../packages/shared/src/file-uploads.js";
 
 const MAX_ENTRIES = 10_000;
@@ -48,17 +45,12 @@ export class HostWorkspace implements SessionWorkspace {
   readonly #testProvider: boolean;
   /** A clone session: the agent clones and pushes with the host's own Git, credentials included. */
   readonly #clone: boolean;
-  /**
-   * Where commands find the browser tool's driver, beside the session's files and out of the worktree, and the host's
-   * Chromium as it is installed; none on Windows, or where the host has no Chromium.
-   */
-  readonly browser: SessionBrowser | undefined;
   #initialization: Promise<void> | undefined;
   #ready = false;
   #closed = false;
   #cancelActive: (() => void) | undefined;
 
-  constructor(binding: RunnerBinding, root: string, options: { browser?: BrowserToolchain | null } = {}) {
+  constructor(binding: RunnerBinding, root: string) {
     if (!["linux", "darwin", "win32"].includes(process.platform) || !isAbsolute(root) || resolve(root) === sep || resolve(root) === resolve(root, "..")) {
       throw new Error("Host workspace requires Linux, macOS or Windows and an absolute, non-root private storage path");
     }
@@ -82,9 +74,6 @@ export class HostWorkspace implements SessionWorkspace {
       ...(windows ? windowsSystemEnvironment() : {}),
       ...sessionEnvironment(this.#identity, { path: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin", gitConfig: join(this.#root, "owner.gitconfig") }),
     });
-    // The driver runs with the host's /usr/bin/python3, which Windows hasn't.
-    const browser = windows ? undefined : options.browser === undefined ? connectorBrowser() : options.browser ?? undefined;
-    this.browser = browser && { driver: join(this.#root, "browser", "pikibun-browser"), chromium: browser.executable };
   }
 
   get home(): string { return this.#identity.home; }
@@ -107,13 +96,6 @@ export class HostWorkspace implements SessionWorkspace {
       }
       const config = ownerGitConfig(this.#identity) + (this.#clone ? hostCredentialConfig(process.env.HOME || homedir()) : "");
       await (await pinOwnerConfig(join(this.#root, "owner.gitconfig"), config)).close();
-      // The browser tool's driver, written afresh at every open: the previous one is read-only, and may be an older version.
-      if (this.browser) {
-        await mkdir(join(this.#root, "browser"), { recursive: true, mode: 0o700 });
-        await rm(this.browser.driver, { force: true });
-        await writeFile(this.browser.driver, BROWSER_DRIVER, { mode: 0o500 });
-        await chmod(this.browser.driver, 0o500);
-      }
       if (!await exists(join(this.worktree, ".git", "HEAD"))) {
         await this.#git(["init", "--quiet", "--template=", "--initial-branch=main", this.worktree]);
       }

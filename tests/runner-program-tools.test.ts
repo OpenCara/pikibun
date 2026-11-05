@@ -13,7 +13,8 @@ import type { AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } 
 import { toolNames } from "../packages/shared/src/types.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
-import { browserAt, hostBrowser } from "../apps/runner/src/browser-toolchain.js";
+import { browserAt, hostBrowser, SANDBOX_BROWSER_DRIVER } from "../apps/runner/src/browser-toolchain.js";
+import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
 function binding(id: string): RunnerBinding {
   return {
@@ -179,7 +180,8 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
 /** A Chromium for the browser tool's session test: PIKIBUN_TEST_BROWSER, or the host's own. */
 const chromium = process.env.PIKIBUN_TEST_BROWSER ? browserAt(process.env.PIKIBUN_TEST_BROWSER) : hostBrowser();
 
-test("the browser tool drives the host's Chromium as one exact command card, answering with the page and its screenshot; piki:browser turns it off", { skip: process.platform === "win32" || (!chromium && "no Chromium on this host (PIKIBUN_TEST_BROWSER names one)") }, async t => {
+test("the browser tool drives the host's Chromium in the session's sandbox as one exact command card, answering with the page and its screenshot; piki:browser turns it off",
+  { skip: linuxSandboxMissing() ?? ((!chromium && "no Chromium on this host (PIKIBUN_TEST_BROWSER names one)") || undefined) }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-tool-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const port = 20_000 + Math.floor(Math.random() * 20_000);
@@ -198,7 +200,7 @@ test("the browser tool drives the host's Chromium as one exact command card, ans
   models.setProvider(faux.provider);
   let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
   const service = new RunnerService({
-    dataDir: directory, sharedSecret: "runner-browser-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    dataDir: directory, sharedSecret: "runner-browser-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, allowTestShell: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
     extensions: { installed: () => [], workspace: async () => answer },
@@ -207,17 +209,23 @@ test("the browser tool drives the host's Chromium as one exact command card, ans
   await service.initialize();
   t.after(() => service.close());
   const id = "browser-session";
-  const session = await service.provision(binding(id), await ticket(id, "create"));
+  // Not a clone session: its sandbox needs nothing of the control plane's repositories.
+  const sandboxed = binding(id);
+  delete sandboxed.session.repositoryMode;
+  const session = await service.provision(sandboxed, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Look at the app.", requestId: "look", admissionId: await sha256("browser admission") }, "write");
   const approval = await pendingApproval(session);
   assert.equal(approval.operation.kind, "bash");
   const command = approval.operation.kind === "bash" ? approval.operation.command : "";
-  assert.ok(command.startsWith(`PATH="\${PATH:-/usr/bin:/bin}":'/usr/local/bin' '${session.sandbox.browser!.driver}' '--chrome' '${chromium!.executable}' '--time-limit' '30' '{"url":"http://127.0.0.1:${port}/"`), command);
+  // The driver and the host's Chromium where the sandbox gives them; PATH may name the connector's own Node.js first.
+  assert.equal(session.sandbox.browser!.driver, SANDBOX_BROWSER_DRIVER);
+  assert.match(command, /^PATH=.*'\/usr\/local\/bin' /);
+  assert.ok(command.includes(` '${SANDBOX_BROWSER_DRIVER}' '--chrome' '${session.sandbox.browser!.chromium}' '--time-limit' '30' '{"url":"http://127.0.0.1:${port}/"`), command);
   await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
   let view = await session.view();
   assert.equal(view.approvals.length, 1, "the refused call left no card");
-  assert.equal(view.approvals[0]!.status, "executed");
+  assert.equal(view.approvals[0]!.status, "executed", view.approvals[0]!.result?.slice(0, 4000));
   const transcript = view.entries.map(entry => entry.text).join("\n");
   assert.match(transcript, /url is an http, https or file URL, or about:blank\. Nothing ran\./);
   assert.match(transcript, /Seen\./);
@@ -244,8 +252,8 @@ test("the browser tool drives the host's Chromium as one exact command card, ans
   assert.equal(view.approvals.length, 1);
 });
 
-test("a session whose host has no Chromium isn't offered the browser tool", { skip: process.platform === "win32" }, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-none-")));
+test("a session on the host is never offered the browser tool, even where the host has a Chromium: it runs only in the session's sandbox", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-host-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
@@ -255,20 +263,20 @@ test("a session whose host has no Chromium isn't offered the browser tool", { sk
   const models = createModels();
   models.setProvider(faux.provider);
   const service = new RunnerService({
-    dataDir: directory, sharedSecret: "runner-browser-none-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    dataDir: directory, sharedSecret: "runner-browser-host-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
     extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
-    browser: null,
+    browser: { executable: "/opt/google/chrome/chrome", directory: "/opt/google/chrome" },
   });
   await service.initialize();
   t.after(() => service.close());
-  const id = "browser-none-session";
+  const id = "browser-host-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   assert.equal(session.sandbox.browser, undefined);
-  await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser none admission") }, "write");
+  await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser host admission") }, "write");
   await idle(session);
   const view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
-  assert.equal(view.approvals.length, 0);
+  assert.equal(view.approvals.length, 0, "nothing ran on the host");
 });

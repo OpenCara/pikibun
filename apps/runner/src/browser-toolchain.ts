@@ -3,8 +3,9 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 
 /*
- * The Chromium the browser tool runs (piki:browser): the host's own, as its owner installed it, since sessions have no
- * way to download one. It is found once, where the connector starts its sessions:
+ * The Chromium the browser tool runs in the session's Linux sandbox (piki:browser): the host's own, as its owner
+ * installed it, since sessions have no way to download one. It never runs on the host itself: its DevTools connection
+ * would reach the host's files and network as its user. It is found once, where the connector starts its sessions:
  * - PIKIBUN_BROWSER, the path of a Chromium executable (Chromium, Google Chrome, Edge, or a headless shell), set for the
  *   connector by the host's owner;
  * - else a system install, such as Debian's and Fedora's chromium packages (/usr/lib/chromium/chromium; not the snap,
@@ -30,11 +31,6 @@ export const SYSTEM_BROWSERS: readonly string[] = Object.freeze([
   "/usr/lib/chromium/chromium", "/usr/lib64/chromium/chromium", "/usr/lib/chromium-browser/chromium-browser",
   "/usr/lib64/chromium-browser/chromium-browser", "/opt/google/chrome/chrome", "/opt/microsoft/msedge/msedge",
 ]);
-/** On macOS, for hosts without the sandbox, whose commands run the host's own applications. */
-export const MAC_BROWSERS: readonly string[] = Object.freeze([
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-]);
 
 const has = (path: string) => { try { statSync(path); return true; } catch { return false; } };
 
@@ -50,8 +46,8 @@ function elf(path: string): boolean {
 }
 
 /**
- * The installation `path` names, or undefined where it isn't one: a real executable file, on Linux an ELF beside one of
- * a Chromium's own files, in a directory that is neither / nor the host user's home or above it.
+ * The installation `path` names, or undefined where it isn't one: a real executable file, an ELF beside one of a
+ * Chromium's own files, in a directory that is neither / nor the host user's home or above it.
  */
 export function browserAt(path: string, options: { platform?: NodeJS.Platform; home?: string } = {}): BrowserToolchain | undefined {
   const platform = options.platform ?? process.platform;
@@ -65,7 +61,7 @@ export function browserAt(path: string, options: { platform?: NodeJS.Platform; h
   const home = options.home ?? homedir();
   const inside = relative(directory, home);
   if (directory === sep || inside === "" || (!inside.startsWith("..") && !inside.startsWith(sep))) return undefined;
-  if (platform === "linux" && (!elf(executable) || !MARKERS.some(name => has(join(directory, name))))) return undefined;
+  if (platform !== "linux" || !elf(executable) || !MARKERS.some(name => has(join(directory, name)))) return undefined;
   return { executable, directory };
 }
 
@@ -93,18 +89,17 @@ export function downloadedBrowsers(cache: string, playwright = join(cache, "ms-p
 }
 
 /**
- * The host's Chromium for the browser tool, or undefined where it has none the tool can run. `env`, `platform` and
- * `home`: the connector's, unless a test gives others.
+ * The host's Chromium for the browser tool, or undefined where it has none the Linux sandbox can run (and on other
+ * systems, whose sandboxes can't run one yet). `env`, `platform` and `home`: the connector's, unless a test gives others.
  */
 export function hostBrowser(options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; home?: string } = {}): BrowserToolchain | undefined {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const home = options.home ?? homedir();
   const at = (path: string) => browserAt(path, { platform, home });
+  if (platform !== "linux") return undefined;
   // A path the host's owner chose is that one or none: never a different browser than they named.
   if (env.PIKIBUN_BROWSER) return at(env.PIKIBUN_BROWSER);
-  if (platform === "darwin") return MAC_BROWSERS.map(at).find(Boolean);
-  if (platform !== "linux") return undefined;
   const cache = env.XDG_CACHE_HOME || join(home, ".cache");
   const candidates = [...SYSTEM_BROWSERS, ...downloadedBrowsers(cache, env.PLAYWRIGHT_BROWSERS_PATH || join(cache, "ms-playwright"))];
   for (const path of candidates) {

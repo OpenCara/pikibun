@@ -222,7 +222,10 @@ in `bash` needs a download the sandbox can't make, a display, and a way to drive
     WebSocket client, nothing another process in the sandbox could connect to). Chromium's own sandbox can't start in
     ours (no user namespaces), so it runs with `--no-sandbox`: the session's sandbox is the boundary, as for every other
     program there. `/dev/shm` is read-only, so it doesn't use it; the sandbox has no `/etc/fonts`, so the driver writes
-    a fontconfig file naming `/usr/share/fonts` and the host's generic-family rules. The HTTP cache is off: a dev server
+    a fontconfig file naming `/usr/share/fonts` and the host's generic-family rules. Chrome and Chromium (not the
+    headless shell) bind their profile's singleton socket in `TMPDIR`, and the session's (`/sessions/<64 hex
+    digits>/home/.tmp`) leaves too little of a Unix socket path's 107 bytes, so they crash at start there: Chromium runs
+    in a directory of its own under it, which its `TMPDIR` names as `/proc/self/cwd`. The HTTP cache is off: a dev server
     changes between calls. Actions find elements by CSS or `text=` (interactive elements first, then the innermost),
     click with real mouse events at the element's centre after scrolling it into view (and say what covered it), type
     with `Input.insertText` (what frameworks listen for), and wait for a navigation an action starts. The answer is a
@@ -247,17 +250,28 @@ in `bash` needs a download the sandbox can't make, a display, and a way to drive
     Only an installation is taken: a real executable (ELF on Linux) beside one of Chromium's own files, in a directory
     that is neither `/` nor the host user's home or above it, so mounting its directory never gives a session anything
     else. The Linux sandbox binds it read-only at `/opt/pikibun/chromium` for shell commands, unless it is under `/usr`,
-    and the driver at `/opt/pikibun/browser/pikibun-browser`, written at every open like the git shim. Hosts without the
-    sandbox run the host's Chromium where it is, with the driver beside the session's files. Found once per connector.
-31. **Offered only where it runs.** A session whose workspace has no Chromium for its commands (none on the host, the
-    experimental macOS and Windows sandboxes, which would need their own policy for it) isn't offered the tool, nor
+    and the driver at `/opt/pikibun/browser/pikibun-browser`, written at every open like the git shim. Found once per
+    connector, and only on Linux.
+31. **Only in the session's sandbox, never on the host.** Chromium on the host, with its own sandbox, would keep the
+    renderer sandbox ours takes away (Chromium refuses to start with it, or with its seccomp layer alone, where there
+    are no user namespaces), and could outlive a call. But Chromium's sandbox confines the processes that run pages, not
+    the browser process, which would run as the host's user; and the DevTools protocol the agent drives it with is
+    privileged: it opens `file://` pages, sets an upload's files from any path, and saves downloads anywhere. So the
+    agent would reach the host owner's files unless the connector filtered every such feature, and the host's network
+    (its LAN, loopback services, cloud metadata) unless every connection were forced through the session's proxy; the
+    app under test, in the session's sandbox, would be out of its reach; and on a shared host each call would be decided
+    like a host command, by the host's owner. In the session's sandbox all of that is the session's already: a page
+    that exploits Chromium gets what the session has, its files, its branch and the workspace's network, not the host.
+    So sessions that run on the host (unsandboxed hosts, sessions on the host's environment) don't get the tool, and
+    neither do the experimental macOS and Windows sandboxes until they give Chromium a policy of their own.
+32. **Offered only where it runs.** A session with no Chromium for its sandboxed commands isn't offered the tool, nor
     told of it, rather than offered a tool that only fails; one the workspace turned off is refused by name, as rule 16
     says. Its network is the session's: Chromium goes through the egress proxy (loopback stays direct), so the
     workspace's network policy holds, and verifies certificates with its own roots, as the proxy only tunnels them.
 
-Later: a browser that lives across calls, for long flows and watching a page as it changes, needs a sandbox that
-outlives one command; the macOS and Windows sandboxes; proxy credentials, for sandboxes whose proxy wants them;
-the user driving the same browser from the Browser tab.
+Later: a browser that lives across calls, for long flows and watching a page as it changes, in a sandbox of the
+session's that outlives one command, beside the app it tests; the user driving it from the Browser tab; the macOS and
+Windows sandboxes, with proxy credentials for their proxies.
 
 ## The prompt audit: piki:prompt-audit
 
@@ -293,7 +307,7 @@ of the host check each message before the agent sees it, and refuses those that 
 | The prompt audit | `apps/runner/src/extensions/piki/prompt-audit.ts`; tests in `tests/prompt-audit.test.ts` |
 | The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session.ts` (the `browser` tool, `browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
-| The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts`, `host-workspace.ts` (`browser`) |
+| The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |
 | The Browser tab | `apps/web/src/session-browser.tsx` |
 | Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`); `session.ts` (`applyOptions`, `requireSessionTool`); tests in `tests/runner-schedule.test.ts` |
 | gh, glab, az: refused and read-only arguments, token variables | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
