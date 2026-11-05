@@ -849,7 +849,12 @@ export interface SessionView {
    * can't run, while the session takes no messages. Absent from runners that predate extensions, and where the host has
    * none to tell.
    */
-  extensions?: { running: { source: string; dev: boolean; tools: string[]; required?: true }[]; missing: string[]; builtin?: string[]; missingRequired?: string[] };
+  extensions?: { running: { source: string; dev: boolean; tools: string[]; required?: true }[]; missing: string[]; builtin?: string[]; missingRequired?: string[];
+    /**
+     * Pikibun's session-tool extensions the workspace has on whose tools this session can't offer, and why, as a fixed
+     * reason (for piki:browser, browserUnavailableReasons in browser.ts): the browser without Chromium on the host, say.
+     */
+    unavailable?: { source: string; tools: string[]; reason: string }[] };
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];

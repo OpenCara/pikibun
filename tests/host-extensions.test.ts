@@ -364,7 +364,8 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   await idle();
   const decided = (await session.view()).approvals.find(item => item.id === card!.id)!;
   assert.deepEqual([decided.status, decided.decidedBy, decided.result], ["executed", "test:bob", "HELLO!"]);
-  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"] });
+  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
+    unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   assert.match((await results()).at(-1)!, /HELLO!/);
 
   await send("quietly", "read");
@@ -389,12 +390,14 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
 
   // A version the host doesn't have: the session runs without it, and says so.
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0" }]), automaticTools: true };
-  assert.deepEqual((await session.view()).extensions, { running: [], missing: ["npm:shout@2.0.0"], builtin: ["pi:codemode"] });
+  assert.deepEqual((await session.view()).extensions, { running: [], missing: ["npm:shout@2.0.0"], builtin: ["pi:codemode"],
+    unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   // Once the host has that version too, the open session runs it, tools and all, in place of the first.
   installed.push({ ...dev!, summary: { ...dev!.summary, source: "npm:shout@2.0.0", dev: false } });
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0", tools: "automatic" }]), automaticTools: true };
   // The view shows what the next message gets, before it is sent.
-  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@2.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"] });
+  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@2.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
+    unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   await send("upgraded", "approval");
   await idle();
   const upgraded = (await session.view()).approvals.at(-1)!;

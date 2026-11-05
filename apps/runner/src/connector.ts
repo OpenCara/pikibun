@@ -31,6 +31,7 @@ import type { RunnerConfig } from "./session.js";
 import { HostExtensions } from "./extensions/host.js";
 import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
+import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
 
 const STATE_FILE = "connector.json";
 const CALLBACK_LIMIT = 64 * 1024;
@@ -325,6 +326,8 @@ export interface ConnectorOptions {
   fetch?: typeof fetch;
   createSocket?: (url: string, protocols: string[]) => ConnectorSocket;
   runtimeFactory?: (config: RunnerConfig) => Promise<ConnectorRuntime>;
+  /** How the host's browser is found and downloaded (HostBrowserSource); tests stand in their own. */
+  browser?: Partial<Omit<HostBrowserOptions, "root" | "signal">>;
   acquireLease?: typeof acquireRunnerLease;
   reconnectDelayMs?: number;
   /**
@@ -400,6 +403,8 @@ export class LocalConnector {
   private releaseLease?: () => Promise<void>;
   private state?: ConnectorCredentials;
   private directory = "";
+  /** The browser tool's Chromium, as the host's owner chose it (HostConfig.browser): its sessions' and its report's. */
+  private browser: HostBrowserSource | undefined;
   /** This host's repository caches, one per scope its configuration has chosen, each opened once and kept. */
   private readonly repositoryCaches = new Map<Exclude<RepositoryCacheMode, "off">, RepositoryCache>();
   private readonly gpu?: GpuKind;
@@ -440,6 +445,9 @@ export class LocalConnector {
     if (!this.options.runtimeFactory && process.platform !== "linux" && !this.options.unsandboxed && !this.options.sandboxBackend)
       throw new Error("This platform has no sandbox unless one is chosen (sandboxBackend); no host-shell fallback");
     this.directory = await privateDirectory(this.options.dataDir);
+    // The browser runs in the Linux sandbox only: elsewhere it reports so, and finds or downloads nothing.
+    this.browser = new HostBrowserSource({ supported: process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend,
+      ...this.options.browser, root: browserDownloads(this.directory), signal: this.lifetime.signal });
     this.hostExtensions = this.options.extensions
       ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false });
     // Each installed extension's factory runs once here, as Pi runs them when it starts.
@@ -549,6 +557,8 @@ export class LocalConnector {
       // Asked again at every connection, before requests run: the host's configuration may have changed while it was away.
       const { config: configured, answered } = await this.hostConfig.refresh();
       this.requireGeneration(generation);
+      // Sessions open with the browser the owner chose: found, or a download started (in the background).
+      await this.browser?.apply(configured.browser).catch(() => {});
       // Only a configuration the control plane gave replaces the runner: a fallback (it didn't answer) keeps its cache.
       const runtime = await this.ensureRuntime(generation, answered || !this.runtime ? configured.repositoryCache : this.runtime.repositoryCache);
       this.requireGeneration(generation);
@@ -591,20 +601,29 @@ export class LocalConnector {
     const extensions = this.hostExtensions;
     if (!extensions) return;
     let results: ExtensionRequestResult[] = [];
-    // A control plane that predates Pikibun extensions refuses a report naming them: it gets the report without them.
+    // A control plane that predates the browser's status, or Pikibun extensions, refuses a report naming them: it gets the
+    // report without the status, then without them.
+    let browserStatus = true;
     let pikiExtensions = true;
     const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal]);
     while (!signal.aborted) {
       try {
         await extensions.refreshIfChanged();
-        const sync = async () => parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions",
-          { report: pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions(), results }));
-        let answer: ReturnType<typeof parseExtensionsSyncAnswer>;
-        try { answer = await sync(); }
-        catch (error) {
-          if (!pikiExtensions || !refusedReport(error)) throw error;
-          pikiExtensions = false;
-          answer = await sync();
+        // The owner's browser choice, applied as the report goes: a change, an install or a finished download shows within a round.
+        if (this.browser) await this.browser.apply((await this.hostConfig.current()).browser).catch(() => {});
+        const report = () => {
+          const base = pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions();
+          return browserStatus && this.browser ? { ...base, browser: this.browser.status() } : base;
+        };
+        const sync = async () => parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions", { report: report(), results }));
+        let answer: ReturnType<typeof parseExtensionsSyncAnswer> | undefined;
+        while (!answer) {
+          try { answer = await sync(); }
+          catch (error) {
+            if (!refusedReport(error) || (!browserStatus && !pikiExtensions)) throw error;
+            if (browserStatus) browserStatus = false;
+            else pikiExtensions = false;
+          }
         }
         results = [];
         if (answer.requests.length) {
@@ -700,6 +719,8 @@ export class LocalConnector {
       },
       compaction: this.options.localModels.compaction, identity: this.options.localModels.identity,
       ...(this.hostExtensions ? { extensions: this.runnerExtensions(this.hostExtensions) } : {}),
+      // Looked up for each command and run: the owner's choice, an install or a download changes it without a restart.
+      ...(this.browser ? { browser: () => this.browser?.current(), browserStatus: () => this.browser?.status() } : {}),
       authorize: async request => this.authorize(await this.connection(), request),
       reportActivity: async (sessionId, activity) => this.reportActivity(await this.connection(), sessionId, activity),
       reportBranches: async (sessionId, branches) => this.reportBranches(await this.connection(), sessionId, branches),

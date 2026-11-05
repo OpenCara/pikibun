@@ -1,4 +1,5 @@
 import { extensionPackageKey, normalizeExtensionSource, parseExtensionSettings, type ExtensionSettings } from "./host-extensions.js";
+import { defaultHostBrowserConfig, parseHostBrowserConfig, type HostBrowserConfig } from "./browser.js";
 
 /**
  * How a host runs its sessions. Its owner sets this in Pikibun (Settings → Hosts → the host → Configuration), and so do
@@ -100,6 +101,12 @@ export interface HostConfig {
    * Only the host's owner changes them. Sessions pick a change up with their next message, within a minute.
    */
   requiredExtensions: RequiredExtension[];
+  /**
+   * Where the browser tool's Chromium comes from (piki:browser): found on the host, at a path its owner gives, downloaded
+   * by the connector, or none. Only the host's owner changes it: it decides which of the host's files every sandboxed
+   * session gets, read-only. The connector applies a change within a minute, as it next reports its extensions.
+   */
+  browser: HostBrowserConfig;
 }
 
 /** An extension a host's owner requires of every session on it, and its settings (the extension's Pi flags). */
@@ -123,6 +130,7 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: Object.freeze({}),
   builtinExtensions: Object.freeze([]) as unknown as BuiltinExtensionName[],
   requiredExtensions: Object.freeze([]) as unknown as RequiredExtension[],
+  browser: defaultHostBrowserConfig as HostBrowserConfig,
 });
 
 /**
@@ -206,9 +214,10 @@ export function parseHostCompaction(value: unknown): HostCompaction {
 
 /**
  * Only the host's owner changes these: they decide whose Git credentials the host uses, whether anything runs on it
- * without the sandbox, and what runs as its OS user in every session on it. Its admins change the rest.
+ * without the sandbox, what runs as its OS user in every session on it, and which of its files sessions get (the
+ * browser). Its admins change the rest.
  */
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser"]);
 
 /** A whole configuration, as the control plane reports it; anything else is refused. */
 export function parseHostConfig(value: unknown): HostConfig {
@@ -229,7 +238,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
   return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
     hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
-    requiredExtensions: parseRequiredExtensions(input.requiredExtensions) };
+    requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser) };
 }
 
 /**

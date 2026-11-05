@@ -31,7 +31,8 @@ import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from ".
 import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
 import { browserRequest, browserShellCommand, browserTarget, servePrograms } from "./browser-command.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
-import { browserActions, browserKeys, browserLimits, parseBrowserReport, type BrowserRequest } from "../../../packages/shared/src/browser.js";
+import { browserActions, browserKeys, browserLimits, browserUnavailableReason, browserUnavailableText, parseBrowserReport, type BrowserRequest,
+  type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
@@ -245,10 +246,12 @@ export type RunnerConfig = {
   resources?: ResourceConfig;
   /**
    * The Chromium the browser tool runs in the Linux sandbox (browser-toolchain.ts): the host's own, found once per
-   * connector, unless this names another, or null for none. Sessions without the sandbox, or without one, aren't offered
-   * the tool.
+   * process, unless this names another, the one a connector has now (HostBrowserSource), or null for none. Sessions
+   * without the sandbox, or without one, aren't offered the tool.
    */
-  browser?: BrowserToolchain | null;
+  browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
+  /** How the connector's browser stands (HostBrowserSource): why a session has none, for its people and its agent. */
+  browserStatus?: () => HostBrowserStatus | undefined;
   /** Owner-consented host mode: no isolation, so bash needs only per-command approval. */
   unsandboxed?: boolean;
   /**
@@ -787,7 +790,7 @@ export class RunnerSession {
   }
 
   /** `off`: the session's own tools its workspace turned off (sessionToolsOff), which the instructions don't point to. */
-  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set()): string {
+  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason): string {
     let instructions = this.binding.agent.instructions;
     if (this.#clone && !this.#egress) {
       // An unsandboxed host: commands run on its owner's machine, with its own Git, network and credentials.
@@ -858,6 +861,9 @@ export class RunnerSession {
       + "browser {serve: {program: \"pnpm\", args: [\"dev\", \"--port\", \"5173\"], directory: \"<name>\", port: 5173}, url: \"http://localhost:5173/\", "
       + "actions: [{action: \"click\", selector: \"text=Sign in\"}, {action: \"type\", selector: \"#email\", text: \"a@example.com\", submit: true}]}. "
       + "Use the selectors its answer lists. Its approval card shows exactly the command it runs.";
+    // The workspace has the browser on, but this session can't run it: the agent says why rather than guessing.
+    else if (mode !== "ask" && browserUnavailable) instructions += `\n\nThis session has no browser tool: ${browserUnavailableText(browserUnavailable)} `
+      + "If you're asked to look at or test a web page, say so, and use what you have instead (fetching it, or running its tests).";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -1324,7 +1330,9 @@ export class RunnerSession {
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     // The session's own tools, less those its workspace turned off (Pikibun's session-tool extensions, such as piki:schedule).
     const off = run.mode === "write" ? await this.sessionToolsOff() : new Set<string>();
-    // The browser runs only in the session's sandbox, with the host's Chromium: elsewhere it is never offered, rather than offered to fail.
+    // The browser runs only in the session's sandbox, with the host's Chromium: elsewhere it is never offered, rather than
+    // offered to fail. Where the workspace has it on, the agent learns why it has none.
+    const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.browserUnavailable() : undefined;
     if (!this.sandbox.browser) off.add("browser");
     // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
     const builtins = run.mode === "write" && this.#builtins
@@ -1338,7 +1346,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [this.#extension, ...extensions.map(extension => extension.extension), ...builtins],
-        instructions: this.agentInstructions(access === "read" ? "read" : "write", off),
+        instructions: this.agentInstructions(access === "read" ? "read" : "write", off, browserUnavailable),
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
@@ -1378,6 +1386,21 @@ export class RunnerSession {
     const installed = config.installed().map(item => item.summary);
     return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
       automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
+  }
+
+  /**
+   * Why this session has no browser, if it hasn't: it runs on its host itself, in a sandbox other than Linux's, or its
+   * host's browser is off, missing, downloading or failed to download (HostBrowserSource). A fixed reason: what the host
+   * reports of its files stays its owner's.
+   */
+  private browserUnavailable(): BrowserUnavailableReason | undefined {
+    if (this.sandbox.browser) return undefined;
+    if (this.#onHost) return "on-host";
+    if (this.config.sandboxBackend) return "sandbox";
+    // A runner no connector runs knows nothing of the host's browser, and has nobody to set one up: it says nothing.
+    const status = this.config.browserStatus?.();
+    if (!status) return undefined;
+    return browserUnavailableReason(status.state) ?? "missing";
   }
 
   /**
@@ -2319,7 +2342,7 @@ export class RunnerSession {
           // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
           await this.requireSessionTool("browser");
           const browser = this.sandbox.browser;
-          if (!browser) throw new RunnerError(400, "This session has no browser: it runs only in the session's Linux sandbox, with Chromium installed on the host (see Extensions → piki:browser). Nothing ran.");
+          if (!browser) throw new RunnerError(400, `This session has no browser: ${browserUnavailableText(this.browserUnavailable() ?? "missing")} Nothing ran.`);
           let request: BrowserRequest;
           let command: string;
           try {
@@ -3139,8 +3162,12 @@ export class RunnerSession {
         && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
       // As the next message selects them: after the workspace's, which may replace one.
       const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
-      return running.length || missing.length || builtin.length || missingRequired.length
-        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}) } } : {};
+      // Pikibun's own the workspace has on that this session can't offer: the browser, without Chromium on the host, say.
+      const browserReason = sessionToolsOff(answer.extensions).has("browser") ? undefined : this.browserUnavailable();
+      const unavailable = browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : [];
+      return running.length || missing.length || builtin.length || missingRequired.length || unavailable.length
+        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}),
+          ...(unavailable.length ? { unavailable } : {}) } } : {};
     } catch { return {}; }
   }
 

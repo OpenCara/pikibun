@@ -46,25 +46,36 @@ function elf(path: string): boolean {
 }
 
 /**
- * The installation `path` names, or undefined where it isn't one: a real executable file, an ELF beside one of a
- * Chromium's own files, in a directory that is neither / nor the host user's home or above it.
+ * The installation `path` names, or why it isn't one: a real executable file, an ELF beside one of a Chromium's own
+ * files, in a directory that is neither / nor the host user's home or above it. The reasons are for the host's owner,
+ * who chose the path.
  */
-export function browserAt(path: string, options: { platform?: NodeJS.Platform; home?: string } = {}): BrowserToolchain | undefined {
+export function inspectBrowser(path: string, options: { platform?: NodeJS.Platform; home?: string } = {}): { browser: BrowserToolchain } | { error: string } {
   const platform = options.platform ?? process.platform;
+  if (platform !== "linux") return { error: "The browser runs in the Linux sandbox only" };
   let executable: string;
+  try { executable = realpathSync(path); } catch { return { error: `Nothing is at ${path}` }; }
   try {
-    executable = realpathSync(path);
-    if (!statSync(executable).isFile()) return undefined;
+    if (!statSync(executable).isFile()) return { error: `${executable} isn't a file` };
     accessSync(executable, constants.X_OK);
-  } catch { return undefined; }
+  } catch { return { error: `${executable} isn't executable` }; }
   const directory = dirname(executable);
   // Through links too, as the executable is: a home at /home/jo that is /var/home/jo is still the home.
   let home = options.home ?? homedir();
   try { home = realpathSync(home); } catch { /* A home that isn't there holds no browser. */ }
   const inside = relative(directory, home);
-  if (directory === sep || inside === "" || (!inside.startsWith("..") && !inside.startsWith(sep))) return undefined;
-  if (platform !== "linux" || !elf(executable) || !MARKERS.some(name => has(join(directory, name)))) return undefined;
-  return { executable, directory };
+  if (directory === sep || inside === "" || (!inside.startsWith("..") && !inside.startsWith(sep))) {
+    return { error: `${directory} is / or a home directory, which sessions would get whole: give a Chromium in a directory of its own` };
+  }
+  if (!elf(executable)) return { error: `${executable} isn't a program but a script or another file: give the Chromium executable itself, such as /usr/lib/chromium/chromium rather than /usr/bin/chromium` };
+  if (!MARKERS.some(name => has(join(directory, name)))) return { error: `${directory} doesn't hold Chromium's own files (icudtl.dat or its .pak files) beside ${basename(executable)}` };
+  return { browser: { executable, directory } };
+}
+
+/** The installation `path` names, or undefined where it isn't one (inspectBrowser). */
+export function browserAt(path: string, options: { platform?: NodeJS.Platform; home?: string } = {}): BrowserToolchain | undefined {
+  const found = inspectBrowser(path, options);
+  return "browser" in found ? found.browser : undefined;
 }
 
 /** Chromium builds Playwright and Puppeteer downloaded under `cache` (the host user's ~/.cache), newest first. */
@@ -112,7 +123,10 @@ export function hostBrowser(options: { env?: NodeJS.ProcessEnv; platform?: NodeJ
 }
 
 let detected: { value: BrowserToolchain | undefined } | undefined;
-/** hostBrowser(), found once per connector: sessions open often, and the host's browser rarely changes while it runs. */
+/**
+ * hostBrowser(), found once per process, for a runner no connector gives a browser: a connector applies its owner's
+ * choice instead, and keeps it current (HostBrowserSource, browser-host.ts).
+ */
 export function connectorBrowser(): BrowserToolchain | undefined {
   detected ??= { value: hostBrowser() };
   return detected.value;

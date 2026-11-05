@@ -172,6 +172,24 @@ test('a host reports its extensions, its owner asks for installs it carries out 
   await denied(await s.alice.request('POST', requests, { action: 'remove', source: 'npm:cc-safety-net@2.7.2' }), 409, 'remote_installs_off');
 });
 
+test('a host reports how its browser stands: its owner sees where it is on the host, its workspaces only how it stands', async t => {
+  const f = await fixture(t); const s = await team(f);
+  const id = s.connector.connectorId;
+  const browser = { source: 'path', state: 'ready', executable: '/home/alice/chromium/chrome', downloadable: true } as const;
+  assert.deepEqual(await json(await self(f, s.connector, 'extensions', { report: { ...report([]), browser }, results: [] })), { requests: [] });
+  type HostPage = { report: HostExtensionsReport };
+  assert.deepEqual((await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`))).report.browser, browser);
+  type Listing = { hosts: { id: string; report?: HostExtensionsReport }[] };
+  assert.deepEqual((await json<Listing>(await s.bob.request('GET', `/api/workspaces/${s.workspaceId}/extensions`))).hosts[0]!.report!.browser,
+    { source: 'path', state: 'ready', downloadable: true });
+  // Within bounds, or the whole report is refused; a connector that predates it reports none.
+  for (const invalid of [{ ...browser, state: 'broken' }, { ...browser, error: 'x'.repeat(1025) }, { ...browser, extra: true }]) {
+    await denied(await self(f, s.connector, 'extensions', { report: { ...report([]), browser: invalid }, results: [] }), 400, 'invalid_extensions');
+  }
+  await json(await self(f, s.connector, 'extensions', { report: report([]), results: [] }));
+  assert.equal((await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`))).report.browser, undefined);
+});
+
 test('a host\'s sessions get their workspace\'s extensions and its owner\'s switch; tool cards name an extension the session may run', async t => {
   const f = await fixture(t); const s = await team(f);
   await json(await s.alice.request('PUT', `/api/workspaces/${s.workspaceId}/extensions`, { source: 'npm:pi-memory@0.4.2', tools: 'automatic' }));

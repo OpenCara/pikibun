@@ -14,6 +14,7 @@ import { toolNames } from "../packages/shared/src/types.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { browserAt, hostBrowser, SANDBOX_BROWSER_DRIVER } from "../apps/runner/src/browser-toolchain.js";
+import type { HostBrowserStatus } from "../packages/shared/src/browser.js";
 import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
 function binding(id: string): RunnerBinding {
@@ -299,8 +300,12 @@ test("a session on the host is never offered the browser tool, even where the ho
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-host-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  let instructions = "";
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("browser", { url: "https://example.com/" })], { stopReason: "toolUse" }),
+    ((context: unknown) => {
+      instructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("browser", { url: "https://example.com/" })], { stopReason: "toolUse" });
+    }) as never,
     fauxAssistantMessage("None."),
   ]);
   const models = createModels();
@@ -322,4 +327,52 @@ test("a session on the host is never offered the browser tool, even where the ho
   const view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
   assert.equal(view.approvals.length, 0, "nothing ran on the host");
+  // The workspace has it on: its people see why this session hasn't, and so does its agent.
+  assert.deepEqual(view.extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }]);
+  assert.match(instructions, /This session has no browser tool: The browser runs only in a session's sandbox, and this session runs on its host itself/);
+});
+
+test("a sandboxed session whose host has no Chromium yet says why it has no browser, and offers it once the host has one", { skip: linuxSandboxMissing() }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-missing-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const offered: string[][] = [];
+  const instructions: string[] = [];
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  const reply = ((context: { messages: { role: string; toolsAdded?: { name: string }[]; toolsRemoved?: string[] }[] }) => {
+    offered.push(context.messages.flatMap(message => message.role === "system" ? (message.toolsAdded ?? []).map(tool => tool.name) : []));
+    instructions.push(JSON.stringify(context));
+    return fauxAssistantMessage("Noted.");
+  }) as never;
+  faux.setResponses([reply, reply]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  // The connector's browser, as its owner's choice and a download change it (HostBrowserSource).
+  let current: { executable: string; directory: string } | undefined;
+  let status: HostBrowserStatus = { source: "download", state: "downloading", downloadable: true };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-browser-missing-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
+    browser: () => current, browserStatus: () => status,
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "browser-missing-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  assert.equal(session.sandbox.browser, undefined);
+  assert.deepEqual((await session.view()).extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "downloading" }]);
+  await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser missing admission") }, "write");
+  await idle(session);
+  assert.ok(!offered[0]!.includes("browser"));
+  assert.match(instructions[0]!, /This session has no browser tool: This host is downloading Chromium for the browser/);
+  // The download is done: the next message has the tool, with no restart.
+  current = { executable: "/opt/chrome-headless-shell/chrome-headless-shell", directory: "/opt/chrome-headless-shell" };
+  status = { source: "download", state: "ready", executable: current.executable, version: "131.0.6778.85", downloadable: true };
+  assert.equal((await session.view()).extensions?.unavailable, undefined);
+  assert.deepEqual(session.sandbox.browser, { driver: SANDBOX_BROWSER_DRIVER, chromium: "/opt/pikibun/chromium/chrome-headless-shell" });
+  await session.submit(await ticket(id, "submit"), { content: "Again.", requestId: "again", admissionId: await sha256("browser missing admission again") }, "write");
+  await idle(session);
+  assert.ok(offered.flat().includes("browser"), JSON.stringify(offered));
+  assert.match(instructions[1]!, /To look at or test a web page, use the browser tool/);
 });

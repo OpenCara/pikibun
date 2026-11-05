@@ -51,9 +51,14 @@ function availability(extensions: readonly WorkspaceExtension[], installed: read
   return Object.fromEntries(extensions.map(extension => [extension.source, extensionAvailability(extension.source, installed)]));
 }
 
-/** A host's report as someone other than its owner sees it: without its dev extensions, whose paths are its owner's files. */
+/**
+ * A host's report as someone other than its owner sees it: without its dev extensions, whose paths are its owner's files,
+ * nor where its browser is on it.
+ */
 function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExtensionsReport {
-  return ownerView ? report : { ...report, installed: report.installed.filter(item => !item.dev) };
+  if (ownerView) return report;
+  const browser = report.browser && (({ executable: _, ...rest }) => rest)(report.browser);
+  return { ...report, installed: report.installed.filter(item => !item.dev), ...(browser ? { browser } : {}) };
 }
 
 /** The sources of Pikibun's session-tool extensions, which are also their package keys. */
