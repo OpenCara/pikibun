@@ -267,7 +267,7 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
   const said = view.entries.map(entry => entry.text).join("\n");
   assert.match(said, /cargo publish acts on a package registry as an account/);
   assert.match(said, /dotnet nuget push acts on a package registry as an account/);
-  assert.match(instructions, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet with the rust, go, dotnet tools: .*such as rust \{program/, "the agent is told how to use them");
+  assert.match(instructions, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet, make with the rust, go, dotnet, make tools: .*such as rust \{program/, "the agent is told how to use them");
 
   answer = { extensions: [{ source: "piki:rust", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("ecosystem admission off") }, "write");
@@ -276,7 +276,7 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool rust is not available/);
   assert.equal(view.approvals.length, 1);
   // Its example is of a tool the session still has (review of #194).
-  assert.match(offInstructions, /Run go and gofmt, dotnet with the go, dotnet tools: .*such as go \{program/);
+  assert.match(offInstructions, /Run go and gofmt, dotnet, make with the go, dotnet, make tools: .*such as go \{program/);
 });
 
 /** A Chromium for the browser tool's session test: PIKIBUN_TEST_BROWSER, or the host's own. */
@@ -433,4 +433,47 @@ test("a sandboxed session whose host has no Chromium yet says why it has no brow
   await idle(session);
   assert.ok(offered.flat().includes("browser"), JSON.stringify(offered));
   assert.match(instructions[1]!, /To look at or test a web page, use the browser tool/);
+});
+
+test("the make tool runs make without a shell of its own, as one exact command card; piki:make turns it off", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-make-tool-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let instructions = "";
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    ((context: unknown) => {
+      instructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("make", { program: "make", args: ["-j4", "test"], directory: "app" })], { stopReason: "toolUse" });
+    }) as never,
+    fauxAssistantMessage("Asked."),
+    fauxAssistantMessage([fauxToolCall("make", { program: "make", args: ["--version"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Off."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-make-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "make-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("make admission") }, "write");
+  // No make needed: the card shows the exact command, and denying it runs nothing.
+  const approval = await pendingApproval(session);
+  assert.deepEqual(approval.operation, { kind: "program", tool: "make", command: "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' make '-j4' 'test' </dev/null 2>&1" });
+  await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
+  await idle(session);
+  assert.match(instructions, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet, make with the rust, go, dotnet, make tools/);
+
+  answer = { extensions: [{ source: "piki:make", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("make admission off") }, "write");
+  await idle(session);
+  const view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool make is not available/);
+  assert.equal(view.approvals.length, 1);
 });

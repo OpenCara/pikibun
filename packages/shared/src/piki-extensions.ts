@@ -119,6 +119,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "make", source: "piki:make", title: "Make", sessionTools: ["make"],
+    description: "The make tool: the agent runs make with its arguments as a list, without a shell of its own, each call approved as a command is (a Makefile's recipes are shell commands). On unless turned off here.",
+    providers: [],
+  },
+  {
     name: "browser", source: "piki:browser", title: "Browser", sessionTools: ["browser"],
     description: "The browser tool: the agent drives a headless Chromium in the session's sandbox (open a page, click, type, run a script, take a screenshot), serving the web app it works on for the call, each call approved as a command is. Its screenshots show in the session panel's Browser tab. Runs only in the Linux sandbox, with Chromium on the host. On unless turned off here.",
     providers: [],
