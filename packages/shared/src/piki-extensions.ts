@@ -94,6 +94,12 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     description: "The python tool: the agent runs Python and its package and test tools (python3, pip, pip3, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
     providers: [],
   },
+  ...([["rust", "Rust", "cargo, rustc, rustup, rustfmt"], ["go", "Go", "go, gofmt"], ["dotnet", ".NET", "dotnet"], ["make", "Make", "make"]] as const)
+    .map(([name, title, programs]) => ({
+      name, source: `piki:${name}` as const, title, sessionTools: [name],
+      description: `The ${name} tool: the agent runs ${title}'s toolchain (${programs}) with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.`,
+      providers: [],
+    })),
   {
     name: "files", source: "piki:files", title: "Files", core: true,
     sessionTools: ["identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file"],

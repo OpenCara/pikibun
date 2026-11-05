@@ -261,6 +261,15 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     command is (`decidedAsHostCommand`, `requesterAutoApproves`, the host's limits and grants, redaction, the
     sandboxes' `execute`). A control plane that predates it refuses the kind, so such a call fails cleanly there.
 
+32. **Rust, Go, .NET and make.** `piki:rust`, `piki:go`, `piki:dotnet` and `piki:make` turn on one tool each, from one
+    table (`apps/runner/src/ecosystem-command.ts`): its programs, its fixed environment (no colours, progress, prompts or
+    telemetry), where its toolchain installs (after the sandbox's PATH, `$HOME` expanded where the command runs), the
+    options that take a value, and what acts on a registry as an account: `cargo publish`, `login`, `logout`, `owner`
+    and `yank` (past `+toolchain` and cargo's options), and `dotnet nuget push`, `delete`, and `add`/`update source` with
+    a user name or password. Each call is a program operation of its own tool (note 31). They aren't offered in the
+    Windows sandbox, whose container reaches none of these toolchains, as `python` isn't. A connector now reports up to
+    32 Pikibun extensions besides its installs.
+
 Next, in order: other ecosystems as usage asks for them,
 codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
 (`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.

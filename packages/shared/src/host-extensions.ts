@@ -160,7 +160,7 @@ export const extensionLimits = Object.freeze({
   workspace: 32,
   installed: 64,
   /** Pikibun extensions a connector reports besides what it installed (piki-extensions.ts). */
-  connector: 16,
+  connector: 32,
   modulesPerSource: 16,
   toolsPerModule: 64,
   flagsPerModule: 64,

@@ -217,3 +217,45 @@ test("the python tool runs Python without a shell, in a virtual environment it n
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool python is not available/);
   assert.equal(view.entries.flatMap(entry => entry.autoApproved ?? []).length, 2);
 });
+
+test("the rust tool runs Cargo without a shell, as one program card of its own; piki:rust turns it off", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-rust-tool-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["publish"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("rust", { program: "rustc", args: ["--version"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Ran."),
+    fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["--version"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Off."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-rust-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "rust-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Which rustc?", requestId: "run", admissionId: await sha256("rust admission") }, "write");
+  const approval = await pendingApproval(session);
+  assert.equal(approval.operation.kind, "program");
+  assert.equal(approval.operation.kind === "program" && approval.operation.tool, "rust");
+  await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
+  await idle(session);
+  let view = await session.view();
+  assert.equal(view.approvals.length, 1, "cargo publish left no card");
+  assert.ok(["executed", "failed"].includes(view.approvals[0]!.status), view.approvals[0]!.result);
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /cargo publish acts on a registry as an account/);
+
+  answer = { extensions: [{ source: "piki:rust", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Cargo?", requestId: "off", admissionId: await sha256("rust admission off") }, "write");
+  await idle(session);
+  view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool rust is not available/);
+});

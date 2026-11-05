@@ -29,6 +29,7 @@ import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
 import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
+import { ecosystemRequest, ecosystems, ecosystemShellCommand, type EcosystemRequest, type EcosystemTool } from "./ecosystem-command.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
@@ -836,6 +837,9 @@ export class RunnerSession {
     if (mode !== "ask" && this.tools.some(tool => tool.name === "python") && !off.has("python")) instructions += "\n\nRun Python, pip, uv, poetry and pytest with the python tool "
       + "rather than in bash. Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
       + "python {program: \"pip\", args: [\"install\", \"-r\", \"requirements.txt\"], directory: \"<name>\", venv: \".venv\"}, python {program: \"pytest\", args: [\"-q\"], directory: \"<name>\", venv: \".venv\"}.";
+    const toolchains = (Object.keys(ecosystems) as EcosystemTool[]).filter(tool => this.tools.some(item => item.name === tool) && !off.has(tool));
+    if (mode !== "ask" && toolchains.length) instructions += `\n\nBuild and test ${toolchains.map(tool => ecosystems[tool].title).join(", ")} projects with the `
+      + `${toolchains.join(", ")} tool${toolchains.length > 1 ? "s" : ""} rather than in bash, such as rust {program: "cargo", args: ["test"], directory: "<name>"}.`;
     // Code mode is core (#163): what pipes did between commands, a script does between tools.
     if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
       + "write a codemode script that calls them rather than piping commands through grep, head, sort or jq in bash.";
@@ -2082,6 +2086,29 @@ export class RunnerSession {
     return this.#clone && this.#egress ? [...tools, this.clonePushTool()] : tools;
   }
 
+  /** One toolchain's tool (ecosystem-command.ts): a program of it, its arguments as a list, run as one approved command. */
+  private ecosystemTool(tool: EcosystemTool): ToolRegistration {
+    const spec = ecosystems[tool];
+    return defineTool({ name: tool, executionMode: "sequential",
+      description: `Run ${spec.title}'s toolchain in the session worktree without a shell: program is one of ${spec.programs.join(", ")}; args is its arguments as a list, such as ${spec.example}; directory is where it runs, such as the clone app (the worktree by default). It runs the host's toolchain where the sandbox finds it, with no colours or prompts${tool === "make" ? "; a Makefile's recipes are shell commands it runs" : ""}; commands that act on a registry as an account (publishing, signing in) aren't taken. Like other commands, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      parameters: Type.Object({ program: StringEnum(spec.programs as [string, ...string[]]), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })),
+        directory: Type.Optional(Type.String()) }),
+      execute: async (args, api, call) => {
+        // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+        await this.requireSessionTool(tool);
+        let request: EcosystemRequest;
+        let command: string;
+        try { request = ecosystemRequest(tool, args); command = ecosystemShellCommand(request); }
+        catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${tool} call`}. Nothing ran.`); }
+        const attribution = await this.toolActor(api, true);
+        await this.requireHostEnvironment();
+        const { unbounded } = await this.permit(api, call, tool, `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
+        const text = (value: unknown) => ({ output: [{ type: "text" as const, text: JSON.stringify(value) }] });
+        return text({ ...await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool, command }, String(api.taskId), { permitted: true, unbounded },
+          call.abortSignal), call), admissionId: undefined, callId: undefined });
+      } });
+  }
+
   private clonePushTool(): ToolRegistration {
     const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
     return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first. Waits for an exact human approval unless the owner enabled auto-approve for this request.", parameters: Type.Object({
@@ -2255,6 +2282,9 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
         } })]),
+      // Rust, Go, .NET and make without a shell (piki:rust, piki:go, piki:dotnet, piki:make, #163), built as python is; not
+      // in the Windows sandbox, whose container reaches none of these toolchains.
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : (Object.keys(ecosystems) as EcosystemTool[]).map(tool => this.ecosystemTool(tool))),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools. "
         + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
         parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), wait: Type.Optional(StringEnum(githubWaits)),
