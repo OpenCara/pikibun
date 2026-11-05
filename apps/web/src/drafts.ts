@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { restoredDraft } from "../../../packages/client/src/message-actions";
 
 /**
  * The unsent text of each session's chat box, kept in this browser's localStorage until it is sent, so switching to
@@ -59,7 +60,9 @@ const restorers = new Map<string, Set<(merge: (current: string) => string) => vo
  * draft; with none open, the draft keeps it for the next one.
  */
 export function restoreDraft(sessionId: string, text: string) {
-  const merge = (current: string) => current.trim() ? `${current}\n\n${text}` : text;
+  // A message that was only images brings no text back: nothing to add, not a blank gap below what is typed.
+  if (!text.trim()) return;
+  const merge = (current: string) => restoredDraft(current, text);
   const open = restorers.get(sessionId);
   if (open?.size) for (const restore of open) restore(merge);
   else writeDraft(sessionId, merge(readDraft(sessionId)));

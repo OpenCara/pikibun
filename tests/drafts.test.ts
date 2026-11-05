@@ -43,6 +43,11 @@ test("a message handed back to the chat box goes below what is typed there, not 
   writeDraft(id, "  \n");
   restoreDraft(id, "Fix the flaky test");
   assert.equal(readDraft(id), "Fix the flaky test");
+
+  // A message that was only images brings no text back: what is typed stays as it is, without a blank gap below it.
+  writeDraft(id, "and update the docs");
+  restoreDraft(id, "");
+  assert.equal(readDraft(id), "and update the docs");
 });
 
 test("starting the session forgets the new-session draft, unless it was edited meanwhile", () => {

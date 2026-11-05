@@ -1,3 +1,4 @@
+import { restoredDraft } from "@pikibun/client";
 import { useEffect, useState } from "react";
 
 /**
@@ -40,7 +41,9 @@ const restorers = new Map<string, Set<(merge: (current: string) => string) => vo
  * the next one.
  */
 export function restoreDraft(sessionId: string, text: string) {
-  const merge = (current: string) => current.trim() ? `${current}\n\n${text}` : text;
+  // A message that was only images brings no text back: nothing to add, not a blank gap below what is typed.
+  if (!text.trim()) return;
+  const merge = (current: string) => restoredDraft(current, text);
   const open = restorers.get(sessionId);
   if (open?.size) for (const restore of open) restore(merge);
   else saveDraft(sessionId, merge(readDraft(sessionId)));
