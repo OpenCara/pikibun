@@ -111,7 +111,7 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
     ? <Button variant="outline" size="sm" icon="plus" onClick={() => setEditing("new")}>Add extension</Button> : undefined}>
     <ResourceState loading={resource.loading && !data} error={resource.error} retry={resource.refresh}>
       {data && <div className="card">
-        {pikiSessionToolExtensions().map(item => {
+        {pikiSessionToolExtensions().filter(item => !item.retired).map(item => {
           const on = !data.extensions.some(extension => extension.source === item.source && !extension.enabled);
           return <Row key={item.source} leading={<Icon name="tool" size={16} />} title={<>{item.title} <code>{item.source}</code></>}
             hint={item.core ? item.description

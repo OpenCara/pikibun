@@ -15,6 +15,7 @@ const target = join(root, "apps", "runner", "src", "sandbox-python.generated.ts"
 const programs = [
   ["HELPER", "helper.py", "The sandbox's helper: every file operation and step of the Linux and macOS sandboxes (sandbox.ts, seatbelt.ts)."],
   ["GIT_SHIM", "git_shim.py", "The sandbox's git, in front of the real one, for clones that borrow the host's mirrors (see GIT_SHIM in sandbox.ts)."],
+  ["BROWSER_DRIVER", "browser.py", "The browser tool's driver: the host's Chromium, headless, on a DevTools pipe, for one call (see browser-command.ts)."],
 ];
 
 export function embedded() {

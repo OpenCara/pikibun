@@ -6,7 +6,7 @@ import { app } from '../apps/server/src/index.js';
 import type { ConnectorRelayEnvelope } from '../apps/server/src/connector-transport.js';
 import { sharedView } from '../apps/server/src/session-links.js';
 import type { Env } from '../apps/server/src/types.js';
-import { encryptToken } from '../apps/server/src/vault.js';
+import { encryptToken } from '../apps/server/src/authority/vault.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
@@ -359,7 +359,8 @@ test('no viewer ever receives a secret, while approvals still review, decide and
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}`;
   const secret = `ghp_${'a1B2'.repeat(9)}`;
-  const operation = { kind: 'bash' as const, command: `curl -H "Authorization: Bearer ${secret}" https://api.github.com/user` };
+  // A program operation, as a person may request one by hand (bash, retired, would be refused: #163).
+  const operation = { kind: 'program' as const, tool: 'node' as const, command: `curl -H "Authorization: Bearer ${secret}" https://api.github.com/user` };
   const shownCommand = 'curl -H "Authorization: Bearer [redacted]" https://api.github.com/user';
   const pending: ApprovalRecord = { id: 'secret-approval', sessionId: s.session.id, requestedBy: s.owner.user.id, operation,
     status: 'pending', createdAt: new Date().toISOString() };
@@ -387,7 +388,7 @@ test('no viewer ever receives a secret, while approvals still review, decide and
   assert.equal(created.status, 201, createdBody);
   assert.ok(!leaks(createdBody));
   const { approval: requested } = JSON.parse(createdBody) as { approval: ApprovalRecord };
-  assert.deepEqual(requested.operation, { kind: 'bash', command: shownCommand });
+  assert.deepEqual(requested.operation, { kind: 'program', tool: 'node', command: shownCommand });
   assert.equal(requested.reviewHash, reviewHash);
   assert.deepEqual(JSON.parse(String(f.sqlite.prepare('SELECT operation_json FROM approval_reviews WHERE approval_id = ?').get(pending.id)!.operation_json)), operation,
     'The review keeps the real operation');
@@ -400,7 +401,7 @@ test('no viewer ever receives a secret, while approvals still review, decide and
     assert.ok(!leaks(body), 'No viewer receives a secret');
     const { view: seen } = JSON.parse(body) as { view: SessionView };
     assert.equal(seen.entries[0]!.text, 'Use ghp_[redacted] with DB_PASSWORD=[redacted]');
-    assert.deepEqual(seen.approvals[0]!.operation, { kind: 'bash', command: shownCommand });
+    assert.deepEqual(seen.approvals[0]!.operation, { kind: 'program', tool: 'node', command: shownCommand });
     assert.equal(seen.approvals[0]!.reviewHash, reviewHash);
   }
   // So are live updates.
@@ -422,7 +423,7 @@ test('no viewer ever receives a secret, while approvals still review, decide and
   assert.ok(!leaks(approvedBody));
   const { approval: decided } = JSON.parse(approvedBody) as { approval: ApprovalRecord };
   assert.equal(decided.result, '{"login":"creator","token":"[redacted]"}');
-  assert.deepEqual(decided.operation, { kind: 'bash', command: shownCommand });
+  assert.deepEqual(decided.operation, { kind: 'program', tool: 'node', command: shownCommand });
 
   // A share link shows the same redacted transcript.
   const { link } = await json<{ link: SessionLink }>(await s.owner.request('PUT', `${path}/link`), 201);

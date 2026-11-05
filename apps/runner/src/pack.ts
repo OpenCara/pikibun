@@ -221,7 +221,8 @@ export async function unpackSandbox(directory: string, binding: RunnerBinding, f
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
       await writePrivate(path, file.bytes, file.mode);
     }
-    const sandbox = new Sandbox(binding, stage);
+    // Initialized only to settle its layout: it runs no commands, so it needs no browser (the session writes its driver when it opens).
+    const sandbox = new Sandbox(binding, stage, undefined, { browser: null });
     try { await sandbox.initialize(); } finally { await sandbox.close(); }
     await syncTree(stage);
     if (await exists(join(directory, SANDBOX)) !== undefined) throw new RunnerError(409, "The session's files are already unpacked");

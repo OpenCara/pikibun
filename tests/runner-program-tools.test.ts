@@ -13,6 +13,9 @@ import type { AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } 
 import { toolNames } from "../packages/shared/src/types.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
+import { browserAt, hostBrowser, SANDBOX_BROWSER_DRIVER } from "../apps/runner/src/browser-toolchain.js";
+import type { HostBrowserStatus } from "../packages/shared/src/browser.js";
+import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
 function binding(id: string): RunnerBinding {
   return {
@@ -218,44 +221,216 @@ test("the python tool runs Python without a shell, in a virtual environment it n
   assert.equal(view.entries.flatMap(entry => entry.autoApproved ?? []).length, 2);
 });
 
-test("the rust tool runs Cargo without a shell, as one program card of its own; piki:rust turns it off", { skip: process.platform === "win32" }, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-rust-tool-")));
+test("the rust, go and dotnet tools run their programs without a shell, as one exact command card; their switches turn them off", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-ecosystem-tools-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  let instructions = "";
+  let offInstructions = "";
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["publish"] })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("rust", { program: "rustc", args: ["--version"] })], { stopReason: "toolUse" }),
-    fauxAssistantMessage("Ran."),
-    fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["--version"] })], { stopReason: "toolUse" }),
+    ((context: unknown) => {
+      instructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["+nightly", "publish"] })], { stopReason: "toolUse" });
+    }) as never,
+    fauxAssistantMessage([fauxToolCall("dotnet", { program: "dotnet", args: ["nuget", "push", "app.nupkg"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("go", { program: "go", args: ["test", "./..."], directory: "app" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Asked."),
+    ((context: unknown) => {
+      offInstructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["--version"] })], { stopReason: "toolUse" });
+    }) as never,
     fauxAssistantMessage("Off."),
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
   let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
   const service = new RunnerService({
-    dataDir: directory, sharedSecret: "runner-rust-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    dataDir: directory, sharedSecret: "runner-ecosystem-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
     extensions: { installed: () => [], workspace: async () => answer },
   });
   await service.initialize();
   t.after(() => service.close());
-  const id = "rust-session";
+  const id = "ecosystem-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
-  await session.submit(await ticket(id, "submit"), { content: "Which rustc?", requestId: "run", admissionId: await sha256("rust admission") }, "write");
+  await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("ecosystem admission") }, "write");
+  // No toolchain needed: the card shows the exact command, and denying it runs nothing.
   const approval = await pendingApproval(session);
-  assert.equal(approval.operation.kind, "program");
-  assert.equal(approval.operation.kind === "program" && approval.operation.tool, "rust");
-  await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
+  assert.deepEqual(approval.operation, { kind: "program", tool: "go",
+    command: "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/go/bin':'/usr/lib/go/bin':'/usr/local/bin' NO_COLOR=1 go 'test' './...' </dev/null 2>&1" });
+  await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
   await idle(session);
   let view = await session.view();
-  assert.equal(view.approvals.length, 1, "cargo publish left no card");
-  assert.ok(["executed", "failed"].includes(view.approvals[0]!.status), view.approvals[0]!.result);
-  assert.match(view.entries.map(entry => entry.text).join("\n"), /cargo publish acts on a registry as an account/);
+  assert.equal(view.approvals.length, 1, "the refused calls left no card");
+  assert.equal(view.approvals[0]!.status, "denied");
+  const said = view.entries.map(entry => entry.text).join("\n");
+  assert.match(said, /cargo publish acts on a package registry as an account/);
+  assert.match(said, /dotnet nuget push acts on a package registry as an account/);
+  assert.match(instructions, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet with the rust, go, dotnet tools: .*such as rust \{program/, "the agent is told how to use them");
 
   answer = { extensions: [{ source: "piki:rust", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
-  await session.submit(await ticket(id, "submit"), { content: "Cargo?", requestId: "off", admissionId: await sha256("rust admission off") }, "write");
+  await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("ecosystem admission off") }, "write");
   await idle(session);
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool rust is not available/);
+  assert.equal(view.approvals.length, 1);
+  // Its example is of a tool the session still has (review of #194).
+  assert.match(offInstructions, /Run go and gofmt, dotnet with the go, dotnet tools: .*such as go \{program/);
+});
+
+/** A Chromium for the browser tool's session test: PIKIBUN_TEST_BROWSER, or the host's own. */
+const chromium = process.env.PIKIBUN_TEST_BROWSER ? browserAt(process.env.PIKIBUN_TEST_BROWSER) : hostBrowser();
+
+test("the browser tool drives the host's Chromium in the session's sandbox as one exact command card, answering with the page and its screenshot; piki:browser turns it off",
+  { skip: linuxSandboxMissing() ?? ((!chromium && "no Chromium on this host (PIKIBUN_TEST_BROWSER names one)") || undefined) }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-tool-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const port = 20_000 + Math.floor(Math.random() * 20_000);
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  let seen: unknown;
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("browser", { url: "javascript:alert(1)" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("write_file", { path: "site/index.html", content: "<!doctype html><title>Faux app</title><h1>Hello from the sandbox</h1><button>Go</button>" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("browser", { serve: { program: "python3", args: ["-m", "http.server", String(port), "--bind", "127.0.0.1"], port, directory: "site" }, url: `http://127.0.0.1:${port}/`,
+      actions: [{ action: "evaluate", expression: "document.querySelector('h1').textContent" }] })], { stopReason: "toolUse" }),
+    context => { seen = context.messages.at(-1); return fauxAssistantMessage("Seen."); },
+    fauxAssistantMessage([fauxToolCall("browser", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Off."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-browser-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, allowTestShell: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+    browser: chromium,
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "browser-session";
+  // Not a clone session: its sandbox needs nothing of the control plane's repositories.
+  const sandboxed = binding(id);
+  delete sandboxed.session.repositoryMode;
+  const session = await service.provision(sandboxed, await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Look at the app.", requestId: "look", admissionId: await sha256("browser admission") }, "write");
+  const approval = await pendingApproval(session);
+  // A program operation of its own: the driver, and the host's Chromium where the sandbox gives it.
+  assert.equal(approval.operation.kind, "program");
+  assert.equal(approval.operation.kind === "program" && approval.operation.tool, "browser");
+  const command = approval.operation.kind === "program" ? approval.operation.command : "";
+  assert.equal(session.sandbox.browser!.driver, SANDBOX_BROWSER_DRIVER);
+  assert.ok(command.startsWith(`'${SANDBOX_BROWSER_DRIVER}' '--chrome' '${session.sandbox.browser!.chromium}' '--time-limit' '30' '{"url":"http://127.0.0.1:${port}/"`), command);
+  await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
+  await idle(session);
+  let view = await session.view();
+  assert.equal(view.approvals.length, 1, "the refused call left no card");
+  assert.equal(view.approvals[0]!.status, "executed", view.approvals[0]!.result?.slice(0, 4000));
+  const transcript = view.entries.map(entry => entry.text).join("\n");
+  assert.match(transcript, /url is an http, https or file URL, or about:blank\. Nothing ran\./);
+  assert.match(transcript, /Seen\./);
+  // The model got the report, without the raw output, and the screenshot as an image.
+  const result = seen as { role: string; toolName: string; content: { type: string; text?: string; mimeType?: string }[] };
+  assert.equal(result.role, "toolResult");
+  assert.equal(result.toolName, "browser");
+  const answerText = JSON.parse(result.content.find(part => part.type === "text")!.text!) as { status: string; result?: string; report: { title: string; actions: { value?: string }[]; screenshot: string } };
+  assert.equal(answerText.status, "executed");
+  assert.equal(answerText.result, undefined);
+  assert.equal(answerText.report.title, "Faux app");
+  assert.equal(answerText.report.actions[0]!.value, "Hello from the sandbox");
+  assert.ok(result.content.some(part => part.type === "image" && /^image\/(png|jpeg|webp)$/.test(part.mimeType ?? "")), "the screenshot reached the model");
+  // The Browser tab reads the same report and screenshot from the worktree.
+  const listing = await session.sandbox.browse("browser-output", async () => {});
+  assert.equal(listing.type, "directory");
+  assert.ok(listing.type === "directory" && listing.entries.some(entry => entry.name === answerText.report.screenshot.split("/").at(-1)));
+
+  answer = { extensions: [{ source: "piki:browser", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Again?", requestId: "off", admissionId: await sha256("browser admission off") }, "write");
+  await idle(session);
+  view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
+  assert.equal(view.approvals.length, 1);
+});
+
+test("a session on the host is never offered the browser tool, even where the host has a Chromium: it runs only in the session's sandbox", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-host-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  let instructions = "";
+  faux.setResponses([
+    ((context: unknown) => {
+      instructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("browser", { url: "https://example.com/" })], { stopReason: "toolUse" });
+    }) as never,
+    fauxAssistantMessage("None."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-browser-host-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
+    browser: { executable: "/opt/google/chrome/chrome", directory: "/opt/google/chrome" },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "browser-host-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  assert.equal(session.sandbox.browser, undefined);
+  await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser host admission") }, "write");
+  await idle(session);
+  const view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
+  assert.equal(view.approvals.length, 0, "nothing ran on the host");
+  // The workspace has it on: its people see why this session hasn't, and so does its agent.
+  assert.deepEqual(view.extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }]);
+  assert.match(instructions, /This session has no browser tool: The browser runs only in a session's sandbox, and this session runs on its host itself/);
+});
+
+test("a sandboxed session whose host has no Chromium yet says why it has no browser, and offers it once the host has one", { skip: linuxSandboxMissing() }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-missing-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const offered: string[][] = [];
+  const instructions: string[] = [];
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  const reply = ((context: { messages: { role: string; toolsAdded?: { name: string }[]; toolsRemoved?: string[] }[] }) => {
+    offered.push(context.messages.flatMap(message => message.role === "system" ? (message.toolsAdded ?? []).map(tool => tool.name) : []));
+    instructions.push(JSON.stringify(context));
+    return fauxAssistantMessage("Noted.");
+  }) as never;
+  faux.setResponses([reply, reply]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  // The connector's browser, as its owner's choice and a download change it (HostBrowserSource).
+  let current: { executable: string; directory: string } | undefined;
+  let status: HostBrowserStatus = { source: "download", state: "downloading", downloadable: true };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-browser-missing-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
+    browser: () => current, browserStatus: () => status,
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "browser-missing-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  assert.equal(session.sandbox.browser, undefined);
+  assert.deepEqual((await session.view()).extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "downloading" }]);
+  await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser missing admission") }, "write");
+  await idle(session);
+  assert.ok(!offered[0]!.includes("browser"));
+  assert.match(instructions[0]!, /This session has no browser tool: This host is downloading Chromium for the browser/);
+  // The download is done: the next message has the tool, with no restart.
+  current = { executable: "/opt/chrome-headless-shell/chrome-headless-shell", directory: "/opt/chrome-headless-shell" };
+  status = { source: "download", state: "ready", executable: current.executable, version: "131.0.6778.85", downloadable: true };
+  assert.equal((await session.view()).extensions?.unavailable, undefined);
+  assert.deepEqual(session.sandbox.browser, { driver: SANDBOX_BROWSER_DRIVER, chromium: "/opt/pikibun/chromium/chrome-headless-shell" });
+  await session.submit(await ticket(id, "submit"), { content: "Again.", requestId: "again", admissionId: await sha256("browser missing admission again") }, "write");
+  await idle(session);
+  assert.ok(offered.flat().includes("browser"), JSON.stringify(offered));
+  assert.match(instructions[1]!, /To look at or test a web page, use the browser tool/);
 });

@@ -4,7 +4,8 @@ import type { AssignableWorkspaceRole, ToolName, Workspace, WorkspaceRole } from
 import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { defaultWorkspaceExtensions, extensionPackageKey } from '../../../packages/shared/src/host-extensions.js';
-import { auditAfterChange, auditStatement, modelDefinition, requireMember } from './db.js';
+import { auditAfterChange, auditStatement, requireMember } from './authority/index.js';
+import { modelDefinition } from './db.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
 import type { AgentRow, Env, ModelRow, WorkerEnv } from './types.js';
 import { ConstraintError, type Query } from './db/types.js';
@@ -165,7 +166,6 @@ async function versionBatch(env: Env, statements: Query<AgentRow>[], versionInde
 /** New broker and host tools require an explicit connector capability. */
 function carries(capabilities: ConnectorCapabilities, tool: ToolName): boolean {
   if (retiredToolNames.includes(tool)) return false;
-  if (tool === 'host_bash') return capabilities.hostCommands === true;
   if (tool === 'git_push') return capabilities.gitPush === true;
   if (tool === 'github_read' || tool === 'github_merge') return capabilities.github === true;
   if (tool === 'github_issue') return capabilities.githubIssues === true;

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { HTTPException } from 'hono/http-exception';
-import { gitProviderAdapters } from '../apps/server/src/git/providers.js';
-import type { GitCredential } from '../apps/server/src/git/types.js';
+import { gitProviderAdapters } from '../apps/server/src/authority/git/providers.js';
+import type { GitCredential } from '../apps/server/src/authority/git/types.js';
 
 const sha = 'a'.repeat(40);
 

@@ -1,13 +1,13 @@
 import type { Hono } from 'hono';
-import { pikiExtensionsFor, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
+import { pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
-  parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type ExtensionToolMode, type HostExtensionsReport, type InstalledExtension,
+  parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, WorkerEnv } from './types.js';
-import { auditStatement, requireMember } from './db.js';
+import {
+  auditStatement, authenticateConnector, automaticTools, managedConnector, requireMember, sessionToolSources, workspaceExtensions,
+} from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
-import { authenticateConnector } from './connectors.js';
-import { managedConnector } from './host-access.js';
 
 /*
  * Extensions (docs/design/host-extensions.md). A workspace's owners and admins choose the Pi extensions its sessions use,
@@ -22,15 +22,6 @@ const RECENT_REQUESTS = 20;
 /** How many requests may wait for a host at once. */
 const MAX_PENDING = 20;
 
-interface ExtensionRow { source: string; enabled: number | string; tools_mode: ExtensionToolMode; settings_json: string }
-
-/** The workspace's extensions, in its order. */
-export async function workspaceExtensions(env: Env, workspaceId: string): Promise<WorkspaceExtension[]> {
-  const rows = await env.DB.query<ExtensionRow>(`SELECT source, enabled, tools_mode, settings_json FROM workspace_extensions
-    WHERE workspace_id = ? ORDER BY position, package_key`).bind(workspaceId).all();
-  return rows.map(row => ({ source: row.source, enabled: Number(row.enabled) === 1, tools: row.tools_mode, settings: JSON.parse(row.settings_json) }));
-}
-
 /** What a host last reported, or null before its first report (or from a report that no longer reads as valid). */
 async function hostReport(env: Env, connectorId: string): Promise<{ report: HostExtensionsReport; reportedAt: string } | null> {
   const row = await env.DB.query<{ report_json: string; reported_at: string }>('SELECT report_json, reported_at FROM connector_extensions WHERE connector_id = ?')
@@ -40,60 +31,26 @@ async function hostReport(env: Env, connectorId: string): Promise<{ report: Host
   catch { return null; }
 }
 
-async function automaticTools(env: Env, connectorId: string): Promise<boolean> {
-  const row = await env.DB.query<{ automatic_tools: number | string }>('SELECT automatic_tools FROM connector_extension_settings WHERE connector_id = ?')
-    .bind(connectorId).first();
-  return Number(row?.automatic_tools) === 1;
-}
-
 /** Each of `extensions` on a host that reported `installed`. */
 function availability(extensions: readonly WorkspaceExtension[], installed: readonly InstalledExtension[]): Record<string, ExtensionAvailability> {
   return Object.fromEntries(extensions.map(extension => [extension.source, extensionAvailability(extension.source, installed)]));
 }
 
-/** A host's report as someone other than its owner sees it: without its dev extensions, whose paths are its owner's files. */
+/**
+ * A host's report as someone other than its owner sees it: without its dev extensions, whose paths are its owner's files,
+ * nor where its browser is on it, nor what went wrong with it, which names a path its owner gave.
+ */
 function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExtensionsReport {
-  return ownerView ? report : { ...report, installed: report.installed.filter(item => !item.dev) };
+  if (ownerView) return report;
+  const browser = report.browser && (({ executable: _, error: __, ...rest }) => rest)(report.browser);
+  return { ...report, installed: report.installed.filter(item => !item.dev), ...(browser ? { browser } : {}) };
 }
 
-/** The sources of Pikibun's session-tool extensions, which are also their package keys. */
-const sessionToolSources: readonly string[] = pikiSessionToolExtensions().map(item => item.source);
 /** Those every session needs (piki:files), which a workspace can't turn off. */
 const coreSources: readonly string[] = pikiSessionToolExtensions().filter(item => item.core).map(item => item.source);
 
 /** SQL true while `user` (bound) is the owner or an admin of the workspace (bound before it). */
 const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
-
-/** Whether an extension tool card's `source` is one the session may run: an enabled extension of its workspace, or a dev extension of its host owner's own session. */
-export async function sessionExtensionSources(env: Env, row: { workspace_id: string; owner_id: string; connector_owner_id?: string | null }): Promise<(source: string) => boolean> {
-  const enabled = new Set((await workspaceExtensions(env, row.workspace_id)).filter(item => item.enabled).map(item => item.source));
-  const ownHost = !!row.connector_owner_id && row.connector_owner_id === row.owner_id;
-  return source => enabled.has(source) || (ownHost && source.startsWith('local:'));
-}
-
-/**
- * Adds the Pikibun extensions for repositories of `provider` (piki-extensions.ts) to a workspace that has just bound
- * its first one there, enabled, their tools with approval, at the end of its list, unless it already uses them or as many
- * extensions as it may. Returns the sources it added.
- */
-export async function addPikiExtensions(env: Env, workspaceId: string, provider: string, actor: string): Promise<string[]> {
-  const added: string[] = [];
-  for (const extension of pikiExtensionsFor(provider)) {
-    const providers = extension.providers;
-    const saved = await env.DB.query<{ source: string }>(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
-      SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), 1, 'approval', '{}', ?, ?
-      WHERE (SELECT COUNT(*) FROM workspace_repositories WHERE workspace_id = ? AND provider IN (${providers.map(() => '?').join(', ')})) = 1
-        AND (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ? AND package_key NOT IN (${sessionToolSources.map(() => '?').join(', ')})) < ?
-      ON CONFLICT (workspace_id, package_key) DO NOTHING
-      RETURNING source`)
-      .bind(workspaceId, extension.source, extension.source, workspaceId, actor, now(), workspaceId, ...providers, workspaceId, ...sessionToolSources, extensionLimits.workspace).first();
-    if (!saved) continue;
-    added.push(saved.source);
-    await auditStatement(env, actor, 'workspace.extension.updated', workspaceId, null,
-      { source: saved.source, enabled: true, tools: 'approval', settings: [], reason: 'repository', provider }).run();
-  }
-  return added;
-}
 
 /**
  * A workspace's extensions as a connector can read them, from its last report. One that predates Pikibun extensions
@@ -108,15 +65,6 @@ export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExten
 }
 
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
-/**
- * The extensions whose tool calls the session's host may run without approval for anyone's message: enabled ones its
- * workspace runs automatically, while its host's owner lets workspaces do that there. Empty without a host.
- */
-export async function automaticExtensionSources(env: Env, row: { workspace_id: string; connector_id?: string | null }): Promise<Set<string>> {
-  if (!row.connector_id || !await automaticTools(env, row.connector_id)) return new Set();
-  return new Set((await workspaceExtensions(env, row.workspace_id)).filter(item => item.enabled && item.tools === 'automatic').map(item => item.source));
-}
-
 export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
   // The connector's sync: what it has installed and how its last requests went; the answer lists those still to do.
   app.post('/api/connectors/self/extensions', async c => {

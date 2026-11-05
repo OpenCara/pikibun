@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
-import { sessionExtensionSources } from '../apps/server/src/extensions.js';
+import { sessionExtensionSources } from '../apps/server/src/authority/extension-policy.js';
 import type { Env } from '../apps/server/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
@@ -170,6 +170,30 @@ test('a host reports its extensions, its owner asks for installs it carries out 
   // A connector that refuses remote installs isn't asked.
   await json(await self(f, s.connector, 'extensions', { report: report([], false), results: [] }));
   await denied(await s.alice.request('POST', requests, { action: 'remove', source: 'npm:cc-safety-net@2.7.2' }), 409, 'remote_installs_off');
+});
+
+test('a host reports how its browser stands: its owner sees where it is on the host, its workspaces only how it stands', async t => {
+  const f = await fixture(t); const s = await team(f);
+  const id = s.connector.connectorId;
+  const browser = { source: 'path', state: 'ready', executable: '/home/alice/chromium/chrome', downloadable: true } as const;
+  assert.deepEqual(await json(await self(f, s.connector, 'extensions', { report: { ...report([]), browser }, results: [] })), { requests: [] });
+  type HostPage = { report: HostExtensionsReport };
+  assert.deepEqual((await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`))).report.browser, browser);
+  type Listing = { hosts: { id: string; report?: HostExtensionsReport }[] };
+  assert.deepEqual((await json<Listing>(await s.bob.request('GET', `/api/workspaces/${s.workspaceId}/extensions`))).hosts[0]!.report!.browser,
+    { source: 'path', state: 'ready', downloadable: true });
+  // Nor what went wrong, which names a path its owner gave.
+  const missing = { source: 'path', state: 'missing', error: 'Nothing is at /home/alice/clients/acme/chrome', downloadable: true } as const;
+  await json(await self(f, s.connector, 'extensions', { report: { ...report([]), browser: missing }, results: [] }));
+  assert.deepEqual((await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`))).report.browser, missing);
+  assert.deepEqual((await json<Listing>(await s.bob.request('GET', `/api/workspaces/${s.workspaceId}/extensions`))).hosts[0]!.report!.browser,
+    { source: 'path', state: 'missing', downloadable: true });
+  // Within bounds, or the whole report is refused; a connector that predates it reports none.
+  for (const invalid of [{ ...browser, state: 'broken' }, { ...browser, error: 'x'.repeat(1025) }, { ...browser, extra: true }]) {
+    await denied(await self(f, s.connector, 'extensions', { report: { ...report([]), browser: invalid }, results: [] }), 400, 'invalid_extensions');
+  }
+  await json(await self(f, s.connector, 'extensions', { report: report([]), results: [] }));
+  assert.equal((await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`))).report.browser, undefined);
 });
 
 test('a host\'s sessions get their workspace\'s extensions and its owner\'s switch; tool cards name an extension the session may run', async t => {

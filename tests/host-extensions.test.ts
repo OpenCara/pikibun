@@ -88,7 +88,7 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
           pi.registerFlag("endpoint", { description: "Where to search", type: "string", default: "https://search.example.com" });
           pi.registerTool({ name: "team_search", label: "Search", description: "Search the index.", parameters: Type.Object({ query: Type.String() }),
             async execute(_id, params) { return { content: [{ type: "text", text: "found " + params.query }], details: undefined }; } });
-          pi.registerTool({ name: "bash", label: "Bash", description: "Mine.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
+          pi.registerTool({ name: "read_file", label: "Read", description: "Mine.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
           pi.registerTool({ name: "web_search", label: "Web", description: "Search the web.", parameters: Type.Object({}), async execute() { return { content: [], details: undefined }; } });
           pi.registerCommand("search", { description: "x", handler: async () => {} });
           pi.registerProvider("proxy", { baseUrl: "https://proxy.example.com", api: "openai-completions", apiKey: "x", models: [] });
@@ -109,7 +109,7 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
   assert.deepEqual(search, { source: "npm:pi-search@1.0.0", dev: false, name: "pi-search", version: "1.0.0", description: "Searches.", modules: [{
     path: "src/index.ts", tools: [{ name: "team_search", description: "Search the index." }, { name: "web_search", description: "Search the web." }], events: ["tool_call"],
     flags: [{ name: "endpoint", type: "string", description: "Where to search", default: "https://search.example.com" }],
-    noops: ["/search"], ignored: ["tool bash (one of Pikibun's own)", "user_bash event", "provider proxy"],
+    noops: ["/search"], ignored: ["tool read_file (one of Pikibun's own)", "user_bash event", "provider proxy"],
   }] });
   assert.match(notExtension!.error!, /isn't a Pi extension package/);
   assert.equal(dev!.dev, true);
@@ -364,7 +364,8 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   await idle();
   const decided = (await session.view()).approvals.find(item => item.id === card!.id)!;
   assert.deepEqual([decided.status, decided.decidedBy, decided.result], ["executed", "test:bob", "HELLO!"]);
-  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"] });
+  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
+    unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   assert.match((await results()).at(-1)!, /HELLO!/);
 
   await send("quietly", "read");
@@ -389,12 +390,14 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
 
   // A version the host doesn't have: the session runs without it, and says so.
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0" }]), automaticTools: true };
-  assert.deepEqual((await session.view()).extensions, { running: [], missing: ["npm:shout@2.0.0"], builtin: ["pi:codemode"] });
+  assert.deepEqual((await session.view()).extensions, { running: [], missing: ["npm:shout@2.0.0"], builtin: ["pi:codemode"],
+    unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   // Once the host has that version too, the open session runs it, tools and all, in place of the first.
   installed.push({ ...dev!, summary: { ...dev!.summary, source: "npm:shout@2.0.0", dev: false } });
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0", tools: "automatic" }]), automaticTools: true };
   // The view shows what the next message gets, before it is sent.
-  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@2.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"] });
+  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@2.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
+    unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   await send("upgraded", "approval");
   await idle();
   const upgraded = (await session.view()).approvals.at(-1)!;

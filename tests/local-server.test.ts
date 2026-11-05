@@ -329,8 +329,8 @@ test("pikibun serve --share takes its settings from the options once, then from 
 });
 
 test("after serving others, running for its owner alone admits only the pinned owner: teammates' sign-ins and hosts are refused", async t => {
-  const { newSession } = await import("../apps/server/src/auth.js");
-  const { authenticateConnectorToken } = await import("../apps/server/src/connectors.js");
+  const { newSession } = await import("../apps/server/src/authority/auth.js");
+  const { authenticateConnectorToken } = await import("../apps/server/src/authority/hosts.js");
   const { sha256 } = await import("../packages/shared/src/crypto.js");
   const f = await localFixture(t, false);
   // Test mode lets this plain-HTTP origin serve outside local mode, as the shared server does behind its proxy.

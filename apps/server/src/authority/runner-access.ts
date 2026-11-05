@@ -1,0 +1,75 @@
+import type { Permission, RunnerAction, RunnerTicket } from '../../../../packages/shared/src/types.js';
+import { requireNoMigration, requireUnfrozen } from '../db.js';
+import { fail } from '../http.js';
+import type { AppContext, Env, SessionRow } from '../types.js';
+import { sessionAccess } from './access.js';
+import { mayRequestAction } from './host-access.js';
+import { requireConnectorSession } from './hosts.js';
+
+/*
+ * Who may ask a session's host for what (RunnerAction): checked before the server relays a request (requireRunnerAccess),
+ * and again for the ticket that goes with it when the relay admits it to a connector (authorizeConnectorTicket). The
+ * relay (runner.ts, connector-transport.ts, connector-hub.ts) carries requests; these decide them.
+ */
+
+const actionPermissions: Record<RunnerAction, Permission> = {
+  create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
+  operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write',
+  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write',
+};
+
+export const connectorPermissions: Record<RunnerAction, Permission> = {
+  create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
+  operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write',
+  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write',
+};
+/** What only the session's owner asks of its host. */
+export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack'];
+
+/**
+ * An archived session admits only reads, and packing and unpacking its files, which it admits only while archived. A
+ * session whose files are packed admits nothing else even if something unarchived it without unpacking them.
+ */
+export function requireArchivedAction(row: SessionRow, action: RunnerAction): void {
+  if (action === 'view' || action === 'events') return;
+  if (action === 'pack' || action === 'unpack') {
+    if (row.status !== 'archived') fail(409, 'session_not_archived', 'Only an archived session\'s files are packed or unpacked.');
+    return;
+  }
+  if (row.status === 'archived') fail(409, 'session_archived', 'Session is archived.');
+  if (row.packed_at) fail(409, 'session_packed', 'This session\'s files are packed. Archive and unarchive it to unpack them.');
+}
+
+/** What every runner request checks first: the actor may still do `action` on the session, and no restore or move is under way. */
+export async function requireRunnerAccess(c: AppContext, actorId: string, row: SessionRow, action: RunnerAction): Promise<SessionRow> {
+  const access = await sessionAccess(c.env, row.id, actorId);
+  if (!access || access.row.owner_id !== row.owner_id || !await mayRequestAction(c.env, access, actorId, action, actionPermissions[action])) {
+    fail(403, 'permission_revoked', 'Session access is no longer authorized.');
+  }
+  requireArchivedAction(access.row, action);
+  // A session that pinned its repositories stays readable only.
+  // A read-only session still opens (create, restart) to show its history and files, and can be stopped; nothing new runs in it.
+  // Its files were never packed (it can't be), but unpacking stays possible whatever happens.
+  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'unpack'].includes(action)) requireUnfrozen(access.row);
+  if (ownerActions.includes(action) && actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
+  if (action !== 'restore' && await c.env.DB.query("SELECT 1 FROM restore_jobs WHERE target_session_id = ? AND status <> 'completed'").bind(row.id).first()) {
+    fail(409, 'restore_pending', 'Session restoration is not complete.');
+  }
+  // The move itself restores into the successor; every other request waits for the move to finish or be cancelled.
+  if (action !== 'view' && action !== 'events') await requireNoMigration(c.env, row.id, action === 'restore');
+  return access.row;
+}
+
+export async function authorizeConnectorTicket(env: Env, ticket: RunnerTicket, connectionHash?: string): Promise<SessionRow> {
+  const permission = connectorPermissions[ticket.action];
+  if (!permission || !Object.hasOwn(connectorPermissions, ticket.action) || !ticket.connectorId) fail(403, 'invalid_ticket', 'Invalid connector ticket.');
+  const access = await sessionAccess(env, ticket.sessionId, ticket.actorId);
+  if (!access || access.row.owner_id !== ticket.ownerId || access.row.connector_id !== ticket.connectorId ||
+      access.row.policy_version !== ticket.policyVersion || !await mayRequestAction(env, access, ticket.actorId, ticket.action, permission)) {
+    fail(403, 'permission_revoked', 'Session access is no longer authorized.');
+  }
+  requireArchivedAction(access.row, ticket.action);
+  if (ownerActions.includes(ticket.action) && ticket.actorId !== ticket.ownerId) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
+  await requireConnectorSession(env, ticket.connectorId, access.row, connectionHash);
+  return access.row;
+}

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { HTTPException } from 'hono/http-exception';
-import { gitProviderAdapters, plainAuthorization, plainPushAllowed, plainRepositoryId } from '../apps/server/src/git/providers.js';
-import { defaultBranch, parseAdvertisement, resolveRef } from '../apps/server/src/git/smart-http.js';
-import type { GitCredential } from '../apps/server/src/git/types.js';
-import { branchTip, openPullRequest, ownerGitAuthorization, pushTarget } from '../apps/server/src/push/targets.js';
-import type { RepositoryAccess } from '../apps/server/src/repositories.js';
+import { gitProviderAdapters, plainAuthorization, plainPushAllowed, plainRepositoryId } from '../apps/server/src/authority/git/providers.js';
+import { defaultBranch, parseAdvertisement, resolveRef } from '../apps/server/src/authority/git/smart-http.js';
+import type { GitCredential } from '../apps/server/src/authority/git/types.js';
+import { branchTip, openPullRequest, ownerGitAuthorization, pushTarget } from '../apps/server/src/authority/push/targets.js';
+import type { RepositoryAccess } from '../apps/server/src/authority/repositories.js';
 import { findRepository, repositoryForRemote } from '../apps/runner/src/egress.js';
 import {
   bindingRemote, gitProviderHasForge, plainRepositoryPath, pushIdentityKindsByProvider, validRepositoryName,

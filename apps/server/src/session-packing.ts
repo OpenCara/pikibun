@@ -1,7 +1,7 @@
 import { HTTPException } from 'hono/http-exception';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import type { AppContext, Env, SessionAccess, SessionRow } from './types.js';
-import { auditStatement, requireSessionManager } from './db.js';
+import { auditStatement, requireSessionManager } from './authority/index.js';
 import { fail, now } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { invalidateSessionView } from './view-feed.js';

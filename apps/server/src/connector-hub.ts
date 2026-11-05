@@ -5,10 +5,8 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { connectorLimits, connectorRequestTimeoutMs, type ConnectorRpcResponse } from '../../../packages/shared/src/connector.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import type { ConnectorHub } from './connector-hub-types.js';
-import {
-  authorizeConnectorTicket, connectorError, connectorRequestFrameBytes, currentConnector,
-  requireConnectorGeneration, validateConnectorRpc, connectorUtf8Bytes, connectorJsonValid, type ConnectorRelayEnvelope,
-} from './connector-transport.js';
+import { authorizeConnectorTicket } from './authority/index.js';
+import { connectorError, connectorRequestFrameBytes, currentConnector, requireConnectorGeneration, validateConnectorRpc, connectorUtf8Bytes, connectorJsonValid, type ConnectorRelayEnvelope } from './connector-transport.js';
 import { fail, id, now, randomToken } from './http.js';
 import type { Env } from './types.js';
 

@@ -3,10 +3,9 @@ import { accessModes, scheduleToolActions, type AccessMode, type ScheduleToolAct
 import { CronError, isTimeZone, nextCronTime, parseCron, scheduleToolTarget } from '../../../packages/shared/src/cron.js';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
-import { auditStatement, requireSession, requireUnfrozen, sessionAccess } from './db.js';
+import { auditStatement, requireCallbackScope, requireSession, requireToolCall, sessionAccess } from './authority/index.js';
+import { requireUnfrozen } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
-import { requireCallbackScope } from './connectors.js';
-import { requireToolCall } from './approval-reviews.js';
 import { submitMessage } from './sessions.js';
 import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
 

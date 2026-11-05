@@ -5,6 +5,7 @@ import type { ClonePushWorkspace } from "./push.js";
 import type { CloneBackup, SandboxAuthorize, SandboxExecutionOptions, SandboxIdentity, SnapshotFile } from "./sandbox.js";
 import type { SearchRequest, SearchResult } from "./search.js";
 import type { FileOperationRequest, FileOperationResult } from "./file-operations.js";
+import type { SessionBrowser } from "./browser-command.js";
 
 /**
  * What a session needs from where its work lives, whatever keeps it there: the bubblewrap sandbox on Linux
@@ -27,6 +28,13 @@ export interface SessionWorkspace {
    * directory as they see it. None where it isn't given to them, and the tool then runs the Node.js on their PATH.
    */
   readonly nodeBin?: string | undefined;
+  /**
+   * Where the session's commands find the browser tool's driver and the host's Chromium (browser-toolchain.ts), as they
+   * see them. Only the Linux sandbox has them, where the host has a Chromium: the browser runs only in the session's
+   * sandbox, never on the host itself (so not in a host workspace), and the macOS and Windows sandboxes can't give it
+   * yet. Without them the session isn't offered the tool.
+   */
+  readonly browser?: SessionBrowser | undefined;
   identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>>;
   initialize(): Promise<void>;
   readFile(path: string, authorize: SandboxAuthorize): Promise<string>;

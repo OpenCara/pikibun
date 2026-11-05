@@ -2,34 +2,10 @@ import { HTTPException } from 'hono/http-exception';
 import { connectorLimits, type ConnectorRpcRequest } from '../../../packages/shared/src/connector.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { isRevision } from '../../../packages/shared/src/view-patch.js';
-import type { Permission, RunnerAction, RunnerTicket } from '../../../packages/shared/src/types.js';
-import { requireConnectorSession } from './connectors.js';
-import { sessionAccess } from './db.js';
-import { mayRequestAction } from './host-access.js';
+import type { RunnerAction, RunnerTicket } from '../../../packages/shared/src/types.js';
+import { authorizeConnectorTicket, connectorPermissions } from './authority/index.js';
 import { fail, id } from './http.js';
 import type { AppContext, Env, SessionRow } from './types.js';
-
-export const connectorPermissions: Record<RunnerAction, Permission> = {
-  create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
-  operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write',
-  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write',
-};
-/** What only the session's owner asks of its host. */
-export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack'];
-
-/**
- * An archived session admits only reads, and packing and unpacking its files, which it admits only while archived. A
- * session whose files are packed admits nothing else even if something unarchived it without unpacking them.
- */
-export function requireArchivedAction(row: SessionRow, action: RunnerAction): void {
-  if (action === 'view' || action === 'events') return;
-  if (action === 'pack' || action === 'unpack') {
-    if (row.status !== 'archived') fail(409, 'session_not_archived', 'Only an archived session\'s files are packed or unpacked.');
-    return;
-  }
-  if (row.status === 'archived') fail(409, 'session_archived', 'Session is archived.');
-  if (row.packed_at) fail(409, 'session_packed', 'This session\'s files are packed. Archive and unarchive it to unpack them.');
-}
 
 export const connectorRequestFrameBytes = connectorLimits.requestBytes * 6 + 16384;
 export interface ConnectorConnection {
@@ -77,20 +53,6 @@ export async function requireConnectorGeneration(env: Env, connectorId: string, 
   if (!connectionHash || row.credential_hash !== credentialHash || row.connection_hash !== connectionHash) {
     fail(503, 'connector_replaced', 'The connector connection changed. Inspect the session before retrying.');
   }
-}
-
-export async function authorizeConnectorTicket(env: Env, ticket: RunnerTicket, connectionHash?: string): Promise<SessionRow> {
-  const permission = connectorPermissions[ticket.action];
-  if (!permission || !Object.hasOwn(connectorPermissions, ticket.action) || !ticket.connectorId) fail(403, 'invalid_ticket', 'Invalid connector ticket.');
-  const access = await sessionAccess(env, ticket.sessionId, ticket.actorId);
-  if (!access || access.row.owner_id !== ticket.ownerId || access.row.connector_id !== ticket.connectorId ||
-      access.row.policy_version !== ticket.policyVersion || !await mayRequestAction(env, access, ticket.actorId, ticket.action, permission)) {
-    fail(403, 'permission_revoked', 'Session access is no longer authorized.');
-  }
-  requireArchivedAction(access.row, ticket.action);
-  if (ownerActions.includes(ticket.action) && ticket.actorId !== ticket.ownerId) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
-  await requireConnectorSession(env, ticket.connectorId, access.row, connectionHash);
-  return access.row;
 }
 
 export async function validateConnectorRpc(envelope: ConnectorRelayEnvelope): Promise<void> {

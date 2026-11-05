@@ -33,6 +33,16 @@ export function resendText(entry: EntryView): string {
   return entry.text.split("\n").filter(line => !IMAGE_LINE.test(line)).join("\n").trim();
 }
 
+/**
+ * A chat box's text once `text` comes back to it (a message taken back to edit, or gone back to before): below what the
+ * box holds, which stays. A box holding only whitespace takes it as it is, and a text that is empty (a message that was
+ * only images) changes nothing, rather than leaving a blank gap below what was typed.
+ */
+export function restoredDraft(draft: string, text: string): string {
+  if (!text.trim()) return draft;
+  return draft.trim() ? `${draft}\n\n${text}` : text;
+}
+
 /** The text a copy of `entry` puts on the clipboard: what it says, without the tool call lines a reply may end with. */
 export function copyText(entry: EntryView): string {
   return entry.role === "assistant" ? splitToolCalls(entry.text).prose.trim() : entry.text;

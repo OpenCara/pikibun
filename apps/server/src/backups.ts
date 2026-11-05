@@ -4,7 +4,8 @@ import type { ConnectorCapabilities } from '../../../packages/shared/src/connect
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { bindingForSession } from './sessions.js';
 import type { AppContext, Env, SessionRow, WorkerEnv, WorkspaceRow } from './types.js';
-import { auditStatement, requireSession, sessionRecord } from './db.js';
+import { auditStatement, requireSession } from './authority/index.js';
+import { sessionRecord } from './db.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
 import { runnerRequest } from './runner.js';
 import { boundedSnapshotText, loadBackupSnapshot, validateSnapshot, type BackupRow } from './restore-snapshot.js';

@@ -152,7 +152,9 @@ test("code mode runs in every session, and its scripts' calls are decided like t
   };
   const assistant = async () => (await session.view()).entries.filter(entry => entry.role === "assistant").map(entry => entry.text).at(-1);
 
-  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"] });
+  // On the host itself, a session has no browser, and says why.
+  assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
+    unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   await send("hello");
   // Each call the script makes of the extension's tool is a card for the host's owner, as the model's own call would be.
   const decided = new Set<string>();

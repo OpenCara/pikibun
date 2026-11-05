@@ -29,7 +29,11 @@ import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
 import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
-import { ecosystemRequest, ecosystems, ecosystemShellCommand, type EcosystemRequest, type EcosystemTool } from "./ecosystem-command.js";
+import { browserRequest, browserShellCommand, browserTarget, servePrograms } from "./browser-command.js";
+import type { BrowserToolchain } from "./browser-toolchain.js";
+import { browserActions, browserKeys, browserLimits, browserUnavailableReason, browserUnavailableText, parseBrowserReport, type BrowserRequest,
+  type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
+import { ecosystemPrograms, ecosystemRequest, ecosystemShellCommand, ecosystemTools, type EcosystemRequest, type EcosystemTool } from "./ecosystem-command.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
@@ -241,6 +245,14 @@ export type RunnerConfig = {
    */
   cacheRemote?: (repository: EgressRepository) => Promise<GitRemote>;
   resources?: ResourceConfig;
+  /**
+   * The Chromium the browser tool runs in the Linux sandbox (browser-toolchain.ts): the host's own, found once per
+   * process, unless this names another, the one a connector has now (HostBrowserSource), or null for none. Sessions
+   * without the sandbox, or without one, aren't offered the tool.
+   */
+  browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
+  /** How the connector's browser stands (HostBrowserSource): why a session has none, for its people and its agent. */
+  browserStatus?: () => HostBrowserStatus | undefined;
   /** Owner-consented host mode: no isolation, so bash needs only per-command approval. */
   unsandboxed?: boolean;
   /**
@@ -502,6 +514,7 @@ export class RunnerSession {
     } else {
       this.#egress = this.egressProxy(egressSocketPath(binding.session.id, directory));
       this.sandbox = new Sandbox(binding, join(directory, "sandbox"), config.resources, { egressSocket: this.#egress.socketPath,
+        ...(config.browser !== undefined ? { browser: config.browser } : {}),
         ...(this.#clone ? { sessionBranch: sessionBranch(binding.session) } : {}),
         ...(this.#mirrors ? { mirrors: () => this.mirrorMounts() } : {}) });
     }
@@ -778,7 +791,7 @@ export class RunnerSession {
   }
 
   /** `off`: the session's own tools its workspace turned off (sessionToolsOff), which the instructions don't point to. */
-  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set()): string {
+  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason): string {
     let instructions = this.binding.agent.instructions;
     if (this.#clone && !this.#egress) {
       // An unsandboxed host: commands run on its owner's machine, with its own Git, network and credentials.
@@ -822,30 +835,43 @@ export class RunnerSession {
       + "missing unless they were made again since. Clone the repositories you need again, and check that a file exists before relying on it.";
     // Sessions read and searched code with grep, sed -n and head in a third of their shell commands (#163), each one approved.
     if (this.tools.some(tool => tool.name === "search")) instructions += "\n\nTo find and read code, use search (a regular expression or text across the worktree's files, "
-      + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than grep, find, sed, cat or head in bash: "
+      + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than reading whole files: "
       + "they need no approval and their output is already bounded.";
     if (mode !== "ask" && this.tools.some(tool => tool.name === "move_file")) instructions += "\n\nTo move, copy or delete files and directories, "
-      + "use move_file, copy_file and delete_file rather than mv, cp, rm or mkdir in bash (write_file makes the directories it needs): they need no approval.";
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "git") && !off.has("git")) instructions += "\n\nRun Git with the git tool rather than in bash: "
+      + "use move_file, copy_file and delete_file (write_file makes the directories it needs): they need no approval.";
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "git") && !off.has("git")) instructions += "\n\nRun Git with the git tool: "
       + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
       + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "
       + "It needs no quoting, and its approval card shows exactly the Git command it runs.";
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "node") && !off.has("node")) instructions += "\n\nRun Node.js, npm, npx, pnpm, yarn and corepack with the node tool rather than in bash: "
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "node") && !off.has("node")) instructions += "\n\nRun Node.js, npm, npx, pnpm, yarn and corepack with the node tool: "
       + "node {program: \"pnpm\", args: [\"install\"], directory: \"<name>\"}, node {program: \"pnpm\", args: [\"test\"], directory: \"<name>\"}, "
       + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs."
       + (this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own), with its npm, npx and corepack, ahead of any other on PATH.` : "");
     if (mode !== "ask" && this.tools.some(tool => tool.name === "python") && !off.has("python")) instructions += "\n\nRun Python, pip, uv, poetry and pytest with the python tool "
-      + "rather than in bash. Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
+      + "(there is no shell). Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
       + "python {program: \"pip\", args: [\"install\", \"-r\", \"requirements.txt\"], directory: \"<name>\", venv: \".venv\"}, python {program: \"pytest\", args: [\"-q\"], directory: \"<name>\", venv: \".venv\"}.";
-    const toolchains = (Object.keys(ecosystems) as EcosystemTool[]).filter(tool => this.tools.some(item => item.name === tool) && !off.has(tool));
-    if (mode !== "ask" && toolchains.length) instructions += `\n\nBuild and test ${toolchains.map(tool => ecosystems[tool].title).join(", ")} projects with the `
-      + `${toolchains.join(", ")} tool${toolchains.length > 1 ? "s" : ""} rather than in bash, such as rust {program: "cargo", args: ["test"], directory: "<name>"}.`;
+    const ecosystems = ecosystemTools.filter(tool => this.tools.some(item => item.name === tool) && !off.has(tool));
+    // The example is of a tool the session has (review of #194).
+    const example = { rust: "rust {program: \"cargo\", args: [\"test\"], directory: \"<name>\"}", go: "go {program: \"go\", args: [\"test\", \"./...\"], directory: \"<name>\"}",
+      dotnet: "dotnet {program: \"dotnet\", args: [\"test\"], directory: \"<name>\"}" };
+    if (mode !== "ask" && ecosystems.length) instructions += `\n\nRun ${ecosystems.map(tool => ({ rust: "cargo, rustc, rustup and rustfmt", go: "go and gofmt", dotnet: "dotnet" })[tool]).join(", ")} `
+      + `with the ${ecosystems.join(", ")} tool${ecosystems.length > 1 ? "s" : ""}: the program, its arguments as a list and the clone's directory, `
+      + `such as ${example[ecosystems[0]!]}.`;
     // Code mode is core (#163): what pipes did between commands, a script does between tools.
     if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
-      + "write a codemode script that calls them rather than piping commands through grep, head, sort or jq in bash.";
-    // Sessions waited for CI with sleep in bash, then read the pull request again, in 9% of their shell commands (#163).
+      + "write a codemode script that calls them: there is no shell to pipe commands through.";
+    // Sessions waited for CI with sleep in a shell, then read the pull request again, in 9% of their shell commands (#163).
     if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read") && !off.has("github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
-      + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes) rather than sleep in bash.";
+      + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes).";
+    if (mode !== "ask" && this.sandbox.browser && this.tools.some(tool => tool.name === "browser") && !off.has("browser")) instructions += "\n\nTo look at or test a web page, "
+      + "use the browser tool, a headless Chromium in the sandbox that answers with a screenshot, the page's text and its interactive elements: "
+      + "browser {url: \"https://example.com/\"}, or for the web app you work on, serve it in the same call, as each call is its own sandboxed command: "
+      + "browser {serve: {program: \"pnpm\", args: [\"dev\", \"--port\", \"5173\"], directory: \"<name>\", port: 5173}, url: \"http://localhost:5173/\", "
+      + "actions: [{action: \"click\", selector: \"text=Sign in\"}, {action: \"type\", selector: \"#email\", text: \"a@example.com\", submit: true}]}. "
+      + "Use the selectors its answer lists. Its approval card shows exactly the command it runs.";
+    // The workspace has the browser on, but this session can't run it: the agent says why rather than guessing.
+    else if (mode !== "ask" && browserUnavailable) instructions += `\n\nThis session has no browser tool: ${browserUnavailableText(browserUnavailable)} `
+      + "If you're asked to look at or test a web page, say so, and use what you have instead (fetching it, or running its tests).";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -1312,6 +1338,10 @@ export class RunnerSession {
     const extensions = run.mode === "write" ? await this.chosenExtensions().catch(() => []) : [];
     // The session's own tools, less those its workspace turned off (Pikibun's session-tool extensions, such as piki:schedule).
     const off = run.mode === "write" ? await this.sessionToolsOff() : new Set<string>();
+    // The browser runs only in the session's sandbox, with the host's Chromium: elsewhere it is never offered, rather than
+    // offered to fail. Where the workspace has it on, the agent learns why it has none.
+    const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.browserUnavailable() : undefined;
+    if (!this.sandbox.browser) off.add("browser");
     // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
     const builtins = run.mode === "write" && this.#builtins
       ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
@@ -1324,7 +1354,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [this.#extension, ...extensions.map(extension => extension.extension), ...builtins],
-        instructions: this.agentInstructions(access === "read" ? "read" : "write", off),
+        instructions: this.agentInstructions(access === "read" ? "read" : "write", off, browserUnavailable),
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
@@ -1364,6 +1394,21 @@ export class RunnerSession {
     const installed = config.installed().map(item => item.summary);
     return { chosen: sessionExtensions(answer.extensions, installed, { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId }, required),
       automaticTools: answer.automaticTools, missingRequired: missingRequiredExtensions(required, installed), unknownRequired: !known };
+  }
+
+  /**
+   * Why this session has no browser, if it hasn't: it runs on its host itself, in a sandbox other than Linux's, or its
+   * host's browser is off, missing, downloading or failed to download (HostBrowserSource). A fixed reason: what the host
+   * reports of its files stays its owner's.
+   */
+  private browserUnavailable(): BrowserUnavailableReason | undefined {
+    if (this.sandbox.browser) return undefined;
+    if (this.#onHost) return "on-host";
+    if (this.config.sandboxBackend) return "sandbox";
+    // A runner no connector runs knows nothing of the host's browser, and has nobody to set one up: it says nothing.
+    const status = this.config.browserStatus?.();
+    if (!status) return undefined;
+    return browserUnavailableReason(status.state) ?? "missing";
   }
 
   /**
@@ -1932,6 +1977,25 @@ export class RunnerSession {
   }
 
   /**
+   * A browser call's answer: its card as the other command tools give it, with the driver's report in place of its raw
+   * output, and the page's screenshot as an image. A call that didn't run, or whose output isn't a report, answers as
+   * bash would.
+   */
+  private async browserOutcome(approval: ApprovalRecord, recheck: () => Promise<void>, approvalText: (approval: StoredApproval) => ToolExecutionResult): Promise<ToolExecutionResult> {
+    const report = approval.status === "executed" && approval.result ? parseBrowserReport(approval.result.trim()) : undefined;
+    if (!report) return approvalText(approval as StoredApproval);
+    const output: ToolExecutionResult["output"] = [{ type: "text", text: JSON.stringify({ ...approval, result: undefined, admissionId: undefined, callId: undefined, report }) }];
+    if (report.screenshot) {
+      try {
+        const file = await this.sandbox.readContent(report.screenshot, recheck);
+        const prepared = "image" in file ? await prepareImage(file.image, file.mimeType) : undefined;
+        if (prepared && "image" in prepared) output.push({ type: "image", data: prepared.image.data, mimeType: prepared.image.mimeType });
+      } catch { /* The report names the screenshot, which read_file reads. */ }
+    }
+    return { output };
+  }
+
+  /**
    * Whether shell commands may run here: within provisioned limits (Linux --resources, or the Windows sandbox's job
    * objects; macOS has none), on the host itself (an owner-consented unsandboxed host, or the owner's session on a host
    * that accepts it), or as a faux test shell.
@@ -2086,29 +2150,6 @@ export class RunnerSession {
     return this.#clone && this.#egress ? [...tools, this.clonePushTool()] : tools;
   }
 
-  /** One toolchain's tool (ecosystem-command.ts): a program of it, its arguments as a list, run as one approved command. */
-  private ecosystemTool(tool: EcosystemTool): ToolRegistration {
-    const spec = ecosystems[tool];
-    return defineTool({ name: tool, executionMode: "sequential",
-      description: `Run ${spec.title}'s toolchain in the session worktree without a shell: program is one of ${spec.programs.join(", ")}; args is its arguments as a list, such as ${spec.example}; directory is where it runs, such as the clone app (the worktree by default). It runs the host's toolchain where the sandbox finds it, with no colours or prompts${tool === "make" ? "; a Makefile's recipes are shell commands it runs" : ""}; commands that act on a registry as an account (publishing, signing in) aren't taken. Like other commands, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
-      parameters: Type.Object({ program: StringEnum(spec.programs as [string, ...string[]]), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })),
-        directory: Type.Optional(Type.String()) }),
-      execute: async (args, api, call) => {
-        // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
-        await this.requireSessionTool(tool);
-        let request: EcosystemRequest;
-        let command: string;
-        try { request = ecosystemRequest(tool, args); command = ecosystemShellCommand(request); }
-        catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${tool} call`}. Nothing ran.`); }
-        const attribution = await this.toolActor(api, true);
-        await this.requireHostEnvironment();
-        const { unbounded } = await this.permit(api, call, tool, `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-        const text = (value: unknown) => ({ output: [{ type: "text" as const, text: JSON.stringify(value) }] });
-        return text({ ...await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool, command }, String(api.taskId), { permitted: true, unbounded },
-          call.abortSignal), call), admissionId: undefined, callId: undefined });
-      } });
-  }
-
   private clonePushTool(): ToolRegistration {
     const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
     return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first. Waits for an exact human approval unless the owner enabled auto-approve for this request.", parameters: Type.Object({
@@ -2196,7 +2237,7 @@ export class RunnerSession {
           await this.sandbox.writeFile(args.path, applyEdits(await this.sandbox.readFile(args.path, recheck), args.edits, args.path), recheck);
           return text({ ...attribution, edited: args.path, edits: args.edits.length });
         } }),
-      // Moving, copying and deleting as mv, cp and rm did in bash (#163): writes like write_file, one at a time.
+      // Moving, copying and deleting as mv, cp and rm did in the retired shell (#163): writes like write_file, one at a time.
       ...(["move_file", "copy_file"] as const).map(name => defineTool({ name, executionMode: "sequential",
         description: name === "move_file"
           ? "Move or rename a file, directory or link in the worktree, without a shell or approval (like write_file): from and to are worktree paths. A link is moved itself, never what it points to. The destination must not exist, its directories are made, and a directory can't go inside itself; nothing in .git is moved. In a read-only request it waits for the session owner to allow it."
@@ -2221,18 +2262,9 @@ export class RunnerSession {
           const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
           return text({ ...attribution, deleted: args.path, entries: result.entries });
         } }),
-      defineTool({ name: "bash", description: "Run an exact shell command in the session worktree. Waits for an exact human approval unless the owner enabled auto-approve for this request; then it runs at once and the result carries its output. It stops at the host's command time limit, which identity reports (commands.timeoutSeconds).", parameters: Type.Object({ command: Type.String() }), execute: async (args, api, call) => {
-        // A workspace that turned piki:shell off (fail-closed, like host_bash): refused before anything is recorded.
-        await this.requireSessionTool("bash");
-        const attribution = await this.toolActor(api, true);
-        // Before any card: a session on a host that no longer accepts that asks nobody for anything.
-        await this.requireHostEnvironment();
-        const { unbounded } = await this.permit(api, call, "bash", args.command, { write: true, shell: true });
-        return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command: args.command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
-      } }),
       // Git without a shell (piki:git, #163): its call becomes one sandboxed command, `git` and its quoted arguments, decided
       // as bash's are; Git's configuration in a clone, which the agent can write, can run programs, so no call skips that.
-      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: Type.Object({ args: Type.Array(Type.String(), { minItems: 1, maxItems: gitLimits.arguments }), directory: Type.Optional(Type.String()) }),
         execute: async (args, api, call) => {
@@ -2249,7 +2281,7 @@ export class RunnerSession {
         } }),
       // Node.js and its package managers without a shell (piki:node, #163), decided as bash's are: they run the project's
       // scripts and whatever a script says.
-      defineTool({ name: "node", description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      defineTool({ name: "node", description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: Type.Object({ program: StringEnum(nodePrograms), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()) }),
         execute: async (args, api, call) => {
@@ -2266,7 +2298,7 @@ export class RunnerSession {
         } }),
       // Python and its package and test tools without a shell (piki:python, #163), decided as bash's are, like node's.
       // Not in the Windows sandbox, whose container reaches no Python yet (review of #186).
-      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: Type.Object({ program: StringEnum(pythonPrograms), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()),
           venv: Type.Optional(Type.String()) }),
@@ -2282,9 +2314,58 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
         } })]),
-      // Rust, Go, .NET and make without a shell (piki:rust, piki:go, piki:dotnet, piki:make, #163), built as python is; not
-      // in the Windows sandbox, whose container reaches none of these toolchains.
-      ...(process.platform === "win32" && this.sandbox.isolated ? [] : (Object.keys(ecosystems) as EcosystemTool[]).map(tool => this.ecosystemTool(tool))),
+      // A headless Chromium in the session's sandbox (piki:browser): one sandboxed command per call, a program operation of
+      // its own decided as the other program tools' are, since pages run their scripts, evaluate runs the agent's, and serve
+      // starts the app under test. Offered only in the Linux sandbox, with a Chromium: never on the host itself.
+      defineTool({ name: "browser", description: "Drive a headless Chromium in the session's sandbox. It opens url (http, https, file, or about:blank; "
+        + "without one, the page the last call left), runs actions in order, and answers with the page as it ends: a screenshot, its URL, title, "
+        + "HTTP status, visible text, interactive elements each with a CSS selector, console messages, page errors and failed requests. Actions: "
+        + "goto {url}; click or hover {selector, or x and y}; type {text, selector?, submit?, clear?}; press {key}; select {selector, value}; "
+        + "scroll {selector, or x and y}; wait {selector, text or ms}; evaluate {expression} (JavaScript in the page; its value comes back); "
+        + "screenshot {full_page?}; back; forward; reload. A selector is CSS, or text=<visible text>. A failed action stops the rest. "
+        + "Each call starts the browser afresh with the session's own profile: cookies and storage persist, open pages and their state don't, "
+        + "so do a whole flow in one call. Its network is the sandbox's: other hosts through the session's proxy, as the workspace allows, and "
+        + "localhost only within the call, so start the web app under test with serve {program, args, directory?, venv?, port}: one of the node and "
+        + `python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, which runs from before `
+        + "the page opens until the call ends. Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
+        + "It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.",
+        executionMode: "sequential",
+        parameters: Type.Object({
+          url: Type.Optional(Type.String()),
+          actions: Type.Optional(Type.Array(Type.Object({
+            action: StringEnum(browserActions),
+            selector: Type.Optional(Type.String()), url: Type.Optional(Type.String()), text: Type.Optional(Type.String()),
+            key: Type.Optional(Type.String({ description: `${browserKeys.join(", ")}, or a single character` })), value: Type.Optional(Type.String()), expression: Type.Optional(Type.String()),
+            x: Type.Optional(Type.Integer()), y: Type.Optional(Type.Integer()), ms: Type.Optional(Type.Integer({ minimum: 0, maximum: browserLimits.waitMs })),
+            full_page: Type.Optional(Type.Boolean()), submit: Type.Optional(Type.Boolean()), clear: Type.Optional(Type.Boolean()),
+          }), { maxItems: browserLimits.actions })),
+          viewport: Type.Optional(Type.Object({ width: Type.Integer(), height: Type.Integer() })),
+          full_page: Type.Optional(Type.Boolean()),
+          timeout_seconds: Type.Optional(Type.Integer({ minimum: browserLimits.timeoutSeconds.min, maximum: browserLimits.timeoutSeconds.max })),
+          serve: Type.Optional(Type.Object({ program: StringEnum([...servePrograms]), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })),
+            directory: Type.Optional(Type.String()), venv: Type.Optional(Type.String()), port: Type.Integer({ minimum: 1, maximum: 65535 }),
+            timeout_seconds: Type.Optional(Type.Integer({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) })),
+        }),
+        execute: async (args, api, call) => {
+          // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+          await this.requireSessionTool("browser");
+          const browser = this.sandbox.browser;
+          if (!browser) throw new RunnerError(400, `This session has no browser: ${browserUnavailableText(this.browserUnavailable() ?? "missing")} Nothing ran.`);
+          let request: BrowserRequest;
+          let command: string;
+          try {
+            request = browserRequest(args as Record<string, unknown>);
+            command = browserShellCommand(request, browser, { seconds: (await this.commandOptions()).limits.seconds, nodeBin: this.sandbox.nodeBin });
+          } catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid browser call"}. Nothing ran.`); }
+          const attribution = await this.toolActor(api, true);
+          await this.requireHostEnvironment();
+          const { unbounded } = await this.permit(api, call, "browser", browserTarget(request), { write: true, shell: true });
+          const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call);
+          return this.browserOutcome(approval, () => this.recheckTool(attribution), approvalText);
+        } }),
+      // Rust, Go and .NET without a shell (piki:rust, piki:go, piki:dotnet, #163), decided as node's and python's are.
+      // Not in the Windows sandbox, whose container reaches none of them, as python isn't.
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : ecosystemTools.map(tool => this.ecosystemTool(tool))),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools. "
         + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
         parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), wait: Type.Optional(StringEnum(githubWaits)),
@@ -2430,17 +2511,6 @@ export class RunnerSession {
           await sleep(WAIT_POLL_MS, undefined, { signal: call.abortSignal });
         }
       } }),
-      defineTool({ name: "host_bash", executionMode: "sequential",
-        description: "Run any command OUTSIDE the sandbox on the host, with its tools, files, credentials and network. Uses the session worktree as cwd and the host home/PATH. Requires exact approval by the host owner or a member they granted host commands; auto-approve skips it only in the session of the host owner or of a member granted automatic host commands. No CPU/memory/disk quotas. Default 300 seconds, maximum 3600. Never use as an implicit fallback.",
-        parameters: Type.Object({ command: Type.String(), timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })) }),
-        execute: async (args, api, call) => {
-          // Before anything is recorded for the call: a refused one leaves nothing behind.
-          await this.requireSessionTool("host_bash");
-          const attribution = await this.toolActor(api, true);
-          await this.permit(api, call, "host_bash", args.command, { write: true });
-          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy,
-            { kind: "host.bash", command: args.command, timeoutSeconds: args.timeout_seconds ?? 300 }, String(api.taskId), { permitted: true }), call));
-        } }),
     ];
   }
 
@@ -2481,6 +2551,35 @@ export class RunnerSession {
    * shutdown like host commands: closing the session stops it. A refusal or a non-zero exit is a definite outcome the
    * agent can act on; anything else may have had partial effects.
    */
+  /** The rust, go or dotnet tool: one of the ecosystem's programs with its arguments as a list, run as its card shows. */
+  private ecosystemTool(tool: EcosystemTool): ToolRegistration {
+    const programs = ecosystemPrograms[tool];
+    const examples: Record<EcosystemTool, string> = {
+      rust: '["build"], ["test", "--quiet"] or ["clippy", "--", "-D", "warnings"]',
+      go: '["build", "./..."], ["test", "./..."] or ["vet", "./..."]',
+      dotnet: '["build"], ["test"] or ["format", "--verify-no-changes"]',
+    };
+    return defineTool({ name: tool, description: `Run ${tool === "dotnet" ? "the .NET CLI" : tool === "go" ? "Go" : "Rust's toolchain"} in the session worktree without a shell: program is one of ${programs.join(", ")}; `
+      + `args is its arguments as a list, such as ${examples[tool]}; directory is where it runs, a path in the worktree such as a clone (app), the worktree by default. `
+      + "It runs exactly that program there, as the approval card shows it: each call is approved as a command is, waiting for a human unless the owner enabled auto-approve for this request. "
+      + "Commands that act on a package registry as an account are refused: sessions have none.",
+      executionMode: "sequential",
+      parameters: Type.Object({ program: StringEnum(programs), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()) }),
+      execute: async (args, api, call) => {
+        // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+        await this.requireSessionTool(tool);
+        let request: EcosystemRequest;
+        let command: string;
+        try { request = ecosystemRequest(tool, args); command = ecosystemShellCommand(request); }
+        catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${tool} call`}. Nothing ran.`); }
+        const attribution = await this.toolActor(api, true);
+        await this.requireHostEnvironment();
+        const { unbounded } = await this.permit(api, call, tool, `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
+        const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool, command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call);
+        return { output: [{ type: "text" as const, text: JSON.stringify({ ...approval, admissionId: undefined, callId: undefined }) }] };
+      } });
+  }
+
   private startShellOperation(id: string, operation: Extract<Operation, { kind: "bash" | "program" }>, unbounded: boolean, recheck: SandboxAuthorize): Promise<void> {
     const entry = { controller: new AbortController(), done: Promise.resolve() };
     const generation = this.generation;
@@ -2572,21 +2671,23 @@ export class RunnerSession {
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");
     // Sessions commit and switch branches with Git itself, and push a clone's directory.
     if (operation.kind === "git.commit" || operation.kind === "git.repin" || (operation.kind === "git.push" && operation.directory === undefined)) {
-      throw new RunnerError(400, "Commit and switch branches with git in bash; a push names a clone's directory");
+      throw new RunnerError(400, "Commit and switch branches with the git tool; a push names a clone's directory");
     }
+    // host_bash is retired (#163): nothing asks to run a command on the host any more. A restart already ended the
+    // host commands that were waiting, so none is left to decide.
+    if (operation.kind === "host.bash") throw new RunnerError(400, "Commands on the host were removed with host_bash; run programs with the git, node and python tools");
     this.requireShellCapability(operation, consent.unbounded);
-    if ((operation.kind === "host.bash" || operation.kind === "extension.tool") && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
+    if (operation.kind === "extension.tool" && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
       throw new RunnerError(403, "Host commands require a connected host with a known owner");
     }
     // Only the session's own extension tools ask for these, each from its call.
     if (operation.kind === "extension.tool" && (!consent.permitted || toolTaskId === undefined)) throw new RunnerError(400, "Extension tool calls come only from their tools");
     if (operation.kind === "git.push" && !this.#clone) throw new RunnerError(400, "Only clone sessions push a clone's directory");
     // On a host without the sandbox the agent pushes with the host's own Git: an approved push would only fail.
-    if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with git in bash");
+    if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with the git tool");
     const toolName = operation.kind === "extension.tool" ? undefined : operation.kind === "program" ? operation.tool : ({ "git.commit": "git_commit", bash: "bash", "github.comment": "github_comment", "github.merge": "github_merge", "github.issue": "github_issue", "git.push": "git_push", "git.repin": "git_repin", "host.bash": "host_bash" } as const)[operation.kind];
-    // Host commands never take a session grant (see `permit`), so a session-wide one left from before doesn't enable them.
     if (!consent.permitted && (toolName === undefined || (!this.binding.agent.tools.includes(toolName)
-      && !(toolName !== "host_bash" && (await this.metadata()).grants?.tools.includes(toolName))))) {
+      && !(await this.metadata()).grants?.tools.includes(toolName)))) {
       throw new RunnerError(403, "Operation not enabled by pinned agent version");
     }
     await this.authorize(actorId, "write");
@@ -2609,7 +2710,7 @@ export class RunnerSession {
       // A tool the owner allowed for the rest of the session runs their calls of it as Auto-approve would; host commands
       // never take a session grant, so each one still asks unless the owner holds automatic host commands on this host.
       const github = operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
-      const sessionGranted = toolName !== undefined && operation.kind !== "host.bash" && !github
+      const sessionGranted = toolName !== undefined && !github
         && state.grants?.tools.includes(toolName) === true;
       automatic = (run.options?.access === "auto" || sessionGranted) && run.initiatedBy === this.binding.owner.id
         && (!github || (admissionId !== undefined && (operation.kind !== "github.merge" || run.options?.autoMerge === true)))
@@ -3101,8 +3202,12 @@ export class RunnerSession {
         && !chosen.some(candidate => candidate.source === item.source)).map(item => item.source);
       // As the next message selects them: after the workspace's, which may replace one.
       const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
-      return running.length || missing.length || builtin.length || missingRequired.length
-        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}) } } : {};
+      // Pikibun's own the workspace has on that this session can't offer: the browser, without Chromium on the host, say.
+      const browserReason = sessionToolsOff(answer.extensions).has("browser") ? undefined : this.browserUnavailable();
+      const unavailable = browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : [];
+      return running.length || missing.length || builtin.length || missingRequired.length || unavailable.length
+        ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}),
+          ...(unavailable.length ? { unavailable } : {}) } } : {};
     } catch { return {}; }
   }
 
@@ -3256,7 +3361,7 @@ export class RunnerSession {
   /** Credential → push → completion. The credential stays in this frame; results carry only fixed, credential-free text. */
   private async runPush(id: string, operation: GitPushOperation, auth: { actorId: string; capability?: string; admissionId?: string }, recheck: SandboxAuthorize, signal?: AbortSignal): Promise<{ status: "executed" | "failed" | "interrupted"; result: string }> {
     if (!this.#clone || operation.directory === undefined) return { status: "failed", result: "Push failed: a push names a clone's directory. Nothing was pushed." };
-    if (!this.#egress) return { status: "failed", result: "Push failed: on a host without the sandbox, push with git in bash. Nothing was pushed." };
+    if (!this.#egress) return { status: "failed", result: "Push failed: on a host without the sandbox, push with the git tool. Nothing was pushed." };
     const request: PushCredentialRequest = { sessionId: this.binding.session.id, approvalId: id, actorId: auth.actorId, operation,
       ...(auth.capability !== undefined ? { capability: auth.capability } : {}), ...(auth.admissionId !== undefined ? { admissionId: auth.admissionId } : {}) };
     let credential: PushCredential | HostPushCredential;

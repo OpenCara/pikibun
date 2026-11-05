@@ -1,6 +1,6 @@
 import { validPushBranch, validRepositoryName } from '../../../packages/shared/src/repositories.js';
 import type { AppContext, SessionRow } from './types.js';
-import { requireCallbackScope } from './connectors.js';
+import { requireCallbackScope } from './authority/index.js';
 import { fail, identifier, jsonObject, now } from './http.js';
 
 /*

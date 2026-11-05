@@ -239,212 +239,25 @@ test("allowing github_issue for the rest of the session still leaves every issue
   assert.deepEqual(issues, []);
 });
 
-test("host_bash auto-approves only on the session owner's own host; shared hosts require their owner's exact decision", hostMode, async t => {
-  for (const hostOwner of ["test:alice", "test:bob"]) await t.test(hostOwner, async t => {
-    const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-command-")));
-    const faux = fauxProvider({ models: [{ id: "faux-1" }] });
-    faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("host_bash", { command: "printf host-command-marker", timeout_seconds: 10 })], { stopReason: "toolUse" }),
-      fauxAssistantMessage("Requested."),
-    ]);
-    const models = createModels(); models.setProvider(faux.provider);
-    const target = binding(`host-command-${hostOwner.split(":")[1]}`);
-    target.agent.tools = ["host_bash"];
-    target.session.connectorId = target.model.connectorId = "host-connector";
-    target.session.connectorOwnerId = target.model.connectorOwnerId = hostOwner;
-    const service = new RunnerService({
-      dataDir: directory, sharedSecret: "host-command-test-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787",
-      connectorId: "host-connector", allowFaux: true, unsandboxed: true,
-      authorize: async input => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
-      resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    });
-    await service.initialize();
-    t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-    const claims = async (action: RunnerAction, actorId = "test:alice") => ({ ...await ticket(target.session.id, action), actorId, connectorId: "host-connector" });
-    const session = await service.provision(target, await claims("create"));
-    await session.submit(await claims("submit"), { content: "Run on host", requestId: "host", admissionId: await sha256("host-command-admission"), options: { access: "auto" } }, "write");
-    if (hostOwner === "test:alice") {
-      await idle(session);
-      // The host's owner auto-approved it: no card, its call is marked and its result is in the transcript.
-      const view = await session.view();
-      assert.deepEqual(view.approvals, []);
-      assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "host_bash", status: "executed" }]);
-      assert.ok(view.entries.some(entry => entry.role === "toolResult" && entry.text.includes('"automatic":true') && entry.text.includes("host-command-marker")));
-    } else {
-      const approval = await pendingApproval(session);
-      assert.equal(approval.status, "pending");
-      assert.equal(approval.automatic, undefined);
-      await assert.rejects(session.decide(await claims("approve"), approval.id, { decision: "approve", operation: approval.operation }), /host owner/);
-      await assert.rejects(session.decide(await claims("approve", hostOwner), approval.id, {
-        decision: "approve", operation: { kind: "host.bash", command: "printf changed", timeoutSeconds: 10 },
-      }), /mismatch/);
-      await session.decide(await claims("approve", hostOwner), approval.id, { decision: "approve", operation: approval.operation });
-      await idle(session);
-      const settled = (await session.view()).approvals[0]!;
-      assert.equal(settled.status, "executed");
-      assert.equal(settled.decidedBy, hostOwner);
-      assert.match(settled.result!, /host-command-marker/);
-      await assert.rejects(session.decide(await claims("approve", hostOwner), approval.id, { decision: "approve", operation: approval.operation }), /already been decided/);
-    }
-  });
-});
-
-test("the host's owner decides a host command with read access to someone else's session; anything else still needs approve permission", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-owner-")));
-  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
-  faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("github_comment", { repository: "acme/alpha", issue: 7, body: "Looks good." })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("host_bash", { command: "printf host-owner-marker", timeout_seconds: 10 })], { stopReason: "toolUse" }),
-    fauxAssistantMessage("Done."),
-  ]);
-  const models = createModels(); models.setProvider(faux.provider);
-  const target = binding("host-owner-decides");
-  target.agent.tools = ["github_comment", "host_bash"];
-  target.session.connectorId = target.model.connectorId = "host-connector";
-  target.session.connectorOwnerId = target.model.connectorOwnerId = "test:bob";
-  const secret = "host-owner-decides-secret-not-for-deployment";
-  // bob follows alice's session, as a workspace-visible one, without approve permission on it.
-  const asked: string[] = [];
-  const service = new RunnerService({
-    dataDir: directory, sharedSecret: secret, controlPlaneUrl: "http://127.0.0.1:8787",
-    connectorId: "host-connector", allowFaux: true, unsandboxed: true,
-    authorize: async input => {
-      if (input.actorId === "test:bob") asked.push(input.permission);
-      return { allowed: input.actorId === "test:alice" || input.permission === "read", ownerId: input.ownerId, policyVersion: 1 };
-    },
-    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-  });
-  await service.initialize();
-  t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-  const claims = async (action: RunnerAction, actorId = "test:alice") => ({ ...await ticket(target.session.id, action), actorId, connectorId: "host-connector" });
-  const session = await service.provision(target, await claims("create"));
-  const app = createRunnerApp(service);
-  // bob's decisions reach the host as the control plane sends them, through the runner's own permission check.
-  const decide = async (approvalId: string, body: Record<string, unknown>) => {
-    const serialized = JSON.stringify({ approvalId, ...body });
-    const token = await signToken({ ...await claims("approve", "test:bob"), bodyHash: await sha256(serialized) }, secret);
-    return app.request(`/v1/sessions/${target.session.id}/approvals/${approvalId}`, { method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: serialized });
-  };
-  await session.submit(await claims("submit"), { content: "Comment, then run on the host", requestId: "host-owner", admissionId: await sha256("host-owner-admission"),
-    options: { access: "approval" } }, "write");
-
-  // The comment runs as alice, so it is hers to decide: bob's read access doesn't, nor does calling it a host command.
-  const comment = await pendingApproval(session);
-  assert.equal(comment.operation.kind, "github.comment");
-  assert.equal((await decide(comment.id, { decision: "deny", operation: comment.operation })).status, 403);
-  assert.equal((await decide(comment.id, { decision: "deny", operation: { kind: "host.bash", command: "true", timeoutSeconds: 10 } })).status, 409);
-  assert.equal((await session.view()).approvals.find(approval => approval.id === comment.id)!.status, "pending");
-  await session.decide(await claims("approve"), comment.id, { decision: "deny", operation: comment.operation });
-
-  // The host command runs as bob's OS user: read access to the session is enough to decide it, and when it runs.
-  const command = await pendingApproval(session);
-  assert.deepEqual(command.operation, { kind: "host.bash", command: "printf host-owner-marker", timeoutSeconds: 10 });
-  asked.length = 0;
-  const response = await decide(command.id, { decision: "approve", operation: command.operation });
-  assert.equal(response.status, 200, await response.clone().text());
-  await idle(session);
-  const settled = (await session.view()).approvals.find(approval => approval.id === command.id)!;
-  assert.deepEqual([settled.status, settled.decidedBy], ["executed", "test:bob"]);
-  assert.match(settled.result!, /host-owner-marker/);
-  assert.ok(asked.length >= 2 && asked.every(permission => permission === "read"), `bob is asked only for read access: ${asked.join()}`);
-});
-
-test("host commands outside the agent are allowed one call at a time, never for the session", hostMode, async t => {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-permission-")));
-  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
-  faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("host_bash", { command: "printf first", timeout_seconds: 10 })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("host_bash", { command: "printf second", timeout_seconds: 10 })], { stopReason: "toolUse" }),
-    fauxAssistantMessage("Done."),
-  ]);
-  const models = createModels(); models.setProvider(faux.provider);
-  const target = binding("host-permission");
-  target.agent.tools = ["identity"];
+test("bash and host_bash are gone: an agent that names them gets neither, and nothing asks for a command on the host", hostMode, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-command-")));
+  const target = binding("host-command-gone");
+  // A stored agent may still name the retired tools (#163).
+  target.agent.tools = ["bash", "host_bash", "identity"];
   target.session.connectorId = target.model.connectorId = "host-connector";
   target.session.connectorOwnerId = target.model.connectorOwnerId = "test:alice";
   const service = new RunnerService({
-    dataDir: directory, sharedSecret: "host-permission-test-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787",
+    dataDir: directory, sharedSecret: "host-command-test-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787",
     connectorId: "host-connector", allowFaux: true, unsandboxed: true,
     authorize: async input => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
-    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
   });
   await service.initialize();
   t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-  const claims = async (action: RunnerAction) => ({ ...await ticket(target.session.id, action), connectorId: "host-connector" });
-  const session = await service.provision(target, await claims("create"));
-  await session.submit(await claims("submit"), { content: "Run on host twice", requestId: "host", admissionId: await sha256("host-permission-admission"), options: { access: "approval" } }, "write");
-  for (const command of ["printf first", "printf second"]) {
-    const permission = await pendingApproval(session);
-    assert.deepEqual(permission.operation, { kind: "permission", tool: "host_bash", target: command, needs: ["tool"] });
-    await assert.rejects(session.decide(await claims("approve"), permission.id, { decision: "approve", operation: permission.operation, scope: "session" }),
-      (error: unknown) => error instanceof RunnerError && error.status === 400 && /only be allowed once/.test(error.message));
-    await session.decide(await claims("approve"), permission.id, { decision: "approve", operation: permission.operation, scope: "call" });
-    // The command itself still waits on the host owner's exact decision.
-    const approval = await pendingApproval(session);
-    assert.deepEqual(approval.operation, { kind: "host.bash", command, timeoutSeconds: 10 });
-    await session.decide(await claims("approve"), approval.id, { decision: "deny", operation: approval.operation });
-  }
-  await idle(session);
-  // Each host command asked again: its own one-call permission shows on its card, and none ran on its own.
-  const approvals = (await session.view()).approvals;
-  assert.deepEqual(approvals.map(approval => [approval.operation.kind, approval.status, approval.permission, approval.automatic]), [
-    ["host.bash", "denied", { decidedBy: "test:alice", scope: "call" }, undefined],
-    ["host.bash", "denied", { decidedBy: "test:alice", scope: "call" }, undefined],
-  ]);
-});
-
-test("on someone else's host, a member granted host commands decides their own, or auto-approves them, as the control plane reports", hostMode, async t => {
-  for (const level of ["approve", "auto"] as const) await t.test(level, async t => {
-    const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-grant-")));
-    const faux = fauxProvider({ models: [{ id: "faux-1" }] });
-    faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("host_bash", { command: "printf granted-marker", timeout_seconds: 10 })], { stopReason: "toolUse" }),
-      fauxAssistantMessage("Requested."),
-    ]);
-    const models = createModels(); models.setProvider(faux.provider);
-    const target = binding(`host-grant-${level}`);
-    target.agent.tools = ["host_bash"];
-    target.session.connectorId = target.model.connectorId = "host-connector";
-    target.session.connectorOwnerId = target.model.connectorOwnerId = "test:bob";
-    const asked: AuthorizationRequest[] = [];
-    let granted: "approve" | "auto" | undefined = level;
-    const service = new RunnerService({
-      dataDir: directory, sharedSecret: "host-grant-test-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787",
-      connectorId: "host-connector", allowFaux: true, unsandboxed: true,
-      authorize: async input => {
-        if (input.host) asked.push(input);
-        return { allowed: true, ownerId: input.ownerId, policyVersion: 1, ...(input.host && input.actorId === "test:alice" && granted ? { hostCommands: granted } : {}) };
-      },
-      resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    });
-    await service.initialize();
-    t.after(async () => { await service.close(); await rm(directory, { recursive: true, force: true }); });
-    const claims = async (action: RunnerAction, actorId = "test:alice") => ({ ...await ticket(target.session.id, action), actorId, connectorId: "host-connector" });
-    const session = await service.provision(target, await claims("create"));
-    await session.submit(await claims("submit"), { content: "Run on host", requestId: "host", admissionId: await sha256(`host-grant-${level}`), options: { access: "auto" } }, "write");
-    if (level === "auto") {
-      await idle(session);
-      // Granted automatic host commands, the session owner's Auto-approve runs it on bob's host without asking.
-      const view = await session.view();
-      assert.deepEqual(view.approvals, []);
-      assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "host_bash", status: "executed" }]);
-      assert.ok(view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("granted-marker")));
-      assert.ok(asked.some(input => input.actorId === "test:alice" && input.permission === "write"), "the grant is checked with the control plane");
-      return;
-    }
-    // Granted approval only, it still waits, and its owner may decide it; once the grant is gone, nobody but bob can.
-    const approval = await pendingApproval(session);
-    assert.equal(approval.automatic, undefined);
-    granted = undefined;
-    await assert.rejects(session.decide(await claims("approve"), approval.id, { decision: "approve", operation: approval.operation }), /host owner/);
-    granted = "approve";
-    await session.decide(await claims("approve"), approval.id, { decision: "approve", operation: approval.operation });
-    await idle(session);
-    const settled = (await session.view()).approvals[0]!;
-    assert.deepEqual([settled.status, settled.decidedBy], ["executed", "test:alice"]);
-    assert.match(settled.result!, /granted-marker/);
-  });
+  const session = await service.provision(target, { ...await ticket(target.session.id, "create"), connectorId: "host-connector" });
+  const names = (session as unknown as { tools: { name: string }[] }).tools.map(tool => tool.name);
+  assert.ok(!names.includes("bash") && !names.includes("host_bash"), names.join(", "));
+  await assert.rejects(session.createApproval("test:alice", { kind: "host.bash", command: "printf never", timeoutSeconds: 10 }), /removed with host_bash/);
+  assert.deepEqual((await session.view()).approvals, []);
 });
 
 test("the owner's Auto-approve posts comments, opens issues and merges at once with its admission, merging in a message marked autoMerge", hostMode, async t => {

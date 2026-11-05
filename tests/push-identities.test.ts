@@ -4,9 +4,9 @@ import test, { type TestContext } from 'node:test';
 import { HTTPException } from 'hono/http-exception';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { decryptToken, encryptToken } from '../apps/server/src/vault.js';
-import { importRsaPrivateKey, publicJwk, signJwt } from '../apps/server/src/push/jwt.js';
-import { mintPushToken, oauthEndpoints, revokePushToken, type MintTarget } from '../apps/server/src/push/mint.js';
+import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
+import { importRsaPrivateKey, publicJwk, signJwt } from '../apps/server/src/authority/push/jwt.js';
+import { mintPushToken, oauthEndpoints, revokePushToken, type MintTarget } from '../apps/server/src/authority/push/mint.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { testDatabase } from './helpers/control-plane.js';
 

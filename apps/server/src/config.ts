@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { adminUserId } from './admin.js';
+import { adminUserId } from './authority/index.js';
 import { ConnectorHubRegistry } from './connector-hub.js';
 import { openDatabase } from './db/index.js';
 import { openStorage } from './storage/index.js';

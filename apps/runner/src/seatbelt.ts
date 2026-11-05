@@ -59,13 +59,22 @@ export interface SeatbeltTools {
   path: string;
 }
 
+/**
+ * Directories below /usr/local the sandbox may read and run, where they exist: Homebrew's, and where the rust, go and
+ * dotnet tools look for their toolchains outside Homebrew (ecosystem-command.ts): Go's installer (/usr/local/go), a
+ * system-wide rustup (/usr/local/cargo, /usr/local/rustup) and .NET's installer (/usr/local/share/dotnet, in share)
+ * (review of #194).
+ */
+export const SEATBELT_LOCAL_ROOTS = Object.freeze(["/opt/homebrew", "/usr/local/Homebrew", "/usr/local/Cellar", "/usr/local/opt", "/usr/local/bin", "/usr/local/lib",
+  "/usr/local/share", "/usr/local/go", "/usr/local/cargo", "/usr/local/rustup"]);
+
 /** The host's tools for sessions; throws with what is missing. */
 export function seatbeltTools(node: NodeToolchain | undefined = connectorNode()): SeatbeltTools {
   const developer = developerDirectory();
   const python = xcrunFind("python3") ?? firstExecutable(["/opt/homebrew/bin/python3", "/usr/local/bin/python3"]);
   const git = xcrunFind("git") ?? firstExecutable(["/opt/homebrew/bin/git", "/usr/local/bin/git"]);
   if (!python || !git) throw new Error("The macOS sandbox needs Python 3 and Git from the developer tools: run xcode-select --install");
-  const homebrew = ["/opt/homebrew", "/usr/local/Homebrew", "/usr/local/Cellar", "/usr/local/opt", "/usr/local/bin", "/usr/local/lib", "/usr/local/share"].filter(path => existsSync(path));
+  const homebrew = SEATBELT_LOCAL_ROOTS.filter(path => existsSync(path));
   // The connector's own Node.js, wherever it is installed (nvm, Volta, a tarball): its node, package managers and headers,
   // never the directory they are in, which may be a home's ~/.local or the home itself.
   const roots = [...new Set([...[developer, ...homebrew, dirname(dirname(python)), dirname(dirname(git)), ...(node ? toolchainPaths(node) : [])].filter((path): path is string => !!path)

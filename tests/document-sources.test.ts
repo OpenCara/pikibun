@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import { HTTPException } from 'hono/http-exception';
-import { googleDriveAdapter } from '../apps/server/src/google-drive.js';
-import { feishuAdapter } from '../apps/server/src/feishu.js';
-import { fit } from '../apps/server/src/document-http.js';
+import { googleDriveAdapter } from '../apps/server/src/authority/sources/google-drive.js';
+import { feishuAdapter } from '../apps/server/src/authority/sources/feishu.js';
+import { fit } from '../apps/server/src/authority/sources/document-http.js';
 import { feishuItem, googleDriveId, sourceReadLimits } from '../packages/shared/src/sources.js';
 
 async function code(promise: Promise<unknown>): Promise<{ status: number; code: string }> {

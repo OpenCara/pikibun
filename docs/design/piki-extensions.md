@@ -261,18 +261,147 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     command is (`decidedAsHostCommand`, `requesterAutoApproves`, the host's limits and grants, redaction, the
     sandboxes' `execute`). A control plane that predates it refuses the kind, so such a call fails cleanly there.
 
-32. **Rust, Go, .NET and make.** `piki:rust`, `piki:go`, `piki:dotnet` and `piki:make` turn on one tool each, from one
-    table (`apps/runner/src/ecosystem-command.ts`): its programs, its fixed environment (no colours, progress, prompts or
-    telemetry), where its toolchain installs (after the sandbox's PATH, `$HOME` expanded where the command runs), the
-    options that take a value, and what acts on a registry as an account: `cargo publish`, `login`, `logout`, `owner`
-    and `yank` (past `+toolchain` and cargo's options), and `dotnet nuget push`, `delete`, and `add`/`update source` with
-    a user name or password. Each call is a program operation of its own tool (note 31). They aren't offered in the
-    Windows sandbox, whose container reaches none of these toolchains, as `python` isn't. A connector now reports up to
-    32 Pikibun extensions besides its installs.
+32. **No shell.** `bash` and `host_bash` are removed (#163): the runner defines neither tool, and the agent's
+    instructions recommend no shell. Both names join `retiredToolNames`, so stored agents and approvals that list them
+    stay valid while the control plane never gives them to a new session; cloning needs `git` (or, on a connector from
+    before, `bash`). `piki:shell` and `piki:host-shell` stay in the catalogue as `retired` entries: connectors still
+    report them, so the control plane still sends a workspace's choice to older connectors, which have the tools and
+    keep them off where it was turned off; workspace pages no longer list them. The runner refuses a new `host.bash`
+    operation (a restart already ended any that waited), and the session page no longer requests `bash` operations by
+    hand. A `bash` operation is still the sandbox's own: the program tools run through it, and an older session whose
+    agent lists `bash` can still have one requested. Extensions may name a tool `bash`, as any retired name, decided like
+    every extension tool, by the host's owner.
 
-Next, in order: other ecosystems as usage asks for them,
-codemode always on, then `bash` switchable, off by default, and removed with `host_bash`. The brokered tools
-(`source_read`, `sessions`, `github_*`, `git_push`) follow on the same switch.
+33. **Rust, Go and .NET.** `piki:rust`, `piki:go` and `piki:dotnet` turn on the `rust`, `go` and `dotnet` tools
+    (`apps/runner/src/ecosystem-command.ts`), one module for the three, built like `node` and `python`: a program
+    (`cargo`, `rustc`, `rustup`, `rustfmt`; `go`, `gofmt`; `dotnet`), its arguments as a list and a directory, run as one
+    quoted command with no colours, progress bars, telemetry or first-run banners, each a `program` operation decided as
+    commands are. The toolchains' usual directories go after the sandbox's PATH (`programShellCommand` takes a list now);
+    a rustup install in a home directory isn't seen by the sandbox. A system-wide rustup (`/usr/local/rustup`, as the
+    official `rust` image) is: its proxies would look in the session's own `HOME`, so where that directory exists a rust
+    call sets `RUSTUP_HOME="${RUSTUP_HOME:-/usr/local/rustup}"`, the session's own value first; `CARGO_HOME` stays the
+    session's. The macOS sandbox reads only its tool roots: `/usr/local/go`, `/usr/local/cargo` and `/usr/local/rustup`
+    join Homebrew's there (`SEATBELT_LOCAL_ROOTS`, seatbelt.ts), where they exist. Refused: what acts on a package registry as an
+    account, `cargo publish`, `login`, `logout`, `owner` and `yank`, followed through `cargo +toolchain` and `rustup run`,
+    and `dotnet nuget push`, `delete`, and `add`/`update source` with a password. Go has no such command. Not in the
+    Windows sandbox, whose container reaches none of them, as `python` isn't.
+
+Next: other ecosystems as usage asks for them (`jvm`, `make`).
+
+## A browser: piki:browser
+
+Agents that build web apps had no way to see them: a page is what its scripts make of its HTML, and a browser needs a
+download the sandbox can't make, a display, and a way to drive it. `piki:browser` turns on the
+`browser` tool, the session's own (rule 16), and the session panel gets a **Browser** tab that shows what it saw.
+
+26. **One sandboxed command per call.** A sandboxed command has its own network namespace, and its processes end with
+    it (`--die-with-parent`, the session's cgroup), so a browser can't outlive a call without a second kind of sandbox
+    that lives across commands, with its own lifetime, limits and cleanup. A call is instead one sandboxed command: the
+    driver starts Chromium, opens the page, runs the actions, screenshots the page and exits. Everything a call needs
+    happens in it, `localhost` included, which is also why `serve` exists (rule 29). What carries over between calls
+    is the profile in the session's home (cookies, storage: a sign-in), and the last page, which a call without a `url`
+    opens again. It is a program operation of its own (`{kind: "program", tool: "browser"}`), decided as the `git`, `node`
+    and `python` tools' are: pages run their scripts, `evaluate` runs the agent's, `serve` starts the app. The card shows
+    the driver, the Chromium it starts, the command's time limit and the call as JSON, within a command's 8192
+    characters.
+27. **The driver.** `sandbox-python/browser.py`, standard-library Python like the helper, embedded through
+    `sandbox-python.generated.ts`, runs Chromium headless on a DevTools pipe (`--remote-debugging-pipe`: no port, no
+    WebSocket client, nothing another process in the sandbox could connect to). Chromium's own sandbox can't start in
+    ours (no user namespaces), so it runs with `--no-sandbox`: the session's sandbox is the boundary, as for every other
+    program there. `/dev/shm` is read-only, so it doesn't use it; the sandbox has no `/etc/fonts`, so the driver writes
+    a fontconfig file naming `/usr/share/fonts` and the host's generic-family rules. Chrome and Chromium (not the
+    headless shell) bind their profile's singleton socket in `TMPDIR`, and the session's (`/sessions/<64 hex
+    digits>/home/.tmp`) leaves too little of a Unix socket path's 107 bytes, so they crash at start there: Chromium runs
+    in a directory of its own under it, which its `TMPDIR` names as `/proc/self/cwd`. The HTTP cache is off: a dev server
+    changes between calls. Actions find elements by CSS or `text=` (interactive elements first, then the innermost),
+    click with real mouse events at the element's centre after scrolling it into view (and say what covered it), type
+    with `Input.insertText` (what frameworks listen for), and wait for a navigation an action starts. The answer is a
+    bounded report: URL, title, status, the visible text (6000 characters), up to 80 interactive elements each with a
+    unique CSS selector, the last 40 console messages, page errors, failed requests, and the screenshot. The driver
+    takes the command's time limit, stops actions 5 seconds before it and reports by 1 second before, so a slow page
+    still answers with what it got to.
+28. **The screenshot, to the model and the panel.** The report and screenshots go to the worktree's `browser-output/`
+    (the newest 30 calls), and the call's output is the report. The tool reads the screenshot back with `read_file`'s
+    reader and preparation (scaled for the model), and answers with the report in place of the raw output, and the
+    image. The **Browser** tab reads the same files through the file browser's API, so it needs nothing new of hosts or
+    the control plane, takes the Files tab's collaborator role, and shows what is on the host now. A report is files
+    the agent can change, so the tab and the tool take only what has a report's shape (`parseBrowserReport`), and a
+    screenshot only at a `browser-output/` path.
+29. **`serve`, without a shell.** A web app under test must listen in the same command as the browser, so a call can
+    name one of the `node` and `python` tools' programs, its arguments, directory (and for Python's, a virtual
+    environment) and port. It is checked by those tools' own requests (`nodeRequest`, `pythonRequest`), so what they
+    refuse it refuses too, and the driver starts it without a shell, in its own process group, with their environment
+    (`NODE_ENVIRONMENT` and the connector's own Node.js first, given as `--node-bin`; `PYTHON_ENVIRONMENT` and the
+    virtual environment's `bin`): sessions have no shell (#163), and `serve` doesn't bring one back. The driver waits
+    for the port (or the program's exit, with its output), browses, stops the group, and returns the end of its output.
+    A call that is stopped, or reaches its time limit, ends everything it started with it: the sandbox's PID namespace
+    goes with the command, and on a host with resource limits so does its cgroup.
+30. **The host's Chromium, given read-only.** Sessions download nothing, so the browser is the host's, as its owner
+    chooses (rule 33; `browser-toolchain.ts`): found there (`PIKIBUN_BROWSER`, else a system install: the
+    distributions' `chromium` packages' real executable, not their wrapper scripts, Chrome and Edge in `/opt`; else the
+    newest Playwright or Puppeteer download; else one the connector downloaded), at a path they give, or downloaded by
+    the connector (rule 34). Only an installation is taken: a real executable (ELF on Linux) beside one of Chromium's
+    own files, in a directory that is neither `/` nor the host user's home or above it, so mounting its directory never
+    gives a session anything else. The Linux sandbox binds it read-only at `/opt/pikibun/chromium` for shell commands,
+    unless it is under `/usr`, and the driver at `/opt/pikibun/browser/pikibun-browser`, written at every open like the
+    git shim. It is looked up for each command, and only on Linux.
+31. **Only in the session's sandbox, never on the host.** Chromium on the host, with its own sandbox, would keep the
+    renderer sandbox ours takes away (Chromium refuses to start with it, or with its seccomp layer alone, where there
+    are no user namespaces), and could outlive a call. But Chromium's sandbox confines the processes that run pages, not
+    the browser process, which would run as the host's user; and the DevTools protocol the agent drives it with is
+    privileged: it opens `file://` pages, sets an upload's files from any path, and saves downloads anywhere. So the
+    agent would reach the host owner's files unless the connector filtered every such feature, and the host's network
+    (its LAN, loopback services, cloud metadata) unless every connection were forced through the session's proxy; the
+    app under test, in the session's sandbox, would be out of its reach; and on a shared host each call would be decided
+    like a host command, by the host's owner. In the session's sandbox all of that is the session's already: a page
+    that exploits Chromium gets what the session has, its files, its branch and the workspace's network, not the host.
+    So sessions that run on the host (unsandboxed hosts, sessions on the host's environment) don't get the tool, and
+    neither do the experimental macOS and Windows sandboxes until they give Chromium a policy of their own.
+32. **Offered only where it runs, and said why where it doesn't.** A session with no Chromium for its sandboxed
+    commands isn't offered the tool, rather than offered a tool that only fails; one the workspace turned off is refused
+    by name, as rule 16 says. Where the workspace has it on, the session's view says why it has none
+    (`SessionView.extensions.unavailable`), as a fixed reason (`browserUnavailableReasons`: on the host, another
+    sandbox, off, missing, downloading, failed) so nothing of the host's paths or errors reaches its viewers, and its
+    agent is told in a sentence, so it says so rather than guessing. The reasons its host's owner can do something about
+    (missing, downloading, failed) show as a warning above the chat box as the session starts, on the web and mobile;
+    each shows in the panel's Extensions section. Its network is the session's: Chromium goes through the egress proxy
+    (loopback stays direct), so the workspace's network policy holds, and verifies certificates with its own roots, as
+    the proxy only tunnels them.
+33. **The host owner's choice, applied without a restart.** `HostConfig.browser` is the host owner's alone, as
+    required extensions are, since it decides which of the host's files every sandboxed session gets: `auto` (found,
+    as rule 30 lists), `path` (that executable or none, never another browser; one that isn't an installation says
+    why: nothing there, a wrapper script, a home directory, no Chromium files beside it), `download` (rule 34) or `off`.
+    The connector (`HostBrowserSource`, `browser-host.ts`) applies it as it connects, before its sessions open, and
+    before each extensions report, every half minute, and reports how it stands with them (`HostBrowserStatus`: ready,
+    missing, downloading, failed, off, unsupported where its sessions have no Linux sandbox), each text within what
+    the control plane takes, so a long path in an error never gets the report refused. The executable and the error
+    (which may name a path the owner gave) are the owner's to see: the host's admins and the workspaces' listing get the
+    rest. Sessions look the browser up for each
+    command and each message's tools, so an install, a change of choice or a finished download reaches open sessions at
+    their next message. A control plane that predates the status refuses a report naming it, and the connector reports
+    without it until the status changes, then tries again, so a status refused for itself doesn't hide the next; it
+    reports without Pikibun extensions for a control plane older still.
+34. **Downloading Chrome for Testing.** `download` fetches Chrome for Testing's Stable `chrome-headless-shell` for
+    linux64, the build Google publishes for automation (Puppeteer's default): its version from Chrome for Testing's JSON
+    API on `googlechromelabs.github.io`, its zip from `storage.googleapis.com/chrome-for-testing-public/` only, at
+    exactly the path the API names for that version (`browser-download.ts`). The connector reads the zip itself, so the
+    host needs no `unzip`: regular files and directories only, every name inside the target, every size and CRC-32 as
+    the central directory says, within 512 MB downloaded and 2 GB extracted. It extracts beside the target and renames
+    it into place only once it holds an installation, so a download that stops part way leaves nothing a session could
+    run. It goes to the connector's state (`<state>/browser/<version>`), the host's one copy, which the sandbox gives
+    sessions read-only as it would a system install. A failed first download is tried again after ten minutes, or at
+    once when the owner chooses again; once a day the connector checks for a newer Stable, downloads it beside the one
+    in use and switches sessions to it once it is in place, and a failed update keeps the one in use. The one replaced
+    stays until the next check, a day later, since a command that started with it (an hour at most) may still run it,
+    and the sandbox skips a mount whose source is gone. Chrome for Testing builds Linux
+    for x86-64 only, so ARM hosts install their distribution's `chromium`; and Chromium links system libraries (NSS,
+    GBM, ALSA) that a minimal server may lack, which the hosts guide names rather than the connector installing
+    packages.
+
+Later: a browser that lives across calls, for long flows and watching a page as it changes, in a sandbox of the
+session's that outlives one command, beside the app it tests; the user driving it from the Browser tab; the macOS and
+Windows sandboxes, with proxy credentials for their proxies; a check that a Chromium found or downloaded starts, in the
+sandbox, before sessions are offered it, so missing system libraries show on the host's page rather than in a call.
 
 ## The prompt audit: piki:prompt-audit
 
@@ -306,12 +435,16 @@ of the host check each message before the agent sees it, and refuses those that 
 | `piki:` sources | `packages/shared/src/host-extensions.ts` |
 | The command tool, its environment and output, in the sandbox or on the host | `apps/runner/src/extensions/piki/command.ts` |
 | The prompt audit | `apps/runner/src/extensions/piki/prompt-audit.ts`; tests in `tests/prompt-audit.test.ts` |
+| The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session.ts` (the `browser` tool, `browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
+| The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
+| The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |
+| The Browser tab | `apps/web/src/session-browser.tsx` |
 | Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`); `session.ts` (`applyOptions`, `requireSessionTool`); tests in `tests/runner-schedule.test.ts` |
 | gh, glab, az: refused and read-only arguments, token variables | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
 | A session's factories, where it runs the command, write leases | `apps/runner/src/extensions/piki/index.ts`, `adapter.ts`; `session.ts` (`pikiSession`, `runPikiCommand`) |
-| The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/api-access.ts` |
+| The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/authority/api-access.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
-| Added on binding; a connector's list; install requests refused | `apps/server/src/extensions.ts`, `repositories.ts`; migrations `0048`/`0041` |
+| Added on binding; a connector's list; install requests refused | `apps/server/src/authority/extension-policy.ts` (`addPikiExtensions`), called from `authority/repositories.ts`; `apps/server/src/extensions.ts`; migrations `0048`/`0041` |
 | Workspace and host pages | `apps/web/src/settings/WorkspaceExtensions.tsx`, `HostExtensions.tsx` |
 | Tests | `tests/piki-extensions.test.ts`, `api-access.test.ts`, and in `push-broker`, `host-extensions`, `extensions`, `repositories`, `local-connector` |
 

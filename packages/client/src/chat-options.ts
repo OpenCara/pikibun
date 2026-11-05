@@ -40,13 +40,13 @@ export function autoApproveWarning(host: Pick<ConnectorInfo, "name" | "capabilit
 function hostCommandsWarning(host: Pick<ConnectorInfo, "name" | "capabilities" | "hostCommandAccess">): string {
   if (!host.capabilities.hostCommands) return "";
   if (host.hostCommandAccess === "auto") {
-    return ` Its owner granted you automatic host commands, so host_bash also runs OUTSIDE the sandbox on ${host.name} without asking, with access to the owner's host files, credentials and network.`;
+    return ` Its owner granted you automatic host commands, so host commands, such as its extensions' tools, also run OUTSIDE the sandbox on ${host.name} without asking, with access to the owner's host files, credentials and network.`;
   }
   // Older connectors honor no grants: only the owner's own sessions run host commands without asking.
   if (host.hostCommandAccess === "owner" || !host.capabilities.hostGrants) {
-    return " On your own host, host_bash also runs OUTSIDE the sandbox without asking, with access to your host files, credentials and network. On someone else's host it still needs their approval.";
+    return " On your own host, host commands, such as its extensions' tools, also run OUTSIDE the sandbox without asking, with access to your host files, credentials and network. On someone else's host they still need their approval.";
   }
-  return " On your own host, or one whose owner granted you automatic host commands, host_bash also runs OUTSIDE the sandbox without asking, with access to that host's files, credentials and network. Elsewhere it still needs approval.";
+  return " On your own host, or one whose owner granted you automatic host commands, host commands, such as its extensions' tools, also run OUTSIDE the sandbox without asking, with access to that host's files, credentials and network. Elsewhere they still need approval.";
 }
 
 export const CONNECTOR_UPDATE_HINT = "Update the host's connector (npx pikibun@latest connect) to choose model, reasoning and access";

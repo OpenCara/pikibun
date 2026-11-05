@@ -33,15 +33,23 @@ export function runnerModels(model: ModelDefinition, allowFaux: boolean) {
       }
       const prompt = lastUser?.role === "user" ? (typeof lastUser.content === "string" ? lastUser.content : lastUser.content.filter(part => part.type === "text").map(part => part.text).join("\n")) : "";
       let tool: string | undefined;
-      let args: Record<string, string> = {};
+      let args: Parameters<typeof fauxToolCall>[1] = {};
       if (prompt === "TEST_IDENTITY") tool = "identity";
       else if (/^TEST_READ [^\r\n]+$/.test(prompt)) { tool = "read_file"; args = { path: prompt.slice(10) }; }
       else if (/^TEST_WRITE [^\r\n]+\n[\s\S]*$/.test(prompt)) {
         const newline = prompt.indexOf("\n");
         tool = "write_file";
         args = { path: prompt.slice(11, newline), content: prompt.slice(newline + 1) };
-      } else if (/^TEST_BASH [^\r\n]+$/.test(prompt)) { tool = "bash"; args = { command: prompt.slice(10) }; }
+      } else if (/^TEST_BASH [^\r\n]+$/.test(prompt)) {
+        // There is no bash tool any more (#163): the command runs through the node tool, as testCommandArgs says.
+        tool = "node";
+        args = testCommandArgs(prompt.slice(10));
+      }
       else if (/^TEST_COMMIT [^\r\n]+$/.test(prompt)) { tool = "git_commit"; args = { message: prompt.slice(12) }; }
+      else if (/^TEST_BROWSER \{[\s\S]*\}$/.test(prompt)) {
+        // The browser tool's call as JSON, such as TEST_BROWSER {"url": "http://localhost:5173/"}.
+        try { tool = "browser"; args = JSON.parse(prompt.slice(13)) as typeof args; } catch { tool = undefined; }
+      }
       else if (/^TEST_HOLD (?:0|[1-9][0-9]{0,3})$/.test(prompt)) {
         const delay = Number(prompt.slice(10));
         if (delay <= 5000) {
@@ -49,7 +57,7 @@ export function runnerModels(model: ModelDefinition, allowFaux: boolean) {
           return fauxAssistantMessage(`Deterministic test provider held for ${delay}ms.`);
         }
       }
-      if (!tool) return fauxAssistantMessage("Deterministic test provider only accepts TEST_IDENTITY, TEST_READ <path>, TEST_WRITE <path>\\n<content>, TEST_BASH <command>, TEST_COMMIT <message>, and TEST_HOLD <0..5000>. This is not an LLM.");
+      if (!tool) return fauxAssistantMessage("Deterministic test provider only accepts TEST_IDENTITY, TEST_READ <path>, TEST_WRITE <path>\\n<content>, TEST_BASH <command>, TEST_COMMIT <message>, TEST_BROWSER <call as JSON>, and TEST_HOLD <0..5000>. This is not an LLM.");
       const available = new Set<string>();
       for (const message of context.messages) {
         if (message.role !== "system") continue;
@@ -64,4 +72,12 @@ export function runnerModels(model: ModelDefinition, allowFaux: boolean) {
   }
   else throw new RunnerError(400, "Unsupported legacy model provider; use a configured local Pi connector");
   return models;
+}
+
+/**
+ * The node tool's arguments the deterministic test provider calls for TEST_BASH <command>: Node.js runs the command in
+ * a shell, its output the call's. Tests compare cards and results against these (testCommandOperation in the tests).
+ */
+export function testCommandArgs(command: string): { program: "node"; args: string[] } {
+  return { program: "node", args: ["-e", `require("child_process").execSync(${JSON.stringify(command)}, { stdio: "inherit", shell: "/bin/sh" })`] };
 }

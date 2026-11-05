@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { app } from "../apps/server/src/index.js";
-import { hashPassword, onceSucceeded, verifyPassword } from "../apps/server/src/password-auth.js";
+import { hashPassword, onceSucceeded, verifyPassword } from "../apps/server/src/authority/password-auth.js";
 import type { Env } from "../apps/server/src/types.js";
 import type { UserProfile } from "../packages/shared/src/types.js";
 import { testDatabase } from "./helpers/control-plane.js";

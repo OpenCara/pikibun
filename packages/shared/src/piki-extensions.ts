@@ -45,6 +45,12 @@ export interface PikiExtensionInfo {
    * The workspace page shows it as always on, and a workspace's choice to turn it off is refused and ignored.
    */
   core?: boolean;
+  /**
+   * Session tools only: a switch for tools sessions no longer have (bash, host_bash). Kept in the catalogue so the
+   * control plane still sends a workspace's choice to connectors that predate the removal, which still offer the tool;
+   * workspace pages don't list it.
+   */
+  retired?: boolean;
 }
 
 export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
@@ -70,13 +76,16 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
-    name: "host-shell", source: "piki:host-shell", title: "Host commands", sessionTools: ["host_bash"], failClosed: true,
-    description: "The host_bash tool: the agent runs commands on the host, outside the sandbox, each approved by the host's owner or a member they granted host commands. Recent sessions used it only for the GitHub CLI, which piki:gh covers. On unless turned off here.",
+    // Retired with host_bash (#163): kept so connectors still report it and the control plane still sends a workspace's
+    // choice to older connectors, which have the tool, and keep it off there; no workspace page lists it.
+    name: "host-shell", source: "piki:host-shell", title: "Host commands", sessionTools: ["host_bash"], failClosed: true, retired: true,
+    description: "The host_bash tool, retired: sessions no longer run commands on the host. Connectors from before its removal still offer it unless turned off.",
     providers: [],
   },
   {
-    name: "shell", source: "piki:shell", title: "Shell commands", sessionTools: ["bash"], failClosed: true,
-    description: "The bash tool: the agent runs shell commands in the session's sandbox, each approved. Sessions clone and commit with git, build and test with node and python, move files with the file tools and chain tools with code mode, so a workspace that needs none of the rest turns it off. On unless turned off here.",
+    // Retired with bash (#163), as piki:host-shell is.
+    name: "shell", source: "piki:shell", title: "Shell commands", sessionTools: ["bash"], failClosed: true, retired: true,
+    description: "The bash tool, retired: sessions clone and commit with git, build and test with node and python, move files with the file tools and chain tools with code mode. Connectors from before its removal still offer it unless turned off.",
     providers: [],
   },
   {
@@ -94,12 +103,26 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     description: "The python tool: the agent runs Python and its package and test tools (python3, pip, pip3, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
     providers: [],
   },
-  ...([["rust", "Rust", "cargo, rustc, rustup, rustfmt"], ["go", "Go", "go, gofmt"], ["dotnet", ".NET", "dotnet"], ["make", "Make", "make"]] as const)
-    .map(([name, title, programs]) => ({
-      name, source: `piki:${name}` as const, title, sessionTools: [name],
-      description: `The ${name} tool: the agent runs ${title}'s toolchain (${programs}) with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.`,
-      providers: [],
-    })),
+  {
+    name: "rust", source: "piki:rust", title: "Rust", sessionTools: ["rust"],
+    description: "The rust tool: the agent runs cargo, rustc, rustup and rustfmt with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "go", source: "piki:go", title: "Go", sessionTools: ["go"],
+    description: "The go tool: the agent runs go and gofmt with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "dotnet", source: "piki:dotnet", title: ".NET", sessionTools: ["dotnet"],
+    description: "The dotnet tool: the agent runs the .NET CLI with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    providers: [],
+  },
+  {
+    name: "browser", source: "piki:browser", title: "Browser", sessionTools: ["browser"],
+    description: "The browser tool: the agent drives a headless Chromium in the session's sandbox (open a page, click, type, run a script, take a screenshot), serving the web app it works on for the call, each call approved as a command is. Its screenshots show in the session panel's Browser tab. Runs only in the Linux sandbox, with Chromium on the host. On unless turned off here.",
+    providers: [],
+  },
   {
     name: "files", source: "piki:files", title: "Files", core: true,
     sessionTools: ["identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file"],

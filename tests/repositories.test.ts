@@ -6,11 +6,11 @@ import { crc32, deflateRawSync, gunzipSync, gzipSync } from 'node:zlib';
 import { HTTPException } from 'hono/http-exception';
 import { app } from '../apps/server/src/index.js';
 import type { ConnectorRelayEnvelope } from '../apps/server/src/connector-transport.js';
-import { boundedRepositoryBody } from '../apps/server/src/repositories.js';
+import { boundedRepositoryBody } from '../apps/server/src/authority/repositories.js';
 import { parseManifest } from '../apps/server/src/connectors.js';
-import { gitProviderAdapters } from '../apps/server/src/git/providers.js';
+import { gitProviderAdapters } from '../apps/server/src/authority/git/providers.js';
 import type { Env } from '../apps/server/src/types.js';
-import { encryptToken } from '../apps/server/src/vault.js';
+import { encryptToken } from '../apps/server/src/authority/vault.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
@@ -1310,13 +1310,13 @@ test('every session clones: older connectors are refused, and a session whose ag
   assert.equal(unsandboxed.cloneUnavailable, undefined);
   // A connector from before sessions cloned can't run one.
   await denied(await start(admin, await host({ plainGit: undefined }, false)), 409, 'connector_update_required');
-  // A session started from a saved agent without bash, before agents were removed, works in an empty worktree too.
+  // A session started from a saved agent without git or bash, before agents were removed, works in an empty worktree too.
   const { models } = await json<{ models: ModelDefinition[] }>(await admin.request('GET', `/api/workspaces/${team.id}/models`));
   const model = models.find(item => item.connectorId === ownHost.connectorId)!;
   const filesOnlyId = seedSavedAgentSession(f.sqlite, own.id, seedAgentVersion(f.sqlite, { authorId: admin.user.id, modelId: model.id, tools: ['read_file'] }));
   const { session: filesOnly } = await json<{ session: SessionRecord }>(await admin.request('GET', `/api/sessions/${filesOnlyId}`));
   assert.equal(filesOnly.repositoryMode, 'clone');
-  assert.match(filesOnly.cloneUnavailable ?? '', /doesn't have the bash tool/);
+  assert.match(filesOnly.cloneUnavailable ?? '', /doesn't have the git tool/);
   assert.throws(() => f.sqlite.prepare("UPDATE sessions SET repository_mode = NULL WHERE id = ?").run(own.id), /immutable/);
 });
 

@@ -67,7 +67,7 @@ The host's page shows its **Status** (online or offline, owner, capabilities), *
 
 ## Host admins and host command grants
 
-By default only a host's owner manages its sharing and models and decides its `host_bash` commands, which run outside the sandbox on their machine. The owner can hand some of that out on the host's page:
+By default only a host's owner manages its sharing and models and decides its host commands (its extensions' tools, and the commands of sessions that run on it), which run outside the sandbox on their machine. The owner can hand some of that out on the host's page:
 
 - **Admins**: **Add admin** makes another member of a workspace the host is connected to an admin. Admins share and unshare the host, in workspaces they and the owner both belong to, give or remove host command grants, and [enable or disable its models](#models) for everyone who uses it, but hold no host command access themselves unless a grant gives it to them. Only the owner adds or removes admins, reconnects, revokes or removes the host; an admin can **Step down**.
 - **Host command access**: in a workspace the host is shared with, grant one member or **All members** either **Approve host commands** (they decide each host command in sessions they can approve) or **Auto-approve host commands** (their own **Auto-approve** messages also run host commands without asking). On a host without [resource limits](#the-sandbox), either level also lets the member's own sandboxed sessions run shell commands there, decided like host commands. The owner (not an admin) can also tick **Sessions on the host**, so the member may start their own [sessions directly on the host](#sessions-on-the-host); an admin can take that away, and changing a grant's level keeps it. A grant can expire after a day, a week or a month, or never. It ends when it expires, when an owner or admin removes it, or when the host stops being shared there. Viewers can't hold one.
@@ -108,7 +108,22 @@ Such a session runs like one on an [unsandboxed host](#running-without-the-sandb
 
 With bubblewrap, every session runs in its own sandbox: no direct network (see [Network access](#network-access)), read-only system directories, and only the session's own worktree writable. Commands in it stop after the host's [command time limit](#host-configuration), 30 seconds unless its owner or an admin sets a longer one. Git there runs without hooks, stored credentials or SSH: an approved push gets a credential for that push alone (see [Commits, pushes and pull requests](pushes.md)), and GitHub actions go through Pikibun.
 
-Shell commands (`bash`) also need resource limits. A connector started with `--resources PATH` (an operator-provisioned cgroup v2 configuration: CPU, memory, process and disk limits, described in [`apps/runner/src/resources.ts`](../apps/runner/src/resources.ts)) runs them in every session. Without it, the host's owner can let commands run without limits in their own sessions, through a [permission request](approvals.md#permission-requests). So can a member they [granted host commands](#host-admins-and-host-command-grants) there, in their own sessions, since that grant already lets them run any command on the host itself. Their commands still run in the sandbox, as the session's owner, but are decided like host commands: only by the host's owner or a member granted host commands, either with approve permission on the session. Under the session owner's **Auto-approve** they run without asking only with **Auto-approve host commands**, and once the grant ends, the next command is refused. In every other member's session on that host, `bash` is refused.
+Commands (`git`, `node`, `python`) also need resource limits. A connector started with `--resources PATH` (an operator-provisioned cgroup v2 configuration: CPU, memory, process and disk limits, described in [`apps/runner/src/resources.ts`](../apps/runner/src/resources.ts)) runs them in every session. Without it, the host's owner can let commands run without limits in their own sessions, through a [permission request](approvals.md#permission-requests). So can a member they [granted host commands](#host-admins-and-host-command-grants) there, in their own sessions, since that grant already lets them run any command on the host itself. Their commands still run in the sandbox, as the session's owner, but are decided like host commands: only by the host's owner or a member granted host commands, either with approve permission on the session. Under the session owner's **Auto-approve** they run without asking only with **Auto-approve host commands**, and once the grant ends, the next command is refused. In every other member's session on that host, commands are refused.
+
+### A browser for sessions
+
+The agent's [browser tool](extensions.md#the-browser-pikibrowser) runs a headless Chromium in the session's sandbox: the host's, since sessions download nothing. Its owner chooses where it comes from on the host's page, under **Extensions** → `piki:browser`, which also shows how it stands (**Ready**, **No Chromium**, **Downloading**, **Download failed**, **Off**), the executable sessions run and, when there is one, what went wrong:
+
+- **Find it** (the default). The connector looks on the host: `PIKIBUN_BROWSER`, the path of a Chromium executable (Chromium, Google Chrome, Microsoft Edge, or Chrome for Testing's `chrome-headless-shell`) set in the connector's environment, which is that one or none; else a system install, such as Debian's and Fedora's `chromium` packages (`sudo apt install chromium`; Ubuntu's is a snap, which can't run in another sandbox), or Google Chrome or Microsoft Edge in `/opt`; else the newest one Playwright or Puppeteer downloaded for the connector's user (`npx playwright install chromium-headless-shell`, `npx @puppeteer/browsers install chrome-headless-shell@stable`); else one the connector downloaded before.
+- **This path.** The Chromium executable you name, and no other: the program itself, beside Chromium's own files (`/usr/lib/chromium/chromium`, not the `/usr/bin/chromium` script). One that isn't an installation leaves the host without a browser, and its page says why.
+- **Download.** The connector downloads Chrome for Testing's headless shell, the build Google publishes for automation (about 110 MB, 240 MB unpacked), into its own folder (`browser/` in its state directory), and checks once a day for a newer Stable to replace it with. Sessions switch to a new one once it is in place; the one it replaced stays for a day, while commands that started with it may still run it. It fetches the current version from `googlechromelabs.github.io` and the build from `storage.googleapis.com`, which a host behind a firewall must reach (behind a proxy, run the connector with `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY`). A failed download is tried again ten minutes later. Chrome for Testing builds for Linux on x86-64 only: on ARM, install your distribution's `chromium` and find it. The headless shell, like any Chromium, needs the system libraries it links (`libnss3`, `libgbm1`, `libasound2` and others), which desktop distributions have and minimal servers may not (`sudo apt install chromium` pulls them in).
+
+Only you see the executable's path and what went wrong; the host's admins and its workspaces see how it stands.
+- **Off.** Sessions on the host get no browser.
+
+The connector applies a change, an install or a finished download within a minute, without a restart, and open sessions get the tool at their next message. Only that browser's own installation directory is given to sandboxed commands, read-only (at `/opt/pikibun/chromium`), and only where they don't already see it under `/usr`. It runs with `python3` from `/usr`, as the sandbox's helper does, and the system's fonts. Sessions without the Linux sandbox are never offered the tool: the browser never runs on the host itself, as its user.
+
+A session whose workspace has the browser on, on a host that has no Chromium for it, says so as it starts: a warning above its chat box, for whoever can write in it, and a row in the panel's **Extensions** section. Its agent is told too, so it says so rather than trying. Viewers of a session only learn why (no Chromium, downloading, download failed, turned off, no Linux sandbox), never the host's paths or errors.
 
 ## Network access
 
@@ -178,7 +193,7 @@ The connector prints the risks and asks you to type `unsandboxed` before it star
 - Commands use this machine's network directly: the workspace's [network access](#network-access) doesn't apply.
 - Anyone you share the host with, and anyone with approve permission on a session that runs on it, can cause approved commands to run on your machine.
 
-Pikibun labels such a host **Unsandboxed** to everyone who can see it.
+Pikibun labels such a host **Unsandboxed** to everyone who can see it. Its sessions get no [browser tool](extensions.md#the-browser-pikibrowser), which runs only in the sandbox.
 
 ## Repository cache (preview)
 
@@ -201,7 +216,7 @@ By default each session downloads its clones itself. With **Repository cache** s
 | `--state-dir PATH` | Connector state (default `~/.local/share/pikibun/connector`) |
 | `--pi-agent-dir PATH` | Pi's configuration and auth directory (default: Pi's own) |
 | `--model PROVIDER/MODEL` | Offer this model (repeatable) instead of `enabledModels` |
-| `--resources PATH` | Operator-provisioned resource limits that let `bash` run in every session |
+| `--resources PATH` | Operator-provisioned resource limits that let commands run in every session |
 | `--unsafe-no-sandbox` | Run agent work directly on this machine, without isolation; asks for confirmation |
 | `--allow-insecure-loopback` | Allow an `http://` server on localhost (development) |
 | `--help` | Show all options |
