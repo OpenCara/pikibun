@@ -28,6 +28,7 @@ import { requestKey, RunnerError, stableJson, validateOperation } from "./protoc
 import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
+import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
@@ -800,7 +801,7 @@ export class RunnerSession {
           + this.#cloneFailures.map(failure => `${failure.path} (${failure.reason})`).join(", ")
           + ". Their backed-up work (branches, and the working tree as a commit) is in Git bundles under .git/pikibun-clones, listed in its "
           + "manifest.json; Pikibun tries again when the session next opens, as long as nothing else is at their paths." : "");
-      if (this.binding.agent.tools.includes("git_push"))
+      if (this.binding.agent.tools.includes("git_push") && !off.has("git_push"))
         instructions += "\ngit_push publishes a clone's checked-out commit, as it is, to another branch of the workspace repository it was cloned from, "
           + "with approval: git_push {directory, branch}, where directory is the clone's path in the worktree. Pushes are fast-forward only (never forced); "
           + "if the branch moved, fetch and merge or rebase first. Optionally request a pull request with pull_request {title, body, base?}; "
@@ -809,7 +810,7 @@ export class RunnerSession {
           + "git_push {directory, branch, tag}: it creates that tag at the commit and moves no branch. Tags are never moved; "
           + "plain git push of tags is refused.";
     }
-    if (this.binding.agent.tools.includes("source_read") && this.#sources.length) {
+    if (this.binding.agent.tools.includes("source_read") && !off.has("source_read") && this.#sources.length) {
       instructions += "\n\nThis workspace's document sources, which source_read reads as the session owner (a page or document as text, "
         + "a folder, database or wiki page as the items in it); pass item, an id or link from an earlier result, to read one under a source: "
         + this.#sources.map(source => `${JSON.stringify(source.title)} (${documentKindNames[source.kind]} ${source.type}, source ${source.id})`).join(", ") + ". "
@@ -832,8 +833,14 @@ export class RunnerSession {
       + "node {program: \"pnpm\", args: [\"install\"], directory: \"<name>\"}, node {program: \"pnpm\", args: [\"test\"], directory: \"<name>\"}, "
       + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs."
       + (this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own), with its npm, npx and corepack, ahead of any other on PATH.` : "");
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "python") && !off.has("python")) instructions += "\n\nRun Python, pip, uv, poetry and pytest with the python tool "
+      + "rather than in bash. Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
+      + "python {program: \"pip\", args: [\"install\", \"-r\", \"requirements.txt\"], directory: \"<name>\", venv: \".venv\"}, python {program: \"pytest\", args: [\"-q\"], directory: \"<name>\", venv: \".venv\"}.";
+    // Code mode is core (#163): what pipes did between commands, a script does between tools.
+    if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
+      + "write a codemode script that calls them rather than piping commands through grep, head, sort or jq in bash.";
     // Sessions waited for CI with sleep in bash, then read the pull request again, in 9% of their shell commands (#163).
-    if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
+    if (mode !== "ask" && this.tools.some(tool => tool.name === "github_read") && !off.has("github_read")) instructions += "\n\nTo wait for a pull request's CI or reviews, "
       + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes) rather than sleep in bash.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
@@ -2081,6 +2088,7 @@ export class RunnerSession {
       directory: Type.String(), branch: Type.String(), tag: Type.Optional(Type.String()),
       pull_request: Type.Optional(Type.Object({ title: Type.String(), body: Type.String(), base: Type.Optional(Type.String()) })),
     }), execute: async (args, api, call) => {
+      await this.requireSessionTool("git_push");
       const attribution = await this.toolActor(api, true);
       await this.permit(api, call, "git_push", args.tag === undefined ? `${args.directory} → ${args.branch}` : `${args.directory} → tag ${args.tag} on ${args.branch}`, { write: true });
       if (!validCloneDirectory(args.directory)) throw new RunnerError(400, "directory must be a clone's path in the worktree, such as app or src/app");
@@ -2187,6 +2195,8 @@ export class RunnerSession {
           return text({ ...attribution, deleted: args.path, entries: result.entries });
         } }),
       defineTool({ name: "bash", description: "Run an exact shell command in the session worktree. Waits for an exact human approval unless the owner enabled auto-approve for this request; then it runs at once and the result carries its output. It stops at the host's command time limit, which identity reports (commands.timeoutSeconds).", parameters: Type.Object({ command: Type.String() }), execute: async (args, api, call) => {
+        // A workspace that turned piki:shell off (fail-closed, like host_bash): refused before anything is recorded.
+        await this.requireSessionTool("bash");
         const attribution = await this.toolActor(api, true);
         // Before any card: a session on a host that no longer accepts that asks nobody for anything.
         await this.requireHostEnvironment();
@@ -2227,10 +2237,29 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "node", `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "node" }, call.abortSignal), call));
         } }),
+      // Python and its package and test tools without a shell (piki:python, #163), decided as bash's are, like node's.
+      // Not in the Windows sandbox, whose container reaches no Python yet (review of #186).
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. Like bash, it waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+        executionMode: "sequential",
+        parameters: Type.Object({ program: StringEnum(pythonPrograms), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()),
+          venv: Type.Optional(Type.String()) }),
+        execute: async (args, api, call) => {
+          // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+          await this.requireSessionTool("python");
+          let request: PythonRequest;
+          let command: string;
+          try { request = pythonRequest(args); command = pythonShellCommand(request); }
+          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid python call"}. Nothing ran.`); }
+          const attribution = await this.toolActor(api, true);
+          await this.requireHostEnvironment();
+          const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
+          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "bash", command }, String(api.taskId), { permitted: true, unbounded, tool: "python" }, call.abortSignal), call));
+        } })]),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools. "
         + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
         parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), wait: Type.Optional(StringEnum(githubWaits)),
           timeout_seconds: Type.Optional(Type.Integer({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }), execute: async (args, api, call) => {
+        await this.requireSessionTool("github_read");
         const attribution = await this.toolActor(api, false);
         const repository = this.githubRepository(args.repository);
         await this.permit(api, call, "github_read", `${repository}#${args.issue}`);
@@ -2252,11 +2281,13 @@ export class RunnerSession {
         return text({ ...attribution, ...view, waited });
       } }),
       defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), body: Type.String() }), execute: async (args, api, call) => {
+        await this.requireSessionTool("github_comment");
         const attribution = await this.toolActor(api, true);
         await this.permit(api, call, "github_comment", `${args.repository}#${args.issue}`, { write: true });
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.comment", ...args }, String(api.taskId), { permitted: true }), call));
       } }),
       defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), pull: Type.Integer({ minimum: 1 }), sha: Type.String(), method: StringEnum(githubMergeMethods) }), execute: async (args, api, call) => {
+        await this.requireSessionTool("github_merge");
         const attribution = await this.toolActor(api, true);
         const repository = this.githubRepository(args.repository);
         if (!/^[0-9a-f]{40}$/.test(args.sha)) throw new RunnerError(400, "sha must be the pull request's full 40-character head commit, as github_read reports it");
@@ -2264,6 +2295,7 @@ export class RunnerSession {
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.merge", repository, pull: args.pull, sha: args.sha, method: args.method }, String(api.taskId), { permitted: true }), call));
       } }),
       defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker once a human approves it, or at once under the owner's auto-approve. Use this instead of gh issue create: the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), title: Type.String(), body: Type.String() }), execute: async (args, api, call) => {
+        await this.requireSessionTool("github_issue");
         const attribution = await this.toolActor(api, true);
         const repository = this.githubRepository(args.repository);
         if (!args.title.trim() || /[\r\n]/.test(args.title) || args.title.length > GITHUB_ISSUE_TITLE_LIMIT) throw new RunnerError(400, `title must be one non-empty line of at most ${GITHUB_ISSUE_TITLE_LIMIT} characters`);
@@ -2273,6 +2305,7 @@ export class RunnerSession {
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.issue", repository, title: args.title, body: args.body }, String(api.taskId), { permitted: true }), call));
       } }),
       defineTool({ name: "source_read", description: "Read one of the workspace's document sources (source, its id as the instructions list it: Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark or Tencent Docs) as the session owner, through Pikibun: a page or document as text (Markdown where the provider gives it), a folder, database or wiki page as the items in it. Pass item (an id or link from an earlier result) to read an item under that source; others are refused. Long content is cut and marked truncated. Read-only; no credentials enter tools.", parameters: Type.Object({ source: Type.String(), item: Type.Optional(Type.String()) }), execute: async (args, api, call) => {
+        await this.requireSessionTool("source_read");
         const attribution = await this.toolActor(api, false);
         if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(args.source)) throw new RunnerError(400, "source must be a source id, as the instructions list it");
         if (args.item !== undefined && !validSourceItem(args.item)) throw new RunnerError(400, "item must be an id or link of one line, as an earlier result gives it");
@@ -2323,6 +2356,7 @@ export class RunnerSession {
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.readEntries })),
         timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
       }), execute: async (args, api, call) => {
+        await this.requireSessionTool("sessions");
         const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
           modelId: args.model, thinkingLevel: args.thinking, visibility: args.visibility, messageId: args.message_id, limit: args.limit }).filter(([, value]) => value !== undefined)) as
@@ -2503,10 +2537,10 @@ export class RunnerSession {
    * owner allows (see runExtensionTool).
    */
   /**
-   * `consent.tool`: the tool whose call this command is, where that isn't bash (git, node): the owner's "Allow for this
+   * `consent.tool`: the tool whose call this command is, where that isn't bash (git, node, python): the owner's "Allow for this
    * session" for it runs its commands without asking, as one for bash does.
    */
-  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean; tool?: "git" | "node" } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
+  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean; tool?: "git" | "node" | "python" } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
     this.requireUnfrozen();
     const operation = validateOperation(input);
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");

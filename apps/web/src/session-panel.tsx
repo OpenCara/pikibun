@@ -301,7 +301,7 @@ const permissionNeedText: Record<PermissionNeed, string> = {
   audience: "Sharing another session: this session's readers would see what the agent reads from a session they can't open themselves.",
 };
 /** Tools whose effect gets its own approval card after the permission, unless the message auto-approves. */
-const approvedTools: readonly string[] = ["bash", "git", "node", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
+const approvedTools: readonly string[] = ["bash", "git", "node", "python", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
 
 function PermissionSummary({ request, pending }: { request: PermissionRequest; pending: boolean }) {
   return <>
@@ -424,7 +424,8 @@ function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView
     {(extensions.builtin ?? []).map(name => {
       const item = builtinExtensions.find(candidate => candidate.name === name);
       return <Row key={`builtin ${name}`} leading={<Icon name="tool" size={16} />} title={item ? <>{item.title} <code>{name}</code></> : <code>{name}</code>}
-        hint={item ? `Built in, as the host's configuration turns it on. Tools: ${item.tools.join(", ")}` : "Built in, as the host's configuration turns it on"}
+        hint={item ? `${"core" in item && item.core ? "Built in, in every session" : "Built in, as the host's configuration turns it on"}. Tools: ${item.tools.join(", ")}`
+          : "Built in, as the host's configuration turns it on"}
         trailing={<StatusBadge tone="success">Running</StatusBadge>} />;
     })}
   </Section>;

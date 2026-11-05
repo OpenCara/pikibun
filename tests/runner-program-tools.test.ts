@@ -174,3 +174,46 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool node is not available/);
   assert.equal(view.approvals.length, 1);
 });
+
+test("the python tool runs Python without a shell, in a virtual environment it names; piki:python turns it off", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-python-tool-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage([fauxToolCall("python", { program: "uv", args: ["publish"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["-m", "venv", "--without-pip", ".venv"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["-c", "import os, subprocess, sys; os.chdir('/'); "
+      + "print('venv-python', sys.prefix != sys.base_prefix, subprocess.run(['python3', '-c', 'import sys; print(sys.prefix != sys.base_prefix)'], capture_output=True, text=True).stdout.strip())"], venv: ".venv" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Ran."),
+    fauxAssistantMessage([fauxToolCall("python", { program: "python3", args: ["--version"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Off."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-python-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "python-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Run it.", requestId: "run", admissionId: await sha256("python admission"), options: { access: "auto" } }, "write");
+  await idle(session);
+  let view = await session.view();
+  assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "python", status: "executed" }, { tool: "python", status: "executed" }],
+    "the refused call ran nothing; the others ran under Auto-approve");
+  // The environment's python3 also for a program that left its directory: on PATH as an absolute path (review of #186).
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /venv-python True True/);
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /uv publish acts on a package index as an account/);
+
+  answer = { extensions: [{ source: "piki:python", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("python admission off") }, "write");
+  await idle(session);
+  view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool python is not available/);
+  assert.equal(view.entries.flatMap(entry => entry.autoApproved ?? []).length, 2);
+});

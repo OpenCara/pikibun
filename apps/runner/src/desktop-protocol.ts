@@ -27,7 +27,7 @@ export type SetupAction =
 export const MXC_SDK_VERSION = "1.0.1";
 
 /** Packages a SetupAction of kind apt may name: the sandbox's own prerequisites. */
-export const APT_PACKAGES = ["bubblewrap", "python3", "git", "util-linux"] as const;
+export const APT_PACKAGES = ["bubblewrap", "python3", "git", "util-linux", "python3-venv"] as const;
 
 /** How to get what is missing: what to do, a command or page that does it, and what the app can do itself. */
 export interface PrerequisiteFix {

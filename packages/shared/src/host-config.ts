@@ -21,11 +21,13 @@ export type GpuKind = (typeof gpuKinds)[number];
  * connector; its tool calls are the session's own, decided as usual. Pi's other built-ins have no counterpart here:
  * `mcp` and `llama.cpp` register MCP servers and providers, which Pikibun doesn't run, and `tool-search` finds deferred
  * tools, which Pikibun has none of. Each is named `pi:<name>`, beside Pikibun's own built-ins, which workspaces choose as
- * `piki:<name>` (piki-extensions.ts).
+ * `piki:<name>` (piki-extensions.ts). A `core` one runs in every session whatever the host's configuration lists: its
+ * owner can't turn it off (a workspace extension offering a tool by its name still replaces it).
  */
 export const builtinExtensions = Object.freeze([
   Object.freeze({
-    name: "pi:codemode", title: "Code mode", tools: Object.freeze(["codemode"]),
+    // Core (#163): it chains, loops over and filters other tools' results, as shell pipelines did, so every session has it.
+    name: "pi:codemode", title: "Code mode", tools: Object.freeze(["codemode"]), core: true,
     description: "The codemode tool: the model writes JavaScript that calls the session's tools, run in a QuickJS sandbox in the connector, to batch, chain and filter calls. Each call it makes is decided like the model's own, and a script resumes where it was after a restart.",
   }),
 ] as const);

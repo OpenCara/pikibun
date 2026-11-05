@@ -179,13 +179,14 @@ export class SessionBuiltins {
   }
 
   /**
-   * The extensions of `enabled` a message runs with. One steps aside where an extension of the workspace offers a tool
-   * by its name (`taken`), as Pi's built-ins do when an extension replaces them.
+   * The extensions a message runs with: the core ones, and those of `enabled`. One steps aside where an extension of the
+   * workspace offers a tool by its name (`taken`), as Pi's built-ins do when an extension replaces them.
    */
   select(enabled: readonly BuiltinExtensionName[], taken: ReadonlySet<string>): { name: BuiltinExtensionName; extension: Extension }[] {
     return builtinExtensions.flatMap(item => {
       const extension = this.extensions.get(item.name);
-      return extension && enabled.includes(item.name) && !item.tools.some(tool => taken.has(tool)) ? [{ name: item.name, extension }] : [];
+      const on = ("core" in item && item.core === true) || enabled.includes(item.name);
+      return extension && on && !item.tools.some(tool => taken.has(tool)) ? [{ name: item.name, extension }] : [];
     });
   }
 
