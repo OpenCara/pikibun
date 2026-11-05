@@ -61,9 +61,24 @@ export interface WorkspaceTool {
 /** What an extension offers, as a host that has it at that version reports it or, for Pikibun's own, as this version knows it. */
 export interface ExtensionOffer {
   description?: string;
-  /** Its tools; none for one that only adds prompt text or hooks. */
-  tools: { name: string; description: string }[];
+  /**
+   * Its tools; none for one that only adds prompt text or hooks. `own`: one named like one of Pikibun's own tools, which
+   * sessions keep instead: the connector reports it among what it ignores, without its description (summarizeModules).
+   */
+  tools: { name: string; description: string; own?: true }[];
 }
+
+/** How a host's report lists a tool it left out for being named like one of Pikibun's own (summarizeModules). */
+const OWN_TOOL = /^tool (.+) \(one of Pikibun's own\)$/;
+
+/**
+ * Why sessions leave a tool out: `own`, an extension's tool named like one of the session's own; `extension`, one named
+ * like an earlier extension's; `builtin`, a built-in's (`pi:codemode`), which an extension's tool of its name replaces.
+ */
+export type ShadowKind = "own" | "extension" | "builtin";
+
+/** Who keeps a name an extension's tool can't have, when it is one of Pikibun's own this version doesn't know. */
+export const PIKIBUN = "Pikibun";
 
 export interface WorkspaceTools {
   /**
@@ -74,10 +89,11 @@ export interface WorkspaceTools {
   /** The session's own tools the workspace turned off, with the extension that turns them on. */
   off: { name: string; source: string }[];
   /**
-   * Tools sessions leave out (`source`'s) because another (`by`) has the name: an enabled extension's, named like one of
-   * the session's own or an earlier extension's, or a built-in's (`pi:codemode`), which an extension's of its name replaces.
+   * Tools sessions leave out (`source`'s) because another (`by`) has the name, and why (`kind`): an enabled extension's,
+   * named like one of the session's own (`by` its session-tool extension, or PIKIBUN) or an earlier extension's, or a
+   * built-in's (`pi:codemode`), which an extension's of its name replaces.
    */
-  shadowed: { name: string; source: string; by: string }[];
+  shadowed: { name: string; source: string; by: string; kind: ShadowKind }[];
   /** Enabled extensions none of the hosts has reported, whose tools aren't known yet. */
   unreported: string[];
 }
@@ -91,9 +107,16 @@ export function extensionOffer(source: string, installed: readonly InstalledExte
   if (piki?.sessionTools) return { description: piki.description, tools: piki.sessionTools.map(name => ({ name, description: pikibunToolDescriptions[name] ?? "" })) };
   const reported = installed.find(item => item.source === source && !item.error);
   if (reported) {
-    const tools = new Map<string, string>();
-    for (const tool of reported.modules.flatMap(module => module.tools)) if (!tools.has(tool.name)) tools.set(tool.name, tool.description);
-    return { description: piki?.description ?? reported.description, tools: [...tools].map(([name, description]) => ({ name, description })) };
+    const tools = new Map<string, ExtensionOffer["tools"][number]>();
+    for (const module of reported.modules) {
+      for (const tool of module.tools) if (!tools.has(tool.name)) tools.set(tool.name, { name: tool.name, description: tool.description });
+      // The connector leaves a tool named like one of Pikibun's own out of `tools`, and says so among what it ignores.
+      for (const item of module.ignored) {
+        const name = OWN_TOOL.exec(item)?.[1];
+        if (name && !tools.has(name)) tools.set(name, { name, description: "", own: true });
+      }
+    }
+    return { description: piki?.description ?? reported.description, tools: [...tools.values()] };
   }
   if (piki) return { description: piki.description, tools: piki.tool ? [{ name: piki.tool, description: piki.description }] : [] };
   return undefined;
@@ -125,7 +148,11 @@ export function workspaceTools(extensions: readonly WorkspaceExtension[], instal
     if (!offer) { unreported.push(extension.source); continue; }
     for (const tool of offer.tools) {
       const by = owners.get(tool.name);
-      if (by) { if (by !== extension.source) shadowed.push({ name: tool.name, source: extension.source, by }); continue; }
+      if (tool.own || (by && sessionToolSources.has(by))) {
+        shadowed.push({ name: tool.name, source: extension.source, by: by && sessionToolSources.has(by) ? by : PIKIBUN, kind: "own" });
+        continue;
+      }
+      if (by) { if (by !== extension.source) shadowed.push({ name: tool.name, source: extension.source, by, kind: "extension" }); continue; }
       owners.set(tool.name, extension.source);
       offered.push({ name: tool.name, source: extension.source, origin: "extension", description: tool.description, mode: extension.tools });
     }
@@ -134,7 +161,7 @@ export function workspaceTools(extensions: readonly WorkspaceExtension[], instal
   for (const builtin of builtinExtensions.filter(item => "core" in item && item.core)) {
     for (const name of builtin.tools) {
       const by = owners.get(name);
-      if (by) shadowed.push({ name, source: builtin.name, by });
+      if (by) shadowed.push({ name, source: builtin.name, by, kind: "builtin" });
       else tools.push({ name, source: builtin.name, origin: "builtin", description: pikibunToolDescriptions[name] ?? builtin.description });
     }
   }

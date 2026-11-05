@@ -19,6 +19,7 @@ import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { extensionAvailability, extensionPackageKey, normalizeExtensionSource, parseHostExtensionsReport, parseWorkspaceExtensions,
   sessionExtensions, type ExtensionSettings, type InstalledExtension } from "../packages/shared/src/host-extensions.js";
+import { extensionOffer, workspaceTools } from "../packages/shared/src/workspace-tools.js";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -123,6 +124,32 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
   assert.equal((await store.list()).length, 4, "a failed install leaves nothing behind");
   await store.remove("pi-search");
   assert.deepEqual((await store.list()).map(item => item.source), ["npm:not-an-extension@1.0.0", `local:${join(root, "dev.ts")}`, `local:${join(root, "broken.ts")}`]);
+});
+
+test("the workspace page reads a host's real report: a tool named like one of Pikibun's own shows as left out, with its kept tools beside it", async t => {
+  const { store } = await storeWith(t, {
+    "pi-shell-helpers": {
+      "package.json": JSON.stringify({ name: "pi-shell-helpers", version: "1.0.0", description: "Shell helpers.", pi: { extensions: ["./index.ts"] } }),
+      "index.ts": `import { Type } from "typebox";
+        export default function (pi) {
+          for (const name of ["read_file", "lint", "git"]) pi.registerTool({ name, label: name, description: name + ", the extension's way.", parameters: Type.Object({}),
+            async execute() { return { content: [], details: undefined }; } });
+        }`,
+    },
+  });
+  await store.add(parseExtensionSource("npm:pi-shell-helpers@1.0.0"));
+  const [summary] = (await loadInstalled(store, [])).map(item => item.summary);
+  // The connector reports only lint as a tool, and the others among what it ignores.
+  assert.deepEqual(summary!.modules[0]!.tools.map(tool => tool.name), ["lint"]);
+  const offer = extensionOffer("npm:pi-shell-helpers@1.0.0", [summary!]);
+  assert.equal(offer?.description, "Shell helpers.");
+  assert.deepEqual(offer?.tools.map(tool => [tool.name, !!tool.own]), [["lint", false], ["read_file", true], ["git", true]]);
+  const usable = workspaceTools([{ source: "npm:pi-shell-helpers@1.0.0", enabled: true, tools: "approval", settings: {} }], [summary!]);
+  assert.deepEqual(usable.shadowed, [
+    { name: "read_file", source: "npm:pi-shell-helpers@1.0.0", by: "piki:files", kind: "own" },
+    { name: "git", source: "npm:pi-shell-helpers@1.0.0", by: "piki:git", kind: "own" },
+  ]);
+  assert.deepEqual(usable.tools.filter(tool => tool.origin === "extension").map(tool => tool.name), ["lint"]);
 });
 
 test("a directory a package names loads as Pi loads it: its index alone, if it has one, else every module in it", async t => {

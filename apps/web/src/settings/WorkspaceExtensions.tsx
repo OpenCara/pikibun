@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { Workspace } from "../../../../packages/shared/src/types";
 import { pikiCommandExtensions, pikiExtension, pikiSessionToolExtensions } from "../../../../packages/shared/src/piki-extensions";
-import { descriptionSummary, extensionLabel, extensionOffer, workspaceTools, type ExtensionOffer, type WorkspaceTool,
+import { descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, workspaceTools, type ExtensionOffer, type ShadowKind, type WorkspaceTool,
   type WorkspaceTools } from "../../../../packages/shared/src/workspace-tools";
 import { ExtensionSettingsFields } from "./ExtensionSettingsFields";
 import { extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, type ExtensionAvailability, type ExtensionFlag, type ExtensionSettings, type ExtensionToolMode,
@@ -76,7 +76,7 @@ function ToolList({ tools, sources, shadowed }: { tools: readonly Pick<Workspace
     const by = shadowed?.get(tool.name);
     return <li key={`${tool.source} ${tool.name}`}>
       <code className={by ? "tool-list-name tool-shadowed" : "tool-list-name"}>{tool.name}</code>
-      <span className="tool-list-description" title={tool.description}>{descriptionSummary(tool.description) || <span className="muted">No description</span>}</span>
+      <span className="tool-list-description" title={tool.description}>{descriptionSummary(tool.description) || (!by && <span className="muted">No description</span>)}</span>
       {by ? <span className="tool-list-source" title={`Sessions keep ${by}'s ${tool.name}`}>Left out: {extensionLabel(by)} has it</span>
         : sources && <span className="tool-list-source" title={tool.source}>{extensionLabel(tool.source)}{tool.mode && <> · {toolsLabel[tool.mode]}</>}</span>}
     </li>;
@@ -167,11 +167,12 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
   /** The tools sessions leave out, by extension: name → whose they keep. */
   const shadowedOf = (source: string) => new Map((usable?.shadowed ?? []).filter(item => item.source === source).map(item => [item.name, item.by]));
   // One warning per name an extension of this workspace can't have: who keeps it, and whose sessions leave out.
-  const conflicts: { tool: string; by: string; sources: string[] }[] = [];
+  // Each kind its own: an extension that replaces a built-in never joins another extension's clash with it.
+  const conflicts: { kind: ShadowKind; tool: string; by: string; sources: string[] }[] = [];
   for (const item of usable?.shadowed ?? []) {
-    const conflict = conflicts.find(other => other.tool === item.name && other.by === item.by);
+    const conflict = conflicts.find(other => other.kind === item.kind && other.tool === item.name && other.by === item.by);
     if (conflict) conflict.sources.push(item.source);
-    else conflicts.push({ tool: item.name, by: item.by, sources: [item.source] });
+    else conflicts.push({ kind: item.kind, tool: item.name, by: item.by, sources: [item.source] });
   }
   return <Section title="Extensions" bare info={info} action={admin && listed.length < extensionLimits.workspace
     ? <Button variant="outline" size="sm" icon="plus" onClick={() => setEditing("new")}>Add extension</Button> : undefined}>
@@ -219,17 +220,19 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
             </div></CardBody>}
           </Collapsible>;
         })}
-        {conflicts.map(conflict => sessionToolSources.has(conflict.by)
-          ? <CardBody key={`${conflict.tool} ${conflict.by}`}><Alert variant="warning" title={`${conflict.tool} is one of Pikibun's own tools`}>
-            {conflict.sources.join(" and ")} {conflict.sources.length === 1 ? "registers" : "register"} a tool named <code>{conflict.tool}</code>, like {conflict.by}. Sessions keep Pikibun's own, even while it is turned off here, and leave out the extension's.
-          </Alert></CardBody>
-          : conflict.sources.every(source => !source.startsWith("pi:"))
-          ? <CardBody key={`${conflict.tool} ${conflict.by}`}><Alert variant="warning" title={`Two extensions offer ${conflict.tool}`}>
-            {[conflict.by, ...conflict.sources].join(" and ")} {conflict.sources.length === 1 ? "both" : "all"} register a tool named <code>{conflict.tool}</code>. Sessions keep the first one's, in this list's order, and leave out the {conflict.sources.length === 1 ? "other's" : "others'"}.
-          </Alert></CardBody>
-          : <CardBody key={`${conflict.tool} ${conflict.by}`}><Alert variant="info" title={`${conflict.by} replaces the built-in ${conflict.tool}`}>
+        {conflicts.map(conflict => {
+          const key = `${conflict.kind} ${conflict.tool} ${conflict.by}`;
+          const one = conflict.sources.length === 1;
+          if (conflict.kind === "own") return <CardBody key={key}><Alert variant="warning" title={`${conflict.tool} is one of Pikibun's own tools`}>
+            {conflict.sources.join(" and ")} {one ? "registers" : "register"} a tool named <code>{conflict.tool}</code>, like Pikibun's own{conflict.by === PIKIBUN ? "" : ` (${conflict.by})`}. Sessions keep Pikibun's, even while it is turned off here, and leave out the {one ? "extension's" : "extensions'"}.
+          </Alert></CardBody>;
+          if (conflict.kind === "extension") return <CardBody key={key}><Alert variant="warning" title={`${one ? "Two" : "Several"} extensions offer ${conflict.tool}`}>
+            {[conflict.by, ...conflict.sources].join(" and ")} {one ? "both" : "all"} register a tool named <code>{conflict.tool}</code>. Sessions keep the first one's, in this list's order, and leave out the {one ? "other's" : "others'"}.
+          </Alert></CardBody>;
+          return <CardBody key={key}><Alert variant="info" title={`${conflict.by} replaces the built-in ${conflict.tool}`}>
             It registers a tool named <code>{conflict.tool}</code>, like {conflict.sources.join(" and ")}: sessions use the extension's instead of the built-in.
-          </Alert></CardBody>)}
+          </Alert></CardBody>;
+        })}
         {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
       </div>}
     </ResourceState>
@@ -278,7 +281,8 @@ function ExtensionSheet({ extension, taken, installed, flags, close, save, busy,
       </Field>
       {offer ? <div className="stack extension-offer">
         {offer.description && <p className="muted small pre-wrap">{offer.description.trim()}{cli?.tool && <> It runs <code>{cli.tool}</code> as the host's owner is signed in to it.</>}</p>}
-        {offer.tools.length ? <ToolList tools={offer.tools.map(tool => ({ ...tool, source: normalized! }))} /> : <p className="muted small">No tools: it adds prompt text or hooks only.</p>}
+        {offer.tools.length ? <ToolList tools={offer.tools.map(tool => ({ ...tool, source: normalized! }))}
+          shadowed={new Map(offer.tools.filter(tool => tool.own).map(tool => [tool.name, PIKIBUN]))} /> : <p className="muted small">No tools: it adds prompt text or hooks only.</p>}
       </div> : normalized && <p className="muted small">What it is and its tools show here once a host that has it installed at this version reports them.</p>}
       {replacing && <p className="muted small">The workspace uses {replacing.source}: this replaces it, in its place.</p>}
       <div className="field"><span className="field-label">Tools</span>
