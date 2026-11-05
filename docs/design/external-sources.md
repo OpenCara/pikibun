@@ -41,7 +41,7 @@ would need a placeholder repository until sources count as bindings too.
 ### A. Brokered tools, like `github_read` / `github_comment`
 
 New tools such as `docs_search`, `docs_read` and `docs_write` (or one set per provider: `notion_read`, `drive_read`,
-and so on). Each one calls `/api/connectors/self/<provider>/…`, as `githubRead` does (`apps/server/src/github-broker.ts`).
+and so on). Each one calls `/api/connectors/self/<provider>/…`, as `githubRead` does (`apps/server/src/authority/github-broker.ts`).
 The control plane:
 
 - loads the **session owner's** account for the provider from an encrypted table like `git_credentials` (`vault.ts`);
@@ -243,7 +243,7 @@ APIs nor their documentation) and are tested against fakes: verify endpoint shap
 against the real services before relying on them.
 
 **Done: sign-in (OAuth) and three more kinds.** Members can connect a document source by signing in to the provider
-(`apps/server/src/source-oauth.ts`), which Dropbox, OneDrive/SharePoint and Tencent Docs need (they have no app-scoped
+(`apps/server/src/authority/sources/source-oauth.ts`), which Dropbox, OneDrive/SharePoint and Tencent Docs need (they have no app-scoped
 secret to paste), and which spares Notion and Google members the integration and service-account setup.
 
 - **Apps.** The operator registers one OAuth app per provider and sets its client id and secret

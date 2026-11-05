@@ -11,7 +11,7 @@ import { sha256, verifyToken } from '../packages/shared/src/crypto.js';
 import { registerRestoreRoutes, downloadRestoreSnapshot } from '../apps/server/src/restore-routes.js';
 import { registerBackups } from '../apps/server/src/backups.js';
 import { boundedSnapshotText, MAX_BACKUP_BYTES, validateSnapshot } from '../apps/server/src/restore-snapshot.js';
-import { sessionAccess } from '../apps/server/src/db.js';
+import { sessionAccess } from '../apps/server/src/authority/access.js';
 import { memoryStorage, testDatabase } from './helpers/control-plane.js';
 
 const secret = 'restore-internal-test-secret-not-for-deployment';

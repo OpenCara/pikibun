@@ -10,27 +10,27 @@ import { isRevision } from '../../../packages/shared/src/view-patch.js';
 import { hasPermission, managesSession, normalizePermissions, roleSessionCeiling, sessionRoleOf, sessionRolePermissions, validateUserEnv } from '../../../packages/shared/src/policy.js';
 import { redactApproval } from '../../../packages/shared/src/redaction.js';
 import type { AgentRow, AppContext, Env, ModelRow, SessionAccess, SessionRow, WorkerEnv } from './types.js';
-import { agentVersion, auditStatement, getUser, listSessionAccess, modelDefinition, requireActiveSession, requireMember, requireSession, requireSessionCreator, requireSessionManager, sessionCreatorSQL, sessionManagerSQL, requireUnfrozen, runnerSessionRecord, sessionAccess, sessionRecord, userProfile } from './db.js';
+import { agentVersion, getUser, modelDefinition, requireActiveSession, requireUnfrozen, runnerSessionRecord, sessionRecord, userProfile } from './db.js';
+import {
+  auditStatement, autoApprovedRequesters, chooseAutoApprovedRequester, cloneRepositories, crossSessionCall, hostAuthority, hostCommandSession,
+  hostOwnerDecides, issueRunAdmission, legacyRepositoryFixture, listSessionAccess, mayDecideHostCommands, parseOperation, permissionCall,
+  presentApprovals, requireConnectorSession, requireMember, requireOperationTool, requireSession, requireSessionCreator, requireSessionManager,
+  reviewedApproval, runsShellCommands, sessionAccess, sessionCreatorSQL, sessionManagerSQL, workspaceApprovalSettings,
+} from './authority/index.js';
 import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
 import { fail, id, identifier, jsonObject, now, randomToken, testMode, text, userIdentifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { connectorUtf8Bytes } from './connector-transport.js';
-import { parseOperation } from './operations.js';
-import { hostSessionsSupported, requireConnectorSession } from './connectors.js';
+import { hostSessionsSupported } from './connectors.js';
 import { connectorHostConfig } from './host-config.js';
-import { crossSessionCall, permissionCall, presentApprovals, requireOperationTool, reviewedApproval } from './approval-reviews.js';
-import { issueRunAdmission } from './run-admissions.js';
-import { cloneRepositories, legacyRepositoryFixture } from './repositories.js';
 import { chatAgentVersion, requireModel } from './catalog.js';
 import { isLinkShared } from './session-links.js';
-import { hostAuthority, hostCommandSession, hostOwnerDecides, mayDecideHostCommands, runsShellCommands } from './host-access.js';
 import { decidedAsHostCommand, grantedShell, requesterAutoApproves } from '../../../packages/shared/src/host-operations.js';
 import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL, requireEnabledModel } from './host-models.js';
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
-import { autoApprovedRequesters, chooseAutoApprovedRequester, workspaceApprovalSettings } from './requester-auto-approve.js';
 
 /**
  * Per-message model, reasoning and access. The model must be one the session's own host offers: one it advertises that its

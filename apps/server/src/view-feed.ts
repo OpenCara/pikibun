@@ -4,10 +4,10 @@ import { redactApproval, redactEntry } from '../../../packages/shared/src/redact
 import {
   applyViewPatch, isPatchableView, isRevision, isViewPatch, reuseUnchanged, ViewRevisions, type SessionViewPatch,
 } from '../../../packages/shared/src/view-patch.js';
-import { presentApprovals } from './approval-reviews.js';
+import { onSessionChange, presentApprovals, requireRunnerAccess } from './authority/index.js';
 import type { ConnectionPin } from './connector-transport.js';
 import { fail } from './http.js';
-import { requireRunnerAccess, runnerJSON, runnerRequest } from './runner.js';
+import { runnerJSON, runnerRequest } from './runner.js';
 import { briefEntry, entriesBefore, fullTranscript, latestEntries, type TranscriptDisplay } from '../../../packages/shared/src/transcript-display.js';
 import type { AppContext, SessionRow } from './types.js';
 
@@ -107,6 +107,8 @@ export function invalidateSessionView(c: AppContext, sessionId: string): void {
   feed.epoch++;
   feed.fresh = false;
 }
+// Changes the authority makes (authority/changes.ts) invalidate feeds as the server's own changes do.
+onSessionChange(invalidateSessionView);
 
 /**
  * The session's current view for the signed-in viewer, after checking their access. Callers must recheck access before

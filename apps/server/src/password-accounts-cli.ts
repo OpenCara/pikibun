@@ -1,9 +1,7 @@
 import { HTTPException } from 'hono/http-exception';
-import { instanceAdmins } from './admin.js';
-import { auditStatement } from './db.js';
+import { auditStatement, hashPassword, instanceAdmins, newPassword, passwordAccountStatements, passwordUsername } from './authority/index.js';
 import { ConstraintError, type Database } from './db/types.js';
 import { now } from './http.js';
-import { hashPassword, newPassword, passwordAccountStatements, passwordUsername } from './password-auth.js';
 import type { Env } from './types.js';
 
 /**

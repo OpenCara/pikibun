@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { Hono } from 'hono';
 import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
-import { sessionAccess } from './db.js';
+import { decryptToken, encryptToken, sessionAccess } from './authority/index.js';
 import { appOrigin, fail, identifier, jsonObject, now, randomToken, text } from './http.js';
-import { decryptToken, encryptToken } from './vault.js';
 import { allowedPushEndpoint, encryptPushPayload, generateVapidKeys, validP256Point, vapidAuthorization, type VapidKeys } from './web-push.js';
 import {
   defaultNotificationPreferences, NOTIFICATION_FEED_RETENTION_MS, notificationPath, type NotificationConfig, type NotificationDevice, type NotificationFeed,

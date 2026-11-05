@@ -4,7 +4,7 @@ import { decidedAsHostCommand, decidesHostCommand, decidesHostCommands, hostComm
 import type { ConnectorInfo } from "../packages/shared/src/connector.js";
 import type { Operation } from "../packages/shared/src/types.js";
 import { decidedAsHostCommand as sharedRule, grantedShell, type HostCommandSession } from "../packages/shared/src/host-operations.js";
-import { hostCommandSession } from "../apps/server/src/host-access.js";
+import { hostCommandSession } from "../apps/server/src/authority/host-access.js";
 
 test("a host command is host_bash, or any command of a session that runs on its host", () => {
   const sandboxed = {};

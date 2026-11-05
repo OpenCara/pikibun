@@ -4,11 +4,12 @@ import { base64Bytes, fileUploadLimits, formatBytes, parseUploadChunk, type Uplo
 import { signToken, verifyToken } from '../../../packages/shared/src/crypto.js';
 import type { RunnerTicket } from '../../../packages/shared/src/types.js';
 import type { Database } from './db/types.js';
-import { auditStatement, requireMember, requireSession } from './db.js';
+import {
+  auditStatement, authorizeConnectorTicket, connectorPermissions, type ConnectorRow, requireMember, requireRunnerAccess, requireSession,
+} from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
-import { authorizeConnectorTicket, connectorPath, connectorPermissions } from './connector-transport.js';
-import type { ConnectorRow } from './connectors.js';
-import { requireRunnerAccess, runnerJSON, runnerRequest } from './runner.js';
+import { connectorPath } from './connector-transport.js';
+import { runnerJSON, runnerRequest } from './runner.js';
 import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
 
 /**

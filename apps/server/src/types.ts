@@ -41,11 +41,11 @@ export interface Env {
   SANDBOX_GITHUB_API?: string;
   /** RSA private key (PEM, PKCS#8; secret) signing Pikibun OIDC assertions for Entra federation and Forgejo integrations. */
   OIDC_SIGNING_KEY?: string;
-  /** Comma-separated user IDs of the instance administrators, who manage every account (see `apps/server/src/admin.ts`). */
+  /** Comma-separated user IDs of the instance administrators, who manage every account (see `apps/server/src/authority/admin.ts`). */
   ADMIN_USER_IDS?: string;
   /**
    * OAuth apps the operator registered so members can connect document sources by signing in (see
-   * apps/server/src/source-oauth.ts). Each pair is optional; a provider without one offers no sign-in. Their redirect
+   * apps/server/src/authority/sources/source-oauth.ts). Each pair is optional; a provider without one offers no sign-in. Their redirect
    * URI is APP_ORIGIN/api/source-accounts/<provider>/oauth/callback.
    */
   GOOGLE_CLIENT_ID?: string;

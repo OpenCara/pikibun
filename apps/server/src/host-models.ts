@@ -2,9 +2,8 @@ import type { Hono } from 'hono';
 import type { ConnectorCapabilities, HostModelSettings, LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import type { ChatOptions } from '../../../packages/shared/src/types.js';
 import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
-import { auditAfterChange } from './db.js';
+import { auditAfterChange, managedConnector, managedConnectorFor, managesConnectorSQL } from './authority/index.js';
 import { fail, jsonObject, now, text } from './http.js';
-import { managedConnector, managedConnectorFor, managesConnectorSQL } from './host-access.js';
 
 /*
  * Which of its models a host offers. A host advertises the models Pi on it is configured to offer; its owner and its

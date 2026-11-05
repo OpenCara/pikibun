@@ -7,10 +7,12 @@ import {
   type CrossSessionMessage, type CrossSessionOutcome, type CrossSessionSummary, type SessionConnections, type SessionsBrokerAction, type SessionsToolResult,
 } from '../../../packages/shared/src/cross-session.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
-import { auditStatement, getUser, requireSession, requireSessionCreator, sessionAccess, sessionReaders, workspaceSessionAccess } from './db.js';
+import {
+  auditStatement, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
+  sessionsNeedGranted, workspaceSessionAccess,
+} from './authority/index.js';
+import { getUser } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
-import { requireCallbackScope } from './connectors.js';
-import { requireToolCall, sessionsNeedGranted } from './approval-reviews.js';
 import { archiveSession, createSession, stopSession, submitMessage } from './sessions.js';
 import { isLinkShared } from './session-links.js';
 import { sessionView, transcriptDisplay } from './view-feed.js';

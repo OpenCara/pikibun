@@ -2,13 +2,14 @@ import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { assignableWorkspaceRoles, type AssignableWorkspaceRole } from '../../../packages/shared/src/types.js';
 import { adminManagedRoles, workspaceManagerRoles } from '../../../packages/shared/src/policy.js';
-import { maxPendingMembers, type OwnJoinRequest, type WorkspaceInvite, type WorkspaceInviteLink, type WorkspaceJoinRequest } from '../../../packages/shared/src/invites.js';
+import type { OwnJoinRequest, WorkspaceInvite, WorkspaceInviteLink, WorkspaceJoinRequest } from '../../../packages/shared/src/invites.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
-import { auditAfterChange, auditStatement, requireMember } from './db.js';
+import {
+  auditAfterChange, auditStatement, decryptToken, encryptToken, INVALID_LINK, INVITE_TOKEN, joinRequestStatement, requireInvitedWorkspace,
+  requireMember,
+} from './authority/index.js';
 import { appOrigin, fail, identifier, id, jsonObject, now, randomToken, userIdentifier } from './http.js';
-import type { Database } from './db/types.js';
 import type { Env, WorkerEnv } from './types.js';
-import { decryptToken, encryptToken } from './vault.js';
 import { ownerHostStatements } from './connectors.js';
 
 /**
@@ -19,8 +20,6 @@ import { ownerHostStatements } from './connectors.js';
  * requesters can still withdraw them through /api/join-requests.
  */
 
-const INVITE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
-const INVALID_LINK = 'This invite link doesn\'t work. It may have been turned off or replaced.';
 const roleList = (roles: readonly string[]) => roles.map(role => `'${role}'`).join(', ');
 
 interface LinkRow { token_hash: string; token_ciphertext: string; created_at: string }
@@ -50,15 +49,6 @@ async function presentLink(env: Env, workspaceId: string, link: LinkRow): Promis
   return { url: linkUrl(env, token), createdAt: link.created_at };
 }
 
-/** The workspace an invite token opens right now, or one answer for every missing, malformed, unknown or turned-off link. */
-export async function requireInvitedWorkspace(env: Env, token: unknown): Promise<{ id: string; name: string }> {
-  if (typeof token !== 'string' || !INVITE_TOKEN.test(token)) fail(404, 'not_found', INVALID_LINK);
-  const workspace = await env.DB.query<{ id: string; name: string }>(`SELECT w.id, w.name FROM workspace_invite_links l
-    JOIN workspaces w ON w.id = l.workspace_id WHERE l.token_hash = ?`).bind(await sha256(token)).first();
-  if (!workspace) fail(404, 'not_found', INVALID_LINK);
-  return workspace;
-}
-
 async function inviteFor(env: Env, workspace: { id: string; name: string }, userId: string): Promise<WorkspaceInvite> {
   const standing = await env.DB.query<{ member: number; pending: number }>(`SELECT
       EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?) AS member,
@@ -76,20 +66,6 @@ function joinRequests(env: Env, workspaceId: string) {
 }
 
 const requireManager = (env: Env, workspaceId: string, actorId: string) => requireMember(env, workspaceId, actorId, workspaceManagerRoles);
-
-/**
- * Files `userId`'s request to join through the link whose token hashes to `tokenHash`: admitted only while that same link
- * is still on, the person isn't a member and the queue has room. It changes one row when it files the request.
- */
-export function joinRequestStatement(db: Pick<Database, 'query'>, workspaceId: string, tokenHash: string, userId: string) {
-  return db.query(`INSERT INTO workspace_join_requests (workspace_id, user_id, created_at)
-    SELECT l.workspace_id, ?, ? FROM workspace_invite_links l
-    WHERE l.workspace_id = ? AND l.token_hash = ?
-      AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = l.workspace_id AND m.user_id = ?)
-      AND (SELECT COUNT(*) FROM workspace_join_requests r WHERE r.workspace_id = l.workspace_id) < ?
-    ON CONFLICT (workspace_id, user_id) DO NOTHING`)
-    .bind(userId, now(), workspaceId, tokenHash, userId, maxPendingMembers);
-}
 
 /** Signed-in routes: register after the cookie authentication and CSRF guard. */
 export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {

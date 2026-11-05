@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validateOperation } from "../apps/runner/src/protocol.js";
-import { parseOperation } from "../apps/server/src/operations.js";
+import { parseOperation } from "../apps/server/src/authority/operations.js";
 import { decidedAsHostCommand, requesterAutoApproves } from "../packages/shared/src/host-operations.js";
 import { redactOperation } from "../packages/shared/src/redaction.js";
 

@@ -44,7 +44,7 @@ where "the workspace's account" would be whoever signed in.
 
 ## Where it is
 
-- Server: `apps/server/src/workspace-connections.ts` (routes, `repositoryReadAccess`, `workspaceGitAccess`,
+- Server: `apps/server/src/authority/workspace-connections.ts` (routes, `repositoryReadAccess`, `workspaceGitAccess`,
   `workspaceDocumentAccount`); `network.ts` picks the read identity in `gitAuthority`; `sources.ts` in `sourceRead`.
   A connection's Git credential is a `LoadedCredential` with `workspaceId`, rechecked against its own row.
 - Migrations: SQLite `0042_workspace_connections.sql`, Postgres `0035_workspace_connections.sql`.

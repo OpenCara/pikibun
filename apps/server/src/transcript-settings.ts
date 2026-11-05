@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { Database } from './db/types.js';
 import type { WorkerEnv } from './types.js';
-import { auditStatement, requireMember } from './db.js';
+import { auditStatement, requireMember } from './authority/index.js';
 import { fail, identifier, jsonObject, now } from './http.js';
 import { toolOutputs, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 

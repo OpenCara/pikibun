@@ -1,16 +1,9 @@
-import type { Permission, RunnerAction, RunnerTicket } from '../../../packages/shared/src/types.js';
+import type { RunnerAction, RunnerTicket } from '../../../packages/shared/src/types.js';
 import { sha256, signToken } from '../../../packages/shared/src/crypto.js';
-import { requireNoMigration, requireUnfrozen, sessionAccess } from './db.js';
-import { mayRequestAction } from './host-access.js';
+import { requireRunnerAccess } from './authority/index.js';
 import type { AppContext, SessionRow } from './types.js';
 import { fail, id, testMode } from './http.js';
-import { connectorRequest, ownerActions, requireArchivedAction, type ConnectionPin } from './connector-transport.js';
-
-const actionPermissions: Record<RunnerAction, Permission> = {
-  create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
-  operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write',
-  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write',
-};
+import { connectorRequest, type ConnectionPin } from './connector-transport.js';
 
 export async function runnerRequest(c: AppContext, row: SessionRow, action: RunnerAction, suffix = '', body?: unknown, pin?: ConnectionPin): Promise<Response> {
   return actorRequest(c, c.get('auth').userId, row, action, suffix, body, pin);
@@ -22,26 +15,6 @@ export async function runnerRequest(c: AppContext, row: SessionRow, action: Runn
  */
 export function ownerViewRequest(c: AppContext, row: SessionRow): Promise<Response> {
   return actorRequest(c, row.owner_id, row, 'view');
-}
-
-/** What every runner request checks first: the actor may still do `action` on the session, and no restore or move is under way. */
-export async function requireRunnerAccess(c: AppContext, actorId: string, row: SessionRow, action: RunnerAction): Promise<SessionRow> {
-  const access = await sessionAccess(c.env, row.id, actorId);
-  if (!access || access.row.owner_id !== row.owner_id || !await mayRequestAction(c.env, access, actorId, action, actionPermissions[action])) {
-    fail(403, 'permission_revoked', 'Session access is no longer authorized.');
-  }
-  requireArchivedAction(access.row, action);
-  // A session that pinned its repositories stays readable only.
-  // A read-only session still opens (create, restart) to show its history and files, and can be stopped; nothing new runs in it.
-  // Its files were never packed (it can't be), but unpacking stays possible whatever happens.
-  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'unpack'].includes(action)) requireUnfrozen(access.row);
-  if (ownerActions.includes(action) && actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
-  if (action !== 'restore' && await c.env.DB.query("SELECT 1 FROM restore_jobs WHERE target_session_id = ? AND status <> 'completed'").bind(row.id).first()) {
-    fail(409, 'restore_pending', 'Session restoration is not complete.');
-  }
-  // The move itself restores into the successor; every other request waits for the move to finish or be cancelled.
-  if (action !== 'view' && action !== 'events') await requireNoMigration(c.env, row.id, action === 'restore');
-  return access.row;
 }
 
 async function actorRequest(c: AppContext, actorId: string, row: SessionRow, action: RunnerAction, suffix = '', body?: unknown, pin?: ConnectionPin): Promise<Response> {

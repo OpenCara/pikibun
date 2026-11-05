@@ -13,7 +13,7 @@ import { registerBackups } from '../apps/server/src/backups.js';
 import { runAutomaticBackups } from '../apps/server/src/automatic-backups.js';
 import { markSessionChanged } from '../apps/server/src/session-changes.js';
 import { exportSession, exportWorkspace } from '../apps/server/src/data-export.js';
-import { decryptToken } from '../apps/server/src/vault.js';
+import { decryptToken } from '../apps/server/src/authority/vault.js';
 import type { ImportSummary } from '../apps/server/src/workspace-databases/import.js';
 import { publicAddress, resolveDatabaseHost } from '../apps/server/src/workspace-databases/hosts.js';
 import { classify, limitResponses, PostgresWorkspaceDatabases } from '../apps/server/src/workspace-databases/postgres.js';

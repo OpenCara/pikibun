@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
-import { sessionAccess } from '../apps/server/src/db.js';
+import { sessionAccess } from '../apps/server/src/authority/access.js';
 import { openDatabase } from '../apps/server/src/db/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { applySqliteMigrations } from './helpers/sqlite-migrations.js';

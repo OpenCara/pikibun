@@ -1,6 +1,6 @@
 import { HTTPException } from 'hono/http-exception';
 import { sessionExportFormat, workspaceExportFormat } from '../data-export.js';
-import { auditStatement } from '../db.js';
+import { auditStatement } from '../authority/index.js';
 import type { Database } from '../db/types.js';
 import type { Env, WorkspaceRow } from '../types.js';
 import { workspaceDatabaseTarget, type WorkspaceDatabaseRow } from './store.js';

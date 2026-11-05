@@ -1,7 +1,7 @@
 import type { WorkspaceDatabase } from '../../../../packages/shared/src/types.js';
 import type { Env } from '../types.js';
 import { fail } from '../http.js';
-import { decryptToken } from '../vault.js';
+import { decryptToken } from '../authority/index.js';
 import {
   WorkspaceDatabaseError, type WorkspaceBackupRef, type WorkspaceDatabaseFailure, type WorkspaceDatabaseTarget,
 } from './types.js';
