@@ -853,8 +853,8 @@ export class RunnerSession {
     const ecosystems = ecosystemTools.filter(tool => this.tools.some(item => item.name === tool) && !off.has(tool));
     // The example is of a tool the session has (review of #194).
     const example = { rust: "rust {program: \"cargo\", args: [\"test\"], directory: \"<name>\"}", go: "go {program: \"go\", args: [\"test\", \"./...\"], directory: \"<name>\"}",
-      dotnet: "dotnet {program: \"dotnet\", args: [\"test\"], directory: \"<name>\"}" };
-    if (mode !== "ask" && ecosystems.length) instructions += `\n\nRun ${ecosystems.map(tool => ({ rust: "cargo, rustc, rustup and rustfmt", go: "go and gofmt", dotnet: "dotnet" })[tool]).join(", ")} `
+      dotnet: "dotnet {program: \"dotnet\", args: [\"test\"], directory: \"<name>\"}", make: "make {program: \"make\", args: [\"test\"], directory: \"<name>\"}" };
+    if (mode !== "ask" && ecosystems.length) instructions += `\n\nRun ${ecosystems.map(tool => ({ rust: "cargo, rustc, rustup and rustfmt", go: "go and gofmt", dotnet: "dotnet", make: "make" })[tool]).join(", ")} `
       + `with the ${ecosystems.join(", ")} tool${ecosystems.length > 1 ? "s" : ""}: the program, its arguments as a list and the clone's directory, `
       + `such as ${example[ecosystems[0]!]}.`;
     // Code mode is core (#163): what pipes did between commands, a script does between tools.
@@ -2551,15 +2551,17 @@ export class RunnerSession {
    * shutdown like host commands: closing the session stops it. A refusal or a non-zero exit is a definite outcome the
    * agent can act on; anything else may have had partial effects.
    */
-  /** The rust, go or dotnet tool: one of the ecosystem's programs with its arguments as a list, run as its card shows. */
+  /** The rust, go, dotnet or make tool: one of the ecosystem's programs with its arguments as a list, run as its card shows. */
   private ecosystemTool(tool: EcosystemTool): ToolRegistration {
     const programs = ecosystemPrograms[tool];
     const examples: Record<EcosystemTool, string> = {
       rust: '["build"], ["test", "--quiet"] or ["clippy", "--", "-D", "warnings"]',
       go: '["build", "./..."], ["test", "./..."] or ["vet", "./..."]',
       dotnet: '["build"], ["test"] or ["format", "--verify-no-changes"]',
+      make: '["test"], ["-C", "build"] or ["-j4", "all"]',
     };
-    return defineTool({ name: tool, description: `Run ${tool === "dotnet" ? "the .NET CLI" : tool === "go" ? "Go" : "Rust's toolchain"} in the session worktree without a shell: program is one of ${programs.join(", ")}; `
+    const names: Record<EcosystemTool, string> = { rust: "Rust's toolchain", go: "Go", dotnet: "the .NET CLI", make: "make (a Makefile's recipes are shell commands, which the card's make stands for)" };
+    return defineTool({ name: tool, description: `Run ${names[tool]} in the session worktree without a shell: program is one of ${programs.join(", ")}; `
       + `args is its arguments as a list, such as ${examples[tool]}; directory is where it runs, a path in the worktree such as a clone (app), the worktree by default. `
       + "It runs exactly that program there, as the approval card shows it: each call is approved as a command is, waiting for a human unless the owner enabled auto-approve for this request. "
       + "Commands that act on a package registry as an account are refused: sessions have none.",

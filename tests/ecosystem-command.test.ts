@@ -112,3 +112,13 @@ test("the macOS sandbox may read and run every toolchain directory below /usr/lo
   // Go's installer puts the whole toolchain there (bin, pkg/tool, src), not only links in /usr/local/bin (review of #194).
   assert.ok(SEATBELT_LOCAL_ROOTS.includes("/usr/local/go"));
 });
+
+test("make runs make, its arguments quoted, refusing nothing as an account: a Makefile's recipes are what its card stands for", () => {
+  assert.deepEqual(ecosystemPrograms.make, ["make"]);
+  assert.deepEqual(ecosystemRequest("make", { program: "make", args: ["-C", "publish", "test"], directory: "app" }), { tool: "make", program: "make", directory: "app", args: ["-C", "publish", "test"] });
+  assert.throws(() => ecosystemRequest("make", { program: "cargo", args: [] }), /program is one of make/);
+  assert.equal(registryAccountCommand("make", ["publish"]), undefined, "a target named publish is the project's own");
+  assert.equal(ecosystemShellCommand(ecosystemRequest("make", { program: "make", args: ["-j4", "all", "$(rm -rf ~)"] })),
+    "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' make '-j4' 'all' '$(rm -rf ~)' </dev/null 2>&1");
+  assert.ok(ecosystemTools.includes("make"));
+});

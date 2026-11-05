@@ -19,7 +19,7 @@ export type AssignableWorkspaceRole = (typeof assignableWorkspaceRoles)[number];
 /** The four tiers of access to one session given to one member, least first; sessionRolePermissions (policy.ts) defines them. */
 export const sessionRoles = ["viewer", "member", "collaborator", "admin"] as const;
 export type SessionRole = (typeof sessionRoles)[number];
-export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "browser"] as const;
+export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "make", "browser"] as const;
 export type ToolName = (typeof toolNames)[number];
 /**
  * Tools no session offers any more, still valid in stored agents and approvals: those of sessions that pinned their
@@ -414,7 +414,7 @@ export interface GitHubIssueResult {
  * rules as a shell command, but approved as its own tool's: a permission or "Allow for this session" for git covers
  * git's calls, never bash's.
  */
-export const programToolNames = ["git", "node", "python", "rust", "go", "dotnet", "browser"] as const;
+export const programToolNames = ["git", "node", "python", "rust", "go", "dotnet", "browser", "make"] as const;
 export type ProgramToolName = (typeof programToolNames)[number];
 /** One call of a program tool: the exact command it runs (program-command.ts), as its card shows it. Key order: kind, tool, command. */
 export interface ProgramOperation {

@@ -286,7 +286,13 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     and `dotnet nuget push`, `delete`, and `add`/`update source` with a password. Go has no such command. Not in the
     Windows sandbox, whose container reaches none of them, as `python` isn't.
 
-Next: other ecosystems as usage asks for them (`jvm`, `make`).
+34. **make.** `piki:make` turns on the `make` tool (#191), a fourth entry of `ecosystem-command.ts`: `make` with its
+    arguments as a list and a directory, a `program` operation decided as commands are. It refuses nothing, since make
+    acts on no registry; a Makefile's recipes are shell commands, which its card stands for, as `npm test` does for
+    package scripts. #191 first brought rust, go and dotnet too; #194 landed those, with the `rustup run` refusal and the
+    instructions' example from a tool the session has, which #191's review asked for.
+
+Next: other ecosystems as usage asks for them (`jvm`).
 
 ## A browser: piki:browser
 

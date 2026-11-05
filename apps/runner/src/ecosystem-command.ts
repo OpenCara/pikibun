@@ -6,9 +6,11 @@ import { programArguments, programShellCommand, workDirectory } from "./program-
  * the node and python tools run theirs. The agent names the program and gives its arguments as a list, and a directory
  * of the worktree; the session runs exactly that program there, which its approval card shows as one sandboxed command.
  * Their calls are decided as commands are: cargo build, go test and dotnet run run whatever the project says.
+ * The make tool (piki:make, #191) runs make the same way: a Makefile's recipes are shell commands, which the card's
+ * `make` stands for, as `npm test` does for a package's scripts.
  */
 
-export const ecosystemTools = Object.freeze(["rust", "go", "dotnet"] as const);
+export const ecosystemTools = Object.freeze(["rust", "go", "dotnet", "make"] as const);
 export type EcosystemTool = (typeof ecosystemTools)[number];
 
 /** The programs each tool runs. */
@@ -16,6 +18,7 @@ export const ecosystemPrograms = Object.freeze({
   rust: Object.freeze(["cargo", "rustc", "rustup", "rustfmt"] as const),
   go: Object.freeze(["go", "gofmt"] as const),
   dotnet: Object.freeze(["dotnet"] as const),
+  make: Object.freeze(["make"] as const),
 }) satisfies Record<EcosystemTool, readonly string[]>;
 
 interface Ecosystem {
@@ -34,6 +37,8 @@ const ecosystems: Readonly<Record<EcosystemTool, Ecosystem>> = {
     environment: "NO_COLOR=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_CLI_UI_LANGUAGE=en",
     path: ["/usr/share/dotnet", "/usr/lib/dotnet", "/usr/local/share/dotnet", "/usr/local/bin"], example: '["test"]',
   },
+  // make is the system's (/usr/bin), or GNU make from Homebrew in /usr/local/bin; it publishes nothing as an account.
+  make: { environment: "", path: ["/usr/local/bin"], example: '["test"]' },
 };
 
 /**
