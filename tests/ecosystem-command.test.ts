@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ecosystemPrograms, ecosystemRequest, ecosystemShellCommand, registryAccountCommand } from "../apps/runner/src/ecosystem-command.js";
 import { programShellCommand } from "../apps/runner/src/program-command.js";
+import { existsSync } from "node:fs";
 
 test("rust, go and dotnet take their own programs, arguments as a list and a worktree directory", () => {
   assert.deepEqual(ecosystemPrograms.rust, ["cargo", "rustc", "rustup", "rustfmt"]);
@@ -76,6 +77,9 @@ test("with a system-wide rustup, rust calls use its toolchains unless the sessio
   assert.doesNotMatch(ecosystemShellCommand(cargo, { rustupHome: false }), /RUSTUP_HOME/);
   assert.doesNotMatch(ecosystemShellCommand(ecosystemRequest("go", { program: "go", args: ["test"] }), { rustupHome: true }), /RUSTUP_HOME/);
   assert.doesNotMatch(ecosystemShellCommand(cargo, { rustupHome: true }), /CARGO_HOME/, "the session keeps its own cargo home");
+  // Left out, it is whether the host has one (review of #194).
+  assert.equal(/RUSTUP_HOME/.test(ecosystemShellCommand(cargo, {})), existsSync("/usr/local/rustup"));
+  assert.equal(ecosystemShellCommand(cargo), ecosystemShellCommand(cargo, {}));
 });
 
 test("a rustup proxy finds the system toolchain through RUSTUP_HOME, and the session's own setting wins", { skip: process.platform === "win32" }, async () => {

@@ -78,9 +78,11 @@ export function registryAccountCommand(program: string, args: readonly string[],
       while (index < rest.length && rest[index]!.startsWith("-")) index++;
       return index < rest.length ? rest[index++] : undefined;
     };
-    if (next() !== "run" || next() === undefined) return undefined;
+    if (next() !== "run") return undefined;
+    const toolchain = next();
     const launched = next();
-    return launched === undefined ? undefined : registryAccountCommand(launched, rest.slice(index), depth + 1);
+    if (toolchain === undefined || launched === undefined) return undefined;
+    return registryAccountCommand(launched, rest.slice(index), depth + 1);
   }
   if (program === "dotnet") {
     const found = positionals(args);
@@ -123,8 +125,8 @@ export const SYSTEM_RUSTUP_HOME = "/usr/local/rustup";
  * rustup (SYSTEM_RUSTUP_HOME), whose toolchains a rust call then uses unless the session's environment names another
  * RUSTUP_HOME. CARGO_HOME stays the session's own, so its registry cache and any credentials stay in the session.
  */
-export function ecosystemShellCommand(request: EcosystemRequest, system: { rustupHome?: boolean } = { rustupHome: existsSync(SYSTEM_RUSTUP_HOME) }): string {
+export function ecosystemShellCommand(request: EcosystemRequest, system: { rustupHome?: boolean } = {}): string {
   const ecosystem = ecosystems[request.tool];
-  const rustup = request.tool === "rust" && system.rustupHome ? ` RUSTUP_HOME="\${RUSTUP_HOME:-${SYSTEM_RUSTUP_HOME}}"` : "";
+  const rustup = request.tool === "rust" && (system.rustupHome ?? existsSync(SYSTEM_RUSTUP_HOME)) ? ` RUSTUP_HOME="\${RUSTUP_HOME:-${SYSTEM_RUSTUP_HOME}}"` : "";
   return programShellCommand({ directory: request.directory, path: ecosystem.path, prefix: `${ecosystem.environment}${rustup}`, program: request.program, args: request.args });
 }
