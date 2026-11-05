@@ -1481,13 +1481,13 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
     return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
   } });
   await startFixture(fixture);
-  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:browser', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit'];
+  const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:browser', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit'];
   const first = (await syncs.next()).report;
   assert.deepEqual([first.installed.map(item => item.source), (first.browser as { state: string }).state], [all, 'missing']);
   // A control plane that has Pikibun extensions but predates the browser's status takes this one.
   const second = (await syncs.next()).report;
   assert.deepEqual([second.installed.map(item => item.source), second.browser], [all, undefined], 'tried again at once, without the browser\'s status');
   assert.deepEqual((await syncs.next()).report, { installed: [], remoteInstalls: true }, 'and again, without them');
-  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:browser', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit'],
+  assert.deepEqual(fixture.runtimes[0]!.config.extensions!.installed().map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:browser', 'piki:files', 'piki:github', 'piki:sources', 'piki:sessions', 'piki:prompt-audit'],
     'sessions still have them');
 });

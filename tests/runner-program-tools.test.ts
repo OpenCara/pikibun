@@ -221,6 +221,64 @@ test("the python tool runs Python without a shell, in a virtual environment it n
   assert.equal(view.entries.flatMap(entry => entry.autoApproved ?? []).length, 2);
 });
 
+test("the rust, go and dotnet tools run their programs without a shell, as one exact command card; their switches turn them off", { skip: process.platform === "win32" }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-ecosystem-tools-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let instructions = "";
+  let offInstructions = "";
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    ((context: unknown) => {
+      instructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["+nightly", "publish"] })], { stopReason: "toolUse" });
+    }) as never,
+    fauxAssistantMessage([fauxToolCall("dotnet", { program: "dotnet", args: ["nuget", "push", "app.nupkg"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("go", { program: "go", args: ["test", "./..."], directory: "app" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Asked."),
+    ((context: unknown) => {
+      offInstructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("rust", { program: "cargo", args: ["--version"] })], { stopReason: "toolUse" });
+    }) as never,
+    fauxAssistantMessage("Off."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-ecosystem-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "ecosystem-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("ecosystem admission") }, "write");
+  // No toolchain needed: the card shows the exact command, and denying it runs nothing.
+  const approval = await pendingApproval(session);
+  assert.deepEqual(approval.operation, { kind: "program", tool: "go",
+    command: "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/go/bin':'/usr/lib/go/bin':'/usr/local/bin' NO_COLOR=1 go 'test' './...' </dev/null 2>&1" });
+  await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
+  await idle(session);
+  let view = await session.view();
+  assert.equal(view.approvals.length, 1, "the refused calls left no card");
+  assert.equal(view.approvals[0]!.status, "denied");
+  const said = view.entries.map(entry => entry.text).join("\n");
+  assert.match(said, /cargo publish acts on a package registry as an account/);
+  assert.match(said, /dotnet nuget push acts on a package registry as an account/);
+  assert.match(instructions, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet with the rust, go, dotnet tools: .*such as rust \{program/, "the agent is told how to use them");
+
+  answer = { extensions: [{ source: "piki:rust", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("ecosystem admission off") }, "write");
+  await idle(session);
+  view = await session.view();
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool rust is not available/);
+  assert.equal(view.approvals.length, 1);
+  // Its example is of a tool the session still has (review of #194).
+  assert.match(offInstructions, /Run go and gofmt, dotnet with the go, dotnet tools: .*such as go \{program/);
+});
+
 /** A Chromium for the browser tool's session test: PIKIBUN_TEST_BROWSER, or the host's own. */
 const chromium = process.env.PIKIBUN_TEST_BROWSER ? browserAt(process.env.PIKIBUN_TEST_BROWSER) : hostBrowser();
 
