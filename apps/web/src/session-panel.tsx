@@ -301,7 +301,7 @@ const permissionNeedText: Record<PermissionNeed, string> = {
   audience: "Sharing another session: this session's readers would see what the agent reads from a session they can't open themselves.",
 };
 /** Tools whose effect gets its own approval card after the permission, unless the message auto-approves. */
-const approvedTools: readonly string[] = ["bash", "git", "node", "python", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
+const approvedTools: readonly string[] = ["bash", "git", "node", "python", "rust", "go", "dotnet", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
 
 function PermissionSummary({ request, pending }: { request: PermissionRequest; pending: boolean }) {
   return <>

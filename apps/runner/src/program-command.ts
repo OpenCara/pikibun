@@ -38,15 +38,17 @@ export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}
 /**
  * The shell command that runs `program` with `args`, every one quoted, in `directory`, after `prefix` (fixed variable
  * assignments and options of the tool's own, never the agent's), with no input and its error output with the rest.
- * `path`: a directory to look in after the sandbox's PATH, such as /usr/local/bin, where toolchains install; `first`, one
+ * `path`: directories to look in after the sandbox's PATH, such as /usr/local/bin, where toolchains install; `first`, one
  * to look in before it, such as the toolchain's own bin directory; `firstHere`, one relative to where it runs, put
  * there as an absolute path ("$PWD"/...), so a program that changes directory still finds it. An empty PATH is /usr/bin:/bin there, never an empty
  * entry, which the shell would take for the command's directory.
  */
-export function programShellCommand(options: { directory: string; program: string; args: readonly string[]; prefix?: string; path?: string; first?: string; firstHere?: string }): string {
+export function programShellCommand(options: { directory: string; program: string; args: readonly string[]; prefix?: string; path?: string | readonly string[]; first?: string; firstHere?: string }): string {
+  // Never an empty entry, which the shell would take for the command's directory (review of #194).
+  const after = (typeof options.path === "string" ? [options.path] : options.path ?? []).filter(item => item !== "");
   const first = options.first ? shellQuote(options.first) : options.firstHere ? `"$PWD"/${shellQuote(options.firstHere)}` : "";
   const command = `${options.directory === "." ? "" : `cd -- ${shellQuote(`./${options.directory}`)} && `}`
-    + `${options.path || first ? `PATH=${first ? `${first}:` : ""}"\${PATH:-/usr/bin:/bin}"${options.path ? `:${shellQuote(options.path)}` : ""} ` : ""}${options.prefix ? `${options.prefix} ` : ""}${options.program}`
+    + `${after.length || first ? `PATH=${first ? `${first}:` : ""}"\${PATH:-/usr/bin:/bin}"${after.map(item => `:${shellQuote(item)}`).join("")} ` : ""}${options.prefix ? `${options.prefix} ` : ""}${options.program}`
     + `${options.args.length ? ` ${options.args.map(shellQuote).join(" ")}` : ""} </dev/null 2>&1`;
   if (command.length > programLimits.commandLength) throw new Error(`the command would be over ${programLimits.commandLength} characters`);
   return command;

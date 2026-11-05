@@ -29,6 +29,7 @@ import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { nodePrograms, nodeRequest, nodeShellCommand, type NodeRequest } from "./node-command.js";
 import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
+import { ecosystemPrograms, ecosystemRequest, ecosystemShellCommand, ecosystemTools, type EcosystemRequest, type EcosystemTool } from "./ecosystem-command.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
@@ -836,6 +837,13 @@ export class RunnerSession {
     if (mode !== "ask" && this.tools.some(tool => tool.name === "python") && !off.has("python")) instructions += "\n\nRun Python, pip, uv, poetry and pytest with the python tool "
       + "(there is no shell). Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
       + "python {program: \"pip\", args: [\"install\", \"-r\", \"requirements.txt\"], directory: \"<name>\", venv: \".venv\"}, python {program: \"pytest\", args: [\"-q\"], directory: \"<name>\", venv: \".venv\"}.";
+    const ecosystems = ecosystemTools.filter(tool => this.tools.some(item => item.name === tool) && !off.has(tool));
+    // The example is of a tool the session has (review of #194).
+    const example = { rust: "rust {program: \"cargo\", args: [\"test\"], directory: \"<name>\"}", go: "go {program: \"go\", args: [\"test\", \"./...\"], directory: \"<name>\"}",
+      dotnet: "dotnet {program: \"dotnet\", args: [\"test\"], directory: \"<name>\"}" };
+    if (mode !== "ask" && ecosystems.length) instructions += `\n\nRun ${ecosystems.map(tool => ({ rust: "cargo, rustc, rustup and rustfmt", go: "go and gofmt", dotnet: "dotnet" })[tool]).join(", ")} `
+      + `with the ${ecosystems.join(", ")} tool${ecosystems.length > 1 ? "s" : ""}: the program, its arguments as a list and the clone's directory, `
+      + `such as ${example[ecosystems[0]!]}.`;
     // Code mode is core (#163): what pipes did between commands, a script does between tools.
     if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
       + "write a codemode script that calls them: there is no shell to pipe commands through.";
@@ -2246,6 +2254,9 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
         } })]),
+      // Rust, Go and .NET without a shell (piki:rust, piki:go, piki:dotnet, #163), decided as node's and python's are.
+      // Not in the Windows sandbox, whose container reaches none of them, as python isn't.
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : ecosystemTools.map(tool => this.ecosystemTool(tool))),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools. "
         + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
         parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), wait: Type.Optional(StringEnum(githubWaits)),
@@ -2431,6 +2442,35 @@ export class RunnerSession {
    * shutdown like host commands: closing the session stops it. A refusal or a non-zero exit is a definite outcome the
    * agent can act on; anything else may have had partial effects.
    */
+  /** The rust, go or dotnet tool: one of the ecosystem's programs with its arguments as a list, run as its card shows. */
+  private ecosystemTool(tool: EcosystemTool): ToolRegistration {
+    const programs = ecosystemPrograms[tool];
+    const examples: Record<EcosystemTool, string> = {
+      rust: '["build"], ["test", "--quiet"] or ["clippy", "--", "-D", "warnings"]',
+      go: '["build", "./..."], ["test", "./..."] or ["vet", "./..."]',
+      dotnet: '["build"], ["test"] or ["format", "--verify-no-changes"]',
+    };
+    return defineTool({ name: tool, description: `Run ${tool === "dotnet" ? "the .NET CLI" : tool === "go" ? "Go" : "Rust's toolchain"} in the session worktree without a shell: program is one of ${programs.join(", ")}; `
+      + `args is its arguments as a list, such as ${examples[tool]}; directory is where it runs, a path in the worktree such as a clone (app), the worktree by default. `
+      + "It runs exactly that program there, as the approval card shows it: each call is approved as a command is, waiting for a human unless the owner enabled auto-approve for this request. "
+      + "Commands that act on a package registry as an account are refused: sessions have none.",
+      executionMode: "sequential",
+      parameters: Type.Object({ program: StringEnum(programs), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()) }),
+      execute: async (args, api, call) => {
+        // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
+        await this.requireSessionTool(tool);
+        let request: EcosystemRequest;
+        let command: string;
+        try { request = ecosystemRequest(tool, args); command = ecosystemShellCommand(request); }
+        catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${tool} call`}. Nothing ran.`); }
+        const attribution = await this.toolActor(api, true);
+        await this.requireHostEnvironment();
+        const { unbounded } = await this.permit(api, call, tool, `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
+        const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool, command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call);
+        return { output: [{ type: "text" as const, text: JSON.stringify({ ...approval, admissionId: undefined, callId: undefined }) }] };
+      } });
+  }
+
   private startShellOperation(id: string, operation: Extract<Operation, { kind: "bash" | "program" }>, unbounded: boolean, recheck: SandboxAuthorize): Promise<void> {
     const entry = { controller: new AbortController(), done: Promise.resolve() };
     const generation = this.generation;
