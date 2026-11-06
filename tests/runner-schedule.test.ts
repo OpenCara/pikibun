@@ -11,7 +11,7 @@ import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
 import type { AuthorizationRequest, PermissionRequest, RunnerAction, RunnerBinding, RunnerTicket, ScheduleToolRequest, SessionSchedule } from "../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../packages/shared/src/cron.js";
-import { sessionToolsOff } from "../packages/shared/src/piki-extensions.js";
+import { sessionToolExtensionOn, sessionToolsOff } from "../packages/shared/src/piki-extensions.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 
@@ -174,11 +174,20 @@ test("piki:schedule: the workspace turns the schedule tool off, and a call by na
   assert.equal(requests.length, 2);
 });
 
-test("sessionToolsOff: only a session-tool extension the workspace lists turned off turns its tools off", () => {
-  assert.deepEqual([...sessionToolsOff([])], []);
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: true }])], []);
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule"]);
-  assert.deepEqual([...sessionToolsOff([{ source: "piki:gh", enabled: false }, { source: "npm:pi-web-access@0.46.0", enabled: false }])], [], "other extensions offer no session tools");
+test("sessionToolsOff: only a session-tool extension the workspace lists turned off turns its tools off, but an opt-in one is off unless listed on", () => {
+  // piki:tunnel is opt-in: off until the workspace lists it enabled.
+  assert.deepEqual([...sessionToolsOff([])], ["tunnel"]);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: true }])], ["tunnel"]);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule", "tunnel"]);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:gh", enabled: false }, { source: "npm:pi-web-access@0.46.0", enabled: false }])], ["tunnel"], "other extensions offer no session tools");
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: true }])], []);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: false }])], ["tunnel"]);
+  assert.deepEqual([...sessionToolsOff([{ source: "piki:tunnel", enabled: false }], { failClosedOnly: true })], ["tunnel"], "and fails closed: an answer that doesn't turn it on leaves it off");
+  assert.equal(sessionToolExtensionOn([], "piki:tunnel"), false);
+  assert.equal(sessionToolExtensionOn([{ source: "piki:tunnel", enabled: true }], "piki:tunnel"), true);
+  assert.equal(sessionToolExtensionOn([], "piki:schedule"), true);
+  assert.equal(sessionToolExtensionOn([{ source: "piki:schedule", enabled: false }], "piki:schedule"), false);
+  assert.equal(sessionToolExtensionOn([{ source: "piki:files", enabled: false }], "piki:files"), true, "core tools stay on");
 });
 
 test("bash and host_bash are retired: their switches turn nothing on or off, while git, node, python and the file tools stay", async t => {

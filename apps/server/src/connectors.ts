@@ -21,6 +21,7 @@ import { connectorRestoreDownload } from './restore-routes.js';
 import { connectorHostConfig } from './host-config.js';
 import { disabledModelKeys, hostModelSettings } from './host-models.js';
 import { reportSessionBranches } from './session-branches.js';
+import { reportSessionTunnel } from './session-tunnels.js';
 import { notifySessionActivityQuietly } from './notifications.js';
 
 function onlyFields(value: Record<string, unknown>, fields: string[]): void {
@@ -313,6 +314,7 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
   app.post('/api/connectors/self/authorize', async c => authorizeSession(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/activity', async c => reportSessionActivity(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/branches', async c => reportSessionBranches(c, (await authenticateConnector(c)).id));
+  app.post('/api/connectors/self/tunnel', async c => reportSessionTunnel(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/comment', async c => githubComment(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/read', async c => githubRead(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/merge', async c => githubMerge(c, (await authenticateConnector(c)).id));

@@ -138,6 +138,10 @@ export interface SessionRow {
   parent_session_id?: string | null;
   /** How its transcript shows tool output to viewers (transcript-display.ts); display only. Absent on older rows: full. */
   tool_output?: 'full' | 'brief';
+  /** Its server's public address while it is online through its tunnel, as its host last reported it (piki:tunnel); display state only. */
+  tunnel_url?: string | null;
+  /** When that tunnel's service lifetime ends: the list no longer shows it online after that, whatever its host said. */
+  tunnel_expires_at?: string | null;
   /** Only on rows read through session access: the newest pull request a push from this session opened or found. */
   pull_request_url?: string | null;
   /** Only on rows read through session access: that pull request's state as last read (pull-request-states.ts). */

@@ -51,6 +51,12 @@ export interface PikiExtensionInfo {
    * workspace pages don't list it.
    */
   retired?: boolean;
+  /**
+   * Session tools only: off unless the workspace lists it turned on, rather than on unless turned off, for tools that
+   * do something a workspace should choose (put a server online). A workspace that never chose, a control plane that
+   * predates it and a connector that can't read the workspace's choice all leave it off.
+   */
+  optIn?: boolean;
 }
 
 export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
@@ -129,6 +135,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
+    name: "tunnel", source: "piki:tunnel", title: "Tunnel", sessionTools: ["tunnel"], optIn: true,
+    description: "The tunnel tool: the agent starts the web server it works on in the session's sandbox, as a service that outlives the call, and puts it online at a public https:// address through a Cloudflare quick tunnel, which cloudflared runs on the host. Each start is approved as a host command is, never automatically. The session panel shows the address with a Stop button. Runs only in the Linux sandbox, with cloudflared on the host. Off unless turned on here.",
+    providers: [],
+  },
+  {
     name: "files", source: "piki:files", title: "Files", core: true,
     sessionTools: ["identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file"],
     description: "The file tools: the agent reads, searches, writes, edits, moves, copies and deletes the session's files, and reads who the session is for. Every session needs them, so they are always on.",
@@ -173,17 +184,30 @@ export function pikiSessionToolExtensions(): PikiExtensionInfo[] {
 
 /**
  * The session tools `workspace` turns off: those of the session-tool extensions it lists disabled. One it doesn't list
- * is on (see `sessionTools`).
+ * is on (see `sessionTools`), but for an opt-in one (`optIn`), which is off unless it lists it enabled.
  */
 export function sessionToolsOff(workspace: readonly { source: string; enabled: boolean }[], options: { failClosedOnly?: boolean } = {}): Set<string> {
   const off = new Set<string>();
   for (const extension of pikiSessionToolExtensions()) {
     // Core tools stay on whatever a workspace lists.
     if (extension.core) continue;
+    // Off by default, and so fail-closed too: only the workspace's enabled entry turns it on.
+    if (extension.optIn) {
+      if (!workspace.some(item => item.source === extension.source && item.enabled)) for (const tool of extension.sessionTools ?? []) off.add(tool);
+      continue;
+    }
     if (options.failClosedOnly && !extension.failClosed) continue;
     if (workspace.some(item => item.source === extension.source && !item.enabled)) for (const tool of extension.sessionTools ?? []) off.add(tool);
   }
   return off;
+}
+
+/** Whether the workspace whose extensions are `workspace` has the session-tool extension `source` on, as sessionToolsOff decides. */
+export function sessionToolExtensionOn(workspace: readonly { source: string; enabled: boolean }[], source: string): boolean {
+  const extension = pikiExtension(source);
+  if (!extension?.sessionTools) return false;
+  if (extension.core) return true;
+  return extension.optIn ? workspace.some(item => item.source === source && item.enabled) : !workspace.some(item => item.source === source && !item.enabled);
 }
 
 /** The Pikibun extensions for repositories of `provider`. */

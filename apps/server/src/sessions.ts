@@ -28,6 +28,7 @@ import { isLinkShared } from './session-links.js';
 import { decidedAsHostCommand, grantedShell, requesterAutoApproves } from '../../../packages/shared/src/host-operations.js';
 import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL, requireEnabledModel } from './host-models.js';
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
+import { stopSessionTunnel } from './session-tunnels.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
@@ -298,6 +299,9 @@ export async function archiveSession(c: AppContext, sessionId: string, audit: Re
   const access = await requireSessionManager(c, sessionId, 'manage', 'Only the session owner, or the workspace\'s owner or an admin, can archive it.');
   const { row } = access;
   const actorId = c.get('auth').userId;
+  // Its server goes offline first, while its host still takes the archiver's request; where it can't (the archiver may
+  // manage the session without writing to it, or its host is away), the host finds the session archived within a minute.
+  if (row.tunnel_url && row.connector_id) await stopSessionTunnel(c, row, 'archived').catch(() => false);
   // A policy version bump invalidates runner tickets and broker capabilities issued before archiving. It lands only
   // while the actor still manages the session, checked as it writes: a suspension, say, bumps no policy version.
   const archived = await c.env.DB.query<SessionRow>(`UPDATE sessions SET archived_status = status, status = 'archived', policy_version = policy_version + 1

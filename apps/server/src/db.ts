@@ -80,15 +80,16 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
     ...(row.tool_output === 'brief' ? { toolOutput: 'brief' as const } : {}),
     ...(row.parent_session_id ? { parentSessionId: row.parent_session_id } : {}),
     ...(row.packed_at ? { packed: true as const } : {}),
-    ...(pullRequest ? { pullRequest } : {}) };
+    ...(pullRequest ? { pullRequest } : {}),
+    ...(row.tunnel_url && row.tunnel_expires_at && Date.parse(row.tunnel_expires_at) > Date.now() ? { tunnel: { url: row.tunnel_url, expiresAt: row.tunnel_expires_at } } : {}) };
 }
-export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed'> {
+export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed' | 'tunnel'> {
   // Visibility is live control-plane policy, activity and the pull request are what the host and pushes report, tool
   // output is how the control plane shows the transcript, the next scheduled prompt is the owner's schedule, the parent
-  // session is how the control plane links sessions, and whether its files are packed is the host's state, so none of
-  // them is part of the immutable runner binding.
+  // session is how the control plane links sessions, and whether its files are packed and whether it is online are the
+  // host's state, so none of them is part of the immutable runner binding.
   const { visibility: _visibility, permissions: _permissions, activity: _activity, frozen: _frozen, pullRequest: _pullRequest,
-    toolOutput: _toolOutput, nextScheduledAt: _nextScheduledAt, parentSessionId: _parentSessionId, packed: _packed, ...record } = sessionRecord(row);
+    toolOutput: _toolOutput, nextScheduledAt: _nextScheduledAt, parentSessionId: _parentSessionId, packed: _packed, tunnel: _tunnel, ...record } = sessionRecord(row);
   return record;
 }
 /** What anything but a read of a session waits for: it isn't archived, being restored into, or moving to another host. */

@@ -20,7 +20,8 @@ import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { commandLimits, gpuMounts, type CommandLimits } from "./host-config.js";
 import type { IsolatedWorkspace } from "./workspace.js";
 import { CREATE_FILE, OPEN_FILE, privateEntry } from "./platform.js";
-import { BROWSER_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER } from "./sandbox-python.generated.js";
+import { BROWSER_DRIVER, GIT_SHIM as EMBEDDED_GIT_SHIM, HELPER, SERVICE_DRIVER } from "./sandbox-python.generated.js";
+import { SANDBOX_SERVICE_DRIVER, SANDBOX_SERVICE_SOCKETS, type ServiceExit, type ServiceProcess } from "./session-service.js";
 import { connectorNode, sandboxNodeMount, type NodeToolchain, type SandboxNodeMount } from "./node-toolchain.js";
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
 import { connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBrowserMount, type BrowserToolchain } from "./browser-toolchain.js";
@@ -57,8 +58,12 @@ export interface SandboxExecutionOptions {
   signal?: AbortSignal;
 }
 
-/** How one shell command runs, besides what every sandboxed step gets. */
-interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal }
+/**
+ * How one shell command runs, besides what every sandboxed step gets. `service`: it is a session service
+ * (session-service.ts), with the directory it listens in, mounted writable at SANDBOX_SERVICE_SOCKETS, and its own
+ * resource domain, so a command's start, which ends what its domain still runs, never ends it.
+ */
+interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; service?: { socketDirectory: string } }
 
 export interface SandboxOptions {
   /** The Node.js the node tool runs (node-toolchain.ts): the connector's own by default; null for none. */
@@ -404,6 +409,8 @@ export class Sandbox implements IsolatedWorkspace {
   #mounts: Mounts | undefined;
   #closed = false;
   #cancelActive: (() => void) | undefined;
+  /** The session's services running now (startService): closing the sandbox ends them too. */
+  readonly #services = new Set<() => void>();
 
   constructor(binding: RunnerBinding, root: string, resources?: ResourceConfig, options: SandboxOptions = {}) {
     if (process.platform !== "linux" || !isAbsolute(root) || resolve(root) === sep) {
@@ -510,6 +517,12 @@ export class Sandbox implements IsolatedWorkspace {
           await writeFile(driver, BROWSER_DRIVER, { mode: 0o500 });
           await chmod(driver, 0o500);
         }
+        // The session service's driver, as the browser's: beside the shim, out of the sandbox's reach, written at every open.
+        const service = join(this.#root, "service", "pikibun-service");
+        await mkdir(join(this.#root, "service"), { recursive: true, mode: 0o700 });
+        await rm(service, { force: true });
+        await writeFile(service, SERVICE_DRIVER, { mode: 0o500 });
+        await chmod(service, 0o500);
         // Beside the shim, out of the sandbox's reach; written at every open, so the host's current store applies.
         if (this.#egressSocket !== undefined) {
           // Replaced in one step, so no command ever finds the file missing or half written.
@@ -624,6 +637,41 @@ export class Sandbox implements IsolatedWorkspace {
     }
   }
 
+  /**
+   * Starts a session service (session-service.ts): `command`, a shell command as `execute` runs one, with the session's
+   * files, network and limits, that runs beside the session's other operations rather than in their queue, until it ends,
+   * `kill`, its time limit (`limits.seconds`, the host's service lifetime) or the sandbox closing. It listens in
+   * `socketDirectory`, the session's own, which it alone gets, writable, at SANDBOX_SERVICE_SOCKETS. With resource limits
+   * it runs in a resource domain of its own with the same limits as the session's commands: a command's start ends what
+   * its domain still runs, which would end the service. Its output, uncapped, goes to `onOutput` as it comes.
+   */
+  async startService(command: string, authorize: SandboxAuthorize, options: { limits: CommandLimits; unbounded: boolean; gpu?: boolean; socketDirectory: string;
+    onOutput: (chunk: Buffer) => void; signal?: AbortSignal }): Promise<ServiceProcess> {
+    if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
+    if (!isAbsolute(options.socketDirectory)) throw new Error("Invalid service socket directory");
+    const bounded = !!this.#resources || !options.unbounded;
+    if (bounded && !this.#resources) throw new Error("Production bash unavailable: explicitly provisioned cgroup and bounded filesystem resources are required");
+    await this.initialize();
+    return this.#exclusive(async () => {
+      if (this.#closed) throw new Error("Sandbox is closed");
+      await authorize();
+      if (this.#closed) throw new Error("Sandbox is closed");
+      if (options.signal?.aborted) throw new SandboxProcessError("Service stopped before it started", null, null, "", "");
+      const controller = new AbortController();
+      const kill = () => controller.abort();
+      options.signal?.addEventListener("abort", kill, { once: true });
+      this.#services.add(kill);
+      const exited: Promise<ServiceExit> = this.#run({ kind: "bash", command: text(command, "service command", 64 * 1024, true) }, false, false, bounded,
+        { output: stdout => { stdout.on("data", (chunk: Buffer) => options.onOutput(chunk)); } }, [],
+        { limits: options.limits, gpu: options.gpu, signal: controller.signal, service: { socketDirectory: options.socketDirectory } })
+        .then((): ServiceExit => ({ code: 0, signal: null }), (error: unknown): ServiceExit => error instanceof SandboxProcessError
+          ? { code: error.exitCode, signal: error.signal as NodeJS.Signals | null, ...(error.exitCode === null && !error.signal ? { failure: error.message.slice(0, 500) } : {}) }
+          : { code: null, signal: null, failure: error instanceof Error ? error.message.slice(0, 500) : "The service failed" })
+        .finally(() => { this.#services.delete(kill); options.signal?.removeEventListener("abort", kill); });
+      return { exited, kill };
+    });
+  }
+
   /** The session's files, leaving out `clones` (worktree paths), which a backup keeps as bundles (cloneBackup). */
   /** `skipCaches`: leave out the home's package caches and temporary files (PACK_SKIPPED_HOME), as a pack does. */
   async snapshot(authorize: SandboxAuthorize, clones: readonly string[] = [], { skipCaches = false }: { skipCaches?: boolean } = {}): Promise<SnapshotFile[]> {
@@ -732,6 +780,7 @@ export class Sandbox implements IsolatedWorkspace {
   async close(): Promise<void> {
     this.#closed = true;
     this.#cancelActive?.();
+    for (const kill of this.#services) kill();
     await this.#initialization?.catch(() => undefined);
     await this.#exclusive(async () => {
       const mounts = this.#mounts;
@@ -752,6 +801,7 @@ export class Sandbox implements IsolatedWorkspace {
     const gpu = request.kind === "bash" && command.gpu ? gpuMounts(this.#gpuRoot) : undefined;
     const limits = request.kind === "bash" ? command.limits : undefined;
     const browser = request.kind === "bash" ? sandboxBrowserMount(this.#browserSource()) : undefined;
+    const service = request.kind === "bash" ? command.service : undefined;
     const args = [
       "--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
       "--cap-drop", "ALL",
@@ -773,6 +823,8 @@ export class Sandbox implements IsolatedWorkspace {
       // The browser tool's driver and the host's Chromium, read-only, for shell commands only: the tool is one.
       ...(browser ? ["--ro-bind-try", join(this.#root, "browser", "pikibun-browser"), SANDBOX_BROWSER_DRIVER] : []),
       ...(browser?.mount ? ["--ro-bind-try", browser.mount.source, browser.mount.target] : []),
+      // A session service's driver, and the directory it listens in, which the connector connects to: the service's alone.
+      ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
         ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),
       ...(gpu?.args ?? []),
@@ -787,8 +839,10 @@ export class Sandbox implements IsolatedWorkspace {
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     const deadline = ["clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"].includes(request.kind)
       ? PUSH_TIMEOUT_MS : (limits ?? commandLimits(TIMEOUT_MS / 1000)).seconds * 1000;
+    // A service's resource domain is its own, beside the session's (startService).
+    const domain = service ? createHash("sha256").update(`${this.#sessionKey}\0service`).digest("hex") : this.#sessionKey;
     const launch = requireResources
-      ? resourceLaunch(this.#resources!, this.#sessionKey, args, deadline / 1000)
+      ? resourceLaunch(this.#resources!, domain, args, deadline / 1000)
       : { command: "/usr/bin/bwrap", args };
     return new Promise<string>((resolveResult, reject) => {
       // Resource supervisor alone receives root fd 8 and liveness pipe 7. It closes
@@ -824,7 +878,8 @@ export class Sandbox implements IsolatedWorkspace {
         failure ??= "Sandbox closed";
         kill();
       };
-      this.#cancelActive = cancel;
+      // A service runs beside the session's queue: closing the sandbox ends it through #services, not as the active step.
+      if (!service) this.#cancelActive = cancel;
       const stop = () => {
         failure ??= "Command stopped";
         kill();

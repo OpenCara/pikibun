@@ -4,6 +4,7 @@ import { managesSession, sessionRoleAllowed, sessionRoleGrantable, sessionRoleOf
 import { containsRedaction, REDACTED } from "../../../packages/shared/src/redaction";
 import { builtinExtensions } from "../../../packages/shared/src/host-config";
 import { browserUnavailableText } from "../../../packages/shared/src/browser";
+import { tunnelUnavailableText, type SessionTunnelView } from "../../../packages/shared/src/tunnel";
 import { useSessionLink } from "./session-link";
 import { api, segment } from "./api";
 import { BackupList, backupDatabaseLabel, backupDownloadHref, backupLocationLabel, type Backup, type BackupDatabase, type BackupListing, type BackupListingResource } from "./backups";
@@ -353,6 +354,7 @@ function PanelDetails({ session, view, user, workspaceRole, hosts, refresh, audi
   const manages = managesSession(user.id, session.ownerId, workspaceRole);
   const changed = () => { audit.refresh(); refresh(); };
   return <div>
+    {view?.tunnel && <TunnelSection session={session} tunnel={view.tunnel} canStop={canWrite && session.status !== "archived"} changed={changed} />}
     <HostSection session={session} user={user} hosts={hosts} />
     {view?.extensions && <ExtensionsSection extensions={view.extensions} />}
     <RepositoriesSection session={session} refresh={refresh} />
@@ -417,6 +419,31 @@ function HostSection({ session, user, hosts }: { session: SessionRecord; user: U
   </Section>;
 }
 
+/**
+ * The session's server while it is online through its tunnel (piki:tunnel): its public address, who started it and until
+ * when, and a Stop button for those who may write to the session, as they may stop its work.
+ */
+function TunnelSection({ session, tunnel, canStop, changed }: { session: SessionRecord; tunnel: SessionTunnelView; canStop: boolean; changed: () => void }) {
+  const action = useAction();
+  function stop() {
+    void (async () => {
+      if (!await confirmDialog({ title: "Take this server offline?", message: <>{tunnel.url} stops answering, and the server stops in the session's sandbox. The agent can put it online again, at a new address, with the host owner's approval.</>, confirmLabel: "Stop", destructive: true })) return;
+      await action.run(async () => {
+        await api(`/api/sessions/${segment(session.id)}/tunnel/stop`, { method: "POST", body: {} });
+        changed();
+      }, "Offline.");
+    })();
+  }
+  return <Section title="Online" info={<p>The agent put the session's web server online through a Cloudflare tunnel, with the approval of its host's owner or a member granted host commands. The server runs in the session's sandbox; cloudflared runs on the host and reaches only its port. Anyone with the address can open it. It goes offline when stopped here or by the agent, when someone stops the session's work, when the session closes or is archived, or at the host's service lifetime.</p>}>
+    <Row leading={<Icon name="globe" size={16} />} title={<a href={tunnel.url} target="_blank" rel="noreferrer">{tunnel.url.replace(/^https:\/\//, "")}</a>}
+      hint={<><code>{tunnel.command}</code> on port {tunnel.port} · started by <Username id={tunnel.startedBy} you /> · online until <Timestamp value={tunnel.expiresAt} /> at most</>}
+      trailing={<span className="inline">{tunnel.connected ? <StatusBadge tone="success" dot>Online</StatusBadge> : <StatusBadge tone="warning" dot>Connecting</StatusBadge>}
+        {canStop && <Button variant="outline" size="sm" icon="stop" disabled={action.busy} onClick={stop}>Stop</Button>}</span>} />
+    <CardBody><CopyField label="Public address" value={tunnel.url} /></CardBody>
+    {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
+  </Section>;
+}
+
 /** The extensions the session runs with, and its workspace's enabled ones its host lacks. */
 function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView["extensions"]> }) {
   return <Section title="Extensions" info={<p>Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls are approved like host commands unless the workspace and the host's owner let them run automatically. Dev extensions are the host owner's own, in their own sessions. Built-in ones come with Pikibun, as the host's configuration turns them on. The host's owner can also require extensions of every session on their host, whatever the workspace chose.</p>}>
@@ -424,7 +451,8 @@ function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView
       hint={item.tools.length ? `Tools: ${item.tools.join(", ")}` : "No tools: prompt or hooks only"}
       trailing={item.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : item.required ? <StatusBadge tone="success">Required by the host</StatusBadge> : <StatusBadge tone="success">Running</StatusBadge>} />)}
     {(extensions.unavailable ?? []).map(item => <Row key={`unavailable ${item.source}`} leading={<Icon name="alert" size={16} />} title={<code>{item.source}</code>}
-      hint={item.source === "piki:browser" ? browserUnavailableText(item.reason) : "The workspace has it on, but this session can't offer its tools"}
+      hint={item.source === "piki:browser" ? browserUnavailableText(item.reason) : item.source === "piki:tunnel" ? tunnelUnavailableText(item.reason)
+        : "The workspace has it on, but this session can't offer its tools"}
       trailing={<StatusBadge tone={["missing", "failed"].includes(item.reason) ? "warning" : "neutral"}>{item.reason === "downloading" ? "Not ready yet" : "Unavailable"}</StatusBadge>} />)}
     {(extensions.missingRequired ?? []).map(source => <Row key={`required ${source}`} leading={<Icon name="alert" size={16} />} title={<code>{source}</code>}
       hint="The host's owner requires it of every session on the host, which can't run it now: no message is sent until it can" trailing={<StatusBadge tone="danger">Missing</StatusBadge>} />)}

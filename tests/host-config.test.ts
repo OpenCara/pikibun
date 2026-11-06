@@ -47,10 +47,11 @@ test("a host configuration is whole and within bounds, or refused", () => {
   const config = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: "owner", hostSessions: true,
     compaction: { reserveTokens: 32_768, modelOverrides: { "anthropic/opus": { keepRecentTokens: 20_000 } } }, builtinExtensions: ["pi:codemode"],
     requiredExtensions: [{ source: "piki:prompt-audit", settings: { model: "anthropic/haiku", policy: "Never read ~/clients." } }, { source: "npm:cc-safety-net@2.7.2", settings: {} }],
-    browser: { source: "path", path: "/usr/lib/chromium/chromium" } };
+    browser: { source: "path", path: "/usr/lib/chromium/chromium" }, serviceLifetimeSeconds: 7200, tunnel: { source: "path", path: "/usr/local/bin/cloudflared" } };
   assert.deepEqual(parseHostConfig(config), config);
+  for (const tunnel of [{ source: "auto" }, { source: "download" }, { source: "off" }]) assert.deepEqual(parseHostConfig({ ...config, tunnel }).tunnel, tunnel);
   for (const browser of [{ source: "auto" }, { source: "download" }, { source: "off" }]) assert.deepEqual(parseHostConfig({ ...config, browser }).browser, browser);
-  assert.deepEqual(parseHostConfig({ ...defaultHostConfig }), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" } });
+  assert.deepEqual(parseHostConfig({ ...defaultHostConfig }), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" }, serviceLifetimeSeconds: 14400, tunnel: { source: "auto" } });
   for (const invalid of [undefined, null, [], "config", { ...config, commandTimeoutSeconds: 29 }, { ...config, commandTimeoutSeconds: 3601 },
     { ...config, commandTimeoutSeconds: 60.5 }, { ...config, commandTimeoutSeconds: "60" }, { ...config, gpu: 1 }, { ...config, gitCredentials: "true" },
     { ...config, repositoryCache: "shared" }, { ...config, hostSessions: "true" }, { ...config, extra: true },
@@ -64,8 +65,14 @@ test("a host configuration is whole and within bounds, or refused", () => {
     { ...config, browser: { source: "path", path: "chromium" } }, { ...config, browser: { source: "path", path: "/opt/chrome\n--flag" } },
     { ...config, browser: { source: "path", path: `/${"x".repeat(4096)}` } }, { ...config, browser: { source: "download", path: "/opt/chrome/chrome" } },
     { ...config, browser: { source: "auto", version: "131" } },
+    // A service runs from 5 minutes to a day; cloudflared comes from a known source, with an absolute path for `path` only.
+    { ...config, serviceLifetimeSeconds: undefined }, { ...config, serviceLifetimeSeconds: 299 }, { ...config, serviceLifetimeSeconds: 86_401 },
+    { ...config, serviceLifetimeSeconds: "3600" }, { ...config, serviceLifetimeSeconds: 600.5 },
+    { ...config, tunnel: undefined }, { ...config, tunnel: { source: "everywhere" } }, { ...config, tunnel: { source: "path" } },
+    { ...config, tunnel: { source: "path", path: "cloudflared" } }, { ...config, tunnel: { source: "off", path: "/usr/bin/cloudflared" } },
+    { ...config, tunnel: { source: "auto", token: "secret" } },
     { ...config, toString: "x" }]) {
-    assert.throws(() => parseHostConfig(invalid), /host configuration|time limit|setting|token counts|[Bb]uilt-in extensions|required extension|[Bb]rowser/, JSON.stringify(invalid));
+    assert.throws(() => parseHostConfig(invalid), /host configuration|time limit|setting|token counts|[Bb]uilt-in extensions|required extension|[Bb]rowser|service lifetime|cloudflared/, JSON.stringify(invalid));
   }
 });
 
@@ -82,6 +89,9 @@ test("a host requires extensions by normalized source, one version of each packa
     assert.throws(() => parseRequiredExtensions(invalid), /required extension|requires|setting/i, JSON.stringify(invalid));
   }
   assert.ok(ownerOnlyHostConfig.includes("requiredExtensions"));
+  // Whether sessions publish from the host's network is its owner's; how long a service runs, its admins' too.
+  assert.ok(ownerOnlyHostConfig.includes("tunnel"));
+  assert.ok(!ownerOnlyHostConfig.includes("serviceLifetimeSeconds"));
   // Within what one configuration answer holds, beside compaction counts for every model.
   const big = Array.from({ length: 9 }, (_, index) => ({ source: `npm:guard-${index}@1.0.0`, settings: { policy: "x".repeat(4000) } }));
   assert.throws(() => parseRequiredExtensions(big), /at most 32 KB/);
@@ -108,7 +118,7 @@ test("a change of configuration names one or more valid settings, and only those
   assert.deepEqual(parseHostConfigChange({ commandTimeoutSeconds: 120 }), { commandTimeoutSeconds: 120 });
   assert.deepEqual(parseHostConfigChange({ gpu: true, repositoryCache: "host" }), { gpu: true, repositoryCache: "host" });
   assert.deepEqual(parseHostConfigChange({ compaction: { keepRecentTokens: 8000 } }), { compaction: { keepRecentTokens: 8000 } });
-  const whole = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: "owner", hostSessions: true, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" } };
+  const whole = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: "owner", hostSessions: true, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" }, serviceLifetimeSeconds: 14400, tunnel: { source: "auto" } };
   assert.deepEqual(parseHostConfigChange(whole), whole);
   for (const invalid of [undefined, null, [], "config", {}, { commandTimeoutSeconds: 29 }, { commandTimeoutSeconds: "60" }, { gpu: 1 },
     { repositoryCache: "shared" }, { hostSessions: "true" }, { gpu: true, extra: true }, { toString: "x" }, JSON.parse('{"__proto__": {"gpu": true}}'),
@@ -119,12 +129,13 @@ test("a change of configuration names one or more valid settings, and only those
 
 test("a connector reads what it knows of a configuration: newer settings are left out, missing ones keep their defaults", () => {
   const sent = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host", hostSessions: true, compaction: { reserveTokens: 20_000 },
-    builtinExtensions: ["pi:codemode"], requiredExtensions: [{ source: "piki:prompt-audit", settings: {} }], browser: { source: "download" } };
+    builtinExtensions: ["pi:codemode"], requiredExtensions: [{ source: "piki:prompt-audit", settings: {} }], browser: { source: "download" },
+    serviceLifetimeSeconds: 3600, tunnel: { source: "download" } };
   assert.deepEqual(readHostConfig({ ...sent, someLaterSetting: "on" }), sent);
   // Built-in extensions it doesn't ship are left out too, not a reason to drop the whole configuration.
   assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["tool-search", "pi:codemode"] }), sent);
   assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["codemode"] }), sent, "a control plane of before pi: names names them bare");
-  assert.deepEqual(readHostConfig({ commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host" }), { ...sent, hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" } },
+  assert.deepEqual(readHostConfig({ commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host" }), { ...sent, hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" }, serviceLifetimeSeconds: 14400, tunnel: { source: "auto" } },
     "a control plane that predates required extensions sends none: the host requires none");
   assert.deepEqual(readHostConfig({}), defaultHostConfig);
   // What it does read must hold, or none of it is used.
@@ -174,7 +185,7 @@ test("the host's configuration is asked for again only after a while, and its la
     if (answer instanceof Error) throw answer;
     return answer;
   }, { now: () => now, ttlMs: 30_000, staleMs: 300_000 });
-  const first = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" } };
+  const first = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" }, serviceLifetimeSeconds: 14400, tunnel: { source: "auto" } };
   const second = { ...first, commandTimeoutSeconds: 1800 };
   answers.push(first);
   assert.deepEqual(await source.current(), first);
@@ -209,7 +220,7 @@ test("a new connection asks again and learns whether the control plane answered;
     if (answer instanceof Error) throw answer;
     return answer;
   }, { now: () => now, ttlMs: 30_000, staleMs: 300_000 });
-  const first = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "owner", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" } };
+  const first = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "owner", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" }, serviceLifetimeSeconds: 14400, tunnel: { source: "auto" } };
   const second = { ...first, repositoryCache: "off" };
   answers.push(first);
   assert.deepEqual(await source.refresh(), { config: first, answered: true });

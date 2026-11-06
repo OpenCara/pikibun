@@ -3,6 +3,7 @@ import type { SessionRecord } from "../../../packages/shared/src/types";
 import { api, segment } from "./api";
 import { useApp } from "./app-context";
 import { PullRequestTag } from "./pull-request";
+import { TunnelTag } from "./tunnel-tag";
 import { href, navigate } from "./router";
 import { sessionStatus } from "../../../packages/client/src/session-status";
 import { nestSessions } from "../../../packages/client/src/session-tree";
@@ -67,7 +68,7 @@ export function SessionsScreen() {
             return <Row key={session.id} href={href({ name: "session", sessionId: session.id })} chevron
               leading={<StatusDot tone={status.tone} icon={status.icon} label={status.label ? undefined : session.status} />}
               title={<span className="truncate">{depth > 0 && <span className="muted" aria-label="Started by the session above">{"  ".repeat(depth - 1)}↳ </span>}{session.title}</span>}
-              hint={<>{status.label && <><span className={`session-status ${status.tone}`}>{status.label}</span> · </>}{session.pullRequest && <><PullRequestTag pull={session.pullRequest} /> · </>}{isOwner ? "Yours" : viewerOnly ? "Viewer" : "Shared"} · {session.visibility === "workspace" ? "Workspace-visible" : "Private"} · <RelativeTime value={session.createdAt} /></>} />;
+              hint={<>{status.label && <><span className={`session-status ${status.tone}`}>{status.label}</span> · </>}{session.tunnel && <><TunnelTag tunnel={session.tunnel} /> · </>}{session.pullRequest && <><PullRequestTag pull={session.pullRequest} /> · </>}{isOwner ? "Yours" : viewerOnly ? "Viewer" : "Shared"} · {session.visibility === "workspace" ? "Workspace-visible" : "Private"} · <RelativeTime value={session.createdAt} /></>} />;
           })}
           {group.sessions.length > limit && <div className="sessions-more"><Button variant="ghost" size="sm" block onClick={() => setLimits(current => ({ ...current, [group.id]: limit + PAGE_SIZE }))}>Load more</Button></div>}
         </Section>;
