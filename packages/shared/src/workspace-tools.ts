@@ -32,6 +32,7 @@ export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.
   dotnet: "Runs the .NET CLI in a clone, without a shell.",
   make: "Runs make in a clone, without a shell of its own; a Makefile's recipes are shell commands.",
   browser: "Drives a headless Chromium in the sandbox: opens a page, acts on it and sees it, serving the web app under test for the call.",
+  tunnel: "Puts the web server it works on online at a public address through a Cloudflare tunnel, each start approved as a host command is.",
   github_read: "Reads a GitHub issue or pull request, or waits for its checks or a change.",
   github_comment: "Comments on a GitHub issue or pull request, as the session owner.",
   github_issue: "Opens a GitHub issue, as the session owner.",

@@ -315,3 +315,62 @@ test("a tool the control plane defines after the session opened never takes the 
   // Decided as an extension's tool is, as a host command: this runner has no connected host to ask, so it says so.
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Host commands require a connected host/);
 });
+
+test("a name a defined tool took up after the session opened stays its own when an extension that offers it is turned on later (review of #205)",
+  { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-defined-first-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "shout.ts"), `import { Type } from "typebox";
+    export default function (pi) {
+      pi.registerTool({ name: "shout", label: "Shout", description: "Shout text.", parameters: Type.Object({ text: Type.String() }),
+        async execute(_id, params) { return { content: [{ type: "text", text: params.text.toUpperCase() + "!" }], details: undefined }; } });
+    }`);
+  const store = new ExtensionStore(join(root, "state"));
+  await store.add(parseExtensionSource(join(root, "shout.ts")));
+  const [dev] = await loadInstalled(store, []);
+  const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage("Opened."),
+    fauxAssistantMessage("Defined."),
+    fauxAssistantMessage([fauxToolCall("shout", { program: "echo", args: ["hi"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Asked."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let definitions: ToolDefinition[] = [...bundledToolDefinitions];
+  const service = new RunnerService({
+    dataDir: join(root, "runner"), sharedSecret: "runner-defined-first-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => installed, workspace: async () => answer },
+    toolDefinitions: async () => definitions,
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "defined-first-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Hello.", requestId: "first", admissionId: await sha256("first first") }, "write");
+  await idle(session);
+  // The control plane defines shout while no extension offers it: the session takes it up.
+  definitions = [...definitions, { ...jvm, name: "shout", extensions: ["piki:shout"], programs: ["echo"], grammar: {}, summary: undefined }];
+  await session.submit(await ticket(id, "submit"), { content: "Define.", requestId: "second", admissionId: await sha256("first second") }, "write");
+  await idle(session);
+  // Then the workspace turns on an extension that offers shout too: the session's own keeps it.
+  answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
+  await session.submit(await ticket(id, "submit"), { content: "Shout.", requestId: "third", admissionId: await sha256("first third") }, "write");
+  let card;
+  for (let count = 0; count < 1000 && !card; count++) {
+    const view = await session.view();
+    card = view.approvals.find(candidate => candidate.status === "pending");
+    if (!card && !view.busy) break;
+    if (!card) await delay(20);
+  }
+  assert.ok(card, (await session.view()).entries.map(entry => entry.text).join("\n"));
+  // The definition's program tool, which this session's agent doesn't list, so it asks for the tool first: never the
+  // extension's call, which would be an extension.tool card.
+  assert.deepEqual(card!.operation, { kind: "permission", tool: "shout", target: ".: echo hi", needs: ["tool"] });
+  await session.decide(await ticket(id, "approve"), card!.id, { decision: "deny", operation: card!.operation });
+  await idle(session);
+});

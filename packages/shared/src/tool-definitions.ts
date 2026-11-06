@@ -415,5 +415,5 @@ export function bundledToolDefinition(name: string): ToolDefinition | undefined 
 
 /** The names of the tools a definition may have: never one of the connector's own tools that are code. */
 export const reservedToolNames: readonly string[] = ["identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file",
-  "delete_file", "git", "git_push", "python", "browser", "github_read", "github_comment", "github_issue", "github_merge", "schedule", "sessions",
+  "delete_file", "git", "git_push", "python", "browser", "tunnel", "github_read", "github_comment", "github_issue", "github_merge", "schedule", "sessions",
   "codemode", "bash", "host_bash", "git_status", "git_commit", "git_repin", "web_fetch", "web_search"];

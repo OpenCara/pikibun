@@ -1,5 +1,6 @@
 import { extensionPackageKey, normalizeExtensionSource, parseExtensionSettings, type ExtensionSettings } from "./host-extensions.js";
 import { defaultHostBrowserConfig, parseHostBrowserConfig, type HostBrowserConfig } from "./browser.js";
+import { defaultHostTunnelConfig, parseHostTunnelConfig, serviceLifetimeLimits, type HostTunnelConfig } from "./tunnel.js";
 
 /**
  * How a host runs its sessions. Its owner sets this in Pikibun (Settings → Hosts → the host → Configuration), and so do
@@ -107,6 +108,17 @@ export interface HostConfig {
    * session gets, read-only. The connector applies a change within a minute, as it next reports its extensions.
    */
   browser: HostBrowserConfig;
+  /**
+   * The longest a session service runs, in seconds: a process a session starts in its sandbox that outlives the call
+   * that started it (the tunnel tool's server, piki:tunnel). It stops then, whatever else, and its tunnel with it.
+   */
+  serviceLifetimeSeconds: number;
+  /**
+   * Where the tunnel tool's cloudflared comes from (piki:tunnel): found on the host, at a path its owner gives,
+   * downloaded by the connector, or none, which refuses tunnels on the host. Only the host's owner changes it: a tunnel
+   * publishes from the host's network. The connector applies a change within a minute, as it next reports its extensions.
+   */
+  tunnel: HostTunnelConfig;
 }
 
 /** An extension a host's owner requires of every session on it, and its settings (the extension's Pi flags). */
@@ -118,6 +130,7 @@ export interface RequiredExtension {
 
 export const hostConfigLimits = Object.freeze({
   commandTimeoutSeconds: Object.freeze({ min: 30, max: 3600 }),
+  serviceLifetimeSeconds: Object.freeze({ min: serviceLifetimeLimits.min, max: serviceLifetimeLimits.max }),
   /** Each compaction token count, and the number of models with their own (a host offers at most 200). */
   compactionTokens: Object.freeze({ min: 0, max: 10_000_000 }),
   compactionModels: 200,
@@ -131,6 +144,8 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   builtinExtensions: Object.freeze([]) as unknown as BuiltinExtensionName[],
   requiredExtensions: Object.freeze([]) as unknown as RequiredExtension[],
   browser: defaultHostBrowserConfig as HostBrowserConfig,
+  serviceLifetimeSeconds: serviceLifetimeLimits.default,
+  tunnel: defaultHostTunnelConfig as HostTunnelConfig,
 });
 
 /**
@@ -214,10 +229,10 @@ export function parseHostCompaction(value: unknown): HostCompaction {
 
 /**
  * Only the host's owner changes these: they decide whose Git credentials the host uses, whether anything runs on it
- * without the sandbox, what runs as its OS user in every session on it, and which of its files sessions get (the
- * browser). Its admins change the rest.
+ * without the sandbox, what runs as its OS user in every session on it, which of its files sessions get (the browser),
+ * and whether sessions publish from its network (the tunnel). Its admins change the rest.
  */
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel"]);
 
 /** A whole configuration, as the control plane reports it; anything else is refused. */
 export function parseHostConfig(value: unknown): HostConfig {
@@ -236,9 +251,15 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (typeof input.gitCredentials !== "boolean") throw new Error("Invalid Git credentials setting");
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
+  const lifetime = input.serviceLifetimeSeconds;
+  const lifetimes = hostConfigLimits.serviceLifetimeSeconds;
+  if (typeof lifetime !== "number" || !Number.isSafeInteger(lifetime) || lifetime < lifetimes.min || lifetime > lifetimes.max) {
+    throw new Error(`The service lifetime is between ${lifetimes.min} and ${lifetimes.max} seconds`);
+  }
   return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
     hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
-    requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser) };
+    requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser),
+    serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel) };
 }
 
 /**

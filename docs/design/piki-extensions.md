@@ -432,6 +432,13 @@ session's that outlives one command, beside the app it tests; the user driving i
 Windows sandboxes, with proxy credentials for their proxies; a check that a Chromium found or downloaded starts, in the
 sandbox, before sessions are offered it, so missing system libraries show on the host's page rather than in a call.
 
+## A tunnel: piki:tunnel
+
+`piki:tunnel` turns on the `tunnel` tool, which runs a session's web server in its sandbox as a **session service**, a
+process that outlives the call that started it, and puts it online through a Cloudflare quick tunnel that the connector
+runs on the host. It is the first opt-in session-tool extension: off unless the workspace turns it on. Each start is an
+`extension.tool` card decided like a host command and never run automatically. See [its design](tunnel.md).
+
 ## The prompt audit: piki:prompt-audit
 
 A shared host runs other members' messages next to its owner's files and credentials. `piki:prompt-audit` has a model

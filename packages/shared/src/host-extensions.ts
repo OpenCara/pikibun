@@ -6,6 +6,7 @@
 
 import { pikiExtension, pikiSessionToolExtensions } from "./piki-extensions.js";
 import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
+import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -135,6 +136,11 @@ export interface HostExtensionsReport {
    * leaves it out, and so does one whose control plane predates it (which refuses a report naming it).
    */
   browser?: HostBrowserStatus;
+  /**
+   * How the tunnel tool's cloudflared stands on the host (piki:tunnel, HostConfig.tunnel). Left out as `browser` is, by
+   * connectors and for control planes that predate it.
+   */
+  tunnel?: HostTunnelStatus;
 }
 
 /** Flag values, by flag name. */
@@ -276,11 +282,12 @@ function parseInstalled(value: unknown): InstalledExtension {
 /** A connector's report, as the control plane accepts it. */
 export function parseHostExtensionsReport(value: unknown): HostExtensionsReport {
   if (!isPlainObject(value)) throw new Error("Invalid extensions report");
-  only(value, ["installed", "remoteInstalls", "browser"], "extensions report");
+  only(value, ["installed", "remoteInstalls", "browser", "tunnel"], "extensions report");
   if (typeof value.remoteInstalls !== "boolean" || !Array.isArray(value.installed) || value.installed.length > extensionLimits.installed + extensionLimits.connector) throw new Error("Invalid extensions report");
   const installed = value.installed.map(parseInstalled);
   if (new Set(installed.map(item => item.source)).size !== installed.length) throw new Error("An extension is reported twice");
-  return { installed, remoteInstalls: value.remoteInstalls, ...(value.browser !== undefined ? { browser: parseHostBrowserStatus(value.browser) } : {}) };
+  return { installed, remoteInstalls: value.remoteInstalls, ...(value.browser !== undefined ? { browser: parseHostBrowserStatus(value.browser) } : {}),
+    ...(value.tunnel !== undefined ? { tunnel: parseHostTunnelStatus(value.tunnel) } : {}) };
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { GitProvider, SessionRepository } from "./repositories.js";
+import type { SessionTunnelRecord, SessionTunnelView } from "./tunnel.js";
 import type { ChatImage } from "./chat-images.js";
 
 export const permissions = ["read", "ask", "write", "approve", "manage"] as const;
@@ -188,6 +189,11 @@ export interface SessionRecord {
    * Display state, like activity: what the push recorded, and the state the control plane last read for it.
    */
   pullRequest?: SessionPullRequest;
+  /**
+   * The session's server is online through its tunnel (piki:tunnel), as its host last reported it: its address, until
+   * its host reports it stopped or its service lifetime is over. Display state, like activity.
+   */
+  tunnel?: SessionTunnelRecord;
 }
 /**
  * A pull request's state as the control plane last read it with the session owner's account: merged and closed win,
@@ -241,7 +247,7 @@ export interface RunnerBinding {
   model: ModelDefinition;
 }
 export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "operations" | "approve" | "backup" | "restart" | "restore" | "stop" | "files"
-  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload";
+  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel";
 
 /** How far the session file browser reads: entries listed per directory, and bytes of a file previewed. */
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
@@ -863,6 +869,12 @@ export interface SessionView {
      * reason (for piki:browser, browserUnavailableReasons in browser.ts): the browser without Chromium on the host, say.
      */
     unavailable?: { source: string; tools: string[]; reason: string }[] };
+  /**
+   * The session's server is online through its tunnel (piki:tunnel): its address, who started it and until when, which
+   * the session panel shows with a Stop button (`POST /api/sessions/:id/tunnel/stop`). Absent while it isn't, and from
+   * runners that predate tunnels.
+   */
+  tunnel?: SessionTunnelView;
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];

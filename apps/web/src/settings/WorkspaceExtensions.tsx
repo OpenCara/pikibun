@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { Workspace } from "../../../../packages/shared/src/types";
-import { pikiCommandExtensions, pikiExtension, pikiExtensionOn, pikiSessionToolExtensions } from "../../../../packages/shared/src/piki-extensions";
+import { pikiCommandExtensions, pikiExtension, pikiSessionToolExtensions, sessionToolExtensionOn } from "../../../../packages/shared/src/piki-extensions";
 import { descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, workspaceTools, type ExtensionOffer, type ShadowKind, type WorkspaceTool,
   type WorkspaceTools } from "../../../../packages/shared/src/workspace-tools";
 import { ExtensionSettingsFields } from "./ExtensionSettingsFields";
@@ -154,11 +154,13 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
   /**
    * Turns a session-tool extension's tools on or off: off is a disabled entry, on removes it (on is what a workspace that
    * never chose has), unless the workspace turned off the retired one it replaces (piki:sources), whose choice an
-   * extension it doesn't list follows: then on is an enabled entry.
+   * extension it doesn't list follows: then on is an enabled entry. An opt-in one (piki:tunnel) the other way round: on
+   * is an enabled entry, off removes it.
    */
   function switchSessionTools(source: string, on: boolean) {
-    const replaces = pikiExtension(source)?.replaces;
-    const remove = on && !(replaces && data?.extensions.some(extension => extension.source === replaces && !extension.enabled));
+    const extension = pikiExtension(source);
+    const replaced = !!extension?.replaces && !!data?.extensions.some(item => item.source === extension.replaces && !item.enabled);
+    const remove = extension?.optIn ? !on : on && !replaced;
     void action.run(async () => {
       const saved = remove
         ? await api<{ extensions: WorkspaceExtension[] }>(`${path}?source=${encodeURIComponent(source)}`, { method: "DELETE" })
@@ -186,10 +188,10 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
       {data && <div className="card">
         {usable && <ToolsOverview usable={usable} />}
         {pikiSessionToolExtensions().filter(item => !item.retired).map(item => {
-          const on = pikiExtensionOn(item, data.extensions);
+          const on = sessionToolExtensionOn(data.extensions, item.source);
           return <Row key={item.source} leading={<Icon name="tool" size={16} />} title={<>{item.title} <code>{item.source}</code></>}
             hint={<ExtensionHint offer={extensionOffer(item.source, installed)} limit={Infinity}
-              note={item.core ? undefined : "Hosts on older connectors offer its tools whatever is chosen here."} />}
+              note={item.core ? undefined : item.optIn ? "Hosts on older connectors don't have it." : "Hosts on older connectors offer its tools whatever is chosen here."} />}
             trailing={item.core ? <StatusBadge tone="neutral">Always on</StatusBadge> : admin
               ? <label className="check-row small"><input type="checkbox" className="checkbox" checked={on} disabled={action.busy}
                 onChange={event => switchSessionTools(item.source, event.target.checked)} /><span>On</span></label>

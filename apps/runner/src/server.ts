@@ -326,7 +326,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     const approval = /^approvals\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(route);
     // view/<revision>: what changed since a view this caller already holds.
     const since = /^view\/([0-9a-f]{32})$/.exec(route)?.[1];
-    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", operations: "operations", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload" };
+    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", operations: "operations", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel" };
     const action = approval ? "approve" : since ? "view" : actions[route];
     if (!action) throw new RunnerError(404, "Unknown runner endpoint");
     if (c.req.method !== (action === "view" || action === "events" ? "GET" : "POST")) throw new RunnerError(405, "Method not allowed");
@@ -390,6 +390,7 @@ export function createRunnerApp(service: RunnerService): Hono {
     if (action === "operations") return c.json({ approval: await session.createApproval(ticket.actorId, input.operation as Operation) }, 201);
     if (action === "stop") return c.json(await session.stop(ticket));
     if (action === "withdraw") return c.json(await session.withdraw(ticket, input));
+    if (action === "tunnel") return c.json(await session.tunnelAction(ticket, input));
     if (action === "revert") return c.json(await session.revert(ticket, input));
     if (action === "fork") return c.json(await service.fork(session, ticket, input));
     if (action === "files") {

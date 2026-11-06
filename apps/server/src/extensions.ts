@@ -39,12 +39,13 @@ function availability(extensions: readonly WorkspaceExtension[], installed: read
 
 /**
  * A host's report as someone other than its owner sees it: without its dev extensions, whose paths are its owner's files,
- * nor where its browser is on it, nor what went wrong with it, which names a path its owner gave.
+ * nor where its browser or cloudflared is on it, nor what went wrong with them, which names a path its owner gave.
  */
 function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExtensionsReport {
   if (ownerView) return report;
   const browser = report.browser && (({ executable: _, error: __, ...rest }) => rest)(report.browser);
-  return { ...report, installed: report.installed.filter(item => !item.dev), ...(browser ? { browser } : {}) };
+  const tunnel = report.tunnel && (({ executable: _, error: __, ...rest }) => rest)(report.tunnel);
+  return { ...report, installed: report.installed.filter(item => !item.dev), ...(browser ? { browser } : {}), ...(tunnel ? { tunnel } : {}) };
 }
 
 /** Those every session needs (piki:files), which a workspace can't turn off. */

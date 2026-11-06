@@ -66,8 +66,9 @@ So the connector is now an engine for both kinds, and the control plane describe
    tools, so a call the durable harness resumes finds its tool. Each write message asks again: a tool by a new name joins
    as one more installed extension at once; a changed definition of a tool the session has applies when it next opens.
    An extension's tool named like a defined one is left out, as for the session's own; but a new definition named like a
-   tool one of the workspace's extensions this message runs with already offers is skipped, so a name never changes
-   hands mid-session. The host's log notes both: a changed definition, and one an extension keeps the name of.
+   tool one of the workspace's extensions this message runs with already offers is skipped, and a name a definition takes
+   up is reserved against extensions from the next message on (`SessionExtensions.reserve`), as names present at open
+   are, so a name never changes hands mid-session. The host's log notes both: a changed definition, and one an extension keeps the name of.
 
 8. **Switches.** A definition names the Pikibun extensions that turn it on (`extensions`): it is offered while any of
    them is on (`source_read` has one per kind of document source). The connector decides each by `extensionSwitchOn`: as
