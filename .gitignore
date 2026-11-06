@@ -7,6 +7,7 @@ dist/
 !.env.example
 .local/
 .data/
+.tunnel/
 coverage/
 *.sqlite
 *.sqlite-shm
