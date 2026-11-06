@@ -33,8 +33,30 @@ Native builds sign in to a server you enter: GitHub in the app's own web view, o
 pnpm typecheck                # the repository's types, then `nsh check`
 pnpm test:client              # the headless tests: NSH's own engine against a stubbed server
 pnpm test:client-live         # against a real test-mode server: serving, sign-in, the session list, sign-out
-pnpm nsh test --target macos tests/screenshots.test.tsx   # screenshots of the main screens, in .nsh/screenshots
+pnpm test:client-macos        # on macOS: the app tests and screenshots in real AppKit windows (apps/nsh/.nsh/screenshots)
+pnpm test:client-macos --github --display 1  # also a live GitHub sign-in, which you complete yourself
 ```
+
+`pnpm test:client-macos` runs the stubbed app and screenshot tests in native macOS windows. `--github` adds an opt-in,
+interactive OAuth smoke test against `https://pikibun.com` (or `--server https://your-server.example`): it takes no
+live screenshots, redacts URL queries from runtime output, and passes only when sign-in returns to the session list.
+Its storage is isolated and discarded when it ends. `--timeout-ms 600000` sets the interactive wait. See
+[Mac test results](MACOS-TESTING.md) for what was observed on a Mac.
+
+The web build's own sign-in (relative URLs and the browser's cookie) needs a browser to test: NSH's headless engine has
+no page to resolve relative URLs against (`pnpm nsh test --target web` runs in one).
+
+## Known gaps, from NSH itself
+
+- **Secure storage**: native sign-ins are kept in NSH's `Storage`, a plain file in the app's data, not the Keychain or
+  Keystore ([nsh#1061](https://github.com/longbridge/nsh/issues/1061)).
+- **GitHub sign-in**: NSH has neither a system authentication session nor deep links
+  ([nsh#1065](https://github.com/longbridge/nsh/issues/1065)), so native sign-in runs GitHub's page in the app's own web
+  view, which can see what is typed into it.
+- **Types**: NSH 0.4 declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared code names.
+- **Tests**: headless `texts()` lists a scroll view's content in view-tree order, not screen order (fixed upstream in
+  [nsh#1105](https://github.com/longbridge/nsh/pull/1105)), and screenshots need `--target`. After `setColorScheme`,
+  the headless engine reports the window as 0×0, so the layout ignores zero sizes (`src/Root.tsx`).
 
 ## Layout
 

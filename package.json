@@ -19,6 +19,7 @@
     "nsh": "node scripts/nsh.mjs",
     "test:client": "node scripts/nsh.mjs test",
     "test:client-live": "node --import tsx scripts/nsh-live.ts",
+    "test:client-macos": "node --import tsx scripts/nsh-macos-smoke.ts",
     "typecheck": "tsc --noEmit && node scripts/nsh.mjs check",
     "python:embed": "node scripts/embed-python.mjs",
     "python:check": "node scripts/check-python.mjs",
