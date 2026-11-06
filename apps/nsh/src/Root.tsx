@@ -111,7 +111,7 @@ function Shell() {
                       <View style={{ flex: 1 }}>
                         <If when={selected()} else={<EmptyState title="No session open">Choose a session from the list, or start a new one.</EmptyState>}>
                           {/* Keyed by id: another session is another view, with its own stream, drafts and picks. */}
-                          <Each of={selected() ? [selected()!] : []}>
+                          <Each of={selected() ? [selected()!] : []} key={id => id}>
                             {id => <SessionView id={id()} page={false} openSession={openSession} />}
                           </Each>
                         </If>

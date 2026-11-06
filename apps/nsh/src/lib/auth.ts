@@ -1,5 +1,6 @@
-import { platform, signal, Storage } from "nsh";
+import { platform, signal, Storage, untracked, type Accessor } from "nsh";
 import { ApiError, createApi, errorMessage, type Api, type RequestOptions, type UserProfile } from "../shared";
+import { clearDrafts } from "./drafts";
 import { createPkce } from "./pkce";
 import { DEFAULT_ORIGIN, usesBrowserSession } from "./server";
 
@@ -37,7 +38,22 @@ export type AuthState =
 
 export type SignedIn = Extract<AuthState, { status: "signedIn" }>;
 
-export const auth = signal<AuthState>({ status: "loading" });
+const authState = signal<AuthState>({ status: "loading" });
+/** Where sign-in stands (reactive). Only this module changes it, through setAuth. */
+export const auth: Accessor<AuthState> = authState;
+
+/** Whose sign-in a state is: the server and the user, or null while nobody is signed in. */
+const account = (value: AuthState) => (value.status === "signedIn" ? `${value.origin} ${value.user.id}` : null);
+
+/**
+ * Every change of sign-in goes through here. What belongs to the account signed in until now (unsent drafts) goes when
+ * it signs out, its sign-in ends or another account signs in, so the next person on this device never sees it.
+ */
+function setAuth(next: AuthState) {
+  const previous = account(untracked(authState));
+  if (previous !== null && previous !== account(next)) clearDrafts();
+  authState.set(next);
+}
 
 /** The signed-in state; only screens behind the signed-in guard call it (untracked use in handlers is fine). */
 export function session(): SignedIn {
@@ -59,7 +75,7 @@ function expire(token: string | null) {
   liveToken = null;
   void clearCredentials();
   const current = auth();
-  if (current.status === "signedIn" && current.token === token) auth.set({ status: "signedOut", origin: current.origin, notice: EXPIRED });
+  if (current.status === "signedIn" && current.token === token) setAuth({ status: "signedOut", origin: current.origin, notice: EXPIRED });
 }
 
 /** An API client whose 401 answers sign the app out: the sign-in is gone. */
@@ -101,7 +117,7 @@ async function establish(origin: string, token: string, expiresAt: string | null
     Storage.setItem(ORIGIN_KEY, origin),
     expiresAt ? Storage.setItem(EXPIRES_KEY, expiresAt) : Storage.removeItem(EXPIRES_KEY),
   ]);
-  auth.set({ status: "signedIn", origin, token, expiresAt, user: profile, api });
+  setAuth({ status: "signedIn", origin, token, expiresAt, user: profile, api });
 }
 
 /** The web: the page's own browser session, if it has one. */
@@ -111,36 +127,36 @@ async function establishBrowserSession(): Promise<boolean> {
   try {
     const { user } = await api<{ user: UserProfile }>("/api/me");
     liveToken = null;
-    auth.set({ status: "signedIn", origin, token: null, expiresAt: null, user, api: guarded(api, null) });
+    setAuth({ status: "signedIn", origin, token: null, expiresAt: null, user, api: guarded(api, null) });
     return true;
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
-      auth.set({ status: "signedOut", origin });
+      setAuth({ status: "signedOut", origin });
       return false;
     }
-    auth.set({ status: "unreachable", origin, error: errorMessage(reason) });
+    setAuth({ status: "unreachable", origin, error: errorMessage(reason) });
     return false;
   }
 }
 
 /** Reads the stored sign-in and checks it with the server; the app shows nothing until it knows. */
 export async function restore(): Promise<void> {
-  auth.set({ status: "loading" });
+  setAuth({ status: "loading" });
   if (usesBrowserSession) {
     await establishBrowserSession();
     return;
   }
   const [storedOrigin, token, expiresAt] = await Promise.all([Storage.getItem(ORIGIN_KEY), Storage.getItem(TOKEN_KEY), Storage.getItem(EXPIRES_KEY)]);
   const origin = storedOrigin ?? DEFAULT_ORIGIN;
-  if (!token) return auth.set({ status: "signedOut", origin });
+  if (!token) return setAuth({ status: "signedOut", origin });
   try {
     await establish(origin, token, expiresAt);
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 401) {
       await clearCredentials();
-      auth.set({ status: "signedOut", origin, notice: EXPIRED });
+      setAuth({ status: "signedOut", origin, notice: EXPIRED });
     } else {
-      auth.set({ status: "unreachable", origin, error: errorMessage(reason) });
+      setAuth({ status: "unreachable", origin, error: errorMessage(reason) });
     }
   }
 }
@@ -211,38 +227,39 @@ export async function signInWithPassword(username: string, password: string): Pr
 /** The web: the browser session may have started in another tab (GitHub's redirect lands on the web app). */
 export const checkBrowserSession = establishBrowserSession;
 
+/** How long signing out waits for the server to revoke the sign-in. */
+const LOGOUT_TIMEOUT_MS = 10_000;
+
 export async function signOut(): Promise<void> {
   const state = auth();
   if (state.status !== "signedIn" && state.status !== "unreachable") return;
   const origin = state.origin;
   let notice: string | undefined;
-  let logout: (() => Promise<unknown>) | null = null;
+  let logout: ((signal: AbortSignal) => Promise<unknown>) | null = null;
   if (state.status === "signedIn") {
     liveToken = null;
-    logout = () => state.api("/api/auth/logout", { method: "POST" });
+    logout = signal => state.api("/api/auth/logout", { method: "POST", signal });
   } else if (!usesBrowserSession) {
-    // The server may be back by now; one that still doesn't answer must not hold up signing out on this device.
+    // The server may be back by now: revoke the stored sign-in there too.
     const token = await Storage.getItem(TOKEN_KEY);
-    if (token) logout = async () => {
-      const timeout = new AbortController();
-      const timer = setTimeout(() => timeout.abort(), 10_000);
-      try {
-        await createApi({ baseUrl: origin, auth: () => token })("/api/auth/logout", { method: "POST", signal: timeout.signal });
-      } finally {
-        clearTimeout(timer);
-      }
-    };
+    if (token) logout = signal => createApi({ baseUrl: origin, auth: () => token })("/api/auth/logout", { method: "POST", signal });
   }
   if (logout) {
+    // A server that doesn't answer must not hold up signing out on this device.
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), LOGOUT_TIMEOUT_MS);
     try {
-      await logout();
+      await logout(timeout.signal);
     } catch (reason) {
       // Signing out must work offline; the sign-in stays valid on the server until revoked there.
       if (!(reason instanceof ApiError && reason.status === 401)) {
-        notice = `Signed out on this device, but the server could not revoke the sign-in (${errorMessage(reason)}). Revoke it under Settings › Profile on the web.`;
+        const why = timeout.signal.aborted ? "it didn't answer" : errorMessage(reason);
+        notice = `Signed out on this device, but the server could not revoke the sign-in (${why}). Revoke it under Settings › Profile on the web.`;
       }
+    } finally {
+      clearTimeout(timer);
     }
   }
   await clearCredentials();
-  auth.set({ status: "signedOut", origin, notice });
+  setAuth({ status: "signedOut", origin, notice });
 }

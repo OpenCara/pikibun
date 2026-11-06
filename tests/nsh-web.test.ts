@@ -15,6 +15,7 @@ async function site(t: test.TestContext) {
   await writeFile(join(root, "index.html"), page);
   await writeFile(join(root, "nsh.4bda023b65.wasm"), new Uint8Array([0, 97, 115, 109]));
   await writeFile(join(root, "manifest.webmanifest"), "{}");
+  await writeFile(join(root, "app.0123456789.css"), "html{}");
   return root;
 }
 
@@ -51,6 +52,7 @@ test("serves the NSH build under /nsh/", async t => {
   assert.deepEqual(new Uint8Array(await wasm!.arrayBuffer()), new Uint8Array([0, 97, 115, 109]));
 
   assert.equal((await serve(get("/nsh/manifest.webmanifest")))?.headers.get("cache-control"), "no-cache");
+  assert.equal((await serve(get("/nsh/app.0123456789.css")))?.headers.get("content-type"), "text/css; charset=utf-8");
   // Any other path under /nsh/ is the page; nothing outside the build is reachable.
   assert.equal(await (await serve(get("/nsh/sessions/s1")))?.text(), page);
   assert.equal(await (await serve(get("/nsh/..%2f..%2fetc%2fpasswd")))?.text(), page);
