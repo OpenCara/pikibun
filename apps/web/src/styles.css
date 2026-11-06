@@ -671,6 +671,7 @@
   .settings-shell { display: grid; grid-template-columns: var(--settings-list-width) minmax(0, 1fr); min-height: 100%; }
   .settings-list { position: sticky; top: 0; align-self: start; align-content: start; display: grid; gap: 2px; height: 100vh; padding: var(--space-4) var(--space-2); border-right: 1px solid var(--border); overflow-y: auto; }
   .settings-list-title { padding: var(--space-2) var(--space-3) var(--space-3); color: var(--foreground-muted); font-size: var(--font-sm); font-weight: 500; }
+  .settings-list-version { margin-top: var(--space-3); padding: var(--space-2) var(--space-3); color: var(--foreground-muted); font-size: var(--font-sm); }
   .settings-detail { min-width: 0; }
 }
 
@@ -709,6 +710,7 @@
     .settings-shell { grid-template-columns: minmax(0, 1fr); align-content: start; }
     .settings-list { position: static; height: auto; display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2); border-right: 0; border-bottom: 1px solid var(--border); }
     .settings-list-title { display: none; }
+    .settings-list-version { margin-top: 0; align-self: center; }
     .settings-list .nav-item { flex: 0 0 auto; width: auto; }
     .settings-list .nav-item > .label { overflow: visible; }
   }
