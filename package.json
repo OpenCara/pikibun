@@ -19,6 +19,7 @@
     "build:nsh-web": "cd apps/nsh && nsh package App.tsx --target web --out ../../dist/nsh",
     "test:nsh": "cd apps/nsh && nsh check && nsh test",
     "test:nsh-live": "node --import tsx scripts/nsh-live.ts",
+    "test:nsh-macos": "node --import tsx scripts/nsh-macos-smoke.ts",
     "typecheck": "tsc --noEmit && pnpm --filter @pikibun/mobile --filter @pikibun/desktop run typecheck",
     "python:embed": "node scripts/embed-python.mjs",
     "python:check": "node scripts/check-python.mjs",

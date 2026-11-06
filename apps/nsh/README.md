@@ -49,7 +49,9 @@ that allows the page's inline loader by hash and WebAssembly (`apps/server/src/n
 ```sh
 nsh check && nsh test       # type check, then the headless tests (pnpm test:nsh from the repository)
 pnpm test:nsh-live          # against a real server: starts one in test mode, checks /nsh/, signs in, signs out
-nsh test --target macos tests/screenshots.test.tsx   # screenshots of the main screens, in .nsh/screenshots
+# From the repository root:
+pnpm test:nsh-macos         # real AppKit tests and screenshots, in apps/nsh/.nsh/screenshots
+pnpm test:nsh-macos --github --display 1  # additionally complete GitHub sign-in yourself
 ```
 
 `tests/app.test.tsx` runs the app on NSH's headless engine against a stubbed server: signing in and out, the session
@@ -57,6 +59,15 @@ list, opening a session, approving, sending, starting a session, and the side-by
 changes. `pnpm test:nsh-live` checks the native sign-in against a real server and that the server serves the web
 build. The web build's own sign-in (relative URLs and the browser's cookie) needs a browser to test: the headless engine
 has no page to resolve relative URLs against (`nsh test --target web` runs in one).
+
+`pnpm test:nsh-macos` creates the screenshot directory and runs the stubbed app and screenshot tests in native
+macOS windows. Add `--github` for an opt-in, interactive OAuth smoke test against `https://pikibun.com`, or pass
+`--server https://your-server.example`. It takes no live screenshots, redacts URL queries from runtime output, and
+passes only when sign-in returns to the authenticated session list. Complete any credentials, MFA and authorization
+yourself. The test uses isolated storage that is discarded when it ends; it does not sign in the installed app.
+`--timeout-ms 600000` sets the interactive wait, and `NSH_BIN` selects a locally installed CLI.
+
+See [Mac test results](MACOS-TESTING.md) for the observed browser failures and the blocked native OAuth callback.
 
 ## Known gaps, from NSH itself
 
