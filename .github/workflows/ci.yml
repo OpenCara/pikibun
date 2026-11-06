@@ -60,6 +60,9 @@ jobs:
       - run: pnpm test
       # The client's tests, headless on Native Shell's own engine against a stubbed server.
       - run: pnpm test:client
+      # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
+      # lacks `lifecycle`, and the page's Content-Security-Policy applies), and only a browser shows it.
+      - run: pnpm test:client-web
       - run: pnpm build
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build

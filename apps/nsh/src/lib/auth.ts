@@ -17,8 +17,12 @@ const TOKEN_KEY = "pikibun.token";
 const EXPIRES_KEY = "pikibun.tokenExpires";
 /** The server is a preference, not a credential: it stays after sign-out so signing in again goes to the same place. */
 const ORIGIN_KEY = "pikibun.origin";
-/** The server redirects here after GitHub (see the native sign-in API). */
-export const CALLBACK_URL = "pikibun://auth";
+/**
+ * Where the server hands a sign-in back after GitHub when asked with `callback=page` (see the native sign-in API): a
+ * page of its own the web view navigates to, since NSH's web views load only http and https and the app has no URL
+ * scheme to be sent to.
+ */
+const CALLBACK_PATH = "/api/auth/native/done";
 
 /** What the server offers on its sign-in page (GET /api/health). */
 export interface SignInMethods {
@@ -166,16 +170,19 @@ export async function signInMethods(origin: string): Promise<SignInMethods> {
   return createApi({ baseUrl: origin, auth: () => null })<SignInMethods>("/api/health");
 }
 
-/** A native GitHub sign-in in progress: the page to show, and how to finish once it redirects to CALLBACK_URL. */
+/** A native GitHub sign-in in progress: the page to show, and how to finish once the web view reaches its callback. */
 export interface GitHubSignIn {
   url: string;
+  /** Whether the web view's address is the server's callback page, which finishes the sign-in. */
+  isCallback(url: string): boolean;
   finish(callbackUrl: string): Promise<void>;
 }
 
 /**
- * Starts the native GitHub sign-in (PKCE, as the Expo app does). NSH has no system authentication session
- * (longbridge/nsh#1065) and no deep links, so the page runs in the app's own web view, which watches for the
- * redirect to pikibun://auth; the web view can see what is typed into it, unlike ASWebAuthenticationSession.
+ * Starts the native GitHub sign-in (PKCE). NSH has no system authentication session (longbridge/nsh#1065) and no deep
+ * links, so the page runs in the app's own web view, which watches for the server's callback page; the web view can see
+ * what is typed into it, unlike ASWebAuthenticationSession. The code it gets back is worth nothing without the verifier,
+ * which never leaves the app.
  */
 export async function startGitHubSignIn(origin: string): Promise<GitHubSignIn> {
   const health = await signInMethods(origin);
@@ -184,9 +191,11 @@ export async function startGitHubSignIn(origin: string): Promise<GitHubSignIn> {
   }
   const { verifier, challenge, state } = await createPkce();
   return {
-    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}`,
+    url: `${origin}/api/auth/native/start?challenge=${challenge}&state=${state}&callback=page`,
+    isCallback: url => isCallbackPage(origin, url),
     async finish(callbackUrl: string) {
-      const params = new URL(callbackUrl.replace(/^pikibun:\/\/auth/, "https://callback.invalid/auth")).searchParams;
+      if (!isCallbackPage(origin, callbackUrl)) throw new Error("The sign-in ended somewhere unexpected. Try again.");
+      const params = new URL(callbackUrl).searchParams;
       // A callback for another attempt must never complete this one.
       if (params.get("state") !== state) throw new Error("The sign-in response did not match this attempt. Try again.");
       const error = params.get("error");
@@ -198,6 +207,16 @@ export async function startGitHubSignIn(origin: string): Promise<GitHubSignIn> {
       await establish(origin, exchange.token, exchange.expiresAt, exchange.user);
     },
   };
+}
+
+/** Whether `url` is `origin`'s callback page: the same origin and path, never a page of another site that names it. */
+function isCallbackPage(origin: string, url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.origin === new URL(origin).origin && parsed.pathname === CALLBACK_PATH;
+  } catch {
+    return false;
+  }
 }
 
 /** A test-mode server's token (POST /api/auth/test), for development and tests. */

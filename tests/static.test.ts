@@ -1,14 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStaticHandler, pageContentSecurityPolicy } from "../apps/server/src/static.ts";
 
 // The client, built for the web by Native Shell (`pnpm build`): an inline loader, files named by their content.
-const loader = "const fetches = new Map();";
-const page = `<!doctype html>\n<html lang="en">\n<head>\n<script>${loader}</script><script type="module">import { createPlayer } from "./nsh.89070fe10a.js";</script><script src="./x.js"></script>\n</head><body></body></html>`;
+const page = `<!doctype html>\n<html lang="en">\n<head>\n<script>const fetches = new Map();</script><script type="module">import { createPlayer } from "./nsh.89070fe10a.js";</script><script src="./x.js"></script>\n</head><body></body></html>`;
 
 async function site(t: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), "web-"));
@@ -21,17 +19,17 @@ async function site(t: test.TestContext) {
 }
 
 const get = (path: string) => new Request(`https://pikibun.example${path}`);
-const hash = (text: string) => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
+const directive = (policy: string, name: string) => policy.split("; ").find(item => item.startsWith(`${name} `));
 
-test("the page allows its inline scripts by hash and WebAssembly, and nothing looser", () => {
-  const policy = pageContentSecurityPolicy(page);
-  assert.match(policy, /script-src 'self' 'wasm-unsafe-eval' /);
-  assert.ok(policy.includes(hash(loader)));
-  assert.ok(policy.includes(hash('import { createPlayer } from "./nsh.89070fe10a.js";')));
-  assert.equal(policy.match(/'sha256-/g)?.length, 2, "a script with src needs no hash");
-  assert.doesNotMatch(policy, /'unsafe-eval'|script-src[^;]*'unsafe-inline'/);
-  assert.match(policy, /connect-src 'self'/);
-  assert.match(policy, /frame-ancestors 'none'/);
+test("the page's policy lets Native Shell's web runtime start, and no more", () => {
+  const policy = pageContentSecurityPolicy();
+  // Its blob modules, the import map it inserts (no hash or nonce: they would turn 'unsafe-inline' off) and WebAssembly.
+  assert.equal(directive(policy, "script-src"), "script-src 'self' blob: 'unsafe-inline' 'wasm-unsafe-eval'");
+  assert.doesNotMatch(policy, /'unsafe-eval'|'sha256-|'nonce-|\*/, "no eval, no hashes or nonces, no wildcard");
+  assert.equal(directive(policy, "connect-src"), "connect-src 'self' blob: data:", "requests go to this server only");
+  for (const kept of ["object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'", "form-action 'self'", "default-src 'self'"]) {
+    assert.ok(policy.split("; ").includes(kept), kept);
+  }
 });
 
 test("serves the client at the root: files as they are, everything else as its page", async t => {
@@ -41,8 +39,7 @@ test("serves the client at the root: files as they are, everything else as its p
   assert.equal(index.status, 200);
   const html = await index.text();
   assert.match(html, /<head>\n<base href="\/">/, "relative URLs resolve from the root whatever the path");
-  assert.match(index.headers.get("content-security-policy") ?? "", /'wasm-unsafe-eval'/);
-  assert.ok((index.headers.get("content-security-policy") ?? "").includes(hash(loader)), "the hashes still match the page as served");
+  assert.equal(index.headers.get("content-security-policy"), pageContentSecurityPolicy());
   assert.equal(index.headers.get("cache-control"), "no-cache");
 
   const wasm = await serve(get("/nsh.4bda023b65.wasm"));

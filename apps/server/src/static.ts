@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -32,19 +31,22 @@ const contentTypes: Record<string, string> = {
 const hashedName = /\.[0-9a-f]{10}\.[a-z0-9]+$/;
 
 /**
- * The page's policy. Native Shell's loader is inline in index.html, so it is allowed by hash and no other inline script
- * runs, and its runtime compiles WebAssembly ('wasm-unsafe-eval', not 'unsafe-eval': JavaScript `eval` stays off).
+ * The page's policy, as Native Shell 0.4's web runtime needs it to start:
+ * - it compiles WebAssembly: 'wasm-unsafe-eval', not 'unsafe-eval', so JavaScript `eval` stays off;
+ * - it builds the app's `nsh` modules as `blob:` URLs and maps them with an inline `<script type="importmap">` it inserts,
+ *   whose content changes with every load, so no hash can allow it: 'unsafe-inline' does (and a hash or nonce in the
+ *   list would turn 'unsafe-inline' off again). The runtime sets no nonce on it (longbridge/nsh: to report).
+ * Scripts still come only from this server and the runtime's own blobs; requests go only to this server.
  */
-export function pageContentSecurityPolicy(html: string): string {
-  const hashes = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)]
-    .map(match => `'sha256-${createHash('sha256').update(match[1] ?? '').digest('base64')}'`);
+export function pageContentSecurityPolicy(): string {
   return [
     "default-src 'self'",
-    `script-src 'self' 'wasm-unsafe-eval' ${hashes.join(' ')}`.trim(),
+    "script-src 'self' blob: 'unsafe-inline' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https://avatars.githubusercontent.com",
     "font-src 'self' data:",
-    "connect-src 'self'",
+    // The runtime reads its own blobs (a pasted image, a picked photo) with fetch.
+    "connect-src 'self' blob: data:",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
@@ -83,7 +85,7 @@ export function createStaticHandler(root: string): (request: Request) => Promise
     if (!/<base\s/i.test(html)) html = html.replace(/<head>/i, '<head>\n<base href="/">');
     return new Response(request.method === 'HEAD' ? null : html, {
       status: 200,
-      headers: { 'Content-Type': contentTypes['.html']!, 'Cache-Control': 'no-cache', 'Content-Security-Policy': pageContentSecurityPolicy(html) },
+      headers: { 'Content-Type': contentTypes['.html']!, 'Cache-Control': 'no-cache', 'Content-Security-Policy': pageContentSecurityPolicy() },
     });
   }
   return async request => {

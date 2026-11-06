@@ -1,4 +1,5 @@
-import { cleanup, effect, lifecycle, signal, untracked, type Accessor } from "nsh";
+import { cleanup, effect, signal, untracked, type Accessor } from "nsh";
+import { lifecycle } from "./lifecycle";
 import { openFetchEventStream, startLiveSession, type SessionRecord, type SessionView, type StreamStatus } from "../shared";
 import { session as signedIn } from "./auth";
 import { inBackground } from "./resource";

@@ -1,5 +1,16 @@
 # Native Shell prototype: Mac test results
 
+> **Since this report** (all three found here, and fixed on the same branch):
+>
+> - **Web**: the page's Content-Security-Policy now allows the runtime's inserted import map and `blob:` modules, and
+>   the web app no longer stays on `Loading…`: NSH 0.4's web runtime has no `lifecycle`, and calling the missing import
+>   threw as the signed-in screens were made (`src/lib/lifecycle.ts` stands in for it). `pnpm test:client-web` runs the
+>   web build in headless Chrome in CI: signed out, signed in, a settings address, signing out, with no page errors or
+>   policy violations.
+> - **Native GitHub sign-in**: the server now hands it back on its own `https` page (`/api/auth/native/done`), which
+>   the web view may load, not `pikibun://auth`, which it may not. This has not been retried on a Mac yet:
+>   `pnpm test:client-macos --github` is the check.
+
 Tested PR #206 at `063868b8a0650db2afbb3dc0fecc1684e26544d5` on an Apple Silicon Mac running macOS 26.6.2,
 Node 26.13.0, pnpm 10.32.1 and Native Shell 0.4.0 (`e626a8d`). The macOS release archive's SHA-256 was verified.
 These are observations on this machine, not a claim that every target or the complete repository suite passes.
@@ -66,13 +77,13 @@ for the native/developer-token path; their failure alone does not identify a web
 
 ## Reproduce the native smoke tests
 
-Install NSH 0.4 and the repository dependencies, then run from the repository root:
+Install the repository dependencies (scripts/nsh.mjs fetches the pinned NSH 0.4), then run from the repository root:
 
 ```sh
-pnpm test:nsh-macos
-pnpm test:nsh-macos --github --display 1
+pnpm test:client-macos
+pnpm test:client-macos --github --display 1
 # For another server or a shorter interactive wait:
-pnpm test:nsh-macos --github --server https://your-server.example --timeout-ms 120000
+pnpm test:client-macos --github --server https://your-server.example --timeout-ms 120000
 ```
 
 The default run uses stubbed API fixtures and requires no account. It creates `apps/nsh/.nsh/screenshots` and writes
@@ -83,7 +94,7 @@ the app's ignored `.nsh` directory. When invoking the screenshot tests directly 
 The opt-in OAuth test opens the actual app on AppKit with a live network and isolated storage. It records no live
 screenshots and supplies no credentials. It waits for the authenticated session list, so a blank web view or a blocked
 callback cannot pass just because the sheet opened. Its isolated app closes when the test ends. `NSH_BIN` overrides
-the `nsh` executable; `--help` lists the runner's options.
+the pinned `nsh`; `--help` lists the runner's options.
 
 No credentials, raw authentication logs, screenshots, SDK binaries, local proxy or machine-specific launchers are
 included in this report or the reusable tests.

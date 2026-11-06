@@ -33,6 +33,7 @@ Native builds sign in to a server you enter: GitHub in the app's own web view, o
 pnpm typecheck                # the repository's types, then `nsh check`
 pnpm test:client              # the headless tests: NSH's own engine against a stubbed server
 pnpm test:client-live         # against a real test-mode server: serving, sign-in, the session list, sign-out
+pnpm test:client-web          # the web build in headless Chrome (CHROME_BIN, or the first on PATH) against one
 pnpm test:client-macos        # on macOS: the app tests and screenshots in real AppKit windows (apps/nsh/.nsh/screenshots)
 pnpm test:client-macos --github --display 1  # also a live GitHub sign-in, which you complete yourself
 ```
@@ -43,16 +44,22 @@ live screenshots, redacts URL queries from runtime output, and passes only when 
 Its storage is isolated and discarded when it ends. `--timeout-ms 600000` sets the interactive wait. See
 [Mac test results](MACOS-TESTING.md) for what was observed on a Mac.
 
-The web build's own sign-in (relative URLs and the browser's cookie) needs a browser to test: NSH's headless engine has
-no page to resolve relative URLs against (`pnpm nsh test --target web` runs in one).
+`pnpm test:client-web` is the web's own: signed out, signed in with the browser's cookie, a settings address, signing
+out, and no page errors, Content-Security-Policy violations or console errors on the way. NSH's headless engine isn't a
+browser and has APIs its web runtime lacks, so only this catches the web's own failures.
 
 ## Known gaps, from NSH itself
 
+- **The web runtime**: NSH 0.4's has no `lifecycle` (its import is undefined there), so `src/lib/lifecycle.ts` stands in
+  for it and counts a page as always active. Its loader inserts an import map and `blob:` modules no hash can allow, so
+  the page's policy allows inline scripts (`apps/server/src/static.ts`).
 - **Secure storage**: native sign-ins are kept in NSH's `Storage`, a plain file in the app's data, not the Keychain or
   Keystore ([nsh#1061](https://github.com/longbridge/nsh/issues/1061)).
 - **GitHub sign-in**: NSH has neither a system authentication session nor deep links
   ([nsh#1065](https://github.com/longbridge/nsh/issues/1065)), so native sign-in runs GitHub's page in the app's own web
-  view, which can see what is typed into it.
+  view, which can see what is typed into it. That web view navigates only to http and https, so the server hands the
+  sign-in back on a page of its own (`/api/auth/native/done`, asked for with `callback=page`) rather than
+  `pikibun://auth`; the code there is worth nothing without the PKCE verifier, which never leaves the app.
 - **Types**: NSH 0.4 declares `CryptoKey` only as a value; `src/globals.d.ts` declares the type the shared code names.
 - **Tests**: headless `texts()` lists a scroll view's content in view-tree order, not screen order (fixed upstream in
   [nsh#1105](https://github.com/longbridge/nsh/pull/1105)), and screenshots need `--target`. After `setColorScheme`,

@@ -3,7 +3,7 @@ import { Dialog, Input } from "nsh/base";
 import { WebView } from "nsh";
 import { openServerPage } from "../lib/page";
 import { errorMessage } from "../shared";
-import { auth, CALLBACK_URL, checkBrowserSession, restore, signInMethods, signInWithPassword, signInWithToken, signOut, startGitHubSignIn, type GitHubSignIn, type SignInMethods } from "../lib/auth";
+import { auth, checkBrowserSession, restore, signInMethods, signInWithPassword, signInWithToken, signOut, startGitHubSignIn, type GitHubSignIn, type SignInMethods } from "../lib/auth";
 import { createAction } from "../lib/resource";
 import { displayOrigin, parseOrigin, usesBrowserSession } from "../lib/server";
 import { palette } from "../theme";
@@ -86,10 +86,10 @@ function SignInForm() {
     });
   }
 
-  /** The web view went somewhere: the redirect to pikibun://auth finishes the sign-in. */
+  /** The web view went somewhere: the server's callback page finishes the sign-in. */
   function navigated(url: string) {
     const attempt = github();
-    if (!attempt || !url.startsWith(CALLBACK_URL)) return;
+    if (!attempt || !attempt.isCallback(url)) return;
     github.set(null);
     void action.run(() => attempt.finish(url));
   }
