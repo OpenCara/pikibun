@@ -3,9 +3,13 @@ import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-a
 import type { ExtensionContext, ExtensionFactory, InputEvent, InputEventResult } from "@earendil-works/pi-coding-agent";
 
 /*
- * piki:prompt-audit (docs/design/piki-extensions.md): a Pi extension that has a model check each message before it
+ * The prompt audit (docs/design/piki-extensions.md): a Pi extension that has a model check each message before it
  * reaches the agent, and refuses one that tries to have the agent reveal or misuse what lies on the machine (its Pi
  * credentials and API keys, its owner's files and environment, its network) rather than do the work at hand.
+ *
+ * It is a Pi package of its own (this directory: package.json's `pi` manifest names index.ts), which Pi installs and
+ * loads as any other (`pi install ./extensions/prompt-audit`), and which imports nothing but Pi's own packages and
+ * Node's. Pikibun's connector bundles the same module as `piki:prompt-audit`, so hosts have it without installing it.
  *
  * It handles Pi's `input` event, so it runs in Pi as it does in Pikibun. Which messages it audits is its `audit`
  * setting: by default those that don't come from the machine's own person (`source` other than `interactive`): in Pi,
