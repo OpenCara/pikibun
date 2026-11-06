@@ -14,7 +14,6 @@ import { HostCompactionSection } from "./HostCompaction";
 import { HostConfigSection } from "./HostConfig";
 import { HostExtensionsSection } from "./HostExtensions";
 import { check, desktopBridge } from "../desktop";
-import { olderThanServer, useServerVersion } from "../server-version";
 import "./settings.css";
 
 const hostsInfo = <>
@@ -281,17 +280,16 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
   </>;
 }
 
-/** The models Pi on the host offers; its owner and admins choose which of them it offers to sessions. */
-/** The version its connector reported when it last connected, and whether it is older than this server's. */
+/**
+ * The version its connector reported when it last connected. It isn't compared with the server's: the connector and the
+ * server are released on their own lines (cli-v*, server-v*), so their numbers say nothing about each other.
+ */
 function ConnectorVersionRow({ connector }: { connector: ConnectorInfo }) {
-  const server = useServerVersion();
-  const update = "npx pikibun@latest connect";
-  const hint = !connector.version ? `Connectors from 0.23 and older don't report it. Update with ${update}`
-    : olderThanServer(connector.version, server) ? `Older than this server's ${server}. Update with ${update}`
-    : undefined;
+  const hint = connector.version ? undefined : "Connectors from 0.23 and older don't report it. Update with npx pikibun@latest connect";
   return <Row title="Connector" hint={hint} trailing={connector.version ?? "Not reported"} />;
 }
 
+/** The models Pi on the host offers; its owner and admins choose which of them it offers to sessions. */
 function ModelsSection({ connector, refresh }: { connector: ConnectorInfo; refresh: () => void }) {
   const action = useAction();
   const disabled = new Set((connector.disabledModels ?? []).map(modelKey));
