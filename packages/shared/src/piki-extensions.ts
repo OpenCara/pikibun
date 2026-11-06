@@ -1,4 +1,5 @@
 import type { GitProvider } from "./repositories.js";
+import type { DocumentKind } from "./sources.js";
 
 /*
  * Extensions built into the connector (docs/design/piki-extensions.md): Pi extensions that give sessions a forge's
@@ -51,6 +52,26 @@ export interface PikiExtensionInfo {
    * workspace pages don't list it.
    */
   retired?: boolean;
+  /**
+   * Session tools only: the retired extension whose switch this one took a share of (piki:sources, split into one per
+   * kind of document source). While the workspace hasn't chosen this one, it follows that one's choice, so a workspace
+   * that turned the old one off keeps its tools off.
+   */
+  replaces?: `piki:${string}`;
+  /**
+   * Document-source extensions only: the kinds of document source whose items `source_read` reads while this extension
+   * is on. `source_read` is offered while any of them is on, and lists and reads only the sources of kinds that are on.
+   */
+  documentKinds?: readonly DocumentKind[];
+}
+
+/** A document-source extension, one per kind of source: each turns source_read on for its kind. */
+function documentSourceExtension(name: string, kind: DocumentKind, title: string): PikiExtensionInfo {
+  return {
+    name, source: `piki:${name}`, title, sessionTools: ["source_read"], replaces: "piki:sources", documentKinds: [kind],
+    description: `The source_read tool for the workspace's ${title} sources: the agent reads them as the session owner. On unless turned off here.`,
+    providers: [],
+  };
 }
 
 export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
@@ -140,10 +161,19 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     providers: [],
   },
   {
-    name: "sources", source: "piki:sources", title: "Document sources", sessionTools: ["source_read"],
-    description: "The source_read tool: the agent reads the workspace's document sources (Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark, Tencent Docs) as the session owner. On unless turned off here.",
+    // Retired when split into one extension per kind of source, below: kept so connectors still report it, and the
+    // control plane still sends older connectors, which have only it, whether any of those is on (connectorWorkspaceExtensions).
+    // A workspace that turned it off keeps every kind it hasn't chosen since off (`replaces`).
+    name: "sources", source: "piki:sources", title: "Document sources", sessionTools: ["source_read"], retired: true,
+    description: "The source_read tool for every kind of document source, retired: each kind has its own extension now (piki:notion, piki:google-drive, ...). Connectors from before the split still offer it unless turned off.",
     providers: [],
   },
+  documentSourceExtension("notion", "notion", "Notion"),
+  documentSourceExtension("google-drive", "google-drive", "Google Drive"),
+  documentSourceExtension("dropbox", "dropbox", "Dropbox"),
+  documentSourceExtension("onedrive", "onedrive", "OneDrive / SharePoint"),
+  documentSourceExtension("feishu", "feishu", "Feishu / Lark"),
+  documentSourceExtension("tencent-docs", "tencent-docs", "Tencent Docs"),
   {
     name: "sessions", source: "piki:sessions", title: "Other sessions", sessionTools: ["sessions"],
     description: "The sessions tool: the agent lists, reads, messages, starts, stops and archives the workspace's other sessions, as the message's sender, with their permissions. On unless turned off here.",
@@ -172,18 +202,56 @@ export function pikiSessionToolExtensions(): PikiExtensionInfo[] {
 }
 
 /**
- * The session tools `workspace` turns off: those of the session-tool extensions it lists disabled. One it doesn't list
- * is on (see `sessionTools`).
+ * Whether `workspace` has `extension` on: a core one always; one it lists as it lists it; one it doesn't list, as it
+ * lists the retired one this one `replaces`, if it does; otherwise on (see `sessionTools`).
+ */
+export function pikiExtensionOn(extension: PikiExtensionInfo, workspace: readonly { source: string; enabled: boolean }[]): boolean {
+  if (extension.core) return true;
+  const chosen = workspace.find(item => item.source === extension.source)
+    ?? (extension.replaces ? workspace.find(item => item.source === extension.replaces) : undefined);
+  return chosen ? chosen.enabled : true;
+}
+
+/** The session-tool extensions that switch tools now: not the ones a newer extension `replaces`. */
+function switchingExtensions(): PikiExtensionInfo[] {
+  const replaced = new Set(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
+  return pikiSessionToolExtensions().filter(item => !replaced.has(item.source));
+}
+
+/**
+ * The session tools `workspace` turns off: those whose every session-tool extension it has off (one tool may come with
+ * several, as source_read does with each kind of document source). One it doesn't list is on (see `sessionTools`).
  */
 export function sessionToolsOff(workspace: readonly { source: string; enabled: boolean }[], options: { failClosedOnly?: boolean } = {}): Set<string> {
+  const offering = new Map<string, PikiExtensionInfo[]>();
+  for (const extension of switchingExtensions()) {
+    for (const tool of extension.sessionTools ?? []) offering.set(tool, [...offering.get(tool) ?? [], extension]);
+  }
   const off = new Set<string>();
-  for (const extension of pikiSessionToolExtensions()) {
-    // Core tools stay on whatever a workspace lists.
-    if (extension.core) continue;
-    if (options.failClosedOnly && !extension.failClosed) continue;
-    if (workspace.some(item => item.source === extension.source && !item.enabled)) for (const tool of extension.sessionTools ?? []) off.add(tool);
+  for (const [tool, extensions] of offering) {
+    if (options.failClosedOnly && !extensions.every(extension => extension.failClosed)) continue;
+    if (extensions.every(extension => !pikiExtensionOn(extension, workspace))) off.add(tool);
   }
   return off;
+}
+
+/** The kinds of document source `workspace` turns off, whose sources source_read neither lists nor reads. */
+export function documentKindsOff(workspace: readonly { source: string; enabled: boolean }[]): Set<DocumentKind> {
+  const off = new Set<DocumentKind>();
+  for (const extension of switchingExtensions()) {
+    if (!pikiExtensionOn(extension, workspace)) for (const kind of extension.documentKinds ?? []) off.add(kind);
+  }
+  return off;
+}
+
+/** The session-tool extensions that offer `tool` now (several for source_read), for naming them where it is off. */
+export function sessionToolExtensions(tool: string): PikiExtensionInfo[] {
+  return switchingExtensions().filter(item => item.sessionTools?.includes(tool));
+}
+
+/** The document-source extension of `kind`. */
+export function documentSourceExtensionOf(kind: DocumentKind): PikiExtensionInfo | undefined {
+  return switchingExtensions().find(item => item.documentKinds?.includes(kind));
 }
 
 /** The Pikibun extensions for repositories of `provider`. */

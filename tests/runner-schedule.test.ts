@@ -11,7 +11,7 @@ import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
 import type { AuthorizationRequest, PermissionRequest, RunnerAction, RunnerBinding, RunnerTicket, ScheduleToolRequest, SessionSchedule } from "../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../packages/shared/src/cron.js";
-import { sessionToolsOff } from "../packages/shared/src/piki-extensions.js";
+import { documentKindsOff, sessionToolsOff } from "../packages/shared/src/piki-extensions.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 
@@ -179,6 +179,21 @@ test("sessionToolsOff: only a session-tool extension the workspace lists turned 
   assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: true }])], []);
   assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule"]);
   assert.deepEqual([...sessionToolsOff([{ source: "piki:gh", enabled: false }, { source: "npm:pi-web-access@0.46.0", enabled: false }])], [], "other extensions offer no session tools");
+});
+
+test("document sources: each kind has its own switch, source_read is off only once every kind is, and piki:sources still counts", () => {
+  const off = (source: string) => ({ source, enabled: false });
+  const kinds = ["piki:notion", "piki:google-drive", "piki:dropbox", "piki:onedrive", "piki:feishu", "piki:tencent-docs"];
+  assert.deepEqual([...documentKindsOff([])], []);
+  assert.deepEqual([...documentKindsOff([off("piki:notion")])], ["notion"]);
+  assert.deepEqual([...sessionToolsOff([off("piki:notion")])], [], "source_read stays on for the other kinds");
+  assert.deepEqual([...sessionToolsOff(kinds.map(off))], ["source_read"]);
+  // Before the split, one switch turned them all off: a workspace that hasn't chosen a kind since follows it.
+  assert.deepEqual([...sessionToolsOff([off("piki:sources")])], ["source_read"]);
+  assert.deepEqual([...documentKindsOff([off("piki:sources")])].sort(), ["dropbox", "feishu", "google-drive", "notion", "onedrive", "tencent-docs"]);
+  assert.deepEqual([...documentKindsOff([off("piki:sources"), { source: "piki:notion", enabled: true }])].sort(), ["dropbox", "feishu", "google-drive", "onedrive", "tencent-docs"]);
+  assert.deepEqual([...sessionToolsOff([off("piki:sources"), { source: "piki:notion", enabled: true }])], []);
+  assert.deepEqual([...documentKindsOff([{ source: "piki:sources", enabled: true }, off("piki:dropbox")])], ["dropbox"]);
 });
 
 test("bash and host_bash are retired: their switches turn nothing on or off, while git, node, python and the file tools stay", async t => {

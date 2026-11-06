@@ -8,7 +8,7 @@ import { descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, pikibunToo
 
 const own = pikiSessionToolExtensions().filter(item => !item.retired);
 /** The session's own tools, as the workspace page lists them: the file tools, which every session has, first. */
-const sessionTools = [...own.filter(item => item.core), ...own.filter(item => !item.core)].flatMap(item => item.sessionTools ?? []);
+const sessionTools = [...new Set([...own.filter(item => item.core), ...own.filter(item => !item.core)].flatMap(item => item.sessionTools ?? []))];
 const enabled = (source: string, tools: WorkspaceExtension["tools"] = "approval"): WorkspaceExtension => ({ source, enabled: true, tools, settings: {} });
 const disabled = (source: string): WorkspaceExtension => ({ source, enabled: false, tools: "approval", settings: {} });
 /**
@@ -45,6 +45,18 @@ test("session tools a workspace turns off leave the list, except the core ones i
   assert.deepEqual(usable.off, [{ name: "git", source: "piki:git" }, { name: "git_push", source: "piki:git" }]);
   assert.ok(!usable.tools.some(tool => tool.name === "git" || tool.name === "git_push"));
   assert.ok(usable.tools.some(tool => tool.name === "read_file"));
+});
+
+test("source_read comes with one extension per kind of document source: on while any is, off once all are", () => {
+  const kinds = ["piki:notion", "piki:google-drive", "piki:dropbox", "piki:onedrive", "piki:feishu", "piki:tencent-docs"];
+  assert.equal(workspaceTools([], []).tools.find(tool => tool.name === "source_read")?.source, "piki:notion");
+  const notionOff = workspaceTools([disabled("piki:notion")], []);
+  assert.equal(notionOff.tools.find(tool => tool.name === "source_read")?.source, "piki:google-drive", "listed with the first kind that has it on");
+  assert.equal(notionOff.tools.filter(tool => tool.name === "source_read").length, 1, "listed once");
+  assert.deepEqual(workspaceTools(kinds.map(disabled), []).off, [{ name: "source_read", source: "piki:notion" }]);
+  // A workspace that turned off piki:sources, before the split, has every kind it hasn't chosen since off.
+  assert.deepEqual(workspaceTools([disabled("piki:sources")], []).off, [{ name: "source_read", source: "piki:notion" }]);
+  assert.equal(workspaceTools([disabled("piki:sources"), enabled("piki:feishu")], []).tools.find(tool => tool.name === "source_read")?.source, "piki:feishu");
 });
 
 test("enabled extensions add the tools hosts report, with how they run; disabled, unreported and broken ones add none", () => {

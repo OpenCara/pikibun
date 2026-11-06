@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
+import { pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
@@ -61,7 +61,28 @@ const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ?
 export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined): WorkspaceExtension[] {
   const has = new Set((installed ?? []).map(item => item.source));
   const knowsPiki = [...has].some(isPikiExtensionSource);
-  return extensions.filter(item => !isPikiExtensionSource(item.source) || (knowsPiki && (!sessionToolSources.includes(item.source) || has.has(item.source))));
+  const shown = extensions.filter(item => !isPikiExtensionSource(item.source) || (knowsPiki && (!sessionToolSources.includes(item.source) || has.has(item.source))));
+  return knowsPiki ? withReplacedSwitches(shown, extensions, has) : shown;
+}
+
+/**
+ * For a connector that has a retired switch (piki:sources) but none of the extensions that replace it (piki:notion,
+ * ...), that switch as the workspace has those now: on while any of them is on. It stands in the workspace's own entry
+ * for it, if any, or else is added at the end, and is left out while on, as a workspace that never chose has it.
+ */
+function withReplacedSwitches(shown: readonly WorkspaceExtension[], extensions: readonly WorkspaceExtension[], has: ReadonlySet<string>): WorkspaceExtension[] {
+  let result = [...shown];
+  const replaced = new Set(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
+  for (const source of replaced) {
+    const successors = pikiExtensions.filter(item => item.replaces === source);
+    if (!has.has(source) || successors.some(item => has.has(item.source))) continue;
+    const on = successors.some(item => pikiExtensionOn(item, extensions));
+    const own = result.find(item => item.source === source);
+    if (on) result = result.filter(item => item.source !== source);
+    else if (own) result = result.map(item => item.source === source ? { ...item, enabled: false } : item);
+    else result.push({ source, enabled: false, tools: 'approval', settings: {} });
+  }
+  return result;
 }
 
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
