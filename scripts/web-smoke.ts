@@ -185,7 +185,15 @@ try {
   cleanups.push(() => server.close());
 
   const { chrome, page } = await launchChrome(join(work, "chrome"));
-  cleanups.unshift(() => { page.close(); chrome.kill(); });
+  // Chrome writes its profile until it has exited, so it must be gone before the profile is removed.
+  cleanups.unshift(async () => {
+    page.close();
+    if (chrome.exitCode !== null || chrome.signalCode !== null) return;
+    const exited = new Promise(done => chrome.once("exit", done));
+    chrome.kill();
+    await Promise.race([exited, new Promise(done => setTimeout(done, 5000))]);
+    if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill("SIGKILL");
+  });
 
   await page.goto(`${origin}/`);
   await page.waitForText("Continue with GitHub");
@@ -225,6 +233,7 @@ try {
   console.error(error instanceof Error ? error.message : error);
 } finally {
   for (const cleanup of cleanups) await cleanup();
-  await rm(work, { recursive: true, force: true });
+  // Leftovers in the temporary directory fail nothing.
+  await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(error => console.warn(`Could not remove ${work}: ${error}`));
 }
 process.exit(failed ? 1 : 0);
