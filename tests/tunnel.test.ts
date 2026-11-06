@@ -3,15 +3,15 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseHostTunnelConfig, parseHostTunnelStatus, parseSessionTunnelReport, quickTunnelUrl, serviceOutputLimits, tunnelUnavailableReason,
   tunnelUnavailableText, validTunnelUrl, type SessionTunnelReport } from "../packages/shared/src/tunnel.js";
 import { tunnelRequest } from "../apps/runner/src/tunnel-command.js";
-import { SERVICE_MARK, SessionService, serviceLimits, serviceShellCommand, type ServiceExit, type ServiceProcess } from "../apps/runner/src/session-service.js";
+import { pinServiceSocket, SERVICE_MARK, SessionService, serviceLimits, serviceShellCommand, type ServiceExit, type ServiceProcess } from "../apps/runner/src/session-service.js";
 import { SessionTunnel } from "../apps/runner/src/session/tunnel.js";
 import { HostTunnels, HostTunnelSource, NO_ADDRESS, type QuickTunnel } from "../apps/runner/src/tunnel-host.js";
 import { cloudflaredAsset, downloadedCloudflareds, latestCloudflared } from "../apps/runner/src/cloudflared.js";
@@ -265,6 +265,93 @@ test("a session's tunnel starts its server and tunnel together, and whatever sto
   const stops = reports.filter(report => report.event === "stopped").map(report => report.url);
   assert.equal(new Set(stops).size, stops.length);
   assert.equal(reports.filter(report => report.event === "started").length, stops.length);
+});
+
+test("a stop or a close while a start waits for the one it replaces to go offline cancels the start: nothing new goes online", async () => {
+  const reports: Omit<SessionTunnelReport, "sessionId">[] = [];
+  let services = 0;
+  let opened = 0;
+  // The first tunnel's close is held until the test lets it go.
+  const release = Promise.withResolvers<void>();
+  let held = true;
+  const sessionTunnel = new SessionTunnel({
+    startService: async (_serve, onOutput) => {
+      services++;
+      const service = fakeProcess();
+      const process = await service.start(onOutput);
+      setTimeout(() => service.print(`${SERVICE_MARK}{"kind":"ready","port":4173}\n`), 5);
+      return process;
+    },
+    openTunnel: async () => {
+      opened++;
+      const closed = Promise.withResolvers<void>();
+      const hold = held;
+      held = false;
+      return { url: `https://held-${opened}.trycloudflare.com`, connected: () => true, closed: closed.promise,
+        close: async () => { if (hold) await release.promise; closed.resolve(); } };
+    },
+    lifetimeMs: async () => 60_000,
+    report: async report => { reports.push(report); },
+    recheck: async () => {},
+  });
+  const serve = { program: "node", args: ["server.js"], port: 4173 };
+  await sessionTunnel.start(serve, "test:alice");
+  // A replacement waits on the first tunnel's close; Stop comes meanwhile.
+  const replacement = sessionTunnel.start(serve, "test:bob");
+  await until(() => reports.some(report => report.event === "stopped") || opened === 1 ? true : undefined, "the replacement to wait");
+  await delay(20);
+  const stopping = sessionTunnel.stop("stop", "test:carol");
+  release.resolve();
+  assert.deepEqual(await stopping, { stopped: true, url: "https://held-1.trycloudflare.com" });
+  await assert.rejects(replacement, /The start was stopped\. Nothing is online/);
+  assert.equal(sessionTunnel.view(), undefined);
+  assert.deepEqual([services, opened], [1, 1], "the replacement never started its server or tunnel");
+  assert.deepEqual(reports.map(report => report.event), ["started", "stopped"]);
+
+  // A start waiting its turn behind another is cancelled by a stop too, and one stopped before it starts never does.
+  const aborted = new AbortController();
+  aborted.abort();
+  await assert.rejects(sessionTunnel.start(serve, "test:alice", aborted.signal), /The start was stopped/);
+  // And by the session closing.
+  const late = sessionTunnel.start(serve, "test:alice");
+  const closing = sessionTunnel.close();
+  await assert.rejects(late, /stopped|closing/);
+  await closing;
+  assert.equal(sessionTunnel.view(), undefined);
+  assert.equal(opened, 1);
+});
+
+test("the connector reaches the socket the service bound, never what the sandbox puts in its place", async t => {
+  const root = await directory(t, "pinned-socket");
+  const shared = shortSocket(join(root, "shared"));
+  await mkdir(shared);
+  const listen = async (path: string, name: string) => {
+    const server = createServer((_request, response) => response.end(name));
+    await new Promise<void>(resolve => server.listen(path, resolve));
+    t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  };
+  const get = (socketPath: string) => new Promise<string>((resolve, reject) => {
+    const request = httpRequest({ socketPath, path: "/" }, response => { let body = ""; response.on("data", chunk => { body += chunk; }); response.on("end", () => resolve(body)); });
+    request.on("error", reject);
+    request.end();
+  });
+  assert.throws(() => pinServiceSocket(shared), /isn't there/);
+  // What a host service would be: a socket outside the sandbox.
+  const host = shortSocket(join(root, "host.sock"));
+  await listen(host, "the host's own service");
+  // A link in the socket's place is refused.
+  await symlink(resolve(host), join(shared, "http.sock"));
+  assert.throws(() => pinServiceSocket(shared), /replaced with something else/);
+  await rm(join(shared, "http.sock"));
+  // The service's own socket is taken, and stays taken whatever the sandbox does to the shared directory afterwards.
+  await listen(join(shared, "http.sock"), "the session's server");
+  const pinned = pinServiceSocket(shared);
+  assert.equal(pinned, join(`${shared}.connector`, "http.sock"));
+  assert.equal(await get(pinned), "the session's server");
+  await rm(join(shared, "http.sock"));
+  await symlink(resolve(host), join(shared, "http.sock"));
+  assert.equal(await get(join(shared, "http.sock")), "the host's own service", "what a connector following the path would have reached");
+  assert.equal(await get(pinned), "the session's server");
 });
 
 test("a server that never answers, or a tunnel that never opens, leaves nothing online and says why", async () => {

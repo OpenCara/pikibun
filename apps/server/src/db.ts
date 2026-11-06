@@ -81,7 +81,8 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
     ...(row.parent_session_id ? { parentSessionId: row.parent_session_id } : {}),
     ...(row.packed_at ? { packed: true as const } : {}),
     ...(pullRequest ? { pullRequest } : {}),
-    ...(row.tunnel_url && row.tunnel_expires_at && Date.parse(row.tunnel_expires_at) > Date.now() ? { tunnel: { url: row.tunnel_url, expiresAt: row.tunnel_expires_at } } : {}) };
+    // An archived session is never online, whatever a host that was away when it was archived said.
+    ...(row.tunnel_url && row.tunnel_expires_at && row.status !== 'archived' && Date.parse(row.tunnel_expires_at) > Date.now() ? { tunnel: { url: row.tunnel_url, expiresAt: row.tunnel_expires_at } } : {}) };
 }
 export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed' | 'tunnel'> {
   // Visibility is live control-plane policy, activity and the pull request are what the host and pushes report, tool

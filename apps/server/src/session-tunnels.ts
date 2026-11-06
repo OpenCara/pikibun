@@ -31,7 +31,8 @@ export async function reportSessionTunnel(c: AppContext, connectorId: string): P
   const detail = { connectorId, url: report.url, ...(report.expiresAt ? { expiresAt: report.expiresAt } : {}), ...(report.reason ? { reason: report.reason } : {}) };
   await c.env.DB.batch([
     report.event === 'started'
-      ? c.env.DB.query('UPDATE sessions SET tunnel_url = ?, tunnel_expires_at = ? WHERE id = ? AND connector_id = ?').bind(report.url, report.expiresAt!, row.id, connectorId)
+      // A start reported late, after the session was archived, marks nothing: it is still audited.
+      ? c.env.DB.query("UPDATE sessions SET tunnel_url = ?, tunnel_expires_at = ? WHERE id = ? AND connector_id = ? AND status <> 'archived'").bind(report.url, report.expiresAt!, row.id, connectorId)
       // Only the address it names: a stop reported after a newer start leaves that one's mark.
       : c.env.DB.query('UPDATE sessions SET tunnel_url = NULL, tunnel_expires_at = NULL WHERE id = ? AND connector_id = ? AND tunnel_url = ?').bind(row.id, connectorId, report.url),
     auditStatement(c.env, actor, `session.tunnel.${report.event}`, row.workspace_id, row.id, detail),

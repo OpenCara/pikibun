@@ -304,7 +304,8 @@ export async function archiveSession(c: AppContext, sessionId: string, audit: Re
   if (row.tunnel_url && row.connector_id) await stopSessionTunnel(c, row, 'archived').catch(() => false);
   // A policy version bump invalidates runner tickets and broker capabilities issued before archiving. It lands only
   // while the actor still manages the session, checked as it writes: a suspension, say, bumps no policy version.
-  const archived = await c.env.DB.query<SessionRow>(`UPDATE sessions SET archived_status = status, status = 'archived', policy_version = policy_version + 1
+  const archived = await c.env.DB.query<SessionRow>(`UPDATE sessions SET archived_status = status, status = 'archived', policy_version = policy_version + 1,
+    tunnel_url = NULL, tunnel_expires_at = NULL
     WHERE id = ? AND owner_id = ? AND policy_version = ? AND status <> 'archived' AND ${sessionManagerSQL('sessions')}
     RETURNING *`).bind(row.id, row.owner_id, row.policy_version, actorId).first();
   if (!archived) fail(409, 'policy_changed', 'Session status or permissions changed; reload and retry.');

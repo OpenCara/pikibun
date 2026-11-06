@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserServe } from "../../../packages/shared/src/browser.js";
@@ -40,6 +40,29 @@ export function serviceSocketDirectory(sessionId: string, dataDir: string): stri
   const path = join(directory, createHash("sha256").update(`${dataDir}\0${sessionId}`).digest("hex").slice(0, 24));
   mkdirSync(path, { recursive: true, mode: 0o700 });
   return path;
+}
+
+/**
+ * The service's socket as the connector connects to it, once the service says it listens: a hard link to the socket it
+ * bound, in a directory of the connector's own beside the one the sandbox shares (`<directory>.connector`), which the
+ * sandbox never sees. The shared directory is the sandbox's to write: had the connector connected there by path, the
+ * session could put a link in the socket's place, to the Docker socket say, and the connector would follow it and put
+ * that online. A hard link names what is there now, a link itself rather than what it points to, and it must be a socket
+ * of the connector's user; nothing the session does in the shared directory afterwards changes where the connector goes.
+ */
+export function pinServiceSocket(directory: string): string {
+  const pinned = `${directory}.connector`;
+  mkdirSync(pinned, { recursive: true, mode: 0o700 });
+  const target = join(pinned, SERVICE_SOCKET);
+  rmSync(target, { force: true });
+  try { linkSync(join(directory, SERVICE_SOCKET), target); }
+  catch { throw new Error("The server's socket isn't there"); }
+  const info = lstatSync(target);
+  if (!info.isSocket() || (process.getuid && info.uid !== process.getuid())) {
+    rmSync(target, { force: true });
+    throw new Error("The server's socket was replaced with something else, so nothing was put online");
+  }
+  return target;
 }
 
 /**

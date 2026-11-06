@@ -138,9 +138,16 @@ test('the session panel\'s Stop asks the session\'s host to take its server offl
   assert.deepEqual(f.relayed, [{ action: 'tunnel', body: { action: 'stop' }, actorId: f.bob.user.id }]);
   assert.deepEqual(await json(await f.bob.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})), { stopped: false }, 'nothing was online any more');
 
-  // Archiving a session online asks its host to take it offline first, as the archiver, and says why.
+  // Archiving a session online asks its host to take it offline first, as the archiver, and says why; it is no longer
+  // marked online, even where its host never answers.
   f.setOnline(true);
+  await json(await f.report({ sessionId: f.session.id, event: 'started', url: 'https://other-river.trycloudflare.com', actorId: f.alice.user.id, expiresAt }));
   await json(await f.alice.request('POST', `/api/sessions/${f.session.id}/archive`, {}));
+  assert.deepEqual({ ...f.sqlite.prepare('SELECT tunnel_url, tunnel_expires_at FROM sessions WHERE id = ?').get(f.session.id) }, { tunnel_url: null, tunnel_expires_at: null });
+  // A start its host reports late marks nothing on an archived session, though the audit log keeps it.
+  await json(await f.report({ sessionId: f.session.id, event: 'started', url: 'https://late-river.trycloudflare.com', actorId: f.alice.user.id, expiresAt }));
+  assert.equal((await json<{ session: SessionRecord }>(await f.alice.request('GET', `/api/sessions/${f.session.id}`))).session.tunnel, undefined);
+  assert.equal((await f.audit()).at(-1)!.detail.url, 'https://late-river.trycloudflare.com');
   assert.deepEqual(f.relayed.at(-1), { action: 'tunnel', body: { action: 'stop', reason: 'archived' }, actorId: f.alice.user.id });
   assert.equal((await json<{ session: SessionRecord }>(await f.alice.request('GET', `/api/sessions/${f.session.id}`))).session.status, 'archived');
   // An archived session's host takes no tunnel request.

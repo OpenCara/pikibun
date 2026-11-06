@@ -63,6 +63,8 @@ export class SessionTunnel {
   #queue: Promise<unknown> = Promise.resolve();
   #closed = false;
   #starting: AbortController | undefined;
+  /** How many stops there have been: a start cancels itself when one comes after it was asked for. */
+  #stops = 0;
 
   constructor(readonly options: SessionTunnelOptions) {}
 
@@ -77,17 +79,24 @@ export class SessionTunnel {
    * cloudflared has its address; throws why it couldn't, with the server's last lines where it stopped.
    */
   start(serve: BrowserServe, actorId: string, signal?: AbortSignal): Promise<TunnelState> {
-    // A start that waits its turn behind another is stopped with the session too.
+    // A stop or close from now on cancels this start, whether it waits its turn behind another, waits for the one it
+    // replaces to go offline, or is under way.
+    const stops = this.#stops;
     return this.#turn(async () => {
       if (this.#closed) throw new Error("The session is closing");
-      if (this.#online) await this.#end(this.#online, "replaced");
       const now = this.options.now ?? Date.now;
       const controller = new AbortController();
       this.#starting = controller;
       const stop = () => controller.abort();
       signal?.addEventListener("abort", stop, { once: true });
+      if (signal?.aborted) controller.abort();
+      const cancelled = () => this.#closed || controller.signal.aborted || this.#stops !== stops;
       let service: SessionService | undefined;
       try {
+        if (cancelled()) throw new Error("The start was stopped. Nothing is online.");
+        if (this.#online) await this.#end(this.#online, "replaced");
+        // Stopped, or the session closed, while the one it replaces went offline: nothing goes online.
+        if (cancelled()) throw new Error("The start was stopped. Nothing is online.");
         service = await SessionService.start({ lifetimeMs: await this.options.lifetimeMs(), now,
           start: (onOutput, stopping) => this.options.startService(serve, onOutput, AbortSignal.any([stopping, controller.signal])) });
         const stopped = service.stopped.then(() => { throw new Error("stopped"); });
@@ -105,7 +114,7 @@ export class SessionTunnel {
           await service.stop("failed");
           throw new Error(`${error instanceof Error ? error.message : "The tunnel didn't open"}. Nothing is online; the server was stopped.`);
         }
-        if (controller.signal.aborted || !service.running) {
+        if (cancelled() || !service.running) {
           await tunnel.close();
           await service.stop("stop");
           throw new Error("The start was stopped. Nothing is online.");
@@ -156,7 +165,8 @@ export class SessionTunnel {
 
   /** Stops the one online, or starting, for `reason`; whether one was. `actorId`: who stopped it, where a person did. */
   async stop(reason: TunnelStopReason, actorId?: string): Promise<{ stopped: boolean; url?: string }> {
-    // A start under way stops at once rather than after its turn.
+    // A start under way stops at once, and one waiting its turn never starts.
+    this.#stops++;
     this.#starting?.abort();
     const online = this.#online;
     if (!online) return { stopped: false };

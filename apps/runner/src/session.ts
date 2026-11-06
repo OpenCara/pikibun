@@ -40,7 +40,7 @@ import { tunnelActions, tunnelUnavailableReason, tunnelUnavailableText, type Hos
   type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
 import { tunnelRequest, type TunnelRequest } from "./tunnel-command.js";
 import { SessionTunnel } from "./session/tunnel.js";
-import { SERVICE_SOCKET, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
+import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
 import type { QuickTunnel } from "./tunnel-host.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
@@ -1458,7 +1458,8 @@ export class RunnerSession {
           // Its start was decided as a host command is, which is what lets it run without the limits this host may lack.
           unbounded: true, gpu: config.gpu, socketDirectory: sockets, onOutput, signal });
       },
-      openTunnel: signal => tunnels.open(join(sockets, SERVICE_SOCKET), signal),
+      // Never the shared directory's path, which the session could point elsewhere: the socket the service bound (pinServiceSocket).
+      openTunnel: async signal => tunnels.open(pinServiceSocket(sockets), signal),
       lifetimeMs: async () => (await this.hostConfig()).serviceLifetimeSeconds * 1000,
       report: async item => { await report?.({ sessionId: this.binding.session.id, ...item }); },
       recheck: async actorId => { await this.authorize(actorId, "write"); },

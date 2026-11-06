@@ -33,6 +33,8 @@ PYTHON_ENVIRONMENT = 'NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 
 MARK = '\x1epikibun-service '
 # Connections relayed at once: more wait in the listener's backlog.
 MAX_CONNECTIONS = 256
+# How long a server may go on answering a connection once the connector has sent all of its request.
+RELAY_DRAIN_SECONDS = 60
 
 
 class ServiceError(Exception):
@@ -138,7 +140,15 @@ def relay(client: socket.socket, port: int, slots: threading.Semaphore) -> None:
         back = threading.Thread(target=pump, args=(upstream, client), daemon=True)
         back.start()
         pump(client, upstream)
-        back.join()
+        # The server has the rest of a minute to finish its answer once the connector is done sending; then both ends
+        # are shut, which wakes the other pump, so a server that keeps its side open never holds the connection's slot.
+        back.join(RELAY_DRAIN_SECONDS)
+        for end in (upstream, client):
+            try:
+                end.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        back.join(5)
         upstream.close()
     finally:
         client.close()

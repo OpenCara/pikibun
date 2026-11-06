@@ -33,13 +33,19 @@ quick tunnel that the connector runs on the host.
    (the connector's own Node.js first, a virtual environment's `bin`). It waits for the port (or the program's exit, with
    its output), then listens on a Unix socket in a directory of the session's own, which the Linux sandbox mounts
    writable at `/run/pikibun-service` for the service alone, and relays each connection to the declared port on the
-   sandbox's loopback: nothing else of the sandbox is reachable through it. Up to 256 connections at once.
+   sandbox's loopback: nothing else of the sandbox is reachable through it. Up to 256 connections at once; once the
+   connector has sent all of a request, the server has a minute to finish its answer before both ends are shut.
 5. **cloudflared in the connector, on the host.** It is the one part that must reach Cloudflare's edge (port 7844) and
    resolve its names, which the sandbox's egress never allows, and it holds the tunnel, which nothing in the sandbox
    should ([egress](egress.md#tunnels-stay-out-of-the-sandbox)). `HostTunnels.open` listens on a loopback port of the
    host's, forwards each connection to the service's socket, and runs `cloudflared tunnel --no-autoupdate --config <empty>
    --url http://127.0.0.1:<port>`: an empty configuration so neither `~/.cloudflared` nor `/etc/cloudflared` applies, a
-   home of its own, and nothing of the connector's environment but `PATH` and certificate settings. The address is read
+   home of its own, and nothing of the connector's environment but `PATH` and certificate settings. The connector never
+   connects by the shared directory's path, which the session can write: it could put a link to a host socket (Docker's,
+   say) in the socket's place, and the connector would follow it and put that online. Once the driver says it listens,
+   the connector hard-links the socket into a directory of its own beside the shared one (`pinServiceSocket`), which
+   names what is there and not what a link points to, refuses anything but a socket of its own user, and connects only
+   there; nothing the session does in the shared directory afterwards changes where the connector goes. The address is read
    from its output (`quickTunnelUrl`), never `https://api.trycloudflare.com`, which its errors name; it counts as
    connected once it registers a connection with the edge. Its output goes to the connector's log; a call is told only
    that it got no address and what the host needs (`NO_ADDRESS`). Its process is recorded in the connector's state while
@@ -71,7 +77,11 @@ quick tunnel that the connector runs on the host.
     names one in the workspace) and the reason, and marks the session online in lists (`SessionRecord.tunnel`) until a
     stop names that address or the reported lifetime is over, so a host that died without saying so leaves no mark past
     it. Archiving a session online asks its host to stop it first, as the archiver; where that fails, the host finds the
-    session archived within a minute, as it checks the starter's write access every minute (`revoked`).
+    session archived within a minute, as it checks the starter's write access every minute (`revoked`). An archived
+    session is never marked online: archiving clears its mark, and a start reported after it marks nothing.
+11. **A stop wins over a start.** A stop or the session closing cancels every start asked for before it: one under way,
+    one waiting for the one it replaces to go offline, and one waiting its turn behind another. Nothing goes online after
+    a stop has returned.
 
 ## Where things are
 

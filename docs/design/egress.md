@@ -511,6 +511,9 @@ connector, on the host**, with the host's network, and the sandbox's egress stay
   the declared port and nowhere else. The connector listens on a loopback port of the host's, forwards each connection
   there to that socket, and points `cloudflared` at the port (`--url http://127.0.0.1:<port>`). A socket path works
   across network namespaces, so nothing of the sandbox's network changes: it still has only loopback and its proxy.
+  The connector never connects by the shared directory's path, where the session could put a link to a host socket in
+  the socket's place: it hard-links the socket the service bound into a directory of its own, checked to be a socket of
+  its user, and connects only there.
 - **No tunnel credential in the sandbox.** A quick tunnel has none to hold, and a named tunnel's token (later) would stay
   in the connector too. `cloudflared` runs with an empty configuration, a home of its own and nothing of the connector's
   environment but its `PATH` and certificate settings, never in a session's sandbox, so nothing a session runs can read

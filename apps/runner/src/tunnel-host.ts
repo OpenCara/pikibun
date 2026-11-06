@@ -210,7 +210,8 @@ export class HostTunnels {
   }
 
   /**
-   * Opens a quick tunnel to the service listening on the Unix socket at `socket`: a loopback port that forwards each
+   * Opens a quick tunnel to the service listening on the Unix socket at `socket`, a path the sandbox can't change
+ * (pinServiceSocket): a loopback port that forwards each
    * connection there, and cloudflared pointed at it. Answers once cloudflared has its address, and has connected to
    * Cloudflare's edge or `connectMs` passed; throws NO_ADDRESS (or why it couldn't start) otherwise.
    */
@@ -229,7 +230,9 @@ export class HostTunnels {
       client.pipe(upstream);
       upstream.pipe(client);
     });
-    await new Promise<void>((resolve, reject) => { forward.once("error", reject); forward.listen(0, "127.0.0.1", () => resolve()); });
+    await new Promise<void>((resolve, reject) => { forward.once("error", reject); forward.listen(0, "127.0.0.1", () => { forward.off("error", reject); resolve(); }); });
+    // Later errors (out of descriptors while accepting, say) are the connector's log's, never an unhandled event.
+    forward.on("error", error => this.options.log?.(`ERR forwarding: ${error instanceof Error ? error.message : String(error)}`));
     const port = (forward.address() as { port: number }).port;
     const closeForward = () => new Promise<void>(resolve => {
       for (const connection of connections) connection.destroy();
