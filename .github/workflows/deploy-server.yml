@@ -11,6 +11,13 @@ name: Deploy server
 # /api/health is checked last), and the secrets DEPLOY_SSH_KEY (a private key the server's user accepts) and
 # DEPLOY_SSH_KNOWN_HOSTS (the server's host keys: ssh-keyscan -p PORT HOST, checked against the server's own). Without
 # any of them nothing is deployed; with only some of them the job fails.
+#
+# Over Tailscale, for a server whose SSH is reachable only on its tailnet (Tailscale SSH): the secrets TS_OAUTH_CLIENT_ID
+# and TS_OAUTH_SECRET (a Tailscale OAuth client with the auth_keys scope and the tag below) join the job to the tailnet
+# as an ephemeral node tagged TS_TAGS (a variable, tag:ci by default), and DEPLOY_HOST is then the server's tailnet name
+# or 100.x address. Tailscale SSH authenticates the node by the tailnet's SSH policy, which must `accept` (not `check`)
+# that tag as DEPLOY_USER, so DEPLOY_SSH_KEY is not needed; DEPLOY_SSH_KNOWN_HOSTS still is (ssh-keyscan of the tailnet
+# name from a machine on the tailnet).
 on:
   workflow_call:
     inputs:
@@ -46,14 +53,25 @@ jobs:
           DEPLOY_USER: ${{ vars.DEPLOY_USER != '' }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
           DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS != '' }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID != '' }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET != '' }}
         run: |
+          # Over Tailscale, Tailscale SSH authenticates the job's node, so no deploy key is needed.
+          if [ "$TS_OAUTH_CLIENT_ID" = true ] || [ "$TS_OAUTH_SECRET" = true ]; then
+            tailscale=true
+            names=(DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KNOWN_HOSTS TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET)
+          else
+            tailscale=false
+            names=(DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_SSH_KNOWN_HOSTS)
+          fi
           missing=()
-          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_SSH_KNOWN_HOSTS; do
+          for name in "${names[@]}"; do
             [ "${!name}" = true ] || missing+=("$name")
           done
           if [ ${#missing[@]} -eq 0 ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
-          elif [ ${#missing[@]} -eq 4 ]; then
+            echo "tailscale=$tailscale" >> "$GITHUB_OUTPUT"
+          elif [ "$tailscale" = false ] && [ ${#missing[@]} -eq ${#names[@]} ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Deployment is not configured in the production environment: nothing was deployed."
           else
@@ -81,6 +99,16 @@ jobs:
           echo "name=$IMAGE" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         if: steps.config.outputs.configured == 'true'
+      # An ephemeral node, removed from the tailnet when the job ends; the ping fails the step if the server is unreachable.
+      - name: Join the tailnet
+        if: steps.config.outputs.configured == 'true' && steps.config.outputs.tailscale == 'true'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+          hostname: pikibun-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          ping: ${{ vars.DEPLOY_HOST }}
       - name: Deploy
         if: steps.config.outputs.configured == 'true'
         env:
@@ -95,9 +123,14 @@ jobs:
           key="$RUNNER_TEMP/deploy_key"
           known_hosts="$RUNNER_TEMP/deploy_known_hosts"
           trap 'rm -f "$key" "$known_hosts"' EXIT
-          (umask 077 && printf '%s\n' "$DEPLOY_SSH_KEY" > "$key")
           printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$known_hosts"
-          ssh -i "$key" -p "$DEPLOY_PORT" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+          # Without a key (over Tailscale SSH) ssh offers none of its own: IdentitiesOnly with no -i.
+          identity=(-o IdentitiesOnly=yes)
+          if [ -n "$DEPLOY_SSH_KEY" ]; then
+            (umask 077 && printf '%s\n' "$DEPLOY_SSH_KEY" > "$key")
+            identity+=(-i "$key")
+          fi
+          ssh "${identity[@]}" -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$known_hosts" -o ServerAliveInterval=15 "$DEPLOY_USER@$DEPLOY_HOST" \
             "bash -s -- $(printf '%q ' "$IMAGE" "$DEPLOY_PATH")" < scripts/deploy-server.sh
       - name: Public health
