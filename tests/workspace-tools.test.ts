@@ -8,7 +8,7 @@ import { descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, pikibunToo
 
 const own = pikiSessionToolExtensions().filter(item => !item.retired);
 /** The session's own tools, as the workspace page lists them: the file tools, which every session has, first. */
-const sessionTools = [...own.filter(item => item.core), ...own.filter(item => !item.core)].flatMap(item => item.sessionTools ?? []);
+const sessionTools = [...new Set([...own.filter(item => item.core), ...own.filter(item => !item.core)].flatMap(item => item.sessionTools ?? []))];
 const enabled = (source: string, tools: WorkspaceExtension["tools"] = "approval"): WorkspaceExtension => ({ source, enabled: true, tools, settings: {} });
 const disabled = (source: string): WorkspaceExtension => ({ source, enabled: false, tools: "approval", settings: {} });
 /**
@@ -26,14 +26,16 @@ test("Pikibun describes each of its own tools, the session's and code mode's, fo
   for (const name of own) assert.ok(pikibunToolDescriptions[name]!.length > 10, name);
 });
 
-test("a workspace that chose nothing gives its sessions every tool of Pikibun's own and code mode", () => {
+test("a workspace that chose nothing gives its sessions every tool of Pikibun's own and code mode, but the opt-in tunnel", () => {
   const usable = workspaceTools([], []);
-  assert.deepEqual(usable.tools.map(tool => tool.name), [...sessionTools, "codemode"]);
+  assert.deepEqual(usable.tools.map(tool => tool.name), [...sessionTools.filter(name => name !== "tunnel"), "codemode"]);
   assert.deepEqual(usable.tools.slice(0, 3).map(tool => tool.name), ["identity", "list_files", "read_file"]);
   assert.ok(usable.tools.every(tool => tool.origin === (tool.name === "codemode" ? "builtin" : "session") && tool.description));
   assert.equal(usable.tools.find(tool => tool.name === "git_push")?.source, "piki:git");
   assert.equal(usable.tools.find(tool => tool.name === "codemode")?.source, "pi:codemode");
-  assert.deepEqual(usable.off, []);
+  assert.deepEqual(usable.off, [{ name: "tunnel", source: "piki:tunnel" }], "the tunnel is off until the workspace turns it on");
+  assert.deepEqual(workspaceTools([enabled("piki:tunnel")], []).off, []);
+  assert.ok(workspaceTools([enabled("piki:tunnel")], []).tools.some(tool => tool.name === "tunnel" && tool.source === "piki:tunnel"));
   assert.deepEqual(usable.shadowed, []);
   assert.deepEqual(usable.unreported, []);
   // Retired switches (bash, host_bash) list nothing, whatever the workspace chose.
@@ -42,9 +44,23 @@ test("a workspace that chose nothing gives its sessions every tool of Pikibun's 
 
 test("session tools a workspace turns off leave the list, except the core ones it can't turn off", () => {
   const usable = workspaceTools([disabled("piki:git"), disabled("piki:files"), disabled("piki:shell")], []);
-  assert.deepEqual(usable.off, [{ name: "git", source: "piki:git" }, { name: "git_push", source: "piki:git" }]);
+  assert.deepEqual(usable.off, [{ name: "git", source: "piki:git" }, { name: "git_push", source: "piki:git" }, { name: "tunnel", source: "piki:tunnel" }]);
   assert.ok(!usable.tools.some(tool => tool.name === "git" || tool.name === "git_push"));
   assert.ok(usable.tools.some(tool => tool.name === "read_file"));
+});
+
+test("source_read comes with one extension per kind of document source: on while any is, off once all are", () => {
+  const kinds = ["piki:notion", "piki:google-drive", "piki:dropbox", "piki:onedrive", "piki:feishu", "piki:tencent-docs"];
+  assert.equal(workspaceTools([], []).tools.find(tool => tool.name === "source_read")?.source, "piki:notion");
+  const notionOff = workspaceTools([disabled("piki:notion")], []);
+  assert.equal(notionOff.tools.find(tool => tool.name === "source_read")?.source, "piki:google-drive", "listed with the first kind that has it on");
+  assert.equal(notionOff.tools.filter(tool => tool.name === "source_read").length, 1, "listed once");
+  // (The opt-in tunnel is off too, until a workspace turns it on.)
+  const sourcesOff = (extensions: WorkspaceExtension[]) => workspaceTools(extensions, []).off.filter(item => item.name === "source_read");
+  assert.deepEqual(sourcesOff(kinds.map(disabled)), [{ name: "source_read", source: "piki:notion" }]);
+  // A workspace that turned off piki:sources, before the split, has every kind it hasn't chosen since off.
+  assert.deepEqual(sourcesOff([disabled("piki:sources")]), [{ name: "source_read", source: "piki:notion" }]);
+  assert.equal(workspaceTools([disabled("piki:sources"), enabled("piki:feishu")], []).tools.find(tool => tool.name === "source_read")?.source, "piki:feishu");
 });
 
 test("enabled extensions add the tools hosts report, with how they run; disabled, unreported and broken ones add none", () => {

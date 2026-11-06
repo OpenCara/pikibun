@@ -11,6 +11,8 @@ import type { ConnectorCapabilities, ConnectorInfo, ConnectorPairing, LocalModel
 import { gpuKinds, type GpuKind } from '../../../packages/shared/src/host-config.js';
 import { sessionActivities, thinkingLevels, type SessionActivity, type ThinkingLevel } from '../../../packages/shared/src/types.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
+// This release's definitions are the ones this server serves: connectors of any later release take them as they are.
+import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { CONNECTOR_VERSION_HEADER, validVersion } from '../../../packages/shared/src/version.js';
 import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
 import type { Query } from './db/types.js';
@@ -22,6 +24,7 @@ import { connectorRestoreDownload } from './restore-routes.js';
 import { connectorHostConfig } from './host-config.js';
 import { disabledModelKeys, hostModelSettings } from './host-models.js';
 import { reportSessionBranches } from './session-branches.js';
+import { reportSessionTunnel } from './session-tunnels.js';
 import { notifySessionActivityQuietly } from './notifications.js';
 
 function onlyFields(value: Record<string, unknown>, fields: string[]): void {
@@ -317,11 +320,18 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
   app.post('/api/connectors/self/authorize', async c => authorizeSession(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/activity', async c => reportSessionActivity(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/branches', async c => reportSessionBranches(c, (await authenticateConnector(c)).id));
+  app.post('/api/connectors/self/tunnel', async c => reportSessionTunnel(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/comment', async c => githubComment(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/read', async c => githubRead(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/merge', async c => githubMerge(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/issue', async c => githubIssue(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sources/read', async c => sourceRead(c, (await authenticateConnector(c)).id));
+  // The tools defined as data (tool-definitions.ts), which a connector runs with its own engine: this server's, so a tool it
+  // adds reaches sessions without a newer connector.
+  app.post('/api/connectors/self/tools', async c => {
+    await authenticateConnector(c);
+    return c.json({ tools: toolDefinitions });
+  });
   app.post('/api/connectors/self/schedules', async c => agentSchedules(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sessions', async c => agentSessions(c, (await authenticateConnector(c)).id));
   // The retired web_search tool's searches (web tools come from extensions now), from connectors that still carry it.

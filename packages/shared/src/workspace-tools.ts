@@ -1,6 +1,6 @@
 import { builtinExtensions } from "./host-config.js";
 import { parseExtensionSourceSpec, type ExtensionToolMode, type InstalledExtension, type WorkspaceExtension } from "./host-extensions.js";
-import { pikiExtension, pikiSessionToolExtensions } from "./piki-extensions.js";
+import { pikiExtension, pikiExtensionOn, pikiSessionToolExtensions, sessionToolsOff } from "./piki-extensions.js";
 
 /*
  * The tools a workspace's sessions can use, as its Extensions page lists them (docs/extensions.md): the session's own,
@@ -32,6 +32,7 @@ export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.
   dotnet: "Runs the .NET CLI in a clone, without a shell.",
   make: "Runs make in a clone, without a shell of its own; a Makefile's recipes are shell commands.",
   browser: "Drives a headless Chromium in the sandbox: opens a page, acts on it and sees it, serving the web app under test for the call.",
+  tunnel: "Puts the web server it works on online at a public address through a Cloudflare tunnel, each start approved as a host command is.",
   github_read: "Reads a GitHub issue or pull request, or waits for its checks or a change.",
   github_comment: "Comments on a GitHub issue or pull request, as the session owner.",
   github_issue: "Opens a GitHub issue, as the session owner.",
@@ -131,13 +132,17 @@ export function workspaceTools(extensions: readonly WorkspaceExtension[], instal
   // ones every session has (the file tools) lead.
   const owners = new Map<string, string>();
   const own = pikiSessionToolExtensions().filter(item => !item.retired);
+  const offTools = sessionToolsOff(extensions);
   for (const extension of [...own.filter(item => item.core), ...own.filter(item => !item.core)]) {
-    const on = extension.core || !extensions.some(item => item.source === extension.source && !item.enabled);
     for (const name of extension.sessionTools ?? []) {
       if (owners.has(name)) continue;
-      owners.set(name, extension.source);
-      if (on) tools.push({ name, source: extension.source, origin: "session", description: pikibunToolDescriptions[name] ?? "" });
-      else off.push({ name, source: extension.source });
+      // A tool several extensions offer (source_read, one per kind of document source) is on while any of them is, and
+      // listed with the first that has it on.
+      const on = !offTools.has(name);
+      const source = (on ? own.find(item => item.sessionTools?.includes(name) && pikiExtensionOn(item, extensions)) : undefined)?.source ?? extension.source;
+      owners.set(name, source);
+      if (on) tools.push({ name, source, origin: "session", description: pikibunToolDescriptions[name] ?? "" });
+      else off.push({ name, source });
     }
   }
   const shadowed: WorkspaceTools["shadowed"] = [];

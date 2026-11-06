@@ -8,7 +8,8 @@ import { z } from "zod";
 import type { ConnectorCapabilities, ConnectorCredentials, ConnectorRpcRequest, ConnectorRpcResponse, LocalModelSummary, RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { connectorLimits, connectorRequestTimeoutMs } from "../../../packages/shared/src/connector.js";
 import { sha256, signToken } from "../../../packages/shared/src/crypto.js";
-import { documentItemTypes, documentKinds, type SourceReadView } from "../../../packages/shared/src/sources.js";
+import { ToolDefinitionsSource } from "./tool-definitions-source.js";
+import { bundledToolDefinitions } from "../../../packages/shared/src/tool-definitions.js";
 import type { AuthorizationRequest, AuthorizationResult, GitHubEffectAuthority, GitHubIssueView, RunnerAction, RunnerBinding, ScheduleToolResult, SessionActivity, SessionBranch } from "../../../packages/shared/src/types.js";
 import type { SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import { MAX_CLONE_BRANCHES } from "./clone-branches.js";
@@ -33,6 +34,8 @@ import { HostExtensions } from "./extensions/host.js";
 import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
 import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
+import { cloudflaredDownloads, HostTunnels, HostTunnelSource, type HostTunnelOptions } from "./tunnel-host.js";
+import type { SessionTunnelReport } from "../../../packages/shared/src/tunnel.js";
 
 const STATE_FILE = "connector.json";
 const CALLBACK_LIMIT = 64 * 1024;
@@ -42,6 +45,12 @@ const EXTENSION_SYNC_MS = 30_000;
 const WORKSPACE_EXTENSIONS_LIMIT = 1024 * 1024;
 /** A github_read result; the control plane keeps its view within 96 KiB of JSON. */
 const GITHUB_READ_LIMIT = 128 * 1024;
+/** A brokered tool's result (tool-definitions.ts), such as source_read's, which the control plane keeps within 96 KiB of JSON. */
+const BROKERED_LIMIT = 1024 * 1024;
+/** The control plane's tool definitions: at most 64, each within a few KB. */
+const TOOL_DEFINITIONS_LIMIT = 1024 * 1024;
+/** A brokered tool's route, as its definition names it (tool-definitions.ts). */
+const BROKERED_ROUTE = /^[a-z0-9-]+(?:\/[a-z0-9-]+){0,3}$/;
 /**
  * The host's configuration, as large as the control plane saves it: compaction counts for 200 models with the longest
  * names take about 67 KB (the save takes 128 KiB).
@@ -69,7 +78,7 @@ const welcomeSchema = z.object({
 const actorSchema = z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f]+$/);
 const ticketSchema = z.object({
   aud: z.literal("runner"), sessionId: z.string().regex(IDENTIFIER), actorId: actorSchema, ownerId: actorSchema,
-  action: z.enum(["create", "view", "events", "submit", "ask", "operations", "approve", "backup", "restart", "restore", "stop", "files", "revert", "fork", "pack", "unpack", "withdraw", "upload"]),
+  action: z.enum(["create", "view", "events", "submit", "ask", "operations", "approve", "backup", "restart", "restore", "stop", "files", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel"]),
   policyVersion: z.number().int().positive(), iat: z.number().int(), exp: z.number().int(),
   jti: z.string().regex(IDENTIFIER), bodyHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/), connectorId: z.string().regex(IDENTIFIER),
 }).strict();
@@ -260,7 +269,7 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
     if (binding.session.connectorId !== connectorId || binding.model?.connectorId !== connectorId
       || binding.owner?.id !== rpc.ticket?.ownerId || binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign connector binding");
   } else {
-    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|operations|restart|backup|restore|stop|files|revert|fork|pack|unpack|withdraw|upload|approvals\/[A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(rpc.path);
+    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|operations|restart|backup|restore|stop|files|revert|fork|pack|unpack|withdraw|upload|tunnel|approvals\/[A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(rpc.path);
     if (!match) throw new Error("Relay path is not allowed");
     sessionId = match[1]!;
     action = match[2]!.startsWith("approvals/") ? "approve" : match[2]!.startsWith("view/") ? "view" : match[2] as RunnerAction;
@@ -334,6 +343,8 @@ export interface ConnectorOptions {
   runtimeFactory?: (config: RunnerConfig) => Promise<ConnectorRuntime>;
   /** How the host's browser is found and downloaded (HostBrowserSource); tests stand in their own. */
   browser?: Partial<Omit<HostBrowserOptions, "root" | "signal">>;
+  /** How the host's cloudflared is found and downloaded (HostTunnelSource); tests stand in their own. */
+  tunnel?: Partial<Omit<HostTunnelOptions, "root" | "signal">>;
   acquireLease?: typeof acquireRunnerLease;
   reconnectDelayMs?: number;
   /**
@@ -411,10 +422,15 @@ export class LocalConnector {
   private directory = "";
   /** The browser tool's Chromium, as the host's owner chose it (HostConfig.browser): its sessions' and its report's. */
   private browser: HostBrowserSource | undefined;
+  /** The tunnel tool's cloudflared, as the host's owner chose it (HostConfig.tunnel), and the quick tunnels it runs for sessions. */
+  private tunnel: HostTunnelSource | undefined;
+  private tunnels: HostTunnels | undefined;
   /** This host's repository caches, one per scope its configuration has chosen, each opened once and kept. */
   private readonly repositoryCaches = new Map<Exclude<RepositoryCacheMode, "off">, RepositoryCache>();
   private readonly gpu?: GpuKind;
   private hostExtensions?: HostExtensions;
+  /** The control plane's tool definitions, as sessions read them (tool-definitions.ts). */
+  private toolDefinitionsSource?: ToolDefinitionsSource;
 
   constructor(private readonly options: ConnectorOptions) {
     this.ready = this.readiness.promise;
@@ -454,6 +470,13 @@ export class LocalConnector {
     // The browser runs in the Linux sandbox only: elsewhere it reports so, and finds or downloads nothing.
     this.browser = new HostBrowserSource({ supported: process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend,
       ...this.options.browser, root: browserDownloads(this.directory), signal: this.lifetime.signal });
+    // Session services run in the Linux sandbox only: elsewhere the tunnel reports so, and finds or downloads nothing.
+    this.tunnel = new HostTunnelSource({ supported: process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend,
+      ...this.options.tunnel, root: cloudflaredDownloads(this.directory), signal: this.lifetime.signal });
+    const tunnel = this.tunnel;
+    // cloudflared's own output is the host owner's: the connector's log, never a session's.
+    this.tunnels = new HostTunnels({ cloudflared: () => tunnel.current(), directory: join(this.directory, "tunnels"),
+      log: line => { if (/\b(ERR|WRN)\b/.test(line)) process.stderr.write(`cloudflared: ${line.slice(0, 1000)}\n`); } });
     this.hostExtensions = this.options.extensions
       ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false });
     // Each installed extension's factory runs once here, as Pi runs them when it starts.
@@ -565,6 +588,7 @@ export class LocalConnector {
       this.requireGeneration(generation);
       // Sessions open with the browser the owner chose: found, or a download started (in the background).
       await this.browser?.apply(configured.browser).catch(() => {});
+      await this.tunnel?.apply(configured.tunnel).catch(() => {});
       // Only a configuration the control plane gave replaces the runner: a fallback (it didn't answer) keeps its cache.
       const runtime = await this.ensureRuntime(generation, answered || !this.runtime ? configured.repositoryCache : this.runtime.repositoryCache);
       this.requireGeneration(generation);
@@ -617,13 +641,17 @@ export class LocalConnector {
       try {
         await extensions.refreshIfChanged();
         // The owner's browser choice, applied as the report goes: a change, an install or a finished download shows within a round.
-        if (this.browser) await this.browser.apply((await this.hostConfig.current()).browser).catch(() => {});
-        const status = this.browser?.status();
-        const statusKey = status && JSON.stringify(status);
-        let withStatus = status !== undefined && statusKey !== refusedStatus;
+        const current = await this.hostConfig.current();
+        if (this.browser) await this.browser.apply(current.browser).catch(() => {});
+        if (this.tunnel) await this.tunnel.apply(current.tunnel).catch(() => {});
+        // The browser's status and the tunnel's go together: a control plane that refuses one of them gets neither.
+        const browser = this.browser?.status();
+        const tunnel = this.tunnel?.status();
+        const statusKey = browser || tunnel ? JSON.stringify({ browser, tunnel }) : undefined;
+        let withStatus = statusKey !== undefined && statusKey !== refusedStatus;
         const report = () => {
           const base = pikiExtensions ? extensions.report() : extensions.reportWithoutPikiExtensions();
-          return withStatus ? { ...base, browser: status } : base;
+          return withStatus ? { ...base, ...(browser ? { browser } : {}), ...(tunnel ? { tunnel } : {}) } : base;
         };
         const sync = async () => parseExtensionsSyncAnswer(await this.callback(generation, "/api/connectors/self/extensions", { report: report(), results }));
         let answer: ReturnType<typeof parseExtensionsSyncAnswer> | undefined;
@@ -707,8 +735,10 @@ export class LocalConnector {
   private runnerExtensions(extensions: HostExtensions): NonNullable<RunnerConfig["extensions"]> {
     return {
       installed: () => extensions.loaded,
+      // `toolDefinitions`: this connector takes the switches of the extensions tool definitions name, which it may not know
+      // by name (a control plane that predates them reads only workspaceId).
       workspace: workspaceId => extensions.workspace(workspaceId, async () =>
-        this.callback(await this.connection(), "/api/connectors/self/extensions/workspace", { workspaceId }, WORKSPACE_EXTENSIONS_LIMIT)),
+        this.callback(await this.connection(), "/api/connectors/self/extensions/workspace", { workspaceId, toolDefinitions: true }, WORKSPACE_EXTENSIONS_LIMIT)),
       lastKnown: workspaceId => extensions.lastKnown(workspaceId),
       ...(this.options.localModels.modelRegistry ? { modelRegistry: this.options.localModels.modelRegistry } : {}),
     };
@@ -733,6 +763,9 @@ export class LocalConnector {
       ...(this.hostExtensions ? { extensions: this.runnerExtensions(this.hostExtensions) } : {}),
       // Looked up for each command and run: the owner's choice, an install or a download changes it without a restart.
       ...(this.browser ? { browser: () => this.browser?.current(), browserStatus: () => this.browser?.status() } : {}),
+      // cloudflared runs here, on the host, never in a session's sandbox: it reaches a session's service through its socket.
+      ...(this.tunnels && this.tunnel ? { tunnels: { open: (socket: string, signal?: AbortSignal) => this.tunnels!.open(socket, signal), status: () => this.tunnel?.status() } } : {}),
+      reportTunnel: async report => this.reportTunnel(await this.connection(), report),
       authorize: async request => this.authorize(await this.connection(), request),
       reportActivity: async (sessionId, activity) => this.reportActivity(await this.connection(), sessionId, activity),
       reportBranches: async (sessionId, branches) => this.reportBranches(await this.connection(), sessionId, branches),
@@ -752,10 +785,17 @@ export class LocalConnector {
         z.looseObject({ repository: z.string(), number: z.number().int().positive(), title: z.string(), comments: z.array(z.unknown()) }).parse(view);
         return view as GitHubIssueView;
       },
-      sourceRead: async request => {
-        const view = await this.brokerCallback(await this.connection(), "/api/connectors/self/sources/read", request, GITHUB_READ_LIMIT);
-        z.looseObject({ source: z.string(), kind: z.enum(documentKinds), id: z.string(), type: z.enum(documentItemTypes), title: z.string(), truncated: z.boolean() }).parse(view);
-        return view as SourceReadView;
+      // Tools defined as data: as the control plane defines them, asked once a minute; the bundled ones where it can't say.
+      toolDefinitions: async () => {
+        this.toolDefinitionsSource ??= new ToolDefinitionsSource(async () =>
+          this.callback(await this.connection(), "/api/connectors/self/tools", {}, TOOL_DEFINITIONS_LIMIT));
+        return await this.toolDefinitionsSource.get() ?? bundledToolDefinitions;
+      },
+      // A brokered tool's call (source_read ...) goes to its route as this connector's own; the control plane's refusal
+      // comes back with its reason, and its answer is a JSON object.
+      brokered: async (route, request) => {
+        if (!BROKERED_ROUTE.test(route)) throw new RunnerError(400, "Invalid brokered tool route");
+        return z.looseObject({}).parse(await this.brokerCallback(await this.connection(), `/api/connectors/self/${route}`, request, BROKERED_LIMIT));
       },
       githubMerge: async request => {
         const payload = {
@@ -946,6 +986,23 @@ export class LocalConnector {
     await response.body?.cancel();
     this.requireGeneration(generation);
     if (!response.ok && (response.status >= 500 || response.status === 408 || response.status === 429)) throw new Error("Activity report unavailable");
+  }
+
+  /**
+   * Tells the control plane a session's tunnel started or stopped (session.tunnel.started/stopped in its audit log, and
+   * the session list's mark). A refusal is final, as for activity: a control plane that predates tunnels refuses them all.
+   */
+  private async reportTunnel(generation: Generation, report: SessionTunnelReport): Promise<void> {
+    if (!IDENTIFIER.test(report.sessionId)) throw new Error("Invalid tunnel report");
+    this.requireGeneration(generation);
+    const signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal, AbortSignal.timeout(15_000)]);
+    const response = await (this.options.fetch ?? fetch)(`${this.state!.controlPlaneUrl}/api/connectors/self/tunnel`, {
+      method: "POST", redirect: "error", credentials: "omit",
+      headers: { authorization: `Bearer ${this.state!.token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json" },
+      body: JSON.stringify(report), signal,
+    });
+    await response.body?.cancel();
+    if (!response.ok && (response.status >= 500 || response.status === 408 || response.status === 429)) throw new Error("Tunnel report unavailable");
   }
 
   /**
@@ -1178,6 +1235,9 @@ export class LocalConnector {
       await this.loop;
       // The runner outlives connections, so it closes once the last one is done, after the requests still executing.
       await this.retireRuntime().catch(() => {});
+      // Its sessions closed their tunnels; any left go with the connector.
+      await this.tunnels?.close().catch(() => {});
+      this.tunnel?.close();
     } finally { await this.releaseLease?.(); this.releaseLease = undefined; this.options.onStatus?.("stopped"); }
   }
 }

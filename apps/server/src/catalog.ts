@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import { assignableWorkspaceRoles, retiredToolNames, toolNames } from '../../../packages/shared/src/types.js';
-import type { AssignableWorkspaceRole, ToolName, Workspace, WorkspaceRole } from '../../../packages/shared/src/types.js';
+import type { AnyToolName, AssignableWorkspaceRole, Workspace, WorkspaceRole } from '../../../packages/shared/src/types.js';
+import { bundledToolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { defaultWorkspaceExtensions, extensionPackageKey } from '../../../packages/shared/src/host-extensions.js';
@@ -163,9 +164,15 @@ async function versionBatch(env: Env, statements: Query<AgentRow>[], versionInde
   }
 }
 
+/**
+ * The tools a session's agent may list: Pikibun's own, then those this server defines as data (tool-definitions.ts) by
+ * other names. A connector that doesn't know one doesn't offer it; one that reads it from this server does.
+ */
+const agentToolNames: readonly AnyToolName[] = [...toolNames, ...bundledToolDefinitions.map(item => item.name).filter(name => !(toolNames as readonly string[]).includes(name))];
+
 /** New broker and host tools require an explicit connector capability. */
-function carries(capabilities: ConnectorCapabilities, tool: ToolName): boolean {
-  if (retiredToolNames.includes(tool)) return false;
+function carries(capabilities: ConnectorCapabilities, tool: AnyToolName): boolean {
+  if ((retiredToolNames as readonly string[]).includes(tool)) return false;
   if (tool === 'git_push') return capabilities.gitPush === true;
   if (tool === 'github_read' || tool === 'github_merge') return capabilities.github === true;
   if (tool === 'github_issue') return capabilities.githubIssues === true;
@@ -183,7 +190,7 @@ function carries(capabilities: ConnectorCapabilities, tool: ToolName): boolean {
 export async function chatAgentVersion(env: Env, ownerId: string, model: ModelRow, capabilities: ConnectorCapabilities): Promise<AgentRow> {
   const agentId = id();
   const createdAt = now();
-  const tools = toolNames.filter(tool => carries(capabilities, tool));
+  const tools = agentToolNames.filter(tool => carries(capabilities, tool));
   const input: AgentInput = { name: model.name, description: '', instructions: '', toolsJson: JSON.stringify(tools), modelId: model.id };
   return versionBatch(env, [
     env.DB.query<never>(`INSERT INTO agents (id, author_id, created_at, chat)
@@ -204,7 +211,7 @@ export async function migratedAgentVersion(env: Env, ownerId: string, source: Ag
   const agentId = id();
   const createdAt = now();
   const wanted = JSON.parse(source.tools_json) as unknown[];
-  const tools = toolNames.filter(tool => wanted.includes(tool) && carries(capabilities, tool));
+  const tools = agentToolNames.filter(tool => wanted.includes(tool) && carries(capabilities, tool));
   const input: AgentInput = { name: source.name, description: source.description, instructions: source.instructions,
     toolsJson: JSON.stringify(tools), modelId: model.id };
   return versionBatch(env, [

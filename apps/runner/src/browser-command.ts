@@ -115,9 +115,10 @@ export const servePrograms: readonly string[] = Object.freeze([...nodePrograms, 
 /**
  * `serve` as it runs: one of the node or python tools' programs, checked as that tool checks it (no registry or package
  * index account commands, a directory within the worktree, a virtual environment for Python's), and the port it
- * listens on. The driver starts it without a shell, with that tool's environment.
+ * listens on. The driver starts it without a shell, with that tool's environment. The tunnel tool's `serve` is the same
+ * (tunnel-command.ts).
  */
-function serveRequest(serve: unknown): BrowserServe {
+export function serveRequest(serve: unknown): BrowserServe {
   const keys = ["program", "args", "directory", "venv", "port", "timeout_seconds"];
   if (!object(serve) || Object.keys(serve).some(key => !keys.includes(key) && serve[key] !== undefined)) {
     throw new Error("serve is {program, args?, directory?, venv?, port, timeout_seconds?}");

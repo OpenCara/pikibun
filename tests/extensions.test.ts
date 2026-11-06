@@ -275,6 +275,23 @@ test('every workspace starts with popular extensions, turned off, and existing o
   assert.match(row.updated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 });
 
+test('piki:sources, split into one extension per kind of document source, reaches connectors that have only it as whether any kind is on', async () => {
+  const { connectorWorkspaceExtensions } = await import('../apps/server/src/extensions.js');
+  const entry = (source: string, enabled: boolean) => ({ source, enabled, tools: 'approval' as const, settings: {} });
+  const kinds = ['piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs'];
+  const older = [{ source: 'piki:gh' }, { source: 'piki:sources' }];
+  const current = [...older, ...kinds.map(source => ({ source }))];
+  // A connector of this release gets the workspace's choices as they are.
+  assert.deepEqual(connectorWorkspaceExtensions([entry('piki:notion', false)], current), [entry('piki:notion', false)]);
+  // An older one: on while any kind is on, as it is for a workspace that never chose.
+  assert.deepEqual(connectorWorkspaceExtensions([entry('piki:notion', false)], older), []);
+  assert.deepEqual(connectorWorkspaceExtensions([entry('piki:sources', false), entry('piki:notion', true)], older), []);
+  assert.deepEqual(connectorWorkspaceExtensions(kinds.map(source => entry(source, false)), older), [entry('piki:sources', false)]);
+  assert.deepEqual(connectorWorkspaceExtensions([entry('piki:gh', true), entry('piki:sources', false)], older), [entry('piki:gh', true), entry('piki:sources', false)]);
+  // One that predates session tools gets no switch it can't read.
+  assert.deepEqual(connectorWorkspaceExtensions(kinds.map(source => entry(source, false)), [{ source: 'piki:gh' }]), []);
+});
+
 test('a workspace at its 32 extensions that turned a session tool off: connectors that have it read all 33, older ones get the 32 (review of #168)', async () => {
   const { connectorWorkspaceExtensions } = await import('../apps/server/src/extensions.js');
   const { parseWorkspaceExtensions, parseWorkspaceExtensionsAnswer } = await import('../packages/shared/src/host-extensions.js');

@@ -144,7 +144,7 @@ export function settleToolNames(sources: readonly { source: string; tools: reado
  */
 export class SessionExtensions {
   readonly #opened: OpenedSource[] = [];
-  readonly #reserved: ReadonlySet<string>;
+  readonly #reserved: Set<string>;
   #selected: SessionExtension[] = [];
   readonly #warned = new Set<string>();
   /** Sources that failed to load for this session, whole or in part. */
@@ -154,6 +154,14 @@ export class SessionExtensions {
   /** `reserved`: the session's own tool names. */
   constructor(private readonly host: ExtensionHost, reserved: Iterable<string> = []) {
     this.#reserved = new Set(reserved);
+  }
+
+  /**
+   * Adds `names` to the session's own tool names, from the next selection on: a tool the session takes up after it opened
+   * (one the control plane defines since, tool-definitions.ts) is never an extension's again (review of #205).
+   */
+  reserve(names: Iterable<string>): void {
+    for (const name of names) this.#reserved.add(name);
   }
 
   /** Every source the session opened. */

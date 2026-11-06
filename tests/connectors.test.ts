@@ -18,6 +18,7 @@ import { sha256 } from '../packages/shared/src/crypto.js';
 import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
+import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
 
 const origin = 'http://localhost:8787';
@@ -516,7 +517,7 @@ test('connector bearer credentials cannot authenticate browser or internal APIs,
     '/api/internal/restores/unknown/download', '/api/internal/git/direct']) {
     await denied(await f.request('POST', path, {}, headers), 401, 'unauthorized');
   }
-  for (const path of ['manifest', 'authorize', 'activity', 'github/comment', 'github/read', 'github/merge', 'github/issue', 'restores/unknown/download', 'git/direct']) {
+  for (const path of ['manifest', 'authorize', 'activity', 'github/comment', 'github/read', 'github/merge', 'github/issue', 'restores/unknown/download', 'git/direct', 'tools']) {
     await denied(await owner.request('POST', `/api/connectors/self/${path}`, {}), 401, 'connector_authentication_required');
     await denied(await self(f, connector, path, {}, null), 401, 'stale_connection');
     await denied(await self(f, connector, path, {}, 'malformed'), 401, 'stale_connection');
@@ -527,7 +528,7 @@ test('connector bearer credentials cannot authenticate browser or internal APIs,
   const oldConnection = connector.connectionToken;
   connector.connectionToken = token();
   f.sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connector.connectionToken), connector.connectorId);
-  for (const path of ['manifest', 'authorize', 'activity', 'github/comment', 'github/read', 'github/merge', 'github/issue', 'restores/unknown/download', 'git/direct']) {
+  for (const path of ['manifest', 'authorize', 'activity', 'github/comment', 'github/read', 'github/merge', 'github/issue', 'restores/unknown/download', 'git/direct', 'tools']) {
     await denied(await self(f, connector, path, {}, oldConnection), 401, 'stale_connection');
   }
   await json(await self(f, connector, 'manifest', manifest));
@@ -3252,7 +3253,7 @@ test('host owners add admins who manage sharing and host command grants, and gra
 test('host owners and admins configure how the host runs sessions, and only the owner decides whose credentials it uses', async t => {
   const f = await fixture(t); const s = await sharedHost(f); const outsider = await f.client('outsider');
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } };
+  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
   const listed = async (client: Client) => (await json<{ connectors: ConnectorInfo[] }>(await client.request('GET', '/api/connectors'))).connectors
     .find(item => item.id === id)?.config;
   // Its owner and the connector itself read it; members of a workspace it is shared with neither see nor change it.
@@ -3270,7 +3271,7 @@ test('host owners and admins configure how the host runs sessions, and only the 
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
   }
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_configs').get()!.n, 0);
-  const owned = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: 'owner', hostSessions: true, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } };
+  const owned = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: 'owner', hostSessions: true, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
   assert.deepEqual(await json(await host.request('PATCH', path, owned)), { config: owned });
   assert.deepEqual(await listed(host), owned);
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: owned });
@@ -3303,7 +3304,7 @@ test('a save changes only the settings it names, so what someone else saved mean
   // An admin's form loaded the defaults; then the owner turns on Git credentials and the cache.
   await json(await host.request('PATCH', path, { gitCredentials: true, repositoryCache: 'host' }));
   // The admin's save of the time limit names none of the owner's settings: it is neither refused nor undoes theirs.
-  const both = { commandTimeoutSeconds: 120, gpu: false, gitCredentials: true, repositoryCache: 'host', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } };
+  const both = { commandTimeoutSeconds: 120, gpu: false, gitCredentials: true, repositoryCache: 'host', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
   assert.deepEqual(await json(await creator.request('PATCH', path, { commandTimeoutSeconds: 120 })), { config: both });
   // Nor does the owner's next save undo the admin's time limit.
   assert.deepEqual(await json(await host.request('PATCH', path, { gpu: true })), { config: { ...both, gpu: true } });
@@ -3339,7 +3340,7 @@ test('an admin\'s first configuration of a host leaves the owner\'s settings at 
   const f = await fixture(t); const s = await sharedHost(f);
   const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
   await json(await s.host.request('PUT', `/api/connectors/${id}/admins/${s.creator.user.id}`));
-  const config = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } };
+  const config = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
   assert.deepEqual(await json(await s.creator.request('PATCH', path, config)), { config });
   assert.deepEqual({ ...f.sqlite.prepare('SELECT git_credentials, repository_cache, host_sessions, updated_by FROM connector_configs WHERE connector_id = ?').get(id) },
     { git_credentials: 0, repository_cache: 'off', host_sessions: 0, updated_by: s.creator.user.id });
@@ -3348,7 +3349,7 @@ test('an admin\'s first configuration of a host leaves the owner\'s settings at 
 test('a host\'s owner and admins set its compaction token counts, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' } };
+  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
   for (const invalid of [{ compaction: null }, { compaction: [] }, { compaction: { reserveTokens: -1 } }, { compaction: { reserveTokens: 1.5 } },
     { compaction: { reserveTokens: 10_000_001 } }, { compaction: { enabled: false } }, { compaction: { modelOverrides: { model: { reserveTokens: 1 } } } },
     { compaction: { modelOverrides: { 'anthropic/opus': { keepRecentTokens: '1' } } } }]) {
@@ -3375,7 +3376,7 @@ test('a host\'s owner and admins set its compaction token counts, which its conn
 test('a host\'s owner and admins turn on Pi\'s built-in extensions for its sessions, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, requiredExtensions: [], browser: { source: 'auto' } };
+  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, builtinExtensions: [] } });
   for (const invalid of [{ builtinExtensions: null }, { builtinExtensions: 'codemode' }, { builtinExtensions: ['tool-search'] }, { builtinExtensions: ['pi:codemode', 'codemode'] }, { builtinExtensions: ['piki:gh'] }]) {
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
@@ -3399,7 +3400,7 @@ test('a host\'s owner and admins turn on Pi\'s built-in extensions for its sessi
 test('only a host\'s owner requires extensions of every session on it, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], browser: { source: 'auto' } };
+  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, requiredExtensions: [] } });
   for (const invalid of [{ requiredExtensions: null }, { requiredExtensions: ['piki:prompt-audit'] }, { requiredExtensions: [{ source: 'npm:cc-safety-net' }] },
     { requiredExtensions: [{ source: './guard.ts' }] }, { requiredExtensions: [{ source: 'piki:prompt-audit', settings: { policy: 5 } }] },
@@ -4013,6 +4014,27 @@ test('a source an admin sets to read as the workspace reads with the workspace\'
   const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().map(row => JSON.parse(String(row.detail_json)));
   assert.deepEqual(audit.map(item => item.readAs), ['workspace']);
 
+  // Each kind of source has its own switch, which the control plane holds whichever connector asks: Notion off, Notion
+  // sources aren't read, before anything reaches Notion; another kind off changes nothing; piki:sources, from before
+  // the split, turns off every kind the workspace hasn't chosen since.
+  const extensions = `/api/workspaces/${s.team.id}/extensions`;
+  const turn = async (source: string, enabled: boolean) => json(await s.admin.request('PUT', extensions, { source, enabled, tools: 'approval', settings: {} }));
+  await turn('piki:notion', false);
+  const quiet = notion.calls.length;
+  const off = await read();
+  await denied(off, 403, 'source_kind_off');
+  assert.equal(notion.calls.length, quiet, 'nothing reached Notion');
+  await turn('piki:notion', true);
+  await turn('piki:google-drive', false);
+  assert.equal((await json<SourceReadView>(await read())).title, 'Specs');
+  await json(await s.admin.request('DELETE', `${extensions}?source=piki%3Anotion`));
+  await turn('piki:sources', false);
+  await denied(await read(), 403, 'source_kind_off');
+  await turn('piki:notion', true);
+  assert.equal((await json<SourceReadView>(await read())).title, 'Specs', 'a kind chosen since is as chosen');
+  for (const source of ['piki:notion', 'piki:google-drive', 'piki:sources']) await json(await s.admin.request('DELETE', `${extensions}?source=${encodeURIComponent(source)}`));
+  const reads = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length;
+
   // A switch while the read is in flight: what was read with the workspace's connection isn't returned.
   const inner = globalThis.fetch;
   let flipped = false;
@@ -4023,7 +4045,7 @@ test('a source an admin sets to read as the workspace reads with the workspace\'
   await denied(await read(), 409, 'source_read_as_changed');
   assert.ok(flipped);
   f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'workspace' WHERE source_id = ?").run(source.id);
-  assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length, 1, 'The refused read is not audited as a read');
+  assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length, reads, 'The refused read is not audited as a read');
 
   // A connection in use can't be removed; switching back to members' accounts never falls back to the workspace's.
   await denied(await s.admin.request('DELETE', `${path}/${connection.id}`), 409, 'workspace_connection_in_use');
@@ -4081,6 +4103,14 @@ test('a workspace whose only source is a Notion page can be shared with hosts an
   provisionHub(f);
   const { session } = await json<{ session: SessionRecord }>(await host.request('POST', '/api/sessions', { workspaceId: docs.id, modelId: models[0]!.id, title: 'Summarize the specs' }), 201);
   assert.equal(session.status, 'ready');
+});
+
+test('a connector reads the tools this server defines as data, only with its own credential', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const { tools } = await json<{ tools: unknown[] }>(await self(f, s.connector, 'tools', {}));
+  assert.deepEqual(parseToolDefinitions({ tools }), bundledToolDefinitions, 'they parse as a connector parses them, unchanged');
+  assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read']);
+  await denied(await s.creator.request('POST', '/api/connectors/self/tools', {}), 401, 'connector_authentication_required');
 });
 
 /**

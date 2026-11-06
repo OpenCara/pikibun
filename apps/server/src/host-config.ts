@@ -3,6 +3,7 @@ import { builtinExtensionNames, defaultHostConfig, hostConfigLimits, normalizeBu
   parseHostConfigChange, parseRequiredExtensions, type HostConfig, type RepositoryCacheMode } from '../../../packages/shared/src/host-config.js';
 import { isPikiExtensionSource } from '../../../packages/shared/src/host-extensions.js';
 import { defaultHostBrowserConfig, parseHostBrowserConfig } from '../../../packages/shared/src/browser.js';
+import { defaultHostTunnelConfig, parseHostTunnelConfig } from '../../../packages/shared/src/tunnel.js';
 import { pikiExtension } from '../../../packages/shared/src/piki-extensions.js';
 import type { Env, WorkerEnv } from './types.js';
 import { auditStatement, managedConnector } from './authority/index.js';
@@ -13,24 +14,39 @@ import { fail, jsonObject, now } from './http.js';
  * pushes in its owner's sessions may use its Git credentials, its repository cache, whether its owner's sessions may
  * run directly on it, without the sandbox, when its long conversations are summarized (compaction), and which of Pi's
  * built-in extensions its sessions run (builtinExtensions), the extensions it requires of every session on it
- * (requiredExtensions), and where the browser tool's Chromium comes from (browser). Its owner sets them here, as do its
- * admins, except the ones that decide whose credentials the host uses, what runs on it unsandboxed, what every session on
- * it must run, and which of its files sessions get. Connectors read them back (`/api/connectors/self/config`)
+ * (requiredExtensions), where the browser tool's Chromium comes from (browser), the longest a session service runs
+ * (serviceLifetimeSeconds) and where the tunnel tool's cloudflared comes from (tunnel). Its owner sets them here, as do
+ * its admins, except the ones that decide whose credentials the host uses, what runs on it unsandboxed, what every session
+ * on it must run, which of its files sessions get, and whether sessions publish from its network. Connectors read them back (`/api/connectors/self/config`)
  * instead of taking connect options.
  */
 
 interface ConfigRow { command_timeout_seconds: number; gpu: number; git_credentials: number; repository_cache: RepositoryCacheMode; host_sessions: number; compaction_json: string;
-  builtin_extensions_json: string; required_extensions_json: string; browser_json: string }
+  builtin_extensions_json: string; required_extensions_json: string; browser_json: string; service_lifetime_seconds: number; tunnel_json: string }
 
 /** The configuration of `connectorId`; the defaults until its owner or an admin changes one. */
 export async function connectorHostConfig(env: Env, connectorId: string): Promise<HostConfig> {
   const row = await env.DB.query<ConfigRow>(`SELECT command_timeout_seconds, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
-    builtin_extensions_json, required_extensions_json, browser_json FROM connector_configs WHERE connector_id = ?`).bind(connectorId).first();
-  if (!row) return { ...defaultHostConfig, builtinExtensions: [], requiredExtensions: [], browser: { ...defaultHostBrowserConfig } };
+    builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json FROM connector_configs WHERE connector_id = ?`).bind(connectorId).first();
+  if (!row) return { ...defaultHostConfig, builtinExtensions: [], requiredExtensions: [], browser: { ...defaultHostBrowserConfig }, tunnel: { ...defaultHostTunnelConfig } };
   return { commandTimeoutSeconds: Number(row.command_timeout_seconds), gpu: Number(row.gpu) === 1,
     gitCredentials: Number(row.git_credentials) === 1, repositoryCache: row.repository_cache, hostSessions: Number(row.host_sessions) === 1,
     compaction: storedCompaction(row.compaction_json), builtinExtensions: storedBuiltinExtensions(row.builtin_extensions_json),
-    requiredExtensions: storedRequiredExtensions(row.required_extensions_json), browser: storedBrowser(row.browser_json) };
+    requiredExtensions: storedRequiredExtensions(row.required_extensions_json), browser: storedBrowser(row.browser_json),
+    serviceLifetimeSeconds: storedLifetime(row.service_lifetime_seconds), tunnel: storedTunnel(row.tunnel_json) };
+}
+
+/** The saved service lifetime; one out of bounds (a database edited by hand, say) is the default. */
+function storedLifetime(value: number | string): number {
+  const seconds = Number(value);
+  const { min, max } = hostConfigLimits.serviceLifetimeSeconds;
+  return Number.isSafeInteger(seconds) && seconds >= min && seconds <= max ? seconds : defaultHostConfig.serviceLifetimeSeconds;
+}
+
+/** The saved tunnel setting; one that no longer reads as valid looks for cloudflared, as by default. */
+function storedTunnel(json: string): HostConfig['tunnel'] {
+  try { return parseHostTunnelConfig(JSON.parse(json)); }
+  catch { return { ...defaultHostTunnelConfig }; }
 }
 
 /** The saved browser setting; one that no longer reads as valid (a database edited by hand, say) looks for one, as by default. */
@@ -67,7 +83,8 @@ function storedCompaction(json: string): HostConfig['compaction'] {
 /** Each setting's column; the only names `upsert` puts in its SQL. */
 const columns: Readonly<Record<keyof HostConfig, string>> = Object.freeze({ commandTimeoutSeconds: 'command_timeout_seconds', gpu: 'gpu',
   gitCredentials: 'git_credentials', repositoryCache: 'repository_cache', hostSessions: 'host_sessions', compaction: 'compaction_json',
-  builtinExtensions: 'builtin_extensions_json', requiredExtensions: 'required_extensions_json', browser: 'browser_json' });
+  builtinExtensions: 'builtin_extensions_json', requiredExtensions: 'required_extensions_json', browser: 'browser_json',
+  serviceLifetimeSeconds: 'service_lifetime_seconds', tunnel: 'tunnel_json' });
 
 /**
  * Saves a change of `settings`. A host with no configuration yet gets a whole one: the change over what it had (the
@@ -76,8 +93,8 @@ const columns: Readonly<Record<keyof HostConfig, string>> = Object.freeze({ comm
  */
 function upsert(settings: readonly (keyof HostConfig)[]): string {
   return `INSERT INTO connector_configs (connector_id, command_timeout_seconds, gpu, git_credentials, repository_cache, host_sessions, compaction_json,
-    builtin_extensions_json, required_extensions_json, browser_json, updated_by, updated_at)
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM connectors WHERE id = ? AND revoked_at IS NULL AND removed_at IS NULL)
+    builtin_extensions_json, required_extensions_json, browser_json, service_lifetime_seconds, tunnel_json, updated_by, updated_at)
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM connectors WHERE id = ? AND revoked_at IS NULL AND removed_at IS NULL)
   ON CONFLICT (connector_id) DO UPDATE SET ${settings.map(key => `${columns[key]} = excluded.${columns[key]}, `).join('')}
     updated_by = excluded.updated_by, updated_at = excluded.updated_at
   RETURNING connector_id`;
@@ -105,7 +122,7 @@ export function registerHostConfig(app: Hono<WorkerEnv>): void {
     if (row.role !== 'owner') {
       // An admin may name one of the owner's settings only as it is: changing it is the owner's.
       if (settings.some(key => ownerOnlyHostConfig.includes(key) && JSON.stringify(change[key]) !== JSON.stringify(current[key]))) {
-        fail(403, 'host_owner_required', 'Only the host\'s owner decides whether it uses its Git credentials, keeps a repository cache, runs sessions without the sandbox, requires extensions of every session on it or where its browser comes from.');
+        fail(403, 'host_owner_required', 'Only the host\'s owner decides whether it uses its Git credentials, keeps a repository cache, runs sessions without the sandbox, requires extensions of every session on it, where its browser comes from or whether its sessions may put servers online through tunnels.');
       }
       settings = settings.filter(key => !ownerOnlyHostConfig.includes(key));
       if (!settings.length) return c.json({ config: current });
@@ -114,7 +131,7 @@ export function registerHostConfig(app: Hono<WorkerEnv>): void {
     const saved = await c.env.DB.query(upsert(settings))
       .bind(row.id, config.commandTimeoutSeconds, config.gpu ? 1 : 0, config.gitCredentials ? 1 : 0, config.repositoryCache, config.hostSessions ? 1 : 0,
         JSON.stringify(config.compaction), JSON.stringify(config.builtinExtensions), JSON.stringify(config.requiredExtensions), JSON.stringify(config.browser),
-        actorId, now(), row.id).first();
+        config.serviceLifetimeSeconds, JSON.stringify(config.tunnel), actorId, now(), row.id).first();
     if (!saved) fail(409, 'connector_revoked', 'Connector is revoked.');
     const effective = await connectorHostConfig(c.env, row.id);
     await auditStatement(c.env, actorId, 'host.config.updated', null, null, { connectorId: row.id, ...effective }).run();

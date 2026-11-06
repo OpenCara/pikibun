@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
-import { pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
+import { pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
+import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
@@ -38,12 +39,13 @@ function availability(extensions: readonly WorkspaceExtension[], installed: read
 
 /**
  * A host's report as someone other than its owner sees it: without its dev extensions, whose paths are its owner's files,
- * nor where its browser is on it, nor what went wrong with it, which names a path its owner gave.
+ * nor where its browser or cloudflared is on it, nor what went wrong with them, which names a path its owner gave.
  */
 function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExtensionsReport {
   if (ownerView) return report;
   const browser = report.browser && (({ executable: _, error: __, ...rest }) => rest)(report.browser);
-  return { ...report, installed: report.installed.filter(item => !item.dev), ...(browser ? { browser } : {}) };
+  const tunnel = report.tunnel && (({ executable: _, error: __, ...rest }) => rest)(report.tunnel);
+  return { ...report, installed: report.installed.filter(item => !item.dev), ...(browser ? { browser } : {}), ...(tunnel ? { tunnel } : {}) };
 }
 
 /** Those every session needs (piki:files), which a workspace can't turn off. */
@@ -58,10 +60,35 @@ const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ?
  * a connector that reports having them: they don't count towards the workspace's 32, and an older connector's parser
  * would refuse a longer list, while it offers their tools whatever the workspace chose anyway.
  */
-export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined): WorkspaceExtension[] {
+export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined,
+  options: { toolDefinitions?: boolean } = {}): WorkspaceExtension[] {
   const has = new Set((installed ?? []).map(item => item.source));
   const knowsPiki = [...has].some(isPikiExtensionSource);
-  return extensions.filter(item => !isPikiExtensionSource(item.source) || (knowsPiki && (!sessionToolSources.includes(item.source) || has.has(item.source))));
+  // A connector that runs tools defined as data takes the switches of the extensions this server's definitions name,
+  // which it may not report having: it switches those tools by them (tool-definitions.ts).
+  if (options.toolDefinitions && knowsPiki) for (const definition of toolDefinitions) for (const extension of definition.extensions) has.add(extension);
+  const shown = extensions.filter(item => !isPikiExtensionSource(item.source) || (knowsPiki && (!sessionToolSources.includes(item.source) || has.has(item.source))));
+  return knowsPiki ? withReplacedSwitches(shown, extensions, has) : shown;
+}
+
+/**
+ * For a connector that has a retired switch (piki:sources) but none of the extensions that replace it (piki:notion,
+ * ...), that switch as the workspace has those now: on while any of them is on. It stands in the workspace's own entry
+ * for it, if any, or else is added at the end, and is left out while on, as a workspace that never chose has it.
+ */
+function withReplacedSwitches(shown: readonly WorkspaceExtension[], extensions: readonly WorkspaceExtension[], has: ReadonlySet<string>): WorkspaceExtension[] {
+  let result = [...shown];
+  const replaced = new Set(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
+  for (const source of replaced) {
+    const successors = pikiExtensions.filter(item => item.replaces === source);
+    if (!has.has(source) || successors.some(item => has.has(item.source))) continue;
+    const on = successors.some(item => pikiExtensionOn(item, extensions));
+    const own = result.find(item => item.source === source);
+    if (on) result = result.filter(item => item.source !== source);
+    else if (own) result = result.map(item => item.source === source ? { ...item, enabled: false } : item);
+    else result.push({ source, enabled: false, tools: 'approval', settings: {} });
+  }
+  return result;
 }
 
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
@@ -99,13 +126,15 @@ export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
     const row = await authenticateConnector(c);
     const input = await jsonObject(c, 4096);
     const workspaceId = identifier(input.workspaceId, 'workspaceId');
+    // A connector that runs tools defined as data says so (`toolDefinitions`); an older one names only the workspace.
+    const options = { toolDefinitions: input.toolDefinitions === true };
     const connected = await c.env.DB.query<{ connector_id: string }>(`SELECT cw.connector_id FROM connector_workspaces cw
       JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = ?
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
     if (!connected) fail(404, 'not_found', 'Workspace not found.');
     const extensions = await workspaceExtensions(c.env, workspaceId);
     const shown = extensions.some(item => isPikiExtensionSource(item.source))
-      ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed) : extensions;
+      ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed, options) : extensions;
     return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id) });
   });
 }

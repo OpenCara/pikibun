@@ -79,6 +79,11 @@ export function hostCommandWaiting(operation: Pick<Operation, "kind">, host: Lis
 
 /** What an extension tool card says it does: it runs in the host's connector, outside the sandbox, decided like a host command. */
 export function extensionToolNotice(operation: { source: string; tool: string }): string {
+  // The tunnel's server runs in the sandbox; what runs on the host is cloudflared, which puts it online from there.
+  if (operation.source === "piki:tunnel" && operation.tool === "tunnel") {
+    return "This puts the session's web server online at a public address: the server runs in the session's sandbox, and cloudflared, on the session's host, "
+      + "publishes it from the host's network through a Cloudflare tunnel that anyone with the address can open. Only the host's owner, or a member granted host commands, can approve it.";
+  }
   return `${operation.tool} comes from the extension ${operation.source}. It runs on the session's host, in its connector, as the host's OS user, `
     + "with access to their files, credentials and network, outside the sandbox. Only the host's owner, or a member granted host commands, can approve it.";
 }

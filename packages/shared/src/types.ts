@@ -1,4 +1,5 @@
 import type { GitProvider, SessionRepository } from "./repositories.js";
+import type { SessionTunnelRecord, SessionTunnelView } from "./tunnel.js";
 import type { ChatImage } from "./chat-images.js";
 
 export const permissions = ["read", "ask", "write", "approve", "manage"] as const;
@@ -21,6 +22,13 @@ export const sessionRoles = ["viewer", "member", "collaborator", "admin"] as con
 export type SessionRole = (typeof sessionRoles)[number];
 export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "make", "browser"] as const;
 export type ToolName = (typeof toolNames)[number];
+/**
+ * A tool's name in an agent, a permission or a program operation: one of Pikibun's own (`toolNames`), or one the
+ * control plane defines as data (tool-definitions.ts), which this version may not know by name.
+ */
+export type AnyToolName = ToolName | (string & {});
+/** The names a tool defined as data may have (tool-definitions.ts), as operations and permissions carry them. */
+export const definedToolNamePattern = /^[a-z][a-z0-9_]{0,63}$/;
 /**
  * Tools no session offers any more, still valid in stored agents and approvals: those of sessions that pinned their
  * repositories (the agent uses the git tool), the web tools, which extensions provide now
@@ -87,7 +95,7 @@ export interface AgentVersion {
   name: string;
   description: string;
   instructions: string;
-  tools: ToolName[];
+  tools: AnyToolName[];
   modelId: string;
   createdAt: string;
 }
@@ -181,6 +189,11 @@ export interface SessionRecord {
    * Display state, like activity: what the push recorded, and the state the control plane last read for it.
    */
   pullRequest?: SessionPullRequest;
+  /**
+   * The session's server is online through its tunnel (piki:tunnel), as its host last reported it: its address, until
+   * its host reports it stopped or its service lifetime is over. Display state, like activity.
+   */
+  tunnel?: SessionTunnelRecord;
 }
 /**
  * A pull request's state as the control plane last read it with the session owner's account: merged and closed win,
@@ -234,7 +247,7 @@ export interface RunnerBinding {
   model: ModelDefinition;
 }
 export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "operations" | "approve" | "backup" | "restart" | "restore" | "stop" | "files"
-  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload";
+  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel";
 
 /** How far the session file browser reads: entries listed per directory, and bytes of a file previewed. */
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
@@ -357,7 +370,7 @@ export type PermissionNeed = (typeof permissionNeeds)[number];
  */
 export interface PermissionRequest {
   kind: "permission";
-  tool: ToolName;
+  tool: AnyToolName;
   target: string;
   /** In `permissionNeeds` order. */
   needs: PermissionNeed[];
@@ -419,7 +432,8 @@ export type ProgramToolName = (typeof programToolNames)[number];
 /** One call of a program tool: the exact command it runs (program-command.ts), as its card shows it. Key order: kind, tool, command. */
 export interface ProgramOperation {
   kind: "program";
-  tool: ProgramToolName;
+  /** One of `programToolNames`, or a program tool defined as data (tool-definitions.ts). */
+  tool: ProgramToolName | (string & {});
   command: string;
 }
 /** Runs outside isolation as the connector user; only the host owner, or a member they granted host commands to, may approve. */
@@ -855,6 +869,12 @@ export interface SessionView {
      * reason (for piki:browser, browserUnavailableReasons in browser.ts): the browser without Chromium on the host, say.
      */
     unavailable?: { source: string; tools: string[]; reason: string }[] };
+  /**
+   * The session's server is online through its tunnel (piki:tunnel): its address, who started it and until when, which
+   * the session panel shows with a Stop button (`POST /api/sessions/:id/tunnel/stop`). Absent while it isn't, and from
+   * runners that predate tunnels.
+   */
+  tunnel?: SessionTunnelView;
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
