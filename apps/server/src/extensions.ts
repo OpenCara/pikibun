@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import { pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
+import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
 import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
@@ -58,9 +59,13 @@ const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ?
  * a connector that reports having them: they don't count towards the workspace's 32, and an older connector's parser
  * would refuse a longer list, while it offers their tools whatever the workspace chose anyway.
  */
-export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined): WorkspaceExtension[] {
+export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined,
+  options: { toolDefinitions?: boolean } = {}): WorkspaceExtension[] {
   const has = new Set((installed ?? []).map(item => item.source));
   const knowsPiki = [...has].some(isPikiExtensionSource);
+  // A connector that runs tools defined as data takes the switches of the extensions this server's definitions name,
+  // which it may not report having: it switches those tools by them (tool-definitions.ts).
+  if (options.toolDefinitions && knowsPiki) for (const definition of toolDefinitions) for (const extension of definition.extensions) has.add(extension);
   const shown = extensions.filter(item => !isPikiExtensionSource(item.source) || (knowsPiki && (!sessionToolSources.includes(item.source) || has.has(item.source))));
   return knowsPiki ? withReplacedSwitches(shown, extensions, has) : shown;
 }
@@ -120,13 +125,15 @@ export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
     const row = await authenticateConnector(c);
     const input = await jsonObject(c, 4096);
     const workspaceId = identifier(input.workspaceId, 'workspaceId');
+    // A connector that runs tools defined as data says so (`toolDefinitions`); an older one names only the workspace.
+    const options = { toolDefinitions: input.toolDefinitions === true };
     const connected = await c.env.DB.query<{ connector_id: string }>(`SELECT cw.connector_id FROM connector_workspaces cw
       JOIN workspace_members m ON m.workspace_id = cw.workspace_id AND m.user_id = ?
       WHERE cw.connector_id = ? AND cw.workspace_id = ?`).bind(row.owner_id, row.id, workspaceId).first();
     if (!connected) fail(404, 'not_found', 'Workspace not found.');
     const extensions = await workspaceExtensions(c.env, workspaceId);
     const shown = extensions.some(item => isPikiExtensionSource(item.source))
-      ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed) : extensions;
+      ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed, options) : extensions;
     return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id) });
   });
 }

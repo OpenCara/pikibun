@@ -666,20 +666,21 @@ test('github reads and merges reach the control plane over the connection, pass 
   answer = () => Response.json({ sha: 'b'.repeat(40), url: 'https://evil.example/acme/alpha/pull/7' });
   await assert.rejects(config.githubMerge!(merge));
 
-  // Source reads go the same way, with the same bound, and refusals pass on.
+  // A brokered tool's call (source_read) goes to the route its definition names, with the same bound, and refusals pass on.
   const sourceRead = { sessionId: 'session', actorId: 'owner', admissionId: 'admission', callId: 'call-2', source: 'source-1', item: '0123abcd-0123-4567-89ab-0123456789ab' };
   const page = { source: 'Specs', kind: 'notion', id: sourceRead.item, type: 'page', title: 'Specs', url: 'https://www.notion.so/x', lastEdited: '', content: 'y'.repeat(90 * 1024), entries: [], truncated: false };
   answer = request => {
     assert.equal(request.url, `${origin}/api/connectors/self/sources/read`);
     return Response.json(page);
   };
-  assert.deepEqual(await config.sourceRead!(sourceRead), page);
+  assert.deepEqual(await config.brokered!('sources/read', sourceRead), page);
   assert.deepEqual(JSON.parse(fixture.allCalls.at(-1)!.body), sourceRead);
   answer = () => Response.json({ error: 'That page is not under this source, the page or database bound to the workspace.', code: 'source_outside' }, { status: 403 });
-  await assert.rejects(config.sourceRead!(sourceRead), (error: Error & { status?: number }) => error.status === 403 && /not under this source/.test(error.message));
-  // A view that isn't one is refused.
-  answer = () => Response.json({ title: 'no id' });
-  await assert.rejects(config.sourceRead!(sourceRead));
+  await assert.rejects(config.brokered!('sources/read', sourceRead), (error: Error & { status?: number }) => error.status === 403 && /not under this source/.test(error.message));
+  // An answer that isn't a JSON object is refused, and so is a route no definition may name.
+  answer = () => Response.json(['no', 'object']);
+  await assert.rejects(config.brokered!('sources/read', sourceRead));
+  await assert.rejects(config.brokered!('../internal/sources/read', sourceRead), /Invalid brokered tool route/);
 });
 
 test('a chunk the desktop app hands the host runs once, as relayed, after the control plane checked its grant', { timeout: 10000 }, async t => {

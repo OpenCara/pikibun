@@ -306,8 +306,14 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     still turns them off. The workspace page turns a kind back on with an enabled entry, rather than by removing the
     disabled one, where `piki:sources` is off. A connector from before the split reports `piki:sources` but none of the
     kinds, and gets `piki:sources` as the workspace has the kinds now: on (left out) while any is on, off once all are
-    (`connectorWorkspaceExtensions`). Such a connector can't tell kinds apart. That brings a connector's Pikibun
-    extensions to 25 of the 32 a report holds.
+    (`connectorWorkspaceExtensions`). Such a connector can't tell kinds apart, so the control plane holds the switch
+    itself: it refuses to read a source whose kind is off, whichever connector asks ([tool definitions](tool-definitions.md),
+    rule 10). That brings a connector's Pikibun extensions to 25 of the 32 a report holds.
+
+36. **Tools defined as data.** `node`, `rust`, `go`, `dotnet`, `make` and `source_read` are no longer code in the
+    connector: the control plane defines them as data and the connector runs them with its own engine, so new tools of
+    those kinds need no connector release. Their extensions switch them as before, and a definition names its own, so a
+    connector switches a tool by an extension it doesn't know yet. See [tool definitions](tool-definitions.md).
 
 Next: other ecosystems as usage asks for them (`jvm`).
 
@@ -462,7 +468,8 @@ of the host check each message before the agent sees it, and refuses those that 
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
 | The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |
 | The Browser tab | `apps/web/src/session-browser.tsx` |
-| Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`, `pikiExtensionOn`, `documentKindsOff`); `session.ts` (`applyOptions`, `requireSessionTool`, `documentKindsOff`); tests in `tests/runner-schedule.test.ts` |
+| Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`, `pikiExtensionOn`, `extensionSwitchOn`, `documentKindsOff`); `session.ts` (`applyOptions`, `requireSessionTool`, `documentKindsOff`); tests in `tests/runner-schedule.test.ts` |
+| Tools defined as data (node, rust, go, dotnet, make, source_read) | [tool-definitions.md](tool-definitions.md) |
 | gh, glab, az: refused and read-only arguments, token variables | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
 | A session's factories, where it runs the command, write leases | `apps/runner/src/extensions/piki/index.ts`, `adapter.ts`; `session.ts` (`pikiSession`, `runPikiCommand`) |
 | The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/authority/api-access.ts` |

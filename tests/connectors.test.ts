@@ -18,6 +18,7 @@ import { sha256 } from '../packages/shared/src/crypto.js';
 import { fileUploadLimits } from '../packages/shared/src/file-uploads.js';
 import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
+import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
 
 const origin = 'http://localhost:8787';
@@ -516,7 +517,7 @@ test('connector bearer credentials cannot authenticate browser or internal APIs,
     '/api/internal/restores/unknown/download', '/api/internal/git/direct']) {
     await denied(await f.request('POST', path, {}, headers), 401, 'unauthorized');
   }
-  for (const path of ['manifest', 'authorize', 'activity', 'github/comment', 'github/read', 'github/merge', 'github/issue', 'restores/unknown/download', 'git/direct']) {
+  for (const path of ['manifest', 'authorize', 'activity', 'github/comment', 'github/read', 'github/merge', 'github/issue', 'restores/unknown/download', 'git/direct', 'tools']) {
     await denied(await owner.request('POST', `/api/connectors/self/${path}`, {}), 401, 'connector_authentication_required');
     await denied(await self(f, connector, path, {}, null), 401, 'stale_connection');
     await denied(await self(f, connector, path, {}, 'malformed'), 401, 'stale_connection');
@@ -527,7 +528,7 @@ test('connector bearer credentials cannot authenticate browser or internal APIs,
   const oldConnection = connector.connectionToken;
   connector.connectionToken = token();
   f.sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connector.connectionToken), connector.connectorId);
-  for (const path of ['manifest', 'authorize', 'activity', 'github/comment', 'github/read', 'github/merge', 'github/issue', 'restores/unknown/download', 'git/direct']) {
+  for (const path of ['manifest', 'authorize', 'activity', 'github/comment', 'github/read', 'github/merge', 'github/issue', 'restores/unknown/download', 'git/direct', 'tools']) {
     await denied(await self(f, connector, path, {}, oldConnection), 401, 'stale_connection');
   }
   await json(await self(f, connector, 'manifest', manifest));
@@ -3990,6 +3991,27 @@ test('a source an admin sets to read as the workspace reads with the workspace\'
   const audit = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().map(row => JSON.parse(String(row.detail_json)));
   assert.deepEqual(audit.map(item => item.readAs), ['workspace']);
 
+  // Each kind of source has its own switch, which the control plane holds whichever connector asks: Notion off, Notion
+  // sources aren't read, before anything reaches Notion; another kind off changes nothing; piki:sources, from before
+  // the split, turns off every kind the workspace hasn't chosen since.
+  const extensions = `/api/workspaces/${s.team.id}/extensions`;
+  const turn = async (source: string, enabled: boolean) => json(await s.admin.request('PUT', extensions, { source, enabled, tools: 'approval', settings: {} }));
+  await turn('piki:notion', false);
+  const quiet = notion.calls.length;
+  const off = await read();
+  await denied(off, 403, 'source_kind_off');
+  assert.equal(notion.calls.length, quiet, 'nothing reached Notion');
+  await turn('piki:notion', true);
+  await turn('piki:google-drive', false);
+  assert.equal((await json<SourceReadView>(await read())).title, 'Specs');
+  await json(await s.admin.request('DELETE', `${extensions}?source=piki%3Anotion`));
+  await turn('piki:sources', false);
+  await denied(await read(), 403, 'source_kind_off');
+  await turn('piki:notion', true);
+  assert.equal((await json<SourceReadView>(await read())).title, 'Specs', 'a kind chosen since is as chosen');
+  for (const source of ['piki:notion', 'piki:google-drive', 'piki:sources']) await json(await s.admin.request('DELETE', `${extensions}?source=${encodeURIComponent(source)}`));
+  const reads = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length;
+
   // A switch while the read is in flight: what was read with the workspace's connection isn't returned.
   const inner = globalThis.fetch;
   let flipped = false;
@@ -4000,7 +4022,7 @@ test('a source an admin sets to read as the workspace reads with the workspace\'
   await denied(await read(), 409, 'source_read_as_changed');
   assert.ok(flipped);
   f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'workspace' WHERE source_id = ?").run(source.id);
-  assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length, 1, 'The refused read is not audited as a read');
+  assert.deepEqual(f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length, reads, 'The refused read is not audited as a read');
 
   // A connection in use can't be removed; switching back to members' accounts never falls back to the workspace's.
   await denied(await s.admin.request('DELETE', `${path}/${connection.id}`), 409, 'workspace_connection_in_use');
@@ -4058,6 +4080,14 @@ test('a workspace whose only source is a Notion page can be shared with hosts an
   provisionHub(f);
   const { session } = await json<{ session: SessionRecord }>(await host.request('POST', '/api/sessions', { workspaceId: docs.id, modelId: models[0]!.id, title: 'Summarize the specs' }), 201);
   assert.equal(session.status, 'ready');
+});
+
+test('a connector reads the tools this server defines as data, only with its own credential', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
+  const { tools } = await json<{ tools: unknown[] }>(await self(f, s.connector, 'tools', {}));
+  assert.deepEqual(parseToolDefinitions({ tools }), bundledToolDefinitions, 'they parse as a connector parses them, unchanged');
+  assert.deepEqual(tools.map(tool => (tool as { name: string }).name), ['node', 'rust', 'go', 'dotnet', 'make', 'source_read']);
+  await denied(await s.creator.request('POST', '/api/connectors/self/tools', {}), 401, 'connector_authentication_required');
 });
 
 /**

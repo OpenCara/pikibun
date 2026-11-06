@@ -69,6 +69,7 @@ Pikibun's own tools are becoming extensions, one by one ([#163](https://github.c
 - **The brokered tools and the file tools.** `piki:github`, the document-source extensions and `piki:sessions` switch the tools that act as the session owner through Pikibun, and `piki:git` switches `git_push` with `git`. `piki:files` holds the tools every session needs to read and write its files: it is always on, and turning it off is refused.
 - **One per kind of document source.** `piki:notion`, `piki:google-drive`, `piki:dropbox`, `piki:onedrive`, `piki:feishu` and `piki:tencent-docs` each switch `source_read` for their kind: sessions offer `source_read` while any of them is on, and list and read only the sources of the kinds that are on. They replace `piki:sources`, which switched every kind at once: a workspace that turned it off has each kind off until it turns that kind on. Hosts on connectors from before the split have only `piki:sources`, which is on there while any kind is on.
 - **No place taken.** They don't count towards a workspace's 32 extensions.
+- **Defined by Pikibun, not by the connector.** `node`, `rust`, `go`, `dotnet`, `make` and `source_read` are described by the server as data, and connectors run them with their own engine, so tools of these kinds that Pikibun adds reach hosts as soon as the server has them, without a connector update. Their switches work the same way. See [the design](design/tool-definitions.md).
 
 ## The browser: piki:browser
 

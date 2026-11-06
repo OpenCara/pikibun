@@ -212,6 +212,15 @@ export function pikiExtensionOn(extension: PikiExtensionInfo, workspace: readonl
   return chosen ? chosen.enabled : true;
 }
 
+/**
+ * Whether `workspace` has the extension `source` on: as `pikiExtensionOn` decides for one this version knows, and for one
+ * a newer control plane's tool definitions name (tool-definitions.ts), on unless the workspace lists it turned off.
+ */
+export function extensionSwitchOn(source: string, workspace: readonly { source: string; enabled: boolean }[]): boolean {
+  const known = pikiExtension(source);
+  return known ? pikiExtensionOn(known, workspace) : !workspace.some(item => item.source === source && !item.enabled);
+}
+
 /** The session-tool extensions that switch tools now: not the ones a newer extension `replaces`. */
 function switchingExtensions(): PikiExtensionInfo[] {
   const replaced = new Set(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
