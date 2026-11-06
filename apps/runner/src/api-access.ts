@@ -7,7 +7,7 @@ import { Readable, type Duplex } from "node:stream";
 import { TLSSocket } from "node:tls";
 import { API_CREDENTIAL_CACHE_SECONDS, API_TOKEN_PLACEHOLDER, apiWriteLease, apiWriteToken, hostAllowed, type ApiAccessKind, type ApiCredential,
   type ApiCredentialGrant, type CredentialedApiProvider, type EgressGrant } from "../../../packages/shared/src/network.js";
-import { publicAddress } from "./egress.js";
+import { fakeIpAddress, publicAddress } from "./egress.js";
 import { interceptionAuthority, type InterceptionAuthority } from "./interception-ca.js";
 import { RunnerError } from "./protocol.js";
 
@@ -182,14 +182,30 @@ async function body(request: IncomingMessage, limit: number): Promise<Uint8Array
   return Buffer.concat(chunks);
 }
 
+/**
+ * The addresses the proxy connects to for `host`, an API host or a download host of its redirects: public ones only,
+ * or the fake-IP addresses of a proxy on the host (fakeIpAddress). Those are let through here, unlike for tunnels: these
+ * hosts are fixed names, and the request goes over TLS checked against the name with Node's own roots, so a fake-IP
+ * proxy can only pass it on to the API itself, while tunnels go wherever the workspace's network policy lets a session
+ * name. Hosts behind such a proxy (where DNS answers 198.18.0.1 for api.github.com) otherwise get no API at all.
+ */
+export async function upstreamAddresses(host: string, lookup: (host: string) => Promise<{ address: string; family: number }[]>
+  = name => dnsLookup(name, { all: true, verbatim: true })): Promise<{ address: string; family: number }[]> {
+  let addresses: { address: string; family: number }[];
+  try { addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await lookup(host); }
+  catch { addresses = []; }
+  const usable = (address: string) => publicAddress(address) || (!isIP(host) && fakeIpAddress(address));
+  const unusable = addresses.find(entry => !usable(entry.address));
+  if (!addresses.length || unusable) {
+    throw new RunnerError(502, `${host.slice(0, 253)} does not resolve to a public address${unusable ? ` (it resolves to ${unusable.address} on this host)` : ""}`);
+  }
+  return addresses.slice(0, 8);
+}
+
 /** A request to `url` at its public addresses only, connected to exactly the addresses checked, without redirects. */
 export const publicUpstream: ApiUpstream = async ({ url, method, headers, body, signal }) => {
   const host = url.hostname.replace(/^\[|\]$/g, "");
-  let addresses: { address: string; family: number }[];
-  try { addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await dnsLookup(host, { all: true, verbatim: true }); }
-  catch { addresses = []; }
-  if (!addresses.length || addresses.some(entry => !publicAddress(entry.address))) throw new RunnerError(502, `${host.slice(0, 253)} does not resolve to a public address`);
-  const checked = addresses.slice(0, 8);
+  const checked = await upstreamAddresses(host);
   const lookup: LookupFunction = (_name, options, callback) => {
     if (options.all) (callback as (error: null, addresses: { address: string; family: number }[]) => void)(null, checked);
     else callback(null, checked[0]!.address, checked[0]!.family);

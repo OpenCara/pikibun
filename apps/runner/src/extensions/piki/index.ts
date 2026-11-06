@@ -4,7 +4,7 @@ import { azureCliSpec } from "./azure-cli.js";
 import { commandExtension, noPikiSession, type CliSpec, type PikiSession } from "./command.js";
 import { ghSpec } from "./gh.js";
 import { glabSpec } from "./glab.js";
-import { promptAuditExtension } from "./prompt-audit.js";
+import { promptAuditExtension } from "../../../../../extensions/prompt-audit/prompt-audit.js";
 
 /*
  * The extensions built into this connector (docs/design/piki-extensions.md), as Pi extension factories: every host

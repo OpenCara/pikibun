@@ -2,6 +2,7 @@ import { useApp } from "./app-context";
 import { desktopBridge } from "./desktop";
 import { Icon, type IconName } from "./icons";
 import { href, type SettingsSection } from "./router";
+import { useServerVersion } from "./server-version";
 import { AdminSettings } from "./settings/AdminSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { DesktopSettings } from "./settings/DesktopSettings";
@@ -32,12 +33,14 @@ export function SettingsScreen({ section, id }: { section: SettingsSection; id?:
   const visible = sections.filter(item => (!item.admin || user.instanceAdmin) && (!item.desktop || desktop))
     .map(item => item.desktop ? { ...item, label: desktopLabel() } : item);
   const current = visible.find(item => item.id === section) ?? visible[0];
+  const serverVersion = useServerVersion();
   return <div className="settings-shell">
     <nav className="settings-list" aria-label="Settings">
       <div className="settings-list-title">Settings</div>
       {visible.map(item => <a key={item.id} className="nav-item" href={href({ name: "settings", section: item.id })} aria-current={item.id === current.id ? "page" : undefined}>
         <Icon name={item.icon} /><span className="label">{item.label}</span>
       </a>)}
+      {serverVersion && <div className="settings-list-version">Pikibun server {serverVersion}</div>}
     </nav>
     <div className="settings-detail">
       <ScreenHeader title={current.label} />
