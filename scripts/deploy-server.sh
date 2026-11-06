@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs on the deployment server, over SSH from .github/workflows/deploy-server.yml:
+# Runs on the deployment server, over Tailscale SSH from .github/workflows/deploy-server.yml:
 #   ssh user@host bash -s -- IMAGE DIR < scripts/deploy-server.sh
 # DIR holds the server's docker-compose.yml (whose pikibun service has `image: ${PIKIBUN_IMAGE...}`) and its .env.
 # Pulls IMAGE, records it as PIKIBUN_IMAGE in .env (so a later `docker compose up -d` keeps it), recreates the pikibun
