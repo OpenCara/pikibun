@@ -1,6 +1,7 @@
 import { effect, openUrl, safeArea, Scroll, signal, Text, untracked, View } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { WebView } from "nsh";
+import { openServerPage } from "../lib/page";
 import { errorMessage } from "../shared";
 import { auth, CALLBACK_URL, checkBrowserSession, restore, signInMethods, signInWithPassword, signInWithToken, signOut, startGitHubSignIn, type GitHubSignIn, type SignInMethods } from "../lib/auth";
 import { createAction } from "../lib/resource";
@@ -76,8 +77,9 @@ function SignInForm() {
     if (target === null) return;
     void action.run(async () => {
       if (usesBrowserSession) {
-        // The server's own GitHub sign-in sets this browser's session cookie; it lands on the web app, so come back here.
-        await openUrl(`${target}/api/auth/github`);
+        // The server's own GitHub sign-in, in place of the app: it sets this browser's session cookie and comes back to
+        // the app, which then starts signed in.
+        if (!openServerPage("/api/auth/github")) await openUrl(`${target}/api/auth/github`);
         return;
       }
       github.set(await startGitHubSignIn(target));

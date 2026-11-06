@@ -1,10 +1,11 @@
 /**
- * Runs the NSH client (apps/nsh) against a real Pikibun server: starts one in test mode on this machine with a fresh
- * SQLite database, builds the NSH web package and checks the server serves it under /nsh/, then drives the app headless
- * over the real network (`nsh test`, network "live"): a test-mode sign-in, the session list, a workspace and the
- * new-session form. Needs the `nsh` CLI on PATH (or NSH_BIN). `pnpm test:nsh-live`
+ * Runs the client (apps/nsh) against a real Pikibun server: starts one in test mode on this machine with a fresh SQLite
+ * database, builds the client for the web and checks the server serves it, then drives the app headless over the real
+ * network (`nsh test`, network "live"): a test-mode sign-in, the session list, a workspace and the new-session form.
+ * Uses the Native Shell CLI scripts/nsh.mjs pins. `pnpm test:client-live`
  */
 import { spawn } from "node:child_process";
+import { buildWeb, nshBinary } from "./nsh.mjs";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -13,11 +14,11 @@ import { join, resolve } from "node:path";
 import { loadConfig } from "../apps/server/src/config.ts";
 import { startServer } from "../apps/server/src/serve.ts";
 
-const nsh = process.env.NSH_BIN || "nsh";
 const app = resolve("apps/nsh");
 
 /** Runs nsh without blocking: the server this process hosts must keep answering the app meanwhile. */
 async function run(args: string[], cwd: string) {
+  const nsh: string = await nshBinary();
   const child = spawn(nsh, args, { cwd, stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, NO_COLOR: "1" } });
   const status = await new Promise<number | null>((done, fail) => { child.on("error", fail); child.on("exit", done); });
   if (status !== 0) throw new Error(`nsh ${args.join(" ")} exited with ${status}`);
@@ -37,27 +38,27 @@ const origin = `http://127.0.0.1:${port}`;
 const secret = randomBytes(32).toString("base64url");
 let stop = async () => {};
 try {
-  console.log("Building the NSH web package…");
-  await run(["package", "App.tsx", "--target", "web", "--out", join(work, "nsh")], app);
+  console.log("Building the client for the web…");
+  await buildWeb(join(work, "web"));
 
   const config = await loadConfig({
     APP_ORIGIN: origin, HOST: "127.0.0.1", PORT: String(port), DATABASE_URL: `sqlite://${join(work, "pikibun.sqlite")}`,
     SESSION_SECRET: randomBytes(32).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"),
     TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3_600_000).toISOString(),
-    STATIC_DIR: join(work, "web"), NSH_STATIC_DIR: join(work, "nsh", "Pikibun"),
+    STATIC_DIR: join(work, "web"),
   });
   const server = await startServer(config);
   stop = () => server.close();
   console.log(`Pikibun test server on ${origin}`);
 
-  // The web build, served by the server itself.
-  const page = await fetch(`${origin}/nsh/`);
+  // The client, served by the server itself.
+  const page = await fetch(`${origin}/`);
   const policy = page.headers.get("content-security-policy") ?? "";
-  if (page.status !== 200 || !policy.includes("'wasm-unsafe-eval'")) throw new Error(`/nsh/ answered ${page.status} with policy ${policy}`);
+  if (page.status !== 200 || !policy.includes("'wasm-unsafe-eval'")) throw new Error(`/ answered ${page.status} with policy ${policy}`);
   const wasm = /nsh\.[0-9a-f]{10}\.wasm/.exec(await page.text())?.[0];
-  const runtime = wasm ? await fetch(`${origin}/nsh/${wasm}`) : null;
-  if (runtime?.headers.get("content-type") !== "application/wasm") throw new Error("/nsh/ does not serve the WebAssembly runtime");
-  console.log(`✓ ${origin}/nsh/ serves the NSH web app (${wasm}) with its Content-Security-Policy`);
+  const runtime = wasm ? await fetch(`${origin}/${wasm}`) : null;
+  if (runtime?.headers.get("content-type") !== "application/wasm") throw new Error("the server does not serve the WebAssembly runtime");
+  console.log(`✓ ${origin}/ serves the client (${wasm}) with its Content-Security-Policy`);
 
   // A test user signed in as a native app, with a workspace of their own.
   const login = await fetch(`${origin}/api/auth/test`, {

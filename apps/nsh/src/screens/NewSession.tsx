@@ -23,11 +23,12 @@ function deriveTitle(content: string, fallback: string): string {
 const sameModel = (a: { provider: string; modelId: string }, b: { provider: string; modelId: string }) => a.provider === b.provider && a.modelId === b.modelId;
 
 /** Pick a workspace, then a host and model in it, optionally a first message; like the web's new-session screen. */
-export function NewSessionForm(props: { onStarted: (sessionId: string) => void }) {
+export function NewSessionForm(props: { onStarted: (sessionId: string) => void; workspaceId?: string }) {
   const data = useAppData();
   // A viewer follows a workspace's sessions but starts none there.
   const workspaces = () => data.workspaces().filter(item => canCreateSessions(item.role));
-  const chosen = signal("");
+  // A link to a workspace's new session (#/w/<id>/new) starts in that workspace.
+  const chosen = signal(props.workspaceId ?? "");
   const picking = signal(false);
   const workspace = () => workspaces().find(item => item.id === (chosen() || data.lastWorkspaceId())) ?? workspaces()[0];
   return (

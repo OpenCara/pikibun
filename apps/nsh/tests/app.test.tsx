@@ -56,6 +56,7 @@ describe("signing out", () => {
     expect(app.value("id:composer-input")).toBe("my unsent secret plan");
     await app.back();
     await app.press("id:open-settings");
+    await app.press("id:settings-section-profile");
     await app.press("id:sign-out");
     await app.waitFor("id:developer-toggle");
     await app.press("id:developer-toggle");
@@ -92,6 +93,7 @@ describe("signing out", () => {
     });
     app.onDialog(() => "Sign out");
     await app.press("id:open-settings");
+    await app.press("id:settings-section-profile");
     await app.press("id:sign-out");
     await app.waitFor("id:github-sign-in", { timeout: 15_000 });
     expect(app.texts().join(" ")).toContain("the server could not revoke the sign-in (it didn't answer)");

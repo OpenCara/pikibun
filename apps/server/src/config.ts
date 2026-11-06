@@ -11,10 +11,8 @@ export interface ServerConfig {
   port: number;
   /** Honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a TLS-terminating proxy. */
   trustProxy: boolean;
-  /** Directory holding the built web client (`dist/web`). */
+  /** Directory holding the client built for the web (`dist/web`, `pnpm build`). */
   staticDir: string;
-  /** Directory holding the NSH client's web build (`dist/nsh/Pikibun`), served under /nsh/ when it exists. */
-  nshStaticDir: string;
   databaseUrl: string;
   /** `STORAGE_URL`, or null when it is unset: the server then stores no session backups. */
   storageUrl: string | null;
@@ -108,6 +106,5 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     host: listenHost,
     trustProxy: trustProxyValue === 'true',
     staticDir: resolve(processEnv.STATIC_DIR || 'dist/web'),
-    nshStaticDir: resolve(processEnv.NSH_STATIC_DIR || 'dist/nsh/Pikibun'),
   };
 }

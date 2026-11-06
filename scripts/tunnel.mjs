@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Puts this checkout's Pikibun online through a Cloudflare quick tunnel, for trying the web app (/) and the NSH client
- * (/nsh/) from anywhere: builds both, starts the server and `cloudflared` in the background, and prints the public
- * address with an administrator's password. Sign-ups are off and the only account is that administrator.
+ * Puts this checkout's Pikibun online through a Cloudflare quick tunnel, for trying the client from anywhere: builds it
+ * for the web, starts the server and `cloudflared` in the background, and prints the public address with an
+ * administrator's password. Sign-ups are off and the only account is that administrator.
  *
  *   node scripts/tunnel.mjs start [--local]   # in the background; --local: no tunnel, on 127.0.0.1 only, where the
  *                                             # pages load but signing in needs the tunnel's https address
@@ -10,7 +10,8 @@
  *   node scripts/tunnel.mjs status
  *   node scripts/tunnel.mjs stop
  *
- * Needs Node 24 and network access; downloads `cloudflared` and the `nsh` CLI into .tunnel/ when they aren't on PATH.
+ * Needs Node 24 and network access; downloads `cloudflared` into .tunnel/ when it isn't on PATH, and the Native Shell
+ * CLI as scripts/nsh.mjs does.
  * Its state (database, logs, the password) stays in .tunnel/, which is git-ignored.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -20,6 +21,7 @@ import { createServer } from "node:net";
 import { arch, platform } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildWeb } from "./nsh.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dir = path.join(repo, ".tunnel");
@@ -64,21 +66,6 @@ async function cloudflared() {
   return bin;
 }
 
-async function nsh() {
-  if (onPath("nsh")) return "nsh";
-  const bin = path.join(dir, "nsh", "bin", "nsh");
-  if (existsSync(bin)) return bin;
-  const asset = platform() === "linux" && arch() === "x64" ? "nsh-linux-x86_64.tar.gz"
-    : platform() === "darwin" && arch() === "arm64" ? "nsh-macos-arm64.tar.gz" : null;
-  if (!asset) throw new Error("Install the nsh CLI (https://nsh.dev/docs/installation) and run this again.");
-  const archive = path.join(dir, asset);
-  console.log(`Downloading ${asset} (several hundred MB)…`);
-  await download(`https://github.com/longbridge/nsh/releases/latest/download/${asset}`, archive);
-  run("tar", ["-xzf", archive, "-C", dir]);
-  rmSync(archive);
-  return bin;
-}
-
 async function freePort() {
   const server = createServer();
   await new Promise(done => server.listen(0, "127.0.0.1", done));
@@ -90,7 +77,7 @@ async function freePort() {
 async function status() {
   const state = readState();
   if (!state) return console.log("Not running. Start it with: node scripts/tunnel.mjs start");
-  console.log(`Address:  ${state.url}  (web app)\n          ${state.url}/nsh/  (NSH client)`);
+  console.log(`Address:  ${state.url}`);
   console.log(`Sign in:  ${state.username} / ${state.password}`);
   console.log(`Server:   ${alive(state.serverPid) ? "running" : "stopped"} on 127.0.0.1:${state.port} (log: .tunnel/server.log)`);
   if (state.tunnelPid) console.log(`Tunnel:   ${alive(state.tunnelPid) ? "running" : "stopped"} (log: .tunnel/cloudflared.log)`);
@@ -114,10 +101,9 @@ function stop() {
 
 async function start() {
   if (readState()) stop();
-  // Dependencies of the server and the web app only (not the Expo and Electron apps), then both web builds.
-  run("npx", ["--yes", "pnpm@10.32.1", "install", "--frozen-lockfile", "--filter", "@opencara/pikibun", "--filter", "@pikibun/client"]);
-  run(process.execPath, [path.join(repo, "node_modules/vite/bin/vite.js"), "build", "--config", "apps/web/vite.config.ts"]);
-  run(await nsh(), ["package", "App.tsx", "--target", "web", "--out", "../../dist/nsh"], { cwd: path.join(repo, "apps/nsh") });
+  // The server's dependencies, then the client built for the web.
+  run("npx", ["--yes", "pnpm@10.32.1", "install", "--frozen-lockfile"]);
+  await buildWeb(path.join(repo, "dist", "web"));
 
   const port = await freePort();
   let url = `http://127.0.0.1:${port}`;
@@ -152,7 +138,7 @@ async function start() {
     DATABASE_URL: `sqlite://${path.join(data, "pikibun.sqlite")}`,
     SESSION_SECRET: secrets.SESSION_SECRET, VAULT_KEY: secrets.VAULT_KEY,
     PASSWORD_AUTH: "true", SIGNUP: "off", ADMIN_USER_IDS: "password:admin",
-    STATIC_DIR: path.join(repo, "dist/web"), NSH_STATIC_DIR: path.join(repo, "dist/nsh/Pikibun"),
+    STATIC_DIR: path.join(repo, "dist/web"),
   };
   const server = ["--import", "tsx", "apps/server/src/main.ts"];
   // The administrator, its password on standard input (never in argv); already there after a restart.

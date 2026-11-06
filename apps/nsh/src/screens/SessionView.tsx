@@ -21,17 +21,20 @@ import { createAction, createResource } from "../lib/resource";
 import { palette } from "../theme";
 import { Badge, Banner, Button, Chip, confirm, EmptyState, Feedback, IconButton, Loading, OptionSheet, Segmented, Small } from "../ui";
 import { drawsHeaders, PageHeader } from "./PageHeader";
+import type { PageRoute } from "../lib/page";
+import { SessionPanel } from "../session-panel";
 
 /**
  * One session: live transcript, pending approvals and the chat box. As a page of the stack (`page`) it carries its
  * header; embedded beside the list (the wide layout) it draws its own title bar. Mounted per session id, so drafts,
  * request IDs and picks never leak between sessions.
  */
-export function SessionView(props: { id: string; page: boolean; openSession: (id: string) => void; onBack?: () => void }) {
+export function SessionView(props: { id: string; page: boolean; openSession: (id: string) => void; onBack?: () => void; go: (route: PageRoute) => void }) {
   const { user } = untracked(session);
   const data = useAppData();
   const live = createLiveSession(props.id);
   const approvalsOpen = signal(false);
+  const panelOpen = signal(false);
   const permissions = () => live.session()?.permissions ?? [];
   // Archived sessions, and sessions that pinned their repositories when they started, are read-only on the server.
   const archived = () => live.session()?.status === "archived";
@@ -130,6 +133,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       <IconButton testID="session-approvals" icon="🛡" label={pending().length ? `Approvals, ${pending().length} pending` : "Approvals"} badge={pending().length}
         onPress={() => approvalsOpen.set(true)} disabled={!live.view()} />
       <IconButton testID="session-copy-id" icon="⧉" label="Copy session ID" onPress={copyId} />
+      <IconButton testID="session-details" icon="ⓘ" label="Session details" onPress={() => panelOpen.set(true)} />
     </View>
   );
 
@@ -256,6 +260,8 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
           <Conversation id={props.id} live={live} host={host} pinned={pinned}
             openSession={target => { data.refreshSessions(); props.openSession(target); }} />
         </If>
+        <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} sessionId={props.id} session={live.session} view={live.view}
+          refresh={live.refresh} go={route => { panelOpen.set(false); props.go(route); }} />
         <ApprovalsSheet open={approvalsOpen()} approvals={approvals()} olderApprovals={live.view()?.olderApprovals} onClose={() => approvalsOpen.set(false)}
           onOpenSession={target => { approvalsOpen.set(false); data.refreshSessions(); props.openSession(target); }} session={live.session()} onChanged={live.refresh} />
       </View>

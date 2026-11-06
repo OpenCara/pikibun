@@ -1,6 +1,16 @@
 {
   "name": "Pikibun",
-  "id": "com.opencara.pikibun.nsh",
+  "id": "com.opencara.pikibun",
   "version": "0.1.0",
-  "build": 1
+  "build": 1,
+  "capabilities": {
+    "network": { "hosts": ["*"] },
+    "webview": { "hosts": ["*"] },
+    "clipboard": true,
+    "picker": true,
+    "openUrl": true,
+    "statusBar": true,
+    "host": ["page.*"]
+  },
+  "web": { "host": "./web/host.js" }
 }
