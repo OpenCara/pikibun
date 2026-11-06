@@ -11,6 +11,8 @@ import { Button, CardBody, Combobox, confirmDialog, Feedback, Row, Section, Segm
 
 /** The time limits offered; the API takes any whole number of seconds from 30 to 3600. */
 const timeouts = [30, 60, 120, 300, 600, 1800, 3600];
+/** The service lifetimes offered; the API takes any whole number of seconds from 300 to 86400. */
+const lifetimes = [900, 1800, 3600, 7200, 14_400, 28_800, 43_200, 86_400];
 
 function duration(seconds: number): string {
   if (seconds % 3600 === 0) return seconds === 3600 ? "1 hour" : `${seconds / 3600} hours`;
@@ -19,8 +21,8 @@ function duration(seconds: number): string {
 }
 
 /** The settings this form changes; compaction and built-in extensions have their own sections (HostCompaction, HostExtensions). */
-// The extensions' settings (built-in and required ones, and where the browser comes from) are saved by the Extensions section.
-const settings = (Object.keys(defaultHostConfig) as (keyof HostConfig)[]).filter(key => key !== "compaction" && key !== "builtinExtensions" && key !== "browser");
+// The extensions' settings (built-in and required ones, and where the browser and cloudflared come from) are saved by the Extensions section.
+const settings = (Object.keys(defaultHostConfig) as (keyof HostConfig)[]).filter(key => key !== "compaction" && key !== "builtinExtensions" && key !== "browser" && key !== "tunnel");
 
 const cacheLabels: Record<RepositoryCacheMode, string> = { off: "Off", host: "Shared", owner: "Per owner" };
 const cacheHints: Record<RepositoryCacheMode, string> = {
@@ -32,6 +34,7 @@ const cacheHints: Record<RepositoryCacheMode, string> = {
 const configInfo = <div className="stack">
   <p>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache or runs their sessions without the sandbox.</p>
   <p>Running sessions pick up a change within a minute. A repository cache change applies when the host's connector next connects.</p>
+  <p>The service lifetime bounds a session service: a server a session keeps running after the call that started it, such as the one the tunnel tool puts online. It stops then, and goes offline.</p>
   <p>A longer time limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB files, 256 open files) so builds fit. Without provisioned resource limits on the host (connect --resources), a command can use the whole machine for that long.</p>
 </div>;
 
@@ -47,13 +50,14 @@ export function HostConfigSection({ connector, refresh }: { connector: Connector
     shown.current = saved;
     const replaced = settings.filter(key => saved[key] !== before[key]);
     if (replaced.length) setConfig(current => ({ ...current, ...Object.fromEntries(replaced.map(key => [key, saved[key]])) }));
-  }, [saved.commandTimeoutSeconds, saved.gpu, saved.gitCredentials, saved.repositoryCache, saved.hostSessions]);
+  }, [saved.commandTimeoutSeconds, saved.serviceLifetimeSeconds, saved.gpu, saved.gitCredentials, saved.repositoryCache, saved.hostSessions]);
   // A save sends only these, so it never undoes a change someone else saved meanwhile; an admin's never names the owner's.
   const changes = settings.filter(key => config[key] !== saved[key] && (owner || !ownerOnlyHostConfig.includes(key)));
   const changed = changes.length > 0;
   const editable = !connector.revokedAt && !action.busy;
   const { unsandboxed, gpu } = connector.capabilities;
   const choices = [...new Set([...timeouts, saved.commandTimeoutSeconds])].sort((a, b) => a - b);
+  const lifetimeChoices = [...new Set([...lifetimes, saved.serviceLifetimeSeconds])].sort((a, b) => a - b);
 
   function save() {
     void (async () => {
@@ -94,6 +98,10 @@ export function HostConfigSection({ connector, refresh }: { connector: Connector
         trailing={<Combobox label="Command time limit" value={String(config.commandTimeoutSeconds)} disabled={!editable}
           options={choices.map(seconds => ({ value: String(seconds), label: duration(seconds), ...(seconds === defaultHostConfig.commandTimeoutSeconds ? { hint: "Default" } : {}) }))}
           onChange={value => setConfig({ ...config, commandTimeoutSeconds: Number(value) })} />} />
+      {!unsandboxed && <Row title="Service lifetime" hint="The longest a session's server keeps running after the call that started it, online through its tunnel, before it is stopped"
+        trailing={<Combobox label="Service lifetime" value={String(config.serviceLifetimeSeconds)} disabled={!editable}
+          options={lifetimeChoices.map(seconds => ({ value: String(seconds), label: duration(seconds), ...(seconds === defaultHostConfig.serviceLifetimeSeconds ? { hint: "Default" } : {}) }))}
+          onChange={value => setConfig({ ...config, serviceLifetimeSeconds: Number(value) })} />} />}
       <Row title="GPU" hint={gpuHint} trailing={<label className="check-row small">
         <input type="checkbox" className="checkbox" checked={config.gpu} disabled={!editable || (!config.gpu && (!gpu || unsandboxed))}
           onChange={event => setConfig({ ...config, gpu: event.target.checked })} /><span>Lend to sandboxed commands</span>

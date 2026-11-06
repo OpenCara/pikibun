@@ -5,6 +5,7 @@ import { isPikiExtensionSource, missingRequiredExtensions, normalizeExtensionSou
   type InstalledExtension } from "../../../../packages/shared/src/host-extensions";
 import { pikiExtension } from "../../../../packages/shared/src/piki-extensions";
 import { defaultHostBrowserConfig, type BrowserSource, type HostBrowserConfig, type HostBrowserStatus } from "../../../../packages/shared/src/browser";
+import { defaultHostTunnelConfig, type HostTunnelConfig, type HostTunnelStatus, type TunnelSource } from "../../../../packages/shared/src/tunnel";
 import { ExtensionSettingsFields } from "./ExtensionSettingsFields";
 import { api, segment } from "../api";
 import { Icon } from "../icons";
@@ -107,6 +108,75 @@ function BrowserSetup({ connector, status, owner, busy, save }: { connector: Con
   </div></CardBody>;
 }
 
+const TUNNEL = "piki:tunnel";
+
+const tunnelHints: Readonly<Record<HostTunnelStatus["state"], string>> = {
+  ready: "Sessions in this host's sandbox can put their servers online with it, where their workspace turns the tunnel on",
+  missing: "No cloudflared for it on this host: its sessions have no tunnel until you set one up below",
+  downloading: "Downloading cloudflared for it: its sessions get the tunnel once it is ready",
+  failed: "cloudflared's download failed: it is tried again in a few minutes, or set one up another way below",
+  off: "Off on this host: its sessions put nothing online",
+  unsupported: "Session services run in the Linux sandbox only, which this host's sessions don't have",
+};
+
+function TunnelBadge({ status }: { status: HostTunnelStatus }) {
+  switch (status.state) {
+    case "ready": return <StatusBadge tone="success">Ready</StatusBadge>;
+    case "downloading": return <StatusBadge tone="neutral" dot>Downloading</StatusBadge>;
+    case "missing": return <StatusBadge tone="warning">No cloudflared</StatusBadge>;
+    case "failed": return <StatusBadge tone="danger">Download failed</StatusBadge>;
+    case "off": return <StatusBadge tone="neutral">Off</StatusBadge>;
+    case "unsupported": return <StatusBadge tone="neutral">Not on this host</StatusBadge>;
+  }
+}
+
+const tunnelSourceChoices: { value: TunnelSource; label: string; hint: string }[] = [
+  { value: "auto", label: "Find it", hint: "Looks on this host: PIKIBUN_CLOUDFLARED, cloudflared on the connector's PATH, /usr/local/bin and /usr/bin, Homebrew's, then one downloaded here" },
+  { value: "path", label: "This path", hint: "Runs the cloudflared executable you name, and no other" },
+  { value: "download", label: "Download", hint: "The connector downloads Cloudflare's latest cloudflared (about 40 MB) into its own folder, checked against its release's SHA-256, and keeps it up to date" },
+  { value: "off", label: "Off", hint: "Sessions on this host put nothing online, whatever their workspace chose" },
+];
+
+/**
+ * Where piki:tunnel's cloudflared comes from on the host (HostConfig.tunnel): found there, at a path its owner gives,
+ * downloaded by its connector, or none, which refuses tunnels on the host. cloudflared runs in the connector, on the host,
+ * never in a session's sandbox, and publishes from the host's network; each start waits for its owner's approval, or a
+ * member's granted host commands.
+ */
+function TunnelSetup({ connector, status, owner, busy, save }: { connector: ConnectorInfo; status?: HostTunnelStatus; owner: boolean; busy: boolean;
+  save: (tunnel: HostTunnelConfig) => void }) {
+  const saved = connector.config?.tunnel ?? defaultHostTunnelConfig;
+  const [source, setSource] = useState<TunnelSource>(saved.source);
+  const [path, setPath] = useState(saved.path ?? "");
+  useEffect(() => { setSource(saved.source); setPath(saved.path ?? ""); }, [saved.source, saved.path]);
+  const chosen = path.trim();
+  const pathError = source === "path" && chosen && !chosen.startsWith("/") ? "The executable's absolute path, such as /usr/local/bin/cloudflared" : undefined;
+  const changed = source !== saved.source || (source === "path" && chosen !== (saved.path ?? ""));
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!changed || pathError || (source === "path" && !chosen)) return;
+    save(source === "path" ? { source, path: chosen } : { source });
+  }
+  const current = status && status.source === saved.source ? status : undefined;
+  return <CardBody><div className="stack">
+    {current?.state === "ready" && <p className="small">Tunnels run {current.executable ? <code>{current.executable}</code> : "the host's cloudflared"}{current.version ? ` (${current.version})` : ""} in this host's connector, never in a session's sandbox. It needs to reach Cloudflare's edge on port 7844.</p>}
+    {current && current.state !== "ready" && current.state !== "off" && <Alert variant={current.state === "downloading" ? "info" : "warning"}
+      title={current.state === "downloading" ? "Downloading cloudflared" : current.state === "failed" ? "cloudflared's download failed" : current.state === "unsupported" ? "Not on this host" : "No cloudflared for the tunnel"}>
+      {current.error ?? tunnelHints[current.state]}</Alert>}
+    {status && !current && <p className="muted small">The host applies your choice as it next reports, within a minute.</p>}
+    {owner ? <form className="stack" onSubmit={submit}>
+      <SegmentedControl label="Where the tunnel's cloudflared comes from" value={source} onChange={setSource} options={tunnelSourceChoices.map(({ value, label, hint }) => ({ value, label, hint }))} />
+      <p className="muted small">{tunnelSourceChoices.find(item => item.value === source)?.hint}{source === "download" && status && !status.downloadable
+        ? ". Cloudflare builds a lone cloudflared for Linux on x86-64 and ARM64 only: on this host, install its package and find it instead." : ""}</p>
+      {source === "path" && <Field label="cloudflared executable" error={pathError} hint="The program itself, such as /usr/local/bin/cloudflared">
+        <input className="input" required spellCheck={false} autoComplete="off" placeholder="/usr/local/bin/cloudflared" maxLength={4096} value={path} onChange={event => setPath(event.target.value)} />
+      </Field>}
+      <div className="inline"><span className="spacer" />
+        <Button type="submit" variant="default" size="sm" disabled={!changed || busy || !!pathError || (source === "path" && !chosen) || !!connector.revokedAt}>Save</Button></div>
+    </form> : <p className="muted small">Only the host's owner chooses where its cloudflared comes from, or refuses tunnels on it.</p>}
+  </div></CardBody>;
+}
+
 function ModuleDetails({ extension }: { extension: InstalledExtension }) {
   if (extension.error) return <Row title="Doesn't load" hint={extension.error} trailing={<StatusBadge tone="danger">Error</StatusBadge>} />;
   return <>{extension.modules.map(module => <CardBody key={module.path}>
@@ -133,11 +203,13 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
   // While requests wait for the host, or it applies a browser choice or downloads one, look again every few seconds.
   const browser = data?.report?.browser;
   const browserChanging = !!browser && !!connector.config && (browser.source !== connector.config.browser.source || browser.state === "downloading");
+  const tunnel = data?.report?.tunnel;
+  const tunnelChanging = !!tunnel && !!connector.config?.tunnel && (tunnel.source !== connector.config.tunnel.source || tunnel.state === "downloading");
   useEffect(() => {
-    if (!pending.length && !browserChanging) return;
+    if (!pending.length && !browserChanging && !tunnelChanging) return;
     const timer = setInterval(resource.refresh, 5000);
     return () => clearInterval(timer);
-  }, [pending.length, browserChanging, resource.refresh]);
+  }, [pending.length, browserChanging, tunnelChanging, resource.refresh]);
 
   async function request(requestAction: "install" | "remove", source: string): Promise<boolean> {
     let done = false;
@@ -186,6 +258,15 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
     }, browser.source === "download" ? "Saved: the host starts downloading Chromium within a minute, and keeps it up to date" : "Saved: the host applies it within a minute");
   }
 
+  function saveTunnel(tunnel: HostTunnelConfig) {
+    void action.run(async () => {
+      await api(`/api/connectors/${segment(connector.id)}/config`, { method: "PATCH", body: { tunnel } });
+      refresh();
+      setTimeout(resource.refresh, 35_000);
+    }, tunnel.source === "download" ? "Saved: the host starts downloading cloudflared within a minute, and keeps it up to date"
+      : tunnel.source === "off" ? "Saved: the host refuses tunnels within a minute; one online now stays until it stops" : "Saved: the host applies it within a minute");
+  }
+
   async function saveRequired(next: RequiredExtension[], notice: string): Promise<boolean> {
     let done = false;
     await action.run(async () => {
@@ -231,12 +312,15 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
         {data.report && !data.report.installed.length && <Row title="No extensions installed" hint="Install those your workspaces use, below" />}
         {data.report?.installed.map(extension => <Collapsible key={extension.source} leading={<Icon name="tool" size={16} />} title={<code>{extension.source}</code>}
           hint={extension.source === BROWSER && data.report?.browser ? browserHints[data.report.browser.state]
+            : extension.source === TUNNEL && data.report?.tunnel ? tunnelHints[data.report.tunnel.state]
             : extension.dev ? "Dev extension: your own sessions on this host" : extension.description ?? `${extension.modules.flatMap(module => module.tools).length} tools`}
           trailing={extension.error || extension.modules.some(module => module.error) ? <StatusBadge tone="danger">Error</StatusBadge>
             : extension.source === BROWSER && data.report?.browser ? <BrowserBadge status={data.report.browser} />
+            : extension.source === TUNNEL && data.report?.tunnel ? <TunnelBadge status={data.report.tunnel} />
             : extension.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : isPikiExtensionSource(extension.source) ? <StatusBadge tone="neutral">With the connector</StatusBadge>
             : waiting(extension.source) ? <StatusBadge tone="neutral" dot>Removing</StatusBadge> : <StatusBadge tone="success">Installed</StatusBadge>}>
           {extension.source === BROWSER && connector.config && <BrowserSetup connector={connector} status={data.report?.browser} owner={owner} busy={action.busy} save={saveBrowser} />}
+          {extension.source === TUNNEL && connector.config && <TunnelSetup connector={connector} status={data.report?.tunnel} owner={owner} busy={action.busy} save={saveTunnel} />}
           <ModuleDetails extension={extension} />
           {!extension.dev && !extension.error && !pikiExtension(extension.source)?.sessionTools && (owner || isRequired(extension.source)) && <CardBody><div className="inline">
             {owner ? <label className="check-row small"><input type="checkbox" className="checkbox" checked={isRequired(extension.source)}

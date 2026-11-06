@@ -495,3 +495,33 @@ aren't limited to the workspace's repositories; REST writes to GitHub are.
 - **Other APIs**: Azure Resource Manager (`management.azure.com`, with a federated credential of the workspace's),
   GitHub Enterprise Server and self-managed GitLab (hosts the authority would vouch for from the workspace's
   repositories).
+
+## Tunnels stay out of the sandbox
+
+Status: implemented for Cloudflare quick tunnels (`piki:tunnel`; see [its design](tunnel.md)). A session that serves what
+it builds at a public address needs something to carry requests from the internet to its server. Cloudflare's
+`cloudflared` does that by holding connections to Cloudflare's edge, which listens on **port 7844** (QUIC or HTTP/2)
+and nowhere else; it also resolves `api.trycloudflare.com` itself, ignoring `HTTPS_PROXY`. Neither works from the
+sandbox: the proxy tunnels only `CONNECT host:443`, and the sandbox has no DNS. So `cloudflared` runs **in the
+connector, on the host**, with the host's network, and the sandbox's egress stays exactly as above.
+
+- **The way in, not out.** The session's server listens on its own loopback, in the sandbox's network namespace, which
+  nothing outside can reach. Its service's driver also listens on a Unix socket in a directory of the session's own,
+  which the Linux sandbox mounts writable for the service alone (`/run/pikibun-service`), and relays each connection to
+  the declared port and nowhere else. The connector listens on a loopback port of the host's, forwards each connection
+  there to that socket, and points `cloudflared` at the port (`--url http://127.0.0.1:<port>`). A socket path works
+  across network namespaces, so nothing of the sandbox's network changes: it still has only loopback and its proxy.
+  The connector never connects by the shared directory's path, where the session could put a link to a host socket in
+  the socket's place: it hard-links the socket the service bound into a directory of its own, checked to be a socket of
+  its user, and connects only there.
+- **No tunnel credential in the sandbox.** A quick tunnel has none to hold, and a named tunnel's token (later) would stay
+  in the connector too. `cloudflared` runs with an empty configuration, a home of its own and nothing of the connector's
+  environment but its `PATH` and certificate settings, never in a session's sandbox, so nothing a session runs can read
+  what it holds or reuse its connection.
+- **Not considered further: allowing `CONNECT *.argotunnel.com:7844`** for sessions with the extension on. A smaller
+  change, but the sandbox would then hold a tunnel to the internet the proxy can't see into, carrying whatever the
+  session chose, its credentials would live in the sandbox, and it would still need DNS and a process that outlives a
+  command. The proxy's rule stays: HTTPS on 443, and only to public addresses.
+- **Visible, decided, bounded.** Each start is a card decided like a host command, since it publishes from the host's
+  network; the audit log records each start and stop with the address; the server stops at the host's service lifetime
+  at most, and with everything that ends the session's work.

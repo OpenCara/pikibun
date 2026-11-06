@@ -16,6 +16,7 @@ const programs = [
   ["HELPER", "helper.py", "The sandbox's helper: every file operation and step of the Linux and macOS sandboxes (sandbox.ts, seatbelt.ts)."],
   ["GIT_SHIM", "git_shim.py", "The sandbox's git, in front of the real one, for clones that borrow the host's mirrors (see GIT_SHIM in sandbox.ts)."],
   ["BROWSER_DRIVER", "browser.py", "The browser tool's driver: the host's Chromium, headless, on a DevTools pipe, for one call (see browser-command.ts)."],
+  ["SERVICE_DRIVER", "service.py", "The session service's driver: the session's web server, relayed from a Unix socket the connector shares (see session-service.ts)."],
 ];
 
 export function embedded() {

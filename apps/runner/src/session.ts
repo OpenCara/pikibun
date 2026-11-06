@@ -2,6 +2,7 @@ import type { ExtensionToolOperation, HostCommandOperation } from "../../../pack
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readFile, rm } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { awaitWithContext, BACKGROUND_CONTEXT as context, type Context } from "@earendil-works/chord/context";
@@ -35,6 +36,12 @@ import type { BrowserToolchain } from "./browser-toolchain.js";
 import { browserActions, browserKeys, browserLimits, browserUnavailableReason, browserUnavailableText, parseBrowserReport, type BrowserRequest,
   type BrowserUnavailableReason, type HostBrowserStatus } from "../../../packages/shared/src/browser.js";
 import { ecosystemPrograms, ecosystemRequest, ecosystemShellCommand, ecosystemTools, type EcosystemRequest, type EcosystemTool } from "./ecosystem-command.js";
+import { tunnelActions, tunnelUnavailableReason, tunnelUnavailableText, type HostTunnelStatus, type SessionTunnelReport,
+  type TunnelUnavailableReason } from "../../../packages/shared/src/tunnel.js";
+import { tunnelRequest, type TunnelRequest } from "./tunnel-command.js";
+import { SessionTunnel } from "./session/tunnel.js";
+import { pinServiceSocket, serviceLimits, serviceShellCommand, serviceSocketDirectory } from "./session-service.js";
+import type { QuickTunnel } from "./tunnel-host.js";
 import { programLimits } from "./program-command.js";
 import { githubWaitLimits, githubWaits, waitForGitHub } from "./github-wait.js";
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
@@ -257,6 +264,14 @@ export type RunnerConfig = {
   browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
   /** How the connector's browser stands (HostBrowserSource): why a session has none, for its people and its agent. */
   browserStatus?: () => HostBrowserStatus | undefined;
+  /**
+   * The connector's quick tunnels (piki:tunnel, tunnel-host.ts): `open` points cloudflared, on the host, at a session
+   * service's socket, and `status` says how the host's cloudflared stands (HostTunnelSource). Without them, sessions have
+   * no tunnel tool.
+   */
+  tunnels?: { open(socket: string, signal?: AbortSignal): Promise<QuickTunnel>; status(): HostTunnelStatus | undefined };
+  /** Tells the control plane a session's tunnel started or stopped, for its audit log and the session list; connected runners only. */
+  reportTunnel?: (report: SessionTunnelReport) => Promise<void>;
   /** Owner-consented host mode: no isolation, so bash needs only per-command approval. */
   unsandboxed?: boolean;
   /**
@@ -475,6 +490,8 @@ export class RunnerSession {
    * configuration refresh (HostConfigSource, 30 seconds).
    */
   #configuredCompaction: HostCompaction | undefined;
+  /** The session's server online through its tunnel (piki:tunnel), made at its first start. */
+  #tunnel: SessionTunnel | undefined;
 
   constructor(readonly binding: RunnerBinding, readonly directory: string, readonly config: RunnerConfig) {
     if (binding.session.connectorId !== config.connectorId || binding.model.connectorId !== config.connectorId)
@@ -795,7 +812,8 @@ export class RunnerSession {
   }
 
   /** `off`: the session's own tools its workspace turned off (sessionToolsOff), which the instructions don't point to. */
-  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason): string {
+  private agentInstructions(mode: "write" | "ask" | "read", off: ReadonlySet<string> = new Set(), browserUnavailable?: BrowserUnavailableReason,
+    tunnelUnavailable?: TunnelUnavailableReason): string {
     let instructions = this.binding.agent.instructions;
     if (this.#clone && !this.#egress) {
       // An unsandboxed host: commands run on its owner's machine, with its own Git, network and credentials.
@@ -876,6 +894,15 @@ export class RunnerSession {
     // The workspace has the browser on, but this session can't run it: the agent says why rather than guessing.
     else if (mode !== "ask" && browserUnavailable) instructions += `\n\nThis session has no browser tool: ${browserUnavailableText(browserUnavailable)} `
       + "If you're asked to look at or test a web page, say so, and use what you have instead (fetching it, or running its tests).";
+    if (mode === "write" && this.tools.some(tool => tool.name === "tunnel") && !off.has("tunnel")) instructions += "\n\nTo put the web app you work on online "
+      + "at a public https:// address, so people can open it in a browser or on a phone, use the tunnel tool: "
+      + "tunnel {action: \"start\", serve: {program: \"pnpm\", args: [\"preview\", \"--port\", \"4173\"], directory: \"<name>\", port: 4173}} runs the server "
+      + "in the sandbox as a service that keeps running after the call, and answers with its address once Cloudflare gave it one. "
+      + "Have the server listen on that port on localhost and accept any Host header (Vite: --host and server.allowedHosts). "
+      + "Each start waits for the approval of the host's owner, and replaces the one online. tunnel {action: \"status\"} gives the address, "
+      + "whether it is connected and the server's last output; tunnel {action: \"stop\"} takes it offline. Stop it once it isn't needed.";
+    else if (mode === "write" && tunnelUnavailable) instructions += `\n\nThis session has no tunnel tool: ${tunnelUnavailableText(tunnelUnavailable)} `
+      + "If you're asked to put a web app online, say so.";
     if (mode === "ask") instructions += "\n\nThis is a read-only ask. Inspect isolated session files only; do not modify files, execute commands, or perform external effects.";
     if (mode === "read") instructions += "\n\nThis request is read-only. Inspect isolated session files; any change to files, command or other effect waits for the session owner to allow it.";
     return instructions;
@@ -1326,6 +1353,9 @@ export class RunnerSession {
     // offered to fail. Where the workspace has it on, the agent learns why it has none.
     const browserUnavailable = run.mode === "write" && !off.has("browser") ? this.browserUnavailable() : undefined;
     if (!this.sandbox.browser) off.add("browser");
+    // The tunnel likewise: only from the Linux sandbox, with cloudflared on the host.
+    const tunnelUnavailable = run.mode === "write" && !off.has("tunnel") ? this.tunnelUnavailable() : undefined;
+    if (!this.tunnelOffered()) off.add("tunnel");
     // Pi's built-in ones the host's configuration turns on, after the workspace's, unless one of those replaces them.
     const builtins = run.mode === "write" && this.#builtins
       ? this.#builtins.select((await this.hostConfig()).builtinExtensions, new Set(extensions.flatMap(item => item.tools.map(tool => tool.name)))).map(item => item.extension)
@@ -1338,7 +1368,7 @@ export class RunnerSession {
       ...(run.mode === "write" ? {
         tools: [...this.tools.filter(tool => !off.has(tool.name)), ...extensions.flatMap(extension => extension.tools), ...builtins.flatMap(extension => extension.tools ?? [])],
         extensions: [this.#extension, ...extensions.map(extension => extension.extension), ...builtins],
-        instructions: this.agentInstructions(access === "read" ? "read" : "write", off, browserUnavailable),
+        instructions: this.agentInstructions(access === "read" ? "read" : "write", off, browserUnavailable, tunnelUnavailable),
       } : {}),
     };
     if (Object.keys(change).length) await conversation.configure(change, context);
@@ -1396,6 +1426,64 @@ export class RunnerSession {
   }
 
   /**
+   * Why this session can't put a server online, if it can't: it runs on its host itself, in a sandbox other than Linux's,
+   * or its host's cloudflared is off, missing, downloading or failed to download (HostTunnelSource). A fixed reason, as
+   * the browser's. A runner no connector runs has no tunnels and says nothing.
+   */
+  private tunnelUnavailable(): TunnelUnavailableReason | undefined {
+    if (!this.config.tunnels) return undefined;
+    if (this.#onHost) return "on-host";
+    if (this.config.sandboxBackend || !(this.sandbox instanceof Sandbox)) return "sandbox";
+    const status = this.config.tunnels.status();
+    return status ? tunnelUnavailableReason(status.state) : "missing";
+  }
+
+  /** Whether this session offers the tunnel tool: the connector has tunnels, and nothing stands in the way. */
+  private tunnelOffered(): boolean {
+    return !!this.config.tunnels && this.tunnelUnavailable() === undefined;
+  }
+
+  /** The session's tunnel, made at its first use: its service in the session's Linux sandbox, its tunnel in the connector. */
+  private sessionTunnel(): SessionTunnel {
+    if (this.#tunnel) return this.#tunnel;
+    const sandbox = this.sandbox as Sandbox;
+    const tunnels = this.config.tunnels!;
+    const sockets = serviceSocketDirectory(this.binding.session.id, this.directory);
+    const report = this.config.reportTunnel;
+    this.#tunnel = new SessionTunnel({
+      startService: async (serve, onOutput, signal) => {
+        const config = await this.hostConfig();
+        return sandbox.startService(serviceShellCommand(serve, { nodeBin: sandbox.nodeBin }), async () => {}, {
+          limits: serviceLimits(config.serviceLifetimeSeconds, availableParallelism()),
+          // Its start was decided as a host command is, which is what lets it run without the limits this host may lack.
+          unbounded: true, gpu: config.gpu, socketDirectory: sockets, onOutput, signal });
+      },
+      // Never the shared directory's path, which the session could point elsewhere: the socket the service bound (pinServiceSocket).
+      openTunnel: async signal => tunnels.open(pinServiceSocket(sockets), signal),
+      lifetimeMs: async () => (await this.hostConfig()).serviceLifetimeSeconds * 1000,
+      report: async item => { await report?.({ sessionId: this.binding.session.id, ...item }); },
+      recheck: async actorId => { await this.authorize(actorId, "write"); },
+      changed: () => this.#activity?.changed(),
+    });
+    return this.#tunnel;
+  }
+
+  /**
+   * The panel's Stop button (`POST /api/sessions/:id/tunnel/stop`), and the control plane archiving the session: takes
+   * its server offline. Anyone who may write to the session, as stopping its work.
+   */
+  async tunnelAction(ticket: RunnerTicket, input: unknown): Promise<{ stopped: boolean; url?: string }> {
+    this.assertTicket(ticket);
+    if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => key !== "action" && key !== "reason")
+      || (input as { action?: unknown }).action !== "stop" || ![undefined, "archived"].includes((input as { reason?: unknown }).reason as string | undefined)) {
+      throw new RunnerError(400, "Invalid tunnel request");
+    }
+    await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    if (!this.#tunnel) return { stopped: false };
+    return this.#tunnel.stop((input as { reason?: string }).reason === "archived" ? "archived" : "stop", ticket.actorId);
+  }
+
+  /**
    * The session's own tools its workspace turned off, by turning off the Pikibun extension that offers them
    * (`sessionToolsOff`). None where the session has no workspace extensions, or can't learn them now: the tools stay on,
    * as they were before they became switchable. A fail-closed one (the shells) also stays off while the last answer this
@@ -1403,10 +1491,11 @@ export class RunnerSession {
    */
   private async sessionToolsOff(): Promise<Set<string>> {
     const config = this.config.extensions;
-    if (!config) return new Set();
+    // Opt-in tools (piki:tunnel) are off unless the workspace's answer turns them on.
+    if (!config) return sessionToolsOff([]);
     const workspaceId = this.binding.session.workspaceId;
     const answer = await config.workspace(workspaceId).catch(() => undefined);
-    const off = answer ? sessionToolsOff(answer.extensions) : new Set<string>();
+    const off = sessionToolsOff(answer?.extensions ?? []);
     const last = config.lastKnown?.(workspaceId);
     if (last) for (const tool of sessionToolsOff(last.extensions, { failClosedOnly: true })) off.add(tool);
     return off;
@@ -1898,6 +1987,8 @@ export class RunnerSession {
       return runs;
     });
     if (stopped.some(run => run.status !== "queued")) void this.abortStopped().catch(() => { /* Reopening aborts what is left (see resumeWork). */ });
+    // Stopping the session's work takes its server offline too: it was the work's.
+    if (this.#tunnel) await this.#tunnel.stop("session-stop", ticket.actorId);
     return { stopped: stopped.length };
   }
 
@@ -2347,6 +2438,68 @@ export class RunnerSession {
           const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call);
           return this.browserOutcome(approval, () => this.recheckTool(attribution), approvalText);
         } }),
+      // The session's server, online through a Cloudflare quick tunnel (piki:tunnel): a session service in its Linux
+      // sandbox, and cloudflared in the connector, on the host. Each start puts something online from the host's network,
+      // so it is an extension tool card, decided as a host command is and never run automatically; status and stop ask nothing.
+      defineTool({ name: "tunnel", description: "Put the web server you work on online at a public https:// address, through a Cloudflare quick tunnel (https://<name>.trycloudflare.com). "
+        + "start {serve: {program, args, directory?, venv?, port, timeout_seconds?}} runs the server in the session's sandbox as a service that keeps running after the call: "
+        + `one of the node and python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, `
+        + "listening on port on localhost; once the port answers (within timeout_seconds, 60 by default) cloudflared, on the host, puts it online, and the call answers with the address. "
+        + "A start replaces the one online. status gives the address, whether cloudflared is connected, the uptime and the server's last lines of output; stop takes it offline. "
+        + "It stays online until stopped, until someone stops the session's work, until the session closes or is archived, or for the host's service lifetime at most. "
+        + "Each start waits for the approval of the host's owner or a member granted host commands, never automatically, and isn't taken in a read-only request. "
+        + "Only the declared port is reachable through it, and it is public: anyone with the address can open it.",
+        executionMode: "sequential",
+        parameters: obj({
+          action: StringEnum(tunnelActions),
+          serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
+            directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
+            timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
+        }, { open: true }),
+        execute: async (args, api, call) => {
+          // Before anything is recorded for the call: one the workspace turned off (or never turned on) leaves nothing behind.
+          await this.requireSessionTool("tunnel");
+          let request: TunnelRequest;
+          try { request = tunnelRequest(args); }
+          catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid tunnel call"}. Nothing ran.`); }
+          if (request.action === "status") {
+            const attribution = await this.toolActor(api, false);
+            return text({ ...attribution, ...(this.#tunnel?.status() ?? { online: false }) });
+          }
+          const attribution = await this.toolActor(api, true);
+          if (request.action === "stop") {
+            // Taking it offline is never refused: it only ever narrows what the session exposes.
+            const stopped = this.#tunnel ? await this.#tunnel.stop("stop", attribution.initiatedBy) : { stopped: false };
+            return text({ ...attribution, ...stopped, ...(stopped.stopped ? {} : { note: "Nothing was online." }) });
+          }
+          const unavailable = this.tunnelUnavailable() ?? (this.config.tunnels ? undefined : "missing");
+          if (unavailable) throw new RunnerError(400, `This session can't put a server online: ${tunnelUnavailableText(unavailable)} Nothing ran.`);
+          const state = await this.metadata();
+          const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
+          if (run.options?.access === "read") {
+            throw new RunnerError(403, "Putting a server online is an effect a Read-only message doesn't take: ask in a message that may act. Nothing ran.");
+          }
+          const json = JSON.stringify({ action: "start", serve: request.serve });
+          const operation: ExtensionToolOperation = { kind: "extension.tool", source: "piki:tunnel", tool: "tunnel",
+            arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
+            digest: createHash("sha256").update(json).digest("hex") };
+          let approval = await this.createApproval(attribution.initiatedBy, operation, String(api.taskId), { permitted: true }, call.abortSignal);
+          if (approval.status === "pending") approval = await this.operationOutcome(approval, call);
+          if (approval.status === "denied") throw new RunnerError(403, "Putting the server online wasn't approved. Nothing ran.");
+          if (approval.status !== "approved") throw new RunnerError(409, approval.result ?? "The tunnel didn't start.");
+          const id = approval.id;
+          await this.mutate(meta => { const card = meta.approvals[id]; if (card?.status === "approved") card.status = "executing"; });
+          try {
+            await this.recheckTool(attribution);
+            const started = await this.sessionTunnel().start(request.serve!, attribution.initiatedBy, call.abortSignal);
+            await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.#waits.kept(id, `Online at ${started.url}`) }); });
+            return text({ ...attribution, ...started });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "failed", result: this.#waits.kept(id, message) }); }).catch(() => {});
+            throw new RunnerError(error instanceof RunnerError ? error.status : 409, message);
+          }
+        } }),
       // Rust, Go and .NET without a shell (piki:rust, piki:go, piki:dotnet, #163), decided as node's and python's are.
       // Not in the Windows sandbox, whose container reaches none of them, as python isn't.
       ...(process.platform === "win32" && this.sandbox.isolated ? [] : ecosystemTools.map(tool => this.ecosystemTool(tool))),
@@ -2708,6 +2861,9 @@ export class RunnerSession {
           || await this.hostCommandLevel(this.binding.owner.id, "write") === "auto");
       // An extension's tools the workspace runs automatically, where the host's owner lets it, run for every message.
       if (operation.kind === "extension.tool" && consent.automatic === true) automatic = true;
+      // Putting a server online (piki:tunnel) is always a person's decision: never under Auto-approve, automatic host
+      // commands or a workspace's automatic extension tools.
+      if (operation.kind === "extension.tool" && operation.source === "piki:tunnel") automatic = false;
       // Another member's sandboxed command, push, or GitHub comment or issue (requesterAutoApproves) runs without asking
       // while the session's owner auto-approves their requests, as the control plane reports it now; its brokers check
       // that again, with the message's admission, before a push or GitHub effect.
@@ -3097,6 +3253,7 @@ export class RunnerSession {
   }
 
   async view(): Promise<SessionView> {
+    const tunnel = this.#tunnel?.view();
     const initial = await this.metadata();
     const snapshots: { branch: Branch; entries: readonly EntryRecord[] }[] = [];
     // A shared conversation someone went back from stays on the host, out of the view: its fork shows what was kept.
@@ -3159,6 +3316,7 @@ export class RunnerSession {
         : sessionActivity(Object.values(state.runs).filter(tellsActivity), Object.values(state.approvals),
           activityEntry(snapshots.find(snapshot => snapshot.branch.mode === "write")?.entries.at(-1))),
       ...await this.extensionView(),
+      ...(tunnel ? { tunnel } : {}),
     };
   }
 
@@ -3188,8 +3346,11 @@ export class RunnerSession {
       // As the next message selects them: after the workspace's, which may replace one.
       const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
       // Pikibun's own the workspace has on that this session can't offer: the browser, without Chromium on the host, say.
-      const browserReason = sessionToolsOff(answer.extensions).has("browser") ? undefined : this.browserUnavailable();
-      const unavailable = browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : [];
+      const off = sessionToolsOff(answer.extensions);
+      const browserReason = off.has("browser") ? undefined : this.browserUnavailable();
+      const tunnelReason = off.has("tunnel") ? undefined : this.tunnelUnavailable();
+      const unavailable = [...(browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : []),
+        ...(tunnelReason ? [{ source: "piki:tunnel", tools: ["tunnel"], reason: tunnelReason }] : [])];
       return running.length || missing.length || builtin.length || missingRequired.length || unavailable.length
         ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}),
           ...(unavailable.length ? { unavailable } : {}) } } : {};
@@ -3318,6 +3479,10 @@ export class RunnerSession {
     this.#opened = false;
     this.#resumed = false;
     this.#activity?.stop();
+    // A closing session's server goes offline with it; the next open has none.
+    const tunnel = this.#tunnel;
+    this.#tunnel = undefined;
+    await tunnel?.close().catch(() => {});
     if (abortPushes) {
       // Aborted pushes still settle their approval (interrupted) and report completion before the harness closes.
       for (const push of this.pushes) push.controller.abort();

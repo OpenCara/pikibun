@@ -1,6 +1,6 @@
 import { builtinExtensions } from "./host-config.js";
 import { parseExtensionSourceSpec, type ExtensionToolMode, type InstalledExtension, type WorkspaceExtension } from "./host-extensions.js";
-import { pikiExtension, pikiSessionToolExtensions } from "./piki-extensions.js";
+import { pikiExtension, pikiSessionToolExtensions, sessionToolExtensionOn } from "./piki-extensions.js";
 
 /*
  * The tools a workspace's sessions can use, as its Extensions page lists them (docs/extensions.md): the session's own,
@@ -32,6 +32,7 @@ export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.
   dotnet: "Runs the .NET CLI in a clone, without a shell.",
   make: "Runs make in a clone, without a shell of its own; a Makefile's recipes are shell commands.",
   browser: "Drives a headless Chromium in the sandbox: opens a page, acts on it and sees it, serving the web app under test for the call.",
+  tunnel: "Puts the web server it works on online at a public address through a Cloudflare tunnel, each start approved as a host command is.",
   github_read: "Reads a GitHub issue or pull request, or waits for its checks or a change.",
   github_comment: "Comments on a GitHub issue or pull request, as the session owner.",
   github_issue: "Opens a GitHub issue, as the session owner.",
@@ -132,7 +133,7 @@ export function workspaceTools(extensions: readonly WorkspaceExtension[], instal
   const owners = new Map<string, string>();
   const own = pikiSessionToolExtensions().filter(item => !item.retired);
   for (const extension of [...own.filter(item => item.core), ...own.filter(item => !item.core)]) {
-    const on = extension.core || !extensions.some(item => item.source === extension.source && !item.enabled);
+    const on = sessionToolExtensionOn(extensions, extension.source);
     for (const name of extension.sessionTools ?? []) {
       if (owners.has(name)) continue;
       owners.set(name, extension.source);

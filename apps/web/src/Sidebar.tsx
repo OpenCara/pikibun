@@ -5,6 +5,7 @@ import { useDesktop } from "./desktop";
 import { Icon, Logo } from "./icons";
 import { NewWorkspaceSheet } from "./NewWorkspaceSheet";
 import { PullRequestTag } from "./pull-request";
+import { TunnelTag } from "./tunnel-tag";
 import { href, type Route } from "./router";
 import { sessionStatus } from "../../../packages/client/src/session-status";
 import { nestSessions } from "../../../packages/client/src/session-tree";
@@ -50,8 +51,9 @@ function WorkspaceGroup({ workspace, sessions, route, collapsed, toggle, onNavig
             <StatusDot tone={status.tone} icon={status.icon} label={status.label ? undefined : session.status} />
             <span className="label">
               <span className="title">{depth > 0 && <span className="muted" aria-label="Started by the session above">↳ </span>}{session.title}</span>
-              {(status.label || session.pullRequest || relation) && <span className="sub">
+              {(status.label || session.pullRequest || session.tunnel || relation) && <span className="sub">
                 {[status.label && <span key="status" className={`session-status ${status.tone}`}>{status.label}</span>,
+                  session.tunnel && <TunnelTag key="tunnel" tunnel={session.tunnel} />,
                   session.pullRequest && <PullRequestTag key="pull" pull={session.pullRequest} />,
                   relation].filter(Boolean).flatMap((item, index) => index ? [" · ", item] : [item])}
               </span>}
