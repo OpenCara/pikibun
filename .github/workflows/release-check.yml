@@ -31,7 +31,7 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
       previous-tag: ${{ steps.previous.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Tagged commit is on main

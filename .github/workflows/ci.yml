@@ -30,9 +30,9 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -48,7 +48,7 @@ jobs:
             --symlink usr/bin /bin --proc /proc --dev /dev -- /usr/bin/true
       - run: pnpm install --frozen-lockfile
       # The Native Shell CLI the client (apps/nsh) is built with, at the version scripts/nsh.mjs pins.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
