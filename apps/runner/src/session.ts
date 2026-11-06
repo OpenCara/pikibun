@@ -5,7 +5,8 @@ import { lstat, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { awaitWithContext, BACKGROUND_CONTEXT as context, type Context } from "@earendil-works/chord/context";
-import { getSupportedThinkingLevels, StringEnum, Type, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, StringEnum, type ClientIdentity, type Message, type Models } from "@earendil-works/pi-ai";
+import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, PermissionNeed, PermissionRequest, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, HostCommandLevel, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, ToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
@@ -99,7 +100,10 @@ export type Run = {
   failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure };
   /** Who stopped it (see stop); `pending` until its conversation's work has ended, which holds the queue. */
   stopped?: { by: string; pending?: true };
-  /** Pi parked its work after host crashes cut it off again and again, so it ended (see endParkedRuns). */
+  /**
+   * Host crashes ended it: Pi ended its work once they cut it off `restartLimit` times in a row (`restart_limit`), or
+   * cut off its model request with no retry left (`interrupted`). See observeRun.
+   */
   crashed?: true;
   /**
    * Extensions' input handlers are still to see it (see `screen`): it is queued, but neither it nor anything behind it
@@ -644,9 +648,9 @@ export class RunnerSession {
     catch (error) { await storage.close(context); throw error; }
     try {
       // Opening does not resume. Reject hidden pi work before committing any rebinding.
-      const graph = await harness.taskGraph(context);
+      const graph = await harness.watchTaskGraph(context);
       try { if (Object.keys(graph.value.tasks).length) throw new RunnerError(409, "Snapshot contains incomplete durable tasks"); }
-      finally { graph.dispose(); }
+      finally { await graph.stop(); }
       const root = await harness.root(context);
       await root.commit(async tx => {
         const doc = await tx.doc(RunnerState);
@@ -961,7 +965,7 @@ export class RunnerSession {
     catch (error) { await storage.close(context); throw error; }
     this.#failed = false;
     const harness = this.harness;
-    void harness.closed.then(end => { if (end.reason === "failed" && harness === this.harness) this.#failed = true; });
+    void harness.closed.then(end => { if (end.kind === "failed" && harness === this.harness) this.#failed = true; });
     this.root = await this.harness.root(context, { agent: {
       // A new conversation starts at the level the host's Pi gives this model, not pi-durable's "off".
       model: this.modelRef, ...(resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {}), extensions: [extension],
@@ -1020,7 +1024,6 @@ export class RunnerSession {
   /** Recovered runs, then the harness and the queue: at most once per open, and only once the repositories are ready. */
   private async resumeWork(): Promise<void> {
     this.#resumed = true;
-    await this.endParkedRuns();
     const state = await this.metadata();
     for (const run of Object.values(state.runs)) {
       if (run.status !== "running" && run.status !== "admitting") continue;
@@ -1055,29 +1058,6 @@ export class RunnerSession {
     await this.sweepInputs();
     this.harness.resume();
     this.drainQueue();
-  }
-
-  /**
-   * Ends the work Pi parked: host crashes cut each of these tasks off `restartLimit` times in a row, so Pi stopped
-   * running it rather than crash the host again. A parked task of a run's own work would hold the session for good:
-   * that run ends as a stop would, and says why; sending it again runs it afresh. Background work, such as an automatic
-   * compaction, belongs to no run and leaves the run alone. Every parked task is aborted, before the scheduler starts,
-   * so none stays parked into later opens.
-   */
-  private async endParkedRuns(): Promise<void> {
-    const tasks = (await this.harness.inspect(context)).tasks;
-    const parked = tasks.filter(task => task.state.kind === "blocked" && task.state.reason === "restart_limit").map(task => task.record);
-    if (!parked.length) return;
-    // A child task is background work when the task that owns it, or one above that, is.
-    const records = new Map(tasks.map(task => [String(task.record.id), task.record]));
-    const background = (record: (typeof parked)[number] | undefined): boolean => !!record && (record.background || (record.owner !== undefined && background(records.get(String(record.owner)))));
-    const conversations = new Set(parked.filter(record => !background(record)).map(record => Number(record.conversationId)));
-    const runs = Object.values((await this.metadata()).runs).filter(run => (run.status === "running" || run.status === "admitting") && conversations.has(run.conversationId));
-    for (const id of new Set(runs.map(run => run.conversationId))) await (await this.harness.conversation(id as ConversationId, context))?.abort(context);
-    if (runs.length) await this.mutate(meta => { for (const run of runs) Object.assign(meta.runs[run.key]!, { status: "interrupted", crashed: true }); });
-    // What those aborts did not end: background work, and work no running message holds. Its abort handler runs once
-    // the scheduler starts.
-    for (const record of parked) await this.harness.abortTask(record.id, context);
   }
 
   private openStorage(): Promise<Storage> {
@@ -1251,13 +1231,17 @@ export class RunnerSession {
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
       const failure: Run["failure"] = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model")
         ? { reason: compaction ? "compaction_failed" : settled.reason, ...(await conversation?.agent(context))?.model, ...(compaction ? { compaction } : {}) } : undefined;
+      // Pi ends a run that host crashes cut off again and again rather than crash the host once more; sending it again runs
+      // it afresh.
+      const crashed = settled.status === "unanswered" && (settled.reason === "restart_limit" || settled.reason === "interrupted");
       await this.exclusive(async () => {
         if (generation !== this.generation || this.closing) return;
         await this.mutate(meta => {
           const run = meta.runs[key]!;
           // A stopped run stays stopped, whatever its aborted submission came to.
           if (run.stopped) return;
-          run.status = "settled";
+          if (crashed) Object.assign(run, { status: "interrupted", crashed: true });
+          else run.status = "settled";
           if (failure) run.failure = failure;
         });
       });
@@ -2152,10 +2136,10 @@ export class RunnerSession {
 
   private clonePushTool(): ToolRegistration {
     const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first. Waits for an exact human approval unless the owner enabled auto-approve for this request.", parameters: Type.Object({
-      directory: Type.String(), branch: Type.String(), tag: Type.Optional(Type.String()),
-      pull_request: Type.Optional(Type.Object({ title: Type.String(), body: Type.String(), base: Type.Optional(Type.String()) })),
-    }), execute: async (args, api, call) => {
+    return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first. Waits for an exact human approval unless the owner enabled auto-approve for this request.", parameters: obj({
+      directory: str(), branch: str(), tag: opt(str()),
+      pull_request: opt(obj({ title: str(), body: str(), base: opt(str()) }, { open: true })),
+    }, { open: true }), execute: async (args, api, call) => {
       await this.requireSessionTool("git_push");
       const attribution = await this.toolActor(api, true);
       await this.permit(api, call, "git_push", args.tag === undefined ? `${args.directory} → ${args.branch}` : `${args.directory} → tag ${args.tag} on ${args.branch}`, { write: true });
@@ -2179,7 +2163,7 @@ export class RunnerSession {
     const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
     const approvalText = (approval: StoredApproval) => text({ ...approval, admissionId: undefined, callId: undefined });
     return [
-      defineTool({ name: "identity", description: "Return immutable session owner identity and sanitized session environment, not collaborator credentials.", parameters: Type.Object({}), execute: async (_args, api, call) => {
+      defineTool({ name: "identity", description: "Return immutable session owner identity and sanitized session environment, not collaborator credentials.", parameters: obj({}, { open: true }), execute: async (_args, api, call) => {
         const attribution = await this.toolActor(api, false);
         await this.permit(api, call, "identity", "");
         const config = await this.hostConfig();
@@ -2190,7 +2174,7 @@ export class RunnerSession {
         return text({ ...await this.sandbox.identity(() => this.recheckTool(attribution)), commands, ...attribution });
       } }),
       defineTool({ name: "read_file", description: "Read a confined worktree file. PNG, JPEG, GIF and WebP images are returned as images, scaled to fit. For a text file, offset (the first line, from 1) and limit (how many lines) read only part of it, and the result says which lines of how many it holds: use search to find where to look, then read around it.",
-        parameters: Type.Object({ path: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1 })) }), execute: async (args, api, call) => {
+        parameters: obj({ path: str(), offset: opt(int({ minimum: 1 })), limit: opt(int({ minimum: 1 })) }, { open: true }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
         await this.permit(api, call, "read_file", args.path);
         const file = await this.sandbox.readContent(args.path, () => this.recheckTool(attribution));
@@ -2204,15 +2188,15 @@ export class RunnerSession {
           { type: "image" as const, data: image.data, mimeType: image.mimeType },
         ] };
       } }),
-      defineTool({ name: "list_files", description: "List confined worktree files.", parameters: Type.Object({ path: Type.Optional(Type.String()) }), execute: async (args, api, call) => {
+      defineTool({ name: "list_files", description: "List confined worktree files.", parameters: obj({ path: opt(str()) }, { open: true }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
         await this.permit(api, call, "list_files", args.path ?? "");
         return text({ ...attribution, files: await this.sandbox.listFiles(args.path, () => this.recheckTool(attribution)) });
       } }),
       defineTool({ name: "search", description: "Search the worktree's text files for a regular expression (or, with literal, exact text), line by line, as grep -rn does, without a shell or approval. path narrows it to a directory or one file; glob to file names (*.ts) or paths (apps/**/*.ts); context adds up to 5 lines around each match; ignore_case; max_results (100 by default, at most 500). It skips .git directories as it walks, and node_modules unless all is true; links, binary and non-UTF-8 files and files over 1 MB are skipped. Results give each match's path, line number and text; truncated says it stopped early. Then read_file with offset and limit reads around a match.",
-        parameters: Type.Object({ pattern: Type.String(), path: Type.Optional(Type.String()), glob: Type.Optional(Type.String()), literal: Type.Optional(Type.Boolean()),
-          ignore_case: Type.Optional(Type.Boolean()), context: Type.Optional(Type.Integer({ minimum: 0, maximum: searchLimits.context })),
-          max_results: Type.Optional(Type.Integer({ minimum: 1, maximum: searchLimits.maxResults })), all: Type.Optional(Type.Boolean()) }),
+        parameters: obj({ pattern: str(), path: opt(str()), glob: opt(str()), literal: opt(bool()),
+          ignore_case: opt(bool()), context: opt(int({ minimum: 0, maximum: searchLimits.context })),
+          max_results: opt(int({ minimum: 1, maximum: searchLimits.maxResults })), all: opt(bool()) }, { open: true }),
         execute: async (args, api, call) => {
           let request: SearchRequest;
           try { request = searchRequest(args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid search"); }
@@ -2221,7 +2205,7 @@ export class RunnerSession {
           return text({ ...attribution, ...await this.sandbox.search(request, () => this.recheckTool(attribution)) });
         } }),
       // Writes run one at a time: a round with a write is sequential, so an edit never reads a file another call changes.
-      defineTool({ name: "write_file", description: "Write a confined worktree file. In a read-only request it waits for the session owner to allow it.", executionMode: "sequential", parameters: Type.Object({ path: Type.String(), content: Type.String() }), execute: async (args, api, call) => {
+      defineTool({ name: "write_file", description: "Write a confined worktree file. In a read-only request it waits for the session owner to allow it.", executionMode: "sequential", parameters: obj({ path: str(), content: str() }, { open: true }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
         await this.permit(api, call, "write_file", args.path, { write: true });
         await this.sandbox.writeFile(args.path, args.content, () => this.recheckTool(attribution));
@@ -2229,7 +2213,7 @@ export class RunnerSession {
       } }),
       defineTool({ name: "edit_file", executionMode: "sequential",
         description: "Edit a confined worktree text file by exact replacement, without rewriting it. Each edits[].oldText must occur exactly once in the file, including whitespace and line breaks; edits are matched against the file as it was, must not overlap, and apply together. In a read-only request it waits for the session owner to allow it.",
-        parameters: Type.Object({ path: Type.String(), edits: Type.Array(Type.Object({ oldText: Type.String(), newText: Type.String() }), { minItems: 1 }) }),
+        parameters: obj({ path: str(), edits: arr(obj({ oldText: str(), newText: str() }, { open: true }), { minItems: 1 }) }, { open: true }),
         execute: async (args, api, call) => {
           const attribution = await this.toolActor(api, true);
           await this.permit(api, call, "edit_file", args.path, { write: true });
@@ -2242,7 +2226,7 @@ export class RunnerSession {
         description: name === "move_file"
           ? "Move or rename a file, directory or link in the worktree, without a shell or approval (like write_file): from and to are worktree paths. A link is moved itself, never what it points to. The destination must not exist, its directories are made, and a directory can't go inside itself; nothing in .git is moved. In a read-only request it waits for the session owner to allow it."
           : `Copy a file, or a directory with everything in it, in the worktree, without a shell or approval (like write_file): from and to are worktree paths. Links are copied as links. The destination must not exist and its directories are made; at most ${fileOperationLimits.entries} entries and ${fileOperationLimits.bytes / 1024 / 1024} MB of files, never a repository's .git (clone it again instead). In a read-only request it waits for the session owner to allow it.`,
-        parameters: Type.Object({ from: Type.String(), to: Type.String() }),
+        parameters: obj({ from: str(), to: str() }, { open: true }),
         execute: async (args, api, call) => {
           let request: FileOperationRequest;
           try { request = fileOperationRequest(name === "move_file" ? "move" : "copy", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
@@ -2253,7 +2237,7 @@ export class RunnerSession {
         } })),
       defineTool({ name: "delete_file", executionMode: "sequential",
         description: "Delete a file, link or directory in the worktree, without a shell or approval (like write_file). A link is deleted itself, never what it points to. A directory with anything in it is deleted only with recursive: true, everything in it included. Never .git or the worktree itself. In a read-only request it waits for the session owner to allow it.",
-        parameters: Type.Object({ path: Type.String(), recursive: Type.Optional(Type.Boolean()) }),
+        parameters: obj({ path: str(), recursive: opt(bool()) }, { open: true }),
         execute: async (args, api, call) => {
           let request: FileOperationRequest;
           try { request = fileOperationRequest("delete", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
@@ -2266,7 +2250,7 @@ export class RunnerSession {
       // as bash's are; Git's configuration in a clone, which the agent can write, can run programs, so no call skips that.
       defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
-        parameters: Type.Object({ args: Type.Array(Type.String(), { minItems: 1, maxItems: gitLimits.arguments }), directory: Type.Optional(Type.String()) }),
+        parameters: obj({ args: arr(str(), { minItems: 1, maxItems: gitLimits.arguments }), directory: opt(str()) }, { open: true }),
         execute: async (args, api, call) => {
           // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
           await this.requireSessionTool("git");
@@ -2283,7 +2267,7 @@ export class RunnerSession {
       // scripts and whatever a script says.
       defineTool({ name: "node", description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
-        parameters: Type.Object({ program: StringEnum(nodePrograms), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()) }),
+        parameters: obj({ program: StringEnum(nodePrograms), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()) }, { open: true }),
         execute: async (args, api, call) => {
           // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
           await this.requireSessionTool("node");
@@ -2300,8 +2284,8 @@ export class RunnerSession {
       // Not in the Windows sandbox, whose container reaches no Python yet (review of #186).
       ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
-        parameters: Type.Object({ program: StringEnum(pythonPrograms), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()),
-          venv: Type.Optional(Type.String()) }),
+        parameters: obj({ program: StringEnum(pythonPrograms), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
+          venv: opt(str()) }, { open: true }),
         execute: async (args, api, call) => {
           // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
           await this.requireSessionTool("python");
@@ -2330,22 +2314,22 @@ export class RunnerSession {
         + "the page opens until the call ends. Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
         + "It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.",
         executionMode: "sequential",
-        parameters: Type.Object({
-          url: Type.Optional(Type.String()),
-          actions: Type.Optional(Type.Array(Type.Object({
+        parameters: obj({
+          url: opt(str()),
+          actions: opt(arr(obj({
             action: StringEnum(browserActions),
-            selector: Type.Optional(Type.String()), url: Type.Optional(Type.String()), text: Type.Optional(Type.String()),
-            key: Type.Optional(Type.String({ description: `${browserKeys.join(", ")}, or a single character` })), value: Type.Optional(Type.String()), expression: Type.Optional(Type.String()),
-            x: Type.Optional(Type.Integer()), y: Type.Optional(Type.Integer()), ms: Type.Optional(Type.Integer({ minimum: 0, maximum: browserLimits.waitMs })),
-            full_page: Type.Optional(Type.Boolean()), submit: Type.Optional(Type.Boolean()), clear: Type.Optional(Type.Boolean()),
-          }), { maxItems: browserLimits.actions })),
-          viewport: Type.Optional(Type.Object({ width: Type.Integer(), height: Type.Integer() })),
-          full_page: Type.Optional(Type.Boolean()),
-          timeout_seconds: Type.Optional(Type.Integer({ minimum: browserLimits.timeoutSeconds.min, maximum: browserLimits.timeoutSeconds.max })),
-          serve: Type.Optional(Type.Object({ program: StringEnum([...servePrograms]), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })),
-            directory: Type.Optional(Type.String()), venv: Type.Optional(Type.String()), port: Type.Integer({ minimum: 1, maximum: 65535 }),
-            timeout_seconds: Type.Optional(Type.Integer({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) })),
-        }),
+            selector: opt(str()), url: opt(str()), text: opt(str()),
+            key: opt(str({ description: `${browserKeys.join(", ")}, or a single character` })), value: opt(str()), expression: opt(str()),
+            x: opt(int()), y: opt(int()), ms: opt(int({ minimum: 0, maximum: browserLimits.waitMs })),
+            full_page: opt(bool()), submit: opt(bool()), clear: opt(bool()),
+          }, { open: true }), { maxItems: browserLimits.actions })),
+          viewport: opt(obj({ width: int(), height: int() }, { open: true })),
+          full_page: opt(bool()),
+          timeout_seconds: opt(int({ minimum: browserLimits.timeoutSeconds.min, maximum: browserLimits.timeoutSeconds.max })),
+          serve: opt(obj({ program: StringEnum([...servePrograms]), args: opt(arr(str(), { maxItems: programLimits.arguments })),
+            directory: opt(str()), venv: opt(str()), port: int({ minimum: 1, maximum: 65535 }),
+            timeout_seconds: opt(int({ minimum: browserLimits.serveSeconds.min, maximum: browserLimits.serveSeconds.max })) }, { open: true })),
+        }, { open: true }),
         execute: async (args, api, call) => {
           // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
           await this.requireSessionTool("browser");
@@ -2368,8 +2352,8 @@ export class RunnerSession {
       ...(process.platform === "win32" && this.sandbox.isolated ? [] : ecosystemTools.map(tool => this.ecosystemTool(tool))),
       defineTool({ name: "github_read", description: "Read a GitHub issue or pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through Pikibun: its description and comments and, for a pull request, its merge state, head commit, reviews, review comments and checks. Long threads keep their newest items. The sandbox has no network, so use this instead of gh or curl. Read-only; no credentials enter tools. "
         + `To wait for CI or a review instead of sleeping, pass wait: "checks" answers once every check of the head commit has completed (or the pull request is closed, or its head has no checks after ${githubWaitLimits.noChecksSeconds} seconds); "change" answers once anything changes: a comment, review, review comment, push, check or its state. It reads again every ${githubWaitLimits.pollSeconds} seconds for up to timeout_seconds (${githubWaitLimits.defaultSeconds} by default, at most ${githubWaitLimits.maxSeconds}), and its result's waited says how it ended (checks-completed, no-checks, changed, closed or timeout).`,
-        parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), wait: Type.Optional(StringEnum(githubWaits)),
-          timeout_seconds: Type.Optional(Type.Integer({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }), execute: async (args, api, call) => {
+        parameters: obj({ repository: str(), issue: int({ minimum: 1 }), wait: opt(StringEnum(githubWaits)),
+          timeout_seconds: opt(int({ minimum: githubWaitLimits.minSeconds, maximum: githubWaitLimits.maxSeconds })) }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("github_read");
         const attribution = await this.toolActor(api, false);
         const repository = this.githubRepository(args.repository);
@@ -2391,13 +2375,13 @@ export class RunnerSession {
           pollMs: this.config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000, now: Date.now, sleep: ms => sleep(ms, undefined, { signal: call.abortSignal }) });
         return text({ ...attribution, ...view, waited });
       } }),
-      defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), issue: Type.Integer({ minimum: 1 }), body: Type.String() }), execute: async (args, api, call) => {
+      defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("github_comment");
         const attribution = await this.toolActor(api, true);
         await this.permit(api, call, "github_comment", `${args.repository}#${args.issue}`, { write: true });
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.comment", ...args }, String(api.taskId), { permitted: true }), call));
       } }),
-      defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), pull: Type.Integer({ minimum: 1 }), sha: Type.String(), method: StringEnum(githubMergeMethods) }), execute: async (args, api, call) => {
+      defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase, once a human approves it, or at once under the owner's auto-approve. The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), pull: int({ minimum: 1 }), sha: str(), method: StringEnum(githubMergeMethods) }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("github_merge");
         const attribution = await this.toolActor(api, true);
         const repository = this.githubRepository(args.repository);
@@ -2405,7 +2389,7 @@ export class RunnerSession {
         await this.permit(api, call, "github_merge", `${repository}#${args.pull}`, { write: true });
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.merge", repository, pull: args.pull, sha: args.sha, method: args.method }, String(api.taskId), { permitted: true }), call));
       } }),
-      defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker once a human approves it, or at once under the owner's auto-approve. Use this instead of gh issue create: the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: Type.Object({ repository: Type.String(), title: Type.String(), body: Type.String() }), execute: async (args, api, call) => {
+      defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker once a human approves it, or at once under the owner's auto-approve. Use this instead of gh issue create: the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: obj({ repository: str(), title: str(), body: str() }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("github_issue");
         const attribution = await this.toolActor(api, true);
         const repository = this.githubRepository(args.repository);
@@ -2415,7 +2399,7 @@ export class RunnerSession {
         await this.permit(api, call, "github_issue", `${repository}: ${args.title}`, { write: true });
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.issue", repository, title: args.title, body: args.body }, String(api.taskId), { permitted: true }), call));
       } }),
-      defineTool({ name: "source_read", description: "Read one of the workspace's document sources (source, its id as the instructions list it: Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark or Tencent Docs) as the session owner, through Pikibun: a page or document as text (Markdown where the provider gives it), a folder, database or wiki page as the items in it. Pass item (an id or link from an earlier result) to read an item under that source; others are refused. Long content is cut and marked truncated. Read-only; no credentials enter tools.", parameters: Type.Object({ source: Type.String(), item: Type.Optional(Type.String()) }), execute: async (args, api, call) => {
+      defineTool({ name: "source_read", description: "Read one of the workspace's document sources (source, its id as the instructions list it: Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark or Tencent Docs) as the session owner, through Pikibun: a page or document as text (Markdown where the provider gives it), a folder, database or wiki page as the items in it. Pass item (an id or link from an earlier result) to read an item under that source; others are refused. Long content is cut and marked truncated. Read-only; no credentials enter tools.", parameters: obj({ source: str(), item: opt(str()) }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("source_read");
         const attribution = await this.toolActor(api, false);
         if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(args.source)) throw new RunnerError(400, "source must be a source id, as the instructions list it");
@@ -2433,10 +2417,10 @@ export class RunnerSession {
         const view = this.config.sourceRead ? await this.config.sourceRead(request) : await this.internalBroker("sources/read", request) as SourceReadView;
         return text({ ...attribution, ...view });
       } }),
-      defineTool({ name: "schedule", description: "Manage this session's scheduled prompts: messages Pikibun sends this session's agent on a cron schedule, as the session owner, so the session wakes up and works on its own (a nightly check, a weekly report). Use it when the user asks to do something every hour, day or week, or at a later time. action list takes nothing; create takes message (what the agent is told each time) and cron (five fields: minute hour day-of-month month day-of-week, such as '0 9 * * 1-5'; runs at least 5 minutes apart), and optionally name, time_zone (IANA, such as Europe/Berlin; UTC otherwise, so ask the user for theirs when the time of day matters), access (approval, the default: commands wait for a human; read; auto, only in a message the owner sent with auto-approve) and enabled; update takes id and only the fields to change (an auto-approved schedule is changed, other than paused or lowered in access, only in a message the owner sent with auto-approve); delete takes id. Only the session owner's messages can use it. A run due while the agent is busy is skipped. The owner sees and edits them in the session panel's Schedules tab.", parameters: Type.Object({
-        action: StringEnum(scheduleToolActions), id: Type.Optional(Type.String()), message: Type.Optional(Type.String()), cron: Type.Optional(Type.String()),
-        time_zone: Type.Optional(Type.String()), name: Type.Optional(Type.String()), access: Type.Optional(StringEnum(accessModes)), enabled: Type.Optional(Type.Boolean()),
-      }), execute: async (args, api, call) => {
+      defineTool({ name: "schedule", description: "Manage this session's scheduled prompts: messages Pikibun sends this session's agent on a cron schedule, as the session owner, so the session wakes up and works on its own (a nightly check, a weekly report). Use it when the user asks to do something every hour, day or week, or at a later time. action list takes nothing; create takes message (what the agent is told each time) and cron (five fields: minute hour day-of-month month day-of-week, such as '0 9 * * 1-5'; runs at least 5 minutes apart), and optionally name, time_zone (IANA, such as Europe/Berlin; UTC otherwise, so ask the user for theirs when the time of day matters), access (approval, the default: commands wait for a human; read; auto, only in a message the owner sent with auto-approve) and enabled; update takes id and only the fields to change (an auto-approved schedule is changed, other than paused or lowered in access, only in a message the owner sent with auto-approve); delete takes id. Only the session owner's messages can use it. A run due while the agent is busy is skipped. The owner sees and edits them in the session panel's Schedules tab.", parameters: obj({
+        action: StringEnum(scheduleToolActions), id: opt(str()), message: opt(str()), cron: opt(str()),
+        time_zone: opt(str()), name: opt(str()), access: opt(StringEnum(accessModes)), enabled: opt(bool()),
+      }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("schedule");
         const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ scheduleId: args.id, name: args.name, cron: args.cron, timeZone: args.time_zone, content: args.message,
@@ -2460,13 +2444,13 @@ export class RunnerSession {
       } }),
       defineTool({ name: "sessions", description: SESSIONS_TOOL_DESCRIPTION,
         // One call at a time: each counts against its message's sends and its session's new sessions.
-        executionMode: "sequential", parameters: Type.Object({
-        action: StringEnum(sessionsToolActions), session: Type.Optional(Type.String()), message: Type.Optional(Type.String()),
-        access: Type.Optional(StringEnum(accessModes)), notify: Type.Optional(Type.Boolean()), title: Type.Optional(Type.String()), model: Type.Optional(Type.String()),
-        thinking: Type.Optional(StringEnum(thinkingLevels)), visibility: Type.Optional(StringEnum(["private", "workspace"] as const)), message_id: Type.Optional(Type.String()),
-        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.readEntries })),
-        timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
-      }), execute: async (args, api, call) => {
+        executionMode: "sequential", parameters: obj({
+        action: StringEnum(sessionsToolActions), session: opt(str()), message: opt(str()),
+        access: opt(StringEnum(accessModes)), notify: opt(bool()), title: opt(str()), model: opt(str()),
+        thinking: opt(StringEnum(thinkingLevels)), visibility: opt(StringEnum(["private", "workspace"] as const)), message_id: opt(str()),
+        limit: opt(int({ minimum: 1, maximum: crossSessionLimits.readEntries })),
+        timeout_seconds: opt(int({ minimum: 1, maximum: crossSessionLimits.waitSeconds })),
+      }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("sessions");
         const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ targetSessionId: args.session, message: args.message, access: args.access, notify: args.notify, title: args.title,
@@ -2566,7 +2550,7 @@ export class RunnerSession {
       + "It runs exactly that program there, as the approval card shows it: each call is approved as a command is, waiting for a human unless the owner enabled auto-approve for this request. "
       + "Commands that act on a package registry as an account are refused: sessions have none.",
       executionMode: "sequential",
-      parameters: Type.Object({ program: StringEnum(programs), args: Type.Optional(Type.Array(Type.String(), { maxItems: programLimits.arguments })), directory: Type.Optional(Type.String()) }),
+      parameters: obj({ program: StringEnum(programs), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()) }, { open: true }),
       execute: async (args, api, call) => {
         // Before anything is recorded for the call: one the workspace turned off, or refused, leaves nothing behind.
         await this.requireSessionTool(tool);
@@ -2972,10 +2956,9 @@ export class RunnerSession {
     const match = /^(\d{1,15}):(\d{1,15})$/.exec(entryId);
     if (!match) throw new RunnerError(400, "Invalid message");
     if (Number(match[1]) !== Number(conversation.id)) throw new RunnerError(409, "That message is no longer in the shared conversation; reload it");
-    const watch = await conversation.watch(context);
-    let entries: readonly EntryRecord[];
-    try { entries = watch.value.entries; }
-    finally { await watch.stop(); }
+    // The active transcript, as the model sees it: from the newest head marker on. (A watch's view holds only a window of
+    // the newest entries, from before the head marker too.)
+    const { entries } = await conversation.context(context);
     const index = entries.findIndex(entry => entry.id === Number(match[2]));
     if (index < 0) throw new RunnerError(409, "That message is no longer in the shared conversation; reload it");
     const entry = entries[index]!;
@@ -3120,9 +3103,9 @@ export class RunnerSession {
     for (const branch of initial.branches.filter(item => !item.superseded)) {
       const conversation = await this.harness.conversation(branch.id as ConversationId, context);
       if (!conversation) continue;
-      const watch = await conversation.watch(context);
-      try { snapshots.push({ branch, entries: watch.value.entries }); }
-      finally { await watch.stop(); }
+      // The active transcript, from the newest head marker (a compaction's summary) on, as the model sees it. A watch's
+      // view would hold only a window of the newest entries.
+      snapshots.push({ branch, entries: (await conversation.context(context)).entries });
     }
     // Every admission is committed before its entries: read attribution after transcript snapshots.
     const state = await this.metadata();

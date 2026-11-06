@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import { obj } from "@earendil-works/pi-schema";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
@@ -37,7 +37,7 @@ test("a script's VM stops once it has computed too long, while time its calls ta
   const builtins = new SessionBuiltins({ computeLimitMs: 400,
     outputs: async () => ({ writeFile: async (path, content) => { files.set(path, content); } }) });
   t.after(() => builtins.close());
-  const slow = defineTool({ name: "slow", description: "Waits a second.", parameters: Type.Object({}),
+  const slow = defineTool({ name: "slow", description: "Waits a second.", parameters: obj({}, { open: true }),
     execute: async () => { await delay(1000); return { output: [{ type: "text", text: "slow done" }] }; } });
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   const respond: FauxResponseFactory = async request => {
