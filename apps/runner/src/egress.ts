@@ -172,6 +172,19 @@ export function publicAddress(address: string): boolean {
   return !blocked.check(address, "ipv6");
 }
 
+const fakeIp = new BlockList();
+fakeIp.addSubnet("198.18.0.0", 15, "ipv4");
+/**
+ * Whether an address is in RFC 2544's benchmarking network (198.18.0.0/15), which is never routed on the internet and
+ * where the fake-IP DNS of local proxies (Clash, mihomo, sing-box, Surge, a TUN mode) answers for every name they route:
+ * the host connects there and the proxy passes the connection on to the name it answered for.
+ */
+export function fakeIpAddress(address: string): boolean {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  const plain = mapped ? mapped[1]! : address;
+  return isIP(plain) === 4 && fakeIp.check(plain, "ipv4");
+}
+
 /** `host[:port]` of a CONNECT request, with a lowercase host and IPv6 brackets removed. */
 function authority(value: string | undefined): { host: string; port: number } | undefined {
   const match = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]{1,253}):(\d{1,5})$/.exec(value ?? "");

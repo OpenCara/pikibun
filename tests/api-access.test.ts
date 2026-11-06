@@ -398,3 +398,21 @@ test("GraphQL mutations count wherever they stand, commas and all: none reaches 
     headers: { authorization: `Bearer ${API_TOKEN_PLACEHOLDER}`, "content-type": "application/json" } });
   assert.equal(read.status, 200, "a field or string named mutation is still a read");
 });
+
+test("the API's upstream takes public addresses and a local proxy's fake-IP ones, never the host's networks", async () => {
+  const { upstreamAddresses } = await import("../apps/runner/src/api-access.js");
+  const answer = (...addresses: string[]) => async () => addresses.map(address => ({ address, family: address.includes(":") ? 6 : 4 }));
+  assert.deepEqual(await upstreamAddresses("api.github.com", answer("140.82.112.6")), [{ address: "140.82.112.6", family: 4 }]);
+  // Clash, sing-box and Surge answer from 198.18.0.0/15 for the names they route, and pass the connection on.
+  assert.deepEqual(await upstreamAddresses("api.github.com", answer("198.18.0.1")), [{ address: "198.18.0.1", family: 4 }]);
+  assert.deepEqual(await upstreamAddresses("gitlab.com", answer("::ffff:198.19.255.254")), [{ address: "::ffff:198.19.255.254", family: 6 }]);
+  // Just past the benchmarking network is the internet again.
+  assert.equal((await upstreamAddresses("api.github.com", answer("198.20.0.1"))).length, 1);
+  for (const address of ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "fd00::1"]) {
+    await assert.rejects(upstreamAddresses("api.github.com", answer(address)), /does not resolve to a public address \(it resolves to/);
+  }
+  // A name that resolves to both is refused whole, and an address given as the host is never a fake-IP one.
+  await assert.rejects(upstreamAddresses("api.github.com", answer("198.18.0.1", "10.0.0.1")), /public address/);
+  await assert.rejects(upstreamAddresses("198.18.0.1"), /public address/);
+  await assert.rejects(upstreamAddresses("api.github.com", async () => { throw new Error("ENOTFOUND"); }), /does not resolve to a public address$/);
+});
