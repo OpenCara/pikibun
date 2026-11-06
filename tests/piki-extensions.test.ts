@@ -74,7 +74,8 @@ test('every connector has its Pikibun extensions: each command-line one offers o
     if (item.summary.source === 'piki:prompt-audit') {
       // No tool: it checks each message on Pi's input event, with its settings.
       assert.deepEqual([module!.tools, module!.events, module!.noops, module!.ignored], [[], ['input'], [], []]);
-      assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['audit', 'string', 'others'], ['model', 'string', ''], ['policy', 'string', '']]);
+      assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['audit', 'string', 'others'], ['model', 'string', ''],
+        ['audit-model', 'string', ''], ['policy', 'string', '']]);
       continue;
     }
     assert.deepEqual(module!.tools.map(tool => tool.name), [pikiExtension(item.summary.source)!.tool]);

@@ -412,7 +412,9 @@ test("the API's upstream takes public addresses and a local proxy's fake-IP ones
     await assert.rejects(upstreamAddresses("api.github.com", answer(address)), /does not resolve to a public address \(it resolves to/);
   }
   // A name that resolves to both is refused whole, and an address given as the host is never a fake-IP one.
-  await assert.rejects(upstreamAddresses("api.github.com", answer("198.18.0.1", "10.0.0.1")), /public address/);
+  await assert.rejects(upstreamAddresses("api.github.com", answer("198.18.0.1", "10.0.0.1")), /resolves to 10\.0\.0\.1 on this host/);
+  // The error names the address it refused, not the first one.
+  await assert.rejects(upstreamAddresses("api.github.com", answer("140.82.112.6", "192.168.1.1")), /resolves to 192\.168\.1\.1 on this host/);
   await assert.rejects(upstreamAddresses("198.18.0.1"), /public address/);
   await assert.rejects(upstreamAddresses("api.github.com", async () => { throw new Error("ENOTFOUND"); }), /does not resolve to a public address$/);
 });

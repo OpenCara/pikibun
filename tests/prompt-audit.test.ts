@@ -147,6 +147,10 @@ test("piki:prompt-audit can audit every message, uses the session's model withou
   assert.equal(audits.at(-1)!.model, "vision", "the session's model, without one of its own");
   const missing = await extensions(t, root, [loaded], models, { model: "test/gone" });
   assert.deepEqual(await missing.session.input(sources, "Fix the tests", [], "rpc"), { action: "refused", by: "piki:prompt-audit", notice: AUDIT_UNAVAILABLE });
+  // audit-model, plain Pi's way to name it (its own --model sets the agent's), comes before model.
+  const named = await extensions(t, root, [loaded], models, { model: "test/gone", "audit-model": "test/audit-1" });
+  assert.equal((await named.session.input(sources, "Fix the tests", [], "rpc")).action, "continue");
+  assert.equal(audits.at(-1)!.model, "audit-1");
   const failing = await extensions(t, root, [loaded], registry(() => new Error("rate limited")).registry, { model: "test/audit-1" });
   assert.deepEqual(await failing.session.input(sources, "Fix the tests", [], "rpc"), { action: "refused", by: "piki:prompt-audit", notice: AUDIT_UNAVAILABLE });
 });
@@ -355,7 +359,8 @@ test("the prompt audit is a Pi package of its own: Pi's loader finds it through 
   assert.equal(summary.modules.length, 1);
   assert.equal(summary.modules[0]!.error, undefined);
   assert.deepEqual(summary.modules[0]!.events, ["input"]);
-  assert.deepEqual(summary.modules[0]!.flags.map(flag => flag.name), ["audit", "model", "policy"]);
+  // audit-model: plain Pi's command line keeps --model for the agent's own model.
+  assert.deepEqual(summary.modules[0]!.flags.map(flag => flag.name), ["audit", "model", "audit-model", "policy"]);
   assert.deepEqual(summary.modules[0]!.tools, []);
 });
 

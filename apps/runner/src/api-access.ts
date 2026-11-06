@@ -195,8 +195,9 @@ export async function upstreamAddresses(host: string, lookup: (host: string) => 
   try { addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await lookup(host); }
   catch { addresses = []; }
   const usable = (address: string) => publicAddress(address) || (!isIP(host) && fakeIpAddress(address));
-  if (!addresses.length || addresses.some(entry => !usable(entry.address))) {
-    throw new RunnerError(502, `${host.slice(0, 253)} does not resolve to a public address${addresses.length ? ` (it resolves to ${addresses[0]!.address} on this host)` : ""}`);
+  const unusable = addresses.find(entry => !usable(entry.address));
+  if (!addresses.length || unusable) {
+    throw new RunnerError(502, `${host.slice(0, 253)} does not resolve to a public address${unusable ? ` (it resolves to ${unusable.address} on this host)` : ""}`);
   }
   return addresses.slice(0, 8);
 }

@@ -19,7 +19,8 @@ Its settings are Pi flags:
 | Flag | Default | What it does |
 |---|---|---|
 | `audit` | `others` | `others` audits messages that don't come from the person at the terminal (RPC clients, other extensions); `all` audits every message |
-| `model` | the session's | The auditor's model, as `provider/modelId` |
+| `audit-model` | the session's | The auditor's model, as `provider/modelId` (`--audit-model`: Pi's own `--model` sets the agent's model) |
+| `model` | the session's | The same, as Pikibun's host settings name it; `audit-model` comes first |
 | `policy` | none | The owner's own rules, in words, added to the auditor's instructions |
 
 ## In Pikibun
