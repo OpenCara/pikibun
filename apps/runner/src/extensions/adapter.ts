@@ -354,6 +354,18 @@ function contextActions(host: ExtensionHost): ExtensionContextActions {
   };
 }
 
+/**
+ * The diagnostic codes of the error results pi-durable writes itself, for calls that never ran or were cut off: a tool
+ * that doesn't resolve, invalid arguments, a block, an interruption, the restart limit, an abort. Its afterTool hooks
+ * run on those too (pi-durable 1.5); Pi never gives such a call to its extensions' tool_result handlers.
+ */
+const HARNESS_RESULT_CODES = new Set(["tool_unavailable", "invalid_arguments", "blocked", "interrupted", "restart_limit", "aborted", "abandoned"]);
+
+/** Whether pi-durable wrote `result` itself (see HARNESS_RESULT_CODES), rather than the tool. */
+export function harnessResult(result: ToolExecutionResult): boolean {
+  return result.isError === true && (result.diagnostics ?? []).some(diagnostic => diagnostic.severity === "error" && HARNESS_RESULT_CODES.has(diagnostic.code ?? ""));
+}
+
 function toResult(result: AgentToolResult<unknown>): ToolExecutionResult {
   const content = Array.isArray(result?.content) ? result.content.filter(part => part && (part.type === "text" || part.type === "image")) : [];
   return { output: content, ...(result?.details !== undefined && isJsonValue(result.details) ? { details: result.details } : {}) };
@@ -393,11 +405,15 @@ function build(source: string, dev: boolean, runner: ExtensionRunner, offered: S
   const hooks: HookRegistration[] = [];
   const has = (...events: string[]) => events.some(event => runner.hasHandlers(event));
   if (has("tool_call", "tool_result", "tool_execution_start", "tool_execution_end")) {
+    // The calls this source was told started (tool_execution_start), so it is told each one's end once, and never of an
+    // end it wasn't told the start of.
+    const started = new Set<string>();
     hooks.push(hook(ToolTask, {
       // A tool_call handler that throws blocks the call (pi-durable's rule, and Pi's), so a broken guard never lets
       // through what it would have stopped.
       beforeTool: async call => {
         if (!(await active())) return undefined;
+        started.add(call.id);
         await quiet("tool_execution_start", () => runner.emit({ type: "tool_execution_start", toolCallId: call.id, toolName: call.name, args: call.arguments }));
         if (!runner.hasHandlers("tool_call")) return undefined;
         const input = structuredClone(call.arguments) as Record<string, unknown>;
@@ -406,8 +422,18 @@ function build(source: string, dev: boolean, runner: ExtensionRunner, offered: S
         return JSON.stringify(input) === JSON.stringify(call.arguments) ? undefined : { arguments: input as never };
       },
       afterTool: async (call, result) => {
+        const began = started.delete(call.id);
         if (!(await active())) return undefined;
         const content = (result.output ?? []) as (TextContent | ImageContent)[];
+        // A result pi-durable wrote itself, for a call that never ran (unknown, invalid, blocked) or was cut off: as in Pi,
+        // tool_result handlers never see it, and tool_execution_end comes only after the tool_execution_start it ends.
+        if (harnessResult(result)) {
+          // Its output is empty or partial; what went wrong is in its diagnostics, as Pi's own error results say it.
+          const errors = (result.diagnostics ?? []).filter(diagnostic => diagnostic.severity === "error").map(diagnostic => ({ type: "text" as const, text: diagnostic.message }));
+          if (began) await quiet("tool_execution_end", () => runner.emit({ type: "tool_execution_end", toolCallId: call.id, toolName: call.name,
+            result: [...content, ...errors], isError: true }));
+          return undefined;
+        }
         let replaced: ToolExecutionResult | undefined;
         if (runner.hasHandlers("tool_result")) {
           try {
