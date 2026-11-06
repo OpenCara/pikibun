@@ -11,6 +11,8 @@ import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../
 import { decryptToken, encryptToken } from '../vault.js';
 import { requireCallbackScope } from '../hosts.js';
 import { requireToolCall } from '../approval-reviews.js';
+import { workspaceExtensions } from '../extension-policy.js';
+import { documentKindsOff, documentSourceExtensionOf } from '../../../../../packages/shared/src/piki-extensions.js';
 import { fit, type DocumentAdapter } from './document-http.js';
 import { notionAdapter } from './notion.js';
 import { googleDriveAdapter } from './google-drive.js';
@@ -129,6 +131,12 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
     await requireToolCall(c.env, access.row, 'source_read', { id: callId, requestedBy: actorId, admission, target: item === null ? sourceId : `${sourceId}: ${item}` });
     const source = await c.env.DB.query<DocumentSourceRow>(`${documentSourceSelect} WHERE d.source_id = ? AND d.workspace_id = ?`).bind(sourceId, access.row.workspace_id).first();
     if (!source) fail(404, 'source_not_found', 'This workspace has no such source, or it is a repository (clone those with Git).');
+    // Each kind of source has its own switch (piki:notion, ...): one the workspace turned off isn't read, whichever
+    // connector asks, older ones that offer source_read for every kind included. Checked again after the read.
+    if (documentKindsOff(await workspaceExtensions(c.env, access.row.workspace_id)).has(source.kind)) {
+      fail(403, 'source_kind_off', `Reading ${documentKindNames[source.kind]} sources is turned off in this workspace (${documentSourceExtensionOf(source.kind)?.source ?? 'its extension'}). `
+        + 'Its owners and admins turn it on under Settings → Workspaces → Extensions.');
+    }
     return { row: access.row, source };
   };
   const { row, source } = await authorize();

@@ -48,7 +48,12 @@ Pikibun's own tools are becoming extensions, one by one ([#163](https://github.c
 | `piki:browser` | `browser` |
 | `piki:tunnel` | `tunnel`: off until turned on |
 | `piki:github` | `github_read`, `github_comment`, `github_issue`, `github_merge` |
-| `piki:sources` | `source_read` |
+| `piki:notion` | `source_read`, for Notion sources |
+| `piki:google-drive` | `source_read`, for Google Drive sources |
+| `piki:dropbox` | `source_read`, for Dropbox sources |
+| `piki:onedrive` | `source_read`, for OneDrive / SharePoint sources |
+| `piki:feishu` | `source_read`, for Feishu / Lark sources |
+| `piki:tencent-docs` | `source_read`, for Tencent Docs sources |
 | `piki:sessions` | `sessions` |
 | `piki:files` | `identity`, `list_files`, `read_file`, `search`, `write_file`, `edit_file`, `move_file`, `copy_file`, `delete_file`: always on |
 
@@ -63,8 +68,10 @@ Pikibun's own tools are becoming extensions, one by one ([#163](https://github.c
 - **`make` runs make.** The `make` tool runs `make` with its arguments as a list, in a clone, as the others run their programs. It refuses nothing: a Makefile's recipes are shell commands the project wrote (or the agent did), which the card's `make` stands for, as `npm test` does for a package's scripts, so approve it as you would the recipes. It is the system's make, or GNU make from Homebrew in `/usr/local/bin`; not in the Windows sandbox.
 - **`browser` to see a web page.** The `browser` tool drives a headless Chromium in the session's sandbox; see [The browser](#the-browser-pikibrowser).
 - **`tunnel` to put a web app online.** The `tunnel` tool runs the session's web server in its sandbox and puts it online at a public address; see [The tunnel](#the-tunnel-pikitunnel).
-- **The brokered tools and the file tools.** `piki:github`, `piki:sources` and `piki:sessions` switch the tools that act as the session owner through Pikibun, and `piki:git` switches `git_push` with `git`. `piki:files` holds the tools every session needs to read and write its files: it is always on, and turning it off is refused.
+- **The brokered tools and the file tools.** `piki:github`, the document-source extensions and `piki:sessions` switch the tools that act as the session owner through Pikibun, and `piki:git` switches `git_push` with `git`. `piki:files` holds the tools every session needs to read and write its files: it is always on, and turning it off is refused.
+- **One per kind of document source.** `piki:notion`, `piki:google-drive`, `piki:dropbox`, `piki:onedrive`, `piki:feishu` and `piki:tencent-docs` each switch `source_read` for their kind: sessions offer `source_read` while any of them is on, and list and read only the sources of the kinds that are on. They replace `piki:sources`, which switched every kind at once: a workspace that turned it off has each kind off until it turns that kind on. Hosts on connectors from before the split have only `piki:sources`, which is on there while any kind is on.
 - **No place taken.** They don't count towards a workspace's 32 extensions.
+- **Defined by Pikibun, not by the connector.** `node`, `rust`, `go`, `dotnet`, `make` and `source_read` are described by the server as data, and connectors run them with their own engine, so tools of these kinds that Pikibun adds reach hosts as soon as the server has them, without a connector update. Their switches work the same way. See [the design](design/tool-definitions.md).
 
 ## The browser: piki:browser
 

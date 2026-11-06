@@ -7,7 +7,7 @@ import type { Database, Query } from "../../apps/server/src/db/types.js";
 import type { ConnectorHub } from "../../apps/server/src/connector-hub-types.js";
 import type { ConnectorRelayEnvelope } from "../../apps/server/src/connector-transport.js";
 import type { ObjectMetadata, ObjectStorage, StoredObject } from "../../apps/server/src/storage/types.js";
-import type { AgentVersion, ToolName } from "../../packages/shared/src/types.js";
+import type { AgentVersion, AnyToolName } from "../../packages/shared/src/types.js";
 
 export interface TestDatabase {
   /** The provider handed to `Env.DB`; every `query()` call is observed. */
@@ -103,7 +103,7 @@ export function fakeHub(options: FakeHubOptions = {}): FakeHub {
 export interface SeededAgent {
   authorId: string;
   modelId: string;
-  tools: readonly ToolName[];
+  tools: readonly AnyToolName[];
   /** Set for a version published to that workspace. */
   workspaceId?: string | null;
   instructions?: string;

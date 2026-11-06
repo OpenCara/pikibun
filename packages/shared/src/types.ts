@@ -23,6 +23,13 @@ export type SessionRole = (typeof sessionRoles)[number];
 export const toolNames = ["identity", "list_files", "read_file", "write_file", "edit_file", "git_status", "git_commit", "bash", "github_read", "github_comment", "github_merge", "git_push", "git_repin", "host_bash", "github_issue", "schedule", "sessions", "web_fetch", "web_search", "source_read", "search", "git", "node", "move_file", "copy_file", "delete_file", "python", "rust", "go", "dotnet", "make", "browser"] as const;
 export type ToolName = (typeof toolNames)[number];
 /**
+ * A tool's name in an agent, a permission or a program operation: one of Pikibun's own (`toolNames`), or one the
+ * control plane defines as data (tool-definitions.ts), which this version may not know by name.
+ */
+export type AnyToolName = ToolName | (string & {});
+/** The names a tool defined as data may have (tool-definitions.ts), as operations and permissions carry them. */
+export const definedToolNamePattern = /^[a-z][a-z0-9_]{0,63}$/;
+/**
  * Tools no session offers any more, still valid in stored agents and approvals: those of sessions that pinned their
  * repositories (the agent uses the git tool), the web tools, which extensions provide now
  * (docs/design/host-extensions.md), and the shells, bash and host_bash (#163). An extension may name a tool like a
@@ -88,7 +95,7 @@ export interface AgentVersion {
   name: string;
   description: string;
   instructions: string;
-  tools: ToolName[];
+  tools: AnyToolName[];
   modelId: string;
   createdAt: string;
 }
@@ -363,7 +370,7 @@ export type PermissionNeed = (typeof permissionNeeds)[number];
  */
 export interface PermissionRequest {
   kind: "permission";
-  tool: ToolName;
+  tool: AnyToolName;
   target: string;
   /** In `permissionNeeds` order. */
   needs: PermissionNeed[];
@@ -425,7 +432,8 @@ export type ProgramToolName = (typeof programToolNames)[number];
 /** One call of a program tool: the exact command it runs (program-command.ts), as its card shows it. Key order: kind, tool, command. */
 export interface ProgramOperation {
   kind: "program";
-  tool: ProgramToolName;
+  /** One of `programToolNames`, or a program tool defined as data (tool-definitions.ts). */
+  tool: ProgramToolName | (string & {});
   command: string;
 }
 /** Runs outside isolation as the connector user; only the host owner, or a member they granted host commands to, may approve. */

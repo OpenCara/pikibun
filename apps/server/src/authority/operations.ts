@@ -1,9 +1,19 @@
-import { programToolNames, type ProgramToolName } from '../../../../packages/shared/src/types.js';
+import { programToolNames } from '../../../../packages/shared/src/types.js';
+import { bundledToolDefinitions } from '../../../../packages/shared/src/tool-definitions.js';
 import { validExtensionToolOperation, validHostOperation } from '../../../../packages/shared/src/host-operations.js';
-import type { GitHubMergeMethod, Operation, PermissionNeed, PullRequestRequest, ToolName } from '../../../../packages/shared/src/types.js';
+import type { GitHubMergeMethod, Operation, PermissionNeed, PullRequestRequest } from '../../../../packages/shared/src/types.js';
 import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, githubMergeMethods, permissionNeeds, toolNames } from '../../../../packages/shared/src/types.js';
 import { validCloneDirectory, validPushBranch, validPushTag } from '../../../../packages/shared/src/repositories.js';
 import { fail, text } from '../http.js';
+
+/**
+ * The program tools a call may name: Pikibun's own, and those this server defines as data (tool-definitions.ts) and
+ * serves to connectors. A definition is never taken back by name, so a call of a tool a connector read from this server
+ * before is still one of these.
+ */
+const programTools: ReadonlySet<string> = new Set([...programToolNames, ...bundledToolDefinitions.filter(item => item.kind === 'program').map(item => item.name)]);
+/** The tools a permission request may name: Pikibun's own, and every tool this server defines as data. */
+const knownTools: ReadonlySet<string> = new Set([...toolNames, ...bundledToolDefinitions.map(item => item.name)]);
 
 /** A pinned repository's worktree path, as produced by repositoryPath(): 2-64 safe segments. */
 export function validRepositoryPath(value: unknown): value is string {
@@ -53,8 +63,8 @@ export function parseOperation(input: unknown): Operation {
     case 'git.commit': return { kind: value.kind, message: text(value.message, 'commit message', 4000) };
     case 'bash': return { kind: value.kind, command: text(value.command, 'command', 8192) };
     case 'program':
-      if (Object.keys(value).length !== 3 || !(programToolNames as readonly unknown[]).includes(value.tool)) fail(400, 'invalid_operation', 'Unknown program tool.');
-      return { kind: value.kind, tool: value.tool as ProgramToolName, command: text(value.command, 'command', 8192) };
+      if (Object.keys(value).length !== 3 || typeof value.tool !== 'string' || !programTools.has(value.tool)) fail(400, 'invalid_operation', 'Unknown program tool.');
+      return { kind: value.kind, tool: value.tool, command: text(value.command, 'command', 8192) };
     case 'github.comment':
       return { kind: value.kind, repository: githubRepositoryName(value.repository), issue: issueNumber(value.issue), body: text(value.body, 'comment body', 60000) };
     case 'github.merge': {
@@ -86,12 +96,12 @@ export function parseOperation(input: unknown): Operation {
     }
     case 'permission': {
       const needs = value.needs;
-      if (!toolNames.includes(value.tool as ToolName)) fail(400, 'invalid_operation', 'Unknown tool.');
+      if (typeof value.tool !== 'string' || !knownTools.has(value.tool)) fail(400, 'invalid_operation', 'Unknown tool.');
       // Unique and in permissionNeeds order, so equal requests hash equally.
       if (!Array.isArray(needs) || !needs.length || needs.join() !== permissionNeeds.filter(need => needs.includes(need)).join()) {
         fail(400, 'invalid_operation', 'Invalid permission needs.');
       }
-      return { kind: value.kind, tool: value.tool as ToolName, target: text(value.target, 'target', 8192, 0), needs: [...needs] as PermissionNeed[] };
+      return { kind: value.kind, tool: value.tool, target: text(value.target, 'target', 8192, 0), needs: [...needs] as PermissionNeed[] };
     }
     default: fail(400, 'invalid_operation', 'Unsupported operation.');
   }

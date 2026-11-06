@@ -2,7 +2,8 @@ import { validExtensionToolOperation, validHostOperation } from "../../../packag
 import { sha256, verifyToken } from "../../../packages/shared/src/crypto.js";
 import { validateUserEnv } from "../../../packages/shared/src/policy.js";
 import type { RunnerAction, RunnerBinding, RunnerTicket, Operation, Permission } from "../../../packages/shared/src/types.js";
-import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, githubMergeMethods, permissionNeeds, toolNames, programToolNames } from "../../../packages/shared/src/types.js";
+import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, definedToolNamePattern, githubMergeMethods, permissionNeeds, toolNames, programToolNames } from "../../../packages/shared/src/types.js";
+import { knownDefinedProgramTool } from "./defined-tools.js";
 import { gitProviderHosts, gitProviders, repositoryLimits, repositoryPath, validCloneDirectory, validGitHost, validPushBranch, validPushTag, validRepositoryId, validRepositoryName, type SessionRepository, type TokenGitProvider } from "../../../packages/shared/src/repositories.js";
 import { validSessionBranch } from "../../../packages/shared/src/git-push.js";
 
@@ -117,7 +118,10 @@ export function validateOperation(value: unknown): Operation {
   const text = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !v.includes("\0");
   if (op.kind === "git.commit" && text(op.message, 4000) && Object.keys(op).length === 2) return op;
   if (op.kind === "bash" && text(op.command, 8192) && Object.keys(op).length === 2) return op;
-  if (op.kind === "program" && (programToolNames as readonly string[]).includes(op.tool) && text(op.command, 8192) && Object.keys(op).length === 3) {
+  // Pikibun's own program tools, and those defined as data this connector knows (tool-definitions.ts): the control plane
+  // decides whether the session may use it.
+  if (op.kind === "program" && typeof op.tool === "string" && ((programToolNames as readonly string[]).includes(op.tool) || knownDefinedProgramTool(op.tool))
+    && text(op.command, 8192) && Object.keys(op).length === 3) {
     return { kind: op.kind, tool: op.tool, command: op.command };
   }
   const githubRepository = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/.test(value) && !value.endsWith("/.") && !value.endsWith("/..");
@@ -148,7 +152,8 @@ export function validateOperation(value: unknown): Operation {
   if (op.kind === "permission") {
     const keys = Object.keys(op);
     // Needs are unique and in permissionNeeds order, so equal requests hash equally.
-    if (keys.length === 4 && keys.every(key => ["kind", "tool", "target", "needs"].includes(key)) && toolNames.includes(op.tool)
+    if (keys.length === 4 && keys.every(key => ["kind", "tool", "target", "needs"].includes(key)) && typeof op.tool === "string"
+      && ((toolNames as readonly string[]).includes(op.tool) || definedToolNamePattern.test(op.tool))
       && typeof op.target === "string" && op.target.length <= 8192 && !op.target.includes("\0") && Array.isArray(op.needs) && op.needs.length > 0
       && op.needs.join() === permissionNeeds.filter(need => op.needs.includes(need)).join()) return op;
   }

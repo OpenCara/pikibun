@@ -4,7 +4,7 @@
  * version, and, in its host owner's own sessions, the host's dev extensions (installed from a local path).
  */
 
-import { pikiSessionToolExtensions } from "./piki-extensions.js";
+import { pikiExtension, pikiSessionToolExtensions } from "./piki-extensions.js";
 import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
 import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 
@@ -172,9 +172,9 @@ export const extensionLimits = Object.freeze({
   workspace: 32,
   installed: 64,
   /**
-   * Pikibun extensions a connector reports besides what it installed (piki-extensions.ts): 17 with the ecosystem tools
-   * (#163), room for more. A control plane from before takes 16, so it refuses only a report that also holds all 64
-   * installed extensions.
+   * Pikibun extensions a connector reports besides what it installed (piki-extensions.ts): 25 with one per kind of
+   * document source, room for more. A control plane from before takes 64 + 16 entries in all, so it refuses only a
+   * report that also holds more than 55 installed extensions.
    */
   connector: 32,
   modulesPerSource: 16,
@@ -226,9 +226,13 @@ export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
  */
 export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {
   const sessionTools = pikiSessionToolExtensions().map(item => item.source as string);
-  if (!Array.isArray(value) || value.length > extensionLimits.workspace + sessionTools.length) throw new Error("Invalid extensions");
+  // Every switch this version knows, and as many more as a connector reports (a newer control plane's), besides the 32.
+  if (!Array.isArray(value) || value.length > extensionLimits.workspace + sessionTools.length + extensionLimits.connector) throw new Error("Invalid extensions");
   const extensions = value.map(parseWorkspaceExtension);
-  if (extensions.filter(extension => !sessionTools.includes(extension.source)).length > extensionLimits.workspace) throw new Error("Invalid extensions");
+  // A Pikibun extension this version doesn't know takes no place either: a newer control plane sends the switches of
+  // the extensions its tool definitions name (tool-definitions.ts), and counts its places itself.
+  const placed = extensions.filter(extension => !sessionTools.includes(extension.source) && !(isPikiExtensionSource(extension.source) && !pikiExtension(extension.source)));
+  if (placed.length > extensionLimits.workspace) throw new Error("Invalid extensions");
   const keys = extensions.map(extension => extensionPackageKey(extension.source));
   if (new Set(keys).size !== keys.length) throw new Error("A workspace uses one version of each extension");
   return extensions;

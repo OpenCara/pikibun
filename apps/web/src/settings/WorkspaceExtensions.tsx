@@ -153,12 +153,16 @@ export function WorkspaceExtensions({ workspace, userId }: { workspace: Workspac
   }
   /**
    * Turns a session-tool extension's tools on or off: off is a disabled entry, on removes it (on is what a workspace that
-   * never chose has). An opt-in one (piki:tunnel) the other way round: on is an enabled entry, off removes it.
+   * never chose has), unless the workspace turned off the retired one it replaces (piki:sources), whose choice an
+   * extension it doesn't list follows: then on is an enabled entry. An opt-in one (piki:tunnel) the other way round: on
+   * is an enabled entry, off removes it.
    */
   function switchSessionTools(source: string, on: boolean) {
-    const optIn = pikiExtension(source)?.optIn === true;
+    const extension = pikiExtension(source);
+    const replaced = !!extension?.replaces && !!data?.extensions.some(item => item.source === extension.replaces && !item.enabled);
+    const remove = extension?.optIn ? !on : on && !replaced;
     void action.run(async () => {
-      const saved = on !== optIn
+      const saved = remove
         ? await api<{ extensions: WorkspaceExtension[] }>(`${path}?source=${encodeURIComponent(source)}`, { method: "DELETE" })
         : await api<{ extensions: WorkspaceExtension[] }>(path, { method: "PUT", body: { source, enabled: on, tools: "approval", settings: {} } });
       resource.setData(current => current && { ...current, ...saved });

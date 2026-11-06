@@ -251,7 +251,8 @@ export class RunnerService {
       throw new RunnerError(403, "Only the immutable owner can restore a session");
     const authority = new RunnerSession(binding, join(this.dataDir, "sessions", id), this.config);
     await authority.authorize(ticket.actorId, "manage", ticket.policyVersion);
-    await restoreSession({ dataDir: this.dataDir, readBackup: (descriptor, target) => this.pullBackup(descriptor, target) },
+    await restoreSession({ dataDir: this.dataDir, readBackup: (descriptor, target) => this.pullBackup(descriptor, target),
+      ...(this.config.toolDefinitions ? { toolDefinitions: this.config.toolDefinitions } : {}) },
       binding, input.restore, async (stage, manifest, options) => {
         if (this.closed) throw new RunnerError(503, "Runner service is closed");
         await authority.authorize(ticket.actorId, "manage", ticket.policyVersion);

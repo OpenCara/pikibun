@@ -8,7 +8,8 @@ import { z } from "zod";
 import type { ConnectorCapabilities, ConnectorCredentials, ConnectorRpcRequest, ConnectorRpcResponse, LocalModelSummary, RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { connectorLimits, connectorRequestTimeoutMs } from "../../../packages/shared/src/connector.js";
 import { sha256, signToken } from "../../../packages/shared/src/crypto.js";
-import { documentItemTypes, documentKinds, type SourceReadView } from "../../../packages/shared/src/sources.js";
+import { ToolDefinitionsSource } from "./tool-definitions-source.js";
+import { bundledToolDefinitions } from "../../../packages/shared/src/tool-definitions.js";
 import type { AuthorizationRequest, AuthorizationResult, GitHubEffectAuthority, GitHubIssueView, RunnerAction, RunnerBinding, ScheduleToolResult, SessionActivity, SessionBranch } from "../../../packages/shared/src/types.js";
 import type { SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import { MAX_CLONE_BRANCHES } from "./clone-branches.js";
@@ -44,6 +45,12 @@ const EXTENSION_SYNC_MS = 30_000;
 const WORKSPACE_EXTENSIONS_LIMIT = 1024 * 1024;
 /** A github_read result; the control plane keeps its view within 96 KiB of JSON. */
 const GITHUB_READ_LIMIT = 128 * 1024;
+/** A brokered tool's result (tool-definitions.ts), such as source_read's, which the control plane keeps within 96 KiB of JSON. */
+const BROKERED_LIMIT = 1024 * 1024;
+/** The control plane's tool definitions: at most 64, each within a few KB. */
+const TOOL_DEFINITIONS_LIMIT = 1024 * 1024;
+/** A brokered tool's route, as its definition names it (tool-definitions.ts). */
+const BROKERED_ROUTE = /^[a-z0-9-]+(?:\/[a-z0-9-]+){0,3}$/;
 /**
  * The host's configuration, as large as the control plane saves it: compaction counts for 200 models with the longest
  * names take about 67 KB (the save takes 128 KiB).
@@ -422,6 +429,8 @@ export class LocalConnector {
   private readonly repositoryCaches = new Map<Exclude<RepositoryCacheMode, "off">, RepositoryCache>();
   private readonly gpu?: GpuKind;
   private hostExtensions?: HostExtensions;
+  /** The control plane's tool definitions, as sessions read them (tool-definitions.ts). */
+  private toolDefinitionsSource?: ToolDefinitionsSource;
 
   constructor(private readonly options: ConnectorOptions) {
     this.ready = this.readiness.promise;
@@ -726,8 +735,10 @@ export class LocalConnector {
   private runnerExtensions(extensions: HostExtensions): NonNullable<RunnerConfig["extensions"]> {
     return {
       installed: () => extensions.loaded,
+      // `toolDefinitions`: this connector takes the switches of the extensions tool definitions name, which it may not know
+      // by name (a control plane that predates them reads only workspaceId).
       workspace: workspaceId => extensions.workspace(workspaceId, async () =>
-        this.callback(await this.connection(), "/api/connectors/self/extensions/workspace", { workspaceId }, WORKSPACE_EXTENSIONS_LIMIT)),
+        this.callback(await this.connection(), "/api/connectors/self/extensions/workspace", { workspaceId, toolDefinitions: true }, WORKSPACE_EXTENSIONS_LIMIT)),
       lastKnown: workspaceId => extensions.lastKnown(workspaceId),
       ...(this.options.localModels.modelRegistry ? { modelRegistry: this.options.localModels.modelRegistry } : {}),
     };
@@ -774,10 +785,17 @@ export class LocalConnector {
         z.looseObject({ repository: z.string(), number: z.number().int().positive(), title: z.string(), comments: z.array(z.unknown()) }).parse(view);
         return view as GitHubIssueView;
       },
-      sourceRead: async request => {
-        const view = await this.brokerCallback(await this.connection(), "/api/connectors/self/sources/read", request, GITHUB_READ_LIMIT);
-        z.looseObject({ source: z.string(), kind: z.enum(documentKinds), id: z.string(), type: z.enum(documentItemTypes), title: z.string(), truncated: z.boolean() }).parse(view);
-        return view as SourceReadView;
+      // Tools defined as data: as the control plane defines them, asked once a minute; the bundled ones where it can't say.
+      toolDefinitions: async () => {
+        this.toolDefinitionsSource ??= new ToolDefinitionsSource(async () =>
+          this.callback(await this.connection(), "/api/connectors/self/tools", {}, TOOL_DEFINITIONS_LIMIT));
+        return await this.toolDefinitionsSource.get() ?? bundledToolDefinitions;
+      },
+      // A brokered tool's call (source_read ...) goes to its route as this connector's own; the control plane's refusal
+      // comes back with its reason, and its answer is a JSON object.
+      brokered: async (route, request) => {
+        if (!BROKERED_ROUTE.test(route)) throw new RunnerError(400, "Invalid brokered tool route");
+        return z.looseObject({}).parse(await this.brokerCallback(await this.connection(), `/api/connectors/self/${route}`, request, BROKERED_LIMIT));
       },
       githubMerge: async request => {
         const payload = {
