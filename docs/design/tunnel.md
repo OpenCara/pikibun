@@ -91,7 +91,7 @@ quick tunnel that the connector runs on the host.
 | Session services: lifetime, output, the driver's command | `apps/runner/src/session-service.ts`; `sandbox.ts` (`startService`); `sandbox-python/service.py` (`SERVICE_DRIVER`) |
 | A session's tunnel: start, replace, stop, reports | `apps/runner/src/session/tunnel.ts`; `session.ts` (the `tunnel` tool, `tunnelAction`, `stop`, `close`) |
 | cloudflared: found, at a path, downloaded; quick tunnels and forwarding | `apps/runner/src/cloudflared.ts`, `tunnel-host.ts`; `connector.ts` |
-| Host configuration | `packages/shared/src/host-config.ts` (`serviceLifetimeSeconds`, `tunnel`); `apps/server/src/host-config.ts`; migrations `0052` (SQLite) and `0045` (Postgres) |
+| Host configuration | `packages/shared/src/host-config.ts` (`serviceLifetimeSeconds`, `tunnel`); `apps/server/src/host-config.ts`; migrations `0053` (SQLite) and `0046` (Postgres) |
 | Reports, audit, the session list's mark, Stop | `apps/server/src/session-tunnels.ts`; `sessions.ts` (archive) |
 | The apps | `apps/web/src/session-panel.tsx` (`TunnelSection`), `tunnel-tag.tsx`, `settings/HostExtensions.tsx` (`TunnelSetup`), `settings/HostConfig.tsx`, `settings/WorkspaceExtensions.tsx` |
 | Tests | `tests/tunnel.test.ts` (with a stand-in cloudflared, `tests/helpers/fake-cloudflared.ts`), `runner-tunnel.test.ts`, `session-tunnels.test.ts` |

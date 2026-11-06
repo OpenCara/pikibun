@@ -11,6 +11,7 @@ import type { ConnectorCapabilities, ConnectorInfo, ConnectorPairing, LocalModel
 import { gpuKinds, type GpuKind } from '../../../packages/shared/src/host-config.js';
 import { sessionActivities, thinkingLevels, type SessionActivity, type ThinkingLevel } from '../../../packages/shared/src/types.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
+import { CONNECTOR_VERSION_HEADER, validVersion } from '../../../packages/shared/src/version.js';
 import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
 import type { Query } from './db/types.js';
 import { appOrigin, fail, id, identifier, jsonObject, now, randomToken, requireOrigin, testMode, text } from './http.js';
@@ -182,7 +183,7 @@ async function connectorInfo(env: Env, row: ConnectorInfoRow, viewer?: InfoViewe
   const hostSessions = (owner || authority?.sessions === true) && !row.revoked_at && config?.hostSessions === true
     && hostSessionsSupported(capabilities, !owner);
   return { id: row.id, ownerId: row.owner_id, ownerName, name: row.name,
-    createdAt: row.created_at, revokedAt: row.revoked_at, online, models,
+    createdAt: row.created_at, revokedAt: row.revoked_at, online, models, ...(row.connector_version ? { version: row.connector_version } : {}),
     workspaceIds: workspaceIds.filter(visible), connectedWorkspaceIds: connectedWorkspaceIds.filter(visible), capabilities,
     ...(viewer?.role ? { role: viewer.role, admins, hostGrants, disabledModels, config } : {}), ...(hostCommandAccess ? { hostCommandAccess } : {}),
     ...(hostSessions ? { hostSessions: true as const } : {}) };
@@ -304,9 +305,12 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
     const input = await jsonObject(c, 128 * 1024);
     onlyFields(input, ['models', 'capabilities']);
     const manifest = withHostToolCapabilities(input, base => parseManifest(base, c.env));
-    const updated = await c.env.DB.query<ConnectorRow>(`UPDATE connectors SET models_json = ?, capabilities_json = ? WHERE id = ?
+    // The version it names (a header, which servers before it ignore), recorded at every connection: one that names none,
+    // or one that isn't a version, clears an earlier one, so the host's page never shows a version it no longer runs.
+    const version = validVersion(c.req.header(CONNECTOR_VERSION_HEADER)) ?? null;
+    const updated = await c.env.DB.query<ConnectorRow>(`UPDATE connectors SET models_json = ?, capabilities_json = ?, connector_version = ? WHERE id = ?
       AND revoked_at IS NULL AND connection_hash = ? RETURNING *`)
-      .bind(JSON.stringify(manifest.models), JSON.stringify(manifest.capabilities), row.id, row.connection_hash).first();
+      .bind(JSON.stringify(manifest.models), JSON.stringify(manifest.capabilities), version, row.id, row.connection_hash).first();
     if (!updated) fail(401, 'stale_connection', 'Connection has been replaced.');
     await syncModels(c.env, updated, null);
     return c.json({ ok: true });
@@ -456,7 +460,7 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
     // Keep a revoked tombstone for immutable session and model bindings.
     await c.env.DB.batch([
       c.env.DB.query(`UPDATE connectors SET removed_at = ?, revoked_at = COALESCE(revoked_at, ?),
-        connection_hash = NULL, credential_hash = ?, name = 'Removed host', models_json = '[]', capabilities_json = '{}'
+        connection_hash = NULL, credential_hash = ?, name = 'Removed host', models_json = '[]', capabilities_json = '{}', connector_version = NULL
         WHERE id = ?`).bind(timestamp, timestamp, await sha256(randomToken()), row.id),
       c.env.DB.query('DELETE FROM connector_shares WHERE connector_id = ?').bind(row.id),
       c.env.DB.query('DELETE FROM connector_workspaces WHERE connector_id = ?').bind(row.id),

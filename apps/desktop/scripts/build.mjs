@@ -11,6 +11,10 @@ const out = join(root, "dist", "app");
 const hostOut = join(root, "dist", "host");
 rmSync(out, { recursive: true, force: true });
 rmSync(hostOut, { recursive: true, force: true });
+// The version the connector host reports to the control plane and the local server in /api/health
+// (packages/shared/src/version.ts): the app's, which the Release workflow sets from the tag before building, marked as the
+// desktop app's since its versions aren't the CLI's.
+const version = `desktop ${JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version}`;
 
 const node = { bundle: true, platform: "node", format: "cjs", target: "node24", external: ["electron"], sourcemap: "linked", logLevel: "info" };
 await Promise.all([
@@ -32,6 +36,7 @@ await Promise.all([
     bundle: true, splitting: true, platform: "node", format: "esm", target: "node24", packages: "external", logLevel: "info",
     entryPoints: { "desktop-host": join(root, "../runner/src/desktop-host.ts"), "desktop-server": join(root, "../server/src/local/desktop.ts") },
     outdir: hostOut, chunkNames: "chunks/[name]-[hash]", outExtension: { ".js": ".mjs" },
+    define: { __PIKIBUN_VERSION__: JSON.stringify(version) },
   }),
 ]);
 mkdirSync(join(out, "renderer"), { recursive: true });

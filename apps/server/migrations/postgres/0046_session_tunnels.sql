@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0052_session_tunnels.sql.
+-- Postgres translation of sqlite/0053_session_tunnels.sql.
 
 -- Session services and tunnels (piki:tunnel; docs/design/tunnel.md).
 -- The longest a session service runs on a host (HostConfig.serviceLifetimeSeconds in packages/shared/src/host-config.ts),

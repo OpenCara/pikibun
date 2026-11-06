@@ -14,6 +14,11 @@ export interface Env {
   /** Reaches the databases workspace owners connect for their session backups; absent unless the operator enabled them. */
   WORKSPACE_DATABASES?: WorkspaceDatabaseProvider;
   APP_ORIGIN: string;
+  /**
+   * The release this server is, which /api/health reports: the image's (the Dockerfile sets it from its build argument),
+   * else the bundle's own (buildVersion, in the CLI's and the desktop app's local server). Absent in development.
+   */
+  PIKIBUN_VERSION?: string;
   RUNNER_URL?: string;
   RUNNER_EVENT_TRANSPORT?: string;
   RUNNER_SHARED_SECRET?: string;
