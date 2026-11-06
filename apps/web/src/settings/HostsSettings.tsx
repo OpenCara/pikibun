@@ -14,6 +14,7 @@ import { HostCompactionSection } from "./HostCompaction";
 import { HostConfigSection } from "./HostConfig";
 import { HostExtensionsSection } from "./HostExtensions";
 import { check, desktopBridge } from "../desktop";
+import { olderThanServer, useServerVersion } from "../server-version";
 import "./settings.css";
 
 const hostsInfo = <>
@@ -229,6 +230,7 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
         {owner && !connector.online && <Row title={connector.revokedAt ? "Pair again" : "Reconnect host"} hint={connector.revokedAt ? "Revoked credentials cannot be reused; create a new pairing" : "Restart the saved connection on your host machine"}
           trailing={<Button variant="outline" size="sm" disabled={revokeAction.busy} onClick={() => connector.revokedAt ? setPairing(true) : setReconnecting(true)}>{connector.revokedAt ? "Pair again" : "Reconnect"}</Button>} />}
         <Row title="Owner" trailing={connector.ownerName} />
+        <ConnectorVersionRow connector={connector} />
         <Row title="Paired" trailing={<Timestamp value={connector.createdAt} />} />
         {connector.revokedAt && <Row title="Revoked" trailing={<Timestamp value={connector.revokedAt} />} />}
       </div>
@@ -280,6 +282,16 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
 }
 
 /** The models Pi on the host offers; its owner and admins choose which of them it offers to sessions. */
+/** The version its connector reported when it last connected, and whether it is older than this server's. */
+function ConnectorVersionRow({ connector }: { connector: ConnectorInfo }) {
+  const server = useServerVersion();
+  const update = "npx pikibun@latest connect";
+  const hint = !connector.version ? `Connectors from 0.23 and older don't report it. Update with ${update}`
+    : olderThanServer(connector.version, server) ? `Older than this server's ${server}. Update with ${update}`
+    : undefined;
+  return <Row title="Connector" hint={hint} trailing={connector.version ?? "Not reported"} />;
+}
+
 function ModelsSection({ connector, refresh }: { connector: ConnectorInfo; refresh: () => void }) {
   const action = useAction();
   const disabled = new Set((connector.disabledModels ?? []).map(modelKey));

@@ -375,6 +375,8 @@ type FixtureOptions = {
   extensionsSync?: (body: unknown) => Response | Promise<Response>;
   /** How the host's browser is found; none unless given, whatever this machine has. */
   browser?: NonNullable<Parameters<typeof createConnector>[0]['browser']>;
+  /** The version it reports; none unless given, as an unbundled (development) build reports none. */
+  version?: string;
 };
 
 async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
@@ -393,6 +395,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
   const connector = createConnector({
     dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
+    ...(options.version ? { version: options.version } : {}),
     browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
     acquireLease: path => {
       assert.equal(path, dataDir);
@@ -587,6 +590,18 @@ test('a host configured in Pikibun uses its Git credentials for pushes only whil
   // A credential is either a token or the host's own: never both.
   issued = { ...host, authorization: 'Basic eDp5' };
   await assert.rejects(config.pushCredential!(request));
+});
+
+test('a host names its version in its manifest, and a development build names none', { timeout: 10000 }, async t => {
+  const manifest = (fixture: Awaited<ReturnType<typeof connectorFixture>>) => fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
+  const released = await connectorFixture(t, { version: '0.24.0' });
+  await startFixture(released);
+  assert.equal(manifest(released).request.headers.get('x-pikibun-version'), '0.24.0');
+  // Only a header: the manifest itself is what older servers take, which reject fields they don't know.
+  assert.deepEqual(Object.keys(JSON.parse(manifest(released).body)).sort(), ['capabilities', 'models']);
+  const development = await connectorFixture(t);
+  await startFixture(development);
+  assert.equal(manifest(development).request.headers.get('x-pikibun-version'), null);
 });
 
 test('a host keeps the repository cache its configuration names for the whole connection, and says so', { timeout: 10000 }, async t => {

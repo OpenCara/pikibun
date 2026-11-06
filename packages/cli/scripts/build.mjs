@@ -4,7 +4,7 @@
 //   optional drivers (Postgres, S3), which a local server never loads, out of the code every command runs.
 // - dist/pikibun.js: the launcher that checks the Node.js version before loading the rest.
 // - dist/web and dist/migrations: the web app and the database migrations the local server serves and applies.
-import { cpSync, existsSync, rmSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -13,11 +13,15 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const repository = join(root, "..", "..");
 const out = join(root, "dist");
 rmSync(out, { recursive: true, force: true });
+// The version the connector reports to the control plane and a local server in /api/health (packages/shared/src/version.ts):
+// the package's, which the Release workflow sets from the tag before building.
+const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 
 await Promise.all([
   build({
     entryPoints: { cli: join(root, "src/cli.ts") }, outdir: out, chunkNames: "chunks/[name]-[hash]",
     bundle: true, splitting: true, platform: "node", format: "esm", target: "node24", packages: "external", logLevel: "warning",
+    define: { __PIKIBUN_VERSION__: JSON.stringify(version) },
   }),
   build({
     entryPoints: [join(root, "src/pikibun.ts")], outfile: join(out, "pikibun.js"),

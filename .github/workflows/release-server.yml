@@ -62,6 +62,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Reported by /api/health and shown in the web app's settings.
+          build-args: |
+            PIKIBUN_VERSION=${{ needs.check.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
