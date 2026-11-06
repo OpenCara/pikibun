@@ -8,6 +8,7 @@ import type { Database } from './db/types.js';
 import { requestUrl, trustForwardedHeaders } from './forwarded.js';
 import { app } from './index.js';
 import { createStaticHandler } from './static.js';
+import { createNshWebHandler } from './nsh-web.js';
 import { runAutomaticBackups } from './automatic-backups.js';
 import { runScheduledPrompts } from './scheduled-prompts.js';
 import { runCrossSessionNotifications } from './cross-session.js';
@@ -67,7 +68,7 @@ export interface RunningServer {
  * background sweeps. Resolves once it listens. One per process: the routes live on the shared `app`.
  */
 export async function startServer(config: ServerConfig): Promise<RunningServer> {
-  const { env, host, port, trustProxy, staticDir } = config;
+  const { env, host, port, trustProxy, staticDir, nshStaticDir } = config;
   const hub = env.CONNECTOR_HUB!;
   await migrateWhenReachable(env.DB);
 
@@ -85,9 +86,18 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
   ];
 
   const serveStatic = createStaticHandler(staticDir);
+  const serveNshWeb = createNshWebHandler(nshStaticDir);
   app.notFound(async c => {
     if ((c.req.method !== 'GET' && c.req.method !== 'HEAD') || c.req.path.startsWith('/api/')) {
       return c.json({ error: 'Not found.', code: 'not_found' }, 404);
+    }
+    // The NSH client's web build, when one is there (nsh-web.ts); its page carries its own Content-Security-Policy.
+    const nsh = await serveNshWeb(c.req.raw);
+    if (nsh) {
+      const response = c.newResponse(nsh.body, nsh);
+      const policy = nsh.headers.get('Content-Security-Policy');
+      if (policy) response.headers.set('Content-Security-Policy', policy);
+      return response;
     }
     const response = await serveStatic(c.req.raw);
     return c.newResponse(response.body, response);

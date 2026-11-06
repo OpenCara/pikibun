@@ -14,5 +14,5 @@
     "allowImportingTsExtensions": true
   },
   "include": ["apps/**/*.ts", "apps/**/*.tsx", "packages/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
-  "exclude": ["**/node_modules", "apps/mobile", "apps/desktop"]
+  "exclude": ["**/node_modules", "apps/mobile", "apps/desktop", "apps/nsh"]
 }
