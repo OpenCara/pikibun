@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { arr, int, obj, opt, str, type Static } from "@earendil-works/pi-schema";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { PikiExtensionInfo } from "../../../../../packages/shared/src/piki-extensions.js";
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
@@ -292,16 +292,17 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
   return (pi: ExtensionAPI) => {
     pi.registerFlag(READ_ONLY, { type: "boolean", default: false,
       description: `Run only ${spec.command} commands that read (lists, views, logs, GET requests), outside the session's worktree. Set it before running the tool automatically.` });
+    const parameters = obj({
+      args: arr(str({ maxLength: 32 * 1024 }), { minItems: 1, maxItems: 256,
+        description: `The arguments after ${spec.command}, one per item, exactly as they are passed: there is no shell, so don't quote them.` }),
+      directory: opt(str({ maxLength: 4096,
+        description: "Where it runs: a directory in the session's worktree, such as a clone (app). The worktree by default." })),
+      timeout_seconds: opt(int({ minimum: 1, maximum: 3600, description: `At most this long (${DEFAULT_TIMEOUT_SECONDS} seconds by default).` })),
+    }, { open: true });
     pi.registerTool({
       name: spec.info.tool ?? spec.command, label: spec.info.title, description: spec.description,
-      parameters: Type.Object({
-        args: Type.Array(Type.String({ maxLength: 32 * 1024 }), { minItems: 1, maxItems: 256,
-          description: `The arguments after ${spec.command}, one per item, exactly as they are passed: there is no shell, so don't quote them.` }),
-        directory: Type.Optional(Type.String({ maxLength: 4096,
-          description: "Where it runs: a directory in the session's worktree, such as a clone (app). The worktree by default." })),
-        timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600, description: `At most this long (${DEFAULT_TIMEOUT_SECONDS} seconds by default).` })),
-      }),
-      async execute(toolCallId, params, signal, _onUpdate, ctx) {
+      parameters,
+      async execute(toolCallId, params: Static<typeof parameters>, signal, _onUpdate, ctx) {
         const args = params.args;
         if (args.some(arg => arg.includes("\0"))) throw new Error("An argument holds a NUL character.");
         const refused = spec.refused(args);

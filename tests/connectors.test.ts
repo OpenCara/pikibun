@@ -856,6 +856,29 @@ test('claim, socket, and self routes require TLS except for explicitly enabled l
     { connectorId: connector.connectorId, credentialHash: await sha256(connector.token) });
 });
 
+test('a connector names its version in its manifest, which its host lists, and the server names its own in /api/health', async t => {
+  const f = await fixture(t); const owner = await f.client('owner'); const connector = await connect(f, owner);
+  const report = (version?: string) => f.request('POST', '/api/connectors/self/manifest', manifest, { Authorization: `Bearer ${connector.token}`,
+    'X-Connection-Token': connector.connectionToken, ...(version === undefined ? {} : { 'X-Pikibun-Version': version }) });
+  const listed = async () => (await json<{ connectors: ConnectorInfo[] }>(await owner.request('GET', '/api/connectors'))).connectors[0]!.version;
+  assert.equal(await listed(), undefined);
+  await json(await report('0.24.0'));
+  assert.equal(await listed(), '0.24.0');
+  await json(await report('desktop 0.9.0'));
+  assert.equal(await listed(), 'desktop 0.9.0');
+  // Not a version: recorded as none, as a connector that names none (an older one, after a downgrade) clears it.
+  await json(await report('<script>'));
+  assert.equal(await listed(), undefined);
+  await json(await report('0.24.0'));
+  await json(await report());
+  assert.equal(await listed(), undefined);
+
+  const health = async () => (await json<{ version: string | null }>(await f.request('GET', '/api/health'))).version;
+  assert.equal(await health(), null);
+  f.env.PIKIBUN_VERSION = '0.24.0';
+  assert.equal(await health(), '0.24.0');
+});
+
 async function socketDenied(f: Fixture, headers: Headers, url: URL, status: number, code: string) {
   let response: Response | undefined;
   await assert.rejects(authenticateConnectorSocket(f.env, headers, url), (error: unknown) => {

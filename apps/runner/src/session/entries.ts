@@ -8,7 +8,7 @@ import type { Run } from "../session.js";
  * which is never image data, provider error text or Pi's own detail.
  */
 
-/** What the transcript says after a run that the host's crashes ended (see RunnerSession.endParkedRuns). */
+/** What the transcript says after a run that the host's crashes ended (see RunnerSession.observeRun). */
 export const CRASHED_TEXT = "Stopped: the host crashed repeatedly while working on this message. Send it again to retry.";
 
 export function entryView(entry: EntryRecord, branch: number, actorId?: string, autoApproved?: ReturnType<typeof autoApprovedCalls>): SessionView["entries"][number] {

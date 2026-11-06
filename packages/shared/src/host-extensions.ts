@@ -220,7 +220,8 @@ export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
  */
 export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {
   const sessionTools = pikiSessionToolExtensions().map(item => item.source as string);
-  if (!Array.isArray(value) || value.length > extensionLimits.workspace + Math.max(sessionTools.length, extensionLimits.connector)) throw new Error("Invalid extensions");
+  // Every switch this version knows, and as many more as a connector reports (a newer control plane's), besides the 32.
+  if (!Array.isArray(value) || value.length > extensionLimits.workspace + sessionTools.length + extensionLimits.connector) throw new Error("Invalid extensions");
   const extensions = value.map(parseWorkspaceExtension);
   // A Pikibun extension this version doesn't know takes no place either: a newer control plane sends the switches of
   // the extensions its tool definitions name (tool-definitions.ts), and counts its places itself.

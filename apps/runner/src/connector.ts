@@ -14,6 +14,7 @@ import type { AuthorizationRequest, AuthorizationResult, GitHubEffectAuthority, 
 import type { SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
 import { MAX_CLONE_BRANCHES } from "./clone-branches.js";
 import { sessionActivities } from "../../../packages/shared/src/types.js";
+import { buildVersion, CONNECTOR_VERSION_HEADER } from "../../../packages/shared/src/version.js";
 import { acquireRunnerLease } from "./lease.js";
 import type { SandboxBackendConfig } from "./sandbox-backend.js";
 import { CREATE_FILE, exactMode, OPEN_DIRECTORY, OPEN_FILE, windows } from "./platform.js";
@@ -330,6 +331,11 @@ export interface ConnectorOptions {
    * command time limit, the GPU, whether pushes may use this host's Git credentials, and its repository cache.
    */
   gpu?: GpuKind | null;
+  /**
+   * The version it reports to the control plane, which shows it on the host's page: the build's own (buildVersion) unless
+   * given; a development build reports none.
+   */
+  version?: string;
   fetch?: typeof fetch;
   createSocket?: (url: string, protocols: string[]) => ConnectorSocket;
   runtimeFactory?: (config: RunnerConfig) => Promise<ConnectorRuntime>;
@@ -880,9 +886,12 @@ export class LocalConnector {
 
   private async callbackResponse(generation: Generation, path: string, body: unknown, signal = AbortSignal.any([generation.abort.signal, this.lifetime.signal, AbortSignal.timeout(15_000)])): Promise<Response> {
     this.requireGeneration(generation);
+    // Its version, which the control plane records from the manifest it posts at every connection; older servers ignore it.
+    const version = this.options.version ?? buildVersion;
     const response = await (this.options.fetch ?? fetch)(`${this.state!.controlPlaneUrl}${path}`, {
       method: "POST", redirect: "error", credentials: "omit",
-      headers: { authorization: `Bearer ${this.state!.token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${this.state!.token}`, "x-connection-token": generation.connectionToken!, "content-type": "application/json",
+        ...(version ? { [CONNECTOR_VERSION_HEADER]: version } : {}) },
       body: JSON.stringify(body), signal,
     });
     try {

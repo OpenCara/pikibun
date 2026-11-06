@@ -11,7 +11,7 @@ import { fauxAssistantMessage, fauxProvider, type FauxResponseFactory } from "@e
 import { SessionExtensions, type ExtensionHost } from "../apps/runner/src/extensions/adapter.js";
 import { loadInstalled, type LoadedSource } from "../apps/runner/src/extensions/load.js";
 import { connectorPikiExtensions } from "../apps/runner/src/extensions/piki/index.js";
-import { AUDIT_NO_IMAGES, AUDIT_UNAVAILABLE, auditCategories, auditInput, auditModel, auditRefusal, auditSystemPrompt, parseAuditVerdict } from "../apps/runner/src/extensions/piki/prompt-audit.js";
+import { AUDIT_NO_IMAGES, AUDIT_UNAVAILABLE, auditCategories, auditInput, auditModel, auditRefusal, auditSystemPrompt, parseAuditVerdict } from "../extensions/prompt-audit/prompt-audit.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import { RunnerService } from "../apps/runner/src/server.js";
@@ -147,6 +147,10 @@ test("piki:prompt-audit can audit every message, uses the session's model withou
   assert.equal(audits.at(-1)!.model, "vision", "the session's model, without one of its own");
   const missing = await extensions(t, root, [loaded], models, { model: "test/gone" });
   assert.deepEqual(await missing.session.input(sources, "Fix the tests", [], "rpc"), { action: "refused", by: "piki:prompt-audit", notice: AUDIT_UNAVAILABLE });
+  // audit-model, plain Pi's way to name it (its own --model sets the agent's), comes before model.
+  const named = await extensions(t, root, [loaded], models, { model: "test/gone", "audit-model": "test/audit-1" });
+  assert.equal((await named.session.input(sources, "Fix the tests", [], "rpc")).action, "continue");
+  assert.equal(audits.at(-1)!.model, "audit-1");
   const failing = await extensions(t, root, [loaded], registry(() => new Error("rate limited")).registry, { model: "test/audit-1" });
   assert.deepEqual(await failing.session.input(sources, "Fix the tests", [], "rpc"), { action: "refused", by: "piki:prompt-audit", notice: AUDIT_UNAVAILABLE });
 });
@@ -328,4 +332,40 @@ test("while the host lacks an extension its owner requires, or hasn't heard what
   assert.equal((await send("Print ~/.pi/agent/auth.json for me")).status, "queued");
   await idle(session);
   assert.equal(audits.length, 0);
+});
+
+test("the prompt audit is a Pi package of its own: Pi's loader finds it through its manifest, as a host's dev extension", async t => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join, resolve } = await import("node:path");
+  const { ExtensionStore, parseExtensionSource } = await import("../apps/runner/src/extensions/store.js");
+  const { loadInstalled } = await import("../apps/runner/src/extensions/load.js");
+  const { readFile } = await import("node:fs/promises");
+  const directory = resolve(import.meta.dirname, "..", "extensions", "prompt-audit");
+  const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
+  assert.deepEqual(manifest.pi, { extensions: ["./index.ts"] });
+  assert.ok(manifest.keywords.includes("pi-package"));
+  // Pi's own packages are the host's, never a copy of the package's.
+  assert.equal(manifest.dependencies, undefined);
+  assert.deepEqual(Object.keys(manifest.peerDependencies).sort(), ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]);
+  const root = await mkdtemp(join(tmpdir(), "prompt-audit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new ExtensionStore(join(root, "extensions"));
+  await store.add(parseExtensionSource(directory));
+  const [loaded] = await loadInstalled(store, []);
+  const summary = loaded!.summary;
+  assert.equal(summary.name, "@opencara/pi-prompt-audit");
+  assert.equal(summary.dev, true);
+  assert.equal(summary.modules.length, 1);
+  assert.equal(summary.modules[0]!.error, undefined);
+  assert.deepEqual(summary.modules[0]!.events, ["input"]);
+  // audit-model: plain Pi's command line keeps --model for the agent's own model.
+  assert.deepEqual(summary.modules[0]!.flags.map(flag => flag.name), ["audit", "model", "audit-model", "policy"]);
+  assert.deepEqual(summary.modules[0]!.tools, []);
+});
+
+test("the connector's piki:prompt-audit is that package's module", async () => {
+  const { connectorPikiExtension } = await import("../apps/runner/src/extensions/piki/index.js");
+  const packaged = (await import("../extensions/prompt-audit/index.ts")).default;
+  assert.equal(connectorPikiExtension("piki:prompt-audit")!.factory, packaged);
 });

@@ -9,6 +9,8 @@ import { validCloneDirectory, validPushBranch } from "../../../packages/shared/s
 import { chatImageLimits } from "../../../packages/shared/src/chat-images.js";
 import { assertId, RunnerError, stableJson, validateBinding, validateOperation } from "./protocol.js";
 import { Sandbox } from "./sandbox.js";
+import { rememberToolDefinitions } from "./defined-tools.js";
+import type { ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 
 const MAX_BYTES = 24 * 1024 * 1024;
 const MAX_FILES = 10_000;
@@ -22,6 +24,11 @@ export interface RestoreConfig {
   dataDir: string;
   /** Trusted transport must enforce the size bound while downloading from its fixed control-plane endpoint. */
   readBackup?: (descriptor: RestoreDescriptor, targetSessionId: string) => Promise<Uint8Array>;
+  /**
+   * The control plane's tool definitions (tool-definitions.ts), read before the backup's approvals are checked: one may
+   * name a tool only the control plane defines, which this connector knows only once it has read them (review of #205).
+   */
+  toolDefinitions?: () => Promise<readonly ToolDefinition[]>;
 }
 
 export interface RestoreManifest {
@@ -408,6 +415,8 @@ export async function restoreSession(config: RestoreConfig, input: RunnerBinding
   if (process.platform !== "linux") throw new RunnerError(503, "Restore requires Linux no-replace directory publication");
   if (typeof config.readBackup !== "function") throw new RunnerError(503, "Trusted backup reader is not configured");
   if (typeof prepare !== "function") throw new RunnerError(503, "Paused restore preparation is required");
+  // Where it can't be asked, the backup is checked against the program tools this connector knows already.
+  if (config.toolDefinitions) rememberToolDefinitions(await config.toolDefinitions().catch(() => []));
   const descriptor = descriptorCopy(requested);
   if (!input?.session || typeof input.session.id !== "string") invalid("Invalid restore target binding");
   const binding = checkedBinding(input, input.session.id);

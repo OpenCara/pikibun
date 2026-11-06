@@ -760,15 +760,21 @@ test("a message whose work host crashes cut off again and again ends, says why, 
   const storage = crashableStorage();
   const f = await fixture(t, { config: { openStorage: path => storage.open(path) } });
   const crashing = await submit(f.session, OWNER, "write", { content: "TEST_HOLD 1000", requestId: "crashing" });
+  const ended = async () => queue(await f.session.view())[0]?.status === "interrupted";
+  const answering = async () => (await tasks(f.session)).some(task => task.state.kind === "running");
   let crashes = 0;
-  while (queue(await f.session.view())[0]?.status !== "interrupted") {
+  for (;;) {
+    // Pi tries a request the host's crash cut off again after a backoff (2s, 4s, 8s), or ends the message.
+    for (let count = 0; count < 500 && !(await ended()) && !(await answering()); count++) await delay(20);
+    if (await ended()) break;
     assert.ok(crashes < 10, "the runner must end the message");
-    // The host goes down while the model answers the message.
-    await running(f.session, () => true, "the message's model request");
+    // The host goes down while the model answers the message (it takes a second), not while Pi records the last crash.
+    await delay(300);
+    if (!(await answering())) continue;
     await storage.crash(f.session);
     crashes++;
   }
-  assert.equal(crashes, 5, "Pi parks a task cut off five times in a row (settings.restartLimit) when it next opens");
+  assert.equal(crashes, 4, "Pi counts a request the host's crash cut off as a failed attempt, and ends the message once settings.retry's 3 retries are spent");
   let view = await idle(f.session);
   assert.deepEqual(queue(view).map(run => run.status), ["interrupted"]);
   assert.equal(view.activity, "failed");
@@ -824,7 +830,7 @@ test("sessions compact by the token counts set in Pikibun over the host's Pi set
   assert.equal(await compactions(), compacted, "clearing them goes back to the host's Pi settings");
 });
 
-test("parked background work, such as a compaction, is aborted without ending the message that is running", options, async t => {
+test("background work host crashes cut off again and again, such as a compaction, ends without ending the message that is running", options, async t => {
   const storage = crashableStorage();
   // A model that takes a second to summarize, and to answer "hold"; it answers anything else at once.
   const faux = fauxProvider({ models: [{ id: "queue-faux", name: "Deterministic test provider (not an LLM)" }] });
@@ -861,7 +867,7 @@ test("parked background work, such as a compaction, is aborted without ending th
   assert.deepEqual(queue(view).map(run => run.status), ["settled", "settled", "settled"], "only the message's own work ends it");
   assert.equal(view.entries.some(entry => entry.kind === "workspace.run-crashed"), false);
   assert.ok(view.entries.some(entry => entry.conversationId === held.conversationId && entry.role === "assistant" && entry.text === "Answered."));
-  // The parked compaction was aborted, so no later open finds it.
+  // Pi ended the compaction at its restart limit (settings.restartLimit), so no later open finds it.
   for (let count = 0; count < 250 && (await tasks(f.session)).length; count++) await delay(20);
   assert.deepEqual(await tasks(f.session), []);
 });

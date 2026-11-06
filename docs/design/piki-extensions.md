@@ -463,7 +463,7 @@ of the host check each message before the agent sees it, and refuses those that 
 | Catalogue (names, tools, providers, install, account and sign-in hints) | `packages/shared/src/piki-extensions.ts` |
 | `piki:` sources | `packages/shared/src/host-extensions.ts` |
 | The command tool, its environment and output, in the sandbox or on the host | `apps/runner/src/extensions/piki/command.ts` |
-| The prompt audit | `apps/runner/src/extensions/piki/prompt-audit.ts`; tests in `tests/prompt-audit.test.ts` |
+| The prompt audit, a Pi package of its own | `extensions/prompt-audit/` (`prompt-audit.ts`, `index.ts`, `package.json`); tests in `tests/prompt-audit.test.ts` |
 | The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session.ts` (the `browser` tool, `browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
 | The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |

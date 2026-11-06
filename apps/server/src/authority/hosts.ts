@@ -13,6 +13,8 @@ export interface ConnectorRow {
   id: string; owner_id: string; name: string; credential_hash: string; revoked_at: string | null;
   created_at: string; last_seen_at: string | null; connection_hash: string | null;
   models_json: string; capabilities_json: string; removed_at: string | null;
+  /** The version its connector reported when it last connected; null where it reported none. */
+  connector_version?: string | null;
 }
 
 export function requireConnectorTLS(env: Env, url: URL): void {

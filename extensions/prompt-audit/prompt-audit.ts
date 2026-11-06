@@ -3,9 +3,13 @@ import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-a
 import type { ExtensionContext, ExtensionFactory, InputEvent, InputEventResult } from "@earendil-works/pi-coding-agent";
 
 /*
- * piki:prompt-audit (docs/design/piki-extensions.md): a Pi extension that has a model check each message before it
+ * The prompt audit (docs/design/piki-extensions.md): a Pi extension that has a model check each message before it
  * reaches the agent, and refuses one that tries to have the agent reveal or misuse what lies on the machine (its Pi
  * credentials and API keys, its owner's files and environment, its network) rather than do the work at hand.
+ *
+ * It is a Pi package of its own (this directory: package.json's `pi` manifest names index.ts), which Pi installs and
+ * loads as any other (`pi install ./extensions/prompt-audit`), and which imports nothing but Pi's own packages and
+ * Node's. Pikibun's connector bundles the same module as `piki:prompt-audit`, so hosts have it without installing it.
  *
  * It handles Pi's `input` event, so it runs in Pi as it does in Pikibun. Which messages it audits is its `audit`
  * setting: by default those that don't come from the machine's own person (`source` other than `interactive`): in Pi,
@@ -103,6 +107,7 @@ export function parseAuditVerdict(text: string): AuditVerdict {
 export const promptAuditFlags = Object.freeze({
   audit: "Which messages to audit: others (default), every message but the machine's own person's (in Pikibun, all but the host owner's); or all",
   model: "The model that audits, as provider/modelId; empty for the session's model",
+  "audit-model": "The model that audits, as provider/modelId, ahead of model: in plain Pi, where --model is Pi's own option and sets the agent's model",
   policy: "What else counts as sensitive on this host, in your own words; the audit refuses what it forbids too",
 });
 
@@ -131,7 +136,10 @@ export async function auditMessage(ctx: ExtensionContext, model: Model<Api>, con
 
 export const promptAuditExtension: ExtensionFactory = pi => {
   pi.registerFlag("audit", { type: "string", default: "others", description: promptAuditFlags.audit });
+  // Pikibun sets `model` (a host's saved settings name it); Pi's command line takes --model for the agent's own model
+  // and never passes it to an extension, so plain Pi sets --audit-model, which comes first.
   pi.registerFlag("model", { type: "string", default: "", description: promptAuditFlags.model });
+  pi.registerFlag("audit-model", { type: "string", default: "", description: promptAuditFlags["audit-model"] });
   pi.registerFlag("policy", { type: "string", default: "", description: promptAuditFlags.policy });
   const flag = (name: string) => { const value = pi.getFlag(name); return typeof value === "string" ? value : ""; };
 
@@ -144,8 +152,9 @@ export const promptAuditExtension: ExtensionFactory = pi => {
       return { action: "handled" };
     };
     try {
-      const model = auditModel(ctx, flag("model").trim());
-      if (!model) return refuse(AUDIT_UNAVAILABLE, `refused a message: its model ${flag("model").trim() || "(the session's)"} is not available`);
+      const setting = flag("audit-model").trim() || flag("model").trim();
+      const model = auditModel(ctx, setting);
+      if (!model) return refuse(AUDIT_UNAVAILABLE, `refused a message: its model ${setting || "(the session's)"} is not available`);
       // Images it can't see could carry what its text doesn't say.
       if (images.length && Array.isArray(model.input) && !model.input.includes("image")) return refuse(AUDIT_NO_IMAGES, `refused a message with images: ${model.provider}/${model.id} doesn't read images`);
       const verdict = await auditMessage(ctx, model, event.text, images, flag("policy"));

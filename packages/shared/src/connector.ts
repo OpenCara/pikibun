@@ -219,6 +219,11 @@ export interface ConnectorInfo {
   createdAt: string;
   revokedAt: string | null;
   online: boolean;
+  /**
+   * The version its connector reported when it last connected, such as `0.24.0` or `desktop 0.9.0`. Absent where it
+   * reported none: connectors from before they did (0.23 and older) and development builds.
+   */
+  version?: string;
   /** The models it offers: those it advertises, less any its owner or an admin disabled. */
   models: LocalModelSummary[];
   // Explicit runtime shares, not the owner's private workspace associations.

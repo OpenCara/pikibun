@@ -229,6 +229,7 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
         {owner && !connector.online && <Row title={connector.revokedAt ? "Pair again" : "Reconnect host"} hint={connector.revokedAt ? "Revoked credentials cannot be reused; create a new pairing" : "Restart the saved connection on your host machine"}
           trailing={<Button variant="outline" size="sm" disabled={revokeAction.busy} onClick={() => connector.revokedAt ? setPairing(true) : setReconnecting(true)}>{connector.revokedAt ? "Pair again" : "Reconnect"}</Button>} />}
         <Row title="Owner" trailing={connector.ownerName} />
+        <ConnectorVersionRow connector={connector} />
         <Row title="Paired" trailing={<Timestamp value={connector.createdAt} />} />
         {connector.revokedAt && <Row title="Revoked" trailing={<Timestamp value={connector.revokedAt} />} />}
       </div>
@@ -277,6 +278,15 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
       </div>
     </Sheet>}
   </>;
+}
+
+/**
+ * The version its connector reported when it last connected. It isn't compared with the server's: the connector and the
+ * server are released on their own lines (cli-v*, server-v*), so their numbers say nothing about each other.
+ */
+function ConnectorVersionRow({ connector }: { connector: ConnectorInfo }) {
+  const hint = connector.version ? undefined : "Connectors from 0.23 and older don't report it. Update with npx pikibun@latest connect";
+  return <Row title="Connector" hint={hint} trailing={connector.version ?? "Not reported"} />;
 }
 
 /** The models Pi on the host offers; its owner and admins choose which of them it offers to sessions. */

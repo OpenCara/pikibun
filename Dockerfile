@@ -27,6 +27,10 @@ RUN pnpm build && pnpm build:server
 
 FROM base AS runtime
 ENV NODE_ENV=production
+# The release this image is, which /api/health reports and the web app's settings show: release-server.yml passes the
+# tag's version; a local build reports none.
+ARG PIKIBUN_VERSION=
+ENV PIKIBUN_VERSION=${PIKIBUN_VERSION}
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/cli/package.json packages/cli/
 RUN pnpm install --frozen-lockfile --prod

@@ -29,6 +29,7 @@ import { registerTranscriptSettings } from './transcript-settings.js';
 import { registerNotifications } from './notifications.js';
 import { registerWorkspaceInvites } from './workspace-invites.js';
 import { compression } from './compression.js';
+import { buildVersion, validVersion } from '../../../packages/shared/src/version.js';
 
 export const app = new Hono<WorkerEnv>();
 
@@ -55,6 +56,8 @@ app.get('/api/health', async c => {
   let vaultReady = false;
   try { await assertVaultConfigured(c.env); vaultReady = true; } catch { /* Readiness only; no configuration values are exposed. */ }
   return c.json({ ok: true,
+    // The release it runs, such as 0.24.0; null in development. Shown in the web app's settings.
+    version: validVersion(c.env.PIKIBUN_VERSION) ?? buildVersion ?? null,
     githubConfigured: !!c.env.GITHUB_CLIENT_ID && !!c.env.GITHUB_CLIENT_SECRET && vaultReady,
     runnerConfigured: !!c.env.RUNNER_URL && !!c.env.RUNNER_SHARED_SECRET && c.env.RUNNER_SHARED_SECRET.length >= 32,
     databaseConfigured: true, databaseProvider: c.env.DB.provider,

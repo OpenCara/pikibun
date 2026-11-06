@@ -16,11 +16,14 @@ import { parseOperation } from "../apps/server/src/authority/operations.js";
 import { connectorWorkspaceExtensions } from "../apps/server/src/extensions.js";
 import { bundledToolDefinitions, parseToolDefinition, parseToolDefinitions, reservedToolNames, type BrokeredToolDefinition, type ProgramToolDefinition,
   type ToolDefinition } from "../packages/shared/src/tool-definitions.js";
-import { pikiExtension } from "../packages/shared/src/piki-extensions.js";
+import { pikiExtension, pikiSessionToolExtensions } from "../packages/shared/src/piki-extensions.js";
 import { pikibunToolDescriptions } from "../packages/shared/src/workspace-tools.js";
 import { parseWorkspaceExtensions, type WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { toolNames, type AuthorizationRequest, type RunnerAction, type RunnerBinding, type RunnerTicket } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
+import { writeFile } from "node:fs/promises";
+import { loadInstalled } from "../apps/runner/src/extensions/load.js";
+import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 
 /** A program tool only a newer control plane defines: no code of this connector knows it by name. */
 const jvm: ProgramToolDefinition = {
@@ -151,6 +154,9 @@ test("operations name the tools this server defines, and connectors take the swi
   const regular = Array.from({ length: 32 }, (_, index) => ({ source: `npm:extension-${index}@1.0.0` }));
   assert.equal(parseWorkspaceExtensions([...regular, off("piki:jvm")]).length, 33);
   assert.throws(() => parseWorkspaceExtensions([...regular, { source: "npm:one-too-many@1.0.0" }]), /Invalid extensions/);
+  // Every switch this version knows as well, and a newer control plane's on top: the cap adds them up (review of #205).
+  const known = pikiSessionToolExtensions().map(item => off(item.source));
+  assert.equal(parseWorkspaceExtensions([...regular, ...known, off("piki:jvm"), off("piki:notes")]).length, 32 + known.length + 2);
 });
 
 function binding(id: string): RunnerBinding {
@@ -261,4 +267,51 @@ test("a session runs tools the control plane defines that its connector never kn
   assert.equal(count(prompts[1]!, "mvn and gradle"), count(prompts[0]!, "mvn and gradle"));
   assert.ok(count(prompts[0]!, "mvn and gradle") >= 1);
   assert.match((await session.view()).entries.map(entry => entry.text).join("\n"), /Tool jvm is not available/);
+});
+
+test("a tool the control plane defines after the session opened never takes the name of a workspace extension's tool: the extension keeps it (review of #205)",
+  { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-defined-clash-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "shout.ts"), `import { Type } from "typebox";
+    export default function (pi) {
+      pi.registerTool({ name: "shout", label: "Shout", description: "Shout text.", parameters: Type.Object({ text: Type.String() }),
+        async execute(_id, params) { return { content: [{ type: "text", text: params.text.toUpperCase() + "!" }], details: undefined }; } });
+    }`);
+  const store = new ExtensionStore(join(root, "state"));
+  await store.add(parseExtensionSource(join(root, "shout.ts")));
+  const [dev] = await loadInstalled(store, []);
+  const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
+  const answer: WorkspaceExtensionsAnswer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    fauxAssistantMessage("Opened."),
+    fauxAssistantMessage([fauxToolCall("shout", { text: "hi" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Shouted."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let definitions: ToolDefinition[] = [...bundledToolDefinitions];
+  const service = new RunnerService({
+    dataDir: join(root, "runner"), sharedSecret: "runner-defined-clash-secret-not-for-deployment", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => installed, workspace: async () => answer },
+    toolDefinitions: async () => definitions,
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "defined-clash-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "Hello.", requestId: "first", admissionId: await sha256("clash first") }, "write");
+  await idle(session);
+  // The control plane now defines a program tool named like the extension's.
+  definitions = [...definitions, { ...jvm, name: "shout", extensions: ["piki:shout"], programs: ["sh"], grammar: {}, summary: undefined }];
+  await session.submit(await ticket(id, "submit"), { content: "Shout.", requestId: "second", admissionId: await sha256("clash second") }, "write");
+  await idle(session);
+  // The call is the extension's, never a program command of the definition's.
+  const view = await session.view();
+  assert.ok(!view.approvals.some(approval => approval.operation.kind === "program"), JSON.stringify(view.approvals));
+  // Decided as an extension's tool is, as a host command: this runner has no connected host to ask, so it says so.
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /Host commands require a connected host/);
 });

@@ -65,7 +65,9 @@ So the connector is now an engine for both kinds, and the control plane describe
 7. **When a session gets them.** A session builds its defined tools when it opens, into the same extension as its own
    tools, so a call the durable harness resumes finds its tool. Each write message asks again: a tool by a new name joins
    as one more installed extension at once; a changed definition of a tool the session has applies when it next opens.
-   An extension's tool named like a defined one is left out, as for the session's own.
+   An extension's tool named like a defined one is left out, as for the session's own; but a new definition named like a
+   tool one of the workspace's extensions this message runs with already offers is skipped, so a name never changes
+   hands mid-session. The host's log notes both: a changed definition, and one an extension keeps the name of.
 
 8. **Switches.** A definition names the Pikibun extensions that turn it on (`extensions`): it is offered while any of
    them is on (`source_read` has one per kind of document source). The connector decides each by `extensionSwitchOn`: as
@@ -77,7 +79,8 @@ So the connector is now an engine for both kinds, and the control plane describe
 9. **Names in operations and agents.** `ProgramOperation.tool` and a permission's `tool` may name a defined tool. The
    control plane accepts Pikibun's own and those it defines (`parseOperation`). The connector accepts its own program
    tools and those it has read from the control plane since it started (`knownDefinedProgramTool`); a session reads them
-   as it opens, before any decision of its own comes back. New sessions' agents list every defined tool too
+   as it opens, before any decision of its own comes back, and a restore reads them before it checks the backup's
+   approvals. New sessions' agents list every defined tool too
    (`catalog.ts`), so their calls need no permission card; a connector that doesn't know one doesn't offer it.
 
 10. **Document kinds on the control plane.** `source_read`'s per-kind switches (piki-extensions.md, note 35) are held
