@@ -20,7 +20,7 @@ RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+
 # Debian 13 here (the runtime image doesn't need it). scripts/nsh.mjs downloads the pinned CLI and checks its SHA-256.
 FROM --platform=$BUILDPLATFORM ${WEB_BUILD_IMAGE} AS web
 WORKDIR /app
-COPY scripts/nsh.mjs scripts/
+COPY scripts/nsh.mjs scripts/nsh-web-fixes.mjs scripts/
 COPY apps/nsh apps/nsh
 COPY packages/shared packages/shared
 COPY packages/client packages/client

@@ -16,6 +16,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFi
 import { arch, platform } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fixWebSite } from "./nsh-web-fixes.mjs";
 
 export const NSH_VERSION = "v0.4.0";
 /** The commit NSH_VERSION's tag names, for what is built from its source (release-app.yml's iPhone runner). */
@@ -87,6 +88,8 @@ export async function buildWeb(out = path.join(repository, "dist", "web")) {
   // nsh writes the site into a directory named after the app.
   const [site] = readdirSync(staging);
   if (!site || !existsSync(path.join(staging, site, "index.html"))) throw new Error(`nsh package wrote no site into ${staging}`);
+  // Firefox and older Safari: the import map before the first module (longbridge/nsh#582).
+  fixWebSite(path.join(staging, site));
   rmSync(out, { recursive: true, force: true });
   mkdirSync(path.dirname(out), { recursive: true });
   cpSync(path.join(staging, site), out, { recursive: true });
