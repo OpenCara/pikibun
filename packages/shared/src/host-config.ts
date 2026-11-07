@@ -1,5 +1,5 @@
 import { extensionPackageKey, normalizeExtensionSource, parseExtensionSettings, type ExtensionSettings } from "./host-extensions.js";
-import { defaultHostBrowserConfig, parseHostBrowserConfig, type HostBrowserConfig } from "./browser.js";
+import { defaultHostBrowserConfig, legacyBrowserConfig, parseHostBrowserConfig, type HostBrowserConfig } from "./browser.js";
 
 /**
  * How a host runs its sessions. Its owner sets this in Pikibun (Settings → Hosts → the host → Configuration), and so do
@@ -258,12 +258,14 @@ export function parseHostConfigChange(value: unknown): Partial<HostConfig> {
 /**
  * A configuration as a connector reads it from the control plane: settings it doesn't know (from a newer control plane)
  * are left out, and ones the control plane doesn't send (an older one) keep their defaults; so are built-in extensions
- * it doesn't ship. What it does read must be valid, or none of it is used.
+ * it doesn't ship. An older control plane's browser download reads as `auto`. What it does read must be valid, or none of
+ * it is used.
  */
 export function readHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
   const input = value as Record<string, unknown>;
   const known = Object.fromEntries(Object.keys(defaultHostConfig).filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]]));
   if (Array.isArray(known.builtinExtensions)) known.builtinExtensions = normalizeBuiltinExtensionNames(known.builtinExtensions).filter(name => (builtinExtensionNames as readonly unknown[]).includes(name));
+  if (Object.hasOwn(known, "browser")) known.browser = legacyBrowserConfig(known.browser);
   return parseHostConfig({ ...defaultHostConfig, ...known });
 }

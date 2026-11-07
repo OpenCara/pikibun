@@ -213,9 +213,9 @@ function SessionPane({ id }: { id: string }) {
   const frozen = session?.frozen === true;
   const canApprove = permissions.includes("approve") && !archived && !frozen;
   const isOwner = session?.ownerId === user.id;
-  // The workspace has the browser on but the host has no Chromium for it (yet): its owner can set one up. Where the host
+  // The workspace has the browser on but the host has no Chromium for it: its owner can install one. Where the host
   // can't run it at all (its sandbox, a session on the host itself) or its owner turned it off, the panel says so instead.
-  const browserWarning = !archived && !frozen ? view?.extensions?.unavailable?.find(item => item.source === "piki:browser" && ["missing", "failed", "downloading"].includes(item.reason)) : undefined;
+  const browserWarning = !archived && !frozen ? view?.extensions?.unavailable?.find(item => item.source === "piki:browser" && item.reason === "missing") : undefined;
   const [dismissedBrowser, setDismissedBrowser] = useState<string>();
   const [renaming, setRenaming] = useState(false);
   const hosts = useConnections(session?.connectorId ? `/api/workspaces/${segment(session.workspaceId)}/connectors` : null);
@@ -351,8 +351,7 @@ function SessionPane({ id }: { id: string }) {
         pinned={<>
           {view.repositories && <RepositoryPreparationCard sessionId={id} preparation={view.repositories}
             canRestart={isOwner && !archived && permissions.includes("manage")} onRestarted={refreshAll} />}
-          {browserWarning && canWrite && dismissedBrowser !== id && <Alert variant={browserWarning.reason === "downloading" ? "info" : "warning"}
-            title={browserWarning.reason === "downloading" ? "The browser isn't ready yet" : "No browser on this host"}
+          {browserWarning && canWrite && dismissedBrowser !== id && <Alert variant="warning" title="No browser on this host"
             actions={<Button variant="ghost" size="sm" onClick={() => setDismissedBrowser(id)}>Dismiss</Button>}>
             The workspace has the browser tool on, but this session can't use it. {browserUnavailableText(browserWarning.reason)}</Alert>}
           {session.hostUnsandboxed && (canWrite || canApprove) && (session.hostEnvironment

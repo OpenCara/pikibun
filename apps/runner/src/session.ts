@@ -1382,7 +1382,7 @@ export class RunnerSession {
 
   /**
    * Why this session has no browser, if it hasn't: it runs on its host itself, in a sandbox other than Linux's, or its
-   * host's browser is off, missing, downloading or failed to download (HostBrowserSource). A fixed reason: what the host
+   * host's browser is off or missing (HostBrowserSource). A fixed reason: what the host
    * reports of its files stays its owner's.
    */
   private browserUnavailable(): BrowserUnavailableReason | undefined {

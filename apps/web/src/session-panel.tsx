@@ -425,7 +425,7 @@ function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView
       trailing={item.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : item.required ? <StatusBadge tone="success">Required by the host</StatusBadge> : <StatusBadge tone="success">Running</StatusBadge>} />)}
     {(extensions.unavailable ?? []).map(item => <Row key={`unavailable ${item.source}`} leading={<Icon name="alert" size={16} />} title={<code>{item.source}</code>}
       hint={item.source === "piki:browser" ? browserUnavailableText(item.reason) : "The workspace has it on, but this session can't offer its tools"}
-      trailing={<StatusBadge tone={["missing", "failed"].includes(item.reason) ? "warning" : "neutral"}>{item.reason === "downloading" ? "Not ready yet" : "Unavailable"}</StatusBadge>} />)}
+      trailing={<StatusBadge tone={item.reason === "missing" ? "warning" : "neutral"}>Unavailable</StatusBadge>} />)}
     {(extensions.missingRequired ?? []).map(source => <Row key={`required ${source}`} leading={<Icon name="alert" size={16} />} title={<code>{source}</code>}
       hint="The host's owner requires it of every session on the host, which can't run it now: no message is sent until it can" trailing={<StatusBadge tone="danger">Missing</StatusBadge>} />)}
     {extensions.missing.map(source => <Row key={source} title={<code>{source}</code>} hint="Not on this host at this version: the session runs without it until the host's owner installs it"

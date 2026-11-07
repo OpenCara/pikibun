@@ -3325,12 +3325,16 @@ test('only a host\'s owner chooses where its browser comes from; its connector r
   assert.deepEqual((await json<Config>(await host.request('PATCH', path, { browser: chosen }))).config.browser, chosen);
   assert.deepEqual((await json<Config>(await self(f, s.connector, 'config', {}))).config.browser, chosen);
   // It decides which of the host's files every sandboxed session gets: its admins don't change it.
-  await denied(await creator.request('PATCH', path, { browser: { source: 'download' } }), 403, 'host_owner_required');
+  await denied(await creator.request('PATCH', path, { browser: { source: 'off' } }), 403, 'host_owner_required');
   assert.deepEqual((await json<Config>(await creator.request('PATCH', path, { browser: chosen, gpu: true }))).config.browser, chosen, 'naming it as it is changes nothing');
-  for (const invalid of [{ source: 'path' }, { source: 'path', path: 'chromium' }, { source: 'web' }, { source: 'off', path: '/opt/chrome/chrome' }, 'download']) {
+  // Connectors no longer download one: it can't be chosen.
+  for (const invalid of [{ source: 'path' }, { source: 'path', path: 'chromium' }, { source: 'web' }, { source: 'off', path: '/opt/chrome/chrome' }, 'download', { source: 'download' }]) {
     await denied(await host.request('PATCH', path, { browser: invalid }), 400, 'invalid_host_config');
   }
-  assert.deepEqual((await json<Config>(await host.request('PATCH', path, { browser: { source: 'download' } }))).config.browser, { source: 'download' });
+  assert.deepEqual((await json<Config>(await host.request('PATCH', path, { browser: { source: 'off' } }))).config.browser, { source: 'off' });
+  // One saved before is looked for on the host instead, as its connector reads it and as the host's page shows it.
+  f.sqlite.prepare('UPDATE connector_configs SET browser_json = ? WHERE connector_id = ?').run('{"source":"download"}', id);
+  assert.deepEqual((await json<Config>(await self(f, s.connector, 'config', {}))).config.browser, { source: 'auto' });
   f.sqlite.prepare('UPDATE connector_configs SET browser_json = ? WHERE connector_id = ?').run('{"source":"somewhere"}', id);
   assert.deepEqual((await json<Config>(await self(f, s.connector, 'config', {}))).config.browser, { source: 'auto' });
 });

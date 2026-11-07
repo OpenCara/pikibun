@@ -195,16 +195,22 @@ export function parseBrowserReport(text: string): BrowserReport | undefined {
 
 /*
  * Where a host's Chromium comes from (HostConfig.browser), as its owner chooses on its page: found on the host, at a path
- * they give, downloaded by the connector, or none.
+ * they give, or none. The host's owner installs it, with its system libraries, from their distribution's packages (or
+ * Google Chrome's, or Playwright's with its dependencies): connectors no longer download one, since a lone Chromium
+ * build doesn't start without the libraries it links (NSS, GBM, ALSA...), which a minimal server lacks.
  */
-export const browserSources = Object.freeze(["auto", "path", "download", "off"] as const);
+export const browserSources = Object.freeze(["auto", "path", "off"] as const);
 export type BrowserSource = (typeof browserSources)[number];
+/**
+ * The source older control planes and connectors also knew, which had the connector download Chrome for Testing's
+ * headless shell: read as `auto` (legacyBrowserConfig), and never saved again.
+ */
+export const LEGACY_DOWNLOAD_SOURCE = "download";
 
 export interface HostBrowserConfig {
   /**
-   * auto: the connector looks for one (PIKIBUN_BROWSER, the distributions' and vendors' installs, Playwright's and
-   * Puppeteer's downloads, then one it downloaded); path: the Chromium executable at `path`, or none; download: Chrome for
-   * Testing's headless shell, which the connector downloads and keeps up to date; off: no browser for sessions here.
+   * auto: the connector looks for one (PIKIBUN_BROWSER, the distributions' and vendors' installs, then Playwright's and
+   * Puppeteer's downloads); path: the Chromium executable at `path`, or none; off: no browser for sessions here.
    */
   source: BrowserSource;
   /** With `path`: the executable's absolute path on the host. */
@@ -231,15 +237,25 @@ export function parseHostBrowserConfig(value: unknown): HostBrowserConfig {
 }
 
 /**
+ * A browser setting as saved or sent before downloads went (`{ source: "download" }`), read as `auto`, which finds what
+ * its owner installed; anything else as it is. For what a control plane has saved and a connector reads, never for a
+ * change its owner makes, which names one of browserSources.
+ */
+export function legacyBrowserConfig(value: unknown): unknown {
+  return isObject(value) && value.source === LEGACY_DOWNLOAD_SOURCE && Object.keys(value).length === 1 ? { source: "auto" } : value;
+}
+
+/**
  * How a host's browser stands, as its connector reports it with its extensions:
  * - ready: sessions in its sandbox get the browser tool;
  * - missing: none was found, or the path its owner gave isn't a Chromium installation (`error` says which);
- * - downloading: the connector is downloading one (`error` says why the last try failed, if it did);
- * - failed: its download failed (`error`), and is tried again later;
  * - off: its owner turned the browser off;
  * - unsupported: its sessions have no Linux sandbox for it (macOS and Windows sandboxes, hosts without the sandbox).
+ * Older connectors also reported `downloading` and `failed`, for downloads: the control plane refuses them, and such a
+ * connector reports without its status (as it does for a control plane that predates the status) until, given `auto`,
+ * it reports one of these.
  */
-export const browserStates = Object.freeze(["ready", "missing", "downloading", "failed", "off", "unsupported"] as const);
+export const browserStates = Object.freeze(["ready", "missing", "off", "unsupported"] as const);
 export type BrowserState = (typeof browserStates)[number];
 
 export interface HostBrowserStatus {
@@ -247,12 +263,15 @@ export interface HostBrowserStatus {
   state: BrowserState;
   /** The Chromium sessions run, as its host has it: its owner's to see, not its admins' or the workspaces'. */
   executable?: string;
-  /** Its version, where the connector knows it: one it downloaded. */
+  /** Its version, where the connector knows it: older connectors gave the version of one they had downloaded. */
   version?: string;
   /** What went wrong, for its owner alone too: it may name a path they gave. */
   error?: string;
-  /** The connector can download one on this host (Linux on x86-64, which Chrome for Testing builds for). */
-  downloadable: boolean;
+  /**
+   * Older connectors said whether they could download one on the host; older control planes require it. Connectors send
+   * false, as none downloads any more, and nothing reads it.
+   */
+  downloadable?: boolean;
 }
 
 const BROWSER_TEXT_LIMIT = 1024;
@@ -265,8 +284,9 @@ export function parseHostBrowserStatus(value: unknown): HostBrowserStatus {
     throw new Error("Invalid browser status");
   }
   if (!(browserSources as readonly unknown[]).includes(value.source) || !(browserStates as readonly unknown[]).includes(value.state)
-    || typeof value.downloadable !== "boolean") throw new Error("Invalid browser status");
-  const status: HostBrowserStatus = { source: value.source as BrowserSource, state: value.state as BrowserState, downloadable: value.downloadable };
+    || (value.downloadable !== undefined && typeof value.downloadable !== "boolean")) throw new Error("Invalid browser status");
+  const status: HostBrowserStatus = { source: value.source as BrowserSource, state: value.state as BrowserState,
+    ...(value.downloadable !== undefined ? { downloadable: value.downloadable as boolean } : {}) };
   for (const key of ["executable", "version", "error"] as const) {
     const item = value[key];
     if (item === undefined) continue;
@@ -280,16 +300,14 @@ export function parseHostBrowserStatus(value: unknown): HostBrowserStatus {
  * Why a session whose workspace has the browser tool on can't use it (SessionView.extensions.unavailable): fixed reasons,
  * so nothing of its host's files or errors reaches the session's viewers.
  */
-export const browserUnavailableReasons = Object.freeze(["on-host", "sandbox", "off", "missing", "downloading", "failed"] as const);
+export const browserUnavailableReasons = Object.freeze(["on-host", "sandbox", "off", "missing"] as const);
 export type BrowserUnavailableReason = (typeof browserUnavailableReasons)[number];
 
 const browserUnavailableTexts: Readonly<Record<BrowserUnavailableReason, string>> = Object.freeze({
   "on-host": "The browser runs only in a session's sandbox, and this session runs on its host itself.",
   sandbox: "This host's sandbox can't run the browser yet: it runs in the Linux sandbox only.",
   off: "This host's owner turned the browser off for its sessions.",
-  missing: "This host has no Chromium for the browser. Its owner can find one installed there, give its path or download one, under Settings → Hosts → the host → Extensions.",
-  downloading: "This host is downloading Chromium for the browser: the tool is offered once it is ready, within a few minutes.",
-  failed: "This host couldn't download Chromium for the browser. It tries again later; its owner can see why, or set one up another way, under Settings → Hosts → the host → Extensions.",
+  missing: "This host has no Chromium for the browser. Its owner can install their distribution's chromium (or Google Chrome) there, or give the path of one, under Settings → Hosts → the host → Extensions.",
 });
 
 /** What to tell a session's people, and its agent, of why it has no browser. */

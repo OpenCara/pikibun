@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import { builtinExtensionNames, defaultHostConfig, hostConfigLimits, normalizeBuiltinExtensionNames, ownerOnlyHostConfig, parseBuiltinExtensions, parseHostCompaction,
   parseHostConfigChange, parseRequiredExtensions, type HostConfig, type RepositoryCacheMode } from '../../../packages/shared/src/host-config.js';
 import { isPikiExtensionSource } from '../../../packages/shared/src/host-extensions.js';
-import { defaultHostBrowserConfig, parseHostBrowserConfig } from '../../../packages/shared/src/browser.js';
+import { defaultHostBrowserConfig, legacyBrowserConfig, parseHostBrowserConfig } from '../../../packages/shared/src/browser.js';
 import { pikiExtension } from '../../../packages/shared/src/piki-extensions.js';
 import type { Env, WorkerEnv } from './types.js';
 import { auditStatement, managedConnector } from './authority/index.js';
@@ -33,9 +33,12 @@ export async function connectorHostConfig(env: Env, connectorId: string): Promis
     requiredExtensions: storedRequiredExtensions(row.required_extensions_json), browser: storedBrowser(row.browser_json) };
 }
 
-/** The saved browser setting; one that no longer reads as valid (a database edited by hand, say) looks for one, as by default. */
+/**
+ * The saved browser setting; one that no longer reads as valid (a database edited by hand, say) looks for one, as by
+ * default. A download, saved before connectors stopped downloading Chromium, looks for one too (legacyBrowserConfig).
+ */
 function storedBrowser(json: string): HostConfig['browser'] {
-  try { return parseHostBrowserConfig(JSON.parse(json)); }
+  try { return parseHostBrowserConfig(legacyBrowserConfig(JSON.parse(json))); }
   catch { return { ...defaultHostBrowserConfig }; }
 }
 

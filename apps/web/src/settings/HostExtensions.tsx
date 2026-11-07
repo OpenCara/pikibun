@@ -43,9 +43,7 @@ const BROWSER = "piki:browser";
 
 const browserHints: Readonly<Record<HostBrowserStatus["state"], string>> = {
   ready: "Sessions in this host's sandbox can open web pages with it",
-  missing: "No Chromium for it on this host: its sessions have no browser until you set one up below",
-  downloading: "Downloading Chromium for it: its sessions get the browser once it is ready",
-  failed: "Chromium's download failed: it is tried again in a few minutes, or set one up another way below",
+  missing: "No Chromium for it on this host: its sessions have no browser until you install one there, or give its path below",
   off: "Off on this host: its sessions have no browser",
   unsupported: "It runs in the Linux sandbox only, which this host's sessions don't have",
 };
@@ -53,25 +51,25 @@ const browserHints: Readonly<Record<HostBrowserStatus["state"], string>> = {
 function BrowserBadge({ status }: { status: HostBrowserStatus }) {
   switch (status.state) {
     case "ready": return <StatusBadge tone="success">Ready</StatusBadge>;
-    case "downloading": return <StatusBadge tone="neutral" dot>Downloading</StatusBadge>;
     case "missing": return <StatusBadge tone="warning">No Chromium</StatusBadge>;
-    case "failed": return <StatusBadge tone="danger">Download failed</StatusBadge>;
     case "off": return <StatusBadge tone="neutral">Off</StatusBadge>;
     case "unsupported": return <StatusBadge tone="neutral">Not on this host</StatusBadge>;
   }
 }
 
 const browserSources: { value: BrowserSource; label: string; hint: string }[] = [
-  { value: "auto", label: "Find it", hint: "Looks on this host: PIKIBUN_BROWSER, your distribution's chromium, Google Chrome or Chromium, then Playwright's and Puppeteer's downloads, then one downloaded here" },
+  { value: "auto", label: "Find it", hint: "Looks on this host: PIKIBUN_BROWSER, your distribution's chromium, Google Chrome or Chromium, then Playwright's and Puppeteer's downloads" },
   { value: "path", label: "This path", hint: "Runs the Chromium executable you name, and no other" },
-  { value: "download", label: "Download", hint: "The connector downloads Chrome for Testing's headless shell (about 110 MB) into its own folder, and keeps it up to date" },
   { value: "off", label: "Off", hint: "Sessions on this host get no browser" },
 ];
 
+/** How to install a Chromium, with the system libraries it needs, on the host. */
+const browserInstall = <p className="muted small">Install it with your distribution's package manager, which brings the libraries it needs: <code>sudo apt install chromium</code> on Debian, <code>sudo dnf install chromium</code> on Fedora. Ubuntu's chromium is a snap, which can't run in the sandbox: install Google Chrome's <code>.deb</code> there, or <code>npx playwright install --with-deps chromium-headless-shell</code>.</p>;
+
 /**
- * Where piki:browser's Chromium comes from on the host (HostConfig.browser): found there, at a path its owner gives,
- * downloaded by its connector, or none; with how it stands, as the connector last reported. Each session's sandbox gets
- * it read-only; the connector applies a change as it next reports, within a minute.
+ * Where piki:browser's Chromium comes from on the host (HostConfig.browser): found there, at a path its owner gives, or
+ * none; with how it stands, as the connector last reported. Each session's sandbox gets it read-only; the connector
+ * applies a change as it next reports, within a minute.
  */
 function BrowserSetup({ connector, status, owner, busy, save }: { connector: ConnectorInfo; status?: HostBrowserStatus; owner: boolean; busy: boolean;
   save: (browser: HostBrowserConfig) => void }) {
@@ -90,14 +88,14 @@ function BrowserSetup({ connector, status, owner, busy, save }: { connector: Con
   const current = status && status.source === saved.source ? status : undefined;
   return <CardBody><div className="stack">
     {current?.state === "ready" && <p className="small">Sessions run {current.executable ? <code>{current.executable}</code> : "the host's Chromium"}{current.version ? ` (${current.version})` : ""}, read-only in their sandbox.</p>}
-    {current && current.state !== "ready" && current.state !== "off" && <Alert variant={current.state === "downloading" ? "info" : "warning"}
-      title={current.state === "downloading" ? "Downloading Chromium" : current.state === "failed" ? "Chromium's download failed" : current.state === "unsupported" ? "Not on this host" : "No Chromium for the browser"}>
-      {current.error ?? browserHints[current.state]}{current.state === "missing" && current.downloadable && saved.source === "path" ? ". Or have the host find one, or download one." : ""}</Alert>}
+    {current && current.state !== "ready" && current.state !== "off" && <Alert variant="warning"
+      title={current.state === "unsupported" ? "Not on this host" : "No Chromium for the browser"}>
+      {current.error ?? browserHints[current.state]}{current.state === "missing" && saved.source === "path" ? ". Or have the host find one." : ""}</Alert>}
+    {owner && current?.state === "missing" && browserInstall}
     {status && !current && <p className="muted small">The host applies your choice as it next reports, within a minute.</p>}
     {owner ? <form className="stack" onSubmit={submit}>
       <SegmentedControl label="Where the browser's Chromium comes from" value={source} onChange={setSource} options={browserSources.map(({ value, label, hint }) => ({ value, label, hint }))} />
-      <p className="muted small">{browserSources.find(item => item.value === source)?.hint}{source === "download" && status && !status.downloadable
-        ? ". Chrome for Testing builds it for Linux on x86-64 only: on this host, install your distribution's chromium and find it instead." : ""}</p>
+      <p className="muted small">{browserSources.find(item => item.value === source)?.hint}</p>
       {source === "path" && <Field label="Chromium executable" error={pathError} hint="The program itself, beside Chromium's own files (icudtl.dat, its .pak files): /usr/lib/chromium/chromium rather than the /usr/bin/chromium script">
         <input className="input" required spellCheck={false} autoComplete="off" placeholder="/usr/lib/chromium/chromium" maxLength={4096} value={path} onChange={event => setPath(event.target.value)} />
       </Field>}
@@ -130,9 +128,9 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
   const data = resource.data;
   const owner = data?.role === "owner";
   const pending = data?.requests.filter(request => request.status === "pending") ?? [];
-  // While requests wait for the host, or it applies a browser choice or downloads one, look again every few seconds.
+  // While requests wait for the host, or it applies a browser choice, look again every few seconds.
   const browser = data?.report?.browser;
-  const browserChanging = !!browser && !!connector.config && (browser.source !== connector.config.browser.source || browser.state === "downloading");
+  const browserChanging = !!browser && !!connector.config && browser.source !== connector.config.browser.source;
   useEffect(() => {
     if (!pending.length && !browserChanging) return;
     const timer = setInterval(resource.refresh, 5000);
@@ -183,7 +181,7 @@ export function HostExtensionsSection({ connector, refresh }: { connector: Conne
       refresh();
       // The connector applies it as it next reports, within a minute: the section looks again until it has.
       setTimeout(resource.refresh, 35_000);
-    }, browser.source === "download" ? "Saved: the host starts downloading Chromium within a minute, and keeps it up to date" : "Saved: the host applies it within a minute");
+    }, "Saved: the host applies it within a minute");
   }
 
   async function saveRequired(next: RequiredExtension[], notice: string): Promise<boolean> {

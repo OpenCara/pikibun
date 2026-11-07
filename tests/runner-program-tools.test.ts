@@ -404,9 +404,9 @@ test("a sandboxed session whose host has no Chromium yet says why it has no brow
   faux.setResponses([reply, reply]);
   const models = createModels();
   models.setProvider(faux.provider);
-  // The connector's browser, as its owner's choice and a download change it (HostBrowserSource).
+  // The connector's browser, as its owner's choice and an install change it (HostBrowserSource).
   let current: { executable: string; directory: string } | undefined;
-  let status: HostBrowserStatus = { source: "download", state: "downloading", downloadable: true };
+  let status: HostBrowserStatus = { source: "auto", state: "missing", downloadable: false };
   const service = new RunnerService({
     dataDir: directory, sharedSecret: "runner-browser-missing-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
@@ -419,14 +419,14 @@ test("a sandboxed session whose host has no Chromium yet says why it has no brow
   const id = "browser-missing-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   assert.equal(session.sandbox.browser, undefined);
-  assert.deepEqual((await session.view()).extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "downloading" }]);
+  assert.deepEqual((await session.view()).extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "missing" }]);
   await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser missing admission") }, "write");
   await idle(session);
   assert.ok(!offered[0]!.includes("browser"));
-  assert.match(instructions[0]!, /This session has no browser tool: This host is downloading Chromium for the browser/);
-  // The download is done: the next message has the tool, with no restart.
+  assert.match(instructions[0]!, /This session has no browser tool: This host has no Chromium for the browser/);
+  // Its owner installs one: the next message has the tool, with no restart.
   current = { executable: "/opt/chrome-headless-shell/chrome-headless-shell", directory: "/opt/chrome-headless-shell" };
-  status = { source: "download", state: "ready", executable: current.executable, version: "131.0.6778.85", downloadable: true };
+  status = { source: "auto", state: "ready", executable: current.executable, downloadable: false };
   assert.equal((await session.view()).extensions?.unavailable, undefined);
   assert.deepEqual(session.sandbox.browser, { driver: SANDBOX_BROWSER_DRIVER, chromium: "/opt/pikibun/chromium/chrome-headless-shell" });
   await session.submit(await ticket(id, "submit"), { content: "Again.", requestId: "again", admissionId: await sha256("browser missing admission again") }, "write");

@@ -32,7 +32,7 @@ import type { RunnerConfig } from "./session.js";
 import { HostExtensions } from "./extensions/host.js";
 import { ExtensionStore } from "./extensions/store.js";
 import { parseExtensionsSyncAnswer, type ExtensionRequestResult } from "../../../packages/shared/src/host-extensions.js";
-import { browserDownloads, HostBrowserSource, type HostBrowserOptions } from "./browser-host.js";
+import { HostBrowserSource, removeBrowserDownloads, type HostBrowserOptions } from "./browser-host.js";
 
 const STATE_FILE = "connector.json";
 const CALLBACK_LIMIT = 64 * 1024;
@@ -332,8 +332,8 @@ export interface ConnectorOptions {
   fetch?: typeof fetch;
   createSocket?: (url: string, protocols: string[]) => ConnectorSocket;
   runtimeFactory?: (config: RunnerConfig) => Promise<ConnectorRuntime>;
-  /** How the host's browser is found and downloaded (HostBrowserSource); tests stand in their own. */
-  browser?: Partial<Omit<HostBrowserOptions, "root" | "signal">>;
+  /** How the host's browser is found (HostBrowserSource); tests stand in their own. */
+  browser?: Partial<HostBrowserOptions>;
   acquireLease?: typeof acquireRunnerLease;
   reconnectDelayMs?: number;
   /**
@@ -451,9 +451,11 @@ export class LocalConnector {
     if (!this.options.runtimeFactory && process.platform !== "linux" && !this.options.unsandboxed && !this.options.sandboxBackend)
       throw new Error("This platform has no sandbox unless one is chosen (sandboxBackend); no host-shell fallback");
     this.directory = await privateDirectory(this.options.dataDir);
-    // The browser runs in the Linux sandbox only: elsewhere it reports so, and finds or downloads nothing.
+    // The browser runs in the Linux sandbox only: elsewhere it reports so, and finds nothing.
     this.browser = new HostBrowserSource({ supported: process.platform === "linux" && !this.options.unsandboxed && !this.options.sandboxBackend,
-      ...this.options.browser, root: browserDownloads(this.directory), signal: this.lifetime.signal });
+      ...this.options.browser });
+    // What older connectors downloaded goes, in the background: nothing runs it, and nothing would update it.
+    void removeBrowserDownloads(this.directory);
     this.hostExtensions = this.options.extensions
       ?? new HostExtensions(ExtensionStore.forStateDir(this.directory), { remoteInstalls: this.options.remoteExtensionInstalls !== false });
     // Each installed extension's factory runs once here, as Pi runs them when it starts.
@@ -563,7 +565,7 @@ export class LocalConnector {
       // Asked again at every connection, before requests run: the host's configuration may have changed while it was away.
       const { config: configured, answered } = await this.hostConfig.refresh();
       this.requireGeneration(generation);
-      // Sessions open with the browser the owner chose: found, or a download started (in the background).
+      // Sessions open with the browser the owner chose, as found on the host.
       await this.browser?.apply(configured.browser).catch(() => {});
       // Only a configuration the control plane gave replaces the runner: a fallback (it didn't answer) keeps its cache.
       const runtime = await this.ensureRuntime(generation, answered || !this.runtime ? configured.repositoryCache : this.runtime.repositoryCache);
@@ -616,7 +618,7 @@ export class LocalConnector {
     while (!signal.aborted) {
       try {
         await extensions.refreshIfChanged();
-        // The owner's browser choice, applied as the report goes: a change, an install or a finished download shows within a round.
+        // The owner's browser choice, applied as the report goes: a change or an install shows within a round.
         if (this.browser) await this.browser.apply((await this.hostConfig.current()).browser).catch(() => {});
         const status = this.browser?.status();
         const statusKey = status && JSON.stringify(status);

@@ -65,7 +65,7 @@ export interface SandboxOptions {
   node?: NodeToolchain | null;
   /**
    * The Chromium the browser tool runs (browser-toolchain.ts): the host's own by default, the one a connector has now
-   * (HostBrowserSource in browser-host.ts, looked up for each command, as its owner's choice and downloads change it), or
+   * (HostBrowserSource in browser-host.ts, looked up for each command, as its owner's choice and installs change it), or
    * null for none.
    */
   browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);

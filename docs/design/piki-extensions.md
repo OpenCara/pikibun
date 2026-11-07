@@ -345,8 +345,7 @@ download the sandbox can't make, a display, and a way to drive it. `piki:browser
 30. **The host's Chromium, given read-only.** Sessions download nothing, so the browser is the host's, as its owner
     chooses (rule 33; `browser-toolchain.ts`): found there (`PIKIBUN_BROWSER`, else a system install: the
     distributions' `chromium` packages' real executable, not their wrapper scripts, Chrome and Edge in `/opt`; else the
-    newest Playwright or Puppeteer download; else one the connector downloaded), at a path they give, or downloaded by
-    the connector (rule 34). Only an installation is taken: a real executable (ELF on Linux) beside one of Chromium's
+    newest Playwright or Puppeteer download), or at a path they give, installed by them (rule 34). Only an installation is taken: a real executable (ELF on Linux) beside one of Chromium's
     own files, in a directory that is neither `/` nor the host user's home or above it, so mounting its directory never
     gives a session anything else. The Linux sandbox binds it read-only at `/opt/pikibun/chromium` for shell commands,
     unless it is under `/usr`, and the driver at `/opt/pikibun/browser/pikibun-browser`, written at every open like the
@@ -367,47 +366,43 @@ download the sandbox can't make, a display, and a way to drive it. `piki:browser
     commands isn't offered the tool, rather than offered a tool that only fails; one the workspace turned off is refused
     by name, as rule 16 says. Where the workspace has it on, the session's view says why it has none
     (`SessionView.extensions.unavailable`), as a fixed reason (`browserUnavailableReasons`: on the host, another
-    sandbox, off, missing, downloading, failed) so nothing of the host's paths or errors reaches its viewers, and its
-    agent is told in a sentence, so it says so rather than guessing. The reasons its host's owner can do something about
-    (missing, downloading, failed) show as a warning above the chat box as the session starts, on the web and mobile;
+    sandbox, off, missing) so nothing of the host's paths or errors reaches its viewers, and its
+    agent is told in a sentence, so it says so rather than guessing. The reason its host's owner can do something about
+    (missing) shows as a warning above the chat box as the session starts, on the web and mobile;
     each shows in the panel's Extensions section. Its network is the session's: Chromium goes through the egress proxy
     (loopback stays direct), so the workspace's network policy holds, and verifies certificates with its own roots, as
     the proxy only tunnels them.
 33. **The host owner's choice, applied without a restart.** `HostConfig.browser` is the host owner's alone, as
     required extensions are, since it decides which of the host's files every sandboxed session gets: `auto` (found,
     as rule 30 lists), `path` (that executable or none, never another browser; one that isn't an installation says
-    why: nothing there, a wrapper script, a home directory, no Chromium files beside it), `download` (rule 34) or `off`.
+    why: nothing there, a wrapper script, a home directory, no Chromium files beside it) or `off`.
     The connector (`HostBrowserSource`, `browser-host.ts`) applies it as it connects, before its sessions open, and
     before each extensions report, every half minute, and reports how it stands with them (`HostBrowserStatus`: ready,
-    missing, downloading, failed, off, unsupported where its sessions have no Linux sandbox), each text within what
+    missing, off, unsupported where its sessions have no Linux sandbox), each text within what
     the control plane takes, so a long path in an error never gets the report refused. The executable and the error
     (which may name a path the owner gave) are the owner's to see: the host's admins and the workspaces' listing get the
-    rest. Sessions look the browser up for each
-    command and each message's tools, so an install, a change of choice or a finished download reaches open sessions at
-    their next message. A control plane that predates the status refuses a report naming it, and the connector reports
-    without it until the status changes, then tries again, so a status refused for itself doesn't hide the next; it
+    rest. Sessions look the browser up for each command and each message's tools, so an install or a change of choice
+    reaches open sessions at their next message. A control plane that predates the status refuses a report naming it,
+    and the connector reports without it until the status changes, then tries again, so a status refused for itself doesn't hide the next; it
     reports without Pikibun extensions for a control plane older still.
-34. **Downloading Chrome for Testing.** `download` fetches Chrome for Testing's Stable `chrome-headless-shell` for
-    linux64, the build Google publishes for automation (Puppeteer's default): its version from Chrome for Testing's JSON
-    API on `googlechromelabs.github.io`, its zip from `storage.googleapis.com/chrome-for-testing-public/` only, at
-    exactly the path the API names for that version (`browser-download.ts`). The connector reads the zip itself, so the
-    host needs no `unzip`: regular files and directories only, every name inside the target, every size and CRC-32 as
-    the central directory says, within 512 MB downloaded and 2 GB extracted. It extracts beside the target and renames
-    it into place only once it holds an installation, so a download that stops part way leaves nothing a session could
-    run. It goes to the connector's state (`<state>/browser/<version>`), the host's one copy, which the sandbox gives
-    sessions read-only as it would a system install. A failed first download is tried again after ten minutes, or at
-    once when the owner chooses again; once a day the connector checks for a newer Stable, downloads it beside the one
-    in use and switches sessions to it once it is in place, and a failed update keeps the one in use. The one replaced
-    stays until the next check, a day later, since a command that started with it (an hour at most) may still run it,
-    and the sandbox skips a mount whose source is gone. Chrome for Testing builds Linux
-    for x86-64 only, so ARM hosts install their distribution's `chromium`; and Chromium links system libraries (NSS,
-    GBM, ALSA) that a minimal server may lack, which the hosts guide names rather than the connector installing
-    packages.
+34. **Installed by the host's owner, with its libraries.** Chromium links system libraries (NSS, GBM, ALSA, ATK, X11's)
+    that a minimal server lacks, and a build without them doesn't start. The connector used to download Chrome for
+    Testing's headless shell (`download`), but that brought the browser without its libraries, and reported it ready
+    though it couldn't start; installing them takes root, and package names differ between distributions and their
+    releases. So the owner installs Chromium with the system's package manager, which brings them (Debian's and Fedora's
+    `chromium`; Google Chrome's `.deb` or Playwright's `install-deps` on Ubuntu, whose `chromium` is a snap), as the
+    hosts guide says, and the connector only finds it. A saved or sent `download` reads as `auto`
+    (`legacyBrowserConfig`: the control plane's saved settings and what a connector reads from an older one), and a
+    change naming it is refused; older connectors' `downloading` and `failed` statuses are refused like any status a
+    control plane doesn't know (rule 33), and they report `auto` once they read it. Connectors remove what older ones
+    downloaded (`<state>/browser`) as they start, and still send `downloadable: false`, which older control planes
+    require.
 
 Later: a browser that lives across calls, for long flows and watching a page as it changes, in a sandbox of the
 session's that outlives one command, beside the app it tests; the user driving it from the Browser tab; the macOS and
-Windows sandboxes, with proxy credentials for their proxies; a check that a Chromium found or downloaded starts, in the
-sandbox, before sessions are offered it, so missing system libraries show on the host's page rather than in a call.
+Windows sandboxes, with proxy credentials for their proxies; a check that a Chromium found starts, in the sandbox,
+before sessions are offered it, so missing system libraries (of a Playwright download, say) show on the host's page
+rather than in a call.
 
 ## The prompt audit: piki:prompt-audit
 

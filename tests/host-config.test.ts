@@ -49,7 +49,7 @@ test("a host configuration is whole and within bounds, or refused", () => {
     requiredExtensions: [{ source: "piki:prompt-audit", settings: { model: "anthropic/haiku", policy: "Never read ~/clients." } }, { source: "npm:cc-safety-net@2.7.2", settings: {} }],
     browser: { source: "path", path: "/usr/lib/chromium/chromium" } };
   assert.deepEqual(parseHostConfig(config), config);
-  for (const browser of [{ source: "auto" }, { source: "download" }, { source: "off" }]) assert.deepEqual(parseHostConfig({ ...config, browser }).browser, browser);
+  for (const browser of [{ source: "auto" }, { source: "off" }]) assert.deepEqual(parseHostConfig({ ...config, browser }).browser, browser);
   assert.deepEqual(parseHostConfig({ ...defaultHostConfig }), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" } });
   for (const invalid of [undefined, null, [], "config", { ...config, commandTimeoutSeconds: 29 }, { ...config, commandTimeoutSeconds: 3601 },
     { ...config, commandTimeoutSeconds: 60.5 }, { ...config, commandTimeoutSeconds: "60" }, { ...config, gpu: 1 }, { ...config, gitCredentials: "true" },
@@ -63,6 +63,8 @@ test("a host configuration is whole and within bounds, or refused", () => {
     { ...config, browser: undefined }, { ...config, browser: "auto" }, { ...config, browser: { source: "anywhere" } }, { ...config, browser: { source: "path" } },
     { ...config, browser: { source: "path", path: "chromium" } }, { ...config, browser: { source: "path", path: "/opt/chrome\n--flag" } },
     { ...config, browser: { source: "path", path: `/${"x".repeat(4096)}` } }, { ...config, browser: { source: "download", path: "/opt/chrome/chrome" } },
+    // Connectors no longer download one: a change can't choose it.
+    { ...config, browser: { source: "download" } },
     { ...config, browser: { source: "auto", version: "131" } },
     { ...config, toString: "x" }]) {
     assert.throws(() => parseHostConfig(invalid), /host configuration|time limit|setting|token counts|[Bb]uilt-in extensions|required extension|[Bb]rowser/, JSON.stringify(invalid));
@@ -119,8 +121,10 @@ test("a change of configuration names one or more valid settings, and only those
 
 test("a connector reads what it knows of a configuration: newer settings are left out, missing ones keep their defaults", () => {
   const sent = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host", hostSessions: true, compaction: { reserveTokens: 20_000 },
-    builtinExtensions: ["pi:codemode"], requiredExtensions: [{ source: "piki:prompt-audit", settings: {} }], browser: { source: "download" } };
+    builtinExtensions: ["pi:codemode"], requiredExtensions: [{ source: "piki:prompt-audit", settings: {} }], browser: { source: "off" } };
   assert.deepEqual(readHostConfig({ ...sent, someLaterSetting: "on" }), sent);
+  // An older control plane's download is looked for on the host, not a reason to drop the whole configuration.
+  assert.deepEqual(readHostConfig({ ...sent, browser: { source: "download" } }), { ...sent, browser: { source: "auto" } });
   // Built-in extensions it doesn't ship are left out too, not a reason to drop the whole configuration.
   assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["tool-search", "pi:codemode"] }), sent);
   assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["codemode"] }), sent, "a control plane of before pi: names names them bare");

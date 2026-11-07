@@ -396,7 +396,7 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
     dataDir, server: origin, localModels: { ...localModels([{ ...summary, ...{ apiKey: providerSecret } }]), ...options.piSettings },
     capabilities: publicCapabilities, reconnectDelayMs: 1, gpu: options.gpu ?? null, ...(options.extensions ? { extensions: options.extensions } : {}),
     ...(options.version ? { version: options.version } : {}),
-    browser: { supported: true, platform: 'linux', arch: 'x64', detect: () => undefined, ...options.browser },
+    browser: { supported: true, platform: 'linux', detect: () => undefined, ...options.browser },
     acquireLease: path => {
       assert.equal(path, dataDir);
       leases.acquired++;
@@ -1409,8 +1409,8 @@ test('a connected host reports its extensions, carries out the installs its owne
   } });
   await startFixture(fixture);
   // With how its browser stands: none found here, and none chosen.
-  assert.deepEqual(await syncs.next(), { report: { installed: [], remoteInstalls: true, browser: { source: 'auto', state: 'missing', downloadable: true,
-    error: 'No Chromium found on this host: install your distribution\'s chromium or Google Chrome, give the path of one, or download one here' } }, results: [] });
+  assert.deepEqual(await syncs.next(), { report: { installed: [], remoteInstalls: true, browser: { source: 'auto', state: 'missing', downloadable: false,
+    error: 'No Chromium found on this host: install your distribution\'s chromium (sudo apt install chromium, sudo dnf install chromium) or Google Chrome, which bring the libraries it needs, or give the path of one' } }, results: [] });
   const second = await syncs.next();
   assert.deepEqual(second.results, [{ id: 'request-1', ok: true }]);
   assert.deepEqual(second.report.installed.map(item => item.source), ['npm:pi-hello@1.0.0']);
@@ -1439,7 +1439,7 @@ test('a connected host\'s sessions get the browser its owner chose, and its repo
   const config = fixture.runtimes[0]!.config;
   assert.equal(typeof config.browser, 'function');
   assert.deepEqual((config.browser as () => unknown)(), { executable: join(directory, 'chrome'), directory });
-  assert.deepEqual((await syncs.next()).report.browser, { source: 'path', state: 'ready', executable: join(directory, 'chrome'), downloadable: true });
+  assert.deepEqual((await syncs.next()).report.browser, { source: 'path', state: 'ready', executable: join(directory, 'chrome'), downloadable: false });
   assert.equal(config.browserStatus!()!.state, 'ready');
   // A path that isn't a Chromium installation is none, never another browser, and the report says why.
   await rm(join(directory, 'icudtl.dat'));
@@ -1447,13 +1447,13 @@ test('a connected host\'s sessions get the browser its owner chose, and its repo
   const connector = fixture.connector as unknown as { browser: { apply(config: unknown): Promise<unknown> } };
   await connector.browser.apply(browser);
   assert.equal((config.browser as () => unknown)(), undefined);
-  assert.deepEqual(config.browserStatus!(), { source: 'path', state: 'missing', downloadable: true,
+  assert.deepEqual(config.browserStatus!(), { source: 'path', state: 'missing', downloadable: false,
     error: `${directory} doesn't hold Chromium's own files (icudtl.dat or its .pak files) beside chrome` });
   // Found on the host; or off.
   await connector.browser.apply({ source: 'auto' });
   assert.deepEqual((config.browser as () => unknown)(), { executable: '/usr/lib/chromium/chromium', directory: '/usr/lib/chromium' });
   await connector.browser.apply({ source: 'off' });
-  assert.deepEqual([(config.browser as () => unknown)(), config.browserStatus!()], [undefined, { source: 'off', state: 'off', downloadable: true }]);
+  assert.deepEqual([(config.browser as () => unknown)(), config.browserStatus!()], [undefined, { source: 'off', state: 'off', downloadable: false }]);
 });
 
 test('a browser status the control plane refuses is left out only until it changes, so the next reaches the host\'s owner', { timeout: 10000 }, async t => {

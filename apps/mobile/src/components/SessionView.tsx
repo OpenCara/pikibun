@@ -55,8 +55,8 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
   const readOnly = archived || session?.frozen === true;
   const canApprove = permissions.includes("approve") && !readOnly;
   const isOwner = session?.ownerId === user.id;
-  // The workspace has the browser on but the host has no Chromium for it (yet), as on the web.
-  const browserWarning = !readOnly ? live.view?.extensions?.unavailable?.find(item => item.source === "piki:browser" && ["missing", "failed", "downloading"].includes(item.reason)) : undefined;
+  // The workspace has the browser on but the host has no Chromium for it, as on the web.
+  const browserWarning = !readOnly ? live.view?.extensions?.unavailable?.find(item => item.source === "piki:browser" && item.reason === "missing") : undefined;
   const [dismissedBrowser, setDismissedBrowser] = useState<string>();
   const hosts = useResource<{ connectors: ConnectorInfo[] }>(session?.connectorId ? `/api/workspaces/${segment(session.workspaceId)}/connectors` : null, 10_000);
   const host = hosts.data?.connectors.find(item => item.id === session?.connectorId);
@@ -206,8 +206,7 @@ export function SessionView({ id, embedded }: { id: string; embedded: boolean })
         pinned={<>
           {view.repositories && <RepositoryPreparationCard sessionId={id} preparation={view.repositories}
             canRestart={isOwner && !archived && permissions.includes("manage")} onRestarted={() => { live.refresh(); refreshSessions(); }} />}
-          {browserWarning && permissions.includes("write") && dismissedBrowser !== id && <Banner tone={browserWarning.reason === "downloading" ? "info" : "warning"}
-            title={browserWarning.reason === "downloading" ? "The browser isn't ready yet" : "No browser on this host"}
+          {browserWarning && permissions.includes("write") && dismissedBrowser !== id && <Banner tone="warning" title="No browser on this host"
             actions={<Button small label="Dismiss" onPress={() => setDismissedBrowser(id)} />}>
             The workspace has the browser tool on, but this session can't use it. {browserUnavailableText(browserWarning.reason)}
           </Banner>}
