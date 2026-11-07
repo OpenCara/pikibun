@@ -459,7 +459,16 @@ jobs:
           key: nsh-ios-runner-${{ hashFiles('scripts/nsh.mjs') }}-xcode-${{ steps.xcode.outputs.build }}
       - name: The iPhone runner, built with this Xcode
         run: |
-          (cd "$RUNNER_TEMP/nsh-src" && cargo build --release --locked -p nsh-ios-app --target aarch64-apple-ios)
+          # Its output in a file, and on failure the end of it and the first error as an annotation: Actions' log of a
+          # long cargo build comes back cut short.
+          if ! (cd "$RUNNER_TEMP/nsh-src" && cargo build --release --locked --color never -p nsh-ios-app --target aarch64-apple-ios) \
+            > "$RUNNER_TEMP/cargo.log" 2>&1; then
+            tail -n 120 "$RUNNER_TEMP/cargo.log"
+            first=$(grep -m1 -A6 -E '^error' "$RUNNER_TEMP/cargo.log" | tr '\n' ' ' | cut -c1-900)
+            echo "::error::Building NSH's iPhone runner failed: ${first:-see the log}"
+            exit 1
+          fi
+          tail -n 3 "$RUNNER_TEMP/cargo.log"
           # The prebuilt release for everything else (also downloaded by `nsh package` itself).
           node scripts/nsh.mjs --version
           runtime="$RUNNER_TEMP/nsh-runtime"
