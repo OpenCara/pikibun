@@ -5,8 +5,10 @@
  *   node scripts/nsh.mjs <nsh arguments...>      # e.g. check, test, run --target ios
  *   node scripts/nsh.mjs --build-web [out]       # the web app into dist/web (or out), as the server serves it
  *
- * The CLI is `NSH_BIN` when set; otherwise the pinned release, downloaded once into .cache/nsh/<version> (Linux x86_64
- * and Apple-silicon macOS, which NSH publishes) and checked against its SHA-256; otherwise `nsh` on PATH.
+ * The CLI is `NSH_BIN` when set; otherwise the pinned release, downloaded once into .cache/nsh/<version> (Linux x86_64,
+ * Apple-silicon macOS and x86_64 Windows, which NSH publishes) and checked against its SHA-256; otherwise `nsh` on PATH.
+ * Each release packages for its own platforms: Linux's for Linux, Android and the web, macOS's for macOS, iOS and the
+ * web, Windows's for Windows and the web.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -23,6 +25,7 @@ const app = path.join(repository, "apps", "nsh");
 function release() {
   if (platform() === "linux" && arch() === "x64") return "nsh-linux-x86_64.tar.gz";
   if (platform() === "darwin" && arch() === "arm64") return "nsh-macos-arm64.tar.gz";
+  if (platform() === "win32" && arch() === "x64") return "nsh-windows-x86_64.zip";
   return null;
 }
 
@@ -40,7 +43,8 @@ async function download(asset, directory) {
   mkdirSync(partial, { recursive: true });
   const archive = path.join(partial, asset);
   writeFileSync(archive, bytes);
-  const untar = spawnSync("tar", ["-xzf", archive, "-C", partial], { stdio: "inherit" });
+  // Windows' own tar (bsdtar) reads the zip too.
+  const untar = spawnSync("tar", [asset.endsWith(".zip") ? "-xf" : "-xzf", archive, "-C", partial], { stdio: "inherit" });
   if (untar.status !== 0) throw new Error(`extracting ${asset} failed`);
   rmSync(archive);
   rmSync(directory, { recursive: true, force: true });
@@ -53,7 +57,7 @@ export async function nshBinary() {
   const asset = release();
   if (asset) {
     const directory = path.join(repository, ".cache", "nsh", NSH_VERSION);
-    const bin = path.join(directory, "nsh", "bin", "nsh");
+    const bin = path.join(directory, "nsh", "bin", platform() === "win32" ? "nsh.exe" : "nsh");
     if (!existsSync(bin)) await download(asset, directory);
     return bin;
   }

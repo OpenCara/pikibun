@@ -1,8 +1,9 @@
 {
   "name": "Pikibun",
-  "id": "com.opencara.pikibun",
+  "id": "com.pikibun.app",
   "version": "0.1.0",
   "build": 1,
+  "icon": "icon.png",
   "capabilities": {
     "network": { "hosts": ["*"] },
     "webview": { "hosts": ["*"] },

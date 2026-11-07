@@ -48,6 +48,15 @@ Its storage is isolated and discarded when it ends. `--timeout-ms 600000` sets t
 out, and no page errors, Content-Security-Policy violations or console errors on the way. NSH's headless engine isn't a
 browser and has APIs its web runtime lacks, so only this catches the web's own failures.
 
+## Release it
+
+Pushing an `app-v1.2.3` tag on `main` packages the app for every platform (`.github/workflows/release-app.yml`): a
+Windows installer ([`windows/installer.iss`](windows/installer.iss), Inno Setup, per user) and portable zip, the macOS
+app, Linux and Android on the tag's GitHub release, and iOS to TestFlight. Its identity is `nsh.json`'s: the id
+`com.pikibun.app` (the iPhone and Android app's before it, so they update in place) and the icon `icon.png`. Signing
+and the secrets it needs are in [docs/development.md](../../docs/development.md). To package one by hand, for this
+machine's platforms: `pnpm nsh package App.tsx --target macos` (or `windows`, `linux`, `android`, `ios`).
+
 ## Known gaps, from NSH itself
 
 - **The web runtime**: NSH 0.4's has no `lifecycle` (its import is undefined there), so `src/lib/lifecycle.ts` stands in
