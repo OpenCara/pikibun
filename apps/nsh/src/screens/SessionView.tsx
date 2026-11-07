@@ -1,5 +1,5 @@
-import { cleanup, Clipboard, computed, effect, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
-import { AlertDialog, NavPage, Sheet } from "nsh/base";
+import { cleanup, Clipboard, computed, effect, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, windowSize, type Accessor, type JSX, type ListRef } from "nsh";
+import { AlertDialog, Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
   initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, preparingRepositories,
@@ -18,9 +18,10 @@ import { randomId } from "../lib/format";
 import { createLiveSession, type LiveSessionState } from "../lib/live-session";
 import { createUsername, createWorkspacePeople, PeopleContext } from "../lib/people";
 import { createAction, createResource } from "../lib/resource";
-import { palette } from "../theme";
-import { Badge, Banner, Button, Chip, confirm, EmptyState, Feedback, IconButton, Loading, OptionSheet, Segmented, Small } from "../ui";
-import { drawsHeaders, PageHeader } from "./PageHeader";
+import { Icon } from "../icons";
+import { palette, radius, text } from "../theme";
+import { Badge, Banner, Button, Chip, confirm, EmptyState, Feedback, IconButton, Loading, Picker, Small } from "../ui";
+import { drawsHeaders, PageHeader, pageStyle } from "./PageHeader";
 import type { PageRoute } from "../lib/page";
 import { SessionPanel } from "../session-panel";
 
@@ -129,13 +130,23 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   };
 
   const headerActions = () => (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-      <IconButton testID="session-approvals" icon="🛡" label={pending().length ? `Approvals, ${pending().length} pending` : "Approvals"} badge={pending().length}
-        onPress={() => approvalsOpen.set(true)} disabled={!live.view()} />
-      <IconButton testID="session-copy-id" icon="⧉" label="Copy session ID" onPress={copyId} />
-      <IconButton testID="session-details" icon="ⓘ" label="Session details" onPress={() => panelOpen.set(true)} />
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+      <If when={!props.page}>
+        <View style={{ paddingRight: 6 }}><Badge testID="session-connection" tone={badge().tone} dot={badge().dot}>{badge().text}</Badge></View>
+      </If>
+      <IconButton testID="session-approvals" icon="shield-check" label={pending().length ? `Approvals, ${pending().length} pending` : "Approvals"} badge={pending().length}
+        tone={pending().length ? "warning" : undefined} onPress={() => approvalsOpen.set(true)} disabled={!live.view()} />
+      <IconButton testID="session-copy-id" icon="copy" label="Copy session ID" onPress={copyId} />
+      <IconButton testID="session-details" icon="panel-right" label="Session details" onPress={() => panelOpen.set(true)} active={panelOpen()} />
     </View>
   );
+  /** What the header says under the title: where the session lives and runs, and who sees it. */
+  const subtitle = () => {
+    const current = live.session();
+    const parts = [workspace()?.name, host() ? `${host()!.name}${host()!.online ? "" : " (offline)"}` : undefined];
+    if (current) parts.push(current.visibility === "workspace" ? "Workspace-visible" : "Private", ...(current.linkShared ? ["Link shared"] : []));
+    return parts.filter(Boolean).join(" · ");
+  };
 
   const pendingApprovalCard = (approval: Accessor<ApprovalRecord>) => {
     const permission = () => approval().operation.kind === "permission";
@@ -160,12 +171,12 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             else={
               <>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                  <Button testID="approval-approve" small variant="primary" label="Approve" disabled={disabled()} onPress={() => void decide(approval(), "approve")} />
+                  <Button testID="approval-approve" variant="primary" icon="check" label="Approve" disabled={disabled()} onPress={() => void decide(approval(), "approve")} />
                   <If when={always()}>
-                    <Button testID="approval-always" small label={`Always approve ${username(people().person(approval().requestedBy))}`} disabled={disabled()}
+                    <Button testID="approval-always" label={`Always approve ${username(people().person(approval().requestedBy))}`} disabled={disabled()}
                       onPress={() => void decide(approval(), "approve", undefined, true)} />
                   </If>
-                  <Button testID="approval-deny" small label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
+                  <Button testID="approval-deny" icon="x" label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
                 </View>
                 <Small testID="approval-hint">
                   {`Runs as ${hostCommand() ? "the host OS user (outside the sandbox)" : live.view()?.owner.displayName ?? ""} · each approval covers one exact operation and its arguments`}
@@ -173,12 +184,12 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               </>
             }>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              <Button small variant="primary" label="Allow once" disabled={disabled()} onPress={() => void decide(approval(), "approve", "call")} />
+              <Button variant="primary" icon="check" label="Allow once" disabled={disabled()} onPress={() => void decide(approval(), "approve", "call")} />
               {/* Each host command asks again: it runs outside the sandbox. */}
               <If when={!(approval().operation.kind === "permission" && (approval().operation as { tool?: string }).tool === "host_bash")}>
-                <Button small label="Allow for this session" disabled={disabled()} onPress={() => void decide(approval(), "approve", "session")} />
+                <Button label="Allow for this session" disabled={disabled()} onPress={() => void decide(approval(), "approve", "session")} />
               </If>
-              <Button small label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
+              <Button icon="x" label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
             </View>
           </If>
         </If>
@@ -208,34 +219,33 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
           <Banner tone="danger" title="Runs on the host">This session runs directly on its host, without the sandbox. Approved commands and commits execute on the host owner's machine with their full user permissions, network access and no resource limits; only the host owner, or members they granted host commands, decide them.</Banner>
         </If>
       </If>
-      <Each of={pending()} key={approval => approval.id}>{approval => pendingApprovalCard(approval)}</Each>
-      <Feedback error={approvalAction.error()} notice={approvalAction.notice()} />
     </View>
+  );
+
+  /** What waits for a decision, docked above the chat box so it can't scroll out of sight. */
+  const approvalDock = (
+    <If when={pending().length > 0 || approvalAction.error() || approvalAction.notice()}>
+      <Scroll testID="approval-dock" style={{ flexShrink: 1, maxHeight: "55%" }} contentStyle={{ gap: 10, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
+        <Each of={pending()} key={approval => approval.id}>{approval => pendingApprovalCard(approval)}</Each>
+        <Feedback error={approvalAction.error()} notice={approvalAction.notice()} />
+      </Scroll>
+    </If>
   );
 
   const content = (
     <PeopleContext.Provider value={people}>
       <View style={{ flex: 1, backgroundColor: palette().background }}>
         <If when={!props.page}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 8, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
-            <Text style={{ flex: 1, numberOfLines: 1, fontSize: 17, fontWeight: "700", color: palette().text }}>{title()}</Text>
-            {headerActions()}
+          <PageHeader title={title()} subtitle={subtitle()} actions={headerActions()} testID="session-header" />
+        </If>
+        <If when={props.page && live.session()}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 6, borderBottomWidth: 1, borderColor: palette().border }}>
+            <Badge testID="session-connection" tone={badge().tone} dot={badge().dot}>{badge().text}</Badge>
+            <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{subtitle()}</Text>
           </View>
         </If>
-        <If when={live.session()}>
-          {current => (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderColor: palette().border }}>
-              <If when={workspace()?.name}>{name => <Small>{name()}</Small>}</If>
-              <Badge tone={badge().tone} dot={badge().dot}>{badge().text}</Badge>
-              <Badge>{current().visibility === "workspace" ? "Workspace-visible" : "Private"}</Badge>
-              <If when={current().linkShared}><Badge tone="info">Link shared</Badge></If>
-              <If when={host() && !host()!.online}><Badge tone="warning" dot>Host offline</Badge></If>
-              <SessionPeople session={current()} host={host()} />
-            </View>
-          )}
-        </If>
         <If when={archived() || (live.error() && !startFailed()) || action.error() || action.notice()}>
-          <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 8 }}>
+          <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
             <If when={archived()}>
               <Banner title="Archived" actions={<If when={manages()}><Button small label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
                 {`This session is read-only. ${manages() ? "Unarchive it to continue the work." : "Only its owner, or the workspace's owner or an admin, can unarchive it."}`}
@@ -257,7 +267,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               </If>
             </If>
           }>
-          <Conversation id={props.id} live={live} host={host} pinned={pinned}
+          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={approvalDock}
             openSession={target => { data.refreshSessions(); props.openSession(target); }} />
         </If>
         <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} sessionId={props.id} session={live.session} view={live.view}
@@ -270,24 +280,10 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
 
   if (!props.page) return content;
   return (
-    <NavPage title={title()} headerRight={drawsHeaders ? undefined : headerActions()}
-      header={drawsHeaders ? <PageHeader title={title()} onBack={props.onBack} actions={headerActions()} /> : undefined}>
+    <NavPage title={title()} style={pageStyle()} headerRight={drawsHeaders ? undefined : headerActions()}
+      header={drawsHeaders ? <PageHeader title={title()} onBack={props.onBack} actions={headerActions()} testID="session-header" /> : undefined}>
       {content}
     </NavPage>
-  );
-}
-
-/** Who the work runs as and whose machine it runs on, as the web's session panel names them. */
-function SessionPeople(props: { session: SessionRecord; host: ConnectorInfo | undefined }) {
-  const { user } = untracked(session);
-  const name = createUsername();
-  const hostOwner = () => props.host?.ownerName ?? (props.session.connectorOwnerId ? name(props.session.connectorOwnerId) : "unknown");
-  return (
-    <Text testID="session-people" style={{ width: "100%", numberOfLines: 2, fontSize: 13, lineHeight: 18, color: palette().muted }}>
-      {`Owned by ${name(props.session.ownerId, true)}${props.session.connectorId
-        ? ` · ${props.host?.name ?? "Pinned host"}, hosted by ${hostOwner()}${props.session.connectorOwnerId === user.id ? " (you)" : ""}`
-        : " · Operator-managed session"}`}
-    </Text>
   );
 }
 
@@ -310,14 +306,14 @@ function ApprovalsSheet(props: {
   }
   const sorted = () => [...props.approvals].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending"));
   return (
-    <Sheet open={props.open} side={platform.desktop ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
+    <Sheet open={props.open} side={windowSize().width >= 700 ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
       backdropStyle={{ backgroundColor: palette().backdrop }}
-      popupStyle={platform.desktop
-        ? { width: 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background }
-        : { height: "90%", borderTopLeftRadius: 16, borderTopRightRadius: 16, backgroundColor: palette().background }}>
+      popupStyle={windowSize().width >= 700
+        ? { width: 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background, borderLeftWidth: 1, borderColor: palette().border }
+        : { height: "90%", borderTopLeftRadius: radius.xlarge, borderTopRightRadius: radius.xlarge, backgroundColor: palette().background }}>
       <View testID="approvals-sheet" style={{ flex: 1 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 8, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
-          <Text style={{ flex: 1, fontSize: 17, fontWeight: "700", color: palette().text }}>Approvals</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
+          <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: palette().text }}>Approvals</Text>
           <Button small variant="ghost" label="Done" onPress={props.onClose} />
         </View>
         <Scroll style={{ flex: 1 }} contentStyle={{ gap: 12, padding: 16 }}>
@@ -349,7 +345,7 @@ function ApprovalsSheet(props: {
 
 type MessageAction = "copy" | "revert" | "fork";
 
-function Conversation(props: { id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; openSession: (id: string) => void }) {
+function Conversation(props: { id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; openSession: (id: string) => void }) {
   const { user } = untracked(session);
   const data = useAppData();
   const askAutoApprove = confirmAutoApprove(data);
@@ -362,7 +358,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   // The unsent text is remembered until it is sent, so switching to another session and back keeps it.
   const content = createDraft(props.id);
   const conversationId = signal("");
-  const pickingConversation = signal(false);
   const queueOpen = signal(false);
   let request: { key: string; id: string } | null = null;
   // Set while the owner decides on Auto-approve, so a second tap can't send the message twice.
@@ -505,10 +500,10 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const draftHasSecret = () => Boolean(content().trim()) && redactSecrets(content()) !== content();
   const queueLabel = () => {
     const queued = activeQueue().length > 0 ? ` · ${activeQueue().length} queued` : "";
-    return preparingRepositories(view()) ? `Preparing repositories...${queued}`
-      : stopPending() ? `Stopping...${queued}`
+    return preparingRepositories(view()) ? `Preparing repositories…${queued}`
+      : stopPending() ? `Stopping…${queued}`
       // A call waiting on a card holds its message until someone decides.
-      : view().busy ? `${view().activity === "waiting" ? "Waiting for a decision" : "Working"}...${queued}`
+      : view().busy ? `${view().activity === "waiting" ? "Waiting for a decision" : "Working"}…${queued}`
       : activeQueue().length ? `${activeQueue().length} queued` : "Idle";
   };
   const name = createUsername();
@@ -519,80 +514,97 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     : actualMode() === "ask" ? "Read-only · anyone who can view this session can see side asks"
     : `Runs as ${view().owner.displayName}${view().owner.id === user.id ? " (you)" : ""}`;
   // Phones keep the chat box above the software keyboard and the home indicator.
-  const bottomInset = () => (platform.desktop ? 8 : Math.max(keyboardFrame().height, safeArea().bottom, 8));
+  const bottomInset = () => (platform.desktop ? 12 : Math.max(keyboardFrame().height, safeArea().bottom, 12));
+
+  const statusShown = () => working() || activeQueue().length > 0 || queueOpen();
+  const statusTone = () => (stopPending() ? "warning" : view().busy && view().activity === "waiting" ? "warning" : "running");
 
   return (
     <>
-      <List each={entries()} keyExtractor={entry => entry.id} ref={list} style={{ flex: 1 }} contentStyle={{ padding: 16 }}
+      <List each={entries()} keyExtractor={entry => entry.id} ref={list} style={{ flex: 1 }} contentStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 }}
         maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 80 }} testID="transcript"
         accessibilityLabel={actualMode() === "ask" ? "Side ask history" : "Shared session history"}
         header={() => (
           <If when={olderCount() > 0}>
-            <View style={{ alignItems: "center", paddingBottom: 12 }}>
-              <Button small variant="ghost" icon="↑" busy={loadingOlder()} onPress={loadEarlier} label={`Show earlier messages (${olderCount()})`} testID="load-earlier" />
+            <View style={{ alignItems: "center", paddingBottom: 16 }}>
+              <Button small variant="ghost" icon="chevron-up" busy={loadingOlder()} onPress={loadEarlier} label={`Show earlier messages (${olderCount()})`} testID="load-earlier" />
             </View>
           </If>
         )}
         empty={() => (
-          <EmptyState title={actualMode() === "ask" ? "A question on the side" : "The conversation begins here"}>
-            {actualMode() === "ask" ? "Ask about the work without changing it" : "Committed messages and tool results will appear here"}
+          <EmptyState icon={actualMode() === "ask" ? "message-question" : "message"} title={actualMode() === "ask" ? "A question on the side" : "The conversation begins here"}>
+            {actualMode() === "ask" ? "Ask about the work without changing it. Only you, and people who can view this session, see side asks." : "Messages, the agent's replies and its tool calls appear here."}
           </EmptyState>
         )}
-        footer={() => props.pinned}>
+        footer={() => <View style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}>{props.pinned}</View>}>
         {entry => (
-          <TranscriptEntry entry={entry()} userId={user.id} expanded={id => expanded().has(id)} onActions={entry => void showActions(entry)}
-            toggle={id => expanded.update(set => { const next = new Set(set); if (!next.delete(id)) next.add(id); return next; })} />
+          <View style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}>
+            <TranscriptEntry entry={entry()} userId={user.id} expanded={id => expanded().has(id)} onActions={entry => void showActions(entry)}
+              toggle={id => expanded.update(set => { const next = new Set(set); if (!next.delete(id)) next.add(id); return next; })} />
+          </View>
         )}
       </List>
-      <View style={{ gap: 8, paddingHorizontal: 12, paddingTop: 8, paddingBottom: bottomInset(), borderTopWidth: 1, borderColor: palette().border, backgroundColor: palette().background }}>
-        <View testID="queue-line" role="button" onPress={() => queueOpen.update(open => !open)} style={{ flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 4 }}>
-          <Small>{queueLabel()}</Small>
-          <Small>{queueOpen() ? "Hide" : "Details"}</Small>
+      {props.dock}
+      <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: bottomInset(), backgroundColor: palette().background }}>
+        <View style={{ gap: 6, width: "100%", maxWidth: 800, alignSelf: "center" }}>
+          <If when={statusShown()}>
+            <BaseButton testID="queue-line" accessibilityLabel={`${queueLabel()}, ${queueOpen() ? "hide details" : "show details"}`} onPress={() => queueOpen.update(open => !open)}
+              style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", paddingHorizontal: 8, height: 26, borderRadius: radius.pill,
+                backgroundColor: palette().tones[statusTone()].background }}
+              hoverStyle={{ opacity: 0.85 }}>
+              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: palette().tones[statusTone()].text }} />
+              <Text style={{ fontSize: text.caption, fontWeight: "600", color: palette().tones[statusTone()].text }}>{queueLabel()}</Text>
+              <Icon name={queueOpen() ? "chevron-up" : "chevron-down"} size={12} color={palette().tones[statusTone()].text} />
+            </BaseButton>
+          </If>
+          <If when={queueOpen()}>
+            <View style={{ gap: 6, padding: 12, borderRadius: radius.large, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
+              <Small>Submissions and side asks share one queue; permissions are checked again before work runs. You can leave this screen: accepted work continues while the host is online and authorized.</Small>
+              <If when={props.live.error()}><Small>This is the last received queue view; live host status is not confirmed.</Small></If>
+              <If when={receipt()}>
+                {last => <Small>{`Last receipt ${last().submissionId} · ${last().status}${last().queuePosition !== undefined ? ` · queue position ${last().queuePosition}` : ""}`}</Small>}
+              </If>
+              <Each of={activeQueue()} key={item => item.submissionId}>
+                {(item, index) => <Small>{`${index() + 1}. ${item().mode === "ask" ? "Read-only side ask" : "Shared submission"} · ${item().status} · by ${name(item().actorId, true)}`}</Small>}
+              </Each>
+              <Each of={recentSubmissions()} key={item => item.submissionId}>
+                {item => <Small>{`${item().status} · ${item().mode === "ask" ? "Side ask" : "Shared submission"} · by ${name(item().actorId, true)}`}</Small>}
+              </Each>
+              <View style={{ flexDirection: "row" }}><Button small icon="refresh" label="Refresh queue" onPress={props.live.refresh} /></View>
+            </View>
+          </If>
+          <Composer value={content()} onChange={value => content.set(value)} onSubmit={() => void submit()} busy={submission.busy()} disabled={!permitted()}
+            onStop={canStop() ? stop : undefined} stopping={stopping.busy()}
+            placeholder={!permitted() ? "Read-only" : actualMode() === "ask" ? "Ask a side question without changing anything" : "Message the agent"}
+            sendLabel={actualMode() === "ask" ? "Send side ask" : "Submit to session"}
+            hint={hint()}
+            tools={
+              <If when={canAsk() || permitted()}>
+                <If when={canAsk()}>
+                  <Picker<"write" | "ask"> title="Send as" value={actualMode()} onSelect={value => mode.set(value)}
+                    trigger={<Chip testID="composer-mode" icon={actualMode() === "ask" ? "message-question" : "users"} label={actualMode() === "ask" ? "Side ask" : "Shared"} />}
+                    options={[
+                      { value: "write", label: "Shared", icon: "users", hint: "Goes into the shared conversation; the agent can change the work" },
+                      { value: "ask", label: "Side ask", icon: "message-question", hint: "A question on the side that doesn't change the work" },
+                    ]} />
+                </If>
+                <If when={actualMode() === "ask" && sideConversations().length > 0}>
+                  <Picker<string> title="Side conversation" value={conversationId()} onSelect={value => conversationId.set(value)}
+                    trigger={<Chip label={sideIndex() < 0 ? "All my side asks" : `Side ask ${sideIndex() + 1}`} />}
+                    options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
+                </If>
+                <If when={permitted()}>
+                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} owner={owner()} showAccess={actualMode() === "write"}
+                    unsandboxed={unsandboxed()} data={data} />
+                </If>
+              </If>
+            } />
+          <If when={draftHasSecret()}>
+            <Small testID="draft-secret" tone="warning">{`This message looks like it holds a secret. Everyone, you included, sees it as ${REDACTED} in the transcript, but the agent and its host receive it as typed.`}</Small>
+          </If>
+          <Feedback error={submission.error() || stopping.error() || rewinding.error()} notice={rewinding.notice()} />
         </View>
-        <If when={queueOpen()}>
-          <View style={{ gap: 6, paddingHorizontal: 4 }}>
-            <Small>Submissions and side asks share one queue; permissions are checked again before work runs. You can leave this screen: accepted work continues while the host is online and authorized.</Small>
-            <If when={props.live.error()}><Small>This is the last received queue view; live host status is not confirmed.</Small></If>
-            <If when={receipt()}>
-              {last => <Small>{`Last receipt ${last().submissionId} · ${last().status}${last().queuePosition !== undefined ? ` · queue position ${last().queuePosition}` : ""}`}</Small>}
-            </If>
-            <Each of={activeQueue()} key={item => item.submissionId}>
-              {(item, index) => <Small>{`${index() + 1}. ${item().mode === "ask" ? "Read-only side ask" : "Shared submission"} · ${item().status} · by ${name(item().actorId, true)}`}</Small>}
-            </Each>
-            <Each of={recentSubmissions()} key={item => item.submissionId}>
-              {item => <Small>{`${item().status} · ${item().mode === "ask" ? "Side ask" : "Shared submission"} · by ${name(item().actorId, true)}`}</Small>}
-            </Each>
-            <View style={{ flexDirection: "row" }}><Button small icon="↻" label="Refresh queue" onPress={props.live.refresh} /></View>
-          </View>
-        </If>
-        <Composer value={content()} onChange={value => content.set(value)} onSubmit={() => void submit()} busy={submission.busy()} disabled={!permitted()}
-          onStop={canStop() ? stop : undefined} stopping={stopping.busy()}
-          placeholder={!permitted() ? "Read-only" : actualMode() === "ask" ? "Ask without changing anything" : "Message the agent"}
-          sendLabel={actualMode() === "ask" ? "Send side ask" : "Submit to session"}
-          hint={hint()}
-          tools={
-            <If when={canAsk() || permitted()}>
-              <If when={canAsk()}>
-                <Segmented testID="composer-mode" value={actualMode()} onChange={value => mode.set(value)}
-                  options={[{ value: "write", label: "Shared" }, { value: "ask", label: "Side ask" }]} />
-              </If>
-              <If when={actualMode() === "ask" && sideConversations().length > 0}>
-                <Chip label={sideIndex() < 0 ? "All my side asks" : `Side ask ${sideIndex() + 1}`} onPress={() => pickingConversation.set(true)} />
-              </If>
-              <If when={permitted()}>
-                <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} owner={owner()} showAccess={actualMode() === "write"}
-                  unsandboxed={unsandboxed()} data={data} />
-              </If>
-            </If>
-          } />
-        <If when={draftHasSecret()}>
-          <Small testID="draft-secret">{`This message looks like it holds a secret. Everyone, you included, sees it as ${REDACTED} in the transcript, but the agent and its host receive it as typed.`}</Small>
-        </If>
-        <Feedback error={submission.error() || stopping.error() || rewinding.error()} notice={rewinding.notice()} />
       </View>
-      <OptionSheet<string> open={pickingConversation()} title="Side conversation" value={conversationId()} onClose={() => pickingConversation.set(false)}
-        onSelect={value => conversationId.set(value)}
-        options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
     </>
   );
 }
@@ -638,12 +650,12 @@ function UnavailableConversation(props: { id: string; session: SessionRecord; er
   return (
     <>
       <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1 }}>
-        <EmptyState title={title()}>{body()}</EmptyState>
+        <EmptyState icon={props.session.status === "error" ? "alert" : props.session.status === "provisioning" ? "clock" : "monitor"} title={title()}>{body()}</EmptyState>
         <If when={failed() && props.error}>
           <Small center>{props.error}</Small>
         </If>
       </Scroll>
-      <View style={{ gap: 8, paddingHorizontal: 12, paddingTop: 8, paddingBottom: platform.desktop ? 8 : Math.max(keyboardFrame().height, safeArea().bottom, 8), borderTopWidth: 1, borderColor: palette().border }}>
+      <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 8, paddingBottom: platform.desktop ? 12 : Math.max(keyboardFrame().height, safeArea().bottom, 12), width: "100%", maxWidth: 800, alignSelf: "center" }}>
         <Composer value={content()} onChange={value => content.set(value)} onSubmit={send} busy={action.busy()} disabled={!canRestart()}
           placeholder={canRestart() ? "Message the agent to start the session again" : "Message the agent"}
           sendLabel={canRestart() ? "Restart and send" : "Sending is unavailable"}

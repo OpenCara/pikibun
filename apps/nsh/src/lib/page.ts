@@ -58,7 +58,10 @@ export function startPage(): void {
   host.on<string>("page.route", hash => pageRoute.set(parseRoute(hash ?? "")));
 }
 
-/** Shows where the app is in the address bar (no history entry of its own; Native Shell keeps those). */
+/**
+ * Shows where the app is in the address bar (no history entry of its own; Native Shell keeps those, and the page's host
+ * keeps their addresses right as Native Shell pushes and pops them: see web/host.js).
+ */
 export function showRoute(route: PageRoute): void {
   if (!hasPage()) return;
   host.call("page.setRoute", { hash: routeHash(route) }).catch(() => undefined);

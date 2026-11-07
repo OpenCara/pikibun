@@ -27,6 +27,22 @@ host (`web/host.js`, NSH's `web.host`) gives it the page's address, so the web a
 
 Native builds sign in to a server you enter: GitHub in the app's own web view, or a test-mode server's token.
 
+## Design
+
+Quiet chrome in the manner of today's coding-agent apps (Codex, Claude Code, Lody, Paseo), so the conversation and what
+needs a decision stand out:
+
+- **Layout**: wider windows have a sidebar (a new session, every session by workspace, the signed-in person and
+  settings) beside the open session; with none open, the home asks "What should we work on?" with the chat box that
+  starts one. Phones stack the session list, then the session.
+- **Session**: a header with where the session lives and runs and its connection; the transcript in one readable column,
+  user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
+  pending approvals docked above the chat box; the chat box's pickers (shared or side ask, model, reasoning, access)
+  along its bottom edge. Details (owner, host, visibility, ID) are in the session's panel.
+- **Kit**: `src/theme.ts` (colors for light and dark, Pikibun's lavender as the accent, type sizes, radii), `src/ui.tsx`
+  (buttons, badges, banners, cards, chips, pickers on `Menu`: a popup on the desktops and the web, a sheet on phones)
+  and `src/icons.tsx` (Lucide-style outlines drawn with `Canvas`, as NSH has no icon font).
+
 ## Test it
 
 ```sh

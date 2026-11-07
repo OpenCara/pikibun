@@ -1,9 +1,11 @@
-import { openUrl, Text, View, type JSX } from "nsh";
+import { openUrl, signal, Text, View, type JSX } from "nsh";
+import { Button as BaseButton } from "nsh/base";
 import { automaticNote, containsRedaction, extensionToolArguments, extensionToolNotice, REDACTED, type ApprovalRecord } from "../shared";
 import type { GitHubMergeMethod, GitHubMergeOperation, GitPushOperation, PermissionNeed, PermissionRequest } from "../../../../packages/shared/src/types";
 import { timestamp } from "../lib/format";
 import { createUsername } from "../lib/people";
-import { monospace, palette, type Tone } from "../theme";
+import { Icon, type IconName } from "../icons";
+import { monospace, palette, radius, text, type Tone } from "../theme";
 import { Badge, Banner, Button, Card, Small } from "../ui";
 
 const approvalTone: Record<ApprovalRecord["status"], Tone> = {
@@ -23,10 +25,44 @@ const mergeMethodLabels: Record<GitHubMergeMethod, string> = { merge: "Merge com
 
 function Code(props: { children?: JSX.Element; testID?: string }) {
   return (
-    <View selectable style={{ borderRadius: 8, padding: 10, backgroundColor: palette().code }}>
-      <Text testID={props.testID} style={{ fontFamily: monospace, fontSize: 12, lineHeight: 17, color: palette().text }}>{props.children}</Text>
+    <View selectable style={{ borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, padding: 10, backgroundColor: palette().code }}>
+      <Text testID={props.testID} style={{ fontFamily: monospace, fontSize: 12, lineHeight: 18, color: palette().text }}>{props.children}</Text>
     </View>
   );
+}
+
+type Operation = ApprovalRecord["operation"];
+
+/** What a card asks, in a few words, and its icon. */
+function heading(op: Operation): { icon: IconName; title: string } {
+  switch (op.kind) {
+    case "program": return { icon: "terminal", title: `Run ${op.tool}` };
+    case "bash": return { icon: "terminal", title: "Run a command" };
+    case "host.bash": return { icon: "monitor", title: "Run a command on the host" };
+    case "git.commit": return { icon: "branch", title: "Commit" };
+    case "git.push": return { icon: "branch", title: op.tag !== undefined ? "Push a tag" : op.pullRequest ? "Push and open a pull request" : "Push" };
+    case "github.merge": return { icon: "pull-request", title: "Merge a pull request" };
+    case "github.issue": return { icon: "pull-request", title: "Open an issue" };
+    case "github.comment": return { icon: "pull-request", title: "Comment on GitHub" };
+    case "permission": return { icon: "shield-check", title: `Permission for ${op.tool}` };
+    case "extension.tool": return { icon: "zap", title: `Extension tool · ${op.tool}` };
+    case "git.repin": return { icon: "branch", title: "Repin a repository" };
+    default: return { icon: "shield-check", title: (op as { kind: string }).kind };
+  }
+}
+
+/**
+ * The exact text an operation runs or writes, when the card can show the whole operation by it: the command of a
+ * program, shell or host command (with the program's tool in the title), a commit's message. Other operations show
+ * their JSON as it is.
+ */
+function exactText(op: Operation): string | null {
+  switch (op.kind) {
+    case "program": case "bash": return op.command;
+    case "host.bash": return `${op.command}\n\n# Time limit: ${op.timeoutSeconds} seconds`;
+    case "git.commit": return op.message;
+    default: return null;
+  }
 }
 
 function Detail(props: { label: string; children?: JSX.Element }) {
@@ -126,20 +162,23 @@ export function ApprovalCard(props: { approval: ApprovalRecord; onOpenSession?: 
       ? allowed(approval.decidedBy, approval.scope)
       : `${approval.permission ? allowed(approval.permission.decidedBy, approval.permission.scope) : ""}${approval.decidedBy ? ` · Decision by ${name(approval.decidedBy)}` : ""}`;
   };
-  const kindLabel = () => {
-    const op = operation();
-    return op.kind === "permission" ? "Permission" : op.kind === "extension.tool" ? `Extension tool · ${op.tool}` : op.kind;
-  };
   const repin = () => (operation().kind === "git.repin" && props.approval.status === "executed" ? repinnedSession(props.approval.result) : null);
+  const pending = () => props.approval.status === "pending";
+  const showJson = signal(false);
+  const exact = () => exactText(operation());
   return (
-    <Card testID={`approval-${props.approval.id}`}>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
-        <Text style={{ fontSize: 14, fontWeight: "700", color: palette().text }}>{kindLabel()}</Text>
+    <Card testID={`approval-${props.approval.id}`} style={pending() ? { borderColor: palette().tones.warning.border, gap: 12 } : undefined}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+        <View style={{ width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center",
+          backgroundColor: pending() ? palette().tones.warning.background : palette().surfaceRaised }}>
+          <Icon name={heading(operation()).icon} size={14} color={pending() ? palette().tones.warning.text : palette().muted} />
+        </View>
+        <Text style={{ flexShrink: 1, fontSize: text.reading, fontWeight: "600", color: palette().text }}>{heading(operation()).title}</Text>
         <View style={{ flex: 1 }} />
         <If when={props.approval.unbounded}><Badge tone="warning">No resource limits</Badge></If>
         <If when={containsRedaction(operation())}><Badge tone="warning">Secret hidden</Badge></If>
         <If when={props.approval.automatic}><Badge tone="warning">Auto-approved</Badge></If>
-        <Badge tone={approvalTone[props.approval.status]} dot={props.approval.status === "executing"}>{props.approval.status}</Badge>
+        <Badge tone={approvalTone[props.approval.status]} dot={props.approval.status === "executing" || pending()}>{pending() ? "Needs approval" : props.approval.status}</Badge>
       </View>
       <If when={operation().kind === "permission" ? operation() as PermissionRequest : null}
         else={
@@ -167,9 +206,22 @@ export function ApprovalCard(props: { approval: ApprovalRecord; onOpenSession?: 
             <If when={operation().kind === "github.merge" ? operation() as GitHubMergeOperation : null}>
               {op => <GitHubMergeSummary operation={op()} />}
             </If>
-            <Code testID="approval-operation">
-              {(() => { const op = operation(); return op.kind === "extension.tool" ? extensionToolArguments(op) : JSON.stringify(op, null, 2); })()}
-            </Code>
+            <If when={exact() !== null}
+              else={
+                <Code testID="approval-operation">
+                  {(() => { const op = operation(); return op.kind === "extension.tool" ? extensionToolArguments(op) : JSON.stringify(op, null, 2); })()}
+                </Code>
+              }>
+              <Code testID="approval-command">{exact() ?? ""}</Code>
+              <BaseButton accessibilityLabel={showJson() ? "Hide the exact operation" : "Show the exact operation"} onPress={() => showJson.update(value => !value)}
+                style={{ flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", paddingVertical: 2 }} activeStyle={{ opacity: 0.6 }}>
+                <Icon name={showJson() ? "chevron-up" : "chevron-down"} size={12} color={palette().muted} />
+                <Text style={{ fontSize: text.caption, color: palette().muted }}>{showJson() ? "Hide the exact operation" : "Show the exact operation"}</Text>
+              </BaseButton>
+              <If when={showJson()}>
+                <Code testID="approval-operation">{JSON.stringify(operation(), null, 2)}</Code>
+              </If>
+            </If>
             <If when={props.approval.status === "pending" && containsRedaction(operation())}><HiddenSecretNote /></If>
           </>
         }>

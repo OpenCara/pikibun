@@ -10,8 +10,9 @@ import { SectionPage, type SectionProps } from "./parts";
 
 export const APP_VERSION = "0.1.0";
 
+/** A settings page's group heading, over its card. */
 export function Heading(props: { children: string }) {
-  return <Text style={{ fontSize: 13, fontWeight: "600", textTransform: "uppercase", marginTop: 8, color: palette().muted }}>{props.children}</Text>;
+  return <Text role="header" style={{ fontSize: 13, fontWeight: "600", marginTop: 12, marginBottom: -2, color: palette().muted }}>{props.children}</Text>;
 }
 
 /** The signed-in person: their account, this sign-in, the app, signing out. */
@@ -32,7 +33,7 @@ export function Profile(_props: SectionProps) {
         <Row label="User ID">
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
             <Value testID="settings-user-id">{usernameWithId(user())}</Value>
-            <Button small variant="ghost" icon="⧉" label="Copy" onPress={() => void action.run(() => Clipboard.writeText(user().id), "User ID copied")} />
+            <Button small variant="ghost" icon="copy" label="Copy" onPress={() => void action.run(() => Clipboard.writeText(user().id), "User ID copied")} />
           </View>
         </Row>
         <Small>Workspace owners add you with your user ID.</Small>
@@ -49,7 +50,7 @@ export function Profile(_props: SectionProps) {
         <Row label="Platform"><Value>{`${platform.os} ${platform.version} · ${platform.desktop ? "desktop" : platform.idiom}`}</Value></Row>
       </Card>
       <Feedback error={action.error()} notice={action.notice()} />
-      <Button testID="sign-out" variant="danger" icon="⏻" label="Sign out" onPress={() => void confirmSignOut()} />
+      <Button testID="sign-out" variant="danger" block icon="log-out" label="Sign out" onPress={() => void confirmSignOut()} />
     </SectionPage>
   );
 }

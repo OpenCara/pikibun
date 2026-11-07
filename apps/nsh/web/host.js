@@ -8,13 +8,24 @@ const page = typeof location !== "undefined" && typeof history !== "undefined";
 /** The fragment, or "" where there is no page (nsh test runs this module headless too). */
 const route = () => (page ? location.hash : "");
 
+/** The address the app last showed: where it is now. */
+let shown = null;
+/** How many of Native Shell's pages were open over the first, as the history entry the page is on says. */
+const depthOf = state => (typeof state?.nsh === "number" ? state.nsh : 0);
+let depth = 0;
+/** When Back or Forward moved between Native Shell's pages, until its hashchange comes (0: none pending). */
+let traversedAt = 0;
+
 const functions = new Map([
   ["page.route", () => route()],
   // Shows the app's route in the address bar without a history entry of its own: Native Shell keeps the entries of
   // its pages and dialogs, whose state stays as it is.
   ["page.setRoute", args => {
     const hash = typeof args?.hash === "string" && /^#\/[^\s]*$/.test(args.hash) ? args.hash : "#/";
-    if (page && location.hash !== hash) history.replaceState(history.state, "", hash);
+    shown = hash;
+    // Marks the entry as one the app has been on (Native Shell's entries copy the state of the one they're pushed from),
+    // so Back to it later isn't mistaken for a link just followed.
+    if (page && (location.hash !== hash || !history.state?.pikibun)) history.replaceState({ ...(history.state ?? {}), pikibun: true }, "", hash);
     return null;
   }],
   // Only this server's own pages (/api/auth/github, say), never another site's.
@@ -27,7 +38,38 @@ const functions = new Map([
 ]);
 
 export async function createHost(player) {
-  if (page && typeof addEventListener === "function") addEventListener("hashchange", () => player.hostEvent("page.route", route()));
+  if (page && typeof addEventListener === "function") {
+    // Native Shell pushes and pops its pages' history entries on its own time, after the app has shown the new page's
+    // address, so an entry can hold another page's address. Back or Forward to an entry of another of its pages (from
+    // the app's Back or the browser's) is Native Shell's to follow: the entry gets the app's address back rather than
+    // being taken as a link, which reopened the page just left (Settings, Back, Settings again), and the app then shows
+    // where it went. Anything else goes where the entry points, as it always did: a link followed or an address typed
+    // (a new entry, without state), and Back or Forward between entries of the same page (two addresses typed one after
+    // the other). The depth of the page an entry is of is followed through Native Shell's own calls.
+    depth = depthOf(history.state);
+    for (const name of ["pushState", "replaceState"]) {
+      const original = history[name].bind(history);
+      history[name] = (state, unused, url) => {
+        original(state, unused, url);
+        depth = depthOf(state);
+      };
+    }
+    addEventListener("popstate", event => {
+      const left = depth;
+      depth = depthOf(event.state);
+      const known = Boolean(event.state?.pikibun || event.state?.nshSession);
+      const between = known && depth !== left;
+      // A move that leaves the address as it is has no hashchange to come: the mark lapses rather than swallow a link.
+      traversedAt = between ? Date.now() : 0;
+      if (between && shown && location.hash !== shown) history.replaceState(history.state, "", shown);
+    });
+    addEventListener("hashchange", () => {
+      const traversed = traversedAt && Date.now() - traversedAt < 1000;
+      traversedAt = 0;
+      if (traversed) return;
+      player.hostEvent("page.route", route());
+    });
+  }
   return {
     call(name, args) {
       const fn = functions.get(name);
