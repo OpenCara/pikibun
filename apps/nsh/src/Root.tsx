@@ -1,20 +1,21 @@
-import { computed, effect, signal, untracked, View, windowSize } from "nsh";
-import { createNavStack, NavPage, NavStack } from "nsh/base";
+import { computed, effect, safeArea, signal, Text, untracked, View, windowSize } from "nsh";
+import { Button as BaseButton, createNavStack, NavPage, NavStack } from "nsh/base";
 import { AppDataContext, createAppData } from "./lib/app-data";
-import { auth, restore } from "./lib/auth";
+import { auth, restore, session } from "./lib/auth";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
+import { Icon, type IconName } from "./icons";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
-import { headerProps } from "./screens/PageHeader";
+import { drawsHeaders, headerProps } from "./screens/PageHeader";
 import { SessionList } from "./screens/SessionList";
 import { SessionView } from "./screens/SessionView";
 import { SharedSession } from "./screens/SharedSession";
 import { SignIn } from "./screens/SignIn";
 import { applyStoredAppearance } from "./settings/Appearance";
 import { findSection, SectionList } from "./settings";
-import { palette } from "./theme";
-import { EmptyState, IconButton, Loading } from "./ui";
+import { palette, radius, text } from "./theme";
+import { Avatar, IconButton, Loading, Logo } from "./ui";
 
 type Route =
   | { name: "sessions" }
@@ -27,7 +28,7 @@ type Route =
   | { name: "settings-section"; section: string; id?: string }
   | { name: "join"; token: string };
 
-/** Phones stack the list and the session; wider windows (tablets, desktops, the web) show them side by side. */
+/** Phones stack the list and the session; wider windows (tablets, desktops, the web) show a sidebar beside them. */
 const WIDE = 700;
 
 export function Root() {
@@ -69,8 +70,12 @@ function Shell() {
     return lastWidth;
   });
   const wide = () => width() >= WIDE;
-  /** The session beside the list in the wide layout. */
+  /** The session beside the sidebar in the wide layout; none shows the new-session home there. */
   const selected = signal<string | null>(null);
+  /** The workspace the wide layout's home starts a session in, when a link named one. */
+  const homeWorkspace = signal<string | undefined>(undefined);
+  /** Bumped to start the home's form afresh (a new session after another, a link to a workspace's new session). */
+  const homeKey = signal(0);
 
   function openSession(id: string) {
     if (wide()) {
@@ -87,6 +92,17 @@ function Shell() {
       selected.set(id);
     } else {
       nav.replace({ name: "session", id });
+    }
+  }
+  /** A new session: the wide layout's home, or a page of its own on phones. */
+  function startNew(workspaceId?: string) {
+    if (wide()) {
+      nav.popToRoot();
+      homeWorkspace.set(workspaceId);
+      selected.set(null);
+      homeKey.update(value => value + 1);
+    } else {
+      nav.push({ name: "new", ...(workspaceId ? { workspaceId } : {}) });
     }
   }
   function openSettings(section?: string, id?: string) {
@@ -107,7 +123,7 @@ function Shell() {
     switch (route.name) {
       case "home": nav.popToRoot(); break;
       case "session": nav.popToRoot(); openSession(route.sessionId); break;
-      case "new": nav.popToRoot(); nav.push({ name: "new", workspaceId: route.workspaceId }); break;
+      case "new": nav.popToRoot(); startNew(route.workspaceId); break;
       case "settings": nav.popToRoot(); openSettings(route.section, route.id); break;
       case "join": nav.popToRoot(); nav.push({ name: "join", token: route.token }); break;
       case "shared": break;
@@ -134,8 +150,8 @@ function Shell() {
       }
     });
   });
-  // A window narrowed while a session is open beside the list keeps it open, as its own page; widened, the page goes
-  // back beside the list.
+  // A window narrowed while a session is open beside the sidebar keeps it open, as its own page; widened, the page goes
+  // back beside the sidebar. A new-session page becomes the wide layout's home the same way.
   effect(() => {
     const isWide = wide();
     untracked(() => {
@@ -147,18 +163,22 @@ function Shell() {
       } else if (isWide && top?.name === "session") {
         nav.popToRoot();
         selected.set(top.id);
+      } else if (isWide && top?.name === "new") {
+        nav.popToRoot();
+        homeWorkspace.set(top.workspaceId);
+        selected.set(null);
       }
     });
   });
 
   const back = () => nav.pop();
   const listActions = () => (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-      <IconButton testID="open-by-id" icon="⇥" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
-      <IconButton testID="new-session" icon="＋" label="New session" onPress={() => nav.push({ name: "new" })} />
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+      <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
+      <IconButton testID="new-session" icon="compose" label="New session" onPress={() => startNew()} active />
     </View>
   );
-  const settingsButton = () => <IconButton testID="open-settings" icon="⚙" label="Settings" onPress={() => openSettings()} />;
+  const settingsButton = () => <IconButton testID="open-settings" icon="settings" label="Settings" onPress={() => openSettings()} />;
 
   return (
     <AppDataContext.Provider value={data}>
@@ -167,14 +187,23 @@ function Shell() {
           switch (route.name) {
             case "sessions":
               return (
-                <NavPage title="Sessions" {...headerProps({ title: "Pikibun", leading: settingsButton(), actions: listActions() })}>
-                  <If when={wide()} else={<SessionList onOpen={openSession} onNew={() => nav.push({ name: "new" })} />}>
+                <If when={wide()}
+                  else={
+                    <NavPage title="Sessions" {...headerProps({ title: "Sessions", leading: drawsHeaders ? <Logo size={22} /> : settingsButton(), actions: drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions() })}>
+                      <SessionList onOpen={openSession} onNew={() => startNew()} />
+                    </NavPage>
+                  }>
+                  <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined}>
                     <View style={{ flex: 1, flexDirection: "row" }}>
-                      <View style={{ width: 340, borderRightWidth: 1, borderColor: palette().border }}>
-                        <SessionList selectedId={selected()} onOpen={openSession} onNew={() => nav.push({ name: "new" })} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <If when={selected()} else={<EmptyState title="No session open">Choose a session from the list, or start a new one.</EmptyState>}>
+                      <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()}
+                        onOpenById={() => nav.push({ name: "open" })} onSettings={() => openSettings()} />
+                      <View style={{ flex: 1, backgroundColor: palette().background }}>
+                        <If when={selected()}
+                          else={
+                            <Each of={[homeKey()]} key={value => String(value)}>
+                              {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} />}
+                            </Each>
+                          }>
                           {/* Keyed by id: another session is another view, with its own stream, drafts and picks. */}
                           <Each of={selected() ? [selected()!] : []} key={id => id}>
                             {id => <SessionView id={id()} page={false} openSession={openSession} go={go} />}
@@ -182,8 +211,8 @@ function Shell() {
                         </If>
                       </View>
                     </View>
-                  </If>
-                </NavPage>
+                  </NavPage>
+                </If>
               );
             case "session":
               return <SessionView id={route.id} page openSession={openSession} onBack={back} go={go} />;
@@ -226,13 +255,58 @@ function Shell() {
   );
 }
 
+/** One of the sidebar's places: an icon and a label, highlighted while it is shown. */
+function SidebarItem(props: { icon: IconName; label: string; onPress: () => void; active?: boolean; testID?: string }) {
+  return (
+    <BaseButton testID={props.testID} accessibilityLabel={props.label} selected={props.active} onPress={props.onPress}
+      style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, height: 34, borderRadius: radius.medium,
+        backgroundColor: props.active ? palette().selection : "transparent" }}
+      hoverStyle={{ backgroundColor: props.active ? palette().selection : palette().hover }} activeStyle={{ opacity: 0.7 }}>
+      <Icon name={props.icon} size={16} color={palette().text} />
+      <Text style={{ flex: 1, fontSize: text.body, fontWeight: "500", color: palette().text }}>{props.label}</Text>
+    </BaseButton>
+  );
+}
+
+/** The wide layout's sidebar: the app, a new session, every session by workspace, and the signed-in person's settings. */
+function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onSettings: () => void }) {
+  const user = () => session().user;
+  return (
+    <View testID="sidebar" style={{ width: 280, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
+      <View desktop={{ windowDrag: true }} style={{ flexDirection: "row", alignItems: "center", gap: 8, height: 52, paddingLeft: 16, paddingRight: 8 }}>
+        <Logo size={22} />
+        <Text style={{ flex: 1, fontSize: text.title, fontWeight: "700", color: palette().text }}>Pikibun</Text>
+        <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={props.onOpenById} />
+      </View>
+      <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
+        <SidebarItem testID="new-session" icon="compose" label="New session" active={props.home} onPress={props.onNew} />
+      </View>
+      <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} />
+      <View style={{ borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>
+        <BaseButton testID="open-settings" accessibilityLabel="Settings" onPress={props.onSettings}
+          style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8, height: 42, borderRadius: radius.medium }}
+          hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
+          <Avatar name={user().displayName || user().githubLogin || "?"} size={26} />
+          <View style={{ flex: 1, gap: 1 }}>
+            <Text style={{ fontSize: text.body, fontWeight: "500", color: palette().text, numberOfLines: 1 }}>{user().displayName || user().githubLogin}</Text>
+            <If when={user().githubLogin}>
+              {login => <Text style={{ fontSize: text.caption, color: palette().muted, numberOfLines: 1 }}>{`@${login()}`}</Text>}
+            </If>
+          </View>
+          <Icon name="settings" size={16} color={palette().muted} />
+        </BaseButton>
+      </View>
+    </View>
+  );
+}
+
 /** The settings: the sections, and in the wide layout the chosen one beside them. */
 function SettingsPage(props: { section?: string; id?: string; wide: boolean; onOpen: (section: string) => void; go: (route: PageRoute) => void }) {
   const current = () => findSection(props.section);
   return (
     <If when={props.wide} else={<SectionList onOpen={props.onOpen} />}>
       <View style={{ flex: 1, flexDirection: "row" }}>
-        <View style={{ width: 260, borderRightWidth: 1, borderColor: palette().border }}>
+        <View style={{ width: 240, borderRightWidth: 1, borderColor: palette().border, backgroundColor: palette().sidebar }}>
           <SectionList selected={current().id} onOpen={props.onOpen} />
         </View>
         <View style={{ flex: 1 }}>

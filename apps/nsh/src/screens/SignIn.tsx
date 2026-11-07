@@ -6,12 +6,12 @@ import { errorMessage } from "../shared";
 import { auth, checkBrowserSession, restore, signInMethods, signInWithPassword, signInWithToken, signOut, startGitHubSignIn, type GitHubSignIn, type SignInMethods } from "../lib/auth";
 import { createAction } from "../lib/resource";
 import { displayOrigin, parseOrigin, usesBrowserSession } from "../lib/server";
-import { palette } from "../theme";
-import { Banner, Button, Small } from "../ui";
+import { palette, radius, text } from "../theme";
+import { Banner, Button, Logo, Small } from "../ui";
 
 const inputStyle = () => ({
-  borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16,
-  backgroundColor: palette().surface, borderColor: palette().border, color: palette().text, placeholderColor: palette().muted,
+  borderWidth: 1, borderRadius: radius.medium, paddingHorizontal: 12, height: 40, fontSize: text.reading,
+  backgroundColor: palette().surface, borderColor: palette().borderStrong, color: palette().text, placeholderColor: palette().faint,
 });
 
 /** Signed out, or a stored sign-in whose server could not be reached. */
@@ -28,7 +28,8 @@ export function SignIn() {
         else={<SignInForm />}>
         {unreachable => (
           <View style={{ flex: 1, justifyContent: "center", gap: 16, padding: 24, width: "100%", maxWidth: 480, alignSelf: "center" }}>
-            <Text style={{ fontSize: 32, fontWeight: "800", color: palette().text }}>Can't reach Pikibun</Text>
+            <Logo size={44} />
+            <Text style={{ fontSize: 26, fontWeight: "700", color: palette().text }}>Can't reach Pikibun</Text>
             <Banner tone="warning" title={displayOrigin(origin())}>{unreachable().error}</Banner>
             <Button variant="primary" label="Try again" disabled={action.busy()} onPress={() => void restore()} />
             <Button variant="ghost" label={action.busy() ? "Signing out…" : "Sign out"} disabled={action.busy()} onPress={() => void action.run(signOut)} />
@@ -95,10 +96,11 @@ function SignInForm() {
   }
 
   return (
-    <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1, justifyContent: "center", gap: 16, padding: 24, width: "100%", maxWidth: 480, alignSelf: "center" }}>
-      <View style={{ gap: 8 }}>
-        <Text style={{ fontSize: 32, fontWeight: "800", color: palette().text }}>Pikibun</Text>
-        <Text style={{ fontSize: 16, lineHeight: 22, color: palette().muted }}>Run Pi agents on your own machine, and work on them together with your team.</Text>
+    <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1, justifyContent: "center", gap: 14, padding: 24, width: "100%", maxWidth: 420, alignSelf: "center" }}>
+      <View style={{ gap: 10, alignItems: "center", paddingBottom: 8 }}>
+        <Logo size={56} />
+        <Text style={{ fontSize: 26, fontWeight: "700", color: palette().text, textAlign: "center" }}>Sign in to Pikibun</Text>
+        <Text style={{ fontSize: text.reading, lineHeight: 22, color: palette().muted, textAlign: "center" }}>Run Pi agents on your own machines, and work on them together with your team.</Text>
       </View>
       <If when={notice()}>{text => <Banner tone="warning">{text()}</Banner>}</If>
       <If when={action.error()}>{text => <Banner tone="danger" title="Sign-in problem">{text()}</Banner>}</If>
@@ -121,10 +123,10 @@ function SignInForm() {
           </If>
         </View>
       </If>
-      <Button testID="github-sign-in" variant="primary" icon="⌥" label="Continue with GitHub" busy={action.busy() && !developerOpen()}
+      <Button testID="github-sign-in" variant="primary" large block icon="github" label="Continue with GitHub" busy={action.busy() && !developerOpen()}
         disabled={origin() === null || action.busy() || methods()?.githubConfigured === false} onPress={continueWithGitHub} />
       <If when={usesBrowserSession}>
-        <Button testID="browser-session-check" label="I've signed in" disabled={action.busy()}
+        <Button testID="browser-session-check" block label="I've signed in" disabled={action.busy()}
           onPress={() => void action.run(async () => { if (!await checkBrowserSession()) throw new Error("This browser isn't signed in to Pikibun yet."); })} />
       </If>
       <If when={usesBrowserSession && methods()?.passwordAuth}>
@@ -135,7 +137,7 @@ function SignInForm() {
           <Input testID="password-password" value={password()} onChange={event => password.set(event.value)} masked autoComplete="current-password"
             placeholder="Password" accessibilityLabel="Password" style={inputStyle()}
             onSubmit={() => void action.run(() => signInWithPassword(username(), password()))} />
-          <Button testID="password-sign-in" label="Sign in" disabled={action.busy() || !username().trim() || !password()}
+          <Button testID="password-sign-in" block label="Sign in" disabled={action.busy() || !username().trim() || !password()}
             onPress={() => void action.run(() => signInWithPassword(username(), password()))} />
         </View>
       </If>
@@ -143,13 +145,13 @@ function SignInForm() {
       <If when={!usesBrowserSession && methods()?.testMode}>
         <View style={{ gap: 8, borderTopWidth: 1, paddingTop: 12, borderColor: palette().border }}>
           <View style={{ flexDirection: "row" }}>
-            <Button testID="developer-toggle" small variant="ghost" icon={developerOpen() ? "▾" : "▸"} label="Developer sign-in" onPress={() => developerOpen.update(value => !value)} />
+            <Button testID="developer-toggle" small variant="ghost" icon={developerOpen() ? "chevron-down" : "chevron-right"} label="Developer sign-in" onPress={() => developerOpen.update(value => !value)} />
           </View>
           <If when={developerOpen()}>
             <Small>This server runs in test mode. Sign in with a token from its POST /api/auth/test.</Small>
             <Input testID="developer-token" value={token()} onChange={event => token.set(event.value)} autoCapitalize="none" autoCorrect={false} masked autoComplete="off"
               placeholder="Test-mode token" accessibilityLabel="Test-mode token" style={inputStyle()} />
-            <Button testID="developer-sign-in" label="Sign in with token" icon="⚿" busy={action.busy() && developerOpen()} disabled={origin() === null || !token().trim() || action.busy()}
+            <Button testID="developer-sign-in" label="Sign in with token" icon="lock" busy={action.busy() && developerOpen()} disabled={origin() === null || !token().trim() || action.busy()}
               onPress={() => void action.run(async () => {
                 try {
                   await signInWithToken(origin()!, token());
@@ -168,8 +170,8 @@ function SignInForm() {
       <Dialog open={github() !== null} onOpenChange={event => { if (!event.open) github.set(null); }}
         style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
         <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 8, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
-            <Text style={{ flex: 1, fontSize: 17, fontWeight: "700", color: palette().text }}>Sign in with GitHub</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
+            <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: palette().text }}>Sign in with GitHub</Text>
             <Button small variant="ghost" label="Cancel" onPress={() => github.set(null)} />
           </View>
           <If when={github()}>

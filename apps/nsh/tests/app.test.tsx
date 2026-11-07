@@ -105,9 +105,9 @@ describe("on a phone", () => {
   test("lists sessions by workspace, archived ones on request", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn });
     await app.waitFor("text:Fix the flaky login test");
-    expect(app.texts()).toContain("ANALYTICAL ENGINE");
+    expect(app.texts()).toContain("Analytical Engine");
     expect(app.shows("text:Old spike")).toBe(false);
-    await app.press("text:🗄  Show archived (1)");
+    await app.press("id:toggle-archived");
     await app.waitFor("text:Old spike");
   });
 
@@ -153,7 +153,9 @@ describe("on a phone", () => {
 describe("on a desktop", () => {
   test("shows the list and the open session side by side", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1200, height: 800 });
-    await app.waitFor("text:No session open");
+    // With no session open, the home beside the sidebar starts a new one.
+    await app.waitFor("text:What should we work on?");
+    expect(app.shows("id:new-start")).toBe(true);
     await app.press("id:session-row-s1");
     await app.waitFor("text:Why does the login test fail on CI?");
     // The list stays beside it.
@@ -173,9 +175,25 @@ describe("on a desktop", () => {
     expect(app.shows("text:Why does the login test fail on CI?")).toBe(true);
   });
 
+  test("starts a session from the home beside the sidebar, opens it there, and goes back home for another", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1200, height: 800 });
+    await app.waitFor("text:What should we work on?");
+    await app.type("id:new-message", "Add a dark mode");
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.press("id:new-start");
+    await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/sessions/s3/submit`) !== undefined);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions`)).toMatchObject({ workspaceId: "w1", title: "Add a dark mode" });
+    // The new session opens beside the sidebar, which stays.
+    await app.waitUntil(() => !app.shows("text:What should we work on?"));
+    expect(app.shows("id:session-row-s1")).toBe(true);
+    await app.press("id:new-session");
+    await app.waitFor("text:What should we work on?");
+    expect(app.value("id:new-message")).toBe("");
+  });
+
   test("keeps its layout through an appearance change", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1280, height: 820 });
-    await app.waitFor("text:No session open");
+    await app.waitFor("text:What should we work on?");
     await app.press("id:session-row-s1");
     await app.waitFor("id:approval-approve");
     await app.setColorScheme("dark");

@@ -1,6 +1,6 @@
-import { platform, Scroll, signal, Text, View, type JSX } from "nsh";
+import { Scroll, signal, Text, View, windowSize, type JSX } from "nsh";
 import { Sheet } from "nsh/base";
-import { palette } from "../theme";
+import { palette, radius } from "../theme";
 import { Button, Segmented } from "../ui";
 import { Browser } from "./Browser";
 import { Connections } from "./Connections";
@@ -29,16 +29,18 @@ export const panelTabs: readonly PanelTab[] = [
 /** A session's panel: its details and tools beside the conversation, from the edge of the window or the screen. */
 export function SessionPanel(props: PanelTabProps & { open: boolean; onClose: () => void }) {
   const tab = signal(panelTabs[0]!.id);
+  // Wide windows slide it in from the right, beside the conversation; phones from the bottom.
+  const sideways = () => windowSize().width >= 700;
   return (
-    <Sheet open={props.open} side={platform.desktop ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
+    <Sheet open={props.open} side={sideways() ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
       backdropStyle={{ backgroundColor: palette().backdrop }}
-      popupStyle={platform.desktop
-        ? { width: 520, maxWidth: "100%", height: "100%", backgroundColor: palette().background }
-        : { height: "92%", borderTopLeftRadius: 16, borderTopRightRadius: 16, backgroundColor: palette().background }}>
+      popupStyle={sideways()
+        ? { width: 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background, borderLeftWidth: 1, borderColor: palette().border }
+        : { height: "92%", borderTopLeftRadius: radius.xlarge, borderTopRightRadius: radius.xlarge, backgroundColor: palette().background }}>
       <View testID="session-panel" style={{ flex: 1 }}>
-        <View style={{ gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
+        <View style={{ gap: 10, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, borderBottomWidth: 1, borderColor: palette().border }}>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
-            <Text style={{ flex: 1, fontSize: 17, fontWeight: "700", color: palette().text }}>Session</Text>
+            <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: palette().text }}>Session details</Text>
             <Button small variant="ghost" label="Done" onPress={props.onClose} />
           </View>
           <Scroll horizontal scrollbar={false}>

@@ -24,5 +24,5 @@ export function TabPage(props: { children?: JSX.Element; testID?: string }) {
 
 /** A part of the web app's session panel this client doesn't have yet; each is ported into its own tab file. */
 export function NotYetHere(props: { what: string }) {
-  return <EmptyState title="Not here yet">{`${props.what} is still being moved to this app.`}</EmptyState>;
+  return <EmptyState icon="clock" title="Coming to this app">{`${props.what} isn't in this app yet.`}</EmptyState>;
 }
