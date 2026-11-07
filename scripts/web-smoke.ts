@@ -1,10 +1,11 @@
 /**
  * Runs the web client (apps/nsh built for the web, as the server ships it) in a real headless Chrome against a test-mode
- * server on this machine: signed out, signed in with the browser's own session cookie, a settings page opened from its
- * address, and signing out. Fails on any page error, any Content-Security-Policy violation and any console error but the
- * expected 401 of a signed-out page. Native Shell's headless engine can't catch these: it is not a browser, and it has
- * APIs the web runtime lacks. Uses the Chrome or Chromium CHROME_BIN names, or the first on PATH, over the DevTools
- * protocol (Node's own WebSocket; no browser library). `pnpm test:client-web`
+ * server on this machine: signed out, signed in with the browser's own session cookie, Settings and Back, Back between
+ * typed addresses, a settings page opened from its address, and signing out. Fails on any page error, any
+ * Content-Security-Policy violation and any console error but the expected 401 of a signed-out page and the 404 of the
+ * made-up sessions whose addresses it types. Native Shell's headless engine can't catch these: it is not a browser, and
+ * it has APIs the web runtime lacks. Uses the Chrome or Chromium CHROME_BIN names, or the first on PATH, over the
+ * DevTools protocol (Node's own WebSocket; no browser library). `pnpm test:client-web`
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -63,7 +64,10 @@ class Page {
       } else if (method === "Log.entryAdded" && params.entry.level === "error") {
         const { text, url } = params.entry;
         // A signed-out page asks /api/me and is told 401: that is how it learns it is signed out.
-        if (!(/status of 401/.test(text) && /\/api\/me$/.test(url ?? ""))) this.problems.push(`${params.entry.source}: ${text} ${url ?? ""}`.trim());
+        const signedOut = /status of 401/.test(text) && /\/api\/me$/.test(url ?? "");
+        // The sessions the address test types don't exist: the page asks for them and is told 404, and says so.
+        const madeUp = /status of 404/.test(text) && /\/api\/sessions\/smoke-(first|second)(\/|$)/.test(url ?? "");
+        if (!signedOut && !madeUp) this.problems.push(`${params.entry.source}: ${text} ${url ?? ""}`.trim());
       }
     });
   }
@@ -239,10 +243,24 @@ try {
   }
   console.log("✓ settings opened in the app follow the address, and Back leaves them");
 
+  // Two sessions' addresses typed one after the other, then the browser's Back: it goes to the first. Wide windows show
+  // a session beside the list, without a page of its own, and Back between two once did nothing. (A session the server
+  // doesn't have opens all the same, saying so.)
+  await page.evaluate("location.hash = '#/s/smoke-first'");
+  await waitForAddress("#/s/smoke-first");
+  await page.evaluate("location.hash = '#/s/smoke-second'");
+  await waitForAddress("#/s/smoke-second");
+  await page.evaluate("history.back()");
+  await waitForAddress("#/s/smoke-first");
+  await new Promise(done => setTimeout(done, 1000));
+  if (await page.evaluate<string>("location.hash") !== "#/s/smoke-first") throw new Error("Back from a typed session address didn't stay on the one before.");
+  console.log("✓ Back goes to the session address typed before");
+
   // An address the page is opened at goes where it points.
   await page.goto(`${origin}/#/settings/profile`);
   await page.waitForText("Ada Lovelace");
   console.log("✓ a settings address opens that section");
+
 
   await page.click("Sign out");
   await page.waitForText("Sign out?");

@@ -127,7 +127,10 @@ export function Card(props: { children?: JSX.Element; testID?: string; style?: V
   );
 }
 
-/** A quiet button that shows a choice and opens its picker: the chat box's model, access and host. */
+/**
+ * A quiet button that shows a choice and opens its picker: the chat box's model, access and host. As a `Picker`'s
+ * trigger it has no `onPress` of its own (the menu opens); its chevron says it opens one unless it is `disabled`.
+ */
 export function Chip(props: { label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean }) {
   const color = () => (props.tone ? palette().tones[props.tone].text : palette().muted);
   return (
@@ -137,7 +140,7 @@ export function Chip(props: { label: string; icon?: IconName; onPress?: () => vo
       hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }} disabledStyle={{ opacity: 0.6 }}>
       <If when={props.icon}>{name => <Icon name={name()} size={14} color={color()} />}</If>
       <Text style={{ fontSize: text.small, fontWeight: "500", color: color(), numberOfLines: 1, flexShrink: 1 }}>{props.label}</Text>
-      <If when={!props.disabled && props.onPress}>
+      <If when={!props.disabled}>
         <Icon name="chevron-down" size={12} color={palette().faint} />
       </If>
     </BaseButton>
@@ -259,6 +262,8 @@ export function Picker<T>(props: { trigger: JSX.Element; title: string; options:
       <View testID={props.testID} style={{ paddingHorizontal: 10, paddingTop: 6, paddingBottom: 4 }}>
         <SectionLabel>{props.title}</SectionLabel>
       </View>
+      {/* A long list (a host's models) scrolls within the popup or sheet rather than running past the screen. */}
+      <Scroll style={{ flexShrink: 1, maxHeight: 360 }} contentStyle={{ gap: 1 }}>
       <Each of={props.options} key="index">
         {option => (
           <MenuItem accessibilityLabel={option().label} onSelect={() => props.onSelect(option().value)}
@@ -268,6 +273,7 @@ export function Picker<T>(props: { trigger: JSX.Element; title: string; options:
           </MenuItem>
         )}
       </Each>
+      </Scroll>
     </Menu>
   );
 }

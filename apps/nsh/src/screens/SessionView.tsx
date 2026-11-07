@@ -240,7 +240,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
         </If>
         <If when={props.page && live.session()}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 6, borderBottomWidth: 1, borderColor: palette().border }}>
-            <Badge tone={badge().tone} dot={badge().dot}>{badge().text}</Badge>
+            <Badge testID="session-connection" tone={badge().tone} dot={badge().dot}>{badge().text}</Badge>
             <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{subtitle()}</Text>
           </View>
         </If>
