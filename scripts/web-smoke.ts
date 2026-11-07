@@ -213,6 +213,32 @@ try {
   await page.waitForText("No sessions yet");
   console.log("✓ signed in with the browser's session, the session list shows");
 
+  // Settings opened in the app and left with Back: the address follows each page, and Back stays back. The address was
+  // once set on the entry of the page underneath before Native Shell pushed its own, so Back reopened Settings.
+  const waitForAddress = async (wanted: string) => {
+    const deadline = Date.now() + TIMEOUT_MS;
+    let hash = "";
+    while (Date.now() < deadline) {
+      hash = await page.evaluate<string>("location.hash");
+      if (hash === wanted) return;
+      await new Promise(done => setTimeout(done, 100));
+    }
+    throw new Error(`The address is ${hash}, not ${wanted}.`);
+  };
+  await page.click("Settings");
+  await page.click("Appearance");
+  await page.waitForText("System follows");
+  await waitForAddress("#/settings/appearance");
+  // As a person would, once Settings has slid in: Native Shell lets a press go while its button still moves under it.
+  await new Promise(done => setTimeout(done, 600));
+  await page.click("Back");
+  await waitForAddress("#/");
+  await new Promise(done => setTimeout(done, 1000));
+  if ((await page.text()).includes("System follows") || await page.evaluate<string>("location.hash") !== "#/") {
+    throw new Error("Back from Settings came back to Settings.");
+  }
+  console.log("✓ settings opened in the app follow the address, and Back leaves them");
+
   // An address the page is opened at goes where it points.
   await page.goto(`${origin}/#/settings/profile`);
   await page.waitForText("Ada Lovelace");

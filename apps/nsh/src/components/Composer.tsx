@@ -1,4 +1,4 @@
-import { Scroll, signal, Text, View, type JSX } from "nsh";
+import { signal, Text, View, type JSX } from "nsh";
 import { Button as BaseButton, Input } from "nsh/base";
 import { Icon } from "../icons";
 import { palette, radius, text } from "../theme";
@@ -28,9 +28,9 @@ export function Composer(props: {
           onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
           style={{ fontSize: text.reading, lineHeight: 22, minHeight: props.minHeight ?? 44, maxHeight: 220, paddingHorizontal: 8, paddingTop: 8, paddingBottom: 4,
             color: palette().text, placeholderColor: palette().faint }} />
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          {/* One line of pickers, scrolled sideways where the window is too narrow for them all. */}
-          <Scroll horizontal scrollbar={false} style={{ flex: 1 }} contentStyle={{ flexDirection: "row", alignItems: "center", gap: 2 }}>{props.tools}</Scroll>
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 4 }}>
+          {/* The pickers wrap rather than scroll: what a message runs with (Auto-approve above all) must never be out of sight. */}
+          <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 2 }}>{props.tools}</View>
           <If when={props.onStop}>
             <BaseButton testID="composer-stop" accessibilityLabel={props.stopping ? "Stopping..." : "Stop"} disabled={props.stopping} onPress={() => props.onStop?.()}
               style={{ width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: palette().borderStrong }}

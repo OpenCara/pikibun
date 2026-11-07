@@ -7,7 +7,7 @@ import { Icon, type IconName } from "./icons";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
-import { drawsHeaders, headerProps } from "./screens/PageHeader";
+import { drawsHeaders, headerProps, pageStyle } from "./screens/PageHeader";
 import { SessionList } from "./screens/SessionList";
 import { SessionView } from "./screens/SessionView";
 import { SharedSession } from "./screens/SharedSession";
@@ -22,8 +22,8 @@ type Route =
   | { name: "session"; id: string }
   | { name: "new"; workspaceId?: string }
   | { name: "open" }
-  /** The sections, with the chosen one beside them in the wide layout. */
-  | { name: "settings"; section?: string; id?: string }
+  /** The sections, with the one `settingsAt` names beside them in the wide layout. */
+  | { name: "settings" }
   /** One section as a page of its own (phones). */
   | { name: "settings-section"; section: string; id?: string }
   | { name: "join"; token: string };
@@ -76,6 +76,11 @@ function Shell() {
   const homeWorkspace = signal<string | undefined>(undefined);
   /** Bumped to start the home's form afresh (a new session after another, a link to a workspace's new session). */
   const homeKey = signal(0);
+  /**
+   * The section (and item) the wide layout's settings show beside their list. Choosing another changes it in place:
+   * replacing the page slid all of Settings in again, and swallowed a Back pressed while it did.
+   */
+  const settingsAt = signal<{ section?: string; id?: string }>({});
 
   function openSession(id: string) {
     if (wide()) {
@@ -108,9 +113,8 @@ function Shell() {
   function openSettings(section?: string, id?: string) {
     const top = untracked(nav.routes).at(-1);
     if (wide()) {
-      const route: Route = { name: "settings", ...(section ? { section } : {}), ...(id ? { id } : {}) };
-      if (top?.name === "settings") nav.replace(route);
-      else nav.push(route);
+      settingsAt.set({ ...(section ? { section } : {}), ...(id ? { id } : {}) });
+      if (top?.name !== "settings") nav.push({ name: "settings" });
     } else if (section) {
       if (top?.name !== "settings") nav.push({ name: "settings" });
       nav.push({ name: "settings-section", section, ...(id ? { id } : {}) });
@@ -138,13 +142,15 @@ function Shell() {
   effect(() => {
     const top = nav.routes().at(-1);
     const beside = selected();
+    const at = settingsAt();
     untracked(() => {
       if (!top) return;
       switch (top.name) {
         case "session": return showRoute({ name: "session", sessionId: top.id });
         case "sessions": return showRoute(beside && wide() ? { name: "session", sessionId: beside } : { name: "home" });
         case "new": return showRoute(top.workspaceId ? { name: "new", workspaceId: top.workspaceId } : { name: "home" });
-        case "settings": case "settings-section": return showRoute({ name: "settings", ...(top.section ? { section: top.section } : {}), ...(top.id ? { id: top.id } : {}) });
+        case "settings": return showRoute(wide() ? { name: "settings", ...at } : { name: "settings" });
+        case "settings-section": return showRoute({ name: "settings", section: top.section, ...(top.id ? { id: top.id } : {}) });
         case "join": return showRoute({ name: "join", token: top.token });
         default: return showRoute({ name: "home" });
       }
@@ -193,7 +199,7 @@ function Shell() {
                       <SessionList onOpen={openSession} onNew={() => startNew()} />
                     </NavPage>
                   }>
-                  <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined}>
+                  <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
                     <View style={{ flex: 1, flexDirection: "row" }}>
                       <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()}
                         onOpenById={() => nav.push({ name: "open" })} onSettings={() => openSettings()} />
@@ -231,7 +237,7 @@ function Shell() {
             case "settings":
               return (
                 <NavPage title="Settings" {...headerProps({ title: "Settings", onBack: back })}>
-                  <SettingsPage section={route.section} id={route.id} wide={wide()} onOpen={id => openSettings(id)} go={go} />
+                  <SettingsPage section={settingsAt().section} id={settingsAt().id} wide={wide()} onOpen={id => openSettings(id)} go={go} />
                 </NavPage>
               );
             case "settings-section": {

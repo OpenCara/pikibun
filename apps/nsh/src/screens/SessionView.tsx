@@ -21,7 +21,7 @@ import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text } from "../theme";
 import { Badge, Banner, Button, Chip, confirm, EmptyState, Feedback, IconButton, Loading, Picker, Small } from "../ui";
-import { drawsHeaders, PageHeader } from "./PageHeader";
+import { drawsHeaders, PageHeader, pageStyle } from "./PageHeader";
 import type { PageRoute } from "../lib/page";
 import { SessionPanel } from "../session-panel";
 
@@ -280,7 +280,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
 
   if (!props.page) return content;
   return (
-    <NavPage title={title()} headerRight={drawsHeaders ? undefined : headerActions()}
+    <NavPage title={title()} style={pageStyle()} headerRight={drawsHeaders ? undefined : headerActions()}
       header={drawsHeaders ? <PageHeader title={title()} onBack={props.onBack} actions={headerActions()} testID="session-header" /> : undefined}>
       {content}
     </NavPage>

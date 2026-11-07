@@ -6,11 +6,17 @@ import { palette, radius, text } from "../theme";
 /** The app draws its pages' headers on the desktops and the web; iOS and Android show their system header. */
 export const drawsHeaders = platform.desktop || platform.os === "web";
 
-/** A page's header props: the app's own header where it draws one, the system header's items elsewhere. */
+/**
+ * A stack page's own background. Pages are transparent by default, so one pushed over another showed the page under it
+ * through its content, while it slid in and after.
+ */
+export const pageStyle = () => ({ backgroundColor: palette().background });
+
+/** A page's header props, with its background: the app's own header where it draws one, the system header's items elsewhere. */
 export function headerProps(options: { title: string; subtitle?: string; onBack?: () => void; actions?: JSX.Element; leading?: JSX.Element }) {
   return drawsHeaders
-    ? { header: <PageHeader title={options.title} subtitle={options.subtitle} onBack={options.onBack} actions={options.actions} leading={options.leading} /> }
-    : { headerLeft: options.leading, headerRight: options.actions };
+    ? { style: pageStyle(), header: <PageHeader title={options.title} subtitle={options.subtitle} onBack={options.onBack} actions={options.actions} leading={options.leading} /> }
+    : { style: pageStyle(), headerLeft: options.leading, headerRight: options.actions };
 }
 
 /** The back button of a page's header. */

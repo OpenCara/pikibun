@@ -132,7 +132,7 @@ export function Chip(props: { label: string; icon?: IconName; onPress?: () => vo
   const color = () => (props.tone ? palette().tones[props.tone].text : palette().muted);
   return (
     <BaseButton testID={props.testID} accessibilityLabel={props.label} disabled={props.disabled} onPress={() => props.onPress?.()}
-      style={{ flexDirection: "row", alignItems: "center", gap: 6, borderRadius: radius.medium, paddingHorizontal: 8, height: 28, flexShrink: 1,
+      style={{ flexDirection: "row", alignItems: "center", gap: 6, borderRadius: radius.medium, paddingHorizontal: 8, height: 28, flexShrink: 1, maxWidth: 240,
         borderWidth: props.bordered ? 1 : 0, borderColor: palette().border, backgroundColor: props.bordered ? palette().surface : "transparent" }}
       hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }} disabledStyle={{ opacity: 0.6 }}>
       <If when={props.icon}>{name => <Icon name={name()} size={14} color={color()} />}</If>

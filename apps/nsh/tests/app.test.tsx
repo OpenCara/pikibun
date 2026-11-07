@@ -191,6 +191,23 @@ describe("on a desktop", () => {
     expect(app.value("id:new-message")).toBe("");
   });
 
+  test("settings switch sections in place beside their list, and Back leaves them for the session", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1200, height: 800 });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:composer-input");
+    await app.press("id:open-settings");
+    await app.waitFor("id:settings-sections");
+    await app.press("id:settings-section-appearance");
+    await app.waitFor("id:appearance-scheme");
+    await app.press("id:settings-section-profile");
+    await app.waitFor("id:sign-out");
+    // One Back: the sections were one page, not a page each.
+    await app.press("id:header-back");
+    await app.waitFor("id:sidebar");
+    await app.waitUntil(() => !app.shows("id:settings-sections"));
+    expect(app.shows("text:Why does the login test fail on CI?")).toBe(true);
+  });
+
   test("keeps its layout through an appearance change", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1280, height: 820 });
     await app.waitFor("text:What should we work on?");
