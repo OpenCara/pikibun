@@ -357,11 +357,18 @@ jobs:
           if-no-files-found: error
 
   # Not a release asset: an App Store build installs only through TestFlight or the App Store.
+  #
+  # App Store Connect takes only apps built with the current SDK (iOS 26), and NSH 0.4's prebuilt iPhone runner was
+  # linked with Xcode 16.4's iOS 18.5 SDK. So the runner is built here from NSH's source at the pinned commit
+  # (scripts/nsh.mjs), with this runner's Xcode, and `nsh package` takes it through NSH_RUNTIME; the rest of NSH is
+  # the prebuilt release. NSH also writes none of the build keys App Store Connect requires in Info.plist (DT*, and
+  # arm64 in UIRequiredDeviceCapabilities): they are added from this Xcode, and the app is signed again. Both can go
+  # once an NSH release does them.
   ios:
     needs: [check, ci]
     if: ${{ !cancelled() && !failure() }}
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     environment: ${{ github.event_name == 'push' && 'release' || '' }}
     steps:
       - name: Signing configured
@@ -422,6 +429,50 @@ jobs:
           [ -n "$identity" ] || { echo "::error::IOS_CERTIFICATE_P12 holds no Apple Distribution identity."; exit 1; }
           echo "IOS_IDENTITY=$identity" >> "$GITHUB_ENV"
           printf '%s' "$IOS_PROVISIONING_PROFILE" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+      - name: Xcode
+        id: xcode
+        run: |
+          xcodebuild -version
+          echo "version=$(xcodebuild -version | awk 'NR==1{print $2}')" >> "$GITHUB_OUTPUT"
+          echo "build=$(xcodebuild -version | awk 'NR==2{print $3}')" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - name: Native Shell's source
+        run: |
+          version=$(node --input-type=module -e 'import { NSH_VERSION } from "./scripts/nsh.mjs"; console.log(NSH_VERSION)')
+          commit=$(node --input-type=module -e 'import { NSH_COMMIT } from "./scripts/nsh.mjs"; console.log(NSH_COMMIT)')
+          git clone --quiet --depth 1 --branch "$version" https://github.com/longbridge/nsh "$RUNNER_TEMP/nsh-src"
+          actual=$(git -C "$RUNNER_TEMP/nsh-src" rev-parse HEAD)
+          if [ "$actual" != "$commit" ]; then
+            echo "::error::NSH's $version tag is $actual, not the pinned $commit (scripts/nsh.mjs)."
+            exit 1
+          fi
+          echo "NSH_VERSION=$version" >> "$GITHUB_ENV"
+      # The build depends on the Xcode it links with, so a new one builds afresh.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/nsh-src/target
+          key: nsh-ios-runner-${{ hashFiles('scripts/nsh.mjs') }}-xcode-${{ steps.xcode.outputs.build }}
+      - name: The iPhone runner, built with this Xcode
+        run: |
+          (cd "$RUNNER_TEMP/nsh-src" && cargo build --release --locked -p nsh-ios-app --target aarch64-apple-ios)
+          # The prebuilt release for everything else (also downloaded by `nsh package` itself).
+          node scripts/nsh.mjs --version
+          runtime="$RUNNER_TEMP/nsh-runtime"
+          rm -rf "$runtime"
+          cp -R ".cache/nsh/$NSH_VERSION/nsh/runtime" "$runtime"
+          cp "$RUNNER_TEMP/nsh-src/target/aarch64-apple-ios/release/nsh-ios-app" "$runtime/ios/iphoneos/nsh-ios-app"
+          sdk=$(xcrun vtool -show-build "$runtime/ios/iphoneos/nsh-ios-app" | awk '$1 == "sdk" {print $2; exit}')
+          echo "The iPhone runner is built with the iOS $sdk SDK."
+          if [ "${sdk%%.*}" -lt 26 ]; then
+            echo "::error::The iPhone runner was built with the iOS $sdk SDK; App Store Connect needs iOS 26 or later."
+            exit 1
+          fi
+          echo "NSH_RUNTIME=$runtime" >> "$GITHUB_ENV"
       - name: Package
         env:
           SIGNED: ${{ steps.signing.outputs.configured }}
@@ -430,6 +481,50 @@ jobs:
           [ "$SIGNED" = true ] && signing=(--sign "$IOS_IDENTITY" --profile "$RUNNER_TEMP/profile.mobileprovision")
           node scripts/nsh.mjs package App.tsx --target ios --app-version "$APP_VERSION" --build "$BUILD" --out "$RUNNER_TEMP/app" "${signing[@]}"
           ls -la "$RUNNER_TEMP/app"
+      # What Xcode writes and App Store Connect requires: the SDK and Xcode the app was built with, and that it is
+      # 64-bit. Then the app is signed again, as `nsh package` signed it (its entitlements, from the profile), and
+      # zipped again into the .ipa the way it zips one.
+      - name: Complete Info.plist for App Store Connect
+        env:
+          SIGNED: ${{ steps.signing.outputs.configured }}
+          XCODE_VERSION: ${{ steps.xcode.outputs.version }}
+          XCODE_BUILD: ${{ steps.xcode.outputs.build }}
+        run: |
+          app="$RUNNER_TEMP/app/Pikibun.app"
+          plist="$app/Info.plist"
+          put() {
+            /usr/libexec/PlistBuddy -c "Delete :$1" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$plist"
+          }
+          sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
+          sdk_build=$(xcrun --sdk iphoneos --show-sdk-build-version)
+          IFS=. read -r major minor patch <<< "$XCODE_VERSION"
+          put BuildMachineOSBuild "$(sw_vers -buildVersion)"
+          put DTCompiler com.apple.compilers.llvm.clang.1_0
+          put DTPlatformBuild "$sdk_build"
+          put DTPlatformName iphoneos
+          put DTPlatformVersion "$sdk_version"
+          put DTSDKBuild "$sdk_build"
+          put DTSDKName "iphoneos$sdk_version"
+          put DTXcode "$(printf '%d%d%d' "$major" "${minor:-0}" "${patch:-0}")"
+          put DTXcodeBuild "$XCODE_BUILD"
+          /usr/libexec/PlistBuddy -c "Delete :UIRequiredDeviceCapabilities" "$plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIRequiredDeviceCapabilities array" -c "Add :UIRequiredDeviceCapabilities:0 string arm64" "$plist"
+          plutil -lint "$plist"
+          plutil -p "$plist" | grep -E 'DT|BuildMachine|UIRequired|arm64'
+          if [ "$SIGNED" != true ]; then
+            exit 0
+          fi
+          entitlements=$(find "$RUNNER_TEMP/app" -maxdepth 1 -name '*.entitlements' | head -n1)
+          [ -n "$entitlements" ] || { echo "::error::nsh package wrote no entitlements to sign the app again with."; exit 1; }
+          codesign --force --sign "$IOS_IDENTITY" --entitlements "$entitlements" "$app"
+          codesign --verify --strict --verbose=2 "$app"
+          staging="$RUNNER_TEMP/ipa"
+          rm -rf "$staging" "$RUNNER_TEMP/app/Pikibun.ipa"
+          mkdir -p "$staging/Payload"
+          ditto "$app" "$staging/Payload/Pikibun.app"
+          ditto -c -k --norsrc --keepParent "$staging/Payload" "$RUNNER_TEMP/app/Pikibun.ipa"
+          rm -rf "$staging"
       # Every app-v tag goes to TestFlight; submitting a build for App Store review stays manual. App Store Connect
       # takes each version's build numbers only increasing: this workflow's run number.
       - name: Upload to TestFlight

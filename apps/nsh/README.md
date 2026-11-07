@@ -59,6 +59,10 @@ machine's platforms: `pnpm nsh package App.tsx --target macos` (or `windows`, `l
 
 ## Known gaps, from NSH itself
 
+- **App Store builds**: NSH 0.4's prebuilt iPhone runner was linked with the iOS 18.5 SDK, which App Store Connect no
+  longer takes, and `nsh package` writes none of the build keys it requires in Info.plist (`DT*`, `arm64` in
+  `UIRequiredDeviceCapabilities`). `release-app.yml` builds the runner from NSH's source with its own Xcode
+  (`NSH_RUNTIME`), adds the keys and signs the app again; drop both once an NSH release does them.
 - **The web runtime**: NSH 0.4's has no `lifecycle` (its import is undefined there), so `src/lib/lifecycle.ts` stands in
   for it and counts a page as always active. Its loader inserts an import map and `blob:` modules no hash can allow, so
   the page's policy allows inline scripts (`apps/server/src/static.ts`).

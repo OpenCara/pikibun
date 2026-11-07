@@ -18,6 +18,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const NSH_VERSION = "v0.4.0";
+/** The commit NSH_VERSION's tag names, for what is built from its source (release-app.yml's iPhone runner). */
+export const NSH_COMMIT = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const app = path.join(repository, "apps", "nsh");
