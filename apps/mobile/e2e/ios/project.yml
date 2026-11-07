@@ -1,0 +1,25 @@
+# UI tests that drive an installed Pikibun development build (com.pikibun.app) on a simulator.
+# Generated with XcodeGen by run.sh; the generated .xcodeproj is not checked in.
+name: PikibunE2E
+options:
+  bundleIdPrefix: com.pikibun.e2e
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  PikibunUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [PikibunUITests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        SWIFT_VERSION: "5.0"
+schemes:
+  PikibunUITests:
+    build:
+      targets:
+        PikibunUITests: [test]
+    test:
+      targets: [PikibunUITests]

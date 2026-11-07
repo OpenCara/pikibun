@@ -304,3 +304,15 @@ test('the feed starts where a page opens and keeps a day of notifications', asyn
   await f.reportAll('working', 'done');
   assert.deepEqual((await f.feed(f.alice, start)).notifications.map(n => n.kind), ['finished']);
 });
+
+test('the desktop app shows only short, clean notifications that lead to the page\'s own routes', async () => {
+  const { parseNotification } = await import('../apps/desktop/src/main/requests.js');
+  assert.deepEqual(parseNotification({ title: 'Fix\nthe build\u202e', body: 'Waiting for an approval · Team', path: '/#/s/abc-123', tag: '00mw04ew2p-CUJmc-Q7I7PE' }),
+    { ok: true, value: { title: 'Fix the build', body: 'Waiting for an approval · Team', path: '/#/s/abc-123', tag: '00mw04ew2p-CUJmc-Q7I7PE' } });
+  assert.equal((parseNotification({ title: 'x'.repeat(500), body: '', path: '/#/settings/notifications' }) as { value: { title: string } }).value.title.length, 120);
+  for (const refused of [null, 'text', { title: 'Hi', body: '', path: 'https://evil.test/' }, { title: 'Hi', body: '', path: '/#/s/<script>' },
+    { title: 'Hi', body: '', path: '//evil.test/#/' }, { title: '', body: 'x', path: '/#/' }, { title: 'Hi', body: '', path: '/#/', tag: 'a b' },
+    { title: 'Hi', body: '', path: '/#/', extra: 1 }, { title: 1, body: '', path: '/#/' }]) {
+    assert.equal(parseNotification(refused).ok, false, JSON.stringify(refused));
+  }
+});

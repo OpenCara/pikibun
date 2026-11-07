@@ -1,0 +1,70 @@
+# Packages dist/app (scripts/build.mjs) and the staged connector (scripts/stage-connector.mjs); see README.md.
+appId: com.pikibun.desktop
+productName: Pikibun
+copyright: Copyright © OpenCara
+directories:
+  output: dist/release
+  buildResources: build
+files:
+  - package.json
+  - dist/app/**
+  - "!dist/app/**/*.map"
+  - assets/**
+  # The app has no runtime dependencies (everything is bundled); without this, electron-builder falls back to the
+  # pnpm workspace root and packs its node_modules.
+  - "!node_modules{,/**/*}"
+# The connector runs from Resources/connector, outside the asar, with its own production node_modules. Resource
+# filters never copy node_modules, so the afterPack hook copies it, before signing.
+afterPack: scripts/after-pack.cjs
+# Nothing native to rebuild: the app is bundled JavaScript and the connector's tree is plain JavaScript.
+npmRebuild: false
+nodeGypRebuild: false
+asar: true
+# The packaged app runs only its own code: no ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect, and only the asar it was
+# signed with. The connector host needs none of these: it runs in a utility process.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [arm64]
+  # No signing identity: builds are ad-hoc signed, which Apple silicon requires to launch them at all. The hardened
+  # runtime comes with Developer ID signing and notarization, which README.md describes.
+  identity: "-"
+  hardenedRuntime: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+
+dmg:
+  title: Pikibun
+
+# Windows: an x64 installer (`pnpm dist:win`, on Windows), per user and without administrator rights, into
+# %LOCALAPPDATA%\Programs\Pikibun. Windows on Arm runs it emulated. Unsigned unless the release workflow has a
+# certificate (README.md, "Signing"), so SmartScreen asks before the first launch.
+win:
+  icon: build/icon.png
+  executableName: Pikibun
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: true
+  perMachine: false
+  artifactName: Pikibun-${version}-${arch}-setup.${ext}
+  shortcutName: Pikibun
+  # The app's settings and Pikibun windows' sign-ins stay when it is uninstalled, as on macOS.
+  deleteAppDataOnUninstall: false
+
+# Declared for a later Linux build.
+linux:
+  icon: build/icon.png
+  category: Development
+  target: [AppImage, deb]

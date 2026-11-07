@@ -9,9 +9,8 @@ dist
 coverage
 tests
 apps/runner
-apps/nsh/.nsh
-.cache
-.tunnel
+apps/mobile
+apps/desktop
 packages/cli/dist
 packages/cli/src
 packages/cli/scripts

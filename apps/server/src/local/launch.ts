@@ -18,14 +18,15 @@ export const LOCAL_ORIGIN_HOST = '127.0.0.1';
 export const githubCallbackPath = '/api/auth/github/callback';
 
 /**
- * The client built for the web: `web/` beside the bundle (the published CLI stages it there), else the repository's
- * `dist/web` (`pnpm build`) when running from source. A build has its manifest next to its page.
+ * The built web app: `web/` beside the bundle (the published CLI and the desktop app stage it there), else the
+ * repository's `dist/web` (`pnpm build`) when running from source. A build has its hashed assets (`apps/web` itself,
+ * the sources, has an index.html too).
  */
 export function defaultStaticDir(): string | undefined {
   let directory = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 6; depth++) {
     for (const candidate of [join(directory, 'web'), join(directory, 'dist', 'web')]) {
-      if (existsSync(join(candidate, 'index.html')) && existsSync(join(candidate, 'manifest.webmanifest'))) return candidate;
+      if (existsSync(join(candidate, 'index.html')) && existsSync(join(candidate, 'assets'))) return candidate;
     }
     directory = dirname(directory);
   }

@@ -1,15 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertPrerequisites, npmPrerequisite } from "../apps/runner/src/connect-setup.js";
 import { fixes } from "../apps/runner/src/prerequisite-fixes.js";
 import { ExtensionSourceError, npmFailure } from "../apps/runner/src/extensions/store.js";
+import { loginShellPath, mergePath, parseShellPath, withLoginShellPath } from "../apps/desktop/src/main/shell-path.js";
 import { listedPrerequisites } from "../packages/shared/src/host-prerequisites.js";
 
-// Installing extensions needs npm on the host's PATH: the host lists npm as an optional prerequisite, and a missing npm
-// says so.
+// Installing extensions needs npm on the host's PATH. A Mac app started from Finder has only launchd's PATH, so the app
+// gives its hosts the owner's login-shell PATH, the host lists npm as an optional prerequisite, and a missing npm says so.
 
 test("npm missing from PATH says so and how to get it; other failures keep npm's own output", () => {
   const missing = Object.assign(new Error("spawn npm ENOENT"), { code: "ENOENT" });
@@ -35,6 +37,25 @@ test("npm missing from PATH says so and how to get it; other failures keep npm's
   assert.equal(npmFailure({ code: 127, stderr: "" }, ["install"], "linux").message, "npm install failed.");
   assert.equal(npmFailure({ code: 1, stderr: "npm error sh: npm: command not found" }, ["install"], "linux").message, "npm install failed:\nnpm error sh: npm: command not found",
     "a script's own call to npm isn't the host's npm missing");
+});
+
+test("the login shell's PATH is read from env's own line between the marks, ahead of the app's", async () => {
+  const output = "Last login: today\n__PIKIBUN_ENV__\nHOME=/Users/a\nPATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\nSHELL=/bin/zsh\n__PIKIBUN_ENV__\nbye\n";
+  assert.equal(parseShellPath(output), "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
+  assert.equal(parseShellPath("PATH=/x\n"), undefined, "nothing outside the marks counts");
+  assert.equal(parseShellPath("__PIKIBUN_ENV__\nHOME=/a\n__PIKIBUN_ENV__\n"), undefined);
+  assert.equal(mergePath("/opt/homebrew/bin:/usr/bin:relative::/bin", "/usr/bin:/bin:/usr/sbin:/sbin"), "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+  assert.deepEqual(await withLoginShellPath({ PATH: "/usr/bin:/bin", HOME: "/h" }, async () => "/opt/homebrew/bin:/usr/bin"), { PATH: "/opt/homebrew/bin:/usr/bin:/bin", HOME: "/h" });
+  const unchanged = { PATH: "/usr/bin" };
+  assert.equal(await withLoginShellPath(unchanged, async () => undefined), unchanged, "a shell that didn't answer leaves the app's PATH");
+  assert.equal(await withLoginShellPath(unchanged, async () => { throw new Error("no"); }), unchanged);
+  assert.equal(await loginShellPath("zsh"), undefined, "only a shell named by its absolute path runs");
+  assert.equal(await loginShellPath("/nonexistent/shell"), undefined);
+});
+
+test("a real login shell answers its PATH", { skip: !existsSync("/bin/bash") && "needs /bin/bash" }, async () => {
+  const path = await loginShellPath("/bin/bash");
+  assert.ok(path && path.split(":").some(entry => entry === "/bin" || entry === "/usr/bin"), String(path));
 });
 
 test("npm is an optional prerequisite: listed with its fix when missing, never keeping a host from starting", async t => {

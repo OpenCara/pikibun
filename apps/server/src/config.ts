@@ -11,7 +11,7 @@ export interface ServerConfig {
   port: number;
   /** Honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a TLS-terminating proxy. */
   trustProxy: boolean;
-  /** Directory holding the client built for the web (`dist/web`, `pnpm build`). */
+  /** Directory holding the built web client (`dist/web`). */
   staticDir: string;
   databaseUrl: string;
   /** `STORAGE_URL`, or null when it is unset: the server then stores no session backups. */

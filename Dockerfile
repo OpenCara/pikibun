@@ -1,13 +1,10 @@
 # syntax=docker/dockerfile:1
-# Builds the client (apps/nsh, as a web app) and the bundled server, then runs them as a non-root user with /data for
+# Builds the web client and the bundled server, then runs them as a non-root user with /data for
 # the SQLite database (override with DATABASE_URL). Session backups are off unless STORAGE_URL names
 # a store, such as file:///data/backups in the same volume.
 
-# Node 24, as in .node-version, CI and the connector's engines, so CI tests the Node the image ships. Images a FROM names
-# are arguments declared here, before the first FROM: one declared later is only that stage's.
+# Node 24, as in .node-version, CI and the connector's engines, so CI tests the Node the image ships.
 ARG NODE_IMAGE=node:24-bookworm-slim
-# The web stage's (below).
-ARG WEB_BUILD_IMAGE=node:24-trixie-slim
 FROM ${NODE_IMAGE} AS base
 WORKDIR /app
 # pnpm from npm, not corepack (gone from Node 25+ images), at the version packageManager in package.json names (without
@@ -15,28 +12,18 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+")[0]')" && npm cache clean --force
 
-# The client as a web app: static files, the same for every platform the image is built for, so this stage runs once on
-# the builder's own platform. Native Shell publishes its Linux CLI for x86_64 only, built against glibc 2.39, hence
-# Debian 13 here (the runtime image doesn't need it). scripts/nsh.mjs downloads the pinned CLI and checks its SHA-256.
-FROM --platform=$BUILDPLATFORM ${WEB_BUILD_IMAGE} AS web
-WORKDIR /app
-COPY scripts/nsh.mjs scripts/nsh-web-fixes.mjs scripts/
-COPY apps/nsh apps/nsh
-COPY packages/shared packages/shared
-COPY packages/client packages/client
-RUN node scripts/nsh.mjs --build-web
-
 FROM base AS build
-# Only the server and connector manifests: pnpm installs just the workspaces present.
+# Only the server, web and connector manifests: the native apps' workspaces (apps/mobile, apps/desktop) stay out of
+# the image, and pnpm installs just the workspaces present.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/cli/package.json packages/cli/
 RUN pnpm install --frozen-lockfile
 COPY apps/server apps/server
+COPY apps/web apps/web
 COPY packages/shared packages/shared
 COPY packages/client packages/client
 COPY tsconfig.json ./
-RUN pnpm build:server
-COPY --from=web /app/dist/web dist/web
+RUN pnpm build && pnpm build:server
 
 FROM base AS runtime
 ENV NODE_ENV=production
