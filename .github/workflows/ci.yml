@@ -30,9 +30,9 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -47,26 +47,26 @@ jobs:
             --cap-drop ALL --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
             --symlink usr/bin /bin --proc /proc --dev /dev -- /usr/bin/true
       - run: pnpm install --frozen-lockfile
+      # The Native Shell CLI the client (apps/nsh) is built with, at the version scripts/nsh.mjs pins.
+      - uses: actions/cache@v6
+        with:
+          path: .cache/nsh
+          key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
       - name: Connector shrinkwrap matches package.json
         run: node packages/cli/scripts/shrinkwrap.mjs --check
       - run: pnpm typecheck
       # The sandbox's Python programs: Ruff and Pyright, from npm (embedded as checked by tests/sandbox-python.test.ts).
       - run: pnpm python:check
       - run: pnpm test
+      # The client's tests, headless on Native Shell's own engine against a stubbed server.
+      - run: pnpm test:client
+      # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
+      # lacks `lifecycle`, and the page's Content-Security-Policy applies), and only a browser shows it.
+      - run: pnpm test:client-web
       - run: pnpm build
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build
       - run: node packages/cli/dist/pikibun.js serve --help
-      # The desktop app's main process, pages and connector host bundle (packaging needs macOS and is not run here).
-      - run: pnpm --filter @pikibun/desktop build
-      # The iOS app's JavaScript bundle, as the release archive's Xcode phase builds it with Metro, which resolves imports
-      # differently from tsc and Vite (the shared sources' "./types.js" imports broke ios-v0.1.0). The native build needs
-      # macOS and runs only in release-ios.yml.
-      - name: Mobile app bundles for iOS
-        working-directory: apps/mobile
-        run: >-
-          pnpm exec expo export:embed --entry-file node_modules/expo-router/entry.js --platform ios --dev false
-          --minify false --bundle-output "$RUNNER_TEMP/mobile/main.jsbundle" --assets-dest "$RUNNER_TEMP/mobile/assets"
       - run: pnpm test:connected
       # TRUST_PROXY with forwarded requests, on the image's own Node: its health check sends no forwarded headers, so it
       # stayed healthy while every request through a TLS proxy was a 500 (#71).
@@ -82,6 +82,7 @@ jobs:
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"githubSignup":"invite"'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"passwordSignup":"invite"'
           curl -fsS http://127.0.0.1:8787/ | grep -qi '<!doctype html'
+          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
           curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: pikibun.example' http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
           curl -fsS -H 'X-Forwarded-Proto: https' http://127.0.0.1:8787/ | grep -qi '<!doctype html'
           docker rm -f pikibun

@@ -89,8 +89,12 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
     if ((c.req.method !== 'GET' && c.req.method !== 'HEAD') || c.req.path.startsWith('/api/')) {
       return c.json({ error: 'Not found.', code: 'not_found' }, 404);
     }
-    const response = await serveStatic(c.req.raw);
-    return c.newResponse(response.body, response);
+    const served = await serveStatic(c.req.raw);
+    const response = c.newResponse(served.body, served);
+    // The page carries its own policy (static.ts), over the API's.
+    const policy = served.headers.get('Content-Security-Policy');
+    if (policy) response.headers.set('Content-Security-Policy', policy);
+    return response;
   });
 
   const server = createAdaptorServer({

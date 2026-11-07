@@ -36,8 +36,8 @@ async function fixture(t: TestContext) {
     app.request(path, { method, headers: { ...(init.body === undefined ? {} : { "Content-Type": "application/json" }), ...init.headers },
       body: init.body === undefined ? undefined : JSON.stringify(init.body) }, env);
   /** Runs the app's sign-in through GitHub and returns where the server sends the authentication browser back to. */
-  async function signInThroughGitHub(challenge: string, query = "code=github-code") {
-    const start = await request("GET", `/api/auth/native/start?challenge=${challenge}&state=${appState}`);
+  async function signInThroughGitHub(challenge: string, query = "code=github-code", startQuery = "") {
+    const start = await request("GET", `/api/auth/native/start?challenge=${challenge}&state=${appState}${startQuery}`);
     assert.equal(start.status, 302);
     const authorize = new URL(start.headers.get("location")!);
     assert.equal(authorize.origin + authorize.pathname, "https://github.com/login/oauth/authorize");
@@ -109,9 +109,34 @@ test("a code expires after two minutes, and a GitHub failure returns the app to 
   assert.equal(failed.searchParams.get("error"), "github_error");
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM native_auth_codes").get()!.n, 0);
 
-  for (const query of [`challenge=${challenge}&state=short`, `challenge=not-a-challenge&state=${appState}`, `state=${appState}`]) {
+  for (const query of [`challenge=${challenge}&state=short`, `challenge=not-a-challenge&state=${appState}`, `state=${appState}`,
+    `challenge=${challenge}&state=${appState}&callback=https://elsewhere.example`, `challenge=${challenge}&state=${appState}&callback=page&callback=page`]) {
     assert.equal((await f.request("GET", `/api/auth/native/start?${query}`)).status, 400);
   }
+});
+
+test("an app signing in through its own web view gets the code back on this server's page instead of pikibun://auth", async t => {
+  const f = await fixture(t);
+  const challenge = await sha256(verifier);
+  const callback = await f.signInThroughGitHub(challenge, "code=github-code", "&callback=page");
+  assert.equal(`${callback.origin}${callback.pathname}`, `${origin}/api/auth/native/done`);
+  assert.equal(callback.searchParams.get("state"), appState);
+  const code = callback.searchParams.get("code")!;
+  // The page shows nothing of its address, and is not kept.
+  const page = await f.request("GET", `${callback.pathname}${callback.search}`);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("content-type") ?? "", /^text\/html/);
+  assert.match(page.headers.get("cache-control") ?? "", /no-store/);
+  assert.ok(!(await page.text()).includes(code));
+  // The code is redeemed as before: only with the verifier.
+  assert.equal((await f.request("POST", "/api/auth/native/token", { body: { code, verifier: "w".repeat(43) } })).status, 400);
+  const fresh = await f.signInThroughGitHub(challenge, "code=github-code", "&callback=page");
+  assert.equal((await f.request("POST", "/api/auth/native/token", { body: { code: fresh.searchParams.get("code"), verifier } })).status, 200);
+  // A failure comes back there too.
+  const denied = await f.signInThroughGitHub(challenge, "error=access_denied", "&callback=page");
+  assert.equal(denied.pathname, "/api/auth/native/done");
+  assert.equal(denied.searchParams.get("error"), "oauth_denied");
+  assert.equal(denied.searchParams.get("state"), appState);
 });
 
 test("storage failing after GitHub answers still returns the app to its callback, with no code and no saved GitHub token", async t => {

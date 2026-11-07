@@ -1,0 +1,17 @@
+{
+  "name": "Pikibun",
+  "id": "com.pikibun.app",
+  "version": "0.1.0",
+  "build": 1,
+  "icon": "icon.png",
+  "capabilities": {
+    "network": { "hosts": ["*"] },
+    "webview": { "hosts": ["*"] },
+    "clipboard": true,
+    "picker": true,
+    "openUrl": true,
+    "statusBar": true,
+    "host": ["page.*"]
+  },
+  "web": { "host": "./web/host.js" }
+}

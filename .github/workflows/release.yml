@@ -31,13 +31,18 @@ jobs:
       contents: read
       id-token: write # npm trusted publishing and provenance
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      # The Native Shell CLI the web app is built with, at the version scripts/nsh.mjs pins (as in ci.yml).
+      - uses: actions/cache@v6
+        with:
+          path: .cache/nsh
+          key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
       - run: pnpm install --frozen-lockfile
       # The tag's version, in the manifest and the shrinkwrap alike (prepublishOnly checks they agree); the build bundles it.
       - name: Set the connector version from the tag

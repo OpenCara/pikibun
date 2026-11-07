@@ -87,7 +87,7 @@ jobs:
             exit 1
           fi
           echo "name=$IMAGE" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.config.outputs.configured == 'true'
       # An ephemeral node: the tailnet forgets it once the job logs out (the action's post step) or goes offline.
       - name: Join the tailnet

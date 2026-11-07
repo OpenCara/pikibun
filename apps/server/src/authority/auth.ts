@@ -22,6 +22,14 @@ const OPAQUE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const CALLBACK_PATH = '/api/auth/github/callback';
 /** Where the server hands a native sign-in back to the app (the apps register the `pikibun` URL scheme). */
 const NATIVE_CALLBACK = 'pikibun://auth';
+/**
+ * Where it hands it back to an app that signs in through a web view of its own (`callback=page`): the client on Native
+ * Shell, whose web views navigate only to http and https and which has no URL schemes, watches for this page.
+ */
+const NATIVE_PAGE_PATH = '/api/auth/native/done';
+
+/** A native sign-in in progress: the app's PKCE challenge and state, and where the result goes back. */
+interface NativeRequest { challenge: string; state: string; callback: 'scheme' | 'page' }
 /** A PKCE verifier (RFC 7636: 43-128 unreserved characters; the apps use base64url) or an app's opaque state. */
 const VERIFIER = /^[A-Za-z0-9_-]{43,128}$/;
 const APP_STATE = /^[A-Za-z0-9_-]{16,128}$/;
@@ -279,7 +287,7 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 /** Starts GitHub's OAuth. A native app's sign-in carries its PKCE challenge and state through to the callback. */
-async function githubStart(c: AppContext, native?: { challenge: string; state: string }) {
+async function githubStart(c: AppContext, native?: NativeRequest) {
   return c.redirect(await githubAuthorization(c, native));
 }
 
@@ -287,16 +295,18 @@ async function githubStart(c: AppContext, native?: { challenge: string; state: s
  * GitHub's authorization URL for a new sign-in, whose state (saved here and in a cookie) carries a native app's PKCE
  * challenge, or the hash of the invite link a browser sign-in started from (githubInviteStart).
  */
-async function githubAuthorization(c: AppContext, native?: { challenge: string; state: string }, inviteTokenHash?: string): Promise<string> {
+async function githubAuthorization(c: AppContext, native?: NativeRequest, inviteTokenHash?: string): Promise<string> {
   requireOrigin(c);
   await assertVaultConfigured(c.env);
   const config = githubConfig(c.env);
   const state = randomToken();
   const verifier = randomToken();
   const expiresAt = Date.now() + STATE_TTL;
-  await dbResult(c.env.DB.query(`INSERT INTO oauth_states (state_hash, verifier, expires_at, created_at, native_challenge, native_state, invite_token_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(await sha256(state), verifier, expiresAt, now(), native?.challenge ?? null, native?.state ?? null, inviteTokenHash ?? null).run());
+  await dbResult(c.env.DB.query(`INSERT INTO oauth_states
+    (state_hash, verifier, expires_at, created_at, native_challenge, native_state, native_callback, invite_token_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(await sha256(state), verifier, expiresAt, now(), native?.challenge ?? null, native?.state ?? null,
+      native?.callback === 'page' ? 'page' : null, inviteTokenHash ?? null).run());
   const cookieConfig = cookies(c.env);
   setCookie(c, cookieConfig.state, state, { ...cookieConfig.options, maxAge: STATE_TTL / 1000, expires: new Date(expiresAt) });
   const authorization = new URL('https://github.com/login/oauth/authorize');
@@ -354,26 +364,40 @@ async function githubSignup(c: AppContext, githubId: string, inviteTokenHash: st
 
 /**
  * A native app's sign-in, opened in the system's authentication browser: `challenge` is base64url(SHA-256) of the
- * app's PKCE verifier and `state` the app's own nonce, both returned to `pikibun://auth` after GitHub.
+ * app's PKCE verifier and `state` the app's own nonce, both returned to `pikibun://auth` after GitHub, or with
+ * `callback=page` to this server's NATIVE_PAGE_PATH, for an app signing in through a web view of its own. Either way
+ * the code is worth nothing without the verifier only the app holds, and works once, for two minutes.
  */
 function nativeStart(c: AppContext) {
   const challenges = c.req.queries('challenge');
   const states = c.req.queries('state');
+  const callbacks = c.req.queries('callback');
   const challenge = challenges?.length === 1 ? challenges[0] : undefined;
   const state = states?.length === 1 ? states[0] : undefined;
   if (!challenge || !OPAQUE_TOKEN.test(challenge) || !state || !APP_STATE.test(state)) fail(400, 'invalid_native_request', 'Invalid native sign-in request.');
-  return githubStart(c, { challenge, state });
+  if (callbacks !== undefined && (callbacks.length !== 1 || callbacks[0] !== 'page')) fail(400, 'invalid_native_request', 'Invalid native sign-in request.');
+  return githubStart(c, { challenge, state, callback: callbacks ? 'page' : 'scheme' });
 }
 
-function nativeCallback(params: Record<string, string>): string {
-  return `${NATIVE_CALLBACK}?${new URLSearchParams(params).toString()}`;
+function nativeCallback(c: AppContext, native: NativeRequest, params: Record<string, string>): string {
+  const query = new URLSearchParams({ ...params, state: native.state }).toString();
+  return native.callback === 'page' ? `${appOrigin(c.env)}${NATIVE_PAGE_PATH}?${query}` : `${NATIVE_CALLBACK}?${query}`;
 }
 
 /** The app's authentication browser closes on its callback, so the app shows a failure, not a JSON page. */
-async function nativeFailure(c: AppContext, error: unknown, state: string): Promise<Response> {
+async function nativeFailure(c: AppContext, error: unknown, native: NativeRequest): Promise<Response> {
   if (!(error instanceof HTTPException)) throw error;
   const body = await error.getResponse().json().catch(() => null) as { code?: unknown } | null;
-  return c.redirect(nativeCallback({ error: typeof body?.code === 'string' ? body.code : 'sign_in_failed', state }));
+  return c.redirect(nativeCallback(c, native, { error: typeof body?.code === 'string' ? body.code : 'sign_in_failed' }));
+}
+
+/**
+ * The page a web-view sign-in ends on (`callback=page`): the app reads the code from its address and closes the web
+ * view, so this is only what shows meanwhile. It repeats nothing of its address.
+ */
+function nativeDone(c: AppContext) {
+  return c.html('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pikibun</title>'
+    + '<p style="font:16px system-ui,sans-serif;text-align:center;margin-top:30vh">You can return to Pikibun.</p>');
 }
 
 /** Exchanges GitHub's code, then creates or updates the user it names; the token statement stores their GitHub token. */
@@ -514,14 +538,15 @@ async function githubCallback(c: AppContext) {
     fail(400, 'invalid_oauth_state', 'Invalid or expired OAuth state.');
   }
   // DELETE RETURNING makes concurrent callbacks and replay fail before code exchange.
-  const saved = await dbResult(c.env.DB.query<{ verifier: string; expires_at: number; native_challenge: string | null; native_state: string | null; invite_token_hash: string | null }>(
-    'DELETE FROM oauth_states WHERE state_hash = ? RETURNING verifier, expires_at, native_challenge, native_state, invite_token_hash')
+  const saved = await dbResult(c.env.DB.query<{ verifier: string; expires_at: number; native_challenge: string | null; native_state: string | null; native_callback: string | null; invite_token_hash: string | null }>(
+    'DELETE FROM oauth_states WHERE state_hash = ? RETURNING verifier, expires_at, native_challenge, native_state, native_callback, invite_token_hash')
     .bind(await sha256(state)).first());
   expireCookie(c, 'state');
   if (!saved || !Number.isSafeInteger(saved.expires_at) || saved.expires_at <= Date.now() || !OPAQUE_TOKEN.test(saved.verifier)) {
     fail(400, 'invalid_oauth_state', 'Invalid or expired OAuth state.');
   }
-  const native = saved.native_challenge !== null && saved.native_state !== null ? { challenge: saved.native_challenge, state: saved.native_state } : undefined;
+  const native: NativeRequest | undefined = saved.native_challenge !== null && saved.native_state !== null
+    ? { challenge: saved.native_challenge, state: saved.native_state, callback: saved.native_callback === 'page' ? 'page' : 'scheme' } : undefined;
   let signedIn: GitHubSignIn;
   try {
     const codes = c.req.queries('code');
@@ -532,10 +557,10 @@ async function githubCallback(c: AppContext) {
     signedIn = await githubUser(c, config, code, saved.verifier, saved.invite_token_hash, !!native);
   } catch (error) {
     if (error instanceof SignupRefusal) {
-      return c.redirect(native ? nativeCallback({ error: error.code, state: native.state })
+      return c.redirect(native ? nativeCallback(c, native, { error: error.code })
         : `${appOrigin(c.env)}/?${new URLSearchParams({ error: error.message }).toString()}`);
     }
-    if (native) return nativeFailure(c, error, native.state);
+    if (native) return nativeFailure(c, error, native);
     throw error;
   }
   const { user, tokenStatement } = signedIn;
@@ -550,9 +575,9 @@ async function githubCallback(c: AppContext) {
           .bind(await sha256(code), user.id, native.challenge, Date.now() + NATIVE_CODE_TTL, now()),
       ]));
     } catch (error) {
-      return nativeFailure(c, error, native.state);
+      return nativeFailure(c, error, native);
     }
-    return c.redirect(nativeCallback({ code, state: native.state }));
+    return c.redirect(nativeCallback(c, native, { code }));
   }
   const session = await newSession(c.env, user.id, 'github');
   await dbResult(c.env.DB.batch([tokenStatement, session.statement]));
@@ -645,6 +670,7 @@ export function registerAuth(app: Hono<WorkerEnv>): void {
   app.get(CALLBACK_PATH, privateResponse, githubCallback);
   app.get('/api/auth/local/claim', privateResponse, localClaim);
   app.get('/api/auth/native/start', privateResponse, nativeStart);
+  app.get(NATIVE_PAGE_PATH, privateResponse, nativeDone);
   app.post('/api/auth/native/token', privateResponse, nativeToken);
   app.post('/api/auth/test', privateResponse, csrfGuard, testLogin);
   app.get('/api/auth/csrf', privateResponse, authenticate, (c) => c.json({ csrfToken: c.get('auth').csrfToken }));
