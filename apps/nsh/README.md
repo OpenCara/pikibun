@@ -40,9 +40,15 @@ needs a decision stand out:
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
   pending approvals docked above the chat box; the chat box's pickers (shared or side ask, model, reasoning, access)
   along its bottom edge. Details (owner, host, visibility, ID) are in the session's panel.
-- **Kit**: `src/theme.ts` (colors for light and dark, Pikibun's lavender as the accent, type sizes, radii), `src/ui.tsx`
-  (buttons, badges, banners, cards, chips, pickers on `Menu`: a popup on the desktops and the web, a sheet on phones)
-  and `src/icons.tsx` (Lucide-style outlines drawn with `Canvas`, as NSH has no icon font).
+- **Kit**: drawn as the production React client's (`apps/web/src/styles.css` and `ui.tsx`), so both look alike.
+  `src/tokens.ts` has the web app's three themes (light, dark and Pikibun's night theme) under its CSS variables' names,
+  and `tests/nsh-theme.test.ts` fails when they differ from the stylesheet's; `src/theme.ts` builds the palettes from
+  them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget follows
+  (buttons, badges, alerts, sections of rows, nav items, chips, pickers on `Menu`: a popup on the desktops and the web,
+  a sheet on phones); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
+  the two differ on purpose: the sidebar keeps a search box (this client has no separate Sessions screen), tool rows
+  name what they work on, approval cards say what they ask in words, and message actions open a sheet rather than
+  appear on hover.
 
 ## Test it
 

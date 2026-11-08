@@ -163,7 +163,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
         <If when={decides(approval())}
           else={<Small>{hostDecided() ? hostCommandWaiting(approval().operation, host()) : ownerOnly() ? "Waiting for the session owner" : "Waiting for an authorized approver"}</Small>}>
           <If when={!approval().reviewHash}>
-            <Banner tone="warning" title="No verified review commitment" actions={<Button small label="Refresh approval" disabled={approvalAction.busy()} onPress={live.refresh} />}>
+            <Banner tone="warning" title="No verified review commitment" actions={<Button small variant="outline" label="Refresh approval" disabled={approvalAction.busy()} onPress={live.refresh} />}>
               Refresh before deciding; the server must bind the displayed operation and requester.
             </Banner>
           </If>
@@ -171,12 +171,12 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             else={
               <>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                  <Button testID="approval-approve" variant="primary" icon="check" label="Approve" disabled={disabled()} onPress={() => void decide(approval(), "approve")} />
+                  <Button testID="approval-approve" small variant="primary" label="Approve" disabled={disabled()} onPress={() => void decide(approval(), "approve")} />
                   <If when={always()}>
-                    <Button testID="approval-always" label={`Always approve ${username(people().person(approval().requestedBy))}`} disabled={disabled()}
+                    <Button testID="approval-always" small variant="outline" label={`Always approve ${username(people().person(approval().requestedBy))}`} disabled={disabled()}
                       onPress={() => void decide(approval(), "approve", undefined, true)} />
                   </If>
-                  <Button testID="approval-deny" icon="x" label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
+                  <Button testID="approval-deny" small variant="outline" label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
                 </View>
                 <Small testID="approval-hint">
                   {`Runs as ${hostCommand() ? "the host OS user (outside the sandbox)" : live.view()?.owner.displayName ?? ""} · each approval covers one exact operation and its arguments`}
@@ -184,12 +184,12 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               </>
             }>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              <Button variant="primary" icon="check" label="Allow once" disabled={disabled()} onPress={() => void decide(approval(), "approve", "call")} />
+              <Button small variant="primary" label="Allow once" disabled={disabled()} onPress={() => void decide(approval(), "approve", "call")} />
               {/* Each host command asks again: it runs outside the sandbox. */}
               <If when={!(approval().operation.kind === "permission" && (approval().operation as { tool?: string }).tool === "host_bash")}>
-                <Button label="Allow for this session" disabled={disabled()} onPress={() => void decide(approval(), "approve", "session")} />
+                <Button small variant="outline" label="Allow for this session" disabled={disabled()} onPress={() => void decide(approval(), "approve", "session")} />
               </If>
-              <Button icon="x" label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
+              <Button small variant="outline" label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
             </View>
           </If>
         </If>
@@ -208,7 +208,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       <If when={browserWarning() && permissions().includes("write") && !dismissedBrowser() ? browserWarning() : null}>
         {warning => (
           <Banner tone={warning().reason === "downloading" ? "info" : "warning"} title={warning().reason === "downloading" ? "The browser isn't ready yet" : "No browser on this host"}
-            actions={<Button small label="Dismiss" onPress={() => dismissedBrowser.set(true)} />}>
+            actions={<Button small variant="outline" label="Dismiss" onPress={() => dismissedBrowser.set(true)} />}>
             {`The workspace has the browser tool on, but this session can't use it. ${browserUnavailableText(warning().reason)}`}
           </Banner>
         )}
@@ -247,12 +247,12 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
         <If when={archived() || (live.error() && !startFailed()) || action.error() || action.notice()}>
           <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
             <If when={archived()}>
-              <Banner title="Archived" actions={<If when={manages()}><Button small label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
+              <Banner title="Archived" actions={<If when={manages()}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
                 {`This session is read-only. ${manages() ? "Unarchive it to continue the work." : "Only its owner, or the workspace's owner or an admin, can unarchive it."}`}
               </Banner>
             </If>
             <If when={live.error() && !startFailed()}>
-              <Banner tone="danger" title={live.session() ? "Live updates interrupted" : "Unable to open session"} actions={<Button small label="Reconnect and check access" onPress={live.reconnect} />}>
+              <Banner tone="danger" title={live.session() ? "Live updates interrupted" : "Unable to open session"} actions={<Button small variant="outline" label="Reconnect and check access" onPress={live.reconnect} />}>
                 {live.error()}
               </Banner>
             </If>
@@ -310,10 +310,10 @@ function ApprovalsSheet(props: {
       backdropStyle={{ backgroundColor: palette().backdrop }}
       popupStyle={windowSize().width >= 700
         ? { width: 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background, borderLeftWidth: 1, borderColor: palette().border }
-        : { height: "90%", borderTopLeftRadius: radius.xlarge, borderTopRightRadius: radius.xlarge, backgroundColor: palette().background }}>
+        : { height: "90%", borderTopLeftRadius: radius.large, borderTopRightRadius: radius.large, backgroundColor: palette().background }}>
       <View testID="approvals-sheet" style={{ flex: 1 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
-          <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: palette().text }}>Approvals</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 48, borderBottomWidth: 1, borderColor: palette().border }}>
+          <Text style={{ flex: 1, fontSize: text.body, fontWeight: "500", color: palette().text }}>Approvals</Text>
           <Button small variant="ghost" label="Done" onPress={props.onClose} />
         </View>
         <Scroll style={{ flex: 1 }} contentStyle={{ gap: 12, padding: 16 }}>
@@ -323,7 +323,7 @@ function ApprovalsSheet(props: {
             </Banner>
             <If when={props.session?.ownerId === user.id}>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                <Each of={always()}>{requester => <Button small label={`Stop for ${name(requester())}`} disabled={stopping.busy()} onPress={() => stop(requester())} />}</Each>
+                <Each of={always()}>{requester => <Button small variant="outline" label={`Stop for ${name(requester())}`} disabled={stopping.busy()} onPress={() => stop(requester())} />}</Each>
               </View>
             </If>
             <Feedback error={stopping.error()} notice={stopping.notice()} />
@@ -532,7 +532,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           </If>
         )}
         empty={() => (
-          <EmptyState icon={actualMode() === "ask" ? "message-question" : "message"} title={actualMode() === "ask" ? "A question on the side" : "The conversation begins here"}>
+          <EmptyState title={actualMode() === "ask" ? "A question on the side" : "The conversation begins here"}>
             {actualMode() === "ask" ? "Ask about the work without changing it. Only you, and people who can view this session, see side asks." : "Messages, the agent's replies and its tool calls appear here."}
           </EmptyState>
         )}
@@ -553,7 +553,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                 backgroundColor: palette().tones[statusTone()].background }}
               hoverStyle={{ opacity: 0.85 }}>
               <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: palette().tones[statusTone()].text }} />
-              <Text style={{ fontSize: text.caption, fontWeight: "600", color: palette().tones[statusTone()].text }}>{queueLabel()}</Text>
+              <Text style={{ fontSize: text.caption, color: palette().tones[statusTone()].text }}>{queueLabel()}</Text>
               <Icon name={queueOpen() ? "chevron-up" : "chevron-down"} size={12} color={palette().tones[statusTone()].text} />
             </BaseButton>
           </If>
@@ -650,7 +650,7 @@ function UnavailableConversation(props: { id: string; session: SessionRecord; er
   return (
     <>
       <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1 }}>
-        <EmptyState icon={props.session.status === "error" ? "alert" : props.session.status === "provisioning" ? "clock" : "monitor"} title={title()}>{body()}</EmptyState>
+        <EmptyState title={title()}>{body()}</EmptyState>
         <If when={failed() && props.error}>
           <Small center>{props.error}</Small>
         </If>

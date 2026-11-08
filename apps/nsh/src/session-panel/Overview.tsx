@@ -1,12 +1,11 @@
-import { Clipboard, Text, untracked, View } from "nsh";
+import { Clipboard, untracked } from "nsh";
 import { segment, sessionStatus, type ConnectorInfo } from "../shared";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { createUsername } from "../lib/people";
 import { createAction, createResource } from "../lib/resource";
 import { timestamp } from "../lib/format";
-import { palette, text } from "../theme";
-import { Badge, Button, Card, Feedback, Row, Small, Value } from "../ui";
+import { Badge, Banner, Button, CardBody, Feedback, Row, Section, Small } from "../ui";
 import { TabPage, type PanelTabProps } from "./parts";
 
 /**
@@ -37,41 +36,24 @@ export function Overview(props: PanelTabProps) {
       <If when={props.session()} else={<Small>Loading…</Small>}>
         {current => (
           <>
-            <Card>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: palette().text }}>{current().title}</Text>
-                <If when={status()?.label}>
-                  <Badge tone={status()!.tone} dot>{status()!.label!}</Badge>
-                </If>
-              </View>
-              <Row label="Workspace"><Value>{workspace()?.name ?? current().workspaceId}</Value></Row>
-              <Row label="Owner"><Value>{name(current().ownerId, true)}</Value></Row>
-              <Row label="Host">
-                <Value testID="session-people">
-                  {current().connectorId
-                    ? `${host()?.name ?? "Pinned host"}, hosted by ${hostOwner()}${current().connectorOwnerId === user.id ? " (you)" : ""}${host() && !host()!.online ? " · offline" : ""}`
-                    : "Operator-managed session"}
-                </Value>
-              </Row>
-              <Row label="Visibility">
-                <Value>{`${current().visibility === "workspace" ? "Workspace members can view it" : "Private: only people given a role, and the workspace's owner and admins"}${current().linkShared ? " · A share link is on" : ""}`}</Value>
-              </Row>
-              <If when={current().hostUnsandboxed}>
-                <Small tone="danger">This session's host runs without a sandbox.</Small>
-              </If>
-              <Row label="Started"><Value>{timestamp(current().createdAt)}</Value></Row>
-            </Card>
-            <Card>
-              <Row label="Session ID">
-                <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-                  <View selectable style={{ flexShrink: 1 }}>
-                    <Text style={{ fontFamily: "monospace", fontSize: text.small, color: palette().text }}>{props.sessionId}</Text>
-                  </View>
-                  <Button small variant="ghost" icon="copy" label="Copy" onPress={() => void action.run(() => Clipboard.writeText(props.sessionId), "Session ID copied")} />
-                </View>
-              </Row>
-              <Small>Open it on another device with Open a session by ID.</Small>
-            </Card>
+            <If when={current().hostUnsandboxed}>
+              <Banner tone="danger" title="Unsandboxed host">This session's host runs without a sandbox.</Banner>
+            </If>
+            <Section title="Session">
+              <Row title={current().title} trailing={status()?.label ? <Badge tone={status()!.tone} dot>{status()!.label!}</Badge> : undefined} />
+              <Row title="Workspace" trailing={workspace()?.name ?? current().workspaceId} />
+              <Row title="Owner" trailing={name(current().ownerId, true)} />
+              <Row title="Host" hintTestID="session-people" hint={current().connectorId
+                ? `${host()?.name ?? "Pinned host"}, hosted by ${hostOwner()}${current().connectorOwnerId === user.id ? " (you)" : ""}${host() && !host()!.online ? " · offline" : ""}`
+                : "Operator-managed session"} />
+              <Row title="Visibility" hint={`${current().visibility === "workspace" ? "Workspace members can view it" : "Private: only people given a role, and the workspace's owner and admins"}${current().linkShared ? " · A share link is on" : ""}`} />
+              <Row title="Started" trailing={timestamp(current().createdAt)} />
+            </Section>
+            <Section title="Open elsewhere">
+              <Row title="Session ID" hint={props.sessionId} selectableHint
+                trailing={<Button small variant="ghost" icon="copy" label="Copy" onPress={() => void action.run(() => Clipboard.writeText(props.sessionId), "Session ID copied")} />} />
+              <CardBody><Small>Open it on another device with Open a session by ID.</Small></CardBody>
+            </Section>
             <Feedback error={action.error()} notice={action.notice()} />
           </>
         )}

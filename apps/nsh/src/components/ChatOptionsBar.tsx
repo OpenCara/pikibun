@@ -47,9 +47,9 @@ export function ChatOptionsBar(props: {
     <If when={props.host}>
       {host => (
         <If when={host().capabilities.chatOptions} else={<Text style={{ fontSize: text.caption, color: palette().muted, paddingHorizontal: 8 }}>{CONNECTOR_UPDATE_HINT}</Text>}>
-          <If when={host().models.length > 0} else={<Chip testID="chat-model" icon="sparkles" label={model()?.name ?? "Model"} disabled />}>
+          <If when={host().models.length > 0} else={<Chip testID="chat-model" label={model()?.name ?? "Model"} disabled />}>
             <Picker<string> title="Model" value={props.value.model && model() ? modelKey(props.value.model) : undefined}
-              trigger={<Chip testID="chat-model" icon="sparkles" label={model()?.name ?? "Model"} />}
+              trigger={<Chip testID="chat-model" label={model()?.name ?? "Model"} />}
               options={host().models.map(item => ({ value: modelKey(item), label: item.name, hint: item.provider }))}
               onSelect={key => {
                 const next = host().models.find(item => modelKey(item) === key);
@@ -58,13 +58,13 @@ export function ChatOptionsBar(props: {
           </If>
           <If when={levels().length > 0}>
             <Picker<ThinkingLevel> title="Reasoning" value={level()}
-              trigger={<Chip testID="chat-reasoning" icon="zap" label={level() && levels().includes(level()!) ? levelLabels[level()!] : "Default"} />}
+              trigger={<Chip testID="chat-reasoning" label={level() && levels().includes(level()!) ? levelLabels[level()!] : "Default"} />}
               options={levels().map(item => ({ value: item, label: levelLabels[item] }))}
               onSelect={thinkingLevel => props.onChange({ ...props.value, thinkingLevel })} />
           </If>
           <If when={props.showAccess}>
             <Picker<AccessMode> title="Access" value={props.value.access}
-              trigger={<Chip testID="chat-access" icon={accessIcons[props.value.access]} tone={props.value.access === "auto" ? "danger" : undefined} label={accessLabels[props.value.access].label} />}
+              trigger={<Chip testID="chat-access" icon={accessIcons[props.value.access]} tone={props.value.access === "auto" ? "warning" : undefined} label={accessLabels[props.value.access].label} />}
               options={modes().map(mode => ({ value: mode, label: accessLabels[mode].label, hint: accessLabels[mode].hint, destructive: mode === "auto", icon: accessIcons[mode] }))}
               onSelect={access => void selectAccess(access)} />
           </If>

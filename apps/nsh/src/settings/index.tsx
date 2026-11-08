@@ -1,8 +1,8 @@
 import { Text, View, type JSX } from "nsh";
-import { Button as BaseButton } from "nsh/base";
 import { session } from "../lib/auth";
 import { Icon, type IconName } from "../icons";
-import { palette, radius, text } from "../theme";
+import { palette, radius, text, weight } from "../theme";
+import { NavItem, Row } from "../ui";
 import { Administration } from "./Administration";
 import { Appearance } from "./Appearance";
 import { Hosts } from "./Hosts";
@@ -40,24 +40,36 @@ export function findSection(id: string | undefined): SettingsSection {
   return visible.find(section => section.id === id) ?? visible[0]!;
 }
 
-/** The list of sections; `selected` marks the one shown beside it in the wide layout. */
+/**
+ * The list of sections; `selected` marks the one shown beside it in the wide layout (the web's .settings-list). On a
+ * phone each is a row that opens its own page.
+ */
 export function SectionList(props: { selected?: string; onOpen: (id: string) => void }) {
   return (
-    <View testID="settings-sections" style={{ gap: 2, padding: 8 }}>
-      <Each of={visibleSections()} key={section => section.id}>
-        {section => (
-          <BaseButton testID={`settings-section-${section().id}`} selected={props.selected === section().id} onPress={() => props.onOpen(section().id)}
-            style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, height: props.selected === undefined ? 44 : 34, borderRadius: radius.medium,
-              backgroundColor: props.selected === section().id ? palette().selection : "transparent" }}
-            activeStyle={{ backgroundColor: palette().selection }} hoverStyle={{ backgroundColor: props.selected === section().id ? palette().selection : palette().hover }}>
-            <Icon name={section().icon} size={16} color={props.selected === section().id ? palette().text : palette().muted} />
-            <Text style={{ flex: 1, fontSize: props.selected === undefined ? text.reading : text.body, fontWeight: "500", color: palette().text }}>{section().label}</Text>
-            <If when={props.selected === undefined}>
-              <Icon name="chevron-right" size={16} color={palette().faint} />
-            </If>
-          </BaseButton>
-        )}
-      </Each>
-    </View>
+    <If when={props.selected !== undefined}
+      else={
+        <View testID="settings-sections" style={{ padding: 16 }}>
+          <View style={{ overflow: "hidden", borderRadius: radius.large, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
+            <View style={{ marginTop: -1 }}>
+              <Each of={visibleSections()} key={section => section.id}>
+                {section => (
+                  <Row testID={`settings-section-${section().id}`} title={section().label} chevron onPress={() => props.onOpen(section().id)}
+                    leading={<Icon name={section().icon} size={16} color={palette().muted} />} />
+                )}
+              </Each>
+            </View>
+          </View>
+        </View>
+      }>
+      <View testID="settings-sections" style={{ gap: 2, paddingVertical: 16, paddingHorizontal: 8 }}>
+        <Text style={{ paddingTop: 8, paddingHorizontal: 12, paddingBottom: 12, fontSize: text.small, fontWeight: weight.medium, color: palette().muted }}>Settings</Text>
+        <Each of={visibleSections()} key={section => section.id}>
+          {section => (
+            <NavItem testID={`settings-section-${section().id}`} icon={section().icon} label={section().label} active={props.selected === section().id}
+              onPress={() => props.onOpen(section().id)} />
+          )}
+        </Each>
+      </View>
+    </If>
   );
 }

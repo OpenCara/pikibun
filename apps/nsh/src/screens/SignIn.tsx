@@ -29,7 +29,7 @@ export function SignIn() {
         {unreachable => (
           <View style={{ flex: 1, justifyContent: "center", gap: 16, padding: 24, width: "100%", maxWidth: 480, alignSelf: "center" }}>
             <Logo size={44} />
-            <Text style={{ fontSize: 26, fontWeight: "700", color: palette().text }}>Can't reach Pikibun</Text>
+            <Text style={{ fontSize: 26, fontWeight: "300", color: palette().text }}>Can't reach Pikibun</Text>
             <Banner tone="warning" title={displayOrigin(origin())}>{unreachable().error}</Banner>
             <Button variant="primary" label="Try again" disabled={action.busy()} onPress={() => void restore()} />
             <Button variant="ghost" label={action.busy() ? "Signing out…" : "Sign out"} disabled={action.busy()} onPress={() => void action.run(signOut)} />
@@ -99,7 +99,7 @@ function SignInForm() {
     <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1, justifyContent: "center", gap: 14, padding: 24, width: "100%", maxWidth: 420, alignSelf: "center" }}>
       <View style={{ gap: 10, alignItems: "center", paddingBottom: 8 }}>
         <Logo size={56} />
-        <Text style={{ fontSize: 26, fontWeight: "700", color: palette().text, textAlign: "center" }}>Sign in to Pikibun</Text>
+        <Text style={{ fontSize: 26, fontWeight: "300", color: palette().text, textAlign: "center" }}>Sign in to Pikibun</Text>
         <Text style={{ fontSize: text.reading, lineHeight: 22, color: palette().muted, textAlign: "center" }}>Run Pi agents on your own machines, and work on them together with your team.</Text>
       </View>
       <If when={notice()}>{text => <Banner tone="warning">{text()}</Banner>}</If>
@@ -110,7 +110,7 @@ function SignInForm() {
           <If when={editingServer()}
             else={
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Text style={{ flexShrink: 1, numberOfLines: 1, fontSize: 16, fontWeight: "600", color: palette().text }}>{origin() ? displayOrigin(origin()!) : server()}</Text>
+                <Text style={{ flexShrink: 1, numberOfLines: 1, fontSize: 16, fontWeight: "500", color: palette().text }}>{origin() ? displayOrigin(origin()!) : server()}</Text>
                 <Button testID="server-change" small variant="ghost" label="Change" onPress={() => editingServer.set(true)} />
               </View>
             }>
@@ -171,7 +171,7 @@ function SignInForm() {
         style={{ flex: 1, backgroundColor: palette().background }} presentation="pageSheet">
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 52, borderBottomWidth: 1, borderColor: palette().border }}>
-            <Text style={{ flex: 1, fontSize: 16, fontWeight: "600", color: palette().text }}>Sign in with GitHub</Text>
+            <Text style={{ flex: 1, fontSize: 14, fontWeight: "500", color: palette().text }}>Sign in with GitHub</Text>
             <Button small variant="ghost" label="Cancel" onPress={() => github.set(null)} />
           </View>
           <If when={github()}>
