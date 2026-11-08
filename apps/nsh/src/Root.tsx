@@ -8,6 +8,7 @@ import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
 import { drawsHeaders, headerProps, pageStyle } from "./screens/PageHeader";
 import { SessionList } from "./screens/SessionList";
+import { Sessions } from "./screens/Sessions";
 import { SessionView } from "./screens/SessionView";
 import { SharedSession } from "./screens/SharedSession";
 import { SignIn } from "./screens/SignIn";
@@ -21,6 +22,8 @@ type Route =
   | { name: "session"; id: string }
   | { name: "new"; workspaceId?: string }
   | { name: "open" }
+  /** Every session, searchable (the web app's Sessions screen). */
+  | { name: "all-sessions" }
   /** The sections, with the one `settingsAt` names beside them in the wide layout. */
   | { name: "settings" }
   /** One section as a page of its own (phones). */
@@ -125,6 +128,7 @@ function Shell() {
   function go(route: PageRoute) {
     switch (route.name) {
       case "home": nav.popToRoot(); break;
+      case "sessions": nav.popToRoot(); nav.push({ name: "all-sessions" }); break;
       case "session": nav.popToRoot(); openSession(route.sessionId); break;
       case "new": nav.popToRoot(); startNew(route.workspaceId); break;
       case "settings": nav.popToRoot(); openSettings(route.section, route.id); break;
@@ -151,6 +155,7 @@ function Shell() {
         case "settings": return showRoute(wide() ? { name: "settings", ...at } : { name: "settings" });
         case "settings-section": return showRoute({ name: "settings", section: top.section, ...(top.id ? { id: top.id } : {}) });
         case "join": return showRoute({ name: "join", token: top.token });
+        case "all-sessions": return showRoute({ name: "sessions" });
         default: return showRoute({ name: "home" });
       }
     });
@@ -201,7 +206,7 @@ function Shell() {
                   <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
                     <View style={{ flex: 1, flexDirection: "row" }}>
                       <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()}
-                        onOpenById={() => nav.push({ name: "open" })} onSettings={section => openSettings(section)} />
+                        onOpenById={() => nav.push({ name: "open" })} onAll={() => nav.push({ name: "all-sessions" })} onSettings={section => openSettings(section)} />
                       <View style={{ flex: 1, backgroundColor: palette().background }}>
                         <If when={selected()}
                           else={
@@ -227,6 +232,12 @@ function Shell() {
                   <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} />
                 </NavPage>
               );
+            case "all-sessions":
+              return (
+                <NavPage title="Sessions" {...headerProps({ title: "Sessions", onBack: back })}>
+                  <Sessions onOpen={openFromPage} onOpenById={() => nav.push({ name: "open" })} onNew={() => startNew()} />
+                </NavPage>
+              );
             case "open":
               return (
                 <NavPage title="Open a session" {...headerProps({ title: "Open a session", onBack: back })}>
@@ -250,7 +261,7 @@ function Shell() {
             case "join":
               return (
                 <NavPage title="Join a workspace" {...headerProps({ title: "Join a workspace", onBack: back })}>
-                  <JoinWorkspace token={route.token} onDone={() => nav.popToRoot()} />
+                  <JoinWorkspace token={route.token} onDone={() => nav.popToRoot()} go={go} />
                 </NavPage>
               );
           }
@@ -264,13 +275,14 @@ function Shell() {
  * The wide layout's sidebar, as the web app's (Sidebar.tsx): the app, a new session and opening one by ID; every session
  * by workspace; and the signed-in person, hosts and settings along its foot.
  */
-function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onSettings: (section?: string) => void }) {
+function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void }) {
   const user = () => session().user;
   return (
     <View testID="sidebar" style={{ width: layout.sidebar, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
       <View desktop={{ windowDrag: true }} style={{ gap: 2, paddingTop: 12, paddingHorizontal: 8, paddingBottom: 8 }}>
         <NavItem label="Pikibun" strong leading={<Logo size={20} />} />
         <NavItem testID="new-session" icon="plus" label="New session" active={props.home} onPress={props.onNew} />
+        <NavItem testID="all-sessions" icon="history" label="Sessions" onPress={props.onAll} />
         <NavItem testID="open-by-id" icon="hash" label="Open by ID" onPress={props.onOpenById} />
       </View>
       <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} />

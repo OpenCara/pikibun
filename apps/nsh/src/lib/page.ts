@@ -7,6 +7,8 @@ import { host, platform, signal } from "nsh";
  */
 export type PageRoute =
   | { name: "home" }
+  /** Every session, searchable. */
+  | { name: "sessions" }
   | { name: "session"; sessionId: string }
   | { name: "new"; workspaceId: string }
   | { name: "settings"; section?: string; id?: string }
@@ -23,6 +25,7 @@ function decode(value: string | undefined): string | undefined {
 export function parseRoute(hash: string): PageRoute {
   const [head, first, second] = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   if (head === "s" && decode(first)) return { name: "session", sessionId: decode(first)! };
+  if (head === "sessions") return { name: "sessions" };
   if (head === "shared" && decode(first)) return { name: "shared", token: decode(first)! };
   if (head === "join" && decode(first)) return { name: "join", token: decode(first)! };
   if (head === "w" && decode(first) && second === "new") return { name: "new", workspaceId: decode(first)! };
@@ -37,6 +40,7 @@ export function parseRoute(hash: string): PageRoute {
 export function routeHash(route: PageRoute): string {
   switch (route.name) {
     case "home": return "#/";
+    case "sessions": return "#/sessions";
     case "session": return `#/s/${encodeURIComponent(route.sessionId)}`;
     case "new": return `#/w/${encodeURIComponent(route.workspaceId)}/new`;
     case "settings": return `#/settings${route.section ? `/${encodeURIComponent(route.section)}` : ""}${route.section && route.id ? `/${encodeURIComponent(route.id)}` : ""}`;

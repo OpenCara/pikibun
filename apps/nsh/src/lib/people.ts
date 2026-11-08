@@ -1,6 +1,6 @@
 import { computed, context, type Accessor } from "nsh";
 import { memberPerson, peopleDirectory, segment, username, type Person, type WorkspaceMember } from "../shared";
-import { session } from "./auth";
+import { auth, session } from "./auth";
 import { createResource } from "./resource";
 
 /** The people a screen can name by username: a workspace's members and the signed-in user. */
@@ -24,12 +24,16 @@ export function createWorkspacePeople(workspaceId: Accessor<string | null>): Acc
 
 export const PeopleContext = context<Accessor<People> | null>(null);
 
-/** A user's username, as the web's `<Username>` shows it; `you` names the signed-in user "you". */
+/**
+ * A user's username, as the web's `<Username>` shows it; `you` names the signed-in user "you". Works signed out too
+ * (a share link's viewer), where nobody is "you".
+ */
 export function createUsername(): (id: string, you?: boolean) => string {
   const people = PeopleContext();
   return (id, you) => {
-    const { user } = session();
-    if (you && id === user.id) return "you";
-    return people ? username(people().person(id)) : id === user.id ? username({ id, username: user.username, githubLogin: user.githubLogin }) : username({ id });
+    const state = auth();
+    const user = state.status === "signedIn" ? state.user : null;
+    if (you && id === user?.id) return "you";
+    return people ? username(people().person(id)) : id === user?.id ? username({ id, username: user.username, githubLogin: user.githubLogin }) : username({ id });
   };
 }
