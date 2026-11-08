@@ -87,26 +87,25 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
   };
 }
 
-/** One quiet line for a tool call, its output or a system note; pressing it shows the exact text. */
+/**
+ * One quiet line for a tool call, its output or a system note (the web's .entry-tool): its icon, what it is and what
+ * it works on, muted, and a chevron that turns as pressing it shows the exact text.
+ */
 function ToolRow(props: { icon: IconName; name: string; summary: string; meta: string; text: string; trimmed?: EntryView["trimmed"]; open: boolean; onToggle: () => void; result?: boolean }) {
   return (
-    <View style={{ gap: 6 }}>
+    <View style={{ gap: 8 }}>
       <BaseButton accessibilityLabel={`${props.name} ${props.summary}${props.meta ? ` · ${props.meta}` : ""}`} onPress={props.onToggle}
-        style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", maxWidth: "100%", paddingHorizontal: 8, height: 28, marginLeft: -8, borderRadius: radius.medium }}
-        hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.6 }}>
-        <Icon name={props.icon} size={14} color={palette().faint} />
-        <Text style={{ fontSize: text.small, fontWeight: "600", color: palette().muted }}>{props.name}</Text>
-        <If when={props.summary}>
-          <Text style={{ flexShrink: 1, numberOfLines: 1, fontFamily: monospace, fontSize: 12, color: palette().faint }}>{props.summary}</Text>
-        </If>
-        <If when={props.meta}>
-          <Text style={{ fontSize: text.caption, color: palette().faint, numberOfLines: 1 }}>{props.meta}</Text>
-        </If>
-        <Icon name={props.open ? "chevron-up" : "chevron-down"} size={12} color={palette().faint} />
+        style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", maxWidth: "100%", paddingVertical: 2, paddingRight: 8, borderRadius: radius.small }}
+        activeStyle={{ opacity: 0.7 }}>
+        <Icon name={props.icon} size={14} color={palette().muted} />
+        <Text style={{ flexShrink: 1, numberOfLines: 1, fontSize: text.small, color: palette().muted }}>
+          {`${props.name}${props.summary ? ` · ${props.summary}` : ""}${props.meta ? ` · ${props.meta}` : ""}`}
+        </Text>
+        <Icon name={props.open ? "chevron-down" : "chevron-right"} size={14} color={palette().muted} />
       </BaseButton>
       <If when={props.open}>
-        <View selectable style={{ borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().code, padding: 10 }}>
-          <Text style={{ fontFamily: monospace, fontSize: 12, lineHeight: 18, color: palette().text }}>{props.text}</Text>
+        <View selectable style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
+          <Text style={{ fontFamily: monospace, fontSize: text.small, lineHeight: 20, color: palette().text }}>{props.text}</Text>
         </View>
         <If when={props.trimmed}>
           {trimmed => (
@@ -127,11 +126,11 @@ function Footer(props: { entry: EntryView; meta: string; onActions?: (entry: Ent
     <If when={props.meta || actions()}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 6, justifyContent: props.end ? "flex-end" : "flex-start" }}>
         <If when={props.meta}>
-          <Text style={{ fontSize: text.caption, color: palette().faint }}>{props.meta}</Text>
+          <Text style={{ fontSize: text.caption, color: palette().muted }}>{props.meta}</Text>
         </If>
         <If when={actions()}>
           <BaseButton accessibilityLabel="Message actions" hitSlop={10} onPress={() => props.onActions?.(props.entry)}
-            style={{ width: 24, height: 22, alignItems: "center", justifyContent: "center", borderRadius: radius.small, opacity: platform.desktop || platform.os === "web" ? 0.55 : 1 }}
+            style={{ width: 28, height: 24, alignItems: "center", justifyContent: "center", borderRadius: radius.small, opacity: platform.desktop || platform.os === "web" ? 0.55 : 1 }}
             hoverStyle={{ backgroundColor: palette().hover, opacity: 1 }} activeStyle={{ opacity: 0.5 }}>
             <Icon name="more" size={14} color={palette().muted} />
           </BaseButton>
@@ -151,8 +150,8 @@ export function TranscriptEntry(props: { entry: EntryView; userId: string; expan
   const shown = computed(() => describe(props.entry, props.userId, name));
   const open = () => props.expanded(props.entry.id);
   const toggle = () => props.toggle(props.entry.id);
-  // Consecutive tool lines sit close together; messages get room around them.
-  const gapAfter = () => (shown().kind === "tool" ? 4 : 18);
+  // Every entry sits 16 points from the next, as the web app's transcript spaces them; consecutive tool lines closer.
+  const gapAfter = () => (shown().kind === "tool" ? 8 : 16);
   return (
     <View style={{ gap: 6, paddingBottom: gapAfter() }}>
       <If when={shown().kind === "stopped" ? shown() as Extract<Shown, { kind: "stopped" }> : null}>
@@ -181,10 +180,10 @@ export function TranscriptEntry(props: { entry: EntryView; userId: string; expan
         {user => (
           <View style={{ alignItems: "flex-end", gap: 4 }}>
             <If when={user().meta}>
-              <Text style={{ fontSize: text.caption, fontWeight: "600", color: palette().muted, paddingHorizontal: 4 }}>{user().meta}</Text>
+              <Text style={{ fontSize: text.caption, color: palette().muted, paddingHorizontal: 4 }}>{`by ${user().meta}`}</Text>
             </If>
-            <View selectable style={{ borderRadius: 18, borderBottomRightRadius: 6, paddingHorizontal: 14, paddingVertical: 9, maxWidth: "85%", backgroundColor: palette().userBubble }}>
-              <Text style={{ fontSize: text.reading, lineHeight: 22, color: palette().onUserBubble }}>{user().text}</Text>
+            <View selectable style={{ borderRadius: radius.large, paddingHorizontal: 12, paddingVertical: 8, maxWidth: "85%", backgroundColor: palette().userBubble }}>
+              <Text style={{ fontSize: text.reading, lineHeight: 23, color: palette().onUserBubble }}>{user().text}</Text>
             </View>
             <Footer entry={props.entry} meta="" onActions={props.onActions} end />
           </View>

@@ -5,7 +5,7 @@ import type { GitHubMergeMethod, GitHubMergeOperation, GitPushOperation, Permiss
 import { timestamp } from "../lib/format";
 import { createUsername } from "../lib/people";
 import { Icon, type IconName } from "../icons";
-import { monospace, palette, radius, text, type Tone } from "../theme";
+import { monospace, palette, radius, text, weight, type Tone } from "../theme";
 import { Badge, Banner, Button, Card, Small } from "../ui";
 
 const approvalTone: Record<ApprovalRecord["status"], Tone> = {
@@ -25,8 +25,8 @@ const mergeMethodLabels: Record<GitHubMergeMethod, string> = { merge: "Merge com
 
 function Code(props: { children?: JSX.Element; testID?: string }) {
   return (
-    <View selectable style={{ borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, padding: 10, backgroundColor: palette().code }}>
-      <Text testID={props.testID} style={{ fontFamily: monospace, fontSize: 12, lineHeight: 18, color: palette().text }}>{props.children}</Text>
+    <View selectable style={{ borderRadius: radius.medium, padding: 12, backgroundColor: palette().code }}>
+      <Text testID={props.testID} style={{ fontFamily: monospace, fontSize: text.small, lineHeight: 20, color: palette().text }}>{props.children}</Text>
     </View>
   );
 }
@@ -167,13 +167,10 @@ export function ApprovalCard(props: { approval: ApprovalRecord; onOpenSession?: 
   const showJson = signal(false);
   const exact = () => exactText(operation());
   return (
-    <Card testID={`approval-${props.approval.id}`} style={pending() ? { borderColor: palette().tones.warning.border, gap: 12 } : undefined}>
+    <Card testID={`approval-${props.approval.id}`} style={{ gap: 8, padding: 12 }}>
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
-        <View style={{ width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center",
-          backgroundColor: pending() ? palette().tones.warning.background : palette().surfaceRaised }}>
-          <Icon name={heading(operation()).icon} size={14} color={pending() ? palette().tones.warning.text : palette().muted} />
-        </View>
-        <Text style={{ flexShrink: 1, fontSize: text.reading, fontWeight: "600", color: palette().text }}>{heading(operation()).title}</Text>
+        <Icon name={heading(operation()).icon} size={16} color={palette().muted} />
+        <Text style={{ flexShrink: 1, fontSize: text.body, fontWeight: weight.medium, color: palette().text }}>{heading(operation()).title}</Text>
         <View style={{ flex: 1 }} />
         <If when={props.approval.unbounded}><Badge tone="warning">No resource limits</Badge></If>
         <If when={containsRedaction(operation())}><Badge tone="warning">Secret hidden</Badge></If>

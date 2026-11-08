@@ -44,14 +44,14 @@ export function NewSessionForm(props: { onStarted: (sessionId: string) => void; 
       <If when={!data.workspacesError()}
         else={
           <View style={{ padding: 20 }}>
-            <Banner tone="danger" title="Unable to load workspaces" actions={<Button small label="Retry" onPress={data.refreshWorkspaces} />}>{data.workspacesError()}</Banner>
+            <Banner tone="danger" title="Unable to load workspaces" actions={<Button small variant="outline" label="Retry" onPress={data.refreshWorkspaces} />}>{data.workspacesError()}</Banner>
           </View>
         }>
         <If when={workspace()}
           else={
             <If when={data.workspaces().length > 0}
-              else={<EmptyState icon="users" title="No workspace yet">Create a workspace, add a repository and pair a host to start your first session.</EmptyState>}>
-              <EmptyState icon="eye" title="Viewer only">You're a viewer in every workspace you belong to, so you can follow their shared sessions but not start one. Ask a workspace owner or admin for the member role.</EmptyState>
+              else={<EmptyState title="No workspace yet">Create a workspace, add a repository and pair a host to start your first session.</EmptyState>}>
+              <EmptyState title="Viewer only">You're a viewer in every workspace you belong to, so you can follow their shared sessions but not start one. Ask a workspace owner or admin for the member role.</EmptyState>
             </If>
           }>
           {current => (
@@ -158,7 +158,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   }
 
   const loading = () => models.loading() || connections.loading();
-  const refreshHost = () => <Button small label="Refresh host status" onPress={connections.refresh} />;
+  const refreshHost = () => <Button small variant="outline" label="Refresh host status" onPress={connections.refresh} />;
   const hostState = (item: ConnectorInfo) => item.revokedAt ? "Revoked" : !item.online ? "Offline" : item.capabilities.unsandboxed ? "Unsandboxed"
     : !item.capabilities.sandbox ? "Sandbox unverified" : "Online";
   /** What keeps the session from starting, the first thing first. */
@@ -190,7 +190,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       <View style={{ gap: 14, width: "100%", maxWidth: 720, alignSelf: "center" }}>
         <View style={{ alignItems: props.home ? "center" : "flex-start", gap: 12, paddingBottom: 6 }}>
           <If when={props.home}><Logo size={40} /></If>
-          <Text role="header" style={{ fontSize: props.home ? 26 : 22, fontWeight: "600", color: palette().text, textAlign: props.home ? "center" : "auto" }}>What should we work on?</Text>
+          <Text role="header" style={{ fontSize: props.home ? 26 : 22, fontWeight: "300", color: palette().text, textAlign: props.home ? "center" : "auto" }}>What should we work on?</Text>
         </View>
         <Composer testID="new-message" sendTestID="new-start" value={content()} onChange={value => content.set(value)} onSubmit={() => void start()}
           busy={action.busy()} ready={canStart()} minHeight={88} sendText="Start session" sendLabel="Start session"
@@ -216,7 +216,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         <If when={blocking()}>
           {alert => (
             <Banner tone={alert().tone} title={alert().title}
-              actions={alert().retry ? <Button small label="Retry" onPress={alert().retry!} /> : alert().refresh ? refreshHost() : undefined}>
+              actions={alert().retry ? <Button small variant="outline" label="Retry" onPress={alert().retry!} /> : alert().refresh ? refreshHost() : undefined}>
               <If when={alert().trust} else={alert().text}>
                 {trustHost => (
                   <Switch testID="new-trust" checked={trustedHost() === trustHost().id} disabled={action.busy()}

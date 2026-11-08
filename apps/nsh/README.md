@@ -40,9 +40,15 @@ needs a decision stand out:
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
   pending approvals docked above the chat box; the chat box's pickers (shared or side ask, model, reasoning, access)
   along its bottom edge. Details (owner, host, visibility, ID) are in the session's panel.
-- **Kit**: `src/theme.ts` (colors for light and dark, Pikibun's lavender as the accent, type sizes, radii), `src/ui.tsx`
-  (buttons, badges, banners, cards, chips, pickers on `Menu`: a popup on the desktops and the web, a sheet on phones)
-  and `src/icons.tsx` (Lucide-style outlines drawn with `Canvas`, as NSH has no icon font).
+- **Kit**: drawn as the production React client's (`apps/web/src/styles.css` and `ui.tsx`), so both look alike.
+  `src/tokens.ts` has the web app's three themes (light, dark and Pikibun's night theme) under its CSS variables' names,
+  and `tests/nsh-theme.test.ts` fails when they differ from the stylesheet's; `src/theme.ts` builds the palettes from
+  them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget follows
+  (buttons, badges, alerts, sections of rows, nav items, chips, pickers on `Menu`: a popup on the desktops and the web,
+  a sheet on phones); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
+  the two differ on purpose: the sidebar keeps a search box, tool rows
+  name what they work on, approval cards say what they ask in words, and message actions open a sheet rather than
+  appear on hover.
 
 ## Test it
 
@@ -73,6 +79,22 @@ app, Linux and Android on the tag's preview GitHub release (always a prerelease,
 `com.pikibun.app` (the iPhone and Android app's before it, so they update in place) and the icon `icon.png`. Signing
 and the secrets it needs are in [docs/development.md](../../docs/development.md). To package one by hand, for this
 machine's platforms: `pnpm nsh package App.tsx --target macos` (or `windows`, `linux`, `android`, `ios`).
+
+## What the web app has that this client doesn't
+
+Every page of the React client is here, drawn with the same kit: sign-in, the sidebar and Sessions, a new session, a
+session with its header menu and its panel (Details, Approvals, Files, Browser, Schedules, Activity), a share link, an
+invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
+Administration). What is left out, and why:
+
+- **This Computer** settings belong to the Electron desktop app, which runs its own host.
+- **Notifications on this device** wait for NSH's push notifications (longbridge/nsh#1058); the account's preferences
+  and devices are managed here.
+- **Attachments** in the chat box, and **Import dump** for a workspace database, wait for picking files other than
+  photos (longbridge/nsh#162).
+- **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
+  they are offered on the web build only; native builds point to Pikibun on the web.
+- **Syntax highlighting** in file previews: text shows as plain monospace.
 
 ## Known gaps, from NSH itself
 

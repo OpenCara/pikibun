@@ -20,7 +20,7 @@ export function RepositoryPreparationCard(props: { sessionId: string; preparatio
     <If when={props.preparation.status === "failed"}
       else={
         <Card testID="repository-preparation">
-          <Text role="header" style={{ fontSize: 14, fontWeight: "700", color: palette().text }}>Preparing repositories…</Text>
+          <Text role="header" style={{ fontSize: 14, fontWeight: "500", color: palette().text }}>Preparing repositories…</Text>
           <Each of={props.preparation.items} key={item => item.path}>
             {item => (
               <View style={{ gap: 6 }}>
@@ -39,7 +39,7 @@ export function RepositoryPreparationCard(props: { sessionId: string; preparatio
         </Card>
       }>
       <Banner tone="danger" title="Repositories could not be prepared"
-        actions={<If when={props.canRestart}><Button small label={action.busy() ? "Restarting..." : "Restart session"} disabled={action.busy()} onPress={restart} /></If>}>
+        actions={<If when={props.canRestart}><Button small variant="outline" label={action.busy() ? "Restarting..." : "Restart session"} disabled={action.busy()} onPress={restart} /></If>}>
         {`${props.preparation.error ?? "The host could not prepare this session's repositories."} ${props.canRestart
           ? "Fix the cause on the host, then restart the session. Queued messages run once the repositories are ready."
           : "The session owner can restart the session once the cause is fixed."}`}

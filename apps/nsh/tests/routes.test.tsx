@@ -46,6 +46,25 @@ describe("on a device", () => {
     await app.waitFor("id:appearance-scheme");
     await app.press("text:Dark");
     expect(app.storage()["pikibun.appearance"]).toBe("dark");
+    // The web app's night theme, in the character's colors: kept, and back at the next start.
+    await app.press("text:Pikibun");
+    expect(app.storage()["pikibun.appearance"]).toBe("pikibun");
+    app.dispose();
+    const again = await open("../App.tsx", { network: server(), storage: { ...signedIn, "pikibun.appearance": "pikibun" } });
+    await again.press("id:open-settings");
+    await again.press("id:settings-section-appearance");
+    await again.waitFor("id:appearance-scheme");
+    expect(again.shows("text:Pikibun")).toBe(true);
+  });
+
+  test("a workspace's row folds its sessions away and back", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn });
+    await app.waitFor("id:session-row-s1");
+    await app.press("id:workspace-row-w1");
+    await app.waitUntil(() => !app.shows("id:session-row-s1"));
+    expect(app.shows("text:Analytical Engine")).toBe(true);
+    await app.press("id:workspace-row-w1");
+    await app.waitFor("id:session-row-s1");
   });
 
   test("a session's panel opens from its header, one tab at a time", async () => {

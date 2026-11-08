@@ -10,6 +10,7 @@ export type {
 // Brings in `SessionRecord.linkShared`, which link sharing declares there.
 export type {} from "../../../packages/shared/src/sharing";
 export { canCreateSessions, managesSession } from "../../../packages/shared/src/policy";
+export { nestSessions } from "../../../packages/client/src/session-tree";
 export { containsRedaction, redactSecrets, REDACTED } from "../../../packages/shared/src/redaction";
 export { browserUnavailableText } from "../../../packages/shared/src/browser";
 export { pullRequestStateLabels, pullRequestStateTones } from "../../../packages/shared/src/pull-requests";

@@ -1,27 +1,30 @@
-import { computed, effect, safeArea, signal, Text, untracked, View, windowSize } from "nsh";
-import { Button as BaseButton, createNavStack, NavPage, NavStack } from "nsh/base";
+import { computed, effect, safeArea, signal, untracked, View, windowSize } from "nsh";
+import { createNavStack, NavPage, NavStack } from "nsh/base";
 import { AppDataContext, createAppData } from "./lib/app-data";
 import { auth, restore, session } from "./lib/auth";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
-import { Icon, type IconName } from "./icons";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
 import { drawsHeaders, headerProps, pageStyle } from "./screens/PageHeader";
 import { SessionList } from "./screens/SessionList";
+import { Sessions } from "./screens/Sessions";
 import { SessionView } from "./screens/SessionView";
 import { SharedSession } from "./screens/SharedSession";
 import { SignIn } from "./screens/SignIn";
+import { UsernameSetup } from "./screens/UsernameSetup";
 import { applyStoredAppearance } from "./settings/Appearance";
 import { findSection, SectionList } from "./settings";
-import { palette, radius, text } from "./theme";
-import { Avatar, IconButton, Loading, Logo } from "./ui";
+import { layout, palette } from "./theme";
+import { IconButton, IdentityBadge, Loading, Logo, NavItem } from "./ui";
 
 type Route =
   | { name: "sessions" }
   | { name: "session"; id: string }
   | { name: "new"; workspaceId?: string }
   | { name: "open" }
+  /** Every session, searchable (the web app's Sessions screen). */
+  | { name: "all-sessions" }
   /** The sections, with the one `settingsAt` names beside them in the wide layout. */
   | { name: "settings" }
   /** One section as a page of its own (phones). */
@@ -47,7 +50,10 @@ export function Root() {
         else={
           <If when={auth().status !== "loading"} else={<Loading />}>
             <If when={signedIn()} else={<SignIn />}>
-              <Shell />
+              {/* A new GitHub account chooses its username before anything else; the route waits, invite links included. */}
+              <If when={!(auth().status === "signedIn" && (auth() as { user: { usernameRequired?: boolean } }).user.usernameRequired)} else={<UsernameSetup />}>
+                <Shell />
+              </If>
             </If>
           </If>
         }>
@@ -126,6 +132,7 @@ function Shell() {
   function go(route: PageRoute) {
     switch (route.name) {
       case "home": nav.popToRoot(); break;
+      case "sessions": nav.popToRoot(); nav.push({ name: "all-sessions" }); break;
       case "session": nav.popToRoot(); openSession(route.sessionId); break;
       case "new": nav.popToRoot(); startNew(route.workspaceId); break;
       case "settings": nav.popToRoot(); openSettings(route.section, route.id); break;
@@ -152,6 +159,7 @@ function Shell() {
         case "settings": return showRoute(wide() ? { name: "settings", ...at } : { name: "settings" });
         case "settings-section": return showRoute({ name: "settings", section: top.section, ...(top.id ? { id: top.id } : {}) });
         case "join": return showRoute({ name: "join", token: top.token });
+        case "all-sessions": return showRoute({ name: "sessions" });
         default: return showRoute({ name: "home" });
       }
     });
@@ -181,7 +189,7 @@ function Shell() {
   const listActions = () => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
       <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
-      <IconButton testID="new-session" icon="compose" label="New session" onPress={() => startNew()} active />
+      <IconButton testID="new-session" icon="plus" label="New session" onPress={() => startNew()} />
     </View>
   );
   const settingsButton = () => <IconButton testID="open-settings" icon="settings" label="Settings" onPress={() => openSettings()} />;
@@ -202,7 +210,7 @@ function Shell() {
                   <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
                     <View style={{ flex: 1, flexDirection: "row" }}>
                       <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()}
-                        onOpenById={() => nav.push({ name: "open" })} onSettings={() => openSettings()} />
+                        onOpenById={() => nav.push({ name: "open" })} onAll={() => nav.push({ name: "all-sessions" })} onSettings={section => openSettings(section)} />
                       <View style={{ flex: 1, backgroundColor: palette().background }}>
                         <If when={selected()}
                           else={
@@ -228,6 +236,12 @@ function Shell() {
                   <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} />
                 </NavPage>
               );
+            case "all-sessions":
+              return (
+                <NavPage title="Sessions" {...headerProps({ title: "Sessions", onBack: back })}>
+                  <Sessions onOpen={openFromPage} onOpenById={() => nav.push({ name: "open" })} onNew={() => startNew()} />
+                </NavPage>
+              );
             case "open":
               return (
                 <NavPage title="Open a session" {...headerProps({ title: "Open a session", onBack: back })}>
@@ -251,7 +265,7 @@ function Shell() {
             case "join":
               return (
                 <NavPage title="Join a workspace" {...headerProps({ title: "Join a workspace", onBack: back })}>
-                  <JoinWorkspace token={route.token} onDone={() => nav.popToRoot()} />
+                  <JoinWorkspace token={route.token} onDone={() => nav.popToRoot()} go={go} />
                 </NavPage>
               );
           }
@@ -261,46 +275,26 @@ function Shell() {
   );
 }
 
-/** One of the sidebar's places: an icon and a label, highlighted while it is shown. */
-function SidebarItem(props: { icon: IconName; label: string; onPress: () => void; active?: boolean; testID?: string }) {
-  return (
-    <BaseButton testID={props.testID} accessibilityLabel={props.label} selected={props.active} onPress={props.onPress}
-      style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 10, height: 34, borderRadius: radius.medium,
-        backgroundColor: props.active ? palette().selection : "transparent" }}
-      hoverStyle={{ backgroundColor: props.active ? palette().selection : palette().hover }} activeStyle={{ opacity: 0.7 }}>
-      <Icon name={props.icon} size={16} color={palette().text} />
-      <Text style={{ flex: 1, fontSize: text.body, fontWeight: "500", color: palette().text }}>{props.label}</Text>
-    </BaseButton>
-  );
-}
-
-/** The wide layout's sidebar: the app, a new session, every session by workspace, and the signed-in person's settings. */
-function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onSettings: () => void }) {
+/**
+ * The wide layout's sidebar, as the web app's (Sidebar.tsx): the app, a new session and opening one by ID; every session
+ * by workspace; and the signed-in person, hosts and settings along its foot.
+ */
+function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void }) {
   const user = () => session().user;
   return (
-    <View testID="sidebar" style={{ width: 280, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
-      <View desktop={{ windowDrag: true }} style={{ flexDirection: "row", alignItems: "center", gap: 8, height: 52, paddingLeft: 16, paddingRight: 8 }}>
-        <Logo size={22} />
-        <Text style={{ flex: 1, fontSize: text.title, fontWeight: "700", color: palette().text }}>Pikibun</Text>
-        <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={props.onOpenById} />
-      </View>
-      <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
-        <SidebarItem testID="new-session" icon="compose" label="New session" active={props.home} onPress={props.onNew} />
+    <View testID="sidebar" style={{ width: layout.sidebar, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
+      <View desktop={{ windowDrag: true }} style={{ gap: 2, paddingTop: 12, paddingHorizontal: 8, paddingBottom: 8 }}>
+        <NavItem label="Pikibun" strong leading={<Logo size={20} />} />
+        <NavItem testID="new-session" icon="plus" label="New session" active={props.home} onPress={props.onNew} />
+        <NavItem testID="all-sessions" icon="history" label="Sessions" onPress={props.onAll} />
+        <NavItem testID="open-by-id" icon="hash" label="Open by ID" onPress={props.onOpenById} />
       </View>
       <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} />
-      <View style={{ borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>
-        <BaseButton testID="open-settings" accessibilityLabel="Settings" onPress={props.onSettings}
-          style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8, height: 42, borderRadius: radius.medium }}
-          hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
-          <Avatar name={user().displayName || user().githubLogin || "?"} size={26} />
-          <View style={{ flex: 1, gap: 1 }}>
-            <Text style={{ fontSize: text.body, fontWeight: "500", color: palette().text, numberOfLines: 1 }}>{user().displayName || user().githubLogin}</Text>
-            <If when={user().githubLogin}>
-              {login => <Text style={{ fontSize: text.caption, color: palette().muted, numberOfLines: 1 }}>{`@${login()}`}</Text>}
-            </If>
-          </View>
-          <Icon name="settings" size={16} color={palette().muted} />
-        </BaseButton>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 2, borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>
+        <NavItem testID="open-profile" style={{ flex: 1 }} label={user().username || user().githubLogin ? `@${user().username || user().githubLogin}` : user().displayName}
+          leading={<IdentityBadge name={user().displayName || user().githubLogin || "?"} id={user().id} />} onPress={() => props.onSettings("profile")} />
+        <IconButton testID="open-hosts" icon="server" label="Hosts" onPress={() => props.onSettings("hosts")} />
+        <IconButton testID="open-settings" icon="settings" label="Settings" onPress={() => props.onSettings()} />
       </View>
     </View>
   );
@@ -312,7 +306,7 @@ function SettingsPage(props: { section?: string; id?: string; wide: boolean; onO
   return (
     <If when={props.wide} else={<SectionList onOpen={props.onOpen} />}>
       <View style={{ flex: 1, flexDirection: "row" }}>
-        <View style={{ width: 240, borderRightWidth: 1, borderColor: palette().border, backgroundColor: palette().sidebar }}>
+        <View style={{ width: layout.settingsList, borderRightWidth: 1, borderColor: palette().border, backgroundColor: palette().sidebar }}>
           <SectionList selected={current().id} onOpen={props.onOpen} />
         </View>
         <View style={{ flex: 1 }}>
