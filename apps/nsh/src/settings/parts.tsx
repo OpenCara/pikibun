@@ -1,7 +1,8 @@
-import { Scroll, type JSX } from "nsh";
+import { Scroll, View, type JSX } from "nsh";
 import type { PageRoute } from "../lib/page";
 import { layout } from "../theme";
-import { EmptyState } from "../ui";
+import type { Action } from "../lib/resource";
+import { Button, EmptyState, Feedback } from "../ui";
 
 /** What every settings section is given. */
 export interface SectionProps {
@@ -27,5 +28,15 @@ export function NotYetHere(props: { what: string }) {
     <EmptyState title="Coming to this app">
       {`${props.what} isn't in this app yet.`}
     </EmptyState>
+  );
+}
+
+/** .settings-actions: a form's outcome beside its one accent button, under its sections. */
+export function SettingsActions(props: { action: Action; label: string; onPress: () => void; testID?: string; disabled?: boolean }) {
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
+      <View style={{ flex: 1, minWidth: 160 }}><Feedback error={props.action.error()} notice={props.action.notice()} /></View>
+      <Button testID={props.testID} variant="primary" label={props.label} disabled={props.action.busy() || props.disabled} onPress={props.onPress} />
+    </View>
   );
 }

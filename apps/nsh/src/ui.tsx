@@ -1,5 +1,5 @@
-import { Image, Scroll, Text, View, type JSX, type ViewStyle } from "nsh";
-import { AlertDialog, Button as BaseButton, Menu, MenuItem, Sheet, Tooltip } from "nsh/base";
+import { Clipboard, Image, Scroll, signal, Text, View, windowSize, type JSX, type ViewStyle } from "nsh";
+import { AlertDialog, Button as BaseButton, Collapsible, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
 import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
@@ -157,11 +157,13 @@ export function Card(props: { children?: JSX.Element; testID?: string; style?: V
  * .section: a muted medium title (with an action at its end) over one card of `Row`s, or of `CardBody` content; `bare`
  * leaves the card out.
  */
-export function Section(props: { title: string; action?: JSX.Element; children?: JSX.Element; bare?: boolean; testID?: string }) {
+export function Section(props: { title: string; info?: JSX.Element | string; action?: JSX.Element; children?: JSX.Element; bare?: boolean; testID?: string }) {
   return (
     <View testID={props.testID} style={{ gap: 8 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 28, paddingHorizontal: 2 }}>
-        <Text role="header" style={{ flex: 1, fontSize: text.body, fontWeight: weight.medium, color: palette().muted }}>{props.title}</Text>
+        <Text role="header" style={{ flexShrink: 1, fontSize: text.body, fontWeight: weight.medium, color: palette().muted }}>{props.title}</Text>
+        <If when={props.info}><InfoTip>{props.info}</InfoTip></If>
+        <View style={{ flex: 1 }} />
         {props.action}
       </View>
       <If when={!props.bare} else={props.children}>
@@ -469,4 +471,169 @@ export function Logo(props: { size?: number }) {
 /** A hairline between parts. */
 export function Divider(props: { vertical?: boolean }) {
   return <View style={props.vertical ? { width: 1, alignSelf: "stretch", backgroundColor: palette().border } : { height: 1, alignSelf: "stretch", backgroundColor: palette().border }} />;
+}
+
+export interface MenuAction {
+  label: string;
+  icon?: IconName;
+  hint?: string;
+  destructive?: boolean;
+  disabled?: boolean;
+  testID?: string;
+  onSelect: () => void;
+}
+
+/** .popover of .menu-items for a small fixed set of actions (a row's kebab menu); "separator" draws a hairline. */
+export function DropdownMenu(props: { label: string; items: (MenuAction | "separator")[]; icon?: IconName; trigger?: JSX.Element; testID?: string; placement?: "top" | "bottom" }) {
+  return (
+    <Menu placement={props.placement ?? "bottom"} align="end" offset={4} backdropStyle={{ backgroundColor: "transparent" }}
+      trigger={props.trigger ?? <IconButton testID={props.testID} icon={props.icon ?? "more"} label={props.label} size={control.xsmall} onPress={() => undefined} />}
+      popupStyle={{ minWidth: 200, maxWidth: 360, padding: 4, borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface,
+        boxShadow: palette().shadow }}>
+      <Each of={props.items} key="index">
+        {item => (
+          <If when={item() !== "separator" ? item() as MenuAction : null} else={<View style={{ height: 1, margin: 4, backgroundColor: palette().border }} />}>
+            {action => (
+              <MenuItem testID={action().testID} accessibilityLabel={action().label} disabled={action().disabled} onSelect={() => action().onSelect()}
+                style={{ flexDirection: "row", alignItems: action().hint ? "flex-start" : "center", gap: 8, minHeight: 32, paddingHorizontal: 8,
+                  paddingVertical: action().hint ? 6 : 0, borderRadius: radius.small }}
+                hoverStyle={{ backgroundColor: palette().hoverStrong }} focusStyle={{ backgroundColor: palette().hoverStrong }} disabledStyle={{ opacity: 0.5 }}>
+                <If when={action().icon}>
+                  {name => <Icon name={name()} size={14} color={action().destructive ? palette().tones.danger.text : palette().muted} style={{ marginTop: action().hint ? 3 : 0 }} />}
+                </If>
+                <View style={{ flex: 1, gap: 1 }}>
+                  <Text style={{ fontSize: text.body, color: action().destructive ? palette().tones.danger.text : palette().text }}>{action().label}</Text>
+                  <If when={action().hint}><Text style={{ fontSize: text.caption, lineHeight: 17, color: palette().muted }}>{action().hint}</Text></If>
+                </View>
+              </MenuItem>
+            )}
+          </If>
+        )}
+      </Each>
+    </Menu>
+  );
+}
+
+/**
+ * .collapsible: a row of a section's card that opens in place to show more (a host's settings, an audit event);
+ * `plain` draws it on its own, outside a card.
+ */
+export function CollapsibleRow(props: {
+  title: string; hint?: JSX.Element; leading?: JSX.Element; trailing?: JSX.Element | string; children?: JSX.Element; open?: boolean; plain?: boolean; testID?: string;
+  onToggle?: (open: boolean) => void;
+}) {
+  const open = signal(Boolean(props.open));
+  const toggle = () => { open.update(value => !value); props.onToggle?.(open()); };
+  return (
+    <Collapsible testID={props.testID} open={open()} style={props.plain
+      ? { borderWidth: 1, borderColor: palette().border, borderRadius: radius.large }
+      : { borderTopWidth: 1, borderColor: palette().border }}
+      content={<View style={{ gap: 12, paddingHorizontal: 16, paddingBottom: 16 }}>{props.children}</View>}>
+      <BaseButton role="button" accessibilityLabel={props.title} onPress={toggle}
+        style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: props.plain ? 44 : 52, paddingVertical: 12, paddingHorizontal: 16 }}
+        hoverStyle={{ backgroundColor: palette().hover }}>
+        <If when={props.leading}>{props.leading}</If>
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <Text style={{ fontSize: text.body, color: props.plain ? palette().muted : palette().text }}>{props.title}</Text>
+          <If when={props.hint}><Text style={{ fontSize: text.small, lineHeight: 19, color: palette().muted }}>{props.hint}</Text></If>
+        </View>
+        <If when={props.trailing}>
+          {typeof props.trailing === "string" ? <Text style={{ fontSize: text.body, color: palette().muted }}>{props.trailing}</Text> : props.trailing}
+        </If>
+        <Icon name={open() ? "chevron-down" : "chevron-right"} size={16} color={palette().muted} />
+      </BaseButton>
+    </Collapsible>
+  );
+}
+
+/** A ghost button that copies `value`, and says so for a moment. */
+export function CopyButton(props: { value: string; label?: string; testID?: string }) {
+  const copied = signal(false);
+  async function copy() {
+    await Clipboard.writeText(props.value).catch(() => undefined);
+    copied.set(true);
+    setTimeout(() => copied.set(false), 1500);
+  }
+  return <IconButton testID={props.testID} icon={copied() ? "check" : "copy"} label={copied() ? "Copied" : props.label ?? "Copy"} size={control.xsmall} onPress={() => void copy()} />;
+}
+
+/** .copy-field: a command or secret to copy, selectable for copying by hand too. */
+export function CopyField(props: { value: string; label?: string; testID?: string }) {
+  return (
+    <View testID={props.testID} style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4, paddingRight: 4, paddingLeft: 12, borderWidth: 1,
+      borderColor: palette().border, borderRadius: radius.medium, backgroundColor: palette().code }}>
+      <View selectable style={{ flex: 1, minWidth: 0 }}>
+        <Text style={{ fontFamily: "monospace", fontSize: text.small, color: palette().text }}>{props.value}</Text>
+      </View>
+      <CopyButton value={props.value} label={props.label} />
+    </View>
+  );
+}
+
+/** .info-tip: an info icon beside a section's title that opens a short note. */
+export function InfoTip(props: { children?: JSX.Element; label?: string }) {
+  return (
+    <Popover placement="bottom" offset={4} closeOnPressOutside
+      trigger={<BaseButton accessibilityLabel={props.label ?? "More information"} hitSlop={6}
+        style={{ width: 20, height: 20, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" }} hoverStyle={{ backgroundColor: palette().hover }}>
+        <Icon name="info" size={14} color={palette().muted} />
+      </BaseButton>}
+      popupStyle={{ width: 320, maxWidth: "90%", padding: 12, gap: 8, borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border,
+        backgroundColor: palette().surface, boxShadow: palette().shadow }}>
+      {typeof props.children === "string" ? <Text style={{ fontSize: text.small, lineHeight: 20, color: palette().muted }}>{props.children}</Text> : props.children}
+    </Popover>
+  );
+}
+
+/** Text in an info tip or a sheet: muted, readable. */
+export function Note(props: { children?: JSX.Element; testID?: string }) {
+  return <Text testID={props.testID} style={{ fontSize: text.small, lineHeight: 20, color: palette().muted }}>{props.children}</Text>;
+}
+
+/**
+ * dialog.sheet: a focused task over a backdrop, its title and close button, its content scrolling, and its buttons at
+ * the end of a footer. A centered card where there is room; on phones it rises from the bottom edge.
+ */
+export function FormSheet(props: { open: boolean; title: string; onClose: () => void; children?: JSX.Element; footer?: JSX.Element; wide?: boolean; testID?: string }) {
+  const phone = () => windowSize().width > 0 && windowSize().width <= 600;
+  const body = () => (
+    <View testID={props.testID} style={{ flexShrink: 1, maxHeight: "100%" }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: phone() ? 12 : 16, paddingHorizontal: phone() ? 16 : 20 }}>
+        <Text role="header" style={{ flex: 1, fontSize: text.body, fontWeight: weight.medium, color: palette().text }}>{props.title}</Text>
+        <IconButton icon="x" label="Close" onPress={props.onClose} />
+      </View>
+      <Scroll style={{ flexShrink: 1 }} contentStyle={{ gap: 16, paddingHorizontal: phone() ? 16 : 20, paddingBottom: phone() ? 16 : 20 }}>{props.children}</Scroll>
+      <If when={props.footer}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 8, paddingVertical: 12, paddingHorizontal: phone() ? 16 : 20,
+          paddingBottom: phone() ? 24 : 12, borderTopWidth: 1, borderColor: palette().border }}>{props.footer}</View>
+      </If>
+    </View>
+  );
+  return (
+    <If when={phone()}
+      else={
+        <Dialog open={props.open} animation="fade" onOpenChange={event => { if (!event.open) props.onClose(); }} backdropStyle={{ backgroundColor: palette().backdrop }}
+          style={{ alignSelf: "center", marginVertical: "auto", width: props.wide ? 720 : 520, maxWidth: "94%", maxHeight: "85%", borderRadius: radius.large, borderWidth: 1,
+            borderColor: palette().border, backgroundColor: palette().surface, boxShadow: palette().shadow, overflow: "hidden" }}>
+          {body()}
+        </Dialog>
+      }>
+      <Sheet open={props.open} side="bottom" closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }} backdropStyle={{ backgroundColor: palette().backdrop }}
+        popupStyle={{ width: "100%", maxHeight: "90%", borderTopWidth: 1, borderColor: palette().border, borderTopLeftRadius: radius.large, borderTopRightRadius: radius.large,
+          backgroundColor: palette().surface }}>
+        {body()}
+      </Sheet>
+    </If>
+  );
+}
+
+/** A loaded resource's content, its loading line while it loads, or its error with a way to try again. */
+export function ResourceState(props: { loading: boolean; error: string; retry: () => void; children?: JSX.Element; inline?: boolean }) {
+  return (
+    <If when={!props.loading} else={<Text style={{ fontSize: text.body, color: palette().muted, padding: props.inline ? 0 : 16 }}>Loading…</Text>}>
+      <If when={!props.error} else={<Banner tone="danger" title="Couldn't load" actions={<Button small variant="outline" label="Try again" onPress={props.retry} />}>{props.error}</Banner>}>
+        {props.children}
+      </If>
+    </If>
+  );
 }

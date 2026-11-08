@@ -6,6 +6,7 @@ import { NavItem, Row } from "../ui";
 import { Administration } from "./Administration";
 import { Appearance } from "./Appearance";
 import { Hosts } from "./Hosts";
+import { Notifications } from "./Notifications";
 import type { SectionProps } from "./parts";
 import { Profile } from "./Profile";
 import { Workspaces } from "./Workspaces";
@@ -23,10 +24,11 @@ export interface SettingsSection {
 /** Every section, in order. A section ported from the web app replaces its file's placeholder; nothing else changes. */
 export const settingsSections: readonly SettingsSection[] = [
   { id: "profile", label: "Profile", icon: "user", Component: Profile },
+  { id: "notifications", label: "Notifications", icon: "bell", Component: Notifications },
+  { id: "hosts", label: "Hosts", icon: "server", Component: Hosts },
   { id: "workspaces", label: "Workspaces", icon: "users", Component: Workspaces },
-  { id: "hosts", label: "Hosts", icon: "monitor", Component: Hosts },
-  { id: "appearance", label: "Appearance", icon: "contrast", Component: Appearance },
-  { id: "admin", label: "Administration", icon: "shield-check", admin: true, Component: Administration },
+  { id: "appearance", label: "Appearance", icon: "palette", Component: Appearance },
+  { id: "admin", label: "Administration", icon: "shield", admin: true, Component: Administration },
 ];
 
 /** The sections this person sees. */

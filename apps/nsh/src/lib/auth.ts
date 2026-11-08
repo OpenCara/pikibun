@@ -66,6 +66,12 @@ export function session(): SignedIn {
   return state;
 }
 
+/** The signed-in user's profile as the server returned it after a change (Settings → Profile). */
+export function updateUser(user: UserProfile): void {
+  const current = untracked(authState);
+  if (current.status === "signedIn" && current.user.id === user.id) authState.set({ ...current, user });
+}
+
 /** The token whose 401 may sign out: an answer to an older sign-in's request must not end a newer one. */
 let liveToken: string | null = null;
 const EXPIRED = "Your sign-in expired or was revoked. Sign in again to continue.";
