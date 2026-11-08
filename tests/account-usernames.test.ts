@@ -167,6 +167,31 @@ test("setting, changing and replacing a GitHub account's password takes its curr
   assert.deepEqual(audit, ["account.username.chosen", "account.password.set", "account.password.changed", "account.password.changed"]);
 });
 
+test("failed sign-ins lock only the password: a recent GitHub sign-in still replaces or removes it", async t => {
+  const f = await fixture(t);
+  const first = await f.github({ id: 1001, login: "Newcomer" });
+  assert.equal((await f.choose(first, { username: "newcomer", password })).status, 200);
+  // Anyone who knows the username locks the password.
+  for (let attempt = 0; attempt < 6; attempt++) await f.signIn("newcomer", "someone guessing " + attempt);
+  assert.equal(await errorCode(await f.signIn("newcomer", password)), "sign_in_locked");
+  // The current password, typed, is refused while locked...
+  const fresh = await f.github({ id: 1001, login: "Newcomer" });
+  assert.equal(await errorCode(await f.setPassword(fresh, { currentPassword: password, newPassword: "a brand new passphrase" })), "sign_in_locked");
+  assert.equal(await errorCode(await f.removePassword(fresh, { currentPassword: password })), "sign_in_locked");
+  // ...and so is a stale sign-in without it, but the owner's fresh GitHub sign-in replaces it, clearing the lock.
+  f.age("github:1001");
+  assert.equal(await errorCode(await f.setPassword(fresh, { newPassword: "a brand new passphrase" })), "recent_sign_in_required");
+  const again = await f.github({ id: 1001, login: "Newcomer" });
+  assert.equal((await f.setPassword(again, { newPassword: "a brand new passphrase" })).status, 200);
+  assert.equal((await f.signIn("newcomer", "a brand new passphrase")).status, 200);
+  // Locked again, it can be removed the same way.
+  for (let attempt = 0; attempt < 6; attempt++) await f.signIn("newcomer", "someone guessing " + attempt);
+  const last = await f.github({ id: 1001, login: "Newcomer" });
+  const removed = await f.removePassword(last, {});
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json() as { user: UserProfile }).user.hasPassword, undefined);
+});
+
 test("a GitHub account can remove its password; a password account can't", async t => {
   const f = await fixture(t);
   const viaGitHub = await f.github({ id: 1001, login: "Newcomer" });

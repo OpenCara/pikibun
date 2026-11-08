@@ -324,16 +324,16 @@ function credential(env: Env, userId: string) {
 /**
  * Checks what stands for the account's owner before its password changes or goes: the current password when one is typed
  * (and always for a password account, which has nothing else), or else a recent GitHub sign-in. A wrong password counts
- * as a failed sign-in, so a stolen browser session can't guess its way to the password either.
+ * as a failed sign-in, so a stolen browser session can't guess its way to the password either. Failed sign-ins lock only
+ * the password: a recent GitHub sign-in still replaces or removes it, so nobody who knows the username can keep its owner
+ * from getting rid of a password by locking it.
  */
 async function requireOwner(c: AppContext, user: UserRow, row: CredentialRow | null, current: unknown): Promise<void> {
-  if (row) {
-    const locked = lockedFor(row);
-    if (locked) failLocked(locked);
-  }
   const typed = current !== undefined && current !== null && current !== '';
   if (typed || user.auth_kind === 'password') {
     if (!row) fail(400, 'invalid_input', 'This account has no password yet, so there is no current one to enter.');
+    const locked = lockedFor(row);
+    if (locked) failLocked(locked);
     if (typeof current !== 'string' || current.length > RAW_PASSWORD_MAX || !await verifyPassword(current, row.password_hash)) {
       await recordFailure(c.env, user.id);
       fail(403, 'invalid_credentials', 'The current password is incorrect.');
