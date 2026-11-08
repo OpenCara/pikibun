@@ -58,6 +58,10 @@ jobs:
       - name: Package (unpacked, unsigned)
         working-directory: apps/desktop
         run: |
+          # Use the runner's installed 7-Zip rather than fetching another copy just to unpack Electron.
+          if [ -f '/c/Program Files/7-Zip/7z.exe' ]; then
+            export ELECTRON_BUILDER_7ZIP_PATH='C:\Program Files\7-Zip\7z.exe'
+          fi
           # Keep already-downloaded Electron/tools between attempts when an upstream asset returns a transient 5xx.
           for attempt in 1 2 3; do
             if pnpm exec electron-builder --win --x64 --dir --publish never; then exit 0; fi

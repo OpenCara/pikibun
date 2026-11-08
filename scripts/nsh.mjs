@@ -32,14 +32,37 @@ function release() {
   return null;
 }
 
+const apiAssets = new Map();
+
+async function apiAsset(source) {
+  if (!apiAssets.has(source.pathname)) {
+    const metadata = await fetch(`https://api.github.com/repos/longbridge/nsh/releases/tags/${NSH_VERSION}`, {
+      headers: { Accept: 'application/vnd.github+json', 'Cache-Control': 'no-cache' },
+    });
+    if (!metadata.ok) throw new Error(`Release metadata: HTTP ${metadata.status}`);
+    const release = await metadata.json();
+    for (const asset of release.assets || []) {
+      if (/^https:\/\/api\.github\.com\/repos\/longbridge\/nsh\/releases\/assets\/[0-9]+$/.test(asset.url)) {
+        apiAssets.set(`/longbridge/nsh/releases/download/${NSH_VERSION}/${asset.name}`, asset.url);
+      }
+    }
+  }
+  const url = apiAssets.get(source.pathname);
+  if (!url) throw new Error(`No API asset for ${source.pathname}`);
+  return new URL(url);
+}
+
 /** Retry upstream failures, including gateways that return an HTML error page with HTTP 200 for a checksum. */
 export async function releaseAsset(url, { checksum = false, attempts = 4, delayMs = 2000 } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      const request = new URL(url);
-      // Avoid reusing a cached gateway error or an expired release-asset redirect on the next attempt.
+      const source = new URL(url);
+      const viaApi = attempt % 2 === 0 && source.origin === 'https://github.com'
+        && source.pathname.startsWith(`/longbridge/nsh/releases/download/${NSH_VERSION}/`);
+      // GitHub's release API gives us another route to the same published bytes if its browser download gateway fails.
+      const request = viaApi ? await apiAsset(source) : source;
       if (attempt > 1) request.searchParams.set('_pikibun_retry', `${Date.now()}-${attempt}`);
-      const response = await fetch(request, { headers: { 'Cache-Control': 'no-cache' } });
+      const response = await fetch(request, { headers: { 'Cache-Control': 'no-cache', ...(viaApi ? { Accept: 'application/octet-stream' } : {}) } });
       if (!response.ok) throw new Error(`downloading ${new URL(url).pathname}: HTTP ${response.status}`);
       if (!checksum) return Buffer.from(await response.arrayBuffer());
       const hash = (await response.text()).trim().split(/\s+/)[0];
