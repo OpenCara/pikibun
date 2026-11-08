@@ -116,10 +116,12 @@ class Page {
    * button comes after the page's). Pages the navigation keeps beside the visible one don't count: the browser's own hit
    * test must land on the element, so a page still sliding in is waited for.
    */
-  async click(label: string) {
+  async click(label: string, options: { scroll?: boolean } = {}) {
     const deadline = Date.now() + TIMEOUT_MS;
     let point = await this.onScreen(label);
     while (!point && Date.now() < deadline) {
+      // With `scroll`, what is below the fold is scrolled to with the wheel, as a person would, whatever the page scrolls with.
+      if (options.scroll) await this.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 640, y: 400, deltaX: 0, deltaY: 400 });
       await new Promise(done => setTimeout(done, 200));
       point = await this.onScreen(label);
     }
@@ -275,12 +277,13 @@ try {
   await page.goto(`${origin}/#/settings/profile`);
   await page.waitForText("Ada Lovelace");
   console.log("✓ a settings address opens that section");
-  if (react) {
-    await page.waitForText("Sign out");
-    await page.evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Sign out')?.scrollIntoView({ block: 'center' })`);
-  }
+  // Both clients' Profile ends with the Account section: bring its Sign out button up from below the fold.
+  await page.waitForText("Sign out");
+  await page.evaluate(`[...document.querySelectorAll('#app [aria-label="Sign out"], #root button')]
+    .filter(element => element.getAttribute('aria-label') === 'Sign out' || element.textContent.trim() === 'Sign out')
+    .at(-1)?.scrollIntoView({ block: 'center' })`);
 
-  await page.click("Sign out");
+  await page.click("Sign out", { scroll: true });
   if (!react) {
     await page.waitForText("Sign out?");
     await page.click("Sign out");
