@@ -1,4 +1,4 @@
-import { effect, signal, untracked, View } from "nsh";
+import { computed, effect, signal, untracked, View } from "nsh";
 import type { ConnectorInfo } from "../../../../packages/shared/src/connector";
 import { builtinExtensions, hostConfigLimits, type BuiltinExtensionName, type RequiredExtension } from "../../../../packages/shared/src/host-config";
 import {
@@ -59,7 +59,7 @@ function StateBadge(props: { state: ToolState; missing: string }) {
   );
 }
 
-const browserSources: { value: BrowserSource; label: string; hint: string }[] = [
+export const browserSources: { value: BrowserSource; label: string; hint: string }[] = [
   { value: "auto", label: "Find it", hint: "Looks on this host: PIKIBUN_BROWSER, your distribution's chromium, Google Chrome or Chromium, then Playwright's and Puppeteer's downloads, then one downloaded here" },
   { value: "path", label: "This path", hint: "Runs the Chromium executable you name, and no other" },
   { value: "download", label: "Download", hint: "The connector downloads Chrome for Testing's headless shell (about 110 MB) into its own folder, and keeps it up to date" },
@@ -76,14 +76,22 @@ const tunnelSources: { value: TunnelSource; label: string; hint: string }[] = [
  * Where a host's piki:browser Chromium or piki:tunnel cloudflared comes from: found there, at a path its owner gives,
  * downloaded by its connector, or none; with how it stands, as the connector last reported.
  */
-function ToolSetup<S extends "auto" | "path" | "download" | "off">(props: {
+export function ToolSetup<S extends "auto" | "path" | "download" | "off">(props: {
   kind: "browser" | "tunnel"; saved: { source: S; path?: string }; status?: { state: ToolState; source: S; executable?: string; version?: string; error?: string; downloadable?: boolean };
   owner: boolean; busy: boolean; revoked: boolean; sources: { value: S; label: string; hint: string }[]; save: (value: { source: S; path?: string }) => void;
 }) {
   const browser = props.kind === "browser";
   const source = signal<S>(untracked(() => props.saved.source));
   const path = signal(untracked(() => props.saved.path ?? ""));
-  effect(() => { const saved = props.saved; untracked(() => { source.set(saved.source); path.set(saved.path ?? ""); }); });
+  // Only a saved choice that changed replaces the draft: the host's status refreshes every 10 seconds with a new config
+  // object, whose values are mostly the same, and that must not undo what is being typed.
+  const savedSource = computed(() => props.saved.source);
+  const savedPath = computed(() => props.saved.path ?? "");
+  effect(() => {
+    const nextSource = savedSource();
+    const nextPath = savedPath();
+    untracked(() => { source.set(nextSource); path.set(nextPath); });
+  });
   const chosen = () => path().trim();
   const pathError = () => (source() === "path" && chosen() && !chosen().startsWith("/")
     ? browser ? "The executable's absolute path, such as /usr/lib/chromium/chromium" : "The executable's absolute path, such as /usr/local/bin/cloudflared" : undefined);
@@ -120,7 +128,7 @@ function ToolSetup<S extends "auto" | "path" | "download" | "off">(props: {
         <If when={source() === "path"}>
           <Field label={browser ? "Chromium executable" : "cloudflared executable"} error={pathError()}
             hint={browser ? "The program itself, beside Chromium's own files (icudtl.dat, its .pak files): /usr/lib/chromium/chromium rather than the /usr/bin/chromium script" : "The program itself, such as /usr/local/bin/cloudflared"}>
-            <TextField monospace value={path()} onChange={value => path.set(value)} maxLength={4096} placeholder={browser ? "/usr/lib/chromium/chromium" : "/usr/local/bin/cloudflared"} />
+            <TextField testID={`${props.kind}-path`} monospace value={path()} onChange={value => path.set(value)} maxLength={4096} placeholder={browser ? "/usr/lib/chromium/chromium" : "/usr/local/bin/cloudflared"} />
           </Field>
         </If>
         <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>

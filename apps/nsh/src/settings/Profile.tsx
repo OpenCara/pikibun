@@ -16,35 +16,6 @@ export const APP_VERSION = "0.1.0";
 
 type EnvRow = { id: string; key: string; value: string };
 
-/** A password account changes its password here; every other browser signed in as it is signed out. */
-function PasswordSection() {
-  const current = signal("");
-  const next = signal("");
-  const again = signal("");
-  const action = createAction();
-  function submit() {
-    void action.run(async () => {
-      if (!current() || !next()) throw new Error("Enter your current and new password.");
-      if (next().length < 12) throw new Error("The new password needs at least 12 characters.");
-      if (next() !== again()) throw new Error("The new passwords don't match.");
-      await session().api("/api/me/password", { method: "POST", body: { currentPassword: current(), newPassword: next() } });
-      current.set(""); next.set(""); again.set("");
-    }, "Password changed. Your other browsers are signed out.");
-  }
-  return (
-    <View style={{ gap: 16 }}>
-      <Section title="Password" info="You sign in with your username and this password. Changing it signs out every other browser signed in as you.">
-        <CardBody>
-          <Field label="Current password"><TextField value={current()} onChange={value => current.set(value)} masked maxLength={256} /></Field>
-          <Field label="New password" hint="At least 12 characters."><TextField value={next()} onChange={value => next.set(value)} masked maxLength={256} /></Field>
-          <Field label="Confirm new password"><TextField value={again()} onChange={value => again.set(value)} masked maxLength={256} onSubmit={submit} /></Field>
-        </CardBody>
-      </Section>
-      <SettingsActions action={action} label={action.busy() ? "Changing…" : "Change password"} onPress={submit} />
-    </View>
-  );
-}
-
 /** Profile section listing the Pikibun apps signed in as you, each revocable on its own. */
 function SignedInAppsSection() {
   const devices = createResource<{ devices: SignedInDevice[] }>(() => "/api/me/devices");
@@ -135,10 +106,12 @@ export function Profile(_props: SectionProps) {
         <SettingsActions action={action} label={action.busy() ? "Saving…" : "Save profile"} onPress={save} testID="profile-save" />
       </View>
       <ConnectedAccountsSection />
-      <If when={user().passwordSignIn}><PasswordSection /></If>
       <SignedInAppsSection />
       <OwnJoinRequests />
       <Section title="Account">
+        <If when={user().username}>
+          {name => <Row title="Username" hint={name()} selectableHint trailing={<CopyButton value={name()} label="Copy username" />} />}
+        </If>
         <Row title="User ID" hint={usernameWithId(user())} hintTestID="settings-user-id" selectableHint
           trailing={<CopyButton value={user().id} label="Copy user ID" />} />
         <Row title="Sign out" hint={`Signed in to ${displayOrigin(session().origin)}${session().expiresAt ? ` until ${timestamp(session().expiresAt!)}` : ""}${usesBrowserSession ? " with this browser's session" : ""}`}

@@ -1,4 +1,4 @@
-import { Text, View, type JSX } from "nsh";
+import { signal, Text, View, type JSX } from "nsh";
 import { session } from "../lib/auth";
 import { Icon, type IconName } from "../icons";
 import { palette, radius, text, weight } from "../theme";
@@ -7,6 +7,7 @@ import { Administration } from "./Administration";
 import { Appearance } from "./Appearance";
 import { Hosts } from "./Hosts";
 import { Notifications } from "./Notifications";
+import { Password } from "./Password";
 import type { SectionProps } from "./parts";
 import { Profile } from "./Profile";
 import { Workspaces } from "./Workspaces";
@@ -18,12 +19,28 @@ export interface SettingsSection {
   icon: IconName;
   /** Only the server's administrators see it. */
   admin?: boolean;
+  /** Only where the server takes passwords, or the account still has one to remove. */
+  passwords?: boolean;
   Component: (props: SectionProps) => JSX.Element;
+}
+
+/** Whether the server takes passwords (its health check), asked once per sign-in. */
+const passwordAuth = signal(false);
+let askedPasswordAuth: string | null = null;
+function passwordsOffered(): boolean {
+  const { api, origin, user } = session();
+  const key = `${origin} ${user.id}`;
+  if (askedPasswordAuth !== key) {
+    askedPasswordAuth = key;
+    api<{ passwordAuth?: boolean }>("/api/health").then(health => passwordAuth.set(health.passwordAuth === true), () => undefined);
+  }
+  return passwordAuth();
 }
 
 /** Every section, in order. A section ported from the web app replaces its file's placeholder; nothing else changes. */
 export const settingsSections: readonly SettingsSection[] = [
   { id: "profile", label: "Profile", icon: "user", Component: Profile },
+  { id: "password", label: "Password", icon: "lock", passwords: true, Component: Password },
   { id: "notifications", label: "Notifications", icon: "bell", Component: Notifications },
   { id: "hosts", label: "Hosts", icon: "server", Component: Hosts },
   { id: "workspaces", label: "Workspaces", icon: "users", Component: Workspaces },
@@ -31,14 +48,16 @@ export const settingsSections: readonly SettingsSection[] = [
   { id: "admin", label: "Administration", icon: "shield", admin: true, Component: Administration },
 ];
 
-/** The sections this person sees. */
-export function visibleSections(): SettingsSection[] {
-  const admin = Boolean(session().user.instanceAdmin);
-  return settingsSections.filter(section => !section.admin || admin);
+/** The sections this person sees; `shown`, a section the address names, stays listed. */
+export function visibleSections(shown?: string): SettingsSection[] {
+  const { user } = session();
+  const admin = Boolean(user.instanceAdmin);
+  return settingsSections.filter(section => (!section.admin || admin)
+    && (!section.passwords || user.hasPassword || shown === section.id || passwordsOffered()));
 }
 
 export function findSection(id: string | undefined): SettingsSection {
-  const visible = visibleSections();
+  const visible = visibleSections(id);
   return visible.find(section => section.id === id) ?? visible[0]!;
 }
 
@@ -65,7 +84,7 @@ export function SectionList(props: { selected?: string; onOpen: (id: string) => 
       }>
       <View testID="settings-sections" style={{ gap: 2, paddingVertical: 16, paddingHorizontal: 8 }}>
         <Text style={{ paddingTop: 8, paddingHorizontal: 12, paddingBottom: 12, fontSize: text.small, fontWeight: weight.medium, color: palette().muted }}>Settings</Text>
-        <Each of={visibleSections()} key={section => section.id}>
+        <Each of={visibleSections(props.selected)} key={section => section.id}>
           {section => (
             <NavItem testID={`settings-section-${section().id}`} icon={section().icon} label={section().label} active={props.selected === section().id}
               onPress={() => props.onOpen(section().id)} />

@@ -1,6 +1,5 @@
-import { effect, openUrl, safeArea, Scroll, signal, Text, untracked, View } from "nsh";
+import { effect, openUrl, safeArea, Scroll, signal, Text, untracked, View, WebView } from "nsh";
 import { Dialog, Input } from "nsh/base";
-import { WebView } from "nsh";
 import { openServerPage } from "../lib/page";
 import { errorMessage } from "../shared";
 import { auth, checkBrowserSession, restore, signInMethods, signInWithPassword, signInWithToken, signOut, startGitHubSignIn, type GitHubSignIn, type SignInMethods } from "../lib/auth";

@@ -1,4 +1,4 @@
-import { signal, untracked, View } from "nsh";
+import { signal, Text, untracked, View } from "nsh";
 import { pikiCommandExtensions, pikiExtension, pikiSessionToolExtensions, sessionToolExtensionOn } from "../../../../packages/shared/src/piki-extensions";
 import {
   descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, workspaceTools, type ExtensionOffer, type ShadowKind, type WorkspaceTool, type WorkspaceTools,
@@ -15,7 +15,6 @@ import { Icon } from "../icons";
 import { monospace, palette, text } from "../theme";
 import { Checkbox, Field, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Row, Section, Segmented, Small } from "../ui";
-import { Text } from "nsh";
 import { ExtensionSettingsFields } from "./extension-fields";
 
 // A workspace's extensions, as the web app's (settings/WorkspaceExtensions.tsx; docs/design/host-extensions.md).

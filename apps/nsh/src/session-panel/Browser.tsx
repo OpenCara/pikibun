@@ -1,4 +1,4 @@
-import { computed, effect, signal, Text, untracked, View } from "nsh";
+import { computed, effect, signal, Text, untracked, View, type JSX } from "nsh";
 import type { SessionFiles } from "../../../../packages/shared/src/types";
 import { BROWSER_OUTPUT, BROWSER_REPORT_NAME, BROWSER_SCREENSHOT_PATH, parseBrowserReport, type BrowserReport } from "../../../../packages/shared/src/browser";
 import { REDACTED } from "../shared";
@@ -229,4 +229,3 @@ function Screenshot(props: { sessionId: string; path: string }) {
   );
 }
 
-import type { JSX } from "nsh";

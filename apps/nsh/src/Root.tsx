@@ -12,6 +12,7 @@ import { Sessions } from "./screens/Sessions";
 import { SessionView } from "./screens/SessionView";
 import { SharedSession } from "./screens/SharedSession";
 import { SignIn } from "./screens/SignIn";
+import { UsernameSetup } from "./screens/UsernameSetup";
 import { applyStoredAppearance } from "./settings/Appearance";
 import { findSection, SectionList } from "./settings";
 import { layout, palette } from "./theme";
@@ -49,7 +50,10 @@ export function Root() {
         else={
           <If when={auth().status !== "loading"} else={<Loading />}>
             <If when={signedIn()} else={<SignIn />}>
-              <Shell />
+              {/* A new GitHub account chooses its username before anything else; the route waits, invite links included. */}
+              <If when={!(auth().status === "signedIn" && (auth() as { user: { usernameRequired?: boolean } }).user.usernameRequired)} else={<UsernameSetup />}>
+                <Shell />
+              </If>
             </If>
           </If>
         }>
@@ -287,7 +291,7 @@ function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id:
       </View>
       <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>
-        <NavItem testID="open-profile" style={{ flex: 1 }} label={user().githubLogin ? `@${user().githubLogin}` : user().displayName}
+        <NavItem testID="open-profile" style={{ flex: 1 }} label={user().username || user().githubLogin ? `@${user().username || user().githubLogin}` : user().displayName}
           leading={<IdentityBadge name={user().displayName || user().githubLogin || "?"} id={user().id} />} onPress={() => props.onSettings("profile")} />
         <IconButton testID="open-hosts" icon="server" label="Hosts" onPress={() => props.onSettings("hosts")} />
         <IconButton testID="open-settings" icon="settings" label="Settings" onPress={() => props.onSettings()} />

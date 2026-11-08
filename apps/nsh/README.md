@@ -46,7 +46,7 @@ needs a decision stand out:
   them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget follows
   (buttons, badges, alerts, sections of rows, nav items, chips, pickers on `Menu`: a popup on the desktops and the web,
   a sheet on phones); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
-  the two differ on purpose: the sidebar keeps a search box (this client has no separate Sessions screen), tool rows
+  the two differ on purpose: the sidebar keeps a search box, tool rows
   name what they work on, approval cards say what they ask in words, and message actions open a sheet rather than
   appear on hover.
 
