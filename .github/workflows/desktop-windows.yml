@@ -57,7 +57,13 @@ jobs:
         run: node scripts/stage-connector.mjs
       - name: Package (unpacked, unsigned)
         working-directory: apps/desktop
-        run: pnpm exec electron-builder --win --x64 --dir --publish never
+        run: |
+          # Keep already-downloaded Electron/tools between attempts when an upstream asset returns a transient 5xx.
+          for attempt in 1 2 3; do
+            if pnpm exec electron-builder --win --x64 --dir --publish never; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then sleep "$((attempt * 10))"; fi
+          done
+          exit 1
       - name: The WSL2 launcher keeps line feeds
         working-directory: apps/desktop
         run: |

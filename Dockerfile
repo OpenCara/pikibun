@@ -24,6 +24,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/cli/package.json packages/cli/
 RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+")[0]')" && pnpm install --frozen-lockfile --ignore-scripts
 COPY scripts/nsh.mjs scripts/nsh-web-fixes.mjs scripts/
+# Cache the verified SDK independently of client sources; frontend edits should not redownload a large release.
+RUN node --input-type=module -e "import { nshBinary } from './scripts/nsh.mjs'; await nshBinary();"
 COPY apps/web apps/web
 COPY apps/nsh apps/nsh
 COPY packages/shared packages/shared

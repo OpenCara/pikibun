@@ -32,13 +32,32 @@ function release() {
   return null;
 }
 
+/** Retry upstream failures, including gateways that return an HTML error page with HTTP 200 for a checksum. */
+export async function releaseAsset(url, { checksum = false, attempts = 4, delayMs = 2000 } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const request = new URL(url);
+      // Avoid reusing a cached gateway error or an expired release-asset redirect on the next attempt.
+      if (attempt > 1) request.searchParams.set('_pikibun_retry', `${Date.now()}-${attempt}`);
+      const response = await fetch(request, { headers: { 'Cache-Control': 'no-cache' } });
+      if (!response.ok) throw new Error(`downloading ${new URL(url).pathname}: HTTP ${response.status}`);
+      if (!checksum) return Buffer.from(await response.arrayBuffer());
+      const hash = (await response.text()).trim().split(/\s+/)[0];
+      if (!/^[0-9a-f]{64}$/i.test(hash)) throw new Error('The release checksum response is not a SHA-256 hash');
+      return hash.toLowerCase();
+    } catch (error) {
+      if (attempt === attempts) throw error;
+      console.error(`Release download attempt ${attempt}/${attempts} failed: ${error.message}; retrying`);
+      await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+}
+
 async function download(asset, directory) {
   const base = `https://github.com/longbridge/nsh/releases/download/${NSH_VERSION}`;
-  const expected = (await (await fetch(`${base}/${asset}.sha256`)).text()).trim().split(/\s+/)[0];
+  const expected = await releaseAsset(`${base}/${asset}.sha256`, { checksum: true });
   console.error(`Downloading Native Shell ${NSH_VERSION} (${asset}, several hundred MB, once)…`);
-  const response = await fetch(`${base}/${asset}`);
-  if (!response.ok) throw new Error(`downloading ${asset}: HTTP ${response.status}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = await releaseAsset(`${base}/${asset}`);
   const actual = createHash("sha256").update(bytes).digest("hex");
   if (actual !== expected) throw new Error(`${asset} does not match its published SHA-256 (${actual} != ${expected})`);
   const partial = `${directory}.partial`;
