@@ -11,10 +11,13 @@ import { fail } from './http.js';
  */
 
 export async function getUser(env: Env, userId: string): Promise<UserRow | null> {
-  return env.DB.query<UserRow>('SELECT u.*, EXISTS(SELECT 1 FROM github_tokens t WHERE t.user_id = u.id) AS github_connected FROM users u WHERE u.id = ?').bind(userId).first();
+  return env.DB.query<UserRow>(`SELECT u.*, EXISTS(SELECT 1 FROM github_tokens t WHERE t.user_id = u.id) AS github_connected,
+    EXISTS(SELECT 1 FROM password_credentials p WHERE p.user_id = u.id) AS has_password FROM users u WHERE u.id = ?`).bind(userId).first();
 }
 export function userProfile(row: UserRow): UserProfile {
-  return { id: row.id, githubId: row.github_id, githubLogin: row.github_login, displayName: row.display_name,
+  // A password account's username is the name in its ID, also where its row predates the username column's backfill.
+  const username = row.username ?? (row.auth_kind === 'password' && row.id.startsWith('password:') ? row.id.slice('password:'.length) : null);
+  return { id: row.id, username, githubId: row.github_id, githubLogin: row.github_login, displayName: row.display_name,
     gitName: row.git_name, gitEmail: row.git_email, env: JSON.parse(row.env_json), githubConnected: row.auth_kind === 'github' && !!row.github_connected };
 }
 export function modelDefinition(row: ModelRow): ModelDefinition {

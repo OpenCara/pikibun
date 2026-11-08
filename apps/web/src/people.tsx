@@ -22,9 +22,9 @@ export function useWorkspacePeople(workspaceId: string | null): People {
   const members = useResource<{ members: WorkspaceMember[] }>(workspaceId ? `/api/workspaces/${segment(workspaceId)}/members` : null).data?.members;
   return useMemo(() => {
     const list = (members ?? []).map(memberPerson);
-    if (!list.some(person => person.id === user.id)) list.push({ id: user.id, githubLogin: user.githubLogin });
+    if (!list.some(person => person.id === user.id)) list.push({ id: user.id, username: user.username, githubLogin: user.githubLogin });
     return peopleOf(list);
-  }, [members, user.id, user.githubLogin]);
+  }, [members, user.id, user.username, user.githubLogin]);
 }
 
 const PeopleContext = createContext<People | null>(null);
@@ -38,7 +38,7 @@ export function PeopleProvider({ people, children }: { people: People; children:
 export function usePeople(): People {
   const { user } = useApp();
   const provided = useContext(PeopleContext);
-  const own = useMemo(() => peopleOf([{ id: user.id, githubLogin: user.githubLogin }]), [user.id, user.githubLogin]);
+  const own = useMemo(() => peopleOf([{ id: user.id, username: user.username, githubLogin: user.githubLogin }]), [user.id, user.username, user.githubLogin]);
   return provided ?? own;
 }
 

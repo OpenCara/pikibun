@@ -178,13 +178,18 @@ test("changing the password needs the current one and signs out every other brow
   assert.equal((await f.signIn("erin", "a brand new passphrase")).status, 200);
 });
 
-test("a GitHub account has no password to change", async t => {
+test("an account without a username has no password to change, and chooses a username before setting one", async t => {
   const f = await fixture(t);
   const login = await f.request("POST", "/api/auth/test", { headers: { Authorization: `Bearer ${f.env.TEST_AUTH_SECRET}`, Origin: origin }, body: { id: "frank" } });
   const cookie = f.cookieOf(login);
   const response = await f.request("POST", "/api/me/password", { headers: await f.browser(cookie), body: { currentPassword: password, newPassword: "a brand new passphrase" } });
-  assert.equal(response.status, 404);
-  assert.equal(await errorCode(response), "no_password");
+  assert.equal(response.status, 409);
+  assert.equal(await errorCode(response), "username_required");
+  // Test accounts aren't asked for one (GitHub accounts are: account-usernames.test.ts), but may choose it.
+  assert.equal((await (await f.request("GET", "/api/me", { headers: { Cookie: cookie } })).json() as { user: UserProfile }).user.usernameRequired, undefined);
+  assert.equal((await f.request("POST", "/api/me/username", { headers: await f.browser(cookie), body: { username: "frank" } })).status, 200);
+  const removed = await f.request("DELETE", "/api/me/password", { headers: await f.browser(cookie), body: {} });
+  assert.equal(await errorCode(removed), "no_password");
 });
 
 test("without PASSWORD_AUTH the routes don't exist, and turning it off ends password sign-ins", async t => {

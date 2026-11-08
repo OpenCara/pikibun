@@ -60,7 +60,7 @@ async function inviteFor(env: Env, workspace: { id: string; name: string }, user
 
 function joinRequests(env: Env, workspaceId: string) {
   return env.DB.query<WorkspaceJoinRequest>(`SELECT r.user_id AS userId, u.display_name AS displayName,
-      u.github_login AS githubLogin, r.created_at AS createdAt
+      u.username, u.github_login AS githubLogin, r.created_at AS createdAt
     FROM workspace_join_requests r JOIN users u ON u.id = r.user_id
     WHERE r.workspace_id = ? ORDER BY r.created_at, r.user_id`).bind(workspaceId);
 }

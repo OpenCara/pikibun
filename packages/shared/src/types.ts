@@ -38,6 +38,12 @@ export const definedToolNamePattern = /^[a-z][a-z0-9_]{0,63}$/;
 export const retiredToolNames: readonly ToolName[] = ["git_status", "git_commit", "git_repin", "web_fetch", "web_search", "bash", "host_bash"];
 export interface UserProfile {
   id: string;
+  /**
+   * The account's unique username, which it signs in with alongside a password. A password account's is the name in its
+   * ID; a GitHub account chooses its own once after signing up, and has none (null) until then. The server always says;
+   * optional for profiles from before usernames, such as an older connector's.
+   */
+  username?: string | null;
   githubId: string | null;
   githubLogin: string | null;
   displayName: string;
@@ -49,6 +55,16 @@ export interface UserProfile {
   instanceAdmin?: true;
   /** Present on the signed-in user's own profile when they sign in with a username and password instead of GitHub. */
   passwordSignIn?: true;
+  /**
+   * Present on the signed-in user's own profile while it has a password to sign in with: always for a password account,
+   * and for a GitHub account once it sets one (Settings → Password).
+   */
+  hasPassword?: true;
+  /**
+   * Present on the signed-in user's own profile while it must choose its username before using the app: a GitHub account
+   * that hasn't yet (POST /api/me/username).
+   */
+  usernameRequired?: true;
 }
 /** A native app (iOS, iPadOS, macOS) signed in as the user, listed so the user can revoke it from the web app. */
 export interface SignedInDevice {

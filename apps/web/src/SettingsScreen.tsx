@@ -8,12 +8,15 @@ import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { DesktopSettings } from "./settings/DesktopSettings";
 import { HostsSettings } from "./settings/HostsSettings";
 import { NotificationSettings } from "./settings/NotificationSettings";
+import { PasswordSettings } from "./settings/PasswordSettings";
 import { ProfileSettings } from "./settings/ProfileSettings";
 import { WorkspacesSettings } from "./settings/WorkspacesSettings";
-import { ScreenHeader } from "./ui";
+import { ScreenHeader, useResource } from "./ui";
 
-const sections: { id: SettingsSection; label: string; icon: IconName; admin?: true; desktop?: true }[] = [
+const sections: { id: SettingsSection; label: string; icon: IconName; admin?: true; desktop?: true; passwords?: true }[] = [
   { id: "profile", label: "Profile", icon: "user" },
+  // Where the server takes passwords, or the account still has one to remove.
+  { id: "password", label: "Password", icon: "lock", passwords: true },
   { id: "notifications", label: "Notifications", icon: "bell" },
   { id: "hosts", label: "Hosts", icon: "server" },
   // Only in the Pikibun desktop app: its own settings (servers, this computer as a host, Pikibun on this computer).
@@ -30,7 +33,8 @@ const desktopLabel = () => /Mac/i.test(navigator.platform) ? "This Mac" : "This 
 export function SettingsScreen({ section, id }: { section: SettingsSection; id?: string }) {
   const { user } = useApp();
   const desktop = Boolean(desktopBridge());
-  const visible = sections.filter(item => (!item.admin || user.instanceAdmin) && (!item.desktop || desktop))
+  const passwordAuth = useResource<{ passwordAuth?: boolean }>("/api/health").data?.passwordAuth === true;
+  const visible = sections.filter(item => (!item.admin || user.instanceAdmin) && (!item.desktop || desktop) && (!item.passwords || passwordAuth || user.hasPassword || section === "password"))
     .map(item => item.desktop ? { ...item, label: desktopLabel() } : item);
   const current = visible.find(item => item.id === section) ?? visible[0];
   const serverVersion = useServerVersion();
@@ -46,6 +50,7 @@ export function SettingsScreen({ section, id }: { section: SettingsSection; id?:
       <ScreenHeader title={current.label} />
       <div className="content-column">
         {current.id === "profile" ? <ProfileSettings />
+          : current.id === "password" ? <PasswordSettings />
           : current.id === "notifications" ? <NotificationSettings />
           : current.id === "hosts" ? <HostsSettings id={id} />
           : current.id === "desktop" ? <DesktopSettings />

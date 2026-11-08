@@ -12,13 +12,27 @@ The first sign-in creates an account, as far as the operator's `SIGNUP` setting 
 
 Existing accounts sign in whatever `SIGNUP` says; it decides only who may be added. In every mode, `ADMIN_USER_IDS`'s GitHub accounts can sign up, so a server's administrators can always set it up. Someone signing up through an invite link where `SIGNUP=open` asks to join its workspace too. The iPhone, iPad and Mac apps can't open invite links, so where `SIGNUP=invite` a new person creates their account through the link in a browser first, then signs in on the app. A refused sign-in keeps nothing: no account, and not the token GitHub issued.
 
+## Your username
+
+Every account has a unique username on the server: 3 to 39 letters, digits, `-` and `_`, starting with a letter or digit, not case-sensitive. Teammates see you by it in member lists and can type it to name you, and you can sign in with it and a password where the server takes passwords. Password accounts and GitHub accounts share one set of usernames, so a name belongs to one account whichever way it signs in. A username can't be changed later.
+
+- **GitHub accounts** choose theirs right after their first sign-in (the web app asks before anything else, invite links included; accounts from before usernames are asked at their next visit). It starts as your GitHub login where that is a valid username, and you can type another. Where the server takes passwords you can also set an optional password in the same step, to sign in later with your username and password as well as GitHub. A local server (`pikibun serve`) has only its owner and doesn't ask.
+- **Password accounts** chose theirs when signing up: it is the name in their user ID.
+- A username listed as an administrator in `ADMIN_USER_IDS` (`password:<username>`) is reserved for that administrator.
+
 ## Username and password
 
 Where the operator sets `PASSWORD_AUTH=true`, as the [Docker image](self-hosting.md#docker) does, the sign-in page also offers a username and password, and **New here? Create an account** where `SIGNUP` lets the visitor sign up: by default only on an invite link's sign-in page. Then:
 
-- The username (3 to 39 letters, digits, `-` and `_`, not case-sensitive) makes your user ID, `password:<username>`, so teammates can add you to a workspace by it before you ever sign in. It can't be changed later.
+- The username makes your user ID, `password:<username>`, so teammates can add you to a workspace by it before you ever sign in. It can't be changed later.
 - Passwords are at least 12 characters, other than the username. The server keeps only a salted scrypt hash. After five wrong passwords in a row the account refuses sign-ins for 30 seconds, doubling with each further miss up to 15 minutes; a correct sign-in resets the count.
-- **Settings → Profile → Password** changes it, which signs out every other browser signed in as you. There is no reset by email: someone who forgets theirs asks the server's operator for a new one (`--reset-password`, see [Administration](self-hosting.md#administration)).
+- **Settings → Password** changes it with your current one, which signs out every other browser and app signed in as you. There is no reset by email: someone who forgets theirs asks the server's operator for a new one (`--reset-password`, see [Administration](self-hosting.md#administration)).
+
+A **GitHub account** can sign in with its username and a password too, once it sets one: in the username step after signing up, or later under **Settings → Password**. It stays a GitHub account, with its GitHub token and repositories, whichever way it signs in. Your GitHub sign-in vouches for you where a password can't:
+
+- Setting your first password, or a new one without the current one (if you forgot it), or removing it without the current one, needs a GitHub sign-in from the last 15 minutes. The page offers **Sign in with GitHub again** and brings you back. So a browser left signed in, or a stolen sign-in, can't add a password to keep its way in.
+- Changing it with the current password signs out every other browser and app signed in as you. **Remove password** takes you back to GitHub only, and signs out the browsers and apps that signed in with the password.
+- Turning `PASSWORD_AUTH` off ends the sign-ins made with a password at once; your GitHub sign-ins go on, and **Settings → Password** still lets you remove the password you set. The operator's `--reset-password` works for your username as well.
 - A password account holds no GitHub token, so it can't bind or clone **github.com** repositories (not even ones a teammate bound: a session reads repositories with its owner's own access), push with its own GitHub account, or use the GitHub tools. It works with every other Git provider, GitHub Enterprise Server included, through personal access tokens under **Git accounts**. Its Git author email starts as `<username>@users.pikibun.invalid`; set your own under **Identity**.
 - The iPhone and iPad app still signs in with GitHub only; the Mac app shows the server's sign-in page, password included.
 - Turning `PASSWORD_AUTH` off signs every password account out at once and refuses their sign-ins; turning it on again lets them back in.
@@ -29,6 +43,8 @@ Where the operator sets `PASSWORD_AUTH=true`, as the [Docker image](self-hosting
 - **Environment**: up to 32 non-secret `APP_` variables (for example `APP_PROJECT=web`) sent to the host of every session you own. Values are at most 2,048 characters, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE_KEY` or `API_KEY` are refused: credentials belong in Git accounts or in Pi on the host.
 - **Git accounts**: your GitHub sign-in plus personal access tokens for other Git providers (see [Repositories and Git accounts](repositories.md)).
 - **Signed-in apps**: the iPhone and iPad apps signed in as you, each of which you can sign out. The Mac app signs in as a browser does, so it isn't listed here; **Sign out** in it ends its sign-in.
-- **Account**: your **User ID** (owners add you to workspaces with it) and **Sign out**.
+- **Account**: your **Username**, your **User ID** (owners add you to workspaces with it) and **Sign out**.
+
+**Settings → Password**, where the server takes passwords (or your account still has one), shows how you sign in (your username, GitHub, and whether you have a password) and sets, changes or removes your password, as above.
 
 **Settings → Appearance** switches between the Light, Dark and System themes.

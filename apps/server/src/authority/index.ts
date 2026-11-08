@@ -10,7 +10,7 @@
 
 // Signing in, the instance's administrators, and what an invite link grants.
 export { authenticate, csrfGuard, localOwner, registerAuth } from './auth.js';
-export { hashPassword, newPassword, passwordAccountStatements, passwordUsername, registerPasswordAuth } from './password-auth.js';
+export { hashPassword, newPassword, passwordAccountStatements, passwordUsername, registerPasswordAuth, USERNAME_MATCH, usernameMatch } from './password-auth.js';
 export { adminUserId, instanceAdmins, registerAdmin } from './admin.js';
 export { INVALID_LINK, INVITE_TOKEN, joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 

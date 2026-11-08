@@ -113,7 +113,7 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate: () =>
     <div className="sidebar-footer">
       <a className="nav-item host-chip" href={href({ name: "settings", section: "profile" })} onClick={onNavigate} title={user.displayName}>
         <IdentityBadge name={user.displayName} id={user.id} />
-        <span className="label">{user.githubLogin ? `@${user.githubLogin}` : user.displayName}</span>
+        <span className="label">{user.username || user.githubLogin ? `@${user.username || user.githubLogin}` : user.displayName}</span>
       </a>
       <a className="btn ghost sm icon-only" href={href({ name: "settings", section: "hosts" })} onClick={onNavigate} aria-label="Hosts" title="Hosts"><Icon name="server" /></a>
       <a className="btn ghost sm icon-only" href={href({ name: "settings", section: "profile" })} onClick={onNavigate} aria-label="Settings" title="Settings" aria-current={route.name === "settings" ? "page" : undefined}><Icon name="settings" /></a>

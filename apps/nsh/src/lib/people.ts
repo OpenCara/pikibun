@@ -17,7 +17,7 @@ export function createWorkspacePeople(workspaceId: Accessor<string | null>): Acc
   return computed(() => {
     const { user } = session();
     const list = (members.data()?.members ?? []).map(memberPerson);
-    if (!list.some(person => person.id === user.id)) list.push({ id: user.id, githubLogin: user.githubLogin });
+    if (!list.some(person => person.id === user.id)) list.push({ id: user.id, username: user.username, githubLogin: user.githubLogin });
     return { person: peopleDirectory(list) };
   });
 }
@@ -30,6 +30,6 @@ export function createUsername(): (id: string, you?: boolean) => string {
   return (id, you) => {
     const { user } = session();
     if (you && id === user.id) return "you";
-    return people ? username(people().person(id)) : id === user.id ? username({ id, githubLogin: user.githubLogin }) : username({ id });
+    return people ? username(people().person(id)) : id === user.id ? username({ id, username: user.username, githubLogin: user.githubLogin }) : username({ id });
   };
 }

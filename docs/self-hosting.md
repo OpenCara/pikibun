@@ -145,7 +145,7 @@ node dist/server/main.js --create-admin admin
 docker compose exec pikibun node dist/server/main.js --create-admin admin   # under Docker
 ```
 
-That needs no sign-in first and no restart afterwards, and a fresh server with `SIGNUP=invite` (as the Docker image has it) or `off` starts this way (or with a GitHub administrator, who can always sign up): the administrator signs in, creates a workspace and shares its invite link. `--reset-password USERNAME` sets a new password for any password account the same way, clears its failed sign-ins and signs it out everywhere. Both are recorded in the audit table, with no actor. The role comes only from this setting: nobody can grant it in the app, and it gives no access inside workspaces or sessions.
+That needs no sign-in first and no restart afterwards, and a fresh server with `SIGNUP=invite` (as the Docker image has it) or `off` starts this way (or with a GitHub administrator, who can always sign up): the administrator signs in, creates a workspace and shares its invite link. `--reset-password USERNAME` sets a new password the same way for any account with that username and a password (a password account, or a GitHub account that set one), clears its failed sign-ins and signs it out everywhere. Both are recorded in the audit table, with no actor. The role comes only from this setting: nobody can grant it in the app, and it gives no access inside workspaces or sessions.
 
 - **Overview** counts accounts, workspaces, hosts (and how many are online) and sessions.
 - **Accounts**, **Workspaces** and **Hosts** list each one with its owner and how many members, repositories, hosts and sessions it has. They never show session titles, prompts, repository names, models, environment values or credentials.

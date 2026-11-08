@@ -17,6 +17,8 @@ import { SessionsScreen } from "./SessionsScreen";
 import { SettingsScreen } from "./SettingsScreen";
 import { SharedSessionScreen } from "./SharedSessionScreen";
 import { Sidebar } from "./Sidebar";
+import { takeReturnAfterSignIn } from "./sign-in-again";
+import { UsernameSetup } from "./UsernameSetup";
 import { applyTheme, useTheme } from "./theme";
 import { NavigationProvider } from "./navigation";
 import { trackVisualViewport } from "./touch";
@@ -124,10 +126,13 @@ function Shell() {
   useNotificationDelivery(user.id);
   useEffect(() => { document.title = title(route); }, [route]);
   useEffect(() => { document.getElementById("main-content")?.scrollTo({ top: 0 }); }, [route]);
-  // A sign-in started from an invite link returns to the app's root; pick the invite up where it left off.
+  // A sign-in started from an invite link returns to the app's root; pick the invite up where it left off. So does one
+  // started again for what needs a recent GitHub sign-in, such as setting a password: back to the page it came from.
   useEffect(() => {
     const token = takeRememberedInvite();
+    const back = takeReturnAfterSignIn();
     if (token && route.name !== "join") navigate({ name: "join", token });
+    else if (back && route.name === "home") window.location.hash = back;
   }, []); // Only once, on the first render after signing in.
   const screen = route.name === "session" ? <SessionScreen key={route.sessionId} sessionId={route.sessionId} />
     : route.name === "join" ? <JoinWorkspaceScreen key={route.token} token={route.token} />
@@ -176,6 +181,8 @@ function App() {
   useEffect(() => { if (!loading && !user && route.name === "join") rememberInvite(route.token); }, [loading, user, route]);
   if (loading) return <PageLoading />;
   if (!user) return <SignIn error={error} retry={() => setRevision(value => value + 1)} inviteToken={route.name === "join" ? route.token : undefined} />;
+  // A new GitHub account chooses its username before anything else; the route waits, invite links included.
+  if (user.usernameRequired) return <>{skipLink}<UsernameSetup user={user} setUser={setUser} signOut={() => void signOut()} /></>;
   return <AppProvider key={user.id} user={user} setUser={setUser} signOut={() => void signOut()}><Shell /></AppProvider>;
 }
 
