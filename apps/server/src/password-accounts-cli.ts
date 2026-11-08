@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import { auditStatement, hashPassword, instanceAdmins, newPassword, passwordAccountStatements, passwordUsername } from './authority/index.js';
+import { auditStatement, hashPassword, instanceAdmins, newPassword, passwordAccountStatements, passwordUsername, USERNAME_MATCH, usernameMatch } from './authority/index.js';
 import { ConstraintError, type Database } from './db/types.js';
 import { now } from './http.js';
 import type { Env } from './types.js';
@@ -10,8 +10,9 @@ import type { Env } from './types.js';
  * - `--create-admin USERNAME` creates `password:USERNAME`, which ADMIN_USER_IDS must list already. Nobody can sign up
  *   as a listed account in the app, so this is how a server's first administrator exists without a race to claim it,
  *   and the role still comes only from ADMIN_USER_IDS.
- * - `--reset-password USERNAME` sets a new password for any password account, clears its failed sign-ins and signs it
- *   out everywhere: the way back in for someone who forgot theirs.
+ * - `--reset-password USERNAME` sets a new password for any account with that username and a password (a password
+ *   account, or a GitHub account that set one), clears its failed sign-ins and signs it out everywhere: the way back in
+ *   for someone who forgot theirs. (A GitHub account can also replace a forgotten one itself, after a fresh GitHub sign-in.)
  *
  * The password is typed at a hidden prompt on a terminal, or read from the first line of standard input when it is a
  * pipe; never from argv, where other users of the machine could read it.
@@ -67,23 +68,30 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
     try {
       await db.batch([...passwordAccountStatements(db, name, name, hash), auditStatement({ DB: db } as Env, null, 'account.password.created_by_operator', null, null, { userId })]);
     } catch (error) {
-      if (error instanceof ConstraintError) throw new PasswordCommandError(`${userId} exists already; --reset-password ${name} sets a new password for it`);
+      if (error instanceof ConstraintError) {
+        const taken = await db.query<{ id: string }>('SELECT id FROM users WHERE id = ?').bind(userId).first();
+        throw new PasswordCommandError(taken ? `${userId} exists already; --reset-password ${name} sets a new password for it`
+          : `the username ${name} belongs to another account already: list another password: administrator`);
+      }
       throw error;
     }
     return `pikibun: created ${userId}, an administrator while ADMIN_USER_IDS lists it; sign in with the username ${name}`;
   }
-  const account = await db.query<{ auth_kind: string }>('SELECT u.auth_kind FROM users u JOIN password_credentials p ON p.user_id = u.id WHERE u.id = ?')
-    .bind(userId).first();
-  if (account?.auth_kind !== 'password') throw new PasswordCommandError(`there is no password account ${userId}`);
+  // By username: a password account's is the name in its ID, and a GitHub account that set a password has its own.
+  const account = await db.query<{ id: string; auth_kind: string }>(`SELECT u.id, u.auth_kind FROM users u JOIN password_credentials p ON p.user_id = u.id ${USERNAME_MATCH}`)
+    .bind(...usernameMatch(name)).first();
+  if (!account || (account.auth_kind !== 'password' && account.auth_kind !== 'github')) {
+    throw new PasswordCommandError(`there is no password account ${userId}, nor another account with the username ${name} and a password`);
+  }
   const password = await plain(async () => newPassword(await readPassword(), name));
   const hash = await hashPassword(password);
   await db.batch([
-    db.query('UPDATE password_credentials SET password_hash = ?, failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?').bind(hash, now(), userId),
+    db.query('UPDATE password_credentials SET password_hash = ?, failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?').bind(hash, now(), account.id),
     // Whoever was signed in as it, with the old password, is signed out.
-    db.query('DELETE FROM auth_sessions WHERE user_id = ?').bind(userId),
-    auditStatement({ DB: db } as Env, null, 'account.password.reset_by_operator', null, null, { userId }),
+    db.query('DELETE FROM auth_sessions WHERE user_id = ?').bind(account.id),
+    auditStatement({ DB: db } as Env, null, 'account.password.reset_by_operator', null, null, { userId: account.id }),
   ]);
-  return `pikibun: set a new password for ${userId} and signed it out everywhere`;
+  return `pikibun: set a new password for ${account.id} and signed it out everywhere`;
 }
 
 /** A line typed on the terminal without echo; any characters, up to 1,024. */

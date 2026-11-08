@@ -67,7 +67,7 @@ export const authenticate: MiddlewareHandler<WorkerEnv> = async (c, next) => {
   const token = bearer ?? getCookie(c, cookies(c.env).auth);
   if (!token || !OPAQUE_TOKEN.test(token)) fail(401, 'unauthorized', 'Authentication is required.');
   const tokenHash = await sha256(token);
-  const session = await dbResult(c.env.DB.query<{ user_id: string; csrf_token: string; expires_at: number; auth_kind: string; client: string }>(`SELECT s.user_id, s.csrf_token, s.expires_at, s.client, u.auth_kind
+  const session = await dbResult(c.env.DB.query<{ user_id: string; csrf_token: string; expires_at: number; auth_kind: string; client: string; method: string | null }>(`SELECT s.user_id, s.csrf_token, s.expires_at, s.client, s.method, u.auth_kind
     FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND u.suspended_at IS NULL`)
     .bind(tokenHash).first());
   if (!session || session.client !== client || session.expires_at <= Date.now() || !Number.isSafeInteger(session.expires_at) ||
@@ -76,8 +76,10 @@ export const authenticate: MiddlewareHandler<WorkerEnv> = async (c, next) => {
       (session.auth_kind === 'test' && (!testMode(c.env) || !session.user_id.startsWith('test:'))) ||
       (session.auth_kind === 'github' && session.user_id.startsWith('test:')) ||
       (session.auth_kind !== 'password' && session.user_id.startsWith('password:')) ||
-      // Turning PASSWORD_AUTH off ends password sign-ins at once, not when they expire.
-      (session.auth_kind === 'password' && (!passwordAuthEnabled(c.env) || !session.user_id.startsWith('password:')))) {
+      // Turning PASSWORD_AUTH off ends password sign-ins at once, not when they expire: a password account's, and a
+      // GitHub account's that signed in with its username and password.
+      (session.auth_kind === 'password' && (!passwordAuthEnabled(c.env) || !session.user_id.startsWith('password:'))) ||
+      (session.method !== null && (session.method !== 'password' || !passwordAuthEnabled(c.env)))) {
     if (client === 'browser') expireCookie(c, 'auth');
     fail(401, 'unauthorized', 'Authentication is required.');
   }
@@ -160,13 +162,26 @@ async function currentUser(c: AppContext): Promise<UserRow> {
   return user;
 }
 
+/**
+ * Whether an account must choose its username before using the app: a GitHub account without one. A local server's
+ * only account is its owner's, which nobody else needs to name and which can't sign in with a password there.
+ */
+export function usernameRequired(env: Env, user: UserRow): boolean {
+  return user.auth_kind === 'github' && !user.username && !localMode(env);
+}
+
 /** The signed-in user's own profile, which also says whether they administer this server. */
 export function ownProfile(env: Env, user: UserRow) {
   return { ...userProfile(user), ...(isInstanceAdmin(env, user.id) ? { instanceAdmin: true as const } : {}),
-    ...(user.auth_kind === 'password' ? { passwordSignIn: true as const } : {}) };
+    ...(user.auth_kind === 'password' ? { passwordSignIn: true as const } : {}),
+    ...(user.has_password ? { hasPassword: true as const } : {}),
+    ...(usernameRequired(env, user) ? { usernameRequired: true as const } : {}) };
 }
 
-/** A new sign-in. Native sessions are bearer tokens listed as devices under the app's `deviceName`. */
+/**
+ * A new sign-in. Native sessions are bearer tokens listed as devices under the app's `deviceName`. `password` is a sign-in
+ * with a username and password, whichever kind of account it is: it ends when PASSWORD_AUTH is turned off.
+ */
 export async function newSession(env: Env, userId: string, kind: 'github' | 'test' | 'password', native?: { deviceName: string | null }) {
   const issuedAt = Date.now();
   let expiresAt = issuedAt + (native ? NATIVE_SESSION_TTL : SESSION_TTL);
@@ -177,17 +192,17 @@ export async function newSession(env: Env, userId: string, kind: 'github' | 'tes
   const token = randomToken();
   const csrfToken = randomToken();
   const tokenHash = await sha256(token);
-  const columns = '(token_hash, user_id, csrf_token, expires_at, created_at, client, device_id, device_name)';
-  const sql = `INSERT INTO auth_sessions ${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+  const columns = '(token_hash, user_id, csrf_token, expires_at, created_at, client, device_id, device_name, method)';
+  const sql = `INSERT INTO auth_sessions ${columns} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
   const values: SqlValue[] = [tokenHash, userId, csrfToken, expiresAt, new Date(issuedAt).toISOString(),
-    native ? 'native' : 'browser', native ? id() : null, native?.deviceName ?? null];
+    native ? 'native' : 'browser', native ? id() : null, native?.deviceName ?? null, kind === 'password' ? 'password' : null];
   return {
     token, expiresAt,
     // `sql` and `values` let a caller insert it inside its own transaction.
     sql, values, statement: env.DB.query(sql).bind(...values),
     /** The insert, made only while `condition` (SQL, with `conditionValues`) holds as it runs. */
     statementWhere: (condition: string, ...conditionValues: SqlValue[]) =>
-      env.DB.query(`INSERT INTO auth_sessions ${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${condition}`).bind(...values, ...conditionValues),
+      env.DB.query(`INSERT INTO auth_sessions ${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${condition}`).bind(...values, ...conditionValues),
   };
 }
 

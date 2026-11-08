@@ -19,6 +19,8 @@ export interface WorkspaceInvite {
 export interface WorkspaceJoinRequest {
   userId: string;
   displayName: string;
+  /** Their username, once they have chosen it. */
+  username: string | null;
   githubLogin: string | null;
   createdAt: string;
 }

@@ -35,6 +35,18 @@ test("a typed or pasted member names a user ID by username(id), username or the 
   assert.equal(userIdFromInput("   ", people), "");
 });
 
+test("a username chosen on the server names a person ahead of their GitHub login, and finds them when typed", () => {
+  const dana = { id: "github:4", username: "dana", githubLogin: "DanaOnGitHub" };
+  assert.equal(username(dana), "dana");
+  assert.equal(usernameWithId(dana), "dana(github:4)");
+  assert.equal(username({ id: "password:erin", username: "erin", githubLogin: null }), "erin");
+  assert.deepEqual(memberPerson({ userId: "github:4", role: "admin", username: "dana", githubLogin: "DanaOnGitHub" }), { ...dana, role: "admin" });
+  assert.equal(userIdFromInput("@Dana", [dana, alice]), "github:4");
+  assert.equal(userIdFromInput("danaongithub", [dana]), "github:4");
+  // Chosen usernames are unique on the server, GitHub logins not: one wins over someone else's login.
+  assert.equal(userIdFromInput("dana", [{ id: "github:5", githubLogin: "dana" }, dana]), "github:4");
+});
+
 test("details show the user IDs of known people as username(id)", () => {
   const person = peopleDirectory([alice]);
   assert.deepEqual(

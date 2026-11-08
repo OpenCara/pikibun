@@ -16,6 +16,7 @@ import { modelEnabledSQL } from './host-models.js';
 interface SafeMember {
   userId: string;
   displayName: string;
+  username: string | null;
   githubLogin: string | null;
   role: WorkspaceRole;
 }
@@ -42,7 +43,7 @@ function nameInput(value: unknown): string {
 
 function membersStatement(env: Env, workspaceId: string, actorId: string): Query<SafeMember> {
   return env.DB.query<SafeMember>(`SELECT member.user_id AS userId, u.display_name AS displayName,
-      u.github_login AS githubLogin, member.role
+      u.username, u.github_login AS githubLogin, member.role
     FROM workspace_members member
     INNER JOIN users u ON u.id = member.user_id
     INNER JOIN workspace_members actor ON actor.workspace_id = member.workspace_id AND actor.user_id = ?

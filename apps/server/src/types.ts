@@ -107,7 +107,14 @@ export interface UserRow {
   created_at: string;
   /** Set while an instance administrator has the account suspended. */
   suspended_at?: string | null;
+  /**
+   * The account's unique username: a password account's is the name in its ID; a GitHub account chooses its own once,
+   * after signing up (password-auth.ts), and it stays NULL until then.
+   */
+  username?: string | null;
   github_connected?: number;
+  /** Whether the account has a password to sign in with (getUser). */
+  has_password?: number;
 }
 export interface WorkspaceRow { id: string; name: string; owner_id: string; created_at: string }
 export interface MemberRow { workspace_id: string; user_id: string; role: WorkspaceRole; created_at: string }
