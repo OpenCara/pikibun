@@ -138,7 +138,7 @@ jobs:
             unset WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
             echo "::warning::WIN_CERTIFICATE_P12 is not set: the Windows installer is unsigned, so SmartScreen warns before its first launch."
           fi
-          pnpm exec electron-builder --win --x64 --publish never
+          node ../../scripts/github-build-proxy.mjs pnpm exec electron-builder --win --x64 --publish never
       - name: The WSL2 launcher keeps line feeds
         working-directory: apps/desktop
         run: |

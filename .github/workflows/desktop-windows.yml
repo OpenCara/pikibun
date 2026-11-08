@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - apps/desktop/**
+      - scripts/github-build-proxy.*
       - apps/runner/src/connect-setup.ts
       - apps/runner/src/desktop-*.ts
       - apps/runner/src/sandbox-backend.ts
@@ -19,6 +20,7 @@ on:
   pull_request:
     paths:
       - apps/desktop/**
+      - scripts/github-build-proxy.*
       - apps/runner/src/connect-setup.ts
       - apps/runner/src/desktop-*.ts
       - apps/runner/src/sandbox-backend.ts
@@ -64,7 +66,7 @@ jobs:
           fi
           # Keep already-downloaded Electron/tools between attempts when an upstream asset returns a transient 5xx.
           for attempt in 1 2 3; do
-            if pnpm exec electron-builder --win --x64 --dir --publish never; then exit 0; fi
+            if node ../../scripts/github-build-proxy.mjs pnpm exec electron-builder --win --x64 --dir --publish never; then exit 0; fi
             if [ "$attempt" -lt 3 ]; then sleep "$((attempt * 10))"; fi
           done
           exit 1
