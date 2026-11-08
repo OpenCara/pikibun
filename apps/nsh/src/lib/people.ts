@@ -6,6 +6,8 @@ import { createResource } from "./resource";
 /** The people a screen can name by username: a workspace's members and the signed-in user. */
 export interface People {
   person: (id: string) => Person;
+  /** Everyone known by name: the workspace's members and the signed-in user. */
+  list: Person[];
 }
 
 /** A workspace's members and the signed-in user. Until the members load, only the signed-in user has a username. */
@@ -18,7 +20,7 @@ export function createWorkspacePeople(workspaceId: Accessor<string | null>): Acc
     const { user } = session();
     const list = (members.data()?.members ?? []).map(memberPerson);
     if (!list.some(person => person.id === user.id)) list.push({ id: user.id, username: user.username, githubLogin: user.githubLogin });
-    return { person: peopleDirectory(list) };
+    return { person: peopleDirectory(list), list };
   });
 }
 

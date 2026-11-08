@@ -20,10 +20,12 @@ import { createUsername, createWorkspacePeople, PeopleContext } from "../lib/peo
 import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text } from "../theme";
-import { Badge, Banner, Button, Chip, confirm, EmptyState, Feedback, IconButton, Loading, Picker, Small } from "../ui";
+import { Badge, Banner, Button, Chip, confirm, DropdownMenu, EmptyState, Feedback, FormSheet, IconButton, Loading, Picker, Small, type MenuAction } from "../ui";
 import { drawsHeaders, PageHeader, pageStyle } from "./PageHeader";
 import type { PageRoute } from "../lib/page";
 import { SessionPanel } from "../session-panel";
+import { createSessionActions } from "../lib/session-actions";
+import { Field, TextField } from "../form";
 
 /**
  * One session: live transcript, pending approvals and the chat box. As a page of the stack (`page`) it carries its
@@ -67,6 +69,35 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   const manages = () => {
     const current = live.session();
     return Boolean(current && managesSession(user.id, current.ownerId, workspace()?.role));
+  };
+  // Renaming, visibility, backups and archiving: the header's menu and the panel share them, as on the web.
+  const actions = createSessionActions({ session: live.session, manages, backupBlocked: () => !live.view() || live.view()!.busy,
+    onChange: () => { live.refresh(); data.refreshSessions(); } });
+  const renaming = signal(false);
+  const renameTo = signal("");
+  const menu = (): (MenuAction | "separator")[] => {
+    const current = live.session();
+    const items: (MenuAction | "separator")[] = [{ label: "Copy session ID", icon: "copy", testID: "session-copy-id", onSelect: copyId }];
+    if (current && manages() && !archived()) {
+      items.push({ label: "Rename", icon: "pencil", testID: "session-rename", disabled: actions.action.busy(), onSelect: () => { renameTo.set(current.title); renaming.set(true); } });
+      items.push({ label: current.visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: current.visibility === "workspace" ? "lock" : "globe",
+        disabled: actions.action.busy(), onSelect: actions.changeVisibility });
+      if (isOwner() && !current.frozen) {
+        items.push({ label: "Create backup", icon: "archive", disabled: actions.backupsOff() || actions.backupsPending() || !live.view() || live.view()!.busy || actions.action.busy(),
+          hint: actions.backupsOff() ? "Backups are off" : live.view()?.busy ? "Session busy" : undefined, onSelect: () => actions.createBackup() });
+        items.push({ label: "Back up conversation only", icon: "archive",
+          disabled: actions.backupsOff() || actions.backupsPending() || !live.view() || live.view()!.busy || actions.conversationOnlyOff() || actions.action.busy(),
+          onSelect: () => actions.createBackup({ conversationOnly: true }) });
+      }
+      items.push({ label: "Archive", icon: "archive", testID: "session-archive", disabled: actions.action.busy(), onSelect: actions.archive });
+    }
+    if (current && manages() && archived()) {
+      items.push({ label: "Unarchive", icon: "archive", disabled: actions.action.busy() || (Boolean(current.packed) && !isOwner()), onSelect: actions.unarchive });
+      if (isOwner() && !current.packed && !current.frozen && !current.hostEnvironment) items.push({ label: "Pack files", icon: "archive", disabled: actions.action.busy(), onSelect: actions.pack });
+    }
+    const workspaceId = known()?.workspaceId;
+    if (workspaceId) items.push("separator", { label: "Open in workspace settings", icon: "settings", onSelect: () => props.go({ name: "settings", section: "workspaces", id: workspaceId }) });
+    return items;
   };
   const approvals = () => live.view()?.approvals ?? [];
   const pending = computed(() => approvals().filter(approval => approval.status === "pending"));
@@ -136,7 +167,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       </If>
       <IconButton testID="session-approvals" icon="shield-check" label={pending().length ? `Approvals, ${pending().length} pending` : "Approvals"} badge={pending().length}
         tone={pending().length ? "warning" : undefined} onPress={() => approvalsOpen.set(true)} disabled={!live.view()} />
-      <IconButton testID="session-copy-id" icon="copy" label="Copy session ID" onPress={copyId} />
+      <DropdownMenu label="Session actions" testID="session-actions" items={menu()} />
       <IconButton testID="session-details" icon="panel-right" label="Session details" onPress={() => panelOpen.set(true)} active={panelOpen()} />
     </View>
   );
@@ -271,7 +302,18 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             openSession={target => { data.refreshSessions(); props.openSession(target); }} />
         </If>
         <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} sessionId={props.id} session={live.session} view={live.view}
-          refresh={live.refresh} go={route => { panelOpen.set(false); props.go(route); }} />
+          refresh={() => { live.refresh(); data.refreshSessions(); }} go={route => { panelOpen.set(false); props.go(route); }}
+          actions={actions} hosts={() => hosts.data()?.connectors ?? null} hostsLoading={hosts.loading} />
+        <FormSheet open={renaming()} title="Rename session" onClose={() => renaming.set(false)}
+          footer={<>
+            <Button label="Cancel" disabled={actions.action.busy()} onPress={() => renaming.set(false)} />
+            <Button testID="rename-save" variant="primary" label={actions.action.busy() ? "Saving…" : "Save"} disabled={actions.action.busy() || !renameTo().trim()}
+              onPress={() => void actions.rename(renameTo()).then(saved => { if (saved) renaming.set(false); })} />
+          </>}>
+          <Field label="Title"><TextField testID="rename-title" value={renameTo()} onChange={value => renameTo.set(value)} maxLength={200} autoFocus
+            onSubmit={() => void actions.rename(renameTo()).then(saved => { if (saved) renaming.set(false); })} /></Field>
+          <Feedback error={actions.action.error()} />
+        </FormSheet>
         <ApprovalsSheet open={approvalsOpen()} approvals={approvals()} olderApprovals={live.view()?.olderApprovals} onClose={() => approvalsOpen.set(false)}
           onOpenSession={target => { approvalsOpen.set(false); data.refreshSessions(); props.openSession(target); }} session={live.session()} onChanged={live.refresh} />
       </View>

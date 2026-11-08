@@ -80,6 +80,22 @@ app, Linux and Android on the tag's preview GitHub release (always a prerelease,
 and the secrets it needs are in [docs/development.md](../../docs/development.md). To package one by hand, for this
 machine's platforms: `pnpm nsh package App.tsx --target macos` (or `windows`, `linux`, `android`, `ios`).
 
+## What the web app has that this client doesn't
+
+Every page of the React client is here, drawn with the same kit: sign-in, the sidebar and Sessions, a new session, a
+session with its header menu and its panel (Details, Approvals, Files, Browser, Schedules, Activity), a share link, an
+invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
+Administration). What is left out, and why:
+
+- **This Computer** settings belong to the Electron desktop app, which runs its own host.
+- **Notifications on this device** wait for NSH's push notifications (longbridge/nsh#1058); the account's preferences
+  and devices are managed here.
+- **Attachments** in the chat box, and **Import dump** for a workspace database, wait for picking files other than
+  photos (longbridge/nsh#162).
+- **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
+  they are offered on the web build only; native builds point to Pikibun on the web.
+- **Syntax highlighting** in file previews: text shows as plain monospace.
+
 ## Known gaps, from NSH itself
 
 - **App Store builds**: NSH 0.4's prebuilt iPhone runner was linked with the iOS 18.5 SDK, which App Store Connect no
