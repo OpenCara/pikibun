@@ -338,6 +338,8 @@ export interface Option<T> {
   hint?: string;
   destructive?: boolean;
   icon?: IconName;
+  /** Shown, but can't be chosen (already configured, not connected). */
+  disabled?: boolean;
 }
 
 /** One choice of a picker (.menu-item): its icon, label and hint, the current one checked. */
@@ -376,7 +378,7 @@ export function Picker<T>(props: { trigger: JSX.Element; title: string; options:
       <Scroll style={{ flexShrink: 1, maxHeight: 360 }} contentStyle={{ gap: 0 }}>
       <Each of={props.options} key="index">
         {option => (
-          <MenuItem accessibilityLabel={option().label} onSelect={() => props.onSelect(option().value)}
+          <MenuItem accessibilityLabel={option().label} disabled={option().disabled} onSelect={() => props.onSelect(option().value)} disabledStyle={{ opacity: 0.5 }}
             style={{ flexDirection: "row", alignItems: "center", minHeight: 32, paddingHorizontal: 8, paddingVertical: option().hint ? 6 : 0, borderRadius: radius.small,
               backgroundColor: props.value === option().value ? palette().hoverStrong : "transparent" }}
             hoverStyle={{ backgroundColor: palette().hoverStrong }} focusStyle={{ backgroundColor: palette().hoverStrong }} activeStyle={{ backgroundColor: palette().hoverStrong }}>
