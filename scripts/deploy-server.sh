@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs on the deployment server, over Tailscale SSH from .github/workflows/deploy-server.yml:
-#   ssh user@host bash -s -- IMAGE DIR < scripts/deploy-server.sh
+#   ssh user@host bash -s -- IMAGE DIR [PREVIEW_ORIGIN] < scripts/deploy-server.sh
 # DIR holds the server's docker-compose.yml (whose pikibun service has `image: ${PIKIBUN_IMAGE...}`) and its .env.
 # Pulls IMAGE, records it as PIKIBUN_IMAGE in .env (so a later `docker compose up -d` keeps it), recreates the pikibun
 # service with it and waits for the container's health check. Migrations run when the new container starts, so a failed
@@ -9,7 +9,14 @@ set -euo pipefail
 
 image=${1:?image}
 dir=${2:?directory}
+preview_origin=${3:-}
 timeout=${DEPLOY_HEALTH_TIMEOUT:-180}
+
+# Only an exact HTTPS hostname/port may be written to the environment file; never a path or shell/env syntax.
+if [ -n "$preview_origin" ] && ! [[ "$preview_origin" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "PREVIEW_ORIGIN must be an exact HTTPS origin without a path or trailing slash." >&2
+  exit 1
+fi
 
 cd "$dir"
 [ -f .env ] || { echo "No .env in $(pwd): set up the server as docs/self-hosting.md's \"Docker\" says first." >&2; exit 1; }
@@ -25,12 +32,18 @@ if ! docker pull --quiet "$image"; then
   DOCKER_CONFIG="$anonymous" docker pull --quiet "$image"
 fi
 
-if grep -q '^PIKIBUN_IMAGE=' .env; then
-  # --follow-symlinks keeps a symlinked .env a symlink, editing the file it points at.
-  sed -i --follow-symlinks "s|^PIKIBUN_IMAGE=.*|PIKIBUN_IMAGE=$image|" .env
-else
-  printf '\nPIKIBUN_IMAGE=%s\n' "$image" >> .env
-fi
+set_env() {
+  local key=$1 value=$2
+  if grep -q "^$key=" .env; then
+    # Keep a symlinked .env a symlink, editing the file it points at.
+    sed -i --follow-symlinks "s|^$key=.*|$key=$value|" .env
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> .env
+  fi
+}
+set_env PIKIBUN_IMAGE "$image"
+# Unconfigured installations retain their existing preview setting; production Actions supplies this explicitly.
+if [ -n "$preview_origin" ]; then set_env PREVIEW_ORIGIN "$preview_origin"; fi
 
 # The compose file must take the image from PIKIBUN_IMAGE, or the service would keep running another one.
 if ! docker compose config --images | grep -qxF "$image"; then

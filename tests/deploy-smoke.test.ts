@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import test, { type TestContext } from "node:test";
+import { checkDeployment } from "../scripts/deploy-smoke.mjs";
+
+async function fixture(t: TestContext, client: "web" | "nsh", options: { missingAsset?: boolean; version?: string; unhealthy?: boolean } = {}) {
+  const server = createServer((req, res) => {
+    if (req.url === "/api/health") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: !options.unhealthy, version: options.version ?? "0.26.0" }));
+    } else if (req.url === "/") {
+      res.setHeader("Content-Security-Policy", client === "web" ? "script-src 'self'; style-src 'self' 'unsafe-inline';" : "script-src 'self' 'wasm-unsafe-eval';");
+      res.end(client === "web" ? '<div id="root"></div><script src="/assets/index-12345678.js"></script>'
+        : '<base href="/"><div id="app"></div><script>const app={wasm:"nsh.0123456789.wasm",code:"app.0123456789.js"}</script>');
+    } else if (options.missingAsset) {
+      // The real static handler falls back to HTML for missing files. A 200 alone must not pass the check.
+      res.setHeader("Content-Type", "text/html");
+      res.end('<div id="root"></div>');
+    } else {
+      res.setHeader("Content-Type", req.url!.endsWith(".wasm") ? "application/wasm" : "text/javascript");
+      res.end(req.url!.endsWith(".wasm") ? Buffer.from([0, 97, 115, 109]) : "// startup asset");
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+  return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+}
+
+test("deployment checks verify both clients, their policies, startup assets and release versions", async t => {
+  for (const client of ["web", "nsh"] as const) {
+    const origin = await fixture(t, client);
+    assert.equal((await checkDeployment(origin, client, "0.26.0")).version, "0.26.0");
+  }
+});
+
+test("a healthy backend serving the wrong client cannot pass deployment checks", async t => {
+  await assert.rejects(checkDeployment(await fixture(t, "nsh"), "web", "0.26.0"), /Production must serve React/);
+  await assert.rejects(checkDeployment(await fixture(t, "web"), "nsh", "0.26.0"), /Preview must use the NSH/);
+});
+
+test("a missing startup asset cannot pass as the SPA fallback", async t => {
+  for (const client of ["web", "nsh"] as const) {
+    await assert.rejects(checkDeployment(await fixture(t, client, { missingAsset: true }), client, "0.26.0"), /not a startup asset/);
+  }
+});
+
+test("an unhealthy or stale backend fails deployment checks", async t => {
+  await assert.rejects(checkDeployment(await fixture(t, "web", { unhealthy: true }), "web", "0.26.0"), /backend is not healthy/);
+  await assert.rejects(checkDeployment(await fixture(t, "nsh", { version: "0.25.0" }), "nsh", "0.26.0"), /version does not match/);
+});

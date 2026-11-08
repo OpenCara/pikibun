@@ -1,8 +1,9 @@
-# Pikibun's client
+# Pikibun's Native Shell Preview
 
-Pikibun's one client, written once in TSX on [Native Shell](https://nsh.dev) (NSH, pinned in `scripts/nsh.mjs`): the
-web app the server serves, and the iOS, Android, macOS, Windows and Linux apps. It replaced the React web app, the
-Expo app and the Electron app, and uses `@pikibun/client` and `packages/shared` as they are.
+An experimental client written in TSX on [Native Shell](https://nsh.dev) (NSH, pinned in `scripts/nsh.mjs`) for the
+web, iOS, Android, macOS, Windows and Linux. Its web build lives at `preview.pikibun.com`, separately from the
+production React web client and Electron app at `pikibun.com`. Both use the same backend, `@pikibun/client` and
+`packages/shared`. See [preview deployment](../../docs/self-hosting.md#native-shell-preview).
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
 (longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), picking files other than photos
@@ -14,8 +15,8 @@ yourself, instead).
 From the repository (the scripts fetch the pinned NSH CLI once into `.cache/nsh`; `NSH_BIN` names another):
 
 ```sh
-pnpm build                    # the web app into dist/web, which the server serves at /
-pnpm dev                      # the app in a window of this desktop, with hot reload
+pnpm build:preview            # the NSH web preview into dist/preview
+pnpm dev:preview              # the app in a window of this desktop, with hot reload
 pnpm nsh run --target ios     # or android, web, macos, windows, linux: any `nsh` command, run in apps/nsh
 pnpm dev:native               # a test-mode server with a host and a session to point the app at
 ```
@@ -55,7 +56,7 @@ pnpm test:client-macos --github --display 1  # also a live GitHub sign-in, which
 ```
 
 `pnpm test:client-macos` runs the stubbed app and screenshot tests in native macOS windows. `--github` adds an opt-in,
-interactive OAuth smoke test against `https://pikibun.com` (or `--server https://your-server.example`): it takes no
+interactive OAuth smoke test against `https://preview.pikibun.com` (or `--server https://your-server.example`): it takes no
 live screenshots, redacts URL queries from runtime output, and passes only when sign-in returns to the session list.
 Its storage is isolated and discarded when it ends. `--timeout-ms 600000` sets the interactive wait. See
 [Mac test results](MACOS-TESTING.md) for what was observed on a Mac.
@@ -68,7 +69,7 @@ browser and has APIs its web runtime lacks, so only this catches the web's own f
 
 Pushing an `app-v1.2.3` tag on `main` packages the app for every platform (`.github/workflows/release-app.yml`): a
 Windows installer ([`windows/installer.iss`](windows/installer.iss), Inno Setup, per user) and portable zip, the macOS
-app, Linux and Android on the tag's GitHub release, and iOS to TestFlight. Its identity is `nsh.json`'s: the id
+app, Linux and Android on the tag's preview GitHub release (always a prerelease, never latest), and iOS to TestFlight. Its identity is `nsh.json`'s: the id
 `com.pikibun.app` (the iPhone and Android app's before it, so they update in place) and the icon `icon.png`. Signing
 and the secrets it needs are in [docs/development.md](../../docs/development.md). To package one by hand, for this
 machine's platforms: `pnpm nsh package App.tsx --target macos` (or `windows`, `linux`, `android`, `ios`).

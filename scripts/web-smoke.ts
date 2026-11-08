@@ -5,7 +5,8 @@
  * Content-Security-Policy violation and any console error but the expected 401 of a signed-out page and the 404 of the
  * made-up sessions whose addresses it types. Native Shell's headless engine can't catch these: it is not a browser, and
  * it has APIs the web runtime lacks. Uses the Chrome or Chromium CHROME_BIN names, or the first on PATH, over the
- * DevTools protocol (Node's own WebSocket; no browser library). `pnpm test:client-web`
+ * DevTools protocol (Node's own WebSocket; no browser library). `pnpm test:client-web` tests NSH; `pnpm test:web`
+ * tests the restored production React client with its stricter policy.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -13,12 +14,13 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { loadConfig } from "../apps/server/src/config.ts";
 import { startServer } from "../apps/server/src/serve.ts";
 import { buildWeb } from "./nsh.mjs";
 
 const TIMEOUT_MS = 20_000;
+const react = process.argv.includes("--react");
 
 function findChrome(): string {
   if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
@@ -121,7 +123,7 @@ class Page {
       await new Promise(done => setTimeout(done, 200));
       point = await this.onScreen(label);
     }
-    if (!point) throw new Error(`Nothing on screen to click says "${label}".`);
+    if (!point) throw new Error(`Nothing on screen to click says "${label}". The page says:\n${await this.text()}\n${this.problems.join("\n")}`);
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
     for (const type of ["mousePressed", "mouseReleased"]) {
       await this.send("Input.dispatchMouseEvent", { type, ...point, button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 });
@@ -133,7 +135,7 @@ class Page {
       const label = ${JSON.stringify(label)};
       const says = element => element.getAttribute("aria-label") === label
         || element.textContent.replace(/[^\\p{L}\\p{N}?' ]/gu, "").trim() === label;
-      const points = [...document.querySelectorAll("#app *")].filter(says).map(element => {
+      const points = [...document.querySelectorAll("#app *, #root *")].filter(says).map(element => {
         const rect = element.getBoundingClientRect();
         const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
         const hit = rect.width > 0 && document.elementFromPoint(point.x, point.y);
@@ -178,12 +180,16 @@ const cleanups: (() => unknown)[] = [];
 let failed = false;
 try {
   console.log("Building the client for the web…");
-  await buildWeb(join(work, "web"));
+  if (react) {
+    const { build } = await import("vite");
+    await build({ configFile: resolve("apps/web/vite.config.ts"), build: { outDir: join(work, "web") } });
+  } else await buildWeb(join(work, "web"));
   const config = await loadConfig({
     APP_ORIGIN: origin, HOST: "127.0.0.1", PORT: String(port), DATABASE_URL: `sqlite://${join(work, "pikibun.sqlite")}`,
     SESSION_SECRET: randomBytes(32).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"),
     TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3_600_000).toISOString(),
-    STATIC_DIR: join(work, "web"),
+    STATIC_DIR: join(work, "web"), STATIC_CLIENT: react ? "web" : "nsh",
+    GITHUB_CLIENT_ID: "web-smoke-client", GITHUB_CLIENT_SECRET: "web-smoke-secret",
   });
   const server = await startServer(config);
   cleanups.push(() => server.close());
@@ -212,59 +218,73 @@ try {
   if (!login.ok || !cookie) throw new Error(`test sign-in failed: ${login.status} ${await login.text()}`);
   const [name, ...value] = cookie.split("=");
   await page.send("Network.setCookie", { name, value: value.join("="), url: origin });
+  if (react) {
+    const { csrfToken } = await (await fetch(`${origin}/api/auth/csrf`, { headers: { Cookie: cookie } })).json() as { csrfToken: string };
+    const workspace = await fetch(`${origin}/api/workspaces`, { method: "POST", headers: {
+      Cookie: cookie, Origin: origin, "X-CSRF-Token": csrfToken, "Content-Type": "application/json",
+    }, body: JSON.stringify({ name: "Browser smoke" }) });
+    if (!workspace.ok) throw new Error(`creating the smoke workspace failed (${workspace.status})`);
+  }
 
   await page.goto(`${origin}/`);
-  await page.waitForText("No sessions yet");
+  await page.waitForText(react ? "What should we work on?" : "No sessions yet");
   console.log("✓ signed in with the browser's session, the session list shows");
 
-  // Settings opened in the app and left with Back: the address follows each page, and Back stays back. The address was
-  // once set on the entry of the page underneath before Native Shell pushed its own, so Back reopened Settings.
-  const waitForAddress = async (wanted: string) => {
-    const deadline = Date.now() + TIMEOUT_MS;
-    let hash = "";
-    while (Date.now() < deadline) {
-      hash = await page.evaluate<string>("location.hash");
-      if (hash === wanted) return;
-      await new Promise(done => setTimeout(done, 100));
+  if (!react) {
+    // Settings opened in the app and left with Back: the address follows each page, and Back stays back. The address was
+    // once set on the entry of the page underneath before Native Shell pushed its own, so Back reopened Settings.
+    const waitForAddress = async (wanted: string) => {
+      const deadline = Date.now() + TIMEOUT_MS;
+      let hash = "";
+      while (Date.now() < deadline) {
+        hash = await page.evaluate<string>("location.hash");
+        if (hash === wanted) return;
+        await new Promise(done => setTimeout(done, 100));
+      }
+      throw new Error(`The address is ${hash}, not ${wanted}.`);
+    };
+    await page.click("Settings");
+    await page.click("Appearance");
+    await page.waitForText("System follows");
+    await waitForAddress("#/settings/appearance");
+    // As a person would, once Settings has slid in: Native Shell lets a press go while its button still moves under it.
+    await new Promise(done => setTimeout(done, 600));
+    await page.click("Back");
+    await waitForAddress("#/");
+    await new Promise(done => setTimeout(done, 1000));
+    if ((await page.text()).includes("System follows") || await page.evaluate<string>("location.hash") !== "#/") {
+      throw new Error("Back from Settings came back to Settings.");
     }
-    throw new Error(`The address is ${hash}, not ${wanted}.`);
-  };
-  await page.click("Settings");
-  await page.click("Appearance");
-  await page.waitForText("System follows");
-  await waitForAddress("#/settings/appearance");
-  // As a person would, once Settings has slid in: Native Shell lets a press go while its button still moves under it.
-  await new Promise(done => setTimeout(done, 600));
-  await page.click("Back");
-  await waitForAddress("#/");
-  await new Promise(done => setTimeout(done, 1000));
-  if ((await page.text()).includes("System follows") || await page.evaluate<string>("location.hash") !== "#/") {
-    throw new Error("Back from Settings came back to Settings.");
-  }
-  console.log("✓ settings opened in the app follow the address, and Back leaves them");
+    console.log("✓ settings opened in the app follow the address, and Back leaves them");
 
-  // Two sessions' addresses typed one after the other, then the browser's Back: it goes to the first. Wide windows show
-  // a session beside the list, without a page of its own, and Back between two once did nothing. (A session the server
-  // doesn't have opens all the same, saying so.)
-  await page.evaluate("location.hash = '#/s/smoke-first'");
-  await waitForAddress("#/s/smoke-first");
-  await page.evaluate("location.hash = '#/s/smoke-second'");
-  await waitForAddress("#/s/smoke-second");
-  await page.evaluate("history.back()");
-  await waitForAddress("#/s/smoke-first");
-  await new Promise(done => setTimeout(done, 1000));
-  if (await page.evaluate<string>("location.hash") !== "#/s/smoke-first") throw new Error("Back from a typed session address didn't stay on the one before.");
-  console.log("✓ Back goes to the session address typed before");
+    // Two sessions' addresses typed one after the other, then the browser's Back: it goes to the first. Wide windows show
+    // a session beside the list, without a page of its own, and Back between two once did nothing. (A session the server
+    // doesn't have opens all the same, saying so.)
+    await page.evaluate("location.hash = '#/s/smoke-first'");
+    await waitForAddress("#/s/smoke-first");
+    await page.evaluate("location.hash = '#/s/smoke-second'");
+    await waitForAddress("#/s/smoke-second");
+    await page.evaluate("history.back()");
+    await waitForAddress("#/s/smoke-first");
+    await new Promise(done => setTimeout(done, 1000));
+    if (await page.evaluate<string>("location.hash") !== "#/s/smoke-first") throw new Error("Back from a typed session address didn't stay on the one before.");
+    console.log("✓ Back goes to the session address typed before");
+  }
 
   // An address the page is opened at goes where it points.
   await page.goto(`${origin}/#/settings/profile`);
   await page.waitForText("Ada Lovelace");
   console.log("✓ a settings address opens that section");
-
+  if (react) {
+    await page.waitForText("Sign out");
+    await page.evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Sign out')?.scrollIntoView({ block: 'center' })`);
+  }
 
   await page.click("Sign out");
-  await page.waitForText("Sign out?");
-  await page.click("Sign out");
+  if (!react) {
+    await page.waitForText("Sign out?");
+    await page.click("Sign out");
+  }
   await page.waitForText("Continue with GitHub");
   const after = await page.evaluate<number>("fetch('/api/me').then(response => response.status)");
   if (after !== 401) throw new Error(`the browser is still signed in after signing out (${after})`);

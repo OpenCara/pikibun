@@ -4,6 +4,7 @@ import { ConnectorHubRegistry } from './connector-hub.js';
 import { openDatabase } from './db/index.js';
 import { openStorage } from './storage/index.js';
 import type { Env } from './types.js';
+import type { WebClient } from './static.js';
 
 export interface ServerConfig {
   env: Env;
@@ -11,8 +12,12 @@ export interface ServerConfig {
   port: number;
   /** Honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a TLS-terminating proxy. */
   trustProxy: boolean;
-  /** Directory holding the client built for the web (`dist/web`, `pnpm build`). */
+  /** The production React/Electron web client (`dist/web`). */
   staticDir: string;
+  /** Standalone NSH development/test servers may opt in; production defaults to the React client. */
+  staticClient?: WebClient;
+  /** Optional, exact origin serving the NSH preview, with the same API and separate host-only cookies. */
+  preview?: { origin: string; staticDir: string };
   databaseUrl: string;
   /** `STORAGE_URL`, or null when it is unset: the server then stores no session backups. */
   storageUrl: string | null;
@@ -81,6 +86,20 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
       if (env.LOCAL_OWNER_ID !== undefined && !/^github:[1-9][0-9]*$/.test(env.LOCAL_OWNER_ID)) throw new ConfigurationError('LOCAL_OWNER_ID must be a GitHub user ID such as github:12345.');
     }
   }
+  const staticClient = processEnv.STATIC_CLIENT || 'web';
+  if (staticClient !== 'web' && staticClient !== 'nsh') throw new ConfigurationError('STATIC_CLIENT must be "web" or "nsh".');
+  let preview: ServerConfig['preview'];
+  if (processEnv.PREVIEW_ORIGIN) {
+    try {
+      const origin = new URL(processEnv.PREVIEW_ORIGIN);
+      if (origin.origin !== processEnv.PREVIEW_ORIGIN || origin.protocol !== 'https:' || origin.origin === env.APP_ORIGIN || env.LOCAL_MODE === 'true') throw new Error();
+      preview = { origin: origin.origin, staticDir: resolve(processEnv.PREVIEW_STATIC_DIR || 'dist/preview') };
+    } catch {
+      throw new ConfigurationError('PREVIEW_ORIGIN must be a distinct https origin (no path or trailing slash), on a shared server.');
+    }
+  } else if (processEnv.PREVIEW_STATIC_DIR) {
+    throw new ConfigurationError('PREVIEW_STATIC_DIR requires PREVIEW_ORIGIN.');
+  }
   const port = Number(processEnv.PORT ?? '8787');
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new ConfigurationError('PORT must be a TCP port number.');
   const trustProxyValue = processEnv.TRUST_PROXY ?? 'false';
@@ -105,6 +124,7 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     env, port, databaseUrl, storageUrl,
     host: listenHost,
     trustProxy: trustProxyValue === 'true',
-    staticDir: resolve(processEnv.STATIC_DIR || 'dist/web'),
+    staticDir: resolve(processEnv.STATIC_DIR || 'dist/web'), staticClient,
+    ...(preview ? { preview } : {}),
   };
 }

@@ -67,7 +67,10 @@ export interface RunningServer {
  * background sweeps. Resolves once it listens. One per process: the routes live on the shared `app`.
  */
 export async function startServer(config: ServerConfig): Promise<RunningServer> {
-  const { env, host, port, trustProxy, staticDir } = config;
+  const { env, host, port, trustProxy, staticDir, preview } = config;
+  // Never derive an authentication origin from an arbitrary Host or Origin header.
+  const previewEnv = preview ? { ...env, APP_ORIGIN: preview.origin } : undefined;
+  const environment = (url: string) => preview && new URL(url).origin === preview.origin ? previewEnv! : env;
   const hub = env.CONNECTOR_HUB!;
   await migrateWhenReachable(env.DB);
 
@@ -84,12 +87,14 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
     sweep('cross-session notifications', 15_000, () => runCrossSessionNotifications(env)),
   ];
 
-  const serveStatic = createStaticHandler(staticDir);
+  const serveStatic = createStaticHandler(staticDir, config.staticClient);
+  const servePreview = preview ? createStaticHandler(preview.staticDir, 'nsh') : undefined;
   app.notFound(async c => {
     if ((c.req.method !== 'GET' && c.req.method !== 'HEAD') || c.req.path.startsWith('/api/')) {
       return c.json({ error: 'Not found.', code: 'not_found' }, 404);
     }
-    const served = await serveStatic(c.req.raw);
+    const handler = servePreview && new URL(c.req.url).origin === preview!.origin ? servePreview : serveStatic;
+    const served = await handler(c.req.raw);
     const response = c.newResponse(served.body, served);
     // The page carries its own policy (static.ts), over the API's.
     const policy = served.headers.get('Content-Security-Policy');
@@ -99,7 +104,8 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
 
   const server = createAdaptorServer({
     overrideGlobalObjects: false,
-    fetch: trustProxy ? trustForwardedHeaders(request => app.fetch(request, env)) : request => app.fetch(request, env),
+    fetch: trustProxy ? trustForwardedHeaders(request => app.fetch(request, environment(request.url)))
+      : request => app.fetch(request, environment(request.url)),
   });
 
   server.on('upgrade', (request, socket, head) => {
@@ -117,7 +123,7 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
         if (Array.isArray(value)) for (const item of value) headers.append(name, item);
         else if (typeof value === 'string') headers.append(name, value);
       }
-      const { connectorId, credentialHash } = await authenticateConnectorSocket(env, headers, url);
+      const { connectorId, credentialHash } = await authenticateConnectorSocket(environment(url.href), headers, url);
       await hub.connect(request, socket, head, connectorId, credentialHash);
     })().catch(error => rejectUpgrade(socket, connectorError(error)));
   });

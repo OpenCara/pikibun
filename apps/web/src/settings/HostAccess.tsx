@@ -1,0 +1,187 @@
+import { useState } from "react";
+import type { ConnectorInfo, HostCommandGrant } from "../../../../packages/shared/src/connector";
+import type { HostCommandLevel } from "../../../../packages/shared/src/types";
+import { memberPerson, usernameWithId, type WorkspaceMember } from "../../../../packages/client/src/usernames";
+import { api, segment } from "../api";
+import { useApp } from "../app-context";
+import { Button, Combobox, confirmDialog, Feedback, Row, Section, StatusBadge, Timestamp, useAction, useResource } from "../ui";
+
+/*
+ * Host sharing beyond its owner: admins, who manage the host's shares and host command grants, and the grants
+ * themselves, which let members of a shared workspace decide host commands or run their own without asking, and, where
+ * the owner includes it, start their own sessions directly on the host.
+ */
+
+const levelLabels: Record<HostCommandLevel, { label: string; hint: string }> = {
+  approve: { label: "Approve host commands", hint: "Decides each host command in sessions they can approve" },
+  auto: { label: "Auto-approve host commands", hint: "Also runs the host commands of their own Auto-approve messages without asking" },
+};
+
+const expiries = [
+  { value: "never", label: "No expiry", days: 0 },
+  { value: "1", label: "1 day", days: 1 },
+  { value: "7", label: "7 days", days: 7 },
+  { value: "30", label: "30 days", days: 30 },
+] as const;
+type Expiry = (typeof expiries)[number]["value"];
+
+const EVERYONE = "*";
+
+function useMembers(workspaceId: string | undefined) {
+  return useResource<{ members: WorkspaceMember[] }>(workspaceId ? `/api/workspaces/${segment(workspaceId)}/members` : null);
+}
+
+/**
+ * Who manages this host's sharing, and which of its models it offers, besides its owner. Only the owner adds or removes
+ * them; an admin may step down.
+ */
+export function HostAdminsSection({ connector, refresh }: { connector: ConnectorInfo; refresh: () => void }) {
+  const { user, workspaces } = useApp();
+  const action = useAction();
+  const owner = connector.role === "owner";
+  const admins = connector.admins ?? [];
+  // Candidates come from the workspaces the host is connected to, where the owner can see members.
+  const connected = workspaces.filter(workspace => (connector.connectedWorkspaceIds ?? connector.workspaceIds).includes(workspace.id));
+  const [workspaceId, setWorkspaceId] = useState("");
+  const source = connected.find(workspace => workspace.id === workspaceId) ?? connected[0];
+  const members = useMembers(owner ? source?.id : undefined);
+  const candidates = (members.data?.members ?? []).filter(member => member.userId !== connector.ownerId && !admins.some(admin => admin.userId === member.userId));
+  const [userId, setUserId] = useState("");
+  const chosen = candidates.find(member => member.userId === userId) ?? candidates[0];
+
+  function add() {
+    if (!chosen) return;
+    void (async () => {
+      if (!await confirmDialog({ title: `Make ${usernameWithId(memberPerson(chosen))} an admin?`, message: `They will manage ${connector.name}'s sharing: share it with workspaces you both belong to, and grant members host commands there, including themselves. Host commands run on your machine with your files, credentials and network. They will also choose which of its models it offers, to everyone including you. Only you can add admins, revoke or remove the host.`, confirmLabel: "Add admin", destructive: true })) return;
+      await action.run(async () => {
+        await api(`/api/connectors/${segment(connector.id)}/admins/${segment(chosen.userId)}`, { method: "PUT", body: {} });
+        refresh();
+      }, "Admin added.");
+    })();
+  }
+  function remove(adminId: string) {
+    const self = adminId === user.id;
+    void (async () => {
+      if (!await confirmDialog({ title: self ? "Stop managing this host?" : "Remove this admin?", message: self ? "You will no longer manage its sharing. Grants already given stay until someone removes them." : "They will no longer manage its sharing. Grants they gave stay until someone removes them.", confirmLabel: self ? "Step down" : "Remove admin" })) return;
+      await action.run(async () => {
+        await api(`/api/connectors/${segment(connector.id)}/admins/${segment(adminId)}`, { method: "DELETE" });
+        refresh();
+      }, self ? "You no longer manage this host." : "Admin removed.");
+    })();
+  }
+
+  return <Section title="Admins" bare info="Admins manage this host's sharing for you: its workspace shares and host command grants, and which of its models it offers. They hold no host command access of their own unless a grant gives it to them, and only the owner can add admins, revoke or remove the host.">
+    <div className="card">
+      {!admins.length && <Row title="No admins" hint={owner ? "Only you manage this host" : undefined} />}
+      {admins.map(admin => <Row key={admin.userId} title={admin.name || admin.userId} hint={<>Admin since <Timestamp value={admin.createdAt} /></>}
+        trailing={(owner || admin.userId === user.id) && <Button variant="outline" size="sm" disabled={action.busy} onClick={() => remove(admin.userId)}>{admin.userId === user.id ? "Step down" : "Remove"}</Button>} />)}
+      {owner && !connector.revokedAt && (connected.length ? <Row title="Add admin" hint={members.loading ? "Loading members..." : !candidates.length ? `No other members in ${source?.name ?? "this workspace"}` : "A member of a workspace this host is connected to"} trailing={<>
+        {connected.length > 1 && <Combobox label="Workspace" value={source?.id ?? ""} options={connected.map(workspace => ({ value: workspace.id, label: workspace.name }))} onChange={value => { setWorkspaceId(value); setUserId(""); }} disabled={action.busy} />}
+        {candidates.length > 0 && <Combobox label="Member" value={chosen?.userId ?? ""} options={candidates.map(member => ({ value: member.userId, label: usernameWithId(memberPerson(member)) }))} onChange={setUserId} disabled={action.busy} />}
+        <Button variant="outline" size="sm" disabled={action.busy || !chosen} onClick={add}>Add</Button>
+      </>} /> : <Row title="Add admin" hint="Connect the host to a workspace first" />)}
+    </div>
+    <Feedback error={action.error} notice={action.notice} />
+  </Section>;
+}
+
+function grantHint(grant: HostCommandGrant) {
+  return <>{levelLabels[grant.level].hint}{grant.hostSessions ? " · may start sessions on the host" : ""}{grant.expiresAt ? <> · expires <Timestamp value={grant.expiresAt} /></> : " · no expiry"}</>;
+}
+
+/** Who may decide host commands, or run their own without asking, in the workspaces this host is shared with. */
+export function HostCommandGrantsSection({ connector, refresh }: { connector: ConnectorInfo; refresh: () => void }) {
+  const { workspaces } = useApp();
+  const action = useAction();
+  const owner = connector.role === "owner";
+  const grants = connector.hostGrants ?? [];
+  const names = new Map(workspaces.map(workspace => [workspace.id, workspace.name]));
+  const shared = workspaces.filter(workspace => connector.workspaceIds.includes(workspace.id));
+  const [workspaceId, setWorkspaceId] = useState("");
+  const target = shared.find(workspace => workspace.id === workspaceId) ?? shared[0];
+  const members = useMembers(target?.id);
+  const eligible = (members.data?.members ?? []).filter(member => member.userId !== connector.ownerId && member.role !== "viewer");
+  const [grantee, setGrantee] = useState(EVERYONE);
+  const [level, setLevel] = useState<HostCommandLevel>("approve");
+  const accepting = connector.config?.hostSessions === true && !connector.capabilities.unsandboxed;
+  // A sandboxed host without resource limits runs only its owner's commands, and those of members granted host commands
+  // there, on a connector that honors that: their own sandboxed sessions run commands without the limits it lacks.
+  const unlimited = !connector.capabilities.productionShell && !connector.capabilities.unsandboxed;
+  const lendsShell = unlimited && connector.capabilities.unboundedShellGrants === true;
+  const outdatedSessions = owner && grants.some(item => item.hostSessions) && connector.capabilities.hostGrants && !connector.capabilities.hostSessionGrants;
+  const [expiry, setExpiry] = useState<Expiry>("7");
+  const member = eligible.find(item => item.userId === grantee);
+  const who = member ? usernameWithId(memberPerson(member)) : `every member of ${target?.name ?? "the workspace"}`;
+  // The grant this form would replace, if any: granting again replaces it as a whole.
+  const existing = grants.find(item => item.workspaceId === target?.id && (item.userId ?? EVERYONE) === (member?.userId ?? EVERYONE));
+  // Sessions on the host, which only the owner grants: the checkbox starts from what the grant already includes, so
+  // changing its level or expiry keeps them unless the owner clears it.
+  const grantKey = `${target?.id ?? ""}:${member?.userId ?? EVERYONE}`;
+  const [sessionsChoice, setSessionsChoice] = useState<{ key: string; value: boolean } | null>(null);
+  const sessions = sessionsChoice?.key === grantKey ? sessionsChoice.value : existing?.hostSessions === true;
+  const setSessions = (value: boolean) => setSessionsChoice({ key: grantKey, value });
+
+  function grant() {
+    if (!target) return;
+    void (async () => {
+      const auto = level === "auto";
+      const withSessions = owner && sessions;
+      // Granting again without sessions takes them away: say so rather than drop them quietly.
+      const dropsSessions = owner && !sessions && existing?.hostSessions === true;
+      if (!await confirmDialog({
+        title: withSessions ? "Grant sessions on the host?" : auto ? "Grant automatic host commands?" : "Grant host command approval?",
+        message: (auto
+          ? `${who} will be able to run host commands on ${connector.name}, such as its extensions' tools, OUTSIDE the sandbox without anyone approving each command, whenever they send a message with Auto-approve. Commands run on the owner's machine as its user, with its files, credentials and network, and no resource limits.`
+          : `${who} will be able to approve host commands on ${connector.name}, such as its extensions' tools, which run OUTSIDE the sandbox on the owner's machine with its files, credentials and network.`)
+          + (withSessions ? ` They will also be able to start their own sessions directly on ${connector.name}, without the sandbox: every command of those sessions runs as its user${auto ? ", without asking under their Auto-approve" : ", once approved"}, and their clones use its Git and credentials.` : "")
+          + (lendsShell ? ` As ${connector.name} has no resource limits for commands, the shell commands of their own sandboxed sessions will run there without them too${auto ? ", without asking under their Auto-approve" : ", each once approved like a host command"}.` : "")
+          + (dropsSessions ? ` This replaces their current grant, which includes sessions on the host: they will no longer start sessions directly on ${connector.name}, and the next command of any they have there will stop.` : ""),
+        confirmLabel: "Grant", destructive: auto || withSessions,
+      })) return;
+      const days = expiries.find(item => item.value === expiry)!.days;
+      await action.run(async () => {
+        await api(`/api/connectors/${segment(connector.id)}/host-grants/${segment(target.id)}`, { method: "PUT", body: {
+          ...(member ? { userId: member.userId } : {}), level, ...(owner ? { hostSessions: sessions } : {}), ...(days ? { expiresAt: new Date(Date.now() + days * 86_400_000).toISOString() } : {}),
+        } });
+        setSessionsChoice(null);
+        refresh();
+      }, "Host command access granted.");
+    })();
+  }
+  function revoke(item: HostCommandGrant) {
+    void action.run(async () => {
+      const query = item.userId ? `?userId=${encodeURIComponent(item.userId)}` : "";
+      await api(`/api/connectors/${segment(connector.id)}/host-grants/${segment(item.workspaceId)}${query}`, { method: "DELETE" });
+      refresh();
+    }, "Host command access removed.");
+  }
+
+  return <Section title="Host command access" bare info="Host commands, such as the tools of this host's extensions, run OUTSIDE the sandbox, on this machine as its user. By default only the owner decides those commands. Grant members of a shared workspace the right to approve them, or to run their own without asking under Auto-approve. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run shell commands without them, decided like host commands. Grants end when they expire, when you remove them, or when the host stops being shared there.">
+    <div className="card">
+      {!grants.length && <Row title="Only the owner" hint="No one else decides host commands on this host" />}
+      {grants.map(item => <Row key={`${item.workspaceId}:${item.userId ?? ""}`}
+        title={<>{item.userId ? item.userName ?? item.userId : "All members"} <span className="muted">· {names.get(item.workspaceId) ?? item.workspaceId}</span></>}
+        hint={grantHint(item)}
+        trailing={<>
+          <StatusBadge tone={item.level === "auto" ? "warning" : "neutral"}>{item.level === "auto" ? "Auto-approve" : "Approve"}</StatusBadge>
+          {item.hostSessions && <StatusBadge tone="danger">Sessions on host</StatusBadge>}
+          <Button variant="outline" size="sm" disabled={action.busy} onClick={() => revoke(item)}>Remove</Button>
+        </>} />)}
+      {!connector.revokedAt && (shared.length ? <Row title="Grant access" hint={members.loading ? "Loading members..." : levelLabels[level].hint} trailing={<>
+        {shared.length > 1 && <Combobox label="Workspace" value={target?.id ?? ""} options={shared.map(workspace => ({ value: workspace.id, label: workspace.name }))} onChange={value => { setWorkspaceId(value); setGrantee(EVERYONE); }} disabled={action.busy} />}
+        <Combobox label="Member" value={member ? member.userId : EVERYONE} options={[{ value: EVERYONE, label: "All members" }, ...eligible.map(item => ({ value: item.userId, label: usernameWithId(memberPerson(item)) }))]} onChange={setGrantee} disabled={action.busy} />
+        <Combobox<HostCommandLevel> label="Access" value={level} options={(["approve", "auto"] as const).map(value => ({ value, label: levelLabels[value].label }))} onChange={setLevel} disabled={action.busy} />
+        {owner && !connector.capabilities.unsandboxed && <label className="check-row small" title={accepting ? "Their own sessions may run directly on this machine, without the sandbox, as its user" : "Turn on Sessions on the host under Configuration for this to apply"}>
+          <input type="checkbox" className="checkbox" checked={sessions} disabled={action.busy} onChange={event => setSessions(event.target.checked)} /><span>Sessions on the host</span>
+        </label>}
+        <Combobox<Expiry> label="Expires" value={expiry} options={expiries.map(item => ({ value: item.value, label: item.label }))} onChange={setExpiry} disabled={action.busy} />
+        <Button variant="outline" size="sm" disabled={action.busy || !target} onClick={grant}>Grant</Button>
+      </>} /> : <Row title="Grant access" hint="Share the host with a workspace first" />)}
+    </div>
+    {owner && grants.some(item => item.hostSessions) && !accepting && <Row title="Sessions on the host are off" hint="Grants that include sessions on the host apply only while Configuration → Sessions on the host is on." />}
+    {outdatedSessions && <Row title="Update the host's connector" hint="This host's connector runs only your own sessions on the host: until it is updated (npx pikibun@latest connect), members you granted that get the sandbox." />}
+    {!outdatedSessions && grants.length > 0 && unlimited && connector.capabilities.hostGrants && !connector.capabilities.unboundedShellGrants && <Row title="Update the host's connector" hint="This host has no resource limits, and its connector refuses every command of other members' sandboxed sessions: until it is updated (npx pikibun@latest connect), the members you granted host commands can't run commands, or clone, in their own." />}
+    {!connector.capabilities.hostGrants && <Row title="Update the host's connector" hint="This host's connector predates grants: until it is updated (npx pikibun@latest connect), only the owner decides its host commands." />}
+    <Feedback error={action.error} notice={action.notice} />
+  </Section>;
+}

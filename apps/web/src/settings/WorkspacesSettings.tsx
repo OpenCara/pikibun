@@ -1,0 +1,519 @@
+import { useState, type FormEvent, type ReactNode } from "react";
+import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type UserProfile, type Workspace, type WorkspaceRole } from "../../../../packages/shared/src/types";
+import { adminManagedRoles, canCreateSessions } from "../../../../packages/shared/src/policy";
+import { gitProviderHasForge, gitProviderNames, repositoryLimits, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type WorkspaceRepository } from "../../../../packages/shared/src/repositories";
+import { api, segment } from "../api";
+import { useApp } from "../app-context";
+import { useConnections } from "../hosts";
+import { Icon } from "../icons";
+import { NewWorkspaceSheet } from "../NewWorkspaceSheet";
+import { gitAccountLabel, gitProviderLabel, RepositoryClonePolicy, useGitAccounts, useWorkspaceRepositories } from "../repositories";
+import { href } from "../router";
+import { DocumentSources, useWorkspaceSources } from "../sources";
+import { ReadAsControl, WorkspaceConnections, connectionLabel, gitConnectionFor, useWorkspaceConnections } from "../workspace-connections";
+import type { WorkspaceConnection } from "../../../../packages/shared/src/workspace-connections";
+import { Alert, Button, CardBody, Combobox, CopyField, DropdownMenu, EmptyState, Feedback, Field, IdentityBadge, LinkButton, PageLoading, RelativeTime, ResourceState, Row, Section, Sheet, StatusBadge, StatusDot, confirmDialog, useAction, useResource } from "../ui";
+import type { WorkspaceInviteLink, WorkspaceJoinRequest } from "../../../../packages/shared/src/invites";
+import { memberPerson, userIdFromInput, username, usernameWithId, type WorkspaceMember } from "../../../../packages/client/src/usernames";
+import { NetworkAccess } from "./NetworkAccess";
+import { WorkspaceExtensions } from "./WorkspaceExtensions";
+import { TranscriptSettings } from "./TranscriptSettings";
+import { AttachmentSettings } from "./AttachmentSettings";
+import { ChildSessionSettings } from "./ChildSessionSettings";
+import { ApprovalSettings } from "./ApprovalSettings";
+import { PushAccess } from "./PushAccess";
+import { WorkspaceDatabaseSection } from "./WorkspaceDatabase";
+
+const roleLabel: Record<WorkspaceRole, string> = { owner: "Owner", admin: "Admin", collaborator: "Collaborator", member: "Member", viewer: "Viewer" };
+const roleHint: Record<AssignableWorkspaceRole, string> = {
+  admin: "Collaborator, and manages the workspace: members, models, repositories and settings",
+  collaborator: "Starts sessions, and sends messages to any session shared with the workspace",
+  member: "Starts sessions, and follows other shared sessions read-only unless granted more",
+  viewer: "Follows shared sessions read-only, and can't start sessions",
+};
+
+export function WorkspacesSettings({ id }: { id?: string }) {
+  const { user, workspaces, workspacesLoading, workspacesError, refreshWorkspaces } = useApp();
+  const [creating, setCreating] = useState(false);
+  const sheet = <NewWorkspaceSheet open={creating} onClose={() => setCreating(false)} />;
+  if (id) {
+    const workspace = workspaces.find(item => item.id === id);
+    if (!workspace) {
+      if (workspacesLoading) return <PageLoading />;
+      return <>
+        <BackLink />
+        {workspacesError
+          ? <Alert variant="error" title="Unable to load workspaces" actions={<Button variant="outline" size="sm" onClick={refreshWorkspaces}>Try again</Button>}>{workspacesError}</Alert>
+          : <EmptyState title="Workspace not found" />}
+      </>;
+    }
+    return <><BackLink /><WorkspaceDetail key={workspace.id} user={user} workspace={workspace} /></>;
+  }
+  if (workspacesLoading && !workspaces.length) return <PageLoading />;
+  if (workspacesError && !workspaces.length) return <Alert variant="error" title="Unable to load workspaces" actions={<Button variant="outline" size="sm" onClick={refreshWorkspaces}>Try again</Button>}>{workspacesError}</Alert>;
+  if (!workspaces.length) return <>
+    <EmptyState title="No workspaces yet" action={<Button variant="default" icon="plus" onClick={() => setCreating(true)}>New workspace</Button>} />
+    {sheet}
+  </>;
+  return <>
+    <Section title="Workspaces" info="A shared home for your repositories, people, agents and sessions" action={<Button variant="outline" size="sm" icon="plus" onClick={() => setCreating(true)}>New workspace</Button>}>
+      {workspaces.map(workspace => <Row key={workspace.id} leading={<IdentityBadge name={workspace.name} id={workspace.id} />} title={workspace.name} hint={roleLabel[workspaceRole(workspace, user)]} href={href({ name: "settings", section: "workspaces", id: workspace.id })} chevron />)}
+    </Section>
+    {sheet}
+  </>;
+}
+
+function BackLink() {
+  return <a className="btn ghost sm" href={href({ name: "settings", section: "workspaces" })}><Icon name="chevron-left" size={16} />Workspaces</a>;
+}
+
+function workspaceRole(workspace: Workspace, user: UserProfile): WorkspaceRole {
+  return workspace.ownerId === user.id ? "owner" : workspace.role ?? "member";
+}
+
+function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Workspace }) {
+  const role = workspaceRole(workspace, user);
+  const admin = role === "owner" || role === "admin";
+  const repositories = useWorkspaceRepositories(workspace.id);
+  const sources = useWorkspaceSources(workspace.id);
+  const connections = useWorkspaceConnections(workspace.id);
+  // A source's read setting changes what the connections list counts, and the reverse.
+  const sourcesChanged = () => { repositories.refresh(); sources.refresh(); connections.refresh(); };
+  return <>
+    <Section title="General">
+      <Row title="Name" trailing={<span>{workspace.name}</span>} />
+      <Row title="Your role" trailing={<StatusBadge tone={admin ? "success" : "neutral"}>{roleLabel[role]}</StatusBadge>} />
+    </Section>
+    {canCreateSessions(role) && <Setup user={user} workspace={workspace} admin={admin} sourceCount={repositories.sourceCount} />}
+    <Repositories workspace={workspace} admin={admin} {...repositories} connections={connections.connections} changed={sourcesChanged}
+      documents={<DocumentSources workspaceId={workspace.id} workspaceName={workspace.name} admin={admin} {...sources} connections={connections.connections} changed={sourcesChanged} />} />
+    <WorkspaceConnections workspaceId={workspace.id} admin={admin} {...connections} changed={sourcesChanged} />
+    <PushAccess workspace={workspace} admin={admin} />
+    <NetworkAccess workspace={workspace} admin={admin} />
+    <WorkspaceExtensions workspace={workspace} userId={user.id} />
+    <TranscriptSettings workspace={workspace} admin={admin} />
+    <ApprovalSettings workspace={workspace} admin={admin} />
+    <ChildSessionSettings workspace={workspace} admin={admin} />
+    <AttachmentSettings workspace={workspace} admin={admin} />
+    <WorkspaceDatabaseSection workspace={workspace} owner={role === "owner"} />
+    <Members workspace={workspace} admin={admin} owner={role === "owner"} />
+    {admin && <DataExport workspace={workspace} />}
+  </>;
+}
+
+function DataExport({ workspace }: { workspace: Workspace }) {
+  return <Section title="Data export" info={<div className="stack">
+    <p>Downloads this workspace as JSON: its settings, members, models, published agents, repositories, push access, session database connection and activity, with your own sessions in full and the records of every other session, which owners and admins manage.</p>
+    <p>The rest of another member's session, such as its people, approvals and activity, is in its owner's export of it. Secrets are never included, and a session's conversation is in its backups.</p>
+    <p>The workspace owner can import exports into the workspace's session database.</p>
+  </div>}>
+    <Row title="Workspace data" hint="JSON, without secrets" trailing={<LinkButton variant="outline" size="sm" href={`/api/workspaces/${segment(workspace.id)}/export`} download>Export</LinkButton>} />
+  </Section>;
+}
+
+function Setup({ user, workspace, admin, sourceCount }: { user: UserProfile; workspace: Workspace; admin: boolean; sourceCount: number | null }) {
+  const { sessions, sessionsLoading } = useApp();
+  const connectors = useConnections(`/api/workspaces/${segment(workspace.id)}/connectors`);
+  // Only show the checklist once every signal is known, so it never flashes in and out.
+  if (sourceCount === null || !connectors.data || sessionsLoading) return null;
+  const steps = [
+    { label: "Add a source", done: sourceCount > 0, hint: admin ? undefined : "An owner or admin does this", onClick: () => document.getElementById("workspace-repositories")?.scrollIntoView({ behavior: "smooth" }) },
+    { label: "Pair a host", done: connectors.data.connectors.some(connector => !connector.revokedAt && connector.online && (connector.ownerId === user.id || connector.workspaceIds.includes(workspace.id))), link: href({ name: "settings", section: "hosts" }) },
+    { label: "Start a session", done: sessions.some(session => session.workspaceId === workspace.id), link: href({ name: "new", workspaceId: workspace.id }) },
+  ];
+  if (steps.every(step => step.done)) return null;
+  return <Section title="Setup" action={<span className="muted small">{steps.filter(step => step.done).length} / {steps.length}</span>}>
+    {steps.map(step => <Row key={step.label} leading={<StatusDot tone={step.done ? "success" : "neutral"} label={step.done ? "Done" : "To do"} />} title={step.label} hint={step.done ? undefined : step.hint} href={step.done ? undefined : step.link} onClick={step.done ? undefined : step.onClick} chevron={!step.done} />)}
+  </Section>;
+}
+
+/** The workspace's sources: its Git repositories, then `documents`, its Notion, Google Drive and Feishu/Lark items. */
+function Repositories({ workspace, admin, repositories, sourceCount, loading, error, refresh, documents, connections, changed }: { workspace: Workspace; admin: boolean; repositories: WorkspaceRepository[] | null; sourceCount: number | null; loading: boolean; error: string; refresh: () => void; documents: ReactNode;
+  connections: WorkspaceConnection[] | null; changed: () => void }) {
+  const action = useAction();
+  const accounts = useGitAccounts(admin);
+  const [picking, setPicking] = useState(false);
+  const full = (repositories?.length ?? 0) >= repositoryLimits.repositories;
+  async function remove(repository: WorkspaceRepository) {
+    if (action.busy || !admin) return;
+    const last = sourceCount === 1;
+    const confirmed = await confirmDialog({
+      title: "Remove repository",
+      message: `Remove ${repository.fullName} from ${workspace.name}? Existing sessions keep their pinned snapshots.${last ? " With no sources, new sessions, pairing and sharing will be disabled until an owner or admin adds a source." : " This changes new sessions only."}`,
+      confirmLabel: "Remove",
+      destructive: true,
+    });
+    if (!confirmed) return;
+    void action.run(async () => {
+      await api(`/api/workspaces/${segment(workspace.id)}/repositories/${segment(repository.id)}`, { method: "DELETE" });
+      refresh();
+    }, "Repository removed. Existing sessions keep their pinned snapshots.");
+  }
+  function setPushPolicy(repository: WorkspaceRepository, allowDefault: boolean) {
+    if (action.busy || !admin) return;
+    void action.run(async () => {
+      await api(`/api/workspaces/${segment(workspace.id)}/repositories/${segment(repository.id)}/push-policy`, { method: "PUT", body: { forbidDefaultBranch: !allowDefault } });
+      refresh();
+    }, "Push policy saved.");
+  }
+  function setLfs(repository: WorkspaceRepository, enabled: boolean) {
+    if (action.busy || !admin) return;
+    void action.run(async () => {
+      await api(`/api/workspaces/${segment(workspace.id)}/repositories/${segment(repository.id)}/lfs`, { method: "PUT", body: { enabled } });
+      refresh();
+    }, enabled ? "Git LFS turned on. New clones download LFS files." : "Git LFS turned off. Clones check out LFS pointer files.");
+  }
+  const gitConnections = connections?.filter(item => item.family === "git") ?? [];
+  const canAdd = admin && Boolean(accounts.accounts?.length || gitConnections.length) && !full;
+  return <Section bare title="Sources" info={<div className="stack">
+    <p>What this workspace's sessions work on: Git repositories, which agents clone, and documents (Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark, Tencent Docs), which agents read. Every session in the workspace gets every source, and reads each with its owner's own accounts.</p>
+    {!admin && <p>Only workspace owners and admins can add or remove sources.</p>}
+    <p>Changes apply at once, in running sessions too: a removed source can no longer be read, nor a removed repository pushed. To change a ref, remove and re-add the repository.</p>
+    <p>Git LFS is off by default, and clones check out LFS pointer files. Turned on, sessions download the repository's LFS files with their owner's own account, where the host has git-lfs installed. Sessions never upload LFS files.</p>
+    <RepositoryClonePolicy />
+  </div>} action={canAdd && <Button variant="outline" size="sm" icon="plus" disabled={loading || Boolean(error) || action.busy} onClick={() => setPicking(true)}>Add repository</Button>}>
+    <div className="stack" id="workspace-repositories">
+      <div className="section-header"><h3 className="section-title">Git repositories</h3></div>
+      <div className="card">
+        <ResourceState loading={loading} error={error} retry={refresh}>
+          {!repositories?.length
+            ? <CardBody><span className="muted">{admin ? "No repositories yet" : "No repositories yet. Ask a workspace owner or admin to bind one"}</span></CardBody>
+            : repositories.map(repository => <Row key={repository.id} title={repository.fullName} hint={<>{gitProviderLabel(repository.provider, repository.host)} · <code>{repository.ref}</code></>} trailing={<>
+              <label className="inline small"><input type="checkbox" className="checkbox" checked={!repository.forbidDefaultBranchPush} disabled={!admin || action.busy} onChange={event => setPushPolicy(repository, event.target.checked)} />Allow agent pushes to the default branch</label>
+              <label className="inline small" title="Sessions download this repository's Git LFS files instead of checking out pointer files"><input type="checkbox" className="checkbox" checked={repository.lfs} disabled={!admin || action.busy} onChange={event => setLfs(repository, event.target.checked)} />Git LFS</label>
+              {repository.provider !== "github" && <ReadAsControl workspaceId={workspace.id} sourceId={repository.id} title={repository.fullName} readAs={repository.readAs}
+                connection={gitConnectionFor(connections, repository)} admin={admin} action={action} changed={changed} />}
+              <StatusBadge>{repository.private ? "Private" : "Public"}</StatusBadge>
+              {admin && <Button variant="outline" size="sm" disabled={action.busy} aria-label={`Remove ${repository.fullName}`} onClick={() => void remove(repository)}>Remove</Button>}
+            </>} />)}
+          {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
+        </ResourceState>
+      </div>
+      {admin && accounts.error && <Alert variant="error" title="Unable to load Git accounts" actions={<Button variant="outline" size="sm" onClick={accounts.refresh}>Try again</Button>}>{accounts.error}</Alert>}
+      {admin && accounts.accounts && !accounts.accounts.length && !gitConnections.length && <Alert variant="warning" title="No Git accounts connected" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "profile" })}>Open profile</LinkButton>}>Connect GitHub or add a Git account in Settings → Profile before choosing repositories.</Alert>}
+      {admin && Boolean(accounts.accounts?.length) && full && <Alert variant="info" title="Repository limit reached">The workspace has reached its {repositoryLimits.repositories}-repository limit. Remove a binding to choose another.</Alert>}
+    </div>
+    {documents}
+    {canAdd && <RepositoryPicker open={picking} workspace={workspace} accounts={[...(accounts.accounts ?? []), ...gitConnections.map(connectionAccount)]} repositories={repositories ?? []} disabled={loading || Boolean(error) || action.busy} refresh={refresh} close={() => setPicking(false)} />}
+  </Section>;
+}
+
+/** A workspace Git connection as a picker account: its id is prefixed, and what it binds reads as the workspace. */
+const workspaceAccountPrefix = "workspace:";
+function connectionAccount(connection: WorkspaceConnection): GitAccount {
+  return { id: `${workspaceAccountPrefix}${connection.id}`, provider: connection.provider as GitAccount["provider"], host: connection.host,
+    organization: connection.organization, login: connection.name, createdAt: connection.createdAt };
+}
+
+function RepositoryPicker({ open, workspace, accounts, repositories, disabled, refresh, close }: { open: boolean; workspace: Workspace; accounts: GitAccount[]; repositories: WorkspaceRepository[]; disabled: boolean; refresh: () => void; close: () => void }) {
+  const [accountId, setAccountId] = useState("");
+  const [selectedId, setSelectedId] = useState("");
+  const [ref, setRef] = useState("");
+  // The API lists the GitHub sign-in account first when connected, so it is the default.
+  const account = accounts.find(item => item.id === accountId) ?? accounts[0];
+  // A plain Git server lists nothing: its repository is looked up by the clone URL or path typed here.
+  const listed = account ? gitProviderHasForge(account.provider) : true;
+  const workspaceConnection = account?.id.startsWith(workspaceAccountPrefix) ?? false;
+  const repositoriesPath = account ? (workspaceConnection
+    ? `/api/workspaces/${segment(workspace.id)}/connections/${segment(account.id.slice(workspaceAccountPrefix.length))}/repositories`
+    : `/api/git/accounts/${segment(account.id)}/repositories`) : null;
+  const [path, setPath] = useState("");
+  const [found, setFound] = useState<ProviderRepository | null>(null);
+  const lookup = useAction();
+  const resource = useResource<ProviderRepositoryList>(open && repositoriesPath && listed ? repositoriesPath : null);
+  const action = useAction();
+  const selected = listed ? resource.data?.repositories.find(repository => repository.id === selectedId) : found ?? undefined;
+  const alreadyBound = (repository: ProviderRepository) => repositories.some(binding => binding.provider === account?.provider && binding.host === account.host
+    && (binding.repositoryId === repository.id || binding.fullName.toLowerCase() === repository.fullName.toLowerCase()));
+  const blocked = disabled || action.busy || lookup.busy || (listed && (resource.loading || Boolean(resource.error))) || !account || !selected || alreadyBound(selected) || repositories.length >= repositoryLimits.repositories;
+  const providerName = account ? gitProviderNames[account.provider] : "Git";
+  function choose(id: string) { setSelectedId(id); setRef(""); }
+  function chooseAccount(id: string) { setAccountId(id); choose(""); setPath(""); setFound(null); }
+  function find() {
+    if (!account || lookup.busy || !path.trim()) return;
+    setFound(null);
+    setRef("");
+    void lookup.run(async () => {
+      const result = await api<ProviderRepositoryList>(`${repositoriesPath}?path=${encodeURIComponent(path.trim())}`);
+      setFound(result.repositories[0] ?? null);
+    });
+  }
+  function dismiss() {
+    if (action.busy) return;
+    setSelectedId("");
+    setRef("");
+    setPath("");
+    setFound(null);
+    close();
+  }
+  function add(event: FormEvent) {
+    event.preventDefault();
+    if (blocked || !selected || !account) return;
+    void action.run(async () => {
+      await api(`/api/workspaces/${segment(workspace.id)}/repositories`, { method: "POST", body: { provider: account.provider, host: account.host, repositoryId: selected.id, fullName: selected.fullName, ...(ref.trim() ? { ref: ref.trim() } : {}),
+        ...(workspaceConnection ? { readAs: "workspace" } : {}) } });
+      refresh();
+      setSelectedId("");
+      setRef("");
+      setPath("");
+      setFound(null);
+      close();
+    });
+  }
+  const refField = <Field label="Branch, tag or commit" hint={`Optional. Leave blank to use ${selected ? `the default branch, ${selected.defaultBranch}` : "the repository's default branch"}. New sessions pin this ref to a commit; existing sessions never follow branch changes`}>
+    <input className="input" value={ref} onChange={event => setRef(event.target.value)} disabled={disabled || action.busy || !selected} autoComplete="off" spellCheck={false} maxLength={255} placeholder={selected?.defaultBranch ?? "Repository default branch"} />
+  </Field>;
+  return <Sheet open={open} title="Add repository" onClose={dismiss} footer={<>
+    <Button disabled={action.busy} onClick={dismiss}>Cancel</Button>
+    <Button variant="default" type="submit" form="repository-picker-form" disabled={blocked}>{action.busy ? "Binding..." : "Bind repository"}</Button>
+  </>}>
+    <form id="repository-picker-form" className="stack" onSubmit={add}>
+      <div className="field"><span className="field-label">Account</span>
+        <Combobox<string> label="Account" placeholder="Choose an account" value={account?.id ?? ""} disabled={disabled || action.busy}
+          options={accounts.map(item => item.id.startsWith(workspaceAccountPrefix)
+            ? { value: item.id, label: `Workspace · ${connectionLabel({ family: "git", provider: item.provider as WorkspaceConnection["provider"], host: item.host, organization: item.organization })}`, hint: item.login }
+            : { value: item.id, label: gitAccountLabel(item), hint: item.login })} onChange={chooseAccount} />
+      </div>
+      {workspaceConnection && <p className="muted small">Sessions read this repository with the workspace's connection ({account?.login}), not their owner's account. Pushes still use the session owner's account or the workspace's push access</p>}
+      {listed ? <p className="muted small">Only repositories this {providerName} account can access are listed. Sessions read them with their owner's own account for the same provider. Never paste a token or clone URL</p>
+        : <p className="muted small">A Git server lists no repositories: enter the one to add. Pikibun reads it with this {workspaceConnection ? "connection" : "account"} to check it{workspaceConnection ? "" : ", and sessions read it with their owner's own account for the same server"}. Never paste a token</p>}
+      {!listed && account && <>
+        <Field label="Clone URL or path" hint={`The repository's https:// clone URL on ${account.host}, or its path there, such as team/project.git`}>
+          <span className="lookup-row">
+            <input className="input" value={path} onChange={event => { setPath(event.target.value); setFound(null); }} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); find(); } }}
+              disabled={disabled || action.busy || lookup.busy} autoComplete="off" spellCheck={false} maxLength={600} placeholder={`https://${account.host}/team/project.git`} />
+            <Button variant="outline" size="sm" disabled={disabled || action.busy || lookup.busy || !path.trim()} onClick={find}>{lookup.busy ? "Checking..." : "Look up"}</Button>
+          </span>
+        </Field>
+        {found && <Row leading={<Icon name="git-branch" size={16} />} title={found.fullName}
+          hint={`${found.private ? "Private" : "Public"} · default branch ${found.defaultBranch}${alreadyBound(found) ? " · Already configured" : ""}`} />}
+        <Feedback error={lookup.error} />
+        {found && refField}
+      </>}
+      {listed && <ResourceState {...resource} retry={resource.refresh}>
+        {!resource.data?.repositories.length
+          ? <EmptyState title="No repositories found">Check your {providerName} account and organization access</EmptyState>
+          : <>
+            <div className="field"><span className="field-label">{providerName} repository</span>
+              <Combobox<string> label={`${providerName} repository`} placeholder="Choose a repository" value={selected?.id ?? ""} disabled={disabled || action.busy}
+                options={resource.data.repositories.map(repository => ({ value: repository.id, label: repository.fullName, disabled: alreadyBound(repository),
+                  hint: `${repository.private ? "Private" : "Public"}${alreadyBound(repository) ? " · Already configured" : ""}` }))} onChange={choose} />
+              {resource.data.truncated && <span className="field-hint">Only the first {repositoryLimits.pickerRepositories.toLocaleString()} repositories this account can access are listed</span>}
+            </div>
+            {refField}
+          </>}
+      </ResourceState>}
+      {resource.error && <p className="muted small">Review your <a href={href({ name: "settings", section: "profile" })}>Git accounts</a> and repository access, then retry. An owner or admin with access can also configure this workspace</p>}
+      <Feedback error={action.error} />
+    </form>
+  </Sheet>;
+}
+
+function Members({ workspace, admin, owner }: { workspace: Workspace; admin: boolean; owner: boolean }) {
+  const path = `/api/workspaces/${segment(workspace.id)}/members`;
+  const resource = useResource<{ members: WorkspaceMember[] }>(path);
+  const [adding, setAdding] = useState(false);
+  const [changing, setChanging] = useState<WorkspaceMember | null>(null);
+  const action = useAction();
+  async function remove(member: WorkspaceMember) {
+    const confirmed = await confirmDialog({ title: "Remove member", message: `Remove ${usernameWithId(memberPerson(member))} from this workspace?`, confirmLabel: "Remove", destructive: true });
+    if (!confirmed) return;
+    void action.run(async () => {
+      await api(`${path}/${segment(member.userId)}`, { method: "DELETE" });
+      resource.refresh();
+    }, "Membership removed.");
+  }
+  return <>
+    <Section title="Members" info={<div className="stack">
+      {!admin && <p>Only workspace owners and admins can manage membership.</p>}
+      <p>Every role can follow workspace-visible sessions, which shows prompts, tool output and repository content in the transcript.</p>
+      <ul>
+        <li><strong>Viewer</strong>: follows them read-only and can't start sessions, whatever a session grants.</li>
+        <li><strong>Member</strong>: starts sessions, and follows other people's read-only unless they grant more.</li>
+        <li><strong>Collaborator</strong>: starts sessions, and sends messages to any workspace-visible session.</li>
+        <li><strong>Admin</strong>: a collaborator who also manages the workspace and every session in it, private ones included. Only the owner manages admins.</li>
+      </ul>
+      <p>Opening someone else's private session takes a session role, except for the owner and admins. Approving tool calls takes one from the session's owner whatever the role.</p>
+      <p>Membership never grants GitHub access, tool execution, or use of anyone's private Pi host.</p>
+    </div>} action={admin && <Button variant="outline" size="sm" icon="plus" onClick={() => setAdding(true)}>Add member</Button>}>
+      <ResourceState {...resource} retry={resource.refresh}>
+        {!resource.data?.members.length
+          ? <CardBody><span className="muted">No members to display</span></CardBody>
+          : resource.data.members.map(member => {
+            const person = memberPerson(member);
+            const name = member.displayName || username(person);
+            return <Row key={member.userId} leading={<IdentityBadge name={name} id={member.userId} />} title={name} hint={usernameWithId(person)} trailing={<>
+              <StatusBadge tone={member.role === "owner" || member.role === "admin" ? "success" : "neutral"}>{roleLabel[member.role]}</StatusBadge>
+              {admin && member.userId !== workspace.ownerId && (owner || adminManagedRoles.includes(member.role)) && <DropdownMenu label={`Actions for ${name}`} items={[
+                { label: "Change role", icon: "shield", disabled: action.busy, onSelect: () => setChanging(member) },
+                { label: "Remove", icon: "trash", destructive: true, disabled: action.busy, onSelect: () => void remove(member) },
+              ]} />}
+            </>} />;
+          })}
+        {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
+      </ResourceState>
+    </Section>
+    {admin && <InviteLink workspace={workspace} />}
+    {admin && <PendingMembers workspace={workspace} owner={owner} accepted={resource.refresh} />}
+    {admin && <AddMember open={adding} path={path} owner={owner} close={() => setAdding(false)} saved={resource.refresh} />}
+    {admin && changing && <ChangeRole key={changing.userId} member={changing} path={path} owner={owner} close={() => setChanging(null)} saved={resource.refresh} />}
+  </>;
+}
+
+/** The workspace's invite link: anyone signed in who opens it can ask to join, and waits as a pending member. */
+function InviteLink({ workspace }: { workspace: Workspace }) {
+  const path = `/api/workspaces/${segment(workspace.id)}/invite-link`;
+  const resource = useResource<{ link: WorkspaceInviteLink | null }>(path);
+  const action = useAction();
+  const link = resource.data?.link;
+  function create() {
+    if (action.busy) return;
+    void action.run(async () => {
+      resource.setData(await api<{ link: WorkspaceInviteLink }>(path, { method: "PUT" }));
+    }, "Invite link created. Share it with the people you want to invite.");
+  }
+  async function turnOff(replace: boolean) {
+    if (action.busy) return;
+    const confirmed = await confirmDialog(replace
+      ? { title: "Replace the invite link?", message: "The current link stops working at once, and a new one replaces it. People already waiting to join stay pending.", confirmLabel: "Replace link", destructive: true }
+      : { title: "Turn off the invite link?", message: "The link stops working at once, for everyone who has it. People already waiting to join stay pending until you accept or decline them. Turning the link on again creates a new link.", confirmLabel: "Turn off link", destructive: true });
+    if (!confirmed) return;
+    void action.run(async () => {
+      await api(path, { method: "DELETE" });
+      resource.setData(replace ? await api<{ link: WorkspaceInviteLink }>(path, { method: "PUT" }) : { link: null });
+    }, replace ? "Invite link replaced. The old link no longer works." : "Invite link turned off.");
+  }
+  return <Section title="Invite link" info={<div className="stack">
+    <p>Share this link with anyone. When someone signed in to this Pikibun server opens it, they can ask to join, and appear under <strong>Pending members</strong>.</p>
+    <p>A pending member can't see or do anything in the workspace until an owner or admin accepts them with a role. Anyone with the link can ask, so only accept people you recognize.</p>
+  </div>} action={link
+    ? <DropdownMenu label="Invite link actions" items={[
+      { label: "Replace link", icon: "refresh", disabled: action.busy, onSelect: () => void turnOff(true) },
+      { label: "Turn off link", icon: "trash", destructive: true, disabled: action.busy, onSelect: () => void turnOff(false) },
+    ]} />
+    : resource.data && <Button variant="outline" size="sm" icon="plus" disabled={action.busy} onClick={create}>Create link</Button>}>
+    <ResourceState {...resource} retry={resource.refresh}>
+      {link
+        ? <CardBody><Field label="Invite link" hint={<>Created <RelativeTime value={link.createdAt} />. Anyone who opens it can ask to join</>}><CopyField value={link.url} label="Copy invite link" /></Field></CardBody>
+        : <CardBody><span className="muted">No invite link. Create one to let people ask to join</span></CardBody>}
+      {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
+    </ResourceState>
+  </Section>;
+}
+
+/** People who asked to join through the invite link, waiting for an owner or admin to accept them with a role. */
+function PendingMembers({ workspace, owner, accepted }: { workspace: Workspace; owner: boolean; accepted: () => void }) {
+  const path = `/api/workspaces/${segment(workspace.id)}/join-requests`;
+  const resource = useResource<{ requests: WorkspaceJoinRequest[] }>(path);
+  const action = useAction();
+  const [roles, setRoles] = useState<Record<string, AssignableWorkspaceRole>>({});
+  const assignable = assignableRoles(owner);
+  const requests = resource.data?.requests ?? [];
+  function accept(request: WorkspaceJoinRequest, name: string) {
+    if (action.busy) return;
+    const role = roles[request.userId] ?? "member";
+    void action.run(async () => {
+      resource.setData(await api<{ requests: WorkspaceJoinRequest[] }>(`${path}/${segment(request.userId)}/accept`, { method: "POST", body: { role } }));
+      accepted();
+    }, `${name} joined as ${roleLabel[role].toLowerCase()}.`);
+  }
+  async function decline(request: WorkspaceJoinRequest, name: string) {
+    if (action.busy) return;
+    const confirmed = await confirmDialog({ title: "Decline request", message: `Decline ${name}'s request to join? They can ask again while they have a working invite link.`, confirmLabel: "Decline", destructive: true });
+    if (!confirmed) return;
+    void action.run(async () => {
+      resource.setData(await api<{ requests: WorkspaceJoinRequest[] }>(`${path}/${segment(request.userId)}`, { method: "DELETE" }));
+    }, "Request declined.");
+  }
+  return <Section title="Pending members" info={<p>People who asked to join through the invite link. Choose a role and accept them, or decline. Until then they can't see or do anything in the workspace.</p>}
+    action={<Button variant="ghost" size="sm" icon="refresh" aria-label="Refresh pending members" disabled={resource.loading} onClick={resource.refresh} />}>
+    <ResourceState {...resource} retry={resource.refresh}>
+      {!requests.length
+        ? <CardBody><span className="muted">Nobody is waiting to join</span></CardBody>
+        : requests.map(request => {
+          const person = memberPerson({ ...request, role: "member" });
+          const name = request.displayName || username(person);
+          const role = roles[request.userId] ?? "member";
+          return <Row key={request.userId} leading={<IdentityBadge name={name} id={request.userId} />} title={name}
+            hint={<>{usernameWithId(person)} · asked <RelativeTime value={request.createdAt} /></>} trailing={<>
+              <select className="select" aria-label={`Role for ${name}`} value={role} disabled={action.busy} title={roleHint[role]}
+                onChange={event => setRoles(current => ({ ...current, [request.userId]: event.target.value as AssignableWorkspaceRole }))}>
+                {assignable.map(item => <option key={item} value={item}>{roleLabel[item]}</option>)}
+              </select>
+              <Button variant="outline" size="sm" disabled={action.busy} onClick={() => accept(request, name)}>Accept</Button>
+              <Button variant="ghost" size="sm" disabled={action.busy} aria-label={`Decline ${name}`} onClick={() => void decline(request, name)}>Decline</Button>
+            </>} />;
+        })}
+      {(action.error || action.notice) && <CardBody><Feedback {...action} /></CardBody>}
+    </ResourceState>
+  </Section>;
+}
+
+/** Roles the actor may assign: admins the roles below their own; only the owner makes someone an admin. */
+function assignableRoles(owner: boolean): AssignableWorkspaceRole[] {
+  return assignableWorkspaceRoles.filter(item => owner || adminManagedRoles.includes(item));
+}
+
+function ChangeRole({ member, path, owner, close, saved }: { member: WorkspaceMember; path: string; owner: boolean; close: () => void; saved: () => void }) {
+  const current = member.role === "owner" ? null : member.role;
+  const [role, setRole] = useState<AssignableWorkspaceRole>(current ?? "member");
+  const roles = assignableRoles(owner);
+  const action = useAction();
+  const name = member.displayName || username(memberPerson(member));
+  function save(event: FormEvent) {
+    event.preventDefault();
+    if (action.busy || role === current) return;
+    void action.run(async () => {
+      await api(`${path}/${segment(member.userId)}`, { method: "PATCH", body: { role } });
+      saved();
+      close();
+    });
+  }
+  return <Sheet open title={`Change role of ${name}`} onClose={() => { if (!action.busy) close(); }} footer={<>
+    <Button disabled={action.busy} onClick={close}>Cancel</Button>
+    <Button variant="default" type="submit" form="change-role-form" disabled={action.busy || role === current}>{action.busy ? "Saving..." : "Save"}</Button>
+  </>}>
+    <form id="change-role-form" className="stack" onSubmit={save}>
+      <Field label="Role" hint={`${roleHint[role]}. Takes effect at once, in their open sessions too`}>
+        <select className="select" autoFocus value={role} onChange={event => setRole(event.target.value as AssignableWorkspaceRole)}>
+          {roles.map(item => <option key={item} value={item}>{roleLabel[item]}{item === current ? " (current)" : ""}</option>)}
+        </select>
+      </Field>
+      <Feedback error={action.error} />
+    </form>
+  </Sheet>;
+}
+
+function AddMember({ open, path, owner, close, saved }: { open: boolean; path: string; owner: boolean; close: () => void; saved: () => void }) {
+  const [userId, setUserId] = useState("");
+  const [role, setRole] = useState<AssignableWorkspaceRole>("member");
+  const roles = assignableRoles(owner);
+  const action = useAction();
+  function save(event: FormEvent) {
+    event.preventDefault();
+    if (action.busy || !userId.trim()) return;
+    void action.run(async () => {
+      // Profiles show the ID as "username(id)", so a pasted label names its ID.
+      await api(path, { method: "POST", body: { userId: userIdFromInput(userId), role } });
+      setUserId("");
+      saved();
+      close();
+    });
+  }
+  return <Sheet open={open} title="Add member" onClose={() => { if (!action.busy) close(); }} footer={<>
+    <Button disabled={action.busy} onClick={close}>Cancel</Button>
+    <Button variant="default" type="submit" form="add-member-form" disabled={action.busy || !userId.trim()}>{action.busy ? "Saving..." : "Save"}</Button>
+  </>}>
+    <form id="add-member-form" className="stack" onSubmit={save}>
+      <Field label="User ID" hint="Copy it from their profile. To change an existing member's role, use Change role in their menu">
+        <input className="input" required autoFocus value={userId} onChange={event => setUserId(event.target.value)} placeholder="User ID" autoComplete="off" spellCheck={false} />
+      </Field>
+      <Field label="Role" hint={roleHint[role]}>
+        <select className="select" value={role} onChange={event => setRole(event.target.value as AssignableWorkspaceRole)}>
+          {roles.map(item => <option key={item} value={item}>{roleLabel[item]}</option>)}
+        </select>
+      </Field>
+      <Feedback error={action.error} />
+    </form>
+  </Sheet>;
+}

@@ -32,13 +32,55 @@ function release() {
   return null;
 }
 
+const apiAssets = new Map();
+
+async function apiAsset(source) {
+  if (!apiAssets.has(source.pathname)) {
+    const metadata = await fetch(`https://api.github.com/repos/longbridge/nsh/releases/tags/${NSH_VERSION}`, {
+      headers: { Accept: 'application/vnd.github+json', 'Cache-Control': 'no-cache' },
+    });
+    if (!metadata.ok) throw new Error(`Release metadata: HTTP ${metadata.status}`);
+    const release = await metadata.json();
+    for (const asset of release.assets || []) {
+      if (/^https:\/\/api\.github\.com\/repos\/longbridge\/nsh\/releases\/assets\/[0-9]+$/.test(asset.url)) {
+        apiAssets.set(`/longbridge/nsh/releases/download/${NSH_VERSION}/${asset.name}`, asset.url);
+      }
+    }
+  }
+  const url = apiAssets.get(source.pathname);
+  if (!url) throw new Error(`No API asset for ${source.pathname}`);
+  return new URL(url);
+}
+
+/** Retry upstream failures, including gateways that return an HTML error page with HTTP 200 for a checksum. */
+export async function releaseAsset(url, { checksum = false, attempts = 4, delayMs = 2000 } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const source = new URL(url);
+      const viaApi = attempt % 2 === 0 && source.origin === 'https://github.com'
+        && source.pathname.startsWith(`/longbridge/nsh/releases/download/${NSH_VERSION}/`);
+      // GitHub's release API gives us another route to the same published bytes if its browser download gateway fails.
+      const request = viaApi ? await apiAsset(source) : source;
+      if (attempt > 1) request.searchParams.set('_pikibun_retry', `${Date.now()}-${attempt}`);
+      const response = await fetch(request, { headers: { 'Cache-Control': 'no-cache', ...(viaApi ? { Accept: 'application/octet-stream' } : {}) } });
+      if (!response.ok) throw new Error(`downloading ${new URL(url).pathname}: HTTP ${response.status}`);
+      if (!checksum) return Buffer.from(await response.arrayBuffer());
+      const hash = (await response.text()).trim().split(/\s+/)[0];
+      if (!/^[0-9a-f]{64}$/i.test(hash)) throw new Error('The release checksum response is not a SHA-256 hash');
+      return hash.toLowerCase();
+    } catch (error) {
+      if (attempt === attempts) throw error;
+      console.error(`Release download attempt ${attempt}/${attempts} failed: ${error.message}; retrying`);
+      await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+}
+
 async function download(asset, directory) {
   const base = `https://github.com/longbridge/nsh/releases/download/${NSH_VERSION}`;
-  const expected = (await (await fetch(`${base}/${asset}.sha256`)).text()).trim().split(/\s+/)[0];
+  const expected = await releaseAsset(`${base}/${asset}.sha256`, { checksum: true });
   console.error(`Downloading Native Shell ${NSH_VERSION} (${asset}, several hundred MB, once)…`);
-  const response = await fetch(`${base}/${asset}`);
-  if (!response.ok) throw new Error(`downloading ${asset}: HTTP ${response.status}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = await releaseAsset(`${base}/${asset}`);
   const actual = createHash("sha256").update(bytes).digest("hex");
   if (actual !== expected) throw new Error(`${asset} does not match its published SHA-256 (${actual} != ${expected})`);
   const partial = `${directory}.partial`;
