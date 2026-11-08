@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Builds the client (apps/nsh, as a web app) and the bundled server, then runs them as a non-root user with /data for
+# Builds the production React/Electron web client, the NSH preview and the bundled server, then runs as a non-root user with /data for
 # the SQLite database (override with DATABASE_URL). Session backups are off unless STORAGE_URL names
 # a store, such as file:///data/backups in the same volume.
 
@@ -20,11 +20,15 @@ RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+
 # Debian 13 here (the runtime image doesn't need it). scripts/nsh.mjs downloads the pinned CLI and checks its SHA-256.
 FROM --platform=$BUILDPLATFORM ${WEB_BUILD_IMAGE} AS web
 WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/cli/package.json packages/cli/
+RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+")[0]')" && pnpm install --frozen-lockfile --ignore-scripts
 COPY scripts/nsh.mjs scripts/nsh-web-fixes.mjs scripts/
+COPY apps/web apps/web
 COPY apps/nsh apps/nsh
 COPY packages/shared packages/shared
 COPY packages/client packages/client
-RUN node scripts/nsh.mjs --build-web
+RUN pnpm build
 
 FROM base AS build
 # Only the server and connector manifests: pnpm installs just the workspaces present.
@@ -37,6 +41,7 @@ COPY packages/client packages/client
 COPY tsconfig.json ./
 RUN pnpm build:server
 COPY --from=web /app/dist/web dist/web
+COPY --from=web /app/dist/preview dist/preview
 
 FROM base AS runtime
 ENV NODE_ENV=production

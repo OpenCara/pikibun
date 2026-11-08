@@ -1,0 +1,83 @@
+name: Desktop app on Windows
+# Builds the desktop app on Windows as release-desktop.yml does, without the installer, and launches it once: it opens
+# its windows, inspects this computer's host (WSL2 by default; a runner has no WSL distribution, so the host says how to
+# set one up) and saves their screenshots (PIKIBUN_DESKTOP_SMOKE), uploaded as the desktop-windows-smoke artifact to
+# look at. Runs when the app, its connector host or their dependencies change: in a pull request, on main, or by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/desktop/**
+      - apps/runner/src/connect-setup.ts
+      - apps/runner/src/desktop-*.ts
+      - apps/runner/src/sandbox-backend.ts
+      - apps/runner/src/windows-*.ts
+      - packages/cli/package.json
+      - packages/cli/npm-shrinkwrap.json
+      - pnpm-lock.yaml
+      - .github/workflows/desktop-windows.yml
+  pull_request:
+    paths:
+      - apps/desktop/**
+      - apps/runner/src/connect-setup.ts
+      - apps/runner/src/desktop-*.ts
+      - apps/runner/src/sandbox-backend.ts
+      - apps/runner/src/windows-*.ts
+      - packages/cli/package.json
+      - packages/cli/npm-shrinkwrap.json
+      - pnpm-lock.yaml
+      - .github/workflows/desktop-windows.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @pikibun/desktop typecheck
+      # The web app, which the app ships for Pikibun on this computer.
+      - run: pnpm build:web
+      - run: pnpm --filter @pikibun/desktop build
+      - name: Stage the connector
+        working-directory: apps/desktop
+        run: node scripts/stage-connector.mjs
+      - name: Package (unpacked, unsigned)
+        working-directory: apps/desktop
+        run: pnpm exec electron-builder --win --x64 --dir --publish never
+      - name: The WSL2 launcher keeps line feeds
+        working-directory: apps/desktop
+        run: |
+          if grep -q $'\r' dist/release/win-unpacked/resources/connector/dist/wsl-host.sh; then
+            echo "::error::wsl-host.sh has carriage returns: WSL2's /bin/sh can't run it."
+            exit 1
+          fi
+      - name: Launch once
+        working-directory: apps/desktop
+        run: |
+          export PIKIBUN_DESKTOP_SMOKE="$RUNNER_TEMP\\smoke"
+          timeout 300 ./dist/release/win-unpacked/Pikibun.exe || true
+          smoke="$(cygpath -u "$RUNNER_TEMP")/smoke"
+          ls -l "$smoke"
+          for name in main host settings; do
+            test -s "$smoke/$name.png" || { echo "::error::The app did not render its $name window."; exit 1; }
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: desktop-windows-smoke
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: ignore

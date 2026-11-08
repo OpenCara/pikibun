@@ -56,6 +56,41 @@ Each server release (`server-v*` tag) is published as `ghcr.io/opencara/pikibun`
 
 Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load balancer); the app serves plain HTTP. If the proxy sets `X-Forwarded-Proto`/`X-Forwarded-Host`, set `TRUST_PROXY=true`. The proxy must pass WebSocket upgrades on `/api/connectors/socket`, accept request bodies of 32 MiB for dump imports, and route `/.well-known/` to Pikibun if you use `OIDC_SIGNING_KEY`. The server gzips its responses and session event streams itself, and compresses the connector WebSocket for connectors that offer it, so the proxy needs no compression of its own.
 
+## Native Shell Preview
+
+The production client is the React web app used by Electron (`apps/web`, `dist/web`). The NSH client is experimental
+and built separately into `dist/preview`; `pnpm build` and the Docker image include both. One server can serve both
+without moving, copying or restoring any accounts, hosts or sessions. For pikibun.com, set in the server's `.env`:
+
+```dotenv
+APP_ORIGIN=https://pikibun.com
+PREVIEW_ORIGIN=https://preview.pikibun.com
+TRUST_PROXY=true
+```
+
+Point DNS for `preview.pikibun.com` to the same ingress as `pikibun.com`, provision TLS for both, and proxy both hosts
+to the same Pikibun listener, preserving each host in `X-Forwarded-Host` and setting `X-Forwarded-Proto=https`. For
+example, with Caddy on the same computer:
+
+```caddyfile
+pikibun.com, preview.pikibun.com {
+    reverse_proxy 127.0.0.1:8787
+}
+```
+
+Recreate the container after setting the variables. Only the exact `PREVIEW_ORIGIN` gets NSH; the primary origin
+keeps React and its strict script policy. Preview's API uses the same database and connector hub, but its sign-in
+cookies stay host-only, so sign in separately on each hostname. CSRF checks accept only the origin of the host being
+used, not requests from one client to the other. No cross-origin API access or shared-domain cookie is needed.
+
+Register `https://preview.pikibun.com/api/auth/github/callback` as an additional callback URL of the existing GitHub
+OAuth app before signing in there. Keep the production callback registered; do not enable wildcard callbacks. Other
+OAuth integrations used from preview need their preview callback registered as well.
+
+`PREVIEW_STATIC_DIR` overrides the preview build directory. Leave both preview settings unset to disable it. A
+standalone NSH development server may instead set `STATIC_CLIENT=nsh` and `STATIC_DIR=dist/preview`; neither changes
+the default React client for the production server or Electron's local server.
+
 ## Sign-in and GitHub apps
 
 - **GitHub sign-in** needs a GitHub OAuth app whose callback URL is `<APP_ORIGIN>/api/auth/github/callback`; put its id and secret in `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The same app resets session owners' GitHub tokens after pushes that used them. github.com repositories need it: only accounts that sign in with GitHub can read them.
@@ -75,7 +110,10 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `VAULT_KEY` | required | Base64url 32-byte key that encrypts stored tokens and secrets; keep it stable, since secrets stored with one key can't be read with another |
 | `HOST`, `PORT` | `0.0.0.0` (`127.0.0.1` with `LOCAL_MODE`), `8787` | Listening address |
 | `TRUST_PROXY` | `false` | Honor `X-Forwarded-Proto`/`X-Forwarded-Host` from a trusted proxy |
-| `STATIC_DIR` | `dist/web` | Built web app |
+| `STATIC_DIR` | `dist/web` | Production React/Electron web app |
+| `STATIC_CLIENT` | `web` | `nsh` only for a standalone NSH development/test server |
+| `PREVIEW_ORIGIN` | none | Exact HTTPS origin serving NSH with the same backend; register its OAuth callbacks too |
+| `PREVIEW_STATIC_DIR` | `dist/preview` | NSH preview build; requires `PREVIEW_ORIGIN` |
 | `DATABASE_URL` | `sqlite:///data/pikibun.sqlite` | Control-plane database |
 | `DATABASE_WAIT_SECONDS` | `60` | How long start-up retries an unreachable database |
 | `STORAGE_URL` | none | Session backup storage; none means no backups |

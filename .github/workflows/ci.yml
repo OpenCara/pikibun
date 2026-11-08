@@ -63,6 +63,8 @@ jobs:
       # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
       # lacks `lifecycle`, and the page's Content-Security-Policy applies), and only a browser shows it.
       - run: pnpm test:client-web
+      # The production React/Electron web client under its strict script policy.
+      - run: pnpm test:web
       - run: pnpm build
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build
@@ -74,7 +76,7 @@ jobs:
         run: |
           docker build -t pikibun:ci .
           docker run -d --name pikibun -p 8787:8787 -e APP_ORIGIN=http://127.0.0.1:8787 -e TRUST_PROXY=true \
-            -e SESSION_SECRET=ci-session-secret-ci-session-secret-ci -e VAULT_KEY=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=') pikibun:ci
+            -e PREVIEW_ORIGIN=https://preview.pikibun.example -e SESSION_SECRET=ci-session-secret-ci-session-secret-ci -e VAULT_KEY=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=') pikibun:ci
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/api/health && break; sleep 1; done
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"workspaceDatabasesConfigured":true'
@@ -82,7 +84,9 @@ jobs:
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"githubSignup":"invite"'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"passwordSignup":"invite"'
           curl -fsS http://127.0.0.1:8787/ | grep -qi '<!doctype html'
-          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
+          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*script-src 'self';"
+          curl -fsSI -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: preview.pikibun.example' http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
+          curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: preview.pikibun.example' http://127.0.0.1:8787/ | grep -q '<base href="/">'
           curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: pikibun.example' http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
           curl -fsS -H 'X-Forwarded-Proto: https' http://127.0.0.1:8787/ | grep -qi '<!doctype html'
           docker rm -f pikibun

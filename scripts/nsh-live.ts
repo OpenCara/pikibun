@@ -45,7 +45,7 @@ try {
     APP_ORIGIN: origin, HOST: "127.0.0.1", PORT: String(port), DATABASE_URL: `sqlite://${join(work, "pikibun.sqlite")}`,
     SESSION_SECRET: randomBytes(32).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"),
     TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3_600_000).toISOString(),
-    STATIC_DIR: join(work, "web"),
+    STATIC_DIR: join(work, "web"), STATIC_CLIENT: "nsh",
   });
   const server = await startServer(config);
   stop = () => server.close();

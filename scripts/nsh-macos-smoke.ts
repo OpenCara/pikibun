@@ -46,11 +46,11 @@ async function run(args: string[]) {
 export async function main(args = process.argv.slice(2)) {
   const { values } = parseArgs({ args, options: {
     help: { type: 'boolean' }, github: { type: 'boolean' },
-    server: { type: 'string', default: 'https://pikibun.com' },
+    server: { type: 'string', default: 'https://preview.pikibun.com' },
     display: { type: 'string' }, 'timeout-ms': { type: 'string', default: '600000' },
   } });
   if (values.help) {
-    console.log(`Usage: pnpm test:client-macos [--github] [--server https://pikibun.com] [--display 1] [--timeout-ms 600000]
+    console.log(`Usage: pnpm test:client-macos [--github] [--server https://preview.pikibun.com] [--display 1] [--timeout-ms 600000]
 
 Runs the stubbed app and screenshot tests on real AppKit windows.
 --github additionally opens a live GitHub sign-in for you to complete manually.

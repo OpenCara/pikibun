@@ -27,8 +27,9 @@ const contentTypes: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-/** `nsh package --target web` names files by their content (`nsh.4bda023b65.wasm`): those never change. */
-const hashedName = /\.[0-9a-f]{10}\.[a-z0-9]+$/;
+/** Native Shell and Vite both name their bundled assets by their content. */
+const hashedName = /(?:\.[0-9a-f]{10}|-[A-Za-z0-9_-]{8,})\.[a-z0-9]+$/;
+export type WebClient = 'web' | 'nsh';
 
 /**
  * The page's policy, as Native Shell 0.4's web runtime needs it to start:
@@ -38,7 +39,12 @@ const hashedName = /\.[0-9a-f]{10}\.[a-z0-9]+$/;
  *   list would turn 'unsafe-inline' off again). The runtime sets no nonce on it (longbridge/nsh: to report).
  * Scripts still come only from this server and the runtime's own blobs; requests go only to this server.
  */
-export function pageContentSecurityPolicy(): string {
+export function pageContentSecurityPolicy(client: WebClient = 'web'): string {
+  if (client === 'web') return [
+    "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data: blob: https://avatars.githubusercontent.com",
+    "connect-src 'self'", "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'", "form-action 'self'",
+  ].join('; ');
   return [
     "default-src 'self'",
     "script-src 'self' blob: 'unsafe-inline' 'wasm-unsafe-eval'",
@@ -56,12 +62,11 @@ export function pageContentSecurityPolicy(): string {
 }
 
 /**
- * Serves the client (apps/nsh, built for the web into `root` by `pnpm build`): an existing file as it is, anything
- * else as `index.html`, whose routes live in the URL's fragment (`/#/s/<id>`). The page gets `<base href="/">`, as
- * Native Shell's site uses relative URLs, and the policy above. The caller limits this to GET/HEAD requests outside
- * `/api/`.
+ * Serves a built client: existing files as they are, other paths as index.html. Only the NSH preview gets its
+ * relative-URL base and relaxed runtime policy; the production React/Electron client keeps a strict script policy.
+ * The caller limits this to GET/HEAD requests outside /api/.
  */
-export function createStaticHandler(root: string): (request: Request) => Promise<Response> {
+export function createStaticHandler(root: string, client: WebClient = 'web'): (request: Request) => Promise<Response> {
   const base = resolve(root);
   const index = join(base, 'index.html');
   async function file(path: string, request: Request): Promise<Response | null> {
@@ -82,10 +87,10 @@ export function createStaticHandler(root: string): (request: Request) => Promise
     try { html = await readFile(index, 'utf8'); } catch {
       return Response.json({ error: 'The web app is not built: run `pnpm build`.', code: 'not_found' }, { status: 404 });
     }
-    if (!/<base\s/i.test(html)) html = html.replace(/<head>/i, '<head>\n<base href="/">');
+    if (client === 'nsh' && !/<base\s/i.test(html)) html = html.replace(/<head>/i, '<head>\n<base href="/">');
     return new Response(request.method === 'HEAD' ? null : html, {
       status: 200,
-      headers: { 'Content-Type': contentTypes['.html']!, 'Cache-Control': 'no-cache', 'Content-Security-Policy': pageContentSecurityPolicy() },
+      headers: { 'Content-Type': contentTypes['.html']!, 'Cache-Control': 'no-cache', 'Content-Security-Policy': pageContentSecurityPolicy(client) },
     });
   }
   return async request => {

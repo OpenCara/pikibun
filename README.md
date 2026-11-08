@@ -4,6 +4,8 @@
 
 Run [Pi](https://github.com/earendil-works/pi) coding agents on your own machines and work on them together with your team. Pikibun is a self-hosted control plane: a web app (with iPhone, iPad, Mac and Windows apps), a Node.js server, and the `pikibun` connector that each host runs to offer its local Pi to a workspace.
 
+The production web client and Electron desktop app use React. The experimental Native Shell client is kept separately at `preview.pikibun.com`; both clients use the same backend. See [the preview setup](docs/self-hosting.md#native-shell-preview).
+
 Two things set it apart:
 
 - **One subscription, the whole team.** Pair a machine where Pi is signed in to your model provider, share it with a workspace, and every teammate can start their own sessions on its models. They never see its API keys or subscription login: those stay on the host. Each session still runs as the member who started it, with their own Git accounts, so the team shares the models and not each other's identities. See [Sharing a host](docs/hosts.md#sharing-a-host).

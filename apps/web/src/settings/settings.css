@@ -1,0 +1,64 @@
+@layer screens {
+  /* Accounts listed under their Git provider in Connected accounts line up with the provider name. */
+  .git-account-indent { display: block; width: 16px; }
+  /* A field with its action beside it: the input takes the room the button leaves. */
+  .lookup-row { display: flex; gap: var(--space-2); align-items: center; }
+  .lookup-row > .input { flex: 1 1 auto; }
+  /* A form grouping several sections keeps the section rhythm across its boundary. */
+  .settings-form + .section, .section + .settings-form { margin-top: var(--space-8); }
+  .settings-actions { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-4); }
+
+  .settings-back { margin: 0 0 var(--space-4) calc(-1 * var(--space-2)); }
+
+  /* Administration's filter sits between sections and keeps their rhythm. */
+  .admin-filter { margin-top: var(--space-8); }
+  .admin-filter + .section { margin-top: var(--space-4); }
+
+  .env-row { display: grid; grid-template-columns: minmax(0, 2fr) auto minmax(0, 3fr); align-items: center; gap: var(--space-2); }
+  @media (max-width: 640px) {
+    .env-row { grid-template-columns: minmax(0, 1fr); }
+    .env-row > .muted { display: none; }
+  }
+}
+
+@layer screens {
+  /* A host's compaction token counts: two short numeric fields, each labelled above. */
+  .token-inputs { display: flex; align-items: flex-end; gap: var(--space-2); }
+  .token-field { display: grid; gap: 2px; }
+  .token-input { width: 112px; height: var(--control-sm); }
+  .token-input[aria-invalid="true"] { border-color: var(--status-danger); }
+  @media (max-width: 640px) {
+    .token-input { width: 88px; }
+  }
+  .desktop-logs { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 14rem; overflow: auto; overflow-wrap: anywhere; }
+  .desktop-logs .danger { color: var(--status-danger); }
+}
+
+@layer screens {
+  /* A workspace's extensions: each one's description, its tools by name and how it runs, one line each under its title. */
+  .extension-hint { display: grid; gap: 2px; }
+  .tool-names { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-1); }
+  .tool-names > code { color: var(--foreground); }
+  .tool-names > code.tool-shadowed, .tool-list-name.tool-shadowed { color: var(--foreground-muted); text-decoration: line-through; }
+  .pre-wrap { white-space: pre-wrap; }
+
+  /* Tools listed one per line: name, what it does, and where it comes from. */
+  .tool-group { display: grid; gap: var(--space-2); }
+  .tool-group-title { display: grid; gap: 2px; }
+  .tool-list { list-style: none; margin: 0; padding: 0; display: grid; font-size: var(--font-sm); }
+  .tool-list > li {
+    display: grid;
+    grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+    padding: var(--space-2) 0;
+  }
+  .tool-list > li + li { border-top: 1px solid var(--border); }
+  .tool-list-name { justify-self: start; overflow-wrap: anywhere; }
+  .tool-list-description { color: var(--foreground-muted); min-width: 0; overflow-wrap: anywhere; }
+  .tool-list-source { color: var(--foreground-muted); white-space: nowrap; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 640px) {
+    .tool-list > li { grid-template-columns: minmax(0, 1fr) auto; }
+    .tool-list-description { grid-column: 1 / -1; grid-row: 2; }
+  }
+}

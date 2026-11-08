@@ -1,7 +1,7 @@
 name: Release app
 # Pushing an app-v1.2.3 tag (app-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then packages the client
-# (apps/nsh) with Native Shell for every platform and attaches the packages to the tag's GitHub release, marked latest
-# unless it is a prerelease:
+# (apps/nsh) with Native Shell for every platform and attaches the packages to a preview GitHub release. These are
+# always prereleases, never latest; the production Electron app uses desktop-v tags:
 #   Windows   Pikibun-<version>-windows-x64-setup.exe (Inno Setup, apps/nsh/windows/installer.iss) and a portable .zip
 #   macOS     Pikibun-<version>-macos-arm64.zip, the .app
 #   Linux     Pikibun-<version>-linux-x86_64.tar.gz
@@ -572,15 +572,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.check.outputs.version }}
-          PRERELEASE: ${{ needs.check.outputs.prerelease }}
           PREVIOUS_TAG: ${{ needs.check.outputs.previous-tag }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" --clobber
             exit 0
           fi
-          flags=()
-          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease --latest=false); else flags+=(--latest); fi
+          # Native Shell remains a preview; never displace the production Electron release as latest.
+          flags=(--prerelease --latest=false)
           [ -n "$PREVIOUS_TAG" ] && flags+=(--notes-start-tag "$PREVIOUS_TAG")
           gh release create "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "Pikibun $VERSION" --generate-notes "${flags[@]}"
+            --title "Pikibun NSH Preview $VERSION" --generate-notes "${flags[@]}"
