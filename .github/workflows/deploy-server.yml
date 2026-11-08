@@ -12,7 +12,7 @@ name: Deploy server
 #
 # Configuration, in the `production` environment (docs/development.md, "Releasing"): the variables DEPLOY_HOST (the
 # server's tailnet name, nerd.tail7e2cef.ts.net), DEPLOY_USER, optionally DEPLOY_PORT (22), DEPLOY_PATH (pikibun, from
-# the user's home), DEPLOY_URL (the public origin, whose /api/health is checked last) and TS_TAGS (tag:ci, the OAuth
+# the user's home), DEPLOY_URL (the production origin), DEPLOY_PREVIEW_URL (the NSH preview origin) and TS_TAGS (tag:ci, the OAuth
 # client's tags), and the secrets TS_OAUTH_CLIENT_ID and TS_OAUTH_SECRET (a Tailscale OAuth client with the auth_keys
 # write scope and TS_TAGS) and DEPLOY_SSH_KNOWN_HOSTS (the server's Tailscale SSH host keys: ssh-keyscan -p PORT HOST
 # from a tailnet device, checked against the server's own). Without any of them nothing is deployed; with only some of
@@ -107,6 +107,7 @@ jobs:
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'pikibun' }}
+          DEPLOY_PREVIEW_URL: ${{ vars.DEPLOY_PREVIEW_URL }}
           DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
         run: |
           known_hosts="$RUNNER_TEMP/deploy_known_hosts"
@@ -115,15 +116,11 @@ jobs:
           # Tailscale SSH admits the runner by its tailnet identity (the tag), not by a key.
           ssh -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
             -o ServerAliveInterval=15 -o ConnectTimeout=30 "$DEPLOY_USER@$DEPLOY_HOST" \
-            "bash -s -- $(printf '%q ' "$IMAGE" "$DEPLOY_PATH")" < scripts/deploy-server.sh
-      - name: Public health
-        if: steps.config.outputs.configured == 'true' && vars.DEPLOY_URL != ''
+            "bash -s -- $(printf '%q ' "$IMAGE" "$DEPLOY_PATH" "$DEPLOY_PREVIEW_URL")" < scripts/deploy-server.sh
+      - name: Verify production and preview clients
+        if: steps.config.outputs.configured == 'true' && (vars.DEPLOY_URL != '' || vars.DEPLOY_PREVIEW_URL != '')
         env:
           DEPLOY_URL: ${{ vars.DEPLOY_URL }}
-        run: |
-          for _ in $(seq 1 30); do
-            curl -fsS --max-time 10 "${DEPLOY_URL%/}/api/health" && exit 0
-            sleep 2
-          done
-          echo "::error::${DEPLOY_URL%/}/api/health did not answer after the deploy."
-          exit 1
+          DEPLOY_PREVIEW_URL: ${{ vars.DEPLOY_PREVIEW_URL }}
+          DEPLOY_IMAGE: ${{ steps.image.outputs.name }}
+        run: node scripts/deploy-smoke.mjs
