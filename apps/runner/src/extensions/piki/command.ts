@@ -6,6 +6,7 @@ import { arr, int, obj, opt, str, type Static } from "@earendil-works/pi-schema"
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { PikiExtensionInfo } from "../../../../../packages/shared/src/piki-extensions.js";
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
+import { boundOutput, fitsModel } from "../../tool-output.js";
 
 /*
  * A command-line tool as a Pi extension (docs/design/piki-extensions.md): one tool that runs the command with the
@@ -126,9 +127,12 @@ export function cliEnvironment(spec: Pick<CliSpec, "passEnv" | "setEnv">, source
     TERM: "dumb", NO_COLOR: "1", CLICOLOR: "0", PAGER: "cat", ...spec.setEnv };
 }
 
-/** What a call returns at most: its output's start and end, which holds a failure's reason. */
-const HEAD_BYTES = 32 * 1024;
-const TAIL_BYTES = 96 * 1024;
+/**
+ * What a run on the host keeps of its output: its start and end, which holds a failure's reason, as much as is saved of a
+ * long output (SAVED_OUTPUT_BYTES). What the call returns is bounded again, to what the model is given (boundOutput).
+ */
+const HEAD_BYTES = 256 * 1024;
+const TAIL_BYTES = 768 * 1024;
 const DEFAULT_TIMEOUT_SECONDS = 300;
 
 /** A run's output, its start and end kept where it is longer than the model should read. */
@@ -255,6 +259,11 @@ export interface PikiSandboxRun {
 export interface PikiSession {
   sandbox?: (run: PikiSandboxRun) => Promise<CliRun>;
   hostSignIn: boolean;
+  /**
+   * Saves the whole of call `callId`'s output, too long for the model, in the session's worktree, and answers its path
+   * there; without it, a long output's excerpt says it wasn't saved.
+   */
+  saveOutput?: (callId: string, tool: string, output: string) => Promise<string>;
 }
 
 /** What a session that offers neither gets: the tool, which says why it can't run. */
@@ -313,9 +322,14 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
           if (writes) throw new Error(`Refused: this workspace runs ${spec.command} read-only, and ${writes}. Nothing ran.`);
         }
         const timeoutSeconds = params.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS;
-        const outcome = (run: CliRun) => {
+        const tool = spec.info.tool ?? spec.command;
+        const outcome = async (run: CliRun) => {
           const status = run.failure ?? (run.exitCode === 0 ? undefined : run.signal ? `It ended with ${run.signal}` : `It exited with ${run.exitCode}`);
-          const text = run.output.trim() || "(no output)";
+          // Its start and end where it is longer than the model is given, and the whole of it saved where the session can.
+          const text = await boundOutput(run.output.trim() || "(no output)", {
+            ...(session.saveOutput ? { save: (whole: string) => session.saveOutput!(toolCallId, tool, whole) } : {}),
+            ...(status ? { fits: (shown: string) => fitsModel(`${status}.\n${shown}`) } : {}),
+          });
           if (status) throw new Error(`${status}.\n${text}`);
           return { content: [{ type: "text" as const, text }], details: { exitCode: 0 } };
         };
@@ -330,7 +344,7 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
           if (run.exitCode === 127 && new RegExp(`${spec.command}: (?:command )?not found|No such file`).test(run.output)) {
             throw new Error(`${spec.command} isn't installed where the session's sandbox finds it (the host's /usr/bin or /usr/local/bin). The host's owner installs it (${spec.info.install}).`);
           }
-          return outcome(run);
+          return await outcome(run);
         }
         if (readOnly && params.directory !== undefined) throw new Error(`Refused: this workspace runs ${spec.command} read-only, outside the session's worktree; leave out directory. Nothing ran.`);
         const scratch = readOnly ? await mkdtemp(join(tmpdir(), `pikibun-${spec.info.name}-`)) : undefined;
@@ -343,7 +357,7 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
             if (error instanceof MissingCommandError) throw new Error(`${error.message}. Its owner installs it (${spec.info.install}) and signs in with ${spec.info.signIn}.`);
             throw error;
           }
-          return outcome(run);
+          return await outcome(run);
         } finally {
           if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
         }
