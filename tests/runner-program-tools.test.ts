@@ -531,7 +531,8 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   const view = await session.view();
   assert.equal(view.approvals.length, 1, "the missing program's call left no card");
   assert.match(view.entries.map(entry => entry.text).join("\n"), /frob-not-installed-anywhere isn't installed on this host where the session's sandbox sees it[^]*Nothing ran\./);
-  assert.match(instructions, /This host doesn't have the frob tool's frob-not-installed-anywhere where the session's sandbox sees them/);
+  // Other tools' missing programs (the python tool's uv, say) may follow in the same sentence, as the host has them.
+  assert.match(instructions, /This host doesn't have the frob tool's frob-not-installed-anywhere[^.]* where the session's sandbox sees them/);
   assert.match(instructions, /Calls to them are refused before they run/);
   // The workspace turns the tool off: the panel no longer lists its programs (review of #216).
   answer = { extensions: [{ source: "piki:frob", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
