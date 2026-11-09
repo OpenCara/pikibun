@@ -23,6 +23,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
 import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
+import { boundOutput, MODEL_OUTPUT, toolOutputPath } from "./tool-output.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
@@ -1003,7 +1004,7 @@ export class RunnerSession {
     this.#registry = registry;
     if (!this.#packed) {
       // Installed whether or not the host's configuration turns them on now, so a script it resumes finds its tool.
-      this.#builtins = new SessionBuiltins({ outputs: api => this.codemodeOutputs(api) });
+      this.#builtins = new SessionBuiltins({ outputs: api => this.outputFiles(api) });
       for (const builtin of this.#builtins.extensions.values()) registry.install(builtin);
     }
     if (this.config.extensions && !this.#packed) {
@@ -1639,10 +1640,11 @@ export class RunnerSession {
   }
 
   /**
-   * Where a code mode call saves its full output: files in the worktree, written as the message's sender, which read_file
-   * reads; none in a Read-only message, whose result then says it couldn't be saved.
+   * Where a call saves its full output (a code mode script's, a command's too long for the model): files in the worktree,
+   * written as the message's sender, which read_file reads; none in a Read-only message, whose result then says it
+   * couldn't be saved.
    */
-  private async codemodeOutputs(api: ToolExecutionApi): Promise<OutputFiles | undefined> {
+  private async outputFiles(api: ToolExecutionApi): Promise<OutputFiles | undefined> {
     const attribution = await this.toolActor(api, true);
     const state = await this.metadata();
     const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
@@ -1685,7 +1687,37 @@ export class RunnerSession {
     return {
       hostSignIn: this.#onHost || (ownSession && this.config.pikiHostSignIn === true),
       ...(this.#egress && !this.#onHost ? { sandbox: (run: PikiSandboxRun) => this.runPikiCommand(run) } : {}),
+      saveOutput: (callId, tool, output) => this.savePikiOutput(callId, tool, output),
     };
+  }
+
+  /**
+   * Saves the whole output of a Pikibun extension's command, too long for the model, in the worktree as its call's sender
+   * (tool-output.ts), for a call runExtensionTool admitted: never in a Read-only message, which doesn't run extensions.
+   */
+  private async savePikiOutput(callId: string, tool: string, output: string): Promise<string> {
+    const call = this.#pikiCalls.get(callId);
+    if (!call) throw new RunnerError(403, "its call no longer runs");
+    const path = toolOutputPath(tool, callId);
+    await this.sandbox.writeFile(path, output, async () => { await this.recheckTool(call.attribution); });
+    return path;
+  }
+
+  /**
+   * A command tool's card as its call returns it to the model: its result bounded to what the model is given
+   * (tool-output.ts), the whole of a longer one saved in the worktree, where the message may write there.
+   */
+  private async shownApproval(approval: StoredApproval, api: ToolExecutionApi, tool: string): Promise<Record<string, unknown>> {
+    const shown = { ...approval, admissionId: undefined, callId: undefined };
+    const result = approval.result;
+    if (typeof result !== "string") return shown;
+    const files = await this.outputFiles(api).catch(() => undefined);
+    return { ...shown, result: await boundOutput(result, {
+      ...(files
+        ? { save: async (whole: string) => { const path = toolOutputPath(tool, String(api.callId)); await files.writeFile(path, whole); return path; } }
+        : { unsaved: "a Read-only message doesn't write to the worktree" }),
+      fits: candidate => Buffer.byteLength(JSON.stringify({ ...shown, result: candidate })) <= MODEL_OUTPUT.bytes,
+    }) };
   }
 
   /**
@@ -2368,6 +2400,8 @@ export class RunnerSession {
   private sessionTools(): ToolRegistration[] {
     const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
     const approvalText = (approval: StoredApproval) => text({ ...approval, admissionId: undefined, callId: undefined });
+    // A command's card, its output bounded to what the model is given, the whole of it saved (shownApproval).
+    const commandText = async (approval: StoredApproval, api: ToolExecutionApi, tool: string) => text(await this.shownApproval(approval, api, tool));
     return [
       defineTool({ name: "identity", description: "Return immutable session owner identity and sanitized session environment, not collaborator credentials.", parameters: obj({}, { open: true }), execute: async (_args, api, call) => {
         const attribution = await this.toolActor(api, false);
@@ -2467,7 +2501,7 @@ export class RunnerSession {
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
           const { unbounded } = await this.permit(api, call, "git", `${request.directory}: git ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
+          return commandText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call), api, "git");
         } }),
       // Node.js, Rust, Go, .NET and make are tools defined as data (definedTool), as source_read is.
       // Python and its package and test tools without a shell (piki:python, #163), decided as bash's are, like node's.
@@ -2488,7 +2522,7 @@ export class RunnerSession {
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
           const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-          return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call));
+          return commandText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call), api, "python");
         } })]),
       // A headless Chromium in the session's sandbox (piki:browser): one sandboxed command per call, a program operation of
       // its own decided as the other program tools' are, since pages run their scripts, evaluate runs the agent's, and serve
@@ -2849,7 +2883,7 @@ export class RunnerSession {
           const { unbounded } = await this.permit(api, call, definition.name, `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
           const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId),
             { permitted: true, unbounded }, call.abortSignal), call);
-          return text({ ...approval, admissionId: undefined, callId: undefined });
+          return text(await this.shownApproval(approval, api, definition.name));
         } });
     }
     const parameters = Object.fromEntries(Object.entries(definition.parameters).map(([name, parameter]) => {

@@ -13,6 +13,7 @@ import { apiWrites, cliEnvironment, commandWords, optionValues, sandboxDirectory
 import { ghSpec } from '../apps/runner/src/extensions/piki/gh.js';
 import { glabSpec } from '../apps/runner/src/extensions/piki/glab.js';
 import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
+import { fitsModel } from '../apps/runner/src/tool-output.js';
 import { SessionExtensions, type ExtensionHost } from '../apps/runner/src/extensions/adapter.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { loadInstalled, loadSource } from '../apps/runner/src/extensions/load.js';
@@ -250,8 +251,8 @@ test('the gh tool runs gh in the worktree, or a directory in it, and returns its
   await assert.rejects(call({ args: ['fail'] }), /exited with 3\.\n[\s\S]*boom/);
   await assert.rejects(call({ args: ['auth', 'token'] }), /Refused: gh auth token would show its token\. Nothing ran\./);
   const big = await call({ args: ['big'] });
-  assert.ok(big.length < 140 * 1024, 'long output keeps its start and end');
-  assert.match(big, /bytes left out/);
+  assert.ok(fitsModel(big), 'long output keeps its start and end, within what pi-durable gives the model');
+  assert.match(big, /bytes left out here, and not saved/, 'a session that can\'t save it says so');
   assert.match(await call({ args: ['pr', 'merge', '1'] }), /arg=merge/, 'without read-only, anything runs (each call approved as the workspace sets)');
 });
 
@@ -310,6 +311,25 @@ test('in the sandbox: the command runs as the session owner, through the session
   answer = { exitCode: 127, signal: null, output: 'bash: line 1: exec: gh: not found' };
   await assert.rejects(call({ args: ['status'] }), /gh isn't installed where the session's sandbox finds it .*https:\/\/cli\.github\.com/);
   assert.equal(runs.length, 3, 'refusals never reach the sandbox');
+});
+
+test('a long output: its start and end, which hold how it ended, and the whole of it saved where the session says', async t => {
+  const output = `${Array.from({ length: 20_000 }, (_, index) => `ok ${index} - passes`).join('\n')}\nnot ok 20000 - the failure\n`;
+  const saved: [string, string, string][] = [];
+  const session: PikiSession = { hostSignIn: false, sandbox: async () => ({ exitCode: 0, signal: null, output }),
+    saveOutput: async (callId, tool, whole) => { saved.push([callId, tool, whole]); return `tool-output/${tool}-${callId}.txt`; } };
+  const { call } = await ghTool(t, false, session);
+  const text = await call({ args: ['run', 'view', '7', '--log-failed'] });
+  assert.ok(fitsModel(text), 'all of it reaches the model');
+  assert.ok(text.startsWith('ok 0 - passes') && text.endsWith('not ok 20000 - the failure'), 'its start and its end');
+  assert.match(text, /bytes left out here\. The whole output is in tool-output\/gh-call\.txt/);
+  assert.deepEqual(saved, [['call', 'gh', output.trim()]]);
+  // A failed command's reason, and its output's end, both fit too.
+  session.sandbox = async () => ({ exitCode: 1, signal: null, output });
+  await assert.rejects(call({ args: ['run', 'view', '7'] }), error => {
+    const message = (error as Error).message;
+    return message.startsWith('It exited with 1.\nok 0 - passes') && message.endsWith('not ok 20000 - the failure') && fitsModel(message);
+  });
 });
 
 test('in the sandbox, read-only: only commands that read, in the worktree mounted read-only', async t => {
