@@ -35,7 +35,7 @@ test("Actions deployment serves NSH from the origin, removes the preview origin 
   const result = f.run("nsh");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const env = await readFile(join(f.root, ".env"), "utf8");
-  assert.match(env, /^STATIC_CLIENT=nsh$/m);
+  assert.doesNotMatch(env, /^STATIC_CLIENT=/m);
   assert.match(env, /^STATIC_DIR=dist\/preview$/m);
   assert.doesNotMatch(env, /^PREVIEW_/m);
   assert.match(env, /^PIKIBUN_IMAGE=ghcr.io\/opencara\/pikibun:0.26.0$/m);
@@ -43,14 +43,14 @@ test("Actions deployment serves NSH from the origin, removes the preview origin 
   assert.match(env, /^SESSION_SECRET=keep-this-setting$/m);
 });
 
-test("deploying the React client again replaces the NSH settings", { skip: process.platform === "win32" }, async t => {
-  const f = await fixture(t, "STATIC_CLIENT=nsh\nSTATIC_DIR=dist/preview\n");
-  const result = f.run("web");
+test("deploying NSH replaces the removed React client's settings", { skip: process.platform === "win32" }, async t => {
+  const f = await fixture(t, "STATIC_CLIENT=web\nSTATIC_DIR=dist/web\n");
+  const result = f.run("nsh");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const env = await readFile(join(f.root, ".env"), "utf8");
-  assert.match(env, /^STATIC_CLIENT=web$/m);
-  assert.match(env, /^STATIC_DIR=dist\/web$/m);
-  assert.equal(env.match(/^STATIC_CLIENT=/gm)?.length, 1);
+  assert.doesNotMatch(env, /^STATIC_CLIENT=/m);
+  assert.match(env, /^STATIC_DIR=dist\/preview$/m);
+  assert.equal(env.match(/^STATIC_DIR=/gm)?.length, 1);
 });
 
 test("deployments without a client retain the server's existing client settings", { skip: process.platform === "win32" }, async t => {
@@ -72,8 +72,8 @@ test("updating an existing symlinked environment file preserves its link and doe
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.ok((await lstat(join(f.root, ".env"))).isSymbolicLink());
   const env = await readFile(target, "utf8");
-  assert.equal(env.match(/^STATIC_CLIENT=/gm)?.length, 1);
-  assert.match(env, /^STATIC_CLIENT=nsh$/m);
+  assert.doesNotMatch(env, /^STATIC_CLIENT=/m);
+  assert.equal(env.match(/^STATIC_DIR=/gm)?.length, 1);
   assert.doesNotMatch(env, /^PREVIEW_ORIGIN=/m);
   assert.match(env, /^PIKIBUN_IMAGE=ghcr.io\/opencara\/pikibun:0.26.0$/m);
 });
@@ -81,10 +81,10 @@ test("updating an existing symlinked environment file preserves its link and doe
 test("unknown clients fail before Docker or environment changes", { skip: process.platform === "win32" }, async t => {
   const original = "APP_ORIGIN=https://pikibun.com\n";
   const f = await fixture(t, original);
-  for (const client of ["react", "https://preview.example.com", "nsh\nOTHER_SETTING=value", "nsh|anything"]) {
+  for (const client of ["web", "react", "https://preview.example.com", "nsh\nOTHER_SETTING=value", "nsh|anything"]) {
     const result = f.run(client);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /CLIENT must be nsh or web/);
+    assert.match(result.stderr, /CLIENT must be nsh\./);
     assert.equal(await readFile(join(f.root, ".env"), "utf8"), original);
   }
   await assert.rejects(readFile(join(f.root, "docker.log")), { code: "ENOENT" });

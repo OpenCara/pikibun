@@ -29,7 +29,6 @@ RUN node --input-type=module -e "import { nshBinary } from './scripts/nsh.mjs'; 
 COPY apps/nsh apps/nsh
 COPY packages/shared packages/shared
 COPY packages/client packages/client
-# The deprecated React client (apps/web) is no longer built into the image.
 RUN pnpm build:preview
 
 FROM base AS build

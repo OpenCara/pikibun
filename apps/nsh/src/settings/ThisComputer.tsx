@@ -16,18 +16,17 @@ import {
 } from "../ui";
 import { SectionPage, type SectionProps } from "./parts";
 
-// Settings › This Mac (This Computer elsewhere), in the desktop builds: this computer as one of your hosts, as the
-// Electron app's This Mac and its section of the web app's Settings are. The app runs Pikibun's command
-// (`pikibun host --stdio`, lib/this-computer.ts) to pair this computer with the server you're signed in to in one step,
-// start and stop its host, choose its sandbox and models, and sign Pi in to a provider; what this computer lacks to
-// host is listed with how to get it.
+// Settings › This Mac (This Computer elsewhere), in the desktop builds: this computer as one of your hosts. The app runs
+// Pikibun's command (`pikibun host --stdio`, lib/this-computer.ts) to pair this computer with the server you're signed
+// in to in one step, start and stop its host, choose its sandbox and models, and sign Pi in to a provider; what this
+// computer lacks to host is listed with how to get it.
 
 const stateLabels: Record<HostState, string> = {
   stopped: "Stopped", starting: "Starting", connecting: "Connecting", connected: "Online", disconnected: "Reconnecting", stopping: "Stopping",
 };
 const hostOf = (origin: string) => { try { return new URL(origin).host; } catch { return origin; } };
 
-// The consent dialog: the CLI's own --unsafe-no-sandbox warning, as the Electron app shows it natively.
+// The consent dialog: the CLI's own --unsafe-no-sandbox warning.
 setUnsandboxedConsent((warning, server, missing) => confirm({
   title: `Run ${hostOf(server)}'s agent work directly on ${computerName}?`,
   message: `${missing.length ? `The isolated sandbox needs ${missing.join(", ")}, so the host would run unsandboxed.\n\n` : ""}${warning || "Approved commands run as you, with access to your files, credentials and network, and no resource limits."}`,

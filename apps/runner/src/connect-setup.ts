@@ -45,16 +45,15 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
     const found = windowsBuild() ?? release().split(".")[2] ?? "unknown";
     const build = Number(found.split(".")[0]);
     const sdk = mxcEntry(runtime);
-    // The CLI's own Node; a desktop app's connector runs on Electron, which can't run the sandbox's steps (sandboxNodePath).
+    // The connector's own Node, which runs the sandbox's steps (sandboxNodePath).
     const node = sandboxNodePath();
     const result: Prerequisite[] = [{ name: "Git for Windows (git on PATH)", ok: gitForWindowsRoot() !== undefined, fix: fixes.gitForWindows },
       { name: `busybox-w32, the sandbox's shell (${SANDBOX_SHELL_HINT}; or set PIKIBUN_SANDBOX_SHELL)`, ok: sandboxShellPath() !== undefined, fix: fixes.busybox },
-      ...(process.versions.electron ? [{ name: "Node.js 24 or newer for the sandbox's steps (node on PATH, or set PIKIBUN_SANDBOX_NODE)", ok: node !== undefined, fix: fixes.nodeForWindows }] : []),
       { name: `Windows 11 24H2 or later (build 26100+, found ${found})`, ok: build >= 26100, fix: fixes.windowsUpdate },
       { name: `Microsoft MXC SDK ${MXC_SDK_VERSION} in ${runtime} (install: ${mxcInstallHint(runtime)})`, ok: sdk !== undefined, fix: fixes.mxcSdk(runtime) }];
     // The update level decides whether sessions can work, and its number differs between releases (25H2 is 26200.x,
     // 26H2 26300.x), so Windows is asked: one container with a session's network policy, resolving a path in it.
-    if (sdk && node && build >= 26100) {
+    if (sdk && build >= 26100) {
       const support = await windowsSandboxSupport(sdk, node);
       result.push(
         { name: `Windows' process container for sessions, with proxy-only egress (MXC's base-container tier)${support.container ? "" : `: ${support.detail}`}`, ok: support.container, fix: fixes.windowsUpdate },

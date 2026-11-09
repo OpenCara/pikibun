@@ -6,10 +6,10 @@ import type {
 } from "../../../runner/src/desktop-protocol";
 
 // This computer as a host, in the desktop builds (Settings › This Mac, or This Computer): the app runs `pikibun host
-// --stdio` (apps/runner/src/host-cli.ts) and talks to it as the Electron app talks to its bundled host, with JSON lines
-// on its stdin and framed events on its stdout (desktop-protocol.ts). The host's connector state is the CLI's own, so a
-// computer paired with `pikibun connect` (or the Electron app's primary server) is adopted as it is; only one of them
-// runs at a time. Hosting lasts while the app is open, and resumes when it opens again if it was running when it quit.
+// --stdio` (apps/runner/src/host-cli.ts) and talks to it with JSON lines on its stdin and framed events on its stdout
+// (desktop-protocol.ts). The host's connector state is the CLI's own, so a computer paired with `pikibun connect` (or
+// the former Electron app's primary server) is adopted as it is; only one of them runs at a time. Hosting lasts while
+// the app is open, and resumes when it opens again if it was running when it quit.
 //
 // NSH runs a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,
 // nvm's and npm's directories. So on macOS and Linux the owner's login shell starts the command, as Terminal would
@@ -117,7 +117,7 @@ const isHostEvent = (value: unknown): value is HostEvent => typeof value === "ob
 
 /**
  * The host process, started on the first request and never restarted by itself: an exit is reported, and the next
- * request starts a fresh one. As apps/desktop's HostProcess, on NSH's process API.
+ * request starts a fresh one.
  */
 class HostChannel {
   private link?: HostLink;

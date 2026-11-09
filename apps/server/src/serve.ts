@@ -87,8 +87,8 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
     sweep('cross-session notifications', 15_000, () => runCrossSessionNotifications(env)),
   ];
 
-  const serveStatic = createStaticHandler(staticDir, config.staticClient);
-  const servePreview = preview ? createStaticHandler(preview.staticDir, 'nsh') : undefined;
+  const serveStatic = createStaticHandler(staticDir);
+  const servePreview = preview ? createStaticHandler(preview.staticDir) : undefined;
   app.notFound(async c => {
     if ((c.req.method !== 'GET' && c.req.method !== 'HEAD') || c.req.path.startsWith('/api/')) {
       return c.json({ error: 'Not found.', code: 'not_found' }, 404);

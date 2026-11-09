@@ -4,9 +4,9 @@ import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
 
-// The app's UI kit on NSH's primitives, drawn as the web app's (apps/web/src/ui.tsx and styles.css): quiet, spacious
-// chrome where hierarchy comes from weight and color, not size, and there is one accent call to action per surface.
-// Each widget names the web app's class it follows; keep the two alike.
+// The app's UI kit on NSH's primitives, first drawn as the React web client's: quiet, spacious chrome where hierarchy
+// comes from weight and color, not size, and there is one accent call to action per surface. Each widget names the web
+// client's CSS class it was drawn from.
 
 /**
  * `primary` is the one accent CTA per surface (the web's `default`); `default` a filled secondary button; `outline` row

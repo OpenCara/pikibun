@@ -93,7 +93,7 @@ quick tunnel that the connector runs on the host.
 | cloudflared: found, at a path, downloaded; quick tunnels and forwarding | `apps/runner/src/cloudflared.ts`, `tunnel-host.ts`; `connector.ts` |
 | Host configuration | `packages/shared/src/host-config.ts` (`serviceLifetimeSeconds`, `tunnel`); `apps/server/src/host-config.ts`; migrations `0053` (SQLite) and `0046` (Postgres) |
 | Reports, audit, the session list's mark, Stop | `apps/server/src/session-tunnels.ts`; `sessions.ts` (archive) |
-| The apps | `apps/web/src/session-panel.tsx` (`TunnelSection`), `tunnel-tag.tsx`, `settings/HostExtensions.tsx` (`TunnelSetup`), `settings/HostConfig.tsx`, `settings/WorkspaceExtensions.tsx` |
+| The apps | `apps/nsh/src/session-panel/Details.tsx` (`TunnelSection`), `screens/SessionList.tsx` (the list's mark), `settings/host-extensions.tsx` (cloudflared), `settings/workspace-extensions.tsx` |
 | Tests | `tests/tunnel.test.ts` (with a stand-in cloudflared, `tests/helpers/fake-cloudflared.ts`), `runner-tunnel.test.ts`, `session-tunnels.test.ts` |
 
 ## Later

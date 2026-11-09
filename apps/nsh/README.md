@@ -2,8 +2,8 @@
 
 An experimental client written in TSX on [Native Shell](https://nsh.dev) (NSH, pinned in `scripts/nsh.mjs`) for the
 web, iOS, Android, macOS, Windows and Linux. Its web build is every server's client: the one pikibun.com serves and the
-only one the Docker image and `pikibun serve` ship. It and the deprecated React web client use the same backend,
-`@pikibun/client` and `packages/shared`. See [choosing the web client](../../docs/self-hosting.md#choosing-the-web-client).
+only one the Docker image and `pikibun serve` ship. It replaced the React web client and the Electron desktop app, which
+are removed, on the same backend, `@pikibun/client` and `packages/shared`. See [the web client](../../docs/self-hosting.md#the-web-client).
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
 (longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), a chooser of any file outside
@@ -49,14 +49,13 @@ needs a decision stand out:
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
   pending approvals docked above the chat box; the chat box's pickers (shared or side ask, model, reasoning, access)
   along its bottom edge. Details (owner, host, visibility, ID) are in the session's panel.
-- **Kit**: drawn as the production React client's (`apps/web/src/styles.css` and `ui.tsx`), so both look alike.
-  `src/tokens.ts` has the web app's three themes (light, dark and Pikibun's night theme) under its CSS variables' names,
-  and `tests/nsh-theme.test.ts` fails when they differ from the stylesheet's; `src/theme.ts` builds the palettes from
-  them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget follows
+- **Kit**: first drawn as the React web client's. `src/tokens.ts` has its three themes (light, dark and Pikibun's night
+  theme) under its CSS variables' names; `src/theme.ts` builds the palettes from
+  them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget was drawn from
   (buttons, badges, alerts, sections of rows, nav items, chips, pickers on `Menu`: a popup on the desktops and the web,
   a sheet on phones; right-click menus on `ContextMenu` (`RowMenu`), which a finger held on the row opens as a sheet on
   touch screens); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
-  the two differ on purpose: the sidebar keeps a search box, tool rows
+  it differs from the React client on purpose: the sidebar keeps a search box, tool rows
   name what they work on, approval cards say what they ask in words, and message actions open a sheet rather than
   appear on hover.
 
@@ -93,17 +92,17 @@ the latest (`app-v1.2.3-beta.1` makes a prerelease), and iOS to TestFlight. Its 
 and the secrets it needs are in [docs/development.md](../../docs/development.md). To package one by hand, for this
 machine's platforms: `pnpm nsh package App.tsx --target macos` (or `windows`, `linux`, `android`, `ios`).
 
-## What the web app has that this client doesn't
+## What the React client had that this client doesn't
 
-Every page of the React client is here, drawn with the same kit: sign-in, the sidebar and Sessions, a new session, a
+Every page of the React client is here: sign-in, the sidebar and Sessions, a new session, a
 session with its header menu and its panel (Details, Approvals, Files, Browser, Schedules, Activity), a share link, an
 invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
 Administration). What is left out, and why:
 
 - **This Computer**: the desktop builds have it ([below](#this-computer)) for this computer as a host of the server
-  signed in to. What the Electron app's adds is left out: hosts for several servers at once, WSL2 on Windows, running
+  signed in to. What the Electron app's had is left out: hosts for several servers at once, WSL2 on Windows, running
   Pikibun itself here (`pikibun serve`), installing prerequisites itself, and hosting while the app is closed (its tray).
-  In a browser, as in the web app's, there is no such section.
+  In a browser there is no such section.
 - **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058), and NSH
   has no local notifications either; the web build turns them on in the browser as the web app does (Web Push through
   the `sw.js` the build ships, or while a tab is open), and every build manages the account's preferences and devices.
@@ -119,7 +118,7 @@ Administration). What is left out, and why:
 ## This Computer
 
 In the macOS, Windows and Linux builds, **Settings → This Mac** (This Computer elsewhere; `#/settings/desktop`, as the
-web app's address for it) makes this computer one of your hosts, as the Electron app's This Mac does:
+React web client's address for it) makes this computer one of your hosts:
 
 - **Pair in one step** with the server signed in to: the app creates a pairing for you and hands its code straight to
   the host, once everything else is settled (prerequisites, the unsandboxed consent), so a refusal leaves no unused code.
@@ -133,7 +132,7 @@ web app's address for it) makes this computer one of your hosts, as the Electron
 
 The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command (`npm install -g
 pikibun@latest`, which the page offers when it's missing or too old) as `pikibun host --stdio`
-(`apps/runner/src/host-cli.ts`, the same host the Electron app bundles: `app-host.ts`), and talks to it with JSON lines
+(`apps/runner/src/host-cli.ts` and `app-host.ts`), and talks to it with JSON lines
 on its stdin and stdout (`desktop-protocol.ts`), where pairing codes and API keys travel; never its command line.
 NSH starts a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,
 nvm's and npm's directories, so the owner's login shell starts it (`$SHELL -ilc 'exec pikibun host --stdio'`, as

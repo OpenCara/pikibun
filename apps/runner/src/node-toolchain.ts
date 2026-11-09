@@ -40,12 +40,9 @@ export interface NodeToolchain {
 const directory = (path: string) => { try { return statSync(path).isDirectory(); } catch { return false; } };
 
 /**
- * The connector's own Node.js, where the connector runs on it: none in the desktop app, which runs on Electron's
- * embedded Node (the app's own executable, which can't run as plain Node), and none where its executable can't be
- * resolved or isn't an installation's bin/node.
+ * The connector's own Node.js: none where its executable can't be resolved or isn't an installation's bin/node.
  */
 export function connectorNode(execPath = process.execPath, versions: NodeJS.ProcessVersions = process.versions): NodeToolchain | undefined {
-  if (versions.electron) return undefined;
   let real: string;
   try { real = realpathSync(execPath); } catch { return undefined; }
   const bin = dirname(real);

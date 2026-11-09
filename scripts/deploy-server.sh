@@ -2,8 +2,8 @@
 # Runs on the deployment server, over Tailscale SSH from .github/workflows/deploy-server.yml:
 #   ssh user@host bash -s -- IMAGE DIR [CLIENT] < scripts/deploy-server.sh
 # DIR holds the server's docker-compose.yml (whose pikibun service has `image: ${PIKIBUN_IMAGE...}`) and its .env.
-# CLIENT, when given, is the web client the server's origin serves: nsh (the Native Shell build, dist/preview) or web
-# (the React build, dist/web). It is written to .env as STATIC_CLIENT and STATIC_DIR, and any separate preview origin
+# CLIENT, when given, is the web client the server's origin serves: nsh (the Native Shell build, dist/preview), the only
+# one. It is written to .env as STATIC_DIR, a leftover STATIC_CLIENT is dropped, and any separate preview origin
 # (PREVIEW_ORIGIN, PREVIEW_STATIC_DIR) is removed: the one origin serves the one client. Without it, .env keeps them.
 # Pulls IMAGE, records it as PIKIBUN_IMAGE in .env (so a later `docker compose up -d` keeps it), recreates the pikibun
 # service with it and waits for the container's health check. Migrations run when the new container starts, so a failed
@@ -18,9 +18,8 @@ timeout=${DEPLOY_HEALTH_TIMEOUT:-180}
 case "$client" in
   '') ;;
   nsh) static_dir=dist/preview ;;
-  web) static_dir=dist/web ;;
   *)
-    echo "CLIENT must be nsh or web." >&2
+    echo "CLIENT must be nsh." >&2
     exit 1
     ;;
 esac
@@ -54,7 +53,7 @@ unset_env() {
 set_env PIKIBUN_IMAGE "$image"
 # Unconfigured installations keep their existing client settings; production Actions supplies the client explicitly.
 if [ -n "$client" ]; then
-  set_env STATIC_CLIENT "$client"
+  unset_env STATIC_CLIENT
   set_env STATIC_DIR "$static_dir"
   unset_env PREVIEW_ORIGIN
   unset_env PREVIEW_STATIC_DIR

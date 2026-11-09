@@ -181,8 +181,7 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     builds. The Linux sandbox mounts each read-only below `/opt/pikibun/node` for shell commands, laid out as on the
     host, with the links, unless they are in `/usr`, which every sandbox sees; the macOS sandbox adds each to the paths
     steps may read and run. Nothing is downloaded, and the session can't change them. PATH falls back to
-    `/usr/bin:/bin` where it is empty, so it never holds an empty entry, the command's own directory. Not given: the desktop app's connector runs on Electron's embedded Node, which can't run
-    as plain Node; the Windows sandbox and unsandboxed hosts run the Node.js on the commands' PATH, the host owner's
+    `/usr/bin:/bin` where it is empty, so it never holds an empty entry, the command's own directory. Not given: the Windows sandbox and unsandboxed hosts run the Node.js on the commands' PATH, the host owner's
     choice there. A version a project asks for (`.nvmrc`, `.node-version`, `engines.node`) would be provisioned next,
     from the npm registry's `node-<platform>-<arch>` packages through the egress proxy.
 
@@ -474,7 +473,7 @@ of the host check each message before the agent sees it, and refuses those that 
 | The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session.ts` (the `browser` tool, `browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
 | The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |
-| The Browser tab | `apps/web/src/session-browser.tsx` |
+| The Browser tab | `apps/nsh/src/session-panel/Browser.tsx` |
 | Session tools: catalogue, switch, refusal | `packages/shared/src/piki-extensions.ts` (`sessionTools`, `sessionToolsOff`, `pikiExtensionOn`, `extensionSwitchOn`, `documentKindsOff`); `session.ts` (`applyOptions`, `requireSessionTool`, `documentKindsOff`); tests in `tests/runner-schedule.test.ts` |
 | Tools defined as data (node, rust, go, dotnet, make, source_read) | [tool-definitions.md](tool-definitions.md) |
 | gh, glab, az: refused and read-only arguments, token variables | `apps/runner/src/extensions/piki/{gh,glab,azure-cli}.ts` |
@@ -482,7 +481,7 @@ of the host check each message before the agent sees it, and refuses those that 
 | The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/authority/api-access.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
 | Added on binding; a connector's list; install requests refused | `apps/server/src/authority/extension-policy.ts` (`addPikiExtensions`), called from `authority/repositories.ts`; `apps/server/src/extensions.ts`; migrations `0048`/`0041` |
-| Workspace and host pages | `apps/web/src/settings/WorkspaceExtensions.tsx`, `HostExtensions.tsx` |
+| Workspace and host pages | `apps/nsh/src/settings/workspace-extensions.tsx`, `host-extensions.tsx` |
 | Tests | `tests/piki-extensions.test.ts`, `api-access.test.ts`, and in `push-broker`, `host-extensions`, `extensions`, `repositories`, `local-connector` |
 
 ## Later
