@@ -1,5 +1,6 @@
 import { signal, Text, View, type JSX } from "nsh";
 import { session } from "../lib/auth";
+import { computerTitle, hostsHere } from "../lib/this-computer";
 import { Icon, type IconName } from "../icons";
 import { palette, radius, text, weight } from "../theme";
 import { NavItem, Row } from "../ui";
@@ -10,6 +11,7 @@ import { Notifications } from "./Notifications";
 import { Password } from "./Password";
 import type { SectionProps } from "./parts";
 import { Profile } from "./Profile";
+import { ThisComputer } from "./ThisComputer";
 import { Workspaces } from "./Workspaces";
 
 export interface SettingsSection {
@@ -21,6 +23,8 @@ export interface SettingsSection {
   admin?: boolean;
   /** Only where the server takes passwords, or the account still has one to remove. */
   passwords?: boolean;
+  /** Only in the desktop builds, which can run this computer's host. */
+  desktop?: boolean;
   Component: (props: SectionProps) => JSX.Element;
 }
 
@@ -47,6 +51,8 @@ export const settingsSections: readonly SettingsSection[] = [
   { id: "password", label: "Password", icon: "lock", passwords: true, Component: Password },
   { id: "notifications", label: "Notifications", icon: "bell", Component: Notifications },
   { id: "hosts", label: "Hosts", icon: "server", Component: Hosts },
+  // This computer as one of your hosts (the web app's address for it: #/settings/desktop).
+  { id: "desktop", label: computerTitle, icon: "monitor", desktop: true, Component: ThisComputer },
   { id: "workspaces", label: "Workspaces", icon: "users", Component: Workspaces },
   { id: "appearance", label: "Appearance", icon: "palette", Component: Appearance },
   { id: "admin", label: "Administration", icon: "shield", admin: true, Component: Administration },
@@ -56,7 +62,7 @@ export const settingsSections: readonly SettingsSection[] = [
 export function visibleSections(shown?: string): SettingsSection[] {
   const { user } = session();
   const admin = Boolean(user.instanceAdmin);
-  return settingsSections.filter(section => (!section.admin || admin)
+  return settingsSections.filter(section => (!section.admin || admin) && (!section.desktop || hostsHere)
     && (!section.passwords || user.hasPassword || shown === section.id || passwordsOffered()));
 }
 

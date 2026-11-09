@@ -8,8 +8,8 @@ production React web client and Electron app at `pikibun.com`. Both use the same
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
 (longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), a chooser of any file outside
 a browser (longbridge/nsh#162; the web build picks any file through its page's host, the desktops take files dropped
-or pasted from a file manager, and phones pick photos), and running the `pikibun` connector from the app (run
-`pikibun connect`, or `pikibun serve` for yourself, instead).
+or pasted from a file manager, and phones pick photos), and bundling the `pikibun` connector inside the app (the
+desktop builds run the installed command instead: see [This Computer](#this-computer)).
 
 ## Run it
 
@@ -99,10 +99,10 @@ session with its header menu and its panel (Details, Approvals, Files, Browser, 
 invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
 Administration). What is left out, and why:
 
-- **This Computer** isn't a page of the web app: React lists it only inside the Electron desktop app, whose own
-  process runs this computer's host, its servers and a local Pikibun (`window.pikibunDesktop`). In a browser, as here,
-  there is no such section. The NSH desktop builds don't run the connector either: it ships only inside the Electron
-  app, and `pikibun connect` takes its pairing code only at a hidden terminal prompt.
+- **This Computer**: the desktop builds have it ([below](#this-computer)) for this computer as a host of the server
+  signed in to. What the Electron app's adds is left out: hosts for several servers at once, WSL2 on Windows, running
+  Pikibun itself here (`pikibun serve`), installing prerequisites itself, and hosting while the app is closed (its tray).
+  In a browser, as in the web app's, there is no such section.
 - **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058), and NSH
   has no local notifications either; the web build turns them on in the browser as the web app does (Web Push through
   the `sw.js` the build ships, or while a tab is open), and every build manages the account's preferences and devices.
@@ -114,6 +114,37 @@ Administration). What is left out, and why:
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
   they are offered on the web build only; native builds point to Pikibun on the web.
+
+## This Computer
+
+In the macOS, Windows and Linux builds, **Settings → This Mac** (This Computer elsewhere; `#/settings/desktop`, as the
+web app's address for it) makes this computer one of your hosts, as the Electron app's This Mac does:
+
+- **Pair in one step** with the server signed in to: the app creates a pairing for you and hands its code straight to
+  the host, once everything else is settled (prerequisites, the unsandboxed consent), so a refusal leaves no unused code.
+  A computer paired with another server is paired again only by replacing that pairing, after saying so.
+- **Start and stop** the host, with the CLI's own `--unsafe-no-sandbox` warning in a native dialog where there is no
+  sandbox; on macOS, choose **None** or **macOS sandbox** (Seatbelt, experimental). Linux uses bubblewrap where it is
+  installed; Windows its own sandbox, experimental, or none after consent.
+- **Models offered** (Pi's choice, or the ones checked), **Sign Pi in to a provider** (Pi's own `/login`, run on this
+  computer: its page opens in the browser, a device code or API key is asked here, and the credential stays in Pi's
+  configuration), **Prerequisites** with what to run for each missing one, and the host's recent activity.
+
+The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command (`npm install -g
+pikibun@latest`, which the page offers when it's missing or too old) as `pikibun host --stdio`
+(`apps/runner/src/host-cli.ts`, the same host the Electron app bundles: `app-host.ts`), and talks to it with JSON lines
+on its stdin and stdout (`desktop-protocol.ts`), where pairing codes and API keys travel; never its command line.
+NSH starts a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,
+nvm's and npm's directories, so the owner's login shell starts it (`$SHELL -ilc 'exec pikibun host --stdio'`, as
+Terminal would; zsh, bash or sh, else the platform's), and on Windows `cmd /d /c pikibun host --stdio`, which finds
+npm's `pikibun.cmd`. `nsh.json` grants exactly those programs (`capabilities.process`), by name, since it is every
+target's and an absolute path of one platform isn't one on another (NSH refuses to build or start with one), and the
+environment the connector needs. The host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
+one of them runs at a time. Hosting lasts while the app is open, and starts again at the next launch if it was running
+when the app quit, with the consent given then (`src/lib/this-computer.ts`).
+
+`tests/this-computer.test.tsx` runs the page against a stand-in for the command that speaks its protocol
+(`tests/harness/this-computer.tsx`); `tests/host-cli.test.ts`, at the repository's root, runs the command itself.
 
 ## Known gaps, from NSH itself
 
