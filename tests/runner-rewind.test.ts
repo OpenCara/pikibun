@@ -23,8 +23,8 @@ function binding(id: string, ownerId = ALICE, modelId = "faux-1", workspaceId = 
   return {
     session: { id, workspaceId, ownerId, agentVersionId: "version-1", title: "Rewind", policyVersion: 1, status: "ready", createdAt, repositories: [], repositoryMode: "clone" },
     owner: { id: ownerId, githubId: null, githubLogin: ownerId.slice(5), displayName: ownerId.slice(5), gitName: "Owner", gitEmail: "owner@example.test", env: {}, githubConnected: false },
-    agent: { id: "version-1", agentId: "agent", authorId: ownerId, workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["identity"], modelId: "model-1", createdAt },
-    model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId },
+    agent: { id: "version-1", agentId: "agent", authorId: ownerId, workspaceId, version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["identity"], modelId: "model-1", createdAt },
+    model: { id: "model-1", workspaceId, name: "Model", provider: "faux", modelId },
   };
 }
 
