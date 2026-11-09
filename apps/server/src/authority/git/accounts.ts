@@ -3,6 +3,7 @@ import type { GitAccount, GitProvider, ProviderRepository, ProviderRepositoryLis
 import { gitProviderHosts, gitProviderNames, gitProviders, plainRepositoryPath, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../../packages/shared/src/repositories.js';
 import type { Env, GitCredentialRow, WorkerEnv } from '../../types.js';
 import { auditStatement } from '../audit.js';
+import { revokeGitHubToken } from '../auth.js';
 import { getUser } from '../../db.js';
 import { fail, id, identifier, jsonObject, now, testMode } from '../../http.js';
 import { decryptToken, encryptToken } from '../vault.js';
@@ -186,7 +187,20 @@ export function registerGitAccounts(app: Hono<WorkerEnv>): void {
 
   app.delete('/api/git/accounts/:id', async c => {
     const userId = c.get('auth').userId;
-    if (c.req.param('id') === 'github') fail(400, 'github_account_fixed', 'The GitHub sign-in connection cannot be removed here.');
+    if (c.req.param('id') === 'github') {
+      // Disconnecting GitHub deletes the sign-in token, as when it stopped working; the owner stays signed in to Pikibun
+      // and connects again by signing in with GitHub, which stores a new one.
+      const user = await getUser(c.env, userId);
+      const removed = user?.auth_kind === 'github'
+        ? await c.env.DB.query<{ ciphertext: string }>('DELETE FROM github_tokens WHERE user_id = ? RETURNING ciphertext').bind(userId).first()
+        : null;
+      if (!removed) fail(404, 'not_found', 'Git account not found.');
+      await auditStatement(c.env, userId, 'git.account.removed', null, null,
+        { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }).run();
+      // GitHub forgets it as well, so a copy elsewhere stops working; the vault no longer holds it either way.
+      try { await revokeGitHubToken(c.env, await decryptToken(c.env, userId, removed.ciphertext)); } catch { /* best effort */ }
+      return c.body(null, 204);
+    }
     const removed = await c.env.DB.query<Pick<GitCredentialRow, 'id' | 'provider' | 'host' | 'organization'>>('DELETE FROM git_credentials WHERE id = ? AND user_id = ? RETURNING id, provider, host, organization')
       .bind(identifier(c.req.param('id')), userId).first();
     if (!removed) fail(404, 'not_found', 'Git account not found.');

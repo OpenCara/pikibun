@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState, type FormEvent } from "react";
 import { gitProviderHosts, gitProviderNames, gitProviders, type GitAccount, type TokenGitProvider } from "../../../../packages/shared/src/repositories";
+import type { UserProfile } from "../../../../packages/shared/src/types";
 import { api, segment } from "../api";
 import { useApp } from "../app-context";
 import { GitHubMark, Icon } from "../icons";
@@ -30,10 +31,25 @@ function providerHost(provider: TokenGitProvider): string {
 /** The Git group of the profile's Connected accounts: one row per supported Git provider, like the document providers,
  * each with its connected accounts under it. GitHub is the sign-in account; the others connect with tokens. */
 export function GitAccountsGroup() {
-  const { user } = useApp();
+  const { user, setUser } = useApp();
   const { accounts, loading, error, refresh } = useGitAccounts();
   const action = useAction();
   const [connecting, setConnecting] = useState<TokenGitProvider | null>(null);
+  async function disconnectGitHub() {
+    if (action.busy) return;
+    const confirmed = await confirmDialog({
+      title: "Disconnect GitHub",
+      message: `Disconnect ${user.githubLogin ? `@${user.githubLogin}` : "your GitHub account"}? Its token is deleted from the server and revoked with GitHub. You stay signed in, but sessions you own can't read github.com repositories, open pull requests or push with your account until you sign in with GitHub again.`,
+      confirmLabel: "Disconnect",
+      destructive: true,
+    });
+    if (!confirmed) return;
+    void action.run(async () => {
+      await api("/api/git/accounts/github", { method: "DELETE" });
+      setUser((await api<{ user: UserProfile }>("/api/me")).user);
+      refresh();
+    }, "GitHub disconnected.");
+  }
   async function remove(account: GitAccount) {
     if (action.busy) return;
     const confirmed = await confirmDialog({
@@ -59,7 +75,10 @@ export function GitAccountsGroup() {
         : <Row leading={<GitHubMark />} title={gitProviderNames.github}
             hint={user.githubConnected ? `${gitProviderHosts.github.default} · ${user.githubLogin ? `@${user.githubLogin} · ` : ""}signed in` : `${gitProviderHosts.github.default} · Not connected`}
             trailing={user.githubConnected
-              ? <StatusBadge tone="success">Connected</StatusBadge>
+              ? <>
+                <StatusBadge tone="success">Connected</StatusBadge>
+                <Button variant="ghost" size="sm" disabled={action.busy} aria-label="Disconnect GitHub" onClick={() => void disconnectGitHub()}>Disconnect</Button>
+              </>
               : <LinkButton variant="outline" size="sm" href="/api/auth/github">Sign in</LinkButton>} />}
       <ResourceState loading={loading && !accounts} error={error} retry={refresh}>
         {tokenProviders.map(provider => {

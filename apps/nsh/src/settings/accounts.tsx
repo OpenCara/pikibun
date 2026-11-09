@@ -4,7 +4,8 @@ import {
 } from "../../../../packages/shared/src/repositories";
 import { documentKindNames, documentKinds, secretKinds, type DocumentKind, type FeishuDomain, type SourceAccountList } from "../../../../packages/shared/src/sources";
 import { segment } from "../shared";
-import { session } from "../lib/auth";
+import type { UserProfile } from "../../../../packages/shared/src/types";
+import { session, updateUser } from "../lib/auth";
 import { openServerLink, opensServerPages } from "../lib/links";
 import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
@@ -75,6 +76,16 @@ function GitAccountsGroup() {
       accounts.refresh();
     }, "Git account removed.");
   }
+  async function disconnectGitHub() {
+    if (action.busy()) return;
+    if (!await confirm({ title: "Disconnect GitHub", destructive: true, confirmLabel: "Disconnect",
+      message: `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from the server and revoked with GitHub. You stay signed in, but sessions you own can't read github.com repositories, open pull requests or push with your account until you sign in with GitHub again.` })) return;
+    void action.run(async () => {
+      await session().api("/api/git/accounts/github", { method: "DELETE" });
+      updateUser((await session().api<{ user: UserProfile }>("/api/me")).user);
+      accounts.refresh();
+    }, "GitHub disconnected.");
+  }
   return (
     <View testID="git-accounts" style={{ gap: 8 }}>
       <GroupTitle>Git</GroupTitle>
@@ -85,7 +96,10 @@ function GitAccountsGroup() {
             trailing={<Badge tone="warning">Not available</Badge>} />}>
           <Row leading={<Icon name="github" size={16} color={palette().muted} />} title={gitProviderNames.github}
             hint={user().githubConnected ? `${gitProviderHosts.github.default} · ${user().githubLogin ? `@${user().githubLogin} · ` : ""}signed in` : `${gitProviderHosts.github.default} · Not connected`}
-            trailing={user().githubConnected ? <Badge tone="success">Connected</Badge>
+            trailing={user().githubConnected ? <>
+                <Badge tone="success">Connected</Badge>
+                <Button small variant="ghost" label="Disconnect" testID="disconnect-github" disabled={action.busy()} onPress={() => void disconnectGitHub()} />
+              </>
               : opensServerPages ? <Button small variant="outline" label="Sign in" onPress={() => openServerLink("/api/auth/github")} /> : "Sign in on the web"} />
         </If>
         <ResourceState inline loading={accounts.loading() && !accounts.data()} error={accounts.error()} retry={accounts.refresh}>

@@ -803,7 +803,6 @@ test('token accounts are verified, stored encrypted, never returned, private to 
   const page = await json(await alice.request('GET', `/api/git/accounts/${account.id}/repositories`));
   assert.deepEqual(page, { repositories: [{ id: '42', fullName: 'acme/tools', defaultBranch: 'main', private: true } satisfies ProviderRepository], truncated: false });
   assert.equal(remote.calls.at(-1)!.authorization, 'token rotated-gitea-token');
-  await denied(await alice.request('DELETE', '/api/git/accounts/github'), 400, 'github_account_fixed');
   await denied(await alice.request('DELETE', `/api/git/accounts/${account.id}`, undefined, { 'X-CSRF-Token': '' }), 403, 'invalid_csrf');
   assert.equal((await alice.request('DELETE', `/api/git/accounts/${account.id}`)).status, 204);
   await denied(await alice.request('GET', `/api/git/accounts/${account.id}/repositories`), 404, 'not_found');
@@ -811,6 +810,39 @@ test('token accounts are verified, stored encrypted, never returned, private to 
   const audit = f.sqlite.prepare("SELECT action, detail_json FROM audit WHERE action LIKE 'git.account.%' ORDER BY created_at, action").all();
   assert.deepEqual(audit.map(row => row.action).sort(), ['git.account.connected', 'git.account.connected', 'git.account.removed']);
   for (const secret of [giteaToken(alice), 'rotated-gitea-token']) assert.ok(!JSON.stringify(audit).includes(secret));
+});
+
+test('disconnecting GitHub deletes the sign-in token, revokes it with GitHub and keeps the owner signed in', async t => {
+  const f = await fixture(t); const alice = await f.client('alice'); const bob = await f.client('bob');
+  f.env.GITHUB_CLIENT_ID = 'Iv1.client'; f.env.GITHUB_CLIENT_SECRET = 'client-secret';
+  const calls: { url: string; method: string | undefined; authorization: string | null; body: unknown }[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), method: init?.method, authorization: new Headers(init?.headers).get('authorization'),
+      body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+    return new Response(null, { status: 204 });
+  });
+  const tokens = () => f.sqlite.prepare('SELECT user_id FROM github_tokens ORDER BY user_id').all().map(row => row.user_id);
+  await denied(await alice.request('DELETE', '/api/git/accounts/github', undefined, { 'X-CSRF-Token': '' }), 403, 'invalid_csrf');
+  assert.equal((await alice.request('DELETE', '/api/git/accounts/github')).status, 204);
+  assert.deepEqual(tokens(), [bob.user.id]);
+  assert.deepEqual(calls, [{ url: 'https://api.github.com/applications/Iv1.client/token', method: 'DELETE',
+    authorization: `Basic ${Buffer.from('Iv1.client:client-secret').toString('base64')}`, body: { access_token: alice.githubToken } }]);
+  // Still signed in, now without GitHub: the profile says so and the sign-in account is no longer listed.
+  const { user } = await json<{ user: { githubConnected: boolean } }>(await alice.request('GET', '/api/me'));
+  assert.equal(user.githubConnected, false);
+  assert.deepEqual((await json<{ accounts: GitAccount[] }>(await alice.request('GET', '/api/git/accounts'))).accounts, []);
+  await denied(await alice.request('DELETE', '/api/git/accounts/github'), 404, 'not_found');
+  assert.equal(calls.length, 1);
+  const audit = f.sqlite.prepare("SELECT actor_id, detail_json FROM audit WHERE action = 'git.account.removed'").all();
+  assert.deepEqual(audit.map(row => [row.actor_id, JSON.parse(String(row.detail_json))]),
+    [[alice.user.id, { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }]]);
+  assert.ok(!JSON.stringify(audit).includes(alice.githubToken));
+
+  // GitHub out of reach: the token still leaves the vault.
+  calls.length = 0;
+  t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('fetch failed'); });
+  assert.equal((await bob.request('DELETE', '/api/git/accounts/github')).status, 204);
+  assert.deepEqual(tokens(), []);
 });
 
 test('account input is validated before any provider request and rejected tokens are not stored', async t => {
