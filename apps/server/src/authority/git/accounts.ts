@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import type { GitAccount, GitProvider, ProviderRepository, ProviderRepositoryList, TokenGitProvider } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviderHosts, gitProviderNames, gitProviders, plainRepositoryPath, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../../packages/shared/src/repositories.js';
 import type { Env, GitCredentialRow, WorkerEnv } from '../../types.js';
-import { auditStatement } from '../audit.js';
+import { auditAfterChange, auditStatement } from '../audit.js';
 import { revokeGitHubToken } from '../auth.js';
 import { getUser } from '../../db.js';
 import { fail, id, identifier, jsonObject, now, testMode } from '../../http.js';
@@ -190,15 +190,18 @@ export function registerGitAccounts(app: Hono<WorkerEnv>): void {
     if (c.req.param('id') === 'github') {
       // Disconnecting GitHub deletes the sign-in token, as when it stopped working; the owner stays signed in to Pikibun
       // and connects again by signing in with GitHub, which stores a new one.
-      const user = await getUser(c.env, userId);
-      const removed = user?.auth_kind === 'github'
-        ? await c.env.DB.query<{ ciphertext: string }>('DELETE FROM github_tokens WHERE user_id = ? RETURNING ciphertext').bind(userId).first()
-        : null;
-      if (!removed) fail(404, 'not_found', 'Git account not found.');
-      await auditStatement(c.env, userId, 'git.account.removed', null, null,
-        { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }).run();
+      // The token leaves the vault together with its audit entry, so a failed audit write leaves it there to retry with.
+      const [deleted] = await c.env.DB.batch<{ ciphertext: string }>([
+        c.env.DB.query<{ ciphertext: string }>(`DELETE FROM github_tokens WHERE user_id = ?
+          AND EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind = 'github') RETURNING ciphertext`).bind(userId, userId),
+        auditAfterChange(c.env, userId, 'git.account.removed', null, { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }),
+      ]);
+      const ciphertext = deleted.results[0]?.ciphertext;
+      if (!ciphertext) fail(404, 'not_found', 'Git account not found.');
       // GitHub forgets it as well, so a copy elsewhere stops working; the vault no longer holds it either way.
-      try { await revokeGitHubToken(c.env, await decryptToken(c.env, userId, removed.ciphertext)); } catch { /* best effort */ }
+      let revoked = false;
+      try { revoked = await revokeGitHubToken(c.env, await decryptToken(c.env, userId, ciphertext)); } catch { /* reported below */ }
+      if (!revoked) console.error(`pikibun: the GitHub sign-in token of ${userId} left the vault, but GitHub could not be asked to revoke it`);
       return c.body(null, 204);
     }
     const removed = await c.env.DB.query<Pick<GitCredentialRow, 'id' | 'provider' | 'host' | 'organization'>>('DELETE FROM git_credentials WHERE id = ? AND user_id = ? RETURNING id, provider, host, organization')

@@ -82,7 +82,8 @@ function GitAccountsGroup() {
       message: `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from the server and revoked with GitHub. You stay signed in, but sessions you own can't read github.com repositories, open pull requests or push with your account until you sign in with GitHub again.` })) return;
     void action.run(async () => {
       await session().api("/api/git/accounts/github", { method: "DELETE" });
-      updateUser((await session().api<{ user: UserProfile }>("/api/me")).user);
+      // Disconnected either way: without the reloaded profile, the row still stops saying Connected.
+      updateUser(await session().api<{ user: UserProfile }>("/api/me").then(result => result.user, () => ({ ...user(), githubConnected: false })));
       accounts.refresh();
     }, "GitHub disconnected.");
   }

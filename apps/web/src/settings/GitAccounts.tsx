@@ -46,7 +46,8 @@ export function GitAccountsGroup() {
     if (!confirmed) return;
     void action.run(async () => {
       await api("/api/git/accounts/github", { method: "DELETE" });
-      setUser((await api<{ user: UserProfile }>("/api/me")).user);
+      // Disconnected either way: without the reloaded profile, the row still stops saying Connected.
+      setUser(await api<{ user: UserProfile }>("/api/me").then(result => result.user, () => ({ ...user, githubConnected: false })));
       refresh();
     }, "GitHub disconnected.");
   }

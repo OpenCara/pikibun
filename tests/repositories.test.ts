@@ -823,6 +823,12 @@ test('disconnecting GitHub deletes the sign-in token, revokes it with GitHub and
   });
   const tokens = () => f.sqlite.prepare('SELECT user_id FROM github_tokens ORDER BY user_id').all().map(row => row.user_id);
   await denied(await alice.request('DELETE', '/api/git/accounts/github', undefined, { 'X-CSRF-Token': '' }), 403, 'invalid_csrf');
+  // A failed audit write keeps the token in the vault, unrevoked, to disconnect again.
+  f.sqlite.exec("CREATE TRIGGER audit_down BEFORE INSERT ON audit WHEN NEW.action = 'git.account.removed' BEGIN SELECT RAISE(ABORT, 'audit down'); END");
+  assert.ok((await alice.request('DELETE', '/api/git/accounts/github')).status >= 500);
+  assert.deepEqual(tokens(), [alice.user.id, bob.user.id].sort());
+  assert.deepEqual(calls, []);
+  f.sqlite.exec('DROP TRIGGER audit_down');
   assert.equal((await alice.request('DELETE', '/api/git/accounts/github')).status, 204);
   assert.deepEqual(tokens(), [bob.user.id]);
   assert.deepEqual(calls, [{ url: 'https://api.github.com/applications/Iv1.client/token', method: 'DELETE',
