@@ -43,7 +43,7 @@ The host can stop a message too. When the host crashes (rather than stopping its
 
 ## Copying, going back and forking
 
-Each message has actions beside who sent it: **Message actions** opens them.
+Each message has its actions beside who sent it, as small icons (their names show on hover).
 
 - **Copy message** (the copy icon): a message's text, or a reply's Markdown without its tool calls. Every message offers it, side asks too.
 - **Go back** (the history icon, needs write permission): takes the shared conversation back, for everyone, to just before one of the messages people sent, or to just after one of the agent's final replies. Everything after that point leaves the conversation, and the next message continues from there, with the model seeing only what is left. Going back to before a message puts that message's text in your chat box, below anything already typed there, so you can edit it and send it again. Only the conversation goes back: the worktree, its clones, commits and anything pushed stay as they are, so ask the agent to undo those if you need to. Stop the session's work first: going back waits until nothing runs or is queued. The host keeps the conversation it went back from, in its backups too, but it no longer shows.
