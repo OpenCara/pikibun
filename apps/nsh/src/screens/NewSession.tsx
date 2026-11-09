@@ -309,7 +309,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
               {count => <Text style={{ fontSize: text.small, color: palette().faint, paddingHorizontal: 8 }}>{count()}</Text>}
             </If>
             <If when={host()}>
-              <Chip small testID="new-host-details" label="Host details" onPress={() => showDetails.update(open => !open)} />
+              <Chip small testID="new-host-details" label="Host details" expanded={showDetails()} onPress={() => showDetails.update(open => !open)} />
             </If>
             <If when={props.go}>
               <IconButton testID="new-workspace-settings" icon="settings" label="Workspace settings" size={control.xsmall} onPress={() => props.go!(workspaceSettings)} />
