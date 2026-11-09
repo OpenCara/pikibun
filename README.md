@@ -77,3 +77,22 @@ pnpm dev                                        # web UI on :5173
 ```
 
 See [Development](docs/development.md) for signing in locally, tests and releases.
+
+## Code signing policy
+
+The apps on [GitHub Releases](https://github.com/OpenCara/pikibun/releases) are built by GitHub Actions from this repository ([`release-app.yml`](.github/workflows/release-app.yml)) and signed there:
+
+- **Windows:** free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). The installer is signed; `Pikibun.exe` inside it is Native Shell's prebuilt runner ([longbridge/nsh](https://github.com/longbridge/nsh)), included as it is published. (Applied for: until SignPath Foundation accepts the project, the installer is released unsigned.)
+- **macOS:** signed with OpenCara's Apple Developer ID and notarized by Apple.
+- **Android:** signed with OpenCara's release key.
+
+Team roles:
+
+- Committers and reviewers: [members of OpenCara](https://github.com/orgs/OpenCara/people). Every change from anyone else is reviewed in a pull request.
+- Approvers, who approve each signing request: [owners of OpenCara](https://github.com/orgs/OpenCara/people?query=role%3Aowner).
+
+Privacy: the apps connect only to the Pikibun server you sign in to (`https://pikibun.com` unless you enter another address) and to the sites you choose to open from them. They send no telemetry, and transfer no information to any other networked system unless you ask them to. A server you sign in to keeps your account and sessions; one you run yourself keeps them on your own infrastructure.
+
+## License
+
+[MIT](LICENSE). Native Shell, which the apps are built with, is [Apache-2.0](https://github.com/longbridge/nsh/blob/main/LICENSE-APACHE).
