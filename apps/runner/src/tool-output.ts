@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /*
  * How much of a tool's output reaches the model. pi-durable bounds every tool result itself, after the tool returns: it
  * keeps the first 50 KiB or 2000 lines (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES in its truncate.ts, unless the tool's
@@ -99,10 +101,14 @@ export function savedOutput(text: string): string {
   return excerpt(text, { bytes: SAVED_OUTPUT_BYTES, lines: Number.MAX_SAFE_INTEGER }, omitted => `[… ${omitted} bytes of the output left out here …]`);
 }
 
-/** Where the output of tool `tool`'s call `callId` is saved: the same file for the same call, as a rerun after a restart writes it again. */
+/**
+ * Where the output of tool `tool`'s call `callId` is saved: the same file for the same call, as a rerun after a restart
+ * writes it again, and another for any other call, whose names may read alike once shortened.
+ */
 export function toolOutputPath(tool: string, callId: string): string {
-  const name = (value: string) => value.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 80) || "call";
-  return `${TOOL_OUTPUT_DIRECTORY}/${name(tool)}-${name(callId)}.txt`;
+  const name = (value: string) => value.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 60) || "call";
+  const digest = createHash("sha256").update(`${tool}\0${callId}`).digest("hex").slice(0, 8);
+  return `${TOOL_OUTPUT_DIRECTORY}/${name(tool)}-${name(callId)}-${digest}.txt`;
 }
 
 export type BoundOptions = {
@@ -136,5 +142,6 @@ export async function boundOutput(text: string, options: BoundOptions = {}): Pro
     limits = { bytes: Math.floor(limits.bytes * 0.7), lines: Math.floor(limits.lines * 0.7) };
     shown = excerpt(text, limits, note);
   }
-  return shown;
+  // Where even that doesn't fit, only the line saying where the output is: never one pi-durable would cut again.
+  return fits(shown) ? shown : note(byteLength(text));
 }

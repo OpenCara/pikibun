@@ -6,7 +6,7 @@ import { arr, int, obj, opt, str, type Static } from "@earendil-works/pi-schema"
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { PikiExtensionInfo } from "../../../../../packages/shared/src/piki-extensions.js";
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
-import { boundOutput, fitsModel } from "../../tool-output.js";
+import { boundOutput, fitsModel, SAVED_OUTPUT_BYTES } from "../../tool-output.js";
 
 /*
  * A command-line tool as a Pi extension (docs/design/piki-extensions.md): one tool that runs the command with the
@@ -132,7 +132,8 @@ export function cliEnvironment(spec: Pick<CliSpec, "passEnv" | "setEnv">, source
  * long output (SAVED_OUTPUT_BYTES). What the call returns is bounded again, to what the model is given (boundOutput).
  */
 const HEAD_BYTES = 256 * 1024;
-const TAIL_BYTES = 768 * 1024;
+/** The rest of what is saved, with room for the line between them, so a saved output is never cut again. */
+const TAIL_BYTES = SAVED_OUTPUT_BYTES - HEAD_BYTES - 256;
 const DEFAULT_TIMEOUT_SECONDS = 300;
 
 /** A run's output, its start and end kept where it is longer than the model should read. */

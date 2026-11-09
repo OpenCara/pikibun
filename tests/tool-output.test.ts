@@ -76,6 +76,17 @@ test('what is saved of an output longer than a file may be keeps its start and e
 test('excerpts keep whole lines, and an output\'s path is the same for the same call', () => {
   const shown = excerpt(log(5_000), { bytes: 4096, lines: 100 }, omitted => `[${omitted}]`);
   for (const line of shown.split('\n')) assert.match(line, /^(ok \d+ - a passing test with some words in it|not ok 5000 - the failure|FAILED: 1 test|\[\d+\])$/);
-  assert.equal(toolOutputPath('gh', 'toolu_01/../x y'), 'tool-output/gh-toolu_01_x_y.txt');
+  assert.match(toolOutputPath('gh', 'toolu_01/../x y'), /^tool-output\/gh-toolu_01_x_y-[0-9a-f]{8}\.txt$/);
   assert.equal(toolOutputPath('gh', 'toolu_01/../x y'), toolOutputPath('gh', 'toolu_01/../x y'));
+  const long = 'a'.repeat(100);
+  assert.notEqual(toolOutputPath('gh', `${long}1`), toolOutputPath('gh', `${long}2`), 'calls whose shortened names read alike');
+  assert.notEqual(toolOutputPath('gh', 'a b'), toolOutputPath('gh', 'a/b'));
+});
+
+test('where even the smallest excerpt doesn\'t fit, the call gets the line saying where the output is', async () => {
+  const around = 'x'.repeat(MODEL_OUTPUT.bytes - 300);
+  const fits = (shown: string) => bytes(around) + bytes(shown) <= MODEL_OUTPUT.bytes;
+  const shown = await boundOutput(log(20_000), { fits, save: async () => 'tool-output/gh-call.txt' });
+  assert.ok(fits(shown));
+  assert.match(shown, /^\[… \d+ bytes left out here\. The whole output is in tool-output\/gh-call\.txt/);
 });
