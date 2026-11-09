@@ -4,6 +4,8 @@ import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
 import { auth, restore, session } from "./lib/auth";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
+import { usesBrowserSession } from "./lib/server";
+import { takeRememberedInvite, takeReturn } from "./lib/sign-in-memory";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
@@ -44,13 +46,18 @@ export function Root() {
     const route = pageRoute();
     return route.name === "shared" ? route.token : null;
   };
+  /** An invite link opened while signed out: signing in asks to join its workspace. */
+  const invite = () => {
+    const route = pageRoute();
+    return route.name === "join" ? route.token : undefined;
+  };
   return (
     <View style={{ flex: 1, backgroundColor: palette().background }}>
       {/* A share link needs no sign-in: its token is the access. */}
       <If when={shared()}
         else={
           <If when={auth().status !== "loading"} else={<Loading />}>
-            <If when={signedIn()} else={<SignIn />}>
+            <If when={signedIn()} else={<SignIn inviteToken={invite()} />}>
               {/* A new GitHub account chooses its username before anything else; the route waits, invite links included. */}
               <If when={!(auth().status === "signedIn" && (auth() as { user: { usernameRequired?: boolean } }).user.usernameRequired)} else={<UsernameSetup />}>
                 <Shell />
@@ -148,6 +155,15 @@ function Shell() {
     const route = pageRoute();
     untracked(() => go(route));
   });
+  // A browser sign-in started from an invite link returns to the app's root; pick the invite up where it left off. So
+  // does one started again for what needs a recent GitHub sign-in, such as setting a password: back to where it was.
+  if (usesBrowserSession) {
+    void Promise.all([takeRememberedInvite(), takeReturn()]).then(([token, back]) => {
+      const at = untracked(pageRoute);
+      if (token && at.name !== "join") go({ name: "join", token });
+      else if (back && at.name === "home") go(back);
+    });
+  }
   // The address follows where the app is, so it can be shared or bookmarked.
   effect(() => {
     const top = nav.routes().at(-1);

@@ -1,12 +1,28 @@
 import { signal, untracked, View } from "nsh";
 import type { Workspace, WorkspaceDatabase, WorkspaceDatabaseTls } from "../../../../packages/shared/src/types";
 import { segment } from "../shared";
+import { decodeBase64 } from "../lib/attachments";
 import { session } from "../lib/auth";
+import { timestamp } from "../lib/format";
+import { pageAvailable, pickFilesInPage, type PageFile } from "../lib/page";
 import { createAction, createResource } from "../lib/resource";
 import { Field, Select, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, confirm, DropdownMenu, Feedback, FormSheet, Note, ResourceState, Row, Section, Small, type MenuAction } from "../ui";
 
 // A workspace's session database, as the web app's (settings/WorkspaceDatabase.tsx).
+
+/** What the server reports after importing a dump into the workspace database. */
+interface ImportSummary {
+  format: "session" | "workspace";
+  exportedAt: string;
+  sessions: number;
+  sessionDetails: number;
+  auditEntries: number;
+  workspaceSettings: boolean;
+}
+
+/** The largest dump the server takes from the app; the operator imports larger ones with --import-dump. */
+const maxUploadBytes = 32 * 1024 * 1024;
 
 interface WorkspaceDatabaseResponse {
   available: boolean;
@@ -44,6 +60,7 @@ export function WorkspaceDatabaseSection(props: { workspace: Workspace; owner: b
   const resource = createResource<WorkspaceDatabaseResponse>(path);
   const action = createAction();
   const editing = signal(false);
+  const importing = signal(false);
   const data = () => resource.data();
   const database = () => data()?.database ?? null;
   async function disconnect() {
@@ -58,7 +75,10 @@ export function WorkspaceDatabaseSection(props: { workspace: Workspace; owner: b
   }
   const items = (): MenuAction[] => [
     ...(data()?.available ? [
-      { label: "Import dump", icon: "folder" as const, hint: "From Pikibun on the web: this app can't pick files yet", disabled: true, onSelect: () => undefined },
+      // A browser's page picks the file; this app picks only photos elsewhere (longbridge/nsh#162).
+      pageAvailable()
+        ? { label: "Import dump", icon: "folder" as const, hint: "A session or workspace export", disabled: action.busy(), onSelect: () => importing.set(true) }
+        : { label: "Import dump", icon: "folder" as const, hint: "From Pikibun on the web: this app can't pick files yet", disabled: true, onSelect: () => undefined },
       { label: "Replace", icon: "refresh" as const, disabled: action.busy(), onSelect: () => editing.set(true) },
     ] : []),
     { label: "Disconnect", icon: "trash", destructive: true, disabled: action.busy(), onSelect: () => void disconnect() },
@@ -100,7 +120,67 @@ export function WorkspaceDatabaseSection(props: { workspace: Workspace; owner: b
       <If when={props.owner && editing() && data()?.available}>
         <DatabaseSheet path={path()} privateHosts={Boolean(data()?.privateHosts)} existing={database()} close={() => editing.set(false)} saved={resource.refresh} />
       </If>
+      <If when={props.owner && importing() && data()?.available ? database() : null}>
+        {current => <ImportSheet path={path()} database={current()} close={() => importing.set(false)} />}
+      </If>
     </Section>
+  );
+}
+
+/** Imports an export of this workspace, or of one of its sessions, into the connected database (web only: it picks the file). */
+function ImportSheet(props: { path: string; database: WorkspaceDatabase; close: () => void }) {
+  const file = signal<PageFile | null>(null);
+  const imported = signal<ImportSummary | null>(null);
+  const action = createAction();
+  const dismiss = () => { if (!action.busy()) props.close(); };
+  function choose() {
+    void action.run(async () => {
+      const [picked] = await pickFilesInPage({ accept: "application/json,.json", maxBytes: maxUploadBytes });
+      if (!picked) return;
+      imported.set(null);
+      file.set(picked);
+      if (picked.data === undefined) throw new Error("This dump is larger than 32 MiB. The server's operator can import it with the --import-dump option.");
+    });
+  }
+  function submit() {
+    const picked = file();
+    if (!picked?.data || action.busy()) return;
+    imported.set(null);
+    void action.run(async () => {
+      let document: unknown;
+      try {
+        document = JSON.parse(new TextDecoder().decode(decodeBase64(picked.data!)));
+      } catch {
+        throw new Error("This file is not a JSON dump.");
+      }
+      const result = await session().api<{ imported: ImportSummary }>(`${props.path}/import`, { method: "POST", body: document });
+      imported.set(result.imported);
+    });
+  }
+  return (
+    <FormSheet open title="Import a dump" onClose={dismiss} testID="database-import"
+      footer={<>
+        <Button label={imported() ? "Done" : "Cancel"} disabled={action.busy()} onPress={dismiss} />
+        <If when={!imported()}>
+          <Button variant="primary" label={action.busy() ? "Importing…" : "Import"} disabled={!file()?.data || action.busy()} onPress={submit} />
+        </If>
+      </>}>
+      <Note>{`Adds an export of this workspace, or of one of its sessions, to ${databaseLabel(props.database)}: session records and details (grants, approvals, pushes, backups and restores), their activity and the workspace's settings. A record replaces an older one of the same session; activity is added once, so importing a dump again changes nothing. Pikibun itself is unchanged.`}</Note>
+      <Field label="Dump file" hint="A JSON export from Pikibun, up to 32 MiB">
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <Button small variant="outline" icon="folder" label={file() ? "Choose another" : "Choose file"} disabled={action.busy()} onPress={choose} />
+          <Small>{file()?.name ?? "No file chosen"}</Small>
+        </View>
+      </Field>
+      <If when={imported()}>
+        {summary => (
+          <Banner tone="success" title="Imported">
+            {`${summary().sessions} session record${summary().sessions === 1 ? "" : "s"} (${summary().sessionDetails} with details) and ${summary().auditEntries} activity entr${summary().auditEntries === 1 ? "y" : "ies"}${summary().workspaceSettings ? ", with the workspace's settings," : ""} from the ${summary().format} export of ${timestamp(summary().exportedAt)}.`}
+          </Banner>
+        )}
+      </If>
+      <Feedback error={action.error()} />
+    </FormSheet>
   );
 }
 

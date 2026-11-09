@@ -70,9 +70,14 @@ export function startPage(): void {
  * keeps their addresses right as Native Shell pushes and pops them: see web/host.js).
  */
 export function showRoute(route: PageRoute): void {
+  shown = route;
   if (!hasPage()) return;
   host.call("page.setRoute", { hash: routeHash(route) }).catch(() => undefined);
 }
+
+let shown: PageRoute = { name: "home" };
+/** Where the app last said it is (`showRoute`). */
+export const shownRoute = (): PageRoute => shown;
 
 /** Opens one of the server's own pages in place of the app (the web's GitHub sign-in). False where there is no page. */
 export function openServerPage(path: string): boolean {

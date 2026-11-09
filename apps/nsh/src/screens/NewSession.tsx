@@ -292,7 +292,8 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
           {alert => (
             <Banner tone={alert().tone} title={alert().title}
               actions={alert().retry ? <Button small variant="outline" label="Retry" onPress={alert().retry!} /> : alert().refresh ? refreshHost() : alert().action}>
-              <If when={alert().trust} else={alert().text}>
+              {/* The reason changes in place (no host yet, then no sources once those load): its words follow it. */}
+              <If when={alert().trust} else={<Text>{alert().text}</Text>}>
                 {trustHost => (
                   <Switch testID="new-trust" checked={trustedHost() === trustHost().id} disabled={action.busy()}
                     onChange={event => trustedHost.set(event.checked ? trustHost().id : "")}

@@ -24,11 +24,18 @@ const ORIGIN_KEY = "pikibun.origin";
  */
 const CALLBACK_PATH = "/api/auth/native/done";
 
+/** Who may create an account with a method, as /api/health reports it (the server's SIGNUP). */
+export type SignupMode = "open" | "invite" | "off";
+
 /** What the server offers on its sign-in page (GET /api/health). */
 export interface SignInMethods {
   githubConfigured?: boolean;
+  githubSignup?: SignupMode;
   passwordAuth?: boolean;
+  passwordSignup?: SignupMode;
   testMode?: boolean;
+  /** A Pikibun running on this computer (`pikibun serve`): whether it has an owner yet. */
+  localServer?: { claimed: boolean };
 }
 
 export type AuthState =
@@ -230,23 +237,48 @@ export async function signInWithToken(origin: string, token: string): Promise<vo
   await establish(origin, token.trim(), null);
 }
 
-/** The web: a username and password on a server that allows them; the server sets the browser session's cookie. */
-export async function signInWithPassword(username: string, password: string): Promise<void> {
-  const response = await fetch("/api/auth/password/login", {
+/**
+ * A signed-out request of the web's to the server's own sign-in API: there is no CSRF token to fetch yet, so the server
+ * checks the request's origin instead. Answers its JSON; throws the server's reason when it refused.
+ */
+async function signedOutRequest<T>(path: string, body: Record<string, string>, failed: string): Promise<T> {
+  const response = await fetch(path, {
     method: "POST",
     credentials: "same-origin",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify(body),
   });
+  const answer = await response.json().catch(() => null) as { error?: string | { message?: string } } | null;
   if (!response.ok) {
-    let message = `Sign-in failed (HTTP ${response.status}).`;
-    try {
-      const body = await response.json() as { error?: string | { message?: string } };
-      message = typeof body.error === "string" ? body.error : body.error?.message ?? message;
-    } catch { /* not JSON */ }
-    throw new Error(message);
+    const error = answer?.error;
+    throw new Error(typeof error === "string" ? error : error?.message ?? `${failed} (HTTP ${response.status}).`);
   }
+  return answer as T;
+}
+
+/** The web: a username and password on a server that allows them; the server sets the browser session's cookie. */
+export async function signInWithPassword(username: string, password: string): Promise<void> {
+  await signedOutRequest("/api/auth/password/login", { username, password }, "Sign-in failed");
   if (!await establishBrowserSession()) throw new Error("Signed in, but the server did not keep the session. Check that cookies are allowed.");
+}
+
+/**
+ * The web: a new account with a username and password, where the server takes them (its SIGNUP for passwords). With
+ * `inviteToken`, the invite link it was created from, it also asks to join that workspace.
+ */
+export async function signUpWithPassword(username: string, password: string, inviteToken?: string): Promise<void> {
+  await signedOutRequest("/api/auth/password/signup", { username, password, ...(inviteToken !== undefined ? { inviteToken } : {}) }, "Creating the account failed");
+  if (!await establishBrowserSession()) throw new Error("Account created, but the server did not keep the session. Check that cookies are allowed.");
+}
+
+/**
+ * The web: GitHub's sign-in from an invite link, which carries the link's token in a request body, never in a URL, so
+ * a new account can ask to join that workspace. Answers GitHub's authorization page to send the browser to.
+ */
+export async function startGitHubInviteSignIn(inviteToken: string): Promise<string> {
+  const { url } = await signedOutRequest<{ url?: unknown }>("/api/auth/github/start", { inviteToken }, "GitHub sign-in could not start");
+  if (typeof url !== "string") throw new Error("GitHub sign-in could not start.");
+  return url;
 }
 
 /** The web: the browser session may have started in another tab (GitHub's redirect lands on the web app). */
