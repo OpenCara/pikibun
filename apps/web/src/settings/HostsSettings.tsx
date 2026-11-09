@@ -70,7 +70,9 @@ export function HostsSettings({ id }: { id?: string }) {
 }
 
 function SharedWithYou() {
-  const { user, workspaces } = useApp();
+  const { user, workspaces: all } = useApp();
+  // Nobody shares a host into a private workspace.
+  const workspaces = all.filter(workspace => !workspace.personal);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const report = useCallback((workspaceId: string, value: number) => setCounts(current => current[workspaceId] === value ? current : { ...current, [workspaceId]: value }), []);
   const settled = workspaces.every(workspace => workspace.id in counts);
@@ -190,7 +192,8 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
   // An admin manages sharing; running, revoking and removing the host stay its owner's.
   const owner = connector.role !== "admin";
   const associated = [...new Set([...(connector.connectedWorkspaceIds ?? []), ...connector.workspaceIds])];
-  const available = workspaces.filter(workspace => !connector.workspaceIds.includes(workspace.id));
+  // Nobody else is in a private workspace, so there is no one to share a host with there.
+  const available = workspaces.filter(workspace => !workspace.personal && !connector.workspaceIds.includes(workspace.id));
   function unshare(workspaceId: string) {
     void (async () => {
       const confirmed = await confirmDialog({ title: "Stop sharing this host?", message: "Other members' sessions can no longer run work on it in this workspace. It stays connected for your own use; existing session records and visibility are unchanged.", confirmLabel: "Unshare" });

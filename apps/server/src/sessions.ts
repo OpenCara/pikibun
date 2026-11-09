@@ -261,8 +261,9 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       row.connector_id ?? null, row.connector_owner_id ?? null, row.repositories_json, row.visibility ?? 'private', row.repository_mode ?? null, row.branch ?? null,
       row.host_environment ?? 0, row.tool_output ?? 'full',
       workspaceId, ownerId, workspaceId, resolved.sourceIds,
-      // A workspace without sources admits only the synthetic legacy fixture that cloneRepositories allowed.
-      ownerId, resolved.sourceIds === '[]' ? 0 : 1, resolved.githubAuthority === null && testMode(c.env) ? 1 : 0,
+      // A workspace without sources admits only its owner's private workspace (which stays private: the mark never goes)
+      // and the synthetic legacy fixture that cloneRepositories allowed.
+      ownerId, resolved.sourceIds === '[]' && !resolved.sourcesOptional ? 0 : 1, resolved.githubAuthority === null && testMode(c.env) ? 1 : 0,
       resolved.githubAuthority?.githubId ?? null, resolved.githubAuthority?.githubId ?? null, resolved.githubAuthority?.ciphertext ?? null,
       JSON.stringify(resolved.credentials), ownerId, resolved.credentials.length,
       row.connector_id ?? null, model.id, row.connector_id ?? null, row.connector_owner_id ?? null, workspaceId, ownerId,

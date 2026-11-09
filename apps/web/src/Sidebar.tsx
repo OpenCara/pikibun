@@ -10,7 +10,7 @@ import { href, type Route } from "./router";
 import { sessionStatus } from "../../../packages/client/src/session-status";
 import { nestSessions } from "../../../packages/client/src/session-tree";
 import { canCreateSessions } from "../../../packages/shared/src/policy";
-import { DropdownMenu, IdentityBadge, Loading, RelativeTime, StatusDot } from "./ui";
+import { DropdownMenu, IdentityBadge, Loading, RelativeTime, StatusDot, WorkspaceBadge } from "./ui";
 
 const SESSIONS_PER_WORKSPACE = 6;
 const COLLAPSED_KEY = "pikibun.collapsedWorkspaces";
@@ -26,10 +26,11 @@ function WorkspaceGroup({ workspace, sessions, route, collapsed, toggle, onNavig
   const nested = nestSessions(sessions);
   const visible = expanded ? nested : nested.slice(0, SESSIONS_PER_WORKSPACE);
   const newHref = href({ name: "new", workspaceId: workspace.id });
-  return <div className="workspace-group">
+  // The user's own private workspace is pinned first, set apart from the shared ones below it.
+  return <div className={workspace.personal ? "workspace-group personal" : "workspace-group"}>
     <div className="workspace-row">
-      <button type="button" className="nav-item" onClick={toggle} aria-expanded={!collapsed} title={workspace.name}>
-        <IdentityBadge name={workspace.name} id={workspace.id} />
+      <button type="button" className="nav-item" onClick={toggle} aria-expanded={!collapsed} title={workspace.personal ? `${workspace.name}: your private workspace, only for you` : workspace.name}>
+        <WorkspaceBadge workspace={workspace} />
         <span className="label">{workspace.name}</span>
       </button>
       <div className="row-actions">
