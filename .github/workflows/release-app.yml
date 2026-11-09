@@ -176,10 +176,22 @@ jobs:
       - name: Remove the certificate
         if: always()
         run: |
-          if ($env:WIN_CERTIFICATE_THUMBPRINT) {
-            Get-ChildItem Cert:\CurrentUser\My | Where-Object Thumbprint -eq $env:WIN_CERTIFICATE_THUMBPRINT | Remove-Item -DeleteKey
-          }
           Remove-Item -Force -ErrorAction SilentlyContinue "$env:RUNNER_TEMP\signing.p12"
+          if (-not $env:WIN_CERTIFICATE_THUMBPRINT) { exit 0 }
+          # The certificate and its private key out of the store (PowerShell 7's Remove-Item has no -DeleteKey).
+          $store = [Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
+          $store.Open('ReadWrite')
+          foreach ($certificate in $store.Certificates.Find('FindByThumbprint', $env:WIN_CERTIFICATE_THUMBPRINT, $false)) {
+            try {
+              $key = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
+              if ($key -is [Security.Cryptography.RSACng]) { $key.Key.Delete() }
+              elseif ($key -is [Security.Cryptography.RSACryptoServiceProvider]) { $key.PersistKeyInCsp = $false; $key.Clear() }
+            } catch {
+              Write-Output "::warning::The signing key was not deleted: $_"
+            }
+            $store.Remove($certificate)
+          }
+          $store.Close()
       - uses: actions/upload-artifact@v7
         with:
           name: app-windows
@@ -441,9 +453,12 @@ jobs:
           # Signed with that key, not the debug one.
           build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)"
           "$build_tools/apksigner" verify --verbose "$apk"
-          signer=$("$build_tools/apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-          if [ "$signer" != "$expected" ]; then
-            echo "::error::The APK is signed by $signer, not the keystore's key $alias ($expected)."
+          # "Signer #1 certificate SHA-256 digest: …", or for a v3 signer "Signer (minSdkVersion=…) certificate …".
+          certificates=$("$build_tools/apksigner" verify --print-certs "$apk" 2> /dev/null)
+          echo "$certificates"
+          signers=$(printf '%s\n' "$certificates" | awk '/^Signer.* certificate SHA-256 digest: / { print $NF }' | sort -u)
+          if [ "$signers" != "$expected" ]; then
+            echo "::error::The APK is signed by ${signers:-no certificate apksigner names}, not the keystore's key $alias ($expected)."
             exit 1
           fi
           mkdir -p "$RUNNER_TEMP/release"
