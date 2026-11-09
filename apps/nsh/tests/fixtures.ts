@@ -63,14 +63,15 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [host] } },
     [`GET ${ORIGIN}/api/workspaces/w1/models`]: { body: { models: [{ id: "m1", workspaceId: "w1", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" }] } },
     [`GET ${ORIGIN}/api/workspaces/w1/repositories`]: { body: { repositories: [{ id: "r1", provider: "github", host: "github.com", repositoryId: "1", fullName: "OpenCara/pikibun", ref: "main", private: false, lfs: false, forbidDefaultBranchPush: true, readAs: "members" }], required: true, sources: 1 } },
-    [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: sessionRecord } },
+    // A single session's read says whether its view would be served now, as the server's does.
+    [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, viewable: true } } },
     [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view, revision: "r1" } },
     // The stream ends at once, as the server ends every stream after a few snapshots; the client reopens it later.
     [`GET ${ORIGIN}/api/sessions/s1/events*`]: { status: 200, headers: { "content-type": "text/event-stream" }, body: "" },
     [`POST ${ORIGIN}/api/sessions/s1/approvals/ap1`]: { body: { ok: true } },
     [`POST ${ORIGIN}/api/sessions/s1/submit`]: (request: Request) => ({ body: { submissionId: "q2", conversationId: "0", status: "queued", queuePosition: 1, echo: JSON.parse(request.body ?? "{}") } }),
     [`POST ${ORIGIN}/api/sessions`]: { status: 201, body: { session: { ...sessionRecord, id: "s3", title: "Add a dark mode" } } },
-    [`GET ${ORIGIN}/api/sessions/s3`]: { body: { session: { ...sessionRecord, id: "s3", title: "Add a dark mode" } } },
+    [`GET ${ORIGIN}/api/sessions/s3`]: { body: { session: { ...sessionRecord, id: "s3", title: "Add a dark mode", viewable: true } } },
     [`GET ${ORIGIN}/api/sessions/s3/view`]: { body: { view: { ...view, sessionId: "s3", entries: [], approvals: [], busy: false, queue: [], activity: "idle" }, revision: "r1" } },
     [`GET ${ORIGIN}/api/sessions/s3/events*`]: { status: 200, headers: { "content-type": "text/event-stream" }, body: "" },
     [`POST ${ORIGIN}/api/sessions/s3/submit`]: { body: { submissionId: "q9", conversationId: "0", status: "queued" } },

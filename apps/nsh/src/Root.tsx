@@ -7,6 +7,7 @@ import { createNotificationDelivery } from "./lib/notifications";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
 import { usesBrowserSession } from "./lib/server";
 import { takeRememberedInvite, takeReturn } from "./lib/sign-in-memory";
+import { resumeThisComputer } from "./lib/this-computer";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
@@ -42,6 +43,8 @@ export function Root() {
   startPage();
   void applyStoredAppearance();
   void restore();
+  // This computer's host, where it was running when the app quit (desktops only).
+  resumeThisComputer();
   const signedIn = () => auth().status === "signedIn";
   const shared = () => {
     const route = pageRoute();

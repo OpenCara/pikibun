@@ -14,7 +14,7 @@ import { useWorkspacePeople } from "./people";
 import { RepositoryClonePolicy, useWorkspaceRepositories } from "./repositories";
 import { href, navigate } from "./router";
 import { enterSends, isPhone } from "./touch";
-import { Alert, Button, Combobox, DropdownMenu, EmptyState, Feedback, IdentityBadge, InfoTip, LinkButton, Loading, PageLoading, useAction, useResource } from "./ui";
+import { Alert, Button, Combobox, DropdownMenu, EmptyState, Feedback, InfoTip, LinkButton, Loading, PageLoading, useAction, useResource, WorkspaceBadge } from "./ui";
 import { usernameWithId } from "../../../packages/client/src/usernames";
 import "./new-session.css";
 
@@ -81,7 +81,8 @@ function Composer({ workspace }: { workspace: Workspace }) {
   // Remembered per workspace, so switching to another session and back finds the unsent first message where it was.
   const draftId = newSessionDraftId(workspace.id);
   const [content, setContent] = useDraft(draftId);
-  const [visibility, setVisibility] = useState<Visibility>("workspace");
+  // A private workspace's sessions start private, and there is nobody to show them to.
+  const [visibility, setVisibility] = useState<Visibility>(workspace.personal ? "private" : "workspace");
   const [trustedHost, setTrustedHost] = useState("");
   // Where the session runs: in the sandbox, or directly on the host, which only its owner, or a member they granted that,
   // chooses where it accepts that.
@@ -201,7 +202,7 @@ function Composer({ workspace }: { workspace: Workspace }) {
     if (repos.error) return <Alert variant="warning" title="Unable to load sources" actions={<Button variant="outline" size="sm" onClick={repos.refresh}>Retry</Button>}>{repos.error}</Alert>;
     if (repositories && !repos.sourceCount && repos.required) return <Alert variant="warning" title="No sources in this workspace" actions={<LinkButton variant="outline" size="sm" href={workspaceSettings}>Add a source</LinkButton>}>Sessions need at least one source, such as a repository or a Notion page. Workspace owners and admins add them in workspace settings.</Alert>;
     if (models.error) return <Alert variant="error" title="Unable to load models" actions={<Button variant="outline" size="sm" onClick={models.refresh}>Retry</Button>}>{models.error}</Alert>;
-    if (!models.loading && !connections.loading && !connections.error && !hosts.length) return <Alert variant="info" title="No host to chat with yet" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "hosts" })}>Pair a host</LinkButton>}>Pair your own Pi to chat with its models, or ask a workspace member to share their host here.</Alert>;
+    if (!models.loading && !connections.loading && !connections.error && !hosts.length) return <Alert variant="info" title="No host to chat with yet" actions={<LinkButton variant="outline" size="sm" href={href({ name: "settings", section: "hosts" })}>Pair a host</LinkButton>}>{workspace.personal ? "Pair your own Pi to chat with its models here, privately." : "Pair your own Pi to chat with its models, or ask a workspace member to share their host here."}</Alert>;
     if (!host || connections.loading || !modelList) return null;
     const refreshHost = <Button variant="outline" size="sm" onClick={connections.refresh}>Refresh host status</Button>;
     if (connections.error) return <Alert variant="warning" title="Unable to check host" actions={refreshHost}>{connections.error}</Alert>;
@@ -229,8 +230,9 @@ function Composer({ workspace }: { workspace: Workspace }) {
     <div className="new-session-hero">
       <h1 className="new-session-title">What should we work on?</h1>
       <div className="new-session-subtitle">
-        <IdentityBadge name={workspace.name} id={workspace.id} />
+        <WorkspaceBadge workspace={workspace} />
         <span className="truncate">{workspace.name}</span>
+        {workspace.personal && <span className="muted small">Only you</span>}
         <LinkButton variant="ghost" size="xs" href={workspaceSettings}>Workspace settings</LinkButton>
       </div>
     </div>
@@ -246,11 +248,11 @@ function Composer({ workspace }: { workspace: Workspace }) {
           <Combobox label="Host" placeholder={models.loading || connections.loading ? "Loading..." : "Choose a host"} disabled={!hosts.length} value={hostKey}
             options={hosts.map(item => ({ value: item.id, label: item.name, hint: item.ownerId === user.id ? "Your host" : `${item.ownerName}'s host` }))}
             onChange={setChoice} />
-          <DropdownMenu label="Visibility" align="start" items={visibilityItems} trigger={<><Icon name={visibility === "workspace" ? "globe" : "lock"} size={14} />{visibility === "workspace" ? "Workspace" : "Private"}</>} />
+          {!workspace.personal && <DropdownMenu label="Visibility" align="start" items={visibilityItems} trigger={<><Icon name={visibility === "workspace" ? "globe" : "lock"} size={14} />{visibility === "workspace" ? "Workspace" : "Private"}</>} />}
           {hostSessions && <DropdownMenu label="Where it runs" align="start" items={environmentItems} trigger={<><Icon name={runOnHost ? "server" : "shield"} size={14} />{runOnHost ? "On host" : "Sandbox"}</>} />}
           <InfoTip label="Who can see and do what">
             <div className="stack">
-              <p>{visibility === "workspace" ? "Workspace members can view prompts, output, tool results, and repository content shown in the transcript. Collaborators can also send messages to it, and the workspace's owner and admins manage it; approving tool calls needs an explicit grant." : "Workspace membership alone does not give access to a private session: only the workspace's owner and admins, who manage every session, and people you give a session role open it."}</p>
+              <p>{workspace.personal ? "This is your private workspace: nobody else can join it, so only you see its sessions unless you create a share link for one." : visibility === "workspace" ? "Workspace members can view prompts, output, tool results, and repository content shown in the transcript. Collaborators can also send messages to it, and the workspace's owner and admins manage it; approving tool calls needs an explicit grant." : "Workspace membership alone does not give access to a private session: only the workspace's owner and admins, who manage every session, and people you give a session role open it."}</p>
               <p>You are the session owner; the host owner is a separate role. Viewing never grants access to your Git accounts, and visibility does not share your Pi host or local models.</p>
             </div>
           </InfoTip>

@@ -90,12 +90,14 @@ function SignInForm(props: { inviteToken?: string }) {
   };
   const invited = () => usesBrowserSession && props.inviteToken !== undefined;
   const githubUnconfigured = () => methods()?.githubConfigured === false;
-  const passwords = () => usesBrowserSession && methods()?.passwordAuth === true;
+  // Native builds sign in with a password too, for a bearer token (signInWithPassword).
+  const passwords = () => methods()?.passwordAuth === true;
   // Without GitHub, a server that offers passwords still signs people in.
   const unconfigured = () => githubUnconfigured() && !passwords();
   const local = () => methods()?.localServer;
   const passwordSignup = () => methods()?.passwordSignup ?? "off";
-  const canSignUp = () => passwords() && (passwordSignup() === "open" || (passwordSignup() === "invite" && invited()));
+  // New password accounts are made on the web, whose sign-up starts a browser session; native builds sign in to them.
+  const canSignUp = () => usesBrowserSession && passwords() && (passwordSignup() === "open" || (passwordSignup() === "invite" && invited()));
   const signingUp = () => passwordMode() === "signup" && canSignUp();
   /** Where neither offered method takes new accounts from anyone, how to get one. */
   const signupHint = () => {
@@ -127,13 +129,14 @@ function SignInForm(props: { inviteToken?: string }) {
   }
 
   function submitPassword() {
-    if (action.busy() || !username().trim() || !password()) return;
+    const target = origin();
+    if (action.busy() || target === null || !username().trim() || !password()) return;
     if (signingUp()) {
       if (password() !== confirmPassword()) { void action.run(async () => { throw new Error("The passwords don't match."); }); return; }
       void action.run(() => signUpWithPassword(username(), password(), props.inviteToken));
       return;
     }
-    void action.run(() => signInWithPassword(username(), password()));
+    void action.run(() => signInWithPassword(target, username(), password()));
   }
 
   /** The web view went somewhere: the server's callback page finishes the sign-in. */
@@ -200,7 +203,8 @@ function SignInForm(props: { inviteToken?: string }) {
           </If>
           <Button testID="password-sign-in" variant={githubUnconfigured() ? "primary" : "default"} large block
             label={action.busy() ? (signingUp() ? "Creating account" : "Signing in") : signingUp() ? "Create account" : "Sign in"} busy={action.busy() && !developerOpen()}
-            disabled={action.busy() || !username().trim() || !password() || (signingUp() && (password().length < 12 || !confirmPassword()))} onPress={submitPassword} />
+            disabled={origin() === null || action.busy() || !username().trim() || !password() || (signingUp() && (password().length < 12 || !confirmPassword()))}
+            onPress={submitPassword} />
           <If when={canSignUp()}>
             <Button testID="password-mode" small variant="ghost" label={signingUp() ? "Have an account? Sign in" : "New here? Create an account"} disabled={action.busy()}
               onPress={() => { passwordMode.set(signingUp() ? "signin" : "signup"); confirmPassword.set(""); action.clear(); }} />
@@ -217,7 +221,8 @@ function SignInForm(props: { inviteToken?: string }) {
           </View>
         </If>
       </If>
-      <If when={!(usesBrowserSession && githubUnconfigured())}>
+      {/* Natively a server without GitHub still shows the button, which says why it can't, unless passwords sign in instead. */}
+      <If when={!(githubUnconfigured() && (usesBrowserSession || passwords()))}>
         <Button testID="github-sign-in" variant="primary" large block icon="github" label="Continue with GitHub" busy={action.busy() && !developerOpen()}
           disabled={origin() === null || action.busy() || githubUnconfigured()} onPress={continueWithGitHub} />
       </If>

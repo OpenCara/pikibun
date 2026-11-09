@@ -27,8 +27,9 @@ export function requestKey(actorId: string, mode: "write" | "ask", requestId: st
   return sha256(JSON.stringify([actorId, mode, requestId]));
 }
 export function permissionFor(action: RunnerAction): Permission {
-  // The file browser reads the worktree as a collaborator could have the agent read it.
-  if (action === "submit" || action === "operations" || action === "create" || action === "stop" || action === "files" || action === "revert" || action === "fork" || action === "upload" || action === "tunnel") return "write";
+  // The file browser reads the worktree as a collaborator could have the agent read it, and the transcript's images
+  // came from such files or from collaborators' messages.
+  if (action === "submit" || action === "operations" || action === "create" || action === "stop" || action === "files" || action === "revert" || action === "fork" || action === "upload" || action === "tunnel" || action === "image") return "write";
   // Taking back a queued message needs the access it was sent with, which the session checks: a side ask's is ask.
   if (action === "ask" || action === "withdraw") return "ask";
   if (action === "approve") return "approve";

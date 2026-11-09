@@ -87,6 +87,11 @@ export interface Workspace {
   name: string;
   ownerId: string;
   role?: WorkspaceRole;
+  /**
+   * The signed-in user's own private workspace: every user has one, listed first, that nobody else can join, where
+   * sessions need no source. Older servers leave it out.
+   */
+  personal?: boolean;
 }
 export interface ModelDefinition {
   id: string;
@@ -176,6 +181,12 @@ export interface SessionRecord {
   // directly (hostEnvironment).
   hostUnsandboxed?: boolean;
   /**
+   * Present only on single-session reads: whether the viewer may read the session's view now, by the checks GET /view
+   * makes before asking the host. False when it is refused although the session itself is readable, e.g. after its
+   * host's owner stopped sharing the host with the workspace. Clients show a view they kept only when this is true.
+   */
+  viewable?: boolean;
+  /**
    * The session runs directly on its host's own environment, without the sandbox: chosen when its owner started it on
    * a host whose configuration accepts that (HostConfig.hostSessions), as the host's owner or a member they granted
    * sessions on the host (HostCommandGrant.hostSessions), and fixed for its life. Its commands run as the host's OS
@@ -263,7 +274,7 @@ export interface RunnerBinding {
   model: ModelDefinition;
 }
 export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "operations" | "approve" | "backup" | "restart" | "restore" | "stop" | "files"
-  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel";
+  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel" | "image";
 
 /** How far the session file browser reads: entries listed per directory, and bytes of a file previewed. */
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
@@ -784,6 +795,12 @@ export interface EntryView {
   /** This entry's tool calls whose commands ran under auto-approve, in call order; absent from older runners. */
   autoApproved?: AutoApprovedCall[];
   /**
+   * The images this entry gave the model, in the order of the `[image <type>]` lines that stand for them in `text`; absent
+   * from entries without images and from older runners. Their data stays on the host: collaborators' clients read each
+   * from `GET /api/sessions/:id/images` (entry-images.ts).
+   */
+  images?: { mimeType: string }[];
+  /**
    * The session shows brief tool output (`SessionRecord.toolOutput`) and `text` is shortened: a tool result's first
    * line, or tool calls cut to their first characters. The whole text's lines and characters (code points); the host
    * keeps it.
@@ -883,8 +900,11 @@ export interface SessionView {
     /**
      * Pikibun's session-tool extensions the workspace has on whose tools this session can't offer, and why, as a fixed
      * reason (for piki:browser, browserUnavailableReasons in browser.ts): the browser without Chromium on the host, say.
+     * A program tool the session offers, some of whose programs its host doesn't have where the sandbox sees them, has
+     * reason "programs" and names them (`programs`: pnpm and yarn of piki:node, say), which programsMissingText in
+     * program-install.ts explains, with how the host's owner installs them.
      */
-    unavailable?: { source: string; tools: string[]; reason: string }[] };
+    unavailable?: { source: string; tools: string[]; reason: string; programs?: string[] }[] };
   /**
    * The session's server is online through its tunnel (piki:tunnel): its address, who started it and until when, which
    * the session panel shows with a Stop button (`POST /api/sessions/:id/tunnel/stop`). Absent while it isn't, and from

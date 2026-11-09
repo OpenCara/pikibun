@@ -8,7 +8,11 @@ type Listener = (event: { data?: unknown }) => void;
  * fields are ignored, and an event cut off by the end of the stream is dropped.
  */
 export class SseParser {
-  #buffer = "";
+  /**
+   * The unfinished line, in the pieces it came in: joined once its line ends. A whole session view is one line of several
+   * megabytes, so joining or searching it again with every chunk would cost the square of its size.
+   */
+  #parts: string[] = [];
   #type = "";
   #data: string[] = [];
   /** The last chunk ended in CR, so an LF opening the next one belongs to the same line end. */
@@ -19,16 +23,24 @@ export class SseParser {
   push(chunk: string): void {
     if (this.#pendingCarriageReturn && chunk.startsWith("\n")) chunk = chunk.slice(1);
     this.#pendingCarriageReturn = false;
-    this.#buffer += chunk;
-    for (;;) {
-      const end = this.#buffer.search(/\r\n|\r|\n/);
-      if (end < 0) break;
-      const newline = this.#buffer.startsWith("\r\n", end) ? 2 : 1;
-      // A CR at the very end may be the first half of a CRLF split across chunks.
-      if (newline === 1 && this.#buffer[end] === "\r" && end === this.#buffer.length - 1) this.#pendingCarriageReturn = true;
-      this.#line(this.#buffer.slice(0, end));
-      this.#buffer = this.#buffer.slice(end + newline);
+    // The pieces held hold no line end: only the new chunk is searched.
+    if (lineEnd(chunk, 0) < 0) {
+      if (chunk) this.#parts.push(chunk);
+      return;
     }
+    const text = this.#parts.length ? this.#parts.join("") + chunk : chunk;
+    this.#parts = [];
+    let start = 0;
+    for (let from = text.length - chunk.length; ;) {
+      const end = lineEnd(text, from);
+      if (end < 0) break;
+      const newline = text.startsWith("\r\n", end) ? 2 : 1;
+      // A CR at the very end may be the first half of a CRLF split across chunks.
+      if (newline === 1 && text[end] === "\r" && end === text.length - 1) this.#pendingCarriageReturn = true;
+      this.#line(text.slice(start, end));
+      start = from = end + newline;
+    }
+    if (start < text.length) this.#parts.push(text.slice(start));
   }
 
   #line(line: string): void {
@@ -46,6 +58,13 @@ export class SseParser {
     if (field === "event") this.#type = value;
     else if (field === "data") this.#data.push(value);
   }
+}
+
+/** Where the first line end (CR or LF) at or after `from` is, or -1. */
+function lineEnd(text: string, from: number): number {
+  const lf = text.indexOf("\n", from);
+  const cr = text.indexOf("\r", from);
+  return cr < 0 ? lf : lf < 0 ? cr : Math.min(lf, cr);
 }
 
 export interface FetchEventStreamOptions {

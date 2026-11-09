@@ -66,7 +66,9 @@ const invite = async (client: Client, token: string, status = 200) =>
 const ask = (client: Client, token: string) => client.request('POST', '/api/invite', { token });
 const requests = async (client: Client, workspaceId: string) =>
   (await json<{ requests: WorkspaceJoinRequest[] }>(await client.request('GET', `/api/workspaces/${workspaceId}/join-requests`))).requests;
-const workspaces = async (client: Client) => (await json<{ workspaces: Workspace[] }>(await client.request('GET', '/api/workspaces'))).workspaces;
+// Everyone has a private workspace too: these are the others.
+const workspaces = async (client: Client) => (await json<{ workspaces: Workspace[] }>(await client.request('GET', '/api/workspaces'))).workspaces
+  .filter(item => !item.personal);
 
 test('owners and admins share one invite link; other roles and outsiders cannot manage it', async t => {
   const f = await fixture(t);

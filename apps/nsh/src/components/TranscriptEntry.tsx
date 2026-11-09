@@ -1,6 +1,7 @@
-import { computed, platform, Text, View } from "nsh";
+import { computed, platform, Text, View, type JSX } from "nsh";
 import { Button as BaseButton, TextView } from "nsh/base";
-import { COMPACTION_FAILED_TITLE, compactionFailureText, copyText, splitToolCalls, type EntryView } from "../shared";
+import { COMPACTION_FAILED_TITLE, compactionFailureText, copyText, shownImages, splitToolCalls, textBesideImages, type EntryView } from "../shared";
+import { EntryImages } from "./EntryImages";
 import { formatDuration, modelFailure } from "../lib/format";
 import { createUsername } from "../lib/people";
 import { Icon, type IconName } from "../icons";
@@ -51,9 +52,13 @@ type Shown =
   | { kind: "user"; text: string; meta: string }
   | { kind: "assistant"; prose: string; tool: { icon: IconName; name: string; summary: string; meta: string; text: string } | null; meta: string };
 
-/** What an entry shows, as the Expo app's TranscriptEntry decided it. `shared`: a share link's, whose readers get no advice. */
-function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string, shared = false): Shown {
+/**
+ * What an entry shows, as the Expo app's TranscriptEntry decided it. `shared`: a share link's, whose readers get no advice.
+ * `images`: how many of its images show as thumbnails, whose `[image <type>]` lines don't.
+ */
+function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string, shared = false, images = 0): Shown {
   const actor = entry.actorId ? name(entry.actorId, true) : "";
+  if (images) entry = { ...entry, text: textBesideImages(entry.text, images) };
   const { prose, calls } = entry.role === "assistant" ? splitToolCalls(entry.text) : { prose: entry.text, calls: [] };
   const marks = autoApprovedSuffix(entry.autoApproved);
   const callName = calls.length > 1 ? `${calls[0]!.name} +${calls.length - 1}` : calls[0]?.name ?? "";
@@ -91,7 +96,7 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
  * One quiet line for a tool call, its output or a system note (the web's .entry-tool): its icon, what it is and what
  * it works on, muted, and a chevron that turns as pressing it shows the exact text.
  */
-function ToolRow(props: { icon: IconName; name: string; summary: string; meta: string; text: string; trimmed?: EntryView["trimmed"]; open: boolean; onToggle: () => void; result?: boolean }) {
+function ToolRow(props: { icon: IconName; name: string; summary: string; meta: string; text: string; trimmed?: EntryView["trimmed"]; open: boolean; onToggle: () => void; result?: boolean; images?: JSX.Element }) {
   return (
     <View style={{ gap: 8 }}>
       <BaseButton accessibilityLabel={`${props.name} ${props.summary}${props.meta ? ` · ${props.meta}` : ""}`} onPress={props.onToggle}
@@ -104,9 +109,12 @@ function ToolRow(props: { icon: IconName; name: string; summary: string; meta: s
         <Icon name={props.open ? "chevron-down" : "chevron-right"} size={14} color={palette().muted} />
       </BaseButton>
       <If when={props.open}>
-        <View selectable style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
-          <Text style={{ fontFamily: monospace, fontSize: text.small, lineHeight: 20, color: palette().text }}>{props.text}</Text>
-        </View>
+        <If when={props.text || !props.images}>
+          <View selectable style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
+            <Text style={{ fontFamily: monospace, fontSize: text.small, lineHeight: 20, color: palette().text }}>{props.text}</Text>
+          </View>
+        </If>
+        {props.images}
         <If when={props.trimmed}>
           {trimmed => (
             <Text style={{ fontSize: text.caption, color: palette().muted }}>
@@ -145,9 +153,19 @@ function Footer(props: { entry: EntryView; meta: string; onActions?: (entry: Ent
  * entries are one quiet line each. List rows are recycled, so `entry` changes under a row: everything here reads it in
  * bindings, and what is expanded is kept by entry id outside the row.
  */
-export function TranscriptEntry(props: { entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; onActions?: (entry: EntryView) => void; shared?: boolean }) {
+export function TranscriptEntry(props: {
+  entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; onActions?: (entry: EntryView) => void; shared?: boolean;
+  /** The session whose transcript images this person sees (seesEntryImages): shown as thumbnails in place of their lines. */
+  imagesOf?: string;
+}) {
   const name = createUsername();
-  const shown = computed(() => describe(props.entry, props.userId, name, props.shared));
+  const images = () => shownImages(props.entry, props.imagesOf !== undefined);
+  const shown = computed(() => describe(props.entry, props.userId, name, props.shared, images().length));
+  const thumbnails = (end?: boolean) => (
+    <If when={images().length > 0 ? props.imagesOf : undefined}>
+      {sessionId => <EntryImages sessionId={sessionId()} entryId={props.entry.id} images={images()} end={end} />}
+    </If>
+  );
   const open = () => props.expanded(props.entry.id);
   const toggle = () => props.toggle(props.entry.id);
   // Every entry sits 16 points from the next, as the web app's transcript spaces them; consecutive tool lines closer.
@@ -164,7 +182,8 @@ export function TranscriptEntry(props: { entry: EntryView; userId: string; expan
         )}
       </If>
       <If when={shown().kind === "tool" ? shown() as Extract<Shown, { kind: "tool" }> : null}>
-        {tool => <ToolRow icon={tool().icon} name={tool().name} summary={tool().summary} meta={tool().meta} text={tool().text} trimmed={tool().trimmed} result={tool().result} open={open()} onToggle={toggle} />}
+        {tool => <ToolRow icon={tool().icon} name={tool().name} summary={tool().summary} meta={tool().meta} text={tool().text} trimmed={tool().trimmed} result={tool().result} open={open()} onToggle={toggle}
+          images={images().length ? thumbnails() : undefined} />}
       </If>
       <If when={shown().kind === "error" ? shown() as Extract<Shown, { kind: "error" }> : null}>
         {error => (
@@ -182,9 +201,12 @@ export function TranscriptEntry(props: { entry: EntryView; userId: string; expan
             <If when={user().meta}>
               <Text style={{ fontSize: text.caption, color: palette().muted, paddingHorizontal: 4 }}>{`by ${user().meta}`}</Text>
             </If>
-            <View selectable style={{ borderRadius: radius.large, paddingHorizontal: 12, paddingVertical: 8, maxWidth: "85%", backgroundColor: palette().userBubble }}>
-              <Text style={{ fontSize: text.reading, lineHeight: 23, color: palette().onUserBubble }}>{user().text}</Text>
-            </View>
+            <If when={user().text || !images().length}>
+              <View selectable style={{ borderRadius: radius.large, paddingHorizontal: 12, paddingVertical: 8, maxWidth: "85%", backgroundColor: palette().userBubble }}>
+                <Text style={{ fontSize: text.reading, lineHeight: 23, color: palette().onUserBubble }}>{user().text}</Text>
+              </View>
+            </If>
+            {thumbnails(true)}
             <Footer entry={props.entry} meta="" onActions={props.onActions} end />
           </View>
         )}

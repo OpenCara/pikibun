@@ -1,23 +1,26 @@
 import { computed, Scroll, signal, Text, untracked, View } from "nsh";
 import { nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord } from "../shared";
 import { pullRequestLabel } from "../components/PullRequest";
+import { createSessionMenu, RenameSheet } from "../components/SessionMenu";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { relativeTime } from "../lib/format";
 import { layout, palette, text, weight } from "../theme";
 import { TextField } from "../form";
-import { Button, EmptyState, IdentityBadge, InfoTip, Loading, Note, Row, StatusDot } from "../ui";
+import { Button, EmptyState, Feedback, IdentityBadge, InfoTip, Loading, Note, Row, RowMenu, StatusDot } from "../ui";
 import { Card } from "../settings/accounts";
 
 const PAGE_SIZE = 50;
 
 /**
  * Every session the person can read, by workspace, newest first, as the web app's SessionsScreen: searchable, archived
- * ones on request, a workspace's longer list in pages.
+ * ones on request, a workspace's longer list in pages. A right click on a session (a finger held on it on touch
+ * screens) opens what can be done to it, as in the sidebar.
  */
 export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () => void; onNew: () => void }) {
   const data = useAppData();
   const { user } = untracked(session);
+  const menu = createSessionMenu();
   const query = signal("");
   const showArchived = signal(false);
   const limits = signal<Record<string, number>>({});
@@ -57,6 +60,9 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
         <If when={data.sessions().length} else={<EmptyState title="No sessions yet" action={<Button variant="ghost" label="Start a session" onPress={props.onNew} />} />}>
           <Scroll style={{ flex: 1 }} contentStyle={{ gap: 32, width: "100%", maxWidth: layout.content, alignSelf: "center", paddingHorizontal: 24, paddingTop: 16, paddingBottom: 48 }}>
             <TextField testID="sessions-search" value={query()} onChange={value => query.set(value)} placeholder="Search sessions" accessibilityLabel="Search sessions by title" />
+            <If when={!menu.renaming() && (menu.action.error() || menu.action.notice())}>
+              <View testID="sessions-feedback"><Feedback error={menu.action.error()} notice={menu.action.notice()} /></View>
+            </If>
             <If when={groups().length} else={<EmptyState title={!query().trim() && !showArchived() ? "All sessions are archived" : "No matching sessions"} />}>
               <Each of={groups()} key={group => group.id}>
                 {group => {
@@ -75,11 +81,13 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
                             const owner = () => record().ownerId === user.id;
                             const viewerOnly = () => !owner() && record().permissions?.includes("read") && record().permissions!.every(permission => permission === "read");
                             return (
-                              <Row testID={`sessions-row-${record().id}`} chevron onPress={() => props.onOpen(record().id)}
-                                leading={<StatusDot tone={status().tone} label={status().label ?? record().status} />}
-                                title={`${item().depth > 0 ? `${"  ".repeat(item().depth - 1)}↳ ` : ""}${record().title}`}
-                                hint={`${status().label ? `${status().label} · ` : ""}${record().tunnel ? "Online · " : ""}${record().pullRequest
-                                  ? `${pullRequestLabel(record().pullRequest!)}${record().pullRequest!.state ? ` ${pullRequestStateLabels[record().pullRequest!.state!]}` : ""} · ` : ""}${owner() ? "Yours" : viewerOnly() ? "Viewer" : "Shared"} · ${record().visibility === "workspace" ? "Workspace-visible" : "Private"} · ${relativeTime(record().createdAt)}`} />
+                              <RowMenu items={() => menu.items(record())} testID={`sessions-menu-${record().id}`}>
+                                <Row testID={`sessions-row-${record().id}`} chevron onPress={() => props.onOpen(record().id)}
+                                  leading={<StatusDot tone={status().tone} label={status().label ?? record().status} />}
+                                  title={`${item().depth > 0 ? `${"  ".repeat(item().depth - 1)}↳ ` : ""}${record().title}`}
+                                  hint={`${status().label ? `${status().label} · ` : ""}${record().tunnel ? "Online · " : ""}${record().pullRequest
+                                    ? `${pullRequestLabel(record().pullRequest!)}${record().pullRequest!.state ? ` ${pullRequestStateLabels[record().pullRequest!.state!]}` : ""} · ` : ""}${owner() ? "Yours" : viewerOnly() ? "Viewer" : "Shared"} · ${record().visibility === "workspace" ? "Workspace-visible" : "Private"} · ${relativeTime(record().createdAt)}`} />
+                              </RowMenu>
                             );
                           }}
                         </Each>
@@ -97,6 +105,8 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
           </Scroll>
         </If>
       </If>
+      <RenameSheet open={menu.renaming() !== null} title={menu.renaming()?.title ?? ""} busy={menu.action.busy()} error={menu.action.error()}
+        onClose={menu.closeRename} onSave={menu.rename} />
     </View>
   );
 }

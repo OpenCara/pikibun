@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import type { ImageLimits, ImageProcessor, PreparedImage } from "@earendil-works/pi-durable/tools";
+import { entryImageLimits } from "../../../packages/shared/src/entry-images.js";
 
 /**
  * Largest image file `read_file` reads; text keeps `MAX_FILE_BYTES`. It covers full-resolution camera photos and
@@ -70,22 +72,36 @@ function imageProcessor(): Promise<ImageProcessor> {
   return processor;
 }
 
-let busy = false;
-const waiting: (() => void)[] = [];
 const BUSY = Symbol("busy");
 
-/** Runs `work` once no other image is being prepared, or gives up when too many reads already wait. */
-async function inTurn<T>(work: () => Promise<T>): Promise<T | typeof BUSY> {
-  if (busy) {
-    if (waiting.length >= MAX_WAITING) return BUSY;
-    // The read that finishes hands its turn over directly, so a newcomer cannot slip in between.
-    await new Promise<void>(resolve => waiting.push(resolve));
-  } else busy = true;
+/**
+ * Who an image is prepared for: the model (a read, a pasted image), or a person's client (a transcript thumbnail).
+ * Each waits in a line of its own, so a transcript full of screenshots never has the model's reads refused as busy.
+ */
+export type ImageTurn = "model" | "thumbnail";
+/** How many may wait in each line; more are refused as busy. */
+const WAITING_LIMITS: Record<ImageTurn, number> = { model: MAX_WAITING, thumbnail: 32 };
+
+let preparing = false;
+const waiting: Record<ImageTurn, (() => void)[]> = { model: [], thumbnail: [] };
+
+/**
+ * Runs `work` once no other image is being prepared, or gives up when too many already wait in `turn`'s line. The whole
+ * process prepares one image at a time, whoever it is for: decoding takes its memory once, and the processor's worker
+ * answers in order anyway. The model's line goes first, so a read waits for at most the one thumbnail under way.
+ * Exported for tests.
+ */
+export async function inTurn<T>(turn: ImageTurn, work: () => Promise<T>): Promise<T | typeof BUSY> {
+  if (preparing) {
+    if (waiting[turn].length >= WAITING_LIMITS[turn]) return BUSY;
+    // The work that finishes hands its turn over directly, so a newcomer cannot slip in between.
+    await new Promise<void>(resolve => waiting[turn].push(resolve));
+  } else preparing = true;
   try { return await work(); }
   finally {
-    const next = waiting.shift();
+    const next = waiting.model.shift() ?? waiting.thumbnail.shift();
     if (next) next();
-    else busy = false;
+    else preparing = false;
   }
 }
 
@@ -93,12 +109,12 @@ async function inTurn<T>(work: () => Promise<T>): Promise<T | typeof BUSY> {
  * `prepare` with a deadline. Photon cannot free the input of a decode that failed, and a slow decode cannot be
  * stopped, so after either the worker is replaced instead of reused.
  */
-async function prepareWithin(bytes: Uint8Array, mimeType: string): Promise<PreparedImage | undefined> {
+async function prepareWithin(bytes: Uint8Array, mimeType: string, limits: ImageLimits = IMAGE_LIMITS): Promise<PreparedImage | undefined> {
   const current = imageProcessor();
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<undefined>(resolve => { timer = setTimeout(resolve, PREPARE_TIMEOUT_MS, undefined); });
   try {
-    const prepared = await Promise.race([current.then(images => images.prepare(bytes, mimeType, IMAGE_LIMITS)), timeout]);
+    const prepared = await Promise.race([current.then(images => images.prepare(bytes, mimeType, limits)), timeout]);
     if (!prepared && processor === current) processor = undefined;
     return prepared;
   } catch {
@@ -120,12 +136,56 @@ export async function prepareImage(bytes: Uint8Array, mimeType: string): Promise
   const view = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   // Under a type providers do not take inline, Photon re-encodes an animated GIF's first frame as a still image:
   // OpenAI accepts only still GIFs, and a rejected image would fail every later turn of the conversation.
-  const prepared = await inTurn(() => prepareWithin(view, header.animated ? "image/x-animated-gif" : mimeType));
+  const prepared = await inTurn("model", () => prepareWithin(view, header.animated ? "image/x-animated-gif" : mimeType));
   if (prepared === BUSY) return { error: IMAGE_BUSY };
   // Read from the result: a passed-through image keeps its size, an EXIF-rotated one swaps it.
   const size = prepared && imageHeader(Buffer.from(prepared.data, "base64"), prepared.mimeType);
   if (!prepared || !size) return { error: IMAGE_ERROR };
   return { image: { data: prepared.data, mimeType: prepared.mimeType, width: size.width, height: size.height } };
+}
+
+/**
+ * Limits of a transcript image's thumbnail: small enough that a transcript of screenshots loads quickly on a phone. As in
+ * `IMAGE_LIMITS`, `maxBytes` bounds the base64 (Photon compares it with `base64Length`), which `checkEntryImage` checks.
+ */
+const THUMBNAIL_LIMITS: ImageLimits = { maxWidth: entryImageLimits.thumbnailEdge, maxHeight: entryImageLimits.thumbnailEdge, maxBytes: entryImageLimits.thumbnailBytes };
+
+type Thumbnail = { readonly data: string; readonly mimeType: string };
+/** Thumbnails made recently, by their image's digest, least recently asked for first: at most 128 of 64 KiB. */
+const thumbnails = new Map<string, Promise<Thumbnail | "busy" | undefined>>();
+const THUMBNAILS_KEPT = 128;
+
+/**
+ * A small copy of an image the transcript keeps (base64, already prepared for the model), for people's clients:
+ * `undefined` when it cannot be made, or `busy` when too many already wait. An image already within the limits comes
+ * back as it is. The process keeps the latest it made, and people asking for one being made wait for it together.
+ */
+export function thumbnailImage(data: string, mimeType: string): Promise<Thumbnail | "busy" | undefined> {
+  const key = createHash("sha256").update(mimeType).update("\0").update(data).digest("hex");
+  const kept = thumbnails.get(key);
+  if (kept) {
+    thumbnails.delete(key);
+    thumbnails.set(key, kept);
+    return kept;
+  }
+  const made = makeThumbnail(data, mimeType);
+  thumbnails.set(key, made);
+  while (thumbnails.size > THUMBNAILS_KEPT) thumbnails.delete(thumbnails.keys().next().value!);
+  // Only thumbnails are kept: one refused as busy, or that failed, is tried again when next asked for.
+  void made.then(result => { if (typeof result !== "object" && thumbnails.get(key) === made) thumbnails.delete(key); });
+  return made;
+}
+
+async function makeThumbnail(data: string, mimeType: string): Promise<Thumbnail | "busy" | undefined> {
+  const bytes = Buffer.from(data, "base64");
+  const header = imageHeader(bytes, mimeType);
+  if (!header || header.width * header.height * (header.bytesPerPixel + 8) > MAX_DECODE_BYTES) return undefined;
+  const view = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // A GIF's first frame, as for the model; a WebP that animates is never decoded frame by frame.
+  if (header.animated && mimeType === "image/webp") return undefined;
+  const prepared = await inTurn("thumbnail", () => prepareWithin(view, header.animated ? "image/x-animated-gif" : mimeType, THUMBNAIL_LIMITS));
+  if (prepared === BUSY) return "busy";
+  return prepared ? { data: prepared.data, mimeType: prepared.mimeType } : undefined;
 }
 
 /**

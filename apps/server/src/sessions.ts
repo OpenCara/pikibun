@@ -14,7 +14,7 @@ import { agentVersion, getUser, modelDefinition, requireActiveSession, requireUn
 import {
   auditStatement, autoApprovedRequesters, chooseAutoApprovedRequester, cloneRepositories, crossSessionCall, hostAuthority, hostCommandSession,
   hostOwnerDecides, issueRunAdmission, legacyRepositoryFixture, listSessionAccess, mayDecideHostCommands, parseOperation, permissionCall,
-  presentApprovals, requireConnectorSession, requireMember, requireOperationTool, requireSession, requireSessionCreator, requireSessionManager,
+  presentApprovals, requireConnectorSession, requireMember, requireOperationTool, requireRunnerAccess, requireSession, requireSessionCreator, requireSessionManager,
   reviewedApproval, runsShellCommands, sessionAccess, sessionCreatorSQL, sessionManagerSQL, workspaceApprovalSettings,
 } from './authority/index.js';
 import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
@@ -261,8 +261,9 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       row.connector_id ?? null, row.connector_owner_id ?? null, row.repositories_json, row.visibility ?? 'private', row.repository_mode ?? null, row.branch ?? null,
       row.host_environment ?? 0, row.tool_output ?? 'full',
       workspaceId, ownerId, workspaceId, resolved.sourceIds,
-      // A workspace without sources admits only the synthetic legacy fixture that cloneRepositories allowed.
-      ownerId, resolved.sourceIds === '[]' ? 0 : 1, resolved.githubAuthority === null && testMode(c.env) ? 1 : 0,
+      // A workspace without sources admits only its owner's private workspace (which stays private: the mark never goes)
+      // and the synthetic legacy fixture that cloneRepositories allowed.
+      ownerId, resolved.sourceIds === '[]' && !resolved.sourcesOptional ? 0 : 1, resolved.githubAuthority === null && testMode(c.env) ? 1 : 0,
       resolved.githubAuthority?.githubId ?? null, resolved.githubAuthority?.githubId ?? null, resolved.githubAuthority?.ciphertext ?? null,
       JSON.stringify(resolved.credentials), ownerId, resolved.credentials.length,
       row.connector_id ?? null, model.id, row.connector_id ?? null, row.connector_owner_id ?? null, workspaceId, ownerId,
@@ -425,6 +426,31 @@ async function requireDecider(c: AppContext, sessionId: string, operation?: Oper
  * after a whole `view` event it gets `patch` events with only what changed since the revision it holds, and a patch
  * with no changes while nothing did. Clients without `since` get the whole view every time, as before patches.
  */
+/**
+ * Whether the viewer is refused the session's view now, by the checks GET /view and every /events snapshot make before
+ * asking the host: the viewer's runner access, and the host still serving the session's workspace (a host whose owner
+ * stopped sharing it refuses its other members' sessions while they still read their metadata). Only a refusal counts:
+ * a session that is restoring is still the viewer's to see. Clients show a view they kept only when this is false.
+ */
+async function viewRefused(c: AppContext, row: SessionRow): Promise<boolean> {
+  const refused = (error: unknown) => {
+    if (!(error instanceof HTTPException)) throw error;
+    return error.status === 403;
+  };
+  try {
+    await requireRunnerAccess(c, c.get('auth').userId, row, 'view');
+  } catch (error) {
+    if (refused(error)) return true;
+  }
+  if (!row.connector_id) return false;
+  try {
+    await requireConnectorSession(c.env, row.connector_id, row);
+  } catch (error) {
+    if (refused(error)) return true;
+  }
+  return false;
+}
+
 function pollingEvents(c: AppContext, row: SessionRow): Response {
   const since = c.req.query('since');
   let held = isRevision(since) ? since : undefined;
@@ -527,9 +553,10 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
     // Everyone who can view it learns whose requests its owner auto-approves, and whether the workspace lets them.
     const requesterAutoApprove = (await workspaceApprovalSettings(c.env.DB, access.row.workspace_id)).requesterAutoApprove;
     const autoApproved = await autoApprovedRequesters(c.env.DB, access.row.id);
+    const viewable = !await viewRefused(c, access.row);
     return c.json({ session: { ...sessionRecord(access.row, access.permissions), ...(hostUnsandboxed ? { hostUnsandboxed } : {}), ...(linkShared ? { linkShared } : {}),
       ...(notice ? { cloneUnavailable: notice } : {}), ...(requesterAutoApprove ? { requesterAutoApprove: true } : {}),
-      ...(autoApproved.length ? { autoApprovedRequesters: autoApproved } : {}) } });
+      ...(autoApproved.length ? { autoApprovedRequesters: autoApproved } : {}), viewable } });
   });
   // The session's owner, and its workspace's owner and admins (managesSession), rename it and change its tool output
   // and visibility. Each statement checks again, as it writes, that the request's user still manages the session.

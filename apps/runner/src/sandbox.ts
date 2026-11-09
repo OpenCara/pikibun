@@ -26,6 +26,7 @@ import { connectorNode, sandboxNodeMount, type NodeToolchain, type SandboxNodeMo
 import { checkedFileOperation, type FileOperationRequest, type FileOperationResult } from "./file-operations.js";
 import { connectorBrowser, SANDBOX_BROWSER_DRIVER, sandboxBrowserMount, type BrowserToolchain } from "./browser-toolchain.js";
 import type { SessionBrowser } from "./browser-command.js";
+import type { SandboxNodePrograms } from "./program-availability.js";
 
 export { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 
@@ -401,6 +402,11 @@ export class Sandbox implements IsolatedWorkspace {
   /** The connector's Node.js (its node, package managers and headers), read-only for shell commands where the sandbox doesn't see it already. */
   readonly #nodeMount: SandboxNodeMount | undefined;
   readonly nodeBin: string | undefined;
+  /**
+   * The connector's Node.js as commands find it (program-availability.ts): its bin directory and, where it is mounted
+   * rather than in /usr, the programs mounted there.
+   */
+  readonly nodePrograms: SandboxNodePrograms | undefined;
   /** The host's Chromium installation, read-only for shell commands where the sandbox doesn't see it already. */
   readonly #browserSource: () => BrowserToolchain | undefined;
   /** Whether the browser tool's driver is written: wherever a Chromium may be given. */
@@ -440,6 +446,7 @@ export class Sandbox implements IsolatedWorkspace {
     const node = sandboxNodeMount(options.node === undefined ? connectorNode() : options.node ?? undefined);
     this.#nodeMount = node?.mount;
     this.nodeBin = node?.bin;
+    this.nodePrograms = node ? { bin: node.bin, ...(node.mount ? { programs: ["node", ...node.mount.links.map(link => link.path.slice(link.path.lastIndexOf("/") + 1))] } : {}) } : undefined;
     const browser = options.browser;
     this.#browserSource = typeof browser === "function" ? browser : browser === undefined ? connectorBrowser : () => browser ?? undefined;
     this.#browserDriver = browser !== null;

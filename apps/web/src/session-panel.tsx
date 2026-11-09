@@ -5,6 +5,7 @@ import { containsRedaction, REDACTED } from "../../../packages/shared/src/redact
 import { builtinExtensions } from "../../../packages/shared/src/host-config";
 import { browserUnavailableText } from "../../../packages/shared/src/browser";
 import { tunnelUnavailableText, type SessionTunnelView } from "../../../packages/shared/src/tunnel";
+import { programsMissingText } from "../../../packages/shared/src/program-install";
 import { useSessionLink } from "./session-link";
 import { api, segment } from "./api";
 import { BackupList, backupDatabaseLabel, backupDownloadHref, backupLocationLabel, type Backup, type BackupDatabase, type BackupListing, type BackupListingResource } from "./backups";
@@ -55,6 +56,44 @@ export interface SessionActions {
   pack: () => void;
 }
 
+type Visibility = NonNullable<SessionRecord["visibility"]>;
+
+/**
+ * Asks before turning `session` workspace-visible or private (the session's menu and the list's right-click menu);
+ * resolves the visibility to set, or null when the user changed their mind.
+ */
+export async function confirmVisibilityChange(session: SessionRecord): Promise<Visibility | null> {
+  const next: Visibility = (session.visibility ?? "private") === "workspace" ? "private" : "workspace";
+  const confirmed = await confirmDialog(next === "workspace" ? {
+    title: "Make session workspace-visible?",
+    message: "All workspace members will be able to view existing and future prompts and output, including tool output, repository content shown in the transcript, and side asks, which may contain sensitive information. This grants viewing only, not direct GitHub access, permission to run tools, or ask/control permissions.",
+    confirmLabel: "Make workspace-visible",
+  } : {
+    title: "Make session private?",
+    message: "Workspace membership will no longer grant viewing access, except to the workspace's owner and admins, who manage every session. Existing explicit grants will remain in effect, and previously viewed or copied content cannot be recalled.",
+    confirmLabel: "Make private",
+  });
+  return confirmed ? next : null;
+}
+
+export function visibilityNotice(visibility: Visibility): string {
+  return visibility === "workspace"
+    ? "Session is workspace-visible. Workspace members can view prompts and output."
+    : "Session is private. Existing explicit grants still apply.";
+}
+
+export function confirmArchive(): Promise<boolean> {
+  return confirmDialog({
+    title: "Archive session?",
+    message: "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. Pending approvals can't be decided while it's archived. You can unarchive it later.",
+    confirmLabel: "Archive",
+  });
+}
+
+export function unarchiveNotice(session: SessionRecord): string {
+  return session.packed ? "Session unarchived, its files unpacked" : "Session unarchived";
+}
+
 /**
  * `manages`: the user is the session's owner, or its workspace's owner or an admin (managesSession), who rename,
  * archive and unarchive it and change its visibility. Backups stay the owner's alone.
@@ -71,23 +110,12 @@ export function useSessionActions({ session, user, manages, backupBlocked, onCha
   const conversationOnlyOff = backups.data?.conversationOnlySupported === false;
   async function changeVisibility() {
     if (!session || !manages || action.busy) return;
-    const nextVisibility = (session.visibility ?? "private") === "workspace" ? "private" : "workspace";
-    const confirmed = await confirmDialog(nextVisibility === "workspace" ? {
-      title: "Make session workspace-visible?",
-      message: "All workspace members will be able to view existing and future prompts and output, including tool output, repository content shown in the transcript, and side asks, which may contain sensitive information. This grants viewing only, not direct GitHub access, permission to run tools, or ask/control permissions.",
-      confirmLabel: "Make workspace-visible",
-    } : {
-      title: "Make session private?",
-      message: "Workspace membership will no longer grant viewing access, except to the workspace's owner and admins, who manage every session. Existing explicit grants will remain in effect, and previously viewed or copied content cannot be recalled.",
-      confirmLabel: "Make private",
-    });
-    if (!confirmed) return;
+    const nextVisibility = await confirmVisibilityChange(session);
+    if (!nextVisibility) return;
     await action.run(async () => {
       await api(`/api/sessions/${segment(session.id)}`, { method: "PATCH", body: { visibility: nextVisibility } });
       onChange();
-    }, nextVisibility === "workspace"
-      ? "Session is workspace-visible. Workspace members can view prompts and output."
-      : "Session is private. Existing explicit grants still apply.");
+    }, visibilityNotice(nextVisibility));
   }
   async function createBackup({ conversationOnly = false }: { conversationOnly?: boolean } = {}) {
     if (!session || !isOwner || backupBlocked || backupsOff || backupsPending || action.busy || (conversationOnly && conversationOnlyOff)) return;
@@ -128,12 +156,7 @@ export function useSessionActions({ session, user, manages, backupBlocked, onCha
   }
   async function archive() {
     if (!session || !manages || action.busy || session.status === "archived") return;
-    const confirmed = await confirmDialog({
-      title: "Archive session?",
-      message: "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. Pending approvals can't be decided while it's archived. You can unarchive it later.",
-      confirmLabel: "Archive",
-    });
-    if (!confirmed) return;
+    if (!await confirmArchive()) return;
     await action.run(async () => {
       await api(`/api/sessions/${segment(session.id)}/archive`, { method: "POST" });
       onChange();
@@ -144,7 +167,7 @@ export function useSessionActions({ session, user, manages, backupBlocked, onCha
     void action.run(async () => {
       await api(`/api/sessions/${segment(session.id)}/unarchive`, { method: "POST" });
       onChange();
-    }, session.packed ? "Session unarchived, its files unpacked" : "Session unarchived");
+    }, unarchiveNotice(session));
   }
   async function pack() {
     if (!session || !isOwner || action.busy || session.status !== "archived" || session.packed) return;
@@ -451,9 +474,10 @@ function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView
       hint={item.tools.length ? `Tools: ${item.tools.join(", ")}` : "No tools: prompt or hooks only"}
       trailing={item.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : item.required ? <StatusBadge tone="success">Required by the host</StatusBadge> : <StatusBadge tone="success">Running</StatusBadge>} />)}
     {(extensions.unavailable ?? []).map(item => <Row key={`unavailable ${item.source}`} leading={<Icon name="alert" size={16} />} title={<code>{item.source}</code>}
-      hint={item.source === "piki:browser" ? browserUnavailableText(item.reason) : item.source === "piki:tunnel" ? tunnelUnavailableText(item.reason)
+      hint={item.programs ? programsMissingText({ [item.tools[0] ?? item.source]: item.programs })
+        : item.source === "piki:browser" ? browserUnavailableText(item.reason) : item.source === "piki:tunnel" ? tunnelUnavailableText(item.reason)
         : "The workspace has it on, but this session can't offer its tools"}
-      trailing={<StatusBadge tone={["missing", "failed"].includes(item.reason) ? "warning" : "neutral"}>{item.reason === "downloading" ? "Not ready yet" : "Unavailable"}</StatusBadge>} />)}
+      trailing={<StatusBadge tone={["missing", "failed", "programs"].includes(item.reason) ? "warning" : "neutral"}>{item.programs ? "Missing programs" : item.reason === "downloading" ? "Not ready yet" : "Unavailable"}</StatusBadge>} />)}
     {(extensions.missingRequired ?? []).map(source => <Row key={`required ${source}`} leading={<Icon name="alert" size={16} />} title={<code>{source}</code>}
       hint="The host's owner requires it of every session on the host, which can't run it now: no message is sent until it can" trailing={<StatusBadge tone="danger">Missing</StatusBadge>} />)}
     {extensions.missing.map(source => <Row key={source} title={<code>{source}</code>} hint="Not on this host at this version: the session runs without it until the host's owner installs it"

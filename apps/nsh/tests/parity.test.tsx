@@ -131,6 +131,17 @@ describe("a new session", () => {
     await app.press("id:new-session");
     await app.waitUntil(() => app.value("id:new-message") === "Half a thought");
   });
+
+  test("opens its host's details from the link under the chat box, and closes them again", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, network: server() });
+    await app.press("id:new-session");
+    await app.waitFor("id:new-host-details");
+    expect(app.shows("id:new-host-details-panel")).toBe(false);
+    await app.press("id:new-host-details");
+    await app.waitFor("id:new-host-details-panel");
+    await app.press("id:new-host-details");
+    await app.waitUntil(() => !app.shows("id:new-host-details-panel"));
+  });
 });
 
 describe("the sidebar", () => {

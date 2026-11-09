@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { api, errorMessage } from "./api";
 import { Icon, type IconName } from "./icons";
@@ -148,15 +149,17 @@ export function CardBody({ children }: { children: ReactNode }) {
 }
 
 /** Row anatomy: leading, title + hint, trailing. With onClick/href and `chevron` it drills into a detail. */
-export function Row({ title, hint, leading, trailing, onClick, href, chevron, disabled }: { title: ReactNode; hint?: ReactNode; leading?: ReactNode; trailing?: ReactNode; onClick?: () => void; href?: string; chevron?: boolean; disabled?: boolean }) {
+export function Row({ title, hint, leading, trailing, onClick, href, chevron, disabled, onContextMenu }: { title: ReactNode; hint?: ReactNode; leading?: ReactNode; trailing?: ReactNode; onClick?: () => void; href?: string; chevron?: boolean; disabled?: boolean;
+  /** A right-click menu for the row (useContextMenu). */
+  onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void }) {
   const body = <>
     {leading && <span className="row-leading">{leading}</span>}
     <span className="row-content"><span className="row-title">{title}</span>{hint && <span className="row-hint">{hint}</span>}</span>
     {(trailing || chevron) && <span className="row-trailing">{trailing}{chevron && <Icon name="chevron-right" size={16} />}</span>}
   </>;
-  if (href) return <a className="row" href={href}>{body}</a>;
-  if (onClick) return <button type="button" className="row" onClick={onClick} disabled={disabled}>{body}</button>;
-  return <div className="row">{body}</div>;
+  if (href) return <a className="row" href={href} onContextMenu={onContextMenu}>{body}</a>;
+  if (onClick) return <button type="button" className="row" onClick={onClick} disabled={disabled} onContextMenu={onContextMenu}>{body}</button>;
+  return <div className="row" onContextMenu={onContextMenu}>{body}</div>;
 }
 
 /** An expandable row; reveals child content in place. `plain` renders it standalone outside a card. */
@@ -205,6 +208,17 @@ export interface MenuItem {
   onSelect: () => void;
 }
 
+export type MenuEntry = MenuItem | "separator";
+
+/** A menu's items and separators; `close` runs before an item's action. */
+function MenuItems({ items, close }: { items: MenuEntry[]; close: () => void }) {
+  return <>{items.map((item, index) => item === "separator"
+    ? <div className="menu-separator" key={`separator-${index}`} role="separator" />
+    : <button key={item.label} type="button" role="menuitem" className={item.destructive ? "menu-item destructive" : "menu-item"} disabled={item.disabled} onClick={event => { event.stopPropagation(); close(); item.onSelect(); }}>
+      {item.icon && <Icon name={item.icon} size={14} />}<span className="menu-text"><span>{item.label}</span>{item.hint && <span className="menu-hint">{item.hint}</span>}</span>
+    </button>)}</>;
+}
+
 /** Trigger-anchored menu for a small fixed set of actions (kebab menus). */
 export function DropdownMenu({ label, icon = "more", items, align = "end", side = "below", trigger, triggerVariant = "ghost" }: { label: string; icon?: IconName; items: (MenuItem | "separator")[]; align?: "start" | "end"; side?: "below" | "above"; trigger?: ReactNode;
   /** How a custom `trigger` looks: ghost (the default), or outline like a section's other add buttons. */
@@ -218,13 +232,132 @@ export function DropdownMenu({ label, icon = "more", items, align = "end", side 
       ? <button type="button" className={`btn ${triggerVariant} sm`} aria-haspopup="menu" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>{trigger}</button>
       : <Button variant="ghost" size="xs" icon={icon} aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} aria-controls={id} onClick={event => { event.stopPropagation(); setOpen(value => !value); }} />}
     {open && <Popover anchor={ref} side={side} align={align} role="menu" id={id} className="menu-scroll">
-      {items.map((item, index) => item === "separator"
-        ? <div className="menu-separator" key={`separator-${index}`} role="separator" />
-        : <button key={item.label} type="button" role="menuitem" className={item.destructive ? "menu-item destructive" : "menu-item"} disabled={item.disabled} onClick={event => { event.stopPropagation(); setOpen(false); item.onSelect(); }}>
-          {item.icon && <Icon name={item.icon} size={14} />}<span className="menu-text"><span>{item.label}</span>{item.hint && <span className="menu-hint">{item.hint}</span>}</span>
-        </button>)}
+      <MenuItems items={items} close={close} />
     </Popover>}
   </div>;
+}
+
+interface OpenContextMenu {
+  /** Where it opens, in viewport coordinates; kept as one object while it is open (see PopoverAnchor). */
+  point: { x: number; y: number };
+  label: string;
+  items: MenuEntry[];
+  /** The element it was opened on: marked while the menu is open, and focused again (see rowFocus) when it closes from the keyboard or an item is chosen. */
+  target: HTMLElement;
+  /** Opened from the keyboard (the context menu key or Shift+F10), so its first item takes focus. */
+  keyboard: boolean;
+  /** Tells one opening from the next, even at the same point. */
+  key: number;
+}
+
+/** What takes the focus back for `target`: itself where it can, else the first control in it (a workspace row's button). */
+function rowFocus(target: HTMLElement): HTMLElement | null {
+  if (target.tabIndex >= 0) return target;
+  return target.querySelector<HTMLElement>("a[href], button:not(:disabled), [tabindex]:not([tabindex='-1'])");
+}
+
+/**
+ * A right-click menu: `open` is an element's onContextMenu handler, and `menu` renders the open one. One hook serves a
+ * whole list, so a second right-click moves the menu rather than opening another. An empty `items` leaves the
+ * browser's own menu.
+ */
+export function useContextMenu(): { open: (event: ReactMouseEvent<HTMLElement>, label: string, items: MenuEntry[]) => void; menu: ReactNode } {
+  const [state, setState] = useState<OpenContextMenu | null>(null);
+  const openings = useRef(0);
+  const close = useCallback(() => setState(null), []);
+  const open = useCallback((event: ReactMouseEvent<HTMLElement>, label: string, items: MenuEntry[]) => {
+    // React bubbles events out of portals: a right click in a popover the element holds (its options menu) isn't on it.
+    if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
+    if (!items.some(item => item !== "separator")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const target = event.currentTarget;
+    // The context menu key (or Shift+F10) opens it with no pointer: a pointer type of "" where the event is a
+    // PointerEvent, the corner of the page where it isn't. It opens under the element then.
+    const native = event.nativeEvent as MouseEvent & { pointerType?: string };
+    const keyboard = native.pointerType !== undefined ? native.pointerType === "" : event.clientX === 0 && event.clientY === 0;
+    const rect = target.getBoundingClientRect();
+    const point = keyboard ? { x: rect.left + 8, y: rect.bottom } : { x: event.clientX, y: event.clientY };
+    setState({ point, label, items, target, keyboard, key: ++openings.current });
+  }, []);
+  return { open, menu: state && <ContextMenu key={state.key} state={state} close={close} /> };
+}
+
+function ContextMenu({ state, close }: { state: OpenContextMenu; close: () => void }) {
+  const id = useId();
+  const { target, keyboard } = state;
+  useEffect(() => {
+    target.setAttribute("data-context-menu", "");
+    const menu = document.getElementById(id);
+    const first = menu?.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)");
+    (keyboard ? first : menu)?.focus({ preventScroll: true });
+    const inside = (node: EventTarget | null) => node instanceof Node && Boolean(menu?.contains(node));
+    const pointer = (event: PointerEvent) => { if (!inside(event.target)) close(); };
+    // It stays where it opened, so anything that moves the page under it closes it, as native menus do.
+    const scroll = (event: Event) => { if (!inside(event.target)) close(); };
+    // Escape closes it and Tab leaves it, back on the row, as a native menu does; the page's own Escape handlers (a
+    // sheet, another menu) don't hear the key, which was the menu's.
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Tab") return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+      rowFocus(target)?.focus({ preventScroll: true });
+    };
+    // Focus moved to something else (a script, an assistive technology): the menu is no longer what the person is in.
+    // With nowhere to go (Safari doesn't focus a pressed button), clicks outside and leaving the window close it instead.
+    const focusout = (event: FocusEvent) => { if (event.relatedTarget instanceof Node && !inside(event.relatedTarget)) close(); };
+    document.addEventListener("pointerdown", pointer, true);
+    document.addEventListener("scroll", scroll, true);
+    document.addEventListener("keydown", key, true);
+    menu?.addEventListener("focusout", focusout);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      target.removeAttribute("data-context-menu");
+      document.removeEventListener("pointerdown", pointer, true);
+      document.removeEventListener("scroll", scroll, true);
+      document.removeEventListener("keydown", key, true);
+      menu?.removeEventListener("focusout", focusout);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [id, target, keyboard, close]);
+  // Choosing an item puts the focus back on the row first, so what the item opens (a sheet, a confirmation) returns it there.
+  const choose = useCallback(() => { close(); rowFocus(target)?.focus({ preventScroll: true }); }, [close, target]);
+  function move(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    const edge = event.key === "Home" ? "first" : event.key === "End" ? "last" : null;
+    if (!step && !edge) return;
+    event.preventDefault();
+    const items = [...event.currentTarget.querySelectorAll<HTMLElement>("[role=menuitem]:not(:disabled)")];
+    if (!items.length) return;
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    const next = edge === "first" ? 0 : edge === "last" ? items.length - 1
+      : current < 0 ? (step > 0 ? 0 : items.length - 1) : (current + step + items.length) % items.length;
+    items[next]!.focus();
+  }
+  return <Popover anchor={state.point} role="menu" id={id} label={state.label} className="menu-scroll context-menu" tabIndex={-1}
+    onKeyDown={move} onContextMenu={event => event.preventDefault()}>
+    <MenuItems items={state.items} close={choose} />
+  </Popover>;
+}
+
+/** A short note in the corner of the screen, for actions whose result has no place on screen (a menu's, say). */
+export function useToast(): { show: (text: string, options?: { error?: boolean }) => void; toast: ReactNode } {
+  const [current, setCurrent] = useState<{ text: string; error: boolean; key: number } | null>(null);
+  const shown = useRef(0);
+  const show = useCallback((text: string, { error = false }: { error?: boolean } = {}) => setCurrent({ text, error, key: ++shown.current }), []);
+  useEffect(() => {
+    if (!current) return;
+    // Errors stay long enough to read.
+    const timer = window.setTimeout(() => setCurrent(null), current.error ? 8000 : 3000);
+    return () => window.clearTimeout(timer);
+  }, [current]);
+  const toast = current && createPortal(<div className="toast-region">
+    <div key={current.key} className={current.error ? "toast error" : "toast"} role={current.error ? "alert" : "status"} onClick={() => setCurrent(null)}>{current.text}</div>
+  </div>, document.body);
+  return { show, toast };
 }
 
 export interface Option<T extends string> { value: T; label: string; hint?: string; disabled?: boolean }
@@ -325,6 +458,12 @@ export function IdentityBadge({ name, id }: { name: string; id: string }) {
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return <span className="identity" style={{ background: identityColors[hash % identityColors.length] }} aria-hidden="true">{(name.trim()[0] ?? "?").toUpperCase()}</span>;
+}
+
+/** A workspace's badge: a lock for the user's own private workspace, its letter badge for any other. */
+export function WorkspaceBadge({ workspace }: { workspace: { id: string; name: string; personal?: boolean } }) {
+  if (workspace.personal) return <span className="identity identity-private" aria-hidden="true"><Icon name="lock" size={12} /></span>;
+  return <IdentityBadge name={workspace.name} id={workspace.id} />;
 }
 
 /* ---------- Text and values ---------- */

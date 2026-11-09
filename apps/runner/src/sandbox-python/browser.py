@@ -225,6 +225,9 @@ class Chrome:
 
     def __init__(self, executable: str, profile: str, viewport: Tuple[int, int], log: str, deadline: float):
         self.deadline = deadline
+        self.started = time.monotonic()
+        # Whether Chromium has said anything on the pipe yet: one that never does is stuck starting, and says why in its log.
+        self.answered = False
         self.next_id = 0
         self.buffer = b''
         self.events: List[Dict[str, Any]] = []
@@ -238,6 +241,10 @@ class Chrome:
             except OSError:
                 pass
         env = dict(os.environ)
+        # No D-Bus: headless Chromium needs none, and where it can reach the machine's bus (the driver run outside a
+        # session's sandbox, which has none), a call there that stalls holds its start for D-Bus's 25-second timeout.
+        env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=/nonexistent/pikibun-no-bus'
+        env['DBUS_SYSTEM_BUS_ADDRESS'] = 'unix:path=/nonexistent/pikibun-no-bus'
         fonts = fonts_config()
         if fonts:
             env['FONTCONFIG_FILE'] = fonts
@@ -281,6 +288,7 @@ class Chrome:
         chunk = os.read(self.reader, 1 << 20)
         if not chunk:
             return False
+        self.answered = True
         self.buffer += chunk
         while b'\0' in self.buffer:
             raw, self.buffer = self.buffer.split(b'\0', 1)
@@ -314,6 +322,8 @@ class Chrome:
                     return answer.get('result', {})
             left = until - time.monotonic()
             if left <= 0:
+                if not self.answered:
+                    raise BrowserError('Chromium did not answer within %d seconds of starting: %s' % (round(time.monotonic() - self.started), self.tail()))
                 raise BrowserError(OUT_OF_TIME if time.monotonic() >= self.deadline else method + ' took too long')
             if not self.pump(left):
                 raise BrowserError('the browser closed: ' + self.tail())

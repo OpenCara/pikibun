@@ -30,8 +30,10 @@ import { requestKey, RunnerError, stableJson, validateOperation } from "./protoc
 import { searchLimits, searchRequest, type SearchRequest } from "./search.js";
 import { gitLimits, gitRequest, gitShellCommand, gitSubcommands, type GitRequest } from "./git-command.js";
 import { brokeredArguments, brokeredTarget, programCommand, programRequest, programToolsInstructions, rememberToolDefinitions, type ProgramRequest } from "./defined-tools.js";
-import { bundledToolDefinitions, type ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
+import { bundledToolDefinitions, type ProgramToolDefinition, type ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 import { pythonPrograms, pythonRequest, pythonShellCommand, type PythonRequest } from "./python-command.js";
+import { sandboxMissingPrograms } from "./program-availability.js";
+import { programInstallStep, programsMissingText } from "../../../packages/shared/src/program-install.js";
 import { browserRequest, browserShellCommand, browserTarget, servePrograms } from "./browser-command.js";
 import type { BrowserToolchain } from "./browser-toolchain.js";
 import { browserActions, browserKeys, browserLimits, browserUnavailableReason, browserUnavailableText, parseBrowserReport, type BrowserRequest,
@@ -56,14 +58,15 @@ import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { reportedBranches } from "./clone-branches.js";
 import { answered, ApprovalWaits } from "./session/approval-waits.js";
-import { endView, entryView, refusedView } from "./session/entries.js";
+import { endView, entryImages, entryView, refusedView } from "./session/entries.js";
+import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
 import { MessageInputs, prepareMessageImages, type InputImage } from "./session/inputs.js";
 import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import {
   hostGitLfs, Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
 } from "./sandbox.js";
-import { prepareImage } from "./images.js";
+import { prepareImage, thumbnailImage } from "./images.js";
 import { performClonePush, PushError, pushSummary, type PushResult } from "./push.js";
 import { HostCredentialError } from "./git-credentials.js";
 import type { GitRemote } from "./git-remote.js";
@@ -885,11 +888,18 @@ export class RunnerSession {
       + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
       + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "
       + "It needs no quoting, and its approval card shows exactly the Git command it runs.";
-    // A program tool's own paragraph (node's): with the connector's Node.js, the agent learns which it runs.
+    // The program tools' programs the sandbox doesn't find (pnpm without corepack, uv, cargo ...), by tool.
+    const missing = mode !== "ask" ? this.missingPrograms(off) : [];
+    // A program tool's own paragraph (node's): with the connector's Node.js, the agent learns which it runs, and with which
+    // of its package managers (Node.js 25 and newer no longer bundle corepack).
     if (mode !== "ask") for (const definition of defined) {
       if (definition.kind !== "program" || !definition.instructions) continue;
+      const absent = missing.find(item => item.tool === definition.name)?.programs ?? [];
+      // Where what commands find isn't known (outside the Linux sandbox), only those every Node.js installation has.
+      const managers = this.linuxSandbox() ? definition.programs.filter(program => program !== "node" && !absent.includes(program)) : ["npm", "npx"];
       instructions += `\n\n${definition.instructions}`
-        + (definition.toolchain === "node" && this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own), with its npm, npx and corepack, ahead of any other on PATH.` : "");
+        + (definition.toolchain === "node" && this.sandbox.nodeBin ? ` It runs Node.js ${process.versions.node} (this host's connector's own)${managers.length
+          ? `, with ${managers.length > 1 ? `${managers.slice(0, -1).join(", ")} and ${managers.at(-1)}` : managers[0]}` : ""}, ahead of any other on PATH.` : "");
     }
     if (mode !== "ask" && this.tools.some(tool => tool.name === "python") && !off.has("python")) instructions += "\n\nRun Python, pip, uv, poetry and pytest with the python tool "
       + "(there is no shell). Make a virtual environment, then install into it and run there: python {program: \"python3\", args: [\"-m\", \"venv\", \".venv\"], directory: \"<name>\"}, "
@@ -897,6 +907,11 @@ export class RunnerSession {
     // The program tools that share one paragraph (rust, go, dotnet, make), its example of a tool the session has (review of #194).
     const programs = mode !== "ask" ? programToolsInstructions(defined) : undefined;
     if (programs) instructions += `\n\n${programs}`;
+    // As for the browser without Chromium: the agent says what the host lacks and how its owner installs it, rather than
+    // finding out from "command not found" or fetching toolchains itself.
+    const missingText = programsMissingText(Object.fromEntries(missing.map(item => [item.tool, item.programs])));
+    if (missingText) instructions += `\n\n${missingText} Calls to them are refused before they run. When a task needs one, use what this session has `
+      + "where you can (npx -y pnpm@<version> for a project's pnpm, say, or pytest installed into a virtual environment), and tell the user what the host's owner installs.";
     // Code mode is core (#163): what pipes did between commands, a script does between tools.
     if (mode !== "ask" && this.#builtins) instructions += "\n\nTo chain tools, loop over their results or cut and filter long output, "
       + "write a codemode script that calls them: there is no shell to pipe commands through.";
@@ -1469,6 +1484,41 @@ export class RunnerSession {
     return status ? tunnelUnavailableReason(status.state) : "missing";
   }
 
+  /** The session's Linux sandbox, where its commands run in one: they see only the host's /usr and the connector's Node.js. */
+  private linuxSandbox(): Sandbox | undefined {
+    return !this.#onHost && !this.config.sandboxBackend && this.sandbox instanceof Sandbox ? this.sandbox : undefined;
+  }
+
+  /**
+   * The programs of this session's program tools (those `off` doesn't name) that its sandbox doesn't find, by tool, each
+   * with its extension: only in the Linux sandbox, which sees just the host's /usr and the connector's Node.js, so what
+   * it finds is known before a call (program-availability.ts). Elsewhere commands see the host's own PATH: nothing.
+   */
+  private missingPrograms(off: ReadonlySet<string>): { tool: string; source: string; programs: string[] }[] {
+    const sandbox = this.linuxSandbox();
+    if (!sandbox) return [];
+    const node = sandbox.nodePrograms;
+    const tools = [
+      ...this.#definitions.filter((definition): definition is ProgramToolDefinition => definition.kind === "program" && !off.has(definition.name))
+        .map(definition => ({ tool: definition.name, source: definition.extensions[0] ?? `piki:${definition.name}`, programs: sandboxMissingPrograms(definition, node) })),
+      ...(this.tools.some(tool => tool.name === "python") && !off.has("python")
+        ? [{ tool: "python", source: "piki:python", programs: sandboxMissingPrograms({ programs: pythonPrograms, path: "/usr/local/bin" }) }] : []),
+    ];
+    return tools.filter(item => item.programs.length);
+  }
+
+  /**
+   * Why a program tool's call to `program` can't run, if it can't: the Linux sandbox doesn't find it. A python call with
+   * a virtual environment is never refused, since its bin may have the program.
+   */
+  private programMissing(tool: { programs: readonly string[]; path: string | readonly string[]; toolchain?: "node" }, program: string): string | undefined {
+    const sandbox = this.linuxSandbox();
+    if (!sandbox || !sandboxMissingPrograms({ ...tool, programs: [program] }, sandbox.nodePrograms).length) return undefined;
+    return `${program} isn't installed on this host where the session's sandbox sees it, so the call would fail with "command not found". `
+      + `The host's owner installs it for the whole system, as the sandbox sees only the host's /usr: ${programInstallStep(program) ?? "the distribution's package"}. `
+      + "Tell the user so, and use what this session has meanwhile where you can.";
+  }
+
   /** Whether this session offers the tunnel tool: the connector has tunnels, and nothing stands in the way. */
   private tunnelOffered(): boolean {
     return !!this.config.tunnels && this.tunnelUnavailable() === undefined;
@@ -1520,18 +1570,25 @@ export class RunnerSession {
    * as they were before they became switchable. A fail-closed one (the shells) also stays off while the last answer this
    * connector read turned it off, however old, so losing the control plane never turns a shell back on.
    */
+  /**
+   * `off` (sessionToolsOff of the workspace's `extensions`) with the tools defined as data decided by their definitions'
+   * extensions, which a newer control plane may name: each is off where none of them is on.
+   */
+  private definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0]): Set<string> {
+    for (const definition of this.#definitions) {
+      off.delete(definition.name);
+      if (!definition.extensions.some(extension => extensionSwitchOn(extension, extensions))) off.add(definition.name);
+    }
+    return off;
+  }
+
   private async sessionToolsOff(): Promise<Set<string>> {
     const config = this.config.extensions;
     // Opt-in tools (piki:tunnel) are off unless the workspace's answer turns them on.
     const workspaceId = this.binding.session.workspaceId;
     const answer = config ? await config.workspace(workspaceId).catch(() => undefined) : undefined;
     const extensions = answer?.extensions ?? [];
-    const off = sessionToolsOff(extensions);
-    // A tool defined as data goes by its definition's extensions, which a newer control plane may name.
-    for (const definition of this.#definitions) {
-      off.delete(definition.name);
-      if (!definition.extensions.some(extension => extensionSwitchOn(extension, extensions))) off.add(definition.name);
-    }
+    const off = this.definedToolsOff(sessionToolsOff(extensions), extensions);
     if (!config) return off;
     const last = config.lastKnown?.(workspaceId);
     if (last) for (const tool of sessionToolsOff(last.extensions, { failClosedOnly: true })) off.add(tool);
@@ -2406,7 +2463,7 @@ export class RunnerSession {
       // Node.js, Rust, Go, .NET and make are tools defined as data (definedTool), as source_read is.
       // Python and its package and test tools without a shell (piki:python, #163), decided as bash's are, like node's.
       // Not in the Windows sandbox, whose container reaches no Python yet (review of #186).
-      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: obj({ program: StringEnum(pythonPrograms), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
           venv: opt(str()) }, { open: true }),
@@ -2417,6 +2474,8 @@ export class RunnerSession {
           let command: string;
           try { request = pythonRequest(args); command = pythonShellCommand(request); }
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid python call"}. Nothing ran.`); }
+          const missing = request.venv ? undefined : this.programMissing({ programs: pythonPrograms, path: "/usr/local/bin" }, request.program);
+          if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
           const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
@@ -2772,6 +2831,9 @@ export class RunnerSession {
           let command: string;
           try { request = programRequest(definition, args); command = programCommand(definition, request, this.sandbox.nodeBin ? { nodeBin: this.sandbox.nodeBin } : {}); }
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${definition.name} call`}. Nothing ran.`); }
+          // A program the sandbox doesn't have fails anyway: refused before anyone is asked to approve it.
+          const missing = this.programMissing(definition, request.program);
+          if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
           const { unbounded } = await this.permit(api, call, definition.name, `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
@@ -3443,11 +3505,13 @@ export class RunnerSession {
       // As the next message selects them: after the workspace's, which may replace one.
       const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
       // Pikibun's own the workspace has on that this session can't offer: the browser, without Chromium on the host, say.
-      const off = sessionToolsOff(answer.extensions);
+      const off = this.definedToolsOff(sessionToolsOff(answer.extensions), answer.extensions);
       const browserReason = off.has("browser") ? undefined : this.browserUnavailable();
       const tunnelReason = off.has("tunnel") ? undefined : this.tunnelUnavailable();
       const unavailable = [...(browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : []),
-        ...(tunnelReason ? [{ source: "piki:tunnel", tools: ["tunnel"], reason: tunnelReason }] : [])];
+        ...(tunnelReason ? [{ source: "piki:tunnel", tools: ["tunnel"], reason: tunnelReason }] : []),
+        // Program tools the session offers, some of whose programs the host doesn't have (pnpm, uv, cargo ...).
+        ...this.missingPrograms(off).map(item => ({ source: item.source, tools: [item.tool], reason: "programs", programs: item.programs }))];
       return running.length || missing.length || builtin.length || missingRequired.length || unavailable.length
         ? { extensions: { running, missing, ...(builtin.length ? { builtin } : {}), ...(missingRequired.length ? { missingRequired } : {}),
           ...(unavailable.length ? { unavailable } : {}) } } : {};
@@ -3526,6 +3590,37 @@ export class RunnerSession {
         return { bytes: packBytes(this.binding, { files, ...(clones.length ? { clones } : {}) }), files: files.length, clones: clones.length };
       } catch (error) { throw packRefusal(error); }
     });
+  }
+
+  /**
+   * One image of the transcript as people's clients show it (see entry-images.ts): a thumbnail, or the image as the model
+   * got it. Only an entry the view shows has its images read, and only by people who could already have the agent read
+   * the files they came from (`write`), as the file browser takes. Not exclusive with runs: it reads the committed
+   * transcript.
+   */
+  async entryImage(ticket: RunnerTicket, input: unknown): Promise<{ image: EntryImage }> {
+    this.assertTicket(ticket);
+    const request = entryImageRequest(input);
+    if (!request) throw new RunnerError(400, "Invalid image request");
+    await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    const { conversationId, entryId } = entryIdParts(request.entryId)!;
+    const state = await this.metadata();
+    // A conversation someone went back from is out of the view, and so are its images.
+    const branch = state.branches.find(item => item.id === conversationId && !item.superseded);
+    const conversation = branch && await this.harness.conversation(branch.id as ConversationId, context);
+    const entry = conversation && (await conversation.context(context)).entries.find(item => Number(item.id) === entryId);
+    const image = entry && entryImages(entry)[request.index];
+    if (!image) throw new RunnerError(404, "That image is not in the transcript");
+    if (request.size === "full") {
+      const whole = checkEntryImage(image, "full");
+      if (!whole) throw new RunnerError(422, "That image can't be shown");
+      return { image: whole };
+    }
+    const thumbnail = await thumbnailImage(image.data, image.mimeType);
+    if (thumbnail === "busy") throw new RunnerError(429, "Too many images are being prepared; try again shortly");
+    const checked = thumbnail && checkEntryImage(thumbnail, "thumbnail");
+    if (!checked) throw new RunnerError(422, "That image can't be shown");
+    return { image: checked };
   }
 
   /**

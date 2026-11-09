@@ -37,6 +37,16 @@ Connector 0.8.0 moved the default state directory from `~/.local/share/opencara/
 
 Run `npx pikibun connect --help` for all options. The connector takes only what pairing and this machine's own setup need (`--state-dir`, `--pi-agent-dir`, `--model`, `--resources`, `--unsafe-no-sandbox`, `--experimental-sandbox`).
 
+### From the Pikibun app
+
+The Pikibun app for macOS, Windows and Linux hosts sessions without a terminal: **Settings → This Mac** (This Computer elsewhere) pairs this computer with the server you're signed in to in one step, starts and stops its host, and signs Pi in to a provider. It runs this package's command, so install it once, globally:
+
+```sh
+npm install -g pikibun@latest
+```
+
+The app starts `pikibun host --stdio` itself, through your login shell (cmd.exe on Windows), and talks to it over stdin and stdout; pairing codes go only there. It uses `connect`'s state directory, so a machine paired with `connect` carries over, and only one of the two runs at a time. Hosting lasts while the app is open, and starts again when it opens if it was running when it quit.
+
 ## Host configuration
 
 Everything else about how the host runs sessions is set in the web app, on the host's page under **Settings → Hosts → the host → Configuration**, and reaches running sessions within a minute:

@@ -3,6 +3,7 @@ import type { ConnectorCapabilities } from '../../../packages/shared/src/connect
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
 import { checkBrowseResult, InvalidBrowseResult, type BrowseResult } from '../../../packages/shared/src/file-browser.js';
 import type { SessionFiles } from '../../../packages/shared/src/types.js';
+import { checkEntryImage, entryImageRequest } from '../../../packages/shared/src/entry-images.js';
 import { requireSession } from './authority/index.js';
 import { fail, identifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
@@ -65,5 +66,24 @@ export function registerSessionFiles(app: Hono<WorkerEnv>): void {
     const result = await runnerJSON<{ files?: unknown }>(await runnerRequest(c, row, 'files', '', { path }));
     c.header('Cache-Control', 'no-store');
     return c.json({ files: checkedFiles(result?.files, path) });
+  });
+
+  /**
+   * One image of the transcript (entry-images.ts), as a thumbnail or whole, from the session's host. The transcript
+   * lists each image an entry has; the image itself takes `write`, as the file browser does: the images came from
+   * collaborators' messages and from files the agent read. Viewers and share links see the `[image <type>]` line only.
+   * Hosts that list images answer this; the entry naming none means there is nothing to ask a host for.
+   */
+  app.get('/api/sessions/:id/images', async c => {
+    const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
+    const index = c.req.query('index') ?? '';
+    const request = entryImageRequest({ entryId: c.req.query('entry'), index: /^\d{1,3}$/.test(index) ? Number(index) : -1, size: c.req.query('size') ?? 'thumbnail' });
+    if (!request) fail(400, 'invalid_image', 'Expected a transcript entry, the index of one of its images, and a size (thumbnail or full).');
+    const result = await runnerJSON<{ image?: unknown }>(await runnerRequest(c, row, 'image', '', request));
+    // The host isn't trusted to have kept to the limits: anything else is an invalid runner response.
+    const image = checkEntryImage(result?.image, request.size);
+    if (!image) fail(502, 'invalid_runner_response', 'The runner returned an invalid image.');
+    c.header('Cache-Control', 'no-store');
+    return c.json({ image });
   });
 }

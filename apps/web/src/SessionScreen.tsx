@@ -18,6 +18,8 @@ import { useConnections } from "./hosts";
 import { Icon, type IconName } from "./icons";
 import { activeStatuses, startLiveSession, type StreamStatus } from "./live-session";
 import { Markdown } from "./markdown";
+import { EntryImages } from "./entry-images";
+import { seesEntryImages, shownImages, textBesideImages } from "../../../packages/client/src/entry-images";
 import { PeopleProvider, Username, useWorkspacePeople } from "./people";
 import { PullRequestLink } from "./pull-request";
 import { RepositoryPreparationCard } from "./repository-preparation";
@@ -28,6 +30,7 @@ import { NavigationButton } from "./navigation";
 import { navigate } from "./router";
 import { enterSends } from "./touch";
 import { ApprovalCard, AutoApprovedMarks, SessionPanel, useSessionActions, widePanelTabs, type AuditEvent, type PanelTab } from "./session-panel";
+import { RenameSheet } from "./session-menu";
 import { splitToolCalls } from "../../../packages/client/src/transcript";
 import { COMPACTION_FAILED_TITLE, compactionFailureText } from "../../../packages/client/src/compaction";
 import {
@@ -96,10 +99,11 @@ function modelFailure({ provider, modelId, status }: NonNullable<EntryView["erro
  * One collapsed row for tool calls, tool results and system entries; expanding it shows the raw text. The label stays on
  * one line; badges that don't fit beside it wrap onto the lines below (session.css).
  */
-function ToolDetails({ role, icon, label, text, badges, trimmed }: { role?: string; icon: IconName; label: ReactNode; text: string; badges?: ReactNode; trimmed?: EntryView["trimmed"] }) {
+function ToolDetails({ role, icon, label, text, badges, trimmed, images }: { role?: string; icon: IconName; label: ReactNode; text: string; badges?: ReactNode; trimmed?: EntryView["trimmed"]; images?: ReactNode }) {
   return <details className="entry-tool" data-role={role}>
     <summary><Icon name={icon} size={14} /><span className="entry-tool-label"><span className="truncate">{label}</span>{badges}</span><Icon name="chevron-right" size={14} /></summary>
-    <pre>{text}</pre>
+    {(text || !images) && <pre>{text}</pre>}
+    {images}
     {trimmed && <BriefNote trimmed={trimmed} />}
   </details>;
 }
@@ -147,9 +151,16 @@ function MessageActions({ entry, actions }: { entry: EntryView; actions?: Messag
   </span>;
 }
 
-/** User messages are plain-text bubbles; assistant text is markdown; tool calls, results and system entries collapse to one row. */
-function TranscriptEntry({ entry, userId, actions }: { entry: EntryView; userId: string; actions?: MessageActionHandlers }) {
+/**
+ * User messages are plain-text bubbles; assistant text is markdown; tool calls, results and system entries collapse to one row.
+ * `imagesOf`: the session whose transcript images this person sees (seesEntryImages), shown as thumbnails in place of
+ * their `[image <type>]` lines; without it, the lines stay.
+ */
+function TranscriptEntry({ entry, userId, actions, imagesOf }: { entry: EntryView; userId: string; actions?: MessageActionHandlers; imagesOf?: string }) {
   const actor = entry.actorId && <Username id={entry.actorId} you />;
+  const images = shownImages(entry, imagesOf !== undefined);
+  const text = images.length ? textBesideImages(entry.text, images.length) : entry.text;
+  const thumbnails = images.length > 0 && imagesOf !== undefined && <EntryImages sessionId={imagesOf} entryId={entry.id} images={images} />;
   const { prose, calls } = entry.role === "assistant" ? splitToolCalls(entry.text) : { prose: entry.text, calls: [] };
   const toolLabel = calls.length > 0 && `Tool · ${calls[0].name}`;
   if (entry.kind === "workspace.run-stopped") return <div className="entry-stopped" role="note"><span>Stopped{actor && <> by {actor}</>}</span></div>;
@@ -160,8 +171,8 @@ function TranscriptEntry({ entry, userId, actions }: { entry: EntryView; userId:
     // A tool call row would show the model's time, not the tool's, so only results carry a duration.
     const took = entry.role === "toolResult" && entry.durationMs !== undefined
       && <> · <span title="How long the tool ran">{formatDuration(entry.durationMs)}</span></>;
-    return <ToolDetails role={entry.role} icon={toolLabel ? "tool" : "terminal"} label={<>{label}{took}{actor && <> · {actor}</>}{briefLine(entry)}</>} text={entry.text}
-      badges={<AutoApprovedMarks calls={entry.autoApproved} />} trimmed={entry.trimmed} />;
+    return <ToolDetails role={entry.role} icon={toolLabel ? "tool" : "terminal"} label={<>{label}{took}{actor && <> · {actor}</>}{briefLine(entry)}</>} text={text}
+      badges={<AutoApprovedMarks calls={entry.autoApproved} />} trimmed={entry.trimmed} images={thumbnails} />;
   }
   if (entry.error) {
     return <div className="entry-error" title={entry.kind}>
@@ -173,7 +184,8 @@ function TranscriptEntry({ entry, userId, actions }: { entry: EntryView; userId:
   }
   if (entry.role === "user") {
     return <div className="entry-user" title={entry.kind}>
-      <div className="entry-bubble">{entry.text}</div>
+      {(text || !thumbnails) && <div className="entry-bubble">{text}</div>}
+      {thumbnails}
       <div className="entry-footer">
         {actor && entry.actorId !== userId && <span className="entry-actor">by {actor}</span>}
         <MessageActions entry={entry} actions={actions} />
@@ -218,6 +230,8 @@ function SessionPane({ id }: { id: string }) {
   const browserWarning = !archived && !frozen ? view?.extensions?.unavailable?.find(item => item.source === "piki:browser" && ["missing", "failed", "downloading"].includes(item.reason)) : undefined;
   const [dismissedBrowser, setDismissedBrowser] = useState<string>();
   const [renaming, setRenaming] = useState(false);
+  // A failed save shows in the rename sheet, over the page's own alerts; only one tried in this opening of it.
+  const [renameTried, setRenameTried] = useState(false);
   const hosts = useConnections(session?.connectorId ? `/api/workspaces/${segment(session.workspaceId)}/connectors` : null);
   const host = hosts.data?.connectors.find(item => item.id === session?.connectorId);
   const hostOnline = host?.online;
@@ -258,7 +272,7 @@ function SessionPane({ id }: { id: string }) {
 
   const menu: (MenuItem | "separator")[] = [{ label: "Copy session ID", icon: "copy", onSelect: () => void navigator.clipboard.writeText(id) }];
   if (session && manages && !archived) {
-    menu.push({ label: "Rename", icon: "pencil", disabled: actions.action.busy, onSelect: () => setRenaming(true) });
+    menu.push({ label: "Rename", icon: "pencil", disabled: actions.action.busy, onSelect: () => { setRenameTried(false); setRenaming(true); } });
     menu.push({ label: visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: visibility === "workspace" ? "lock" : "globe", disabled: actions.action.busy, onSelect: actions.changeVisibility });
     // Backups hold the owner's work and personal environment, so they stay the owner's.
     if (isOwner && !frozen) {
@@ -391,30 +405,9 @@ function SessionPane({ id }: { id: string }) {
       <button type="button" className="session-scrim" aria-label="Close session panel" onClick={() => setPanelOpen(false)} />
       <SessionPanel session={session} view={view} user={user} workspaceRole={workspaceRole} hosts={hosts} tab={tab} setTab={setTab} onClose={() => setPanelOpen(false)} refresh={live.refresh} audit={audit} actions={actions} openSession={openSession} />
     </>}
-    {session && manages && <RenameSheet open={renaming} title={session.title} busy={actions.action.busy} onClose={() => setRenaming(false)}
-      onSave={async title => { if (await actions.rename(title)) setRenaming(false); }} />}
+    {session && manages && <RenameSheet open={renaming} title={session.title} busy={actions.action.busy} error={renameTried ? actions.action.error : undefined}
+      onClose={() => setRenaming(false)} onSave={async title => { setRenameTried(true); if (await actions.rename(title)) setRenaming(false); }} />}
   </div></PeopleProvider>;
-}
-
-function RenameSheet({ open, title, busy, onClose, onSave }: { open: boolean; title: string; busy: boolean; onClose: () => void; onSave: (title: string) => void }) {
-  const [value, setValue] = useState(title);
-  // Start from the current title each time the sheet opens.
-  useEffect(() => { if (open) setValue(title); }, [open, title]);
-  const next = value.trim();
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (next && !busy) onSave(next);
-  }
-  return <Sheet open={open} title="Rename session" onClose={onClose} footer={<>
-    <Button variant="ghost" onClick={onClose}>Cancel</Button>
-    <Button type="submit" form="rename-session-form" variant="default" disabled={busy || !next}>{busy ? "Saving..." : "Rename"}</Button>
-  </>}>
-    <form id="rename-session-form" className="stack" onSubmit={submit}>
-      <Field label="Title">
-        <input className="input" required autoFocus maxLength={200} value={value} onChange={event => setValue(event.target.value)} autoComplete="off" />
-      </Field>
-    </form>
-  </Sheet>;
 }
 
 function Conversation({ id, user, session, view, host, stale, refresh, loadOlder, openSession, pinned }: {
@@ -467,6 +460,8 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   const archived = session.status === "archived";
   const frozen = session.frozen === true;
   const permitted = !archived && !frozen && (actualMode === "write" ? canWrite : canAsk);
+  // Collaborators see the transcript's images; everyone else the lines that stand for them.
+  const imagesOf = seesEntryImages(session) ? session.id : undefined;
   const unsandboxed = Boolean(session.hostUnsandboxed || host?.capabilities.unsandboxed);
   const queue = view.queue ?? [];
   const activeQueue = queue.filter(item => activeStatuses.includes(item.status));
@@ -723,7 +718,7 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
               {loadingOlder ? "Loading earlier messages..." : `Show earlier messages (${olderCount})`}
             </Button>
           </div>}
-          {entries.length ? entries.map(entry => <TranscriptEntry entry={entry} userId={user.id} actions={messageActions} key={entry.id} />)
+          {entries.length ? entries.map(entry => <TranscriptEntry entry={entry} userId={user.id} actions={messageActions} imagesOf={imagesOf} key={entry.id} />)
             : <EmptyState title={actualMode === "ask" ? "A question on the side" : "The conversation begins here"}>{actualMode === "ask" ? "Ask about the work without changing it" : "Committed messages and tool results will appear here"}</EmptyState>}
         </div>
       </div>

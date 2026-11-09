@@ -5,8 +5,8 @@ import { adminManagedRoles, workspaceManagerRoles } from '../../../packages/shar
 import type { OwnJoinRequest, WorkspaceInvite, WorkspaceInviteLink, WorkspaceJoinRequest } from '../../../packages/shared/src/invites.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import {
-  auditAfterChange, auditStatement, decryptToken, encryptToken, INVALID_LINK, INVITE_TOKEN, joinRequestStatement, requireInvitedWorkspace,
-  requireMember,
+  auditAfterChange, auditStatement, decryptToken, encryptToken, INVALID_LINK, INVITE_TOKEN, joinRequestStatement, personalWorkspaceSQL,
+  requireInvitedWorkspace, requireMember, requireSharedWorkspace,
 } from './authority/index.js';
 import { appOrigin, fail, identifier, id, jsonObject, now, randomToken, userIdentifier } from './http.js';
 import type { Env, WorkerEnv } from './types.js';
@@ -142,6 +142,8 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;
     await requireManager(c.env, workspaceId, actorId);
+    // Nobody joins a private workspace.
+    await requireSharedWorkspace(c.env, workspaceId);
     const existing = await currentLink(c.env, workspaceId);
     if (existing) return c.json({ link: await presentLink(c.env, workspaceId, existing) });
     const token = randomToken();
@@ -151,6 +153,7 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     const created = await c.env.DB.query(`INSERT INTO workspace_invite_links (workspace_id, token_hash, token_ciphertext, created_by, created_at)
       SELECT workspace_id, ?, ?, user_id, ? FROM workspace_members
       WHERE workspace_id = ? AND user_id = ? AND role IN (${roleList(workspaceManagerRoles)})
+        AND NOT ${personalWorkspaceSQL('workspace_members.workspace_id')}
       ON CONFLICT (workspace_id) DO NOTHING RETURNING workspace_id`)
       .bind(await sha256(token), ciphertext, createdAt, workspaceId, actorId).first();
     if (!created) {
@@ -189,6 +192,8 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     const role = body.role;
     if (typeof role !== 'string' || !(assignableWorkspaceRoles as readonly string[]).includes(role)) fail(400, 'invalid_input', 'Invalid role.');
     const actor = await requireManager(c.env, workspaceId, actorId);
+    // Nobody joins a private workspace.
+    await requireSharedWorkspace(c.env, workspaceId);
     if (actor.role !== 'owner' && !adminManagedRoles.includes(role as AssignableWorkspaceRole)) {
       fail(403, 'forbidden', 'Only the workspace owner can make someone an administrator.');
     }
@@ -200,7 +205,7 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
         FROM workspace_join_requests r
         INNER JOIN workspaces w ON w.id = r.workspace_id
         INNER JOIN workspace_members actor ON actor.workspace_id = w.id AND actor.user_id = ?
-        WHERE r.workspace_id = ? AND r.user_id = ? AND r.user_id <> w.owner_id
+        WHERE r.workspace_id = ? AND r.user_id = ? AND r.user_id <> w.owner_id AND NOT ${personalWorkspaceSQL('w.id')}
           AND ((actor.role = 'owner' AND actor.user_id = w.owner_id)
             OR (actor.role = 'admin' AND ? IN (${roleList(adminManagedRoles)})))
         ON CONFLICT (workspace_id, user_id) DO NOTHING`)

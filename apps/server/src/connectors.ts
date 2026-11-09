@@ -1,8 +1,8 @@
 import {
   apiCredential, auditStatement, authenticateConnector, authorizeSession, connectorAdmins, connectorHostGrants, type ConnectorRow, egressGrant,
   gitDirect, githubComment, githubIssue, githubMerge, githubRead, gitRelay, legacyRepositoryFixture, managedConnector, pushComplete,
-  pushCredential, requireCallbackScope, requireConfiguredWorkspace, requireConnectorTLS, requireManagedWorkspace, requireMember, sourceRead,
-  viewerHostAuthority, workspaceHasSourceSQL,
+  personalWorkspaceSQL, pushCredential, requireCallbackScope, requireConfiguredWorkspace, requireConnectorTLS, requireManagedWorkspace, requireMember,
+  requireSharedWorkspace, sourceRead, viewerHostAuthority, workspaceHasSourceSQL,
 } from './authority/index.js';
 import { withHostToolCapabilities } from './host-capabilities.js';
 import { verifyDirectUpload } from './file-uploads.js';
@@ -417,6 +417,8 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
     const workspaceId = identifier(c.req.param('workspaceId'));
     await requireManagedWorkspace(c.env, row, workspaceId, c.get('auth').userId);
     await requireMember(c.env, workspaceId, row.owner_id);
+    // A private workspace has nobody to share with: its owner's hosts are there already, for them alone.
+    await requireSharedWorkspace(c.env, workspaceId);
     await requireConfiguredWorkspace(c.env, workspaceId, row.owner_id);
     const legacy = testMode(c.env) && await legacyRepositoryFixture(c.env, row.owner_id);
     const results = await c.env.DB.batch([
@@ -425,12 +427,13 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
         OR EXISTS (SELECT 1 FROM connector_shares WHERE connector_id = ? AND workspace_id = ?))
       AND EXISTS (SELECT 1 FROM connectors WHERE id = ? AND owner_id = ? AND revoked_at IS NULL)
       AND EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?)
+      AND NOT ${personalWorkspaceSQL('?')}
       AND (${workspaceHasSourceSQL('?')}
         OR (? = 1 AND EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind = 'test')))
       ON CONFLICT (connector_id, workspace_id) DO UPDATE SET created_at = connector_shares.created_at
       RETURNING connector_id`)
       .bind(row.id, workspaceId, now(), row.id, row.id, workspaceId, row.id, row.owner_id, workspaceId, row.owner_id,
-        workspaceId, legacy && testMode(c.env) ? 1 : 0, row.owner_id),
+        workspaceId, workspaceId, legacy && testMode(c.env) ? 1 : 0, row.owner_id),
       c.env.DB.query(`INSERT INTO connector_workspaces (connector_id,workspace_id,created_at)
         SELECT ?,?,? WHERE changes() = 1
         ON CONFLICT (connector_id, workspace_id) DO NOTHING`).bind(row.id, workspaceId, now()),

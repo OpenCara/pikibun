@@ -7,7 +7,8 @@ import { TunnelTag } from "./tunnel-tag";
 import { href, navigate } from "./router";
 import { sessionStatus } from "../../../packages/client/src/session-status";
 import { nestSessions } from "../../../packages/client/src/session-tree";
-import { Button, EmptyState, Feedback, Field, IdentityBadge, InfoTip, LinkButton, PageLoading, RelativeTime, Row, ScreenHeader, Section, Sheet, StatusDot, useAction } from "./ui";
+import { useSessionMenu } from "./session-menu";
+import { Button, EmptyState, Feedback, Field, IdentityBadge, InfoTip, LinkButton, PageLoading, RelativeTime, Row, ScreenHeader, Section, Sheet, StatusDot, useAction, useContextMenu, useToast } from "./ui";
 import "./new-session.css";
 
 const PAGE_SIZE = 50;
@@ -19,6 +20,9 @@ export function SessionsScreen() {
   const [joinOpen, setJoinOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const archivedCount = useMemo(() => sessions.filter(session => session.status === "archived").length, [sessions]);
+  const { show, toast } = useToast();
+  const contextMenu = useContextMenu();
+  const sessionMenu = useSessionMenu(show);
 
   // Newest-first sessions grouped by workspace: the current workspace first, then the sidebar order.
   const groups = useMemo(() => {
@@ -66,6 +70,7 @@ export function SessionsScreen() {
             const viewerOnly = !isOwner && session.permissions?.includes("read") && session.permissions.every(permission => permission === "read");
             const status = sessionStatus(session);
             return <Row key={session.id} href={href({ name: "session", sessionId: session.id })} chevron
+              onContextMenu={event => contextMenu.open(event, `${session.title} options`, sessionMenu.items(session))}
               leading={<StatusDot tone={status.tone} icon={status.icon} label={status.label ? undefined : session.status} />}
               title={<span className="truncate">{depth > 0 && <span className="muted" aria-label="Started by the session above">{"  ".repeat(depth - 1)}↳ </span>}{session.title}</span>}
               hint={<>{status.label && <><span className={`session-status ${status.tone}`}>{status.label}</span> · </>}{session.tunnel && <><TunnelTag tunnel={session.tunnel} /> · </>}{session.pullRequest && <><PullRequestTag pull={session.pullRequest} /> · </>}{isOwner ? "Yours" : viewerOnly ? "Viewer" : "Shared"} · {session.visibility === "workspace" ? "Workspace-visible" : "Private"} · <RelativeTime value={session.createdAt} /></>} />;
@@ -75,6 +80,9 @@ export function SessionsScreen() {
       })}
     </div>
     {sheet}
+    {contextMenu.menu}
+    {sessionMenu.element}
+    {toast}
   </>;
 }
 

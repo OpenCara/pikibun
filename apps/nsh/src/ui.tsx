@@ -1,5 +1,5 @@
 import { Clipboard, Image, Scroll, signal, Text, View, windowSize, type JSX, type ViewStyle } from "nsh";
-import { AlertDialog, Button as BaseButton, Collapsible, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
+import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
 import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
@@ -241,20 +241,27 @@ export function NavItem(props: { icon?: IconName; leading?: JSX.Element; label: 
 /**
  * A quiet button that shows a choice and opens its picker (.btn.ghost.sm with a chevron): the chat box's model,
  * reasoning and access. As a `Picker`'s trigger it has no `onPress` of its own (the menu opens); its chevron says it
- * opens one unless it is `disabled`. A `tone` tints it (Auto-approve's warning).
+ * opens one unless it is `disabled`. A `tone` tints it (Auto-approve's warning). `small` is the quieter size of a
+ * row of settings under a chat box (the new session's workspace, host and visibility). With `expanded` it discloses
+ * what it opens in place instead (the new session's Host details): its chevron turns down while open, and screen
+ * readers are told it is on (a toggled trigger's `selected`; NSH's button has no expanded state of its own).
  */
-export function Chip(props: { label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean }) {
+export function Chip(props: {
+  label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean; small?: boolean; expanded?: boolean;
+}) {
   const color = () => (props.tone ? palette().tones[props.tone].text : palette().muted);
   return (
     <BaseButton testID={props.testID} accessibilityLabel={props.label} disabled={props.disabled} onPress={() => props.onPress?.()}
-      style={{ flexDirection: "row", alignItems: "center", gap: props.icon ? 4 : 8, borderRadius: radius.small, paddingHorizontal: 12, height: control.small, flexShrink: 1, maxWidth: 260,
+      selected={props.expanded}
+      style={{ flexDirection: "row", alignItems: "center", gap: props.icon ? 4 : 8, borderRadius: radius.small, paddingHorizontal: props.small ? 8 : 12,
+        height: props.small ? control.xsmall : control.small, flexShrink: 1, maxWidth: 260,
         borderWidth: 1, borderColor: props.bordered ? palette().borderStrong : "transparent",
         backgroundColor: props.tone ? palette().tones[props.tone].background : "transparent" }}
       hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.8 }} disabledStyle={{ opacity: 0.5 }}>
       <If when={props.icon}>{name => <Icon name={name()} size={14} color={color()} />}</If>
-      <Text style={{ fontSize: text.body, color: color(), numberOfLines: 1, flexShrink: 1 }}>{props.label}</Text>
+      <Text style={{ fontSize: props.small ? text.small : text.body, color: color(), numberOfLines: 1, flexShrink: 1 }}>{props.label}</Text>
       <If when={!props.disabled}>
-        <Icon name="chevron-down" size={14} color={color()} />
+        <Icon name={props.expanded === false ? "chevron-right" : "chevron-down"} size={props.small ? 12 : 14} color={color()} />
       </If>
     </BaseButton>
   );
@@ -485,34 +492,58 @@ export interface MenuAction {
   onSelect: () => void;
 }
 
+/** The popup (desktops, the web) or sheet (touch screens) of a menu of actions (.popover). */
+const menuPopupStyle = () => ({ minWidth: 200, maxWidth: 360, padding: 4, borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border,
+  backgroundColor: palette().surface, boxShadow: palette().shadow });
+
+/** A menu's actions (.menu-item), "separator" a hairline between them (.menu-separator). */
+function MenuActions(props: { items: (MenuAction | "separator")[] }) {
+  return (
+    <Each of={props.items} key="index">
+      {item => (
+        <If when={item() !== "separator" ? item() as MenuAction : null} else={<View style={{ height: 1, margin: 4, backgroundColor: palette().border }} />}>
+          {action => (
+            <MenuItem testID={action().testID} accessibilityLabel={action().label} disabled={action().disabled} onSelect={() => action().onSelect()}
+              style={{ flexDirection: "row", alignItems: action().hint ? "flex-start" : "center", gap: 8, minHeight: 32, paddingHorizontal: 8,
+                paddingVertical: action().hint ? 6 : 0, borderRadius: radius.small }}
+              hoverStyle={{ backgroundColor: palette().hoverStrong }} focusStyle={{ backgroundColor: palette().hoverStrong }} disabledStyle={{ opacity: 0.5 }}>
+              <If when={action().icon}>
+                {name => <Icon name={name()} size={14} color={action().destructive ? palette().tones.danger.text : palette().muted} style={{ marginTop: action().hint ? 3 : 0 }} />}
+              </If>
+              <View style={{ flex: 1, gap: 1 }}>
+                <Text style={{ fontSize: text.body, color: action().destructive ? palette().tones.danger.text : palette().text }}>{action().label}</Text>
+                <If when={action().hint}><Text style={{ fontSize: text.caption, lineHeight: 17, color: palette().muted }}>{action().hint}</Text></If>
+              </View>
+            </MenuItem>
+          )}
+        </If>
+      )}
+    </Each>
+  );
+}
+
 /** .popover of .menu-items for a small fixed set of actions (a row's kebab menu); "separator" draws a hairline. */
 export function DropdownMenu(props: { label: string; items: (MenuAction | "separator")[]; icon?: IconName; trigger?: JSX.Element; testID?: string; placement?: "top" | "bottom" }) {
   return (
     <Menu placement={props.placement ?? "bottom"} align="end" offset={4} backdropStyle={{ backgroundColor: "transparent" }}
       trigger={props.trigger ?? <IconButton testID={props.testID} icon={props.icon ?? "more"} label={props.label} size={control.xsmall} onPress={() => undefined} />}
-      popupStyle={{ minWidth: 200, maxWidth: 360, padding: 4, borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface,
-        boxShadow: palette().shadow }}>
-      <Each of={props.items} key="index">
-        {item => (
-          <If when={item() !== "separator" ? item() as MenuAction : null} else={<View style={{ height: 1, margin: 4, backgroundColor: palette().border }} />}>
-            {action => (
-              <MenuItem testID={action().testID} accessibilityLabel={action().label} disabled={action().disabled} onSelect={() => action().onSelect()}
-                style={{ flexDirection: "row", alignItems: action().hint ? "flex-start" : "center", gap: 8, minHeight: 32, paddingHorizontal: 8,
-                  paddingVertical: action().hint ? 6 : 0, borderRadius: radius.small }}
-                hoverStyle={{ backgroundColor: palette().hoverStrong }} focusStyle={{ backgroundColor: palette().hoverStrong }} disabledStyle={{ opacity: 0.5 }}>
-                <If when={action().icon}>
-                  {name => <Icon name={name()} size={14} color={action().destructive ? palette().tones.danger.text : palette().muted} style={{ marginTop: action().hint ? 3 : 0 }} />}
-                </If>
-                <View style={{ flex: 1, gap: 1 }}>
-                  <Text style={{ fontSize: text.body, color: action().destructive ? palette().tones.danger.text : palette().text }}>{action().label}</Text>
-                  <If when={action().hint}><Text style={{ fontSize: text.caption, lineHeight: 17, color: palette().muted }}>{action().hint}</Text></If>
-                </View>
-              </MenuItem>
-            )}
-          </If>
-        )}
-      </Each>
+      popupStyle={menuPopupStyle()}>
+      <MenuActions items={props.items} />
     </Menu>
+  );
+}
+
+/**
+ * The right-click menu of what it wraps (the web app's useContextMenu): the secondary button opens it where the pointer
+ * is on the desktops and the web; a finger held on it opens it as a sheet on touch screens. `items` are made each time it
+ * opens, so they say what can be done then; with none, nothing opens.
+ */
+export function RowMenu(props: { items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string }) {
+  return (
+    <ContextMenu testID={props.testID} trigger={props.children} disabled={!props.items().some(item => item !== "separator")} offset={2}
+      backdropStyle={{ backgroundColor: palette().backdrop }} popupStyle={menuPopupStyle()}>
+      <MenuActions items={props.items()} />
+    </ContextMenu>
   );
 }
 

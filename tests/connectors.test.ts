@@ -2056,8 +2056,12 @@ test('owner runs a session on an unshared host and the default session is listed
   assert.equal(session.visibility, 'workspace');
   // The owner runs shell commands on their own host, so the session clones.
   assert.equal(session.cloneUnavailable, undefined);
+  // The member reads its view: the host is its owner's own.
+  const { viewable, ...record } = session;
+  assert.equal(viewable, true);
   const listed = await json<{ sessions: SessionRecord[] }>(await s.member.request('GET', '/api/sessions'));
-  assert.deepEqual(listed.sessions, [session]);
+  // Lists carry what single reads do, but `viewable`.
+  assert.deepEqual(listed.sessions, [record]);
   const requests = rpcHub(f, s.connector, envelope => {
     assert.equal(envelope.request.ticket.action, 'view');
     assert.equal(envelope.request.ticket.actorId, s.member.user.id);
@@ -2742,6 +2746,9 @@ test('opt-in sharing admits a teammate runtime; unshare blocks foreign sessions 
   });
   await json(await s.member.request('GET', `/api/sessions/${foreign.id}/view`));
   await json(await s.member.request('GET', `/api/sessions/${s.session.id}/view`));
+  // The metadata says whether the view would be served, so clients show a view they kept only then.
+  const viewable = async (id: string) => (await json<{ session: SessionRecord }>(await s.member.request('GET', `/api/sessions/${id}`))).session.viewable;
+  assert.equal(await viewable(foreign.id), true);
   assert.equal((await s.owner.request('DELETE', sharePath)).status, 204);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_shares').get()!.n, 0);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_workspaces WHERE connector_id = ? AND workspace_id = ?').get(s.connector.connectorId, s.team.id)!.n, 1);
@@ -2751,6 +2758,9 @@ test('opt-in sharing admits a teammate runtime; unshare blocks foreign sessions 
   assert.deepEqual((await json<{ models: ModelDefinition[] }>(await s.owner.request('GET', `/api/workspaces/${s.team.id}/models`))).models, [s.model]);
   const beforeDenied = requests.length;
   await denied(await s.member.request('GET', `/api/sessions/${foreign.id}/view`), 403, 'connector_unavailable');
+  // The member still reads their session's metadata, which now says its view is refused.
+  assert.equal(await viewable(foreign.id), false);
+  assert.equal(await viewable(s.session.id), true);
   await denied(await self(f, s.connector, 'authorize', authorization(foreign)), 403, 'connector_unavailable');
   await denied(await s.member.request('POST', '/api/sessions', input), 404, 'not_found');
   assert.equal(requests.length, beforeDenied);
@@ -3660,6 +3670,47 @@ test('the Files tab reads the session worktree through its host, for collaborato
   await json(await files('.', s.host));
   assert.equal(requests.at(-1)!.request.ticket.actorId, s.host.user.id);
   assert.equal(requests.length, before + 1);
+});
+
+test('transcript images come from the session host, as thumbnails or whole, for collaborators only', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  const image = (query: string, client = s.creator) => client.request('GET', `/api/sessions/${s.session.id}/images?${query}`);
+  const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+  const requests = rpcHub(f, s.connector, envelope => {
+    const { entryId, size } = JSON.parse(envelope.request.body) as { entryId: string; size: string };
+    if (entryId === '0:9') return Response.json({ image: { mimeType: 'image/png', data: 'A'.repeat(64 * 1024 + 4) } });
+    if (entryId === '0:8') return Response.json({ image: { mimeType: 'image/svg+xml', data: png } });
+    return Response.json({ image: { mimeType: 'image/png', data: png, ...(size === 'full' ? { extra: 1 } : {}) } });
+  });
+
+  assert.deepEqual(await json(await image('entry=0:3&index=1&size=thumbnail')), { image: { mimeType: 'image/png', data: png } });
+  const request = requests.at(-1)!.request;
+  assert.equal(request.method, 'POST');
+  assert.equal(request.path, `/v1/sessions/${s.session.id}/image`);
+  assert.equal(request.ticket.action, 'image');
+  assert.deepEqual(JSON.parse(request.body), { entryId: '0:3', index: 1, size: 'thumbnail' });
+  // A thumbnail is what's asked for unless the whole image is; unknown keys are dropped.
+  await json(await image('entry=0:3&index=0'));
+  assert.equal(JSON.parse(requests.at(-1)!.request.body).size, 'thumbnail');
+  assert.deepEqual(await json(await image('entry=0:3&index=0&size=full')), { image: { mimeType: 'image/png', data: png } });
+
+  // Only well-formed requests reach the host, and its answer is held to the limits and image types.
+  const before = requests.length;
+  for (const query of ['entry=stopped:1&index=0', 'entry=0:3&index=-1', 'entry=0:3&index=64', 'entry=0:3&index=x', 'entry=0:3&index=0&size=huge', 'index=0']) {
+    await denied(await image(query), 400, 'invalid_image');
+  }
+  assert.equal(requests.length, before);
+  await denied(await image('entry=0:9&index=0'), 502, 'invalid_runner_response');
+  await denied(await image('entry=0:8&index=0'), 502, 'invalid_runner_response');
+
+  // Like the Files tab: workspace members and session viewers follow the conversation, with its image lines only.
+  await denied(await image('entry=0:3&index=0', s.host), 403, 'forbidden');
+  await json(await s.creator.request('PATCH', `/api/sessions/${s.session.id}`, { visibility: 'private' }));
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'viewer' }));
+  await denied(await image('entry=0:3&index=0', s.host), 403, 'forbidden');
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
+  await json(await image('entry=0:3&index=0', s.host));
+  assert.equal(requests.at(-1)!.request.ticket.actorId, s.host.user.id);
 });
 
 test('files attached to messages go to the session host in chunks, within the workspace limit its admins set', async t => {

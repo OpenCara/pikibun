@@ -8,8 +8,8 @@ backend, `@pikibun/client` and `packages/shared`. See [choosing the web client](
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
 (longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), a chooser of any file outside
 a browser (longbridge/nsh#162; the web build picks any file through its page's host, the desktops take files dropped
-or pasted from a file manager, and phones pick photos), and running the `pikibun` connector from the app (run
-`pikibun connect`, or `pikibun serve` for yourself, instead).
+or pasted from a file manager, and phones pick photos), and bundling the `pikibun` connector inside the app (the
+desktop builds run the installed command instead: see [This Computer](#this-computer)).
 
 ## Run it
 
@@ -31,7 +31,9 @@ workspace and is remembered across GitHub's redirect, as the web app does. The p
 can't: the browser's own file chooser for any file, an image too large for a message drawn again smaller, the query
 GitHub's sign-in comes back with, and GitHub's authorization page for an invite's sign-in.
 
-Native builds sign in to a server you enter: GitHub in the app's own web view, or a test-mode server's token.
+Native builds sign in to a server you enter: GitHub in the app's own web view, a username and password where the
+server allows them (`POST /api/auth/native/password`, for a bearer token listed under Signed-in apps, as GitHub's), or
+a test-mode server's token. New password accounts are made on the web, whose sign-up starts a browser session.
 
 ## Design
 
@@ -40,7 +42,9 @@ needs a decision stand out:
 
 - **Layout**: wider windows have a sidebar (a new session, every session by workspace, the signed-in person and
   settings) beside the open session; with none open, the home asks "What should we work on?" with the chat box that
-  starts one. Phones stack the session list, then the session.
+  starts one: in the box what the first message runs with (model, reasoning, access), under it one quiet row of where
+  the session lives (workspace, host, sandbox, visibility), and alerts only when something needs a decision. Phones
+  stack the session list, then the session.
 - **Session**: a header with where the session lives and runs and its connection; the transcript in one readable column,
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
   pending approvals docked above the chat box; the chat box's pickers (shared or side ask, model, reasoning, access)
@@ -50,7 +54,8 @@ needs a decision stand out:
   and `tests/nsh-theme.test.ts` fails when they differ from the stylesheet's; `src/theme.ts` builds the palettes from
   them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget follows
   (buttons, badges, alerts, sections of rows, nav items, chips, pickers on `Menu`: a popup on the desktops and the web,
-  a sheet on phones); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
+  a sheet on phones; right-click menus on `ContextMenu` (`RowMenu`), which a finger held on the row opens as a sheet on
+  touch screens); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
   the two differ on purpose: the sidebar keeps a search box, tool rows
   name what they work on, approval cards say what they ask in words, and message actions open a sheet rather than
   appear on hover.
@@ -94,10 +99,10 @@ session with its header menu and its panel (Details, Approvals, Files, Browser, 
 invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
 Administration). What is left out, and why:
 
-- **This Computer** isn't a page of the web app: React lists it only inside the Electron desktop app, whose own
-  process runs this computer's host, its servers and a local Pikibun (`window.pikibunDesktop`). In a browser, as here,
-  there is no such section. The NSH desktop builds don't run the connector either: it ships only inside the Electron
-  app, and `pikibun connect` takes its pairing code only at a hidden terminal prompt.
+- **This Computer**: the desktop builds have it ([below](#this-computer)) for this computer as a host of the server
+  signed in to. What the Electron app's adds is left out: hosts for several servers at once, WSL2 on Windows, running
+  Pikibun itself here (`pikibun serve`), installing prerequisites itself, and hosting while the app is closed (its tray).
+  In a browser, as in the web app's, there is no such section.
 - **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058), and NSH
   has no local notifications either; the web build turns them on in the browser as the web app does (Web Push through
   the `sw.js` the build ships, or while a tab is open), and every build manages the account's preferences and devices.
@@ -109,6 +114,37 @@ Administration). What is left out, and why:
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
   they are offered on the web build only; native builds point to Pikibun on the web.
+
+## This Computer
+
+In the macOS, Windows and Linux builds, **Settings → This Mac** (This Computer elsewhere; `#/settings/desktop`, as the
+web app's address for it) makes this computer one of your hosts, as the Electron app's This Mac does:
+
+- **Pair in one step** with the server signed in to: the app creates a pairing for you and hands its code straight to
+  the host, once everything else is settled (prerequisites, the unsandboxed consent), so a refusal leaves no unused code.
+  A computer paired with another server is paired again only by replacing that pairing, after saying so.
+- **Start and stop** the host, with the CLI's own `--unsafe-no-sandbox` warning in a native dialog where there is no
+  sandbox; on macOS, choose **None** or **macOS sandbox** (Seatbelt, experimental). Linux uses bubblewrap where it is
+  installed; Windows its own sandbox, experimental, or none after consent.
+- **Models offered** (Pi's choice, or the ones checked), **Sign Pi in to a provider** (Pi's own `/login`, run on this
+  computer: its page opens in the browser, a device code or API key is asked here, and the credential stays in Pi's
+  configuration), **Prerequisites** with what to run for each missing one, and the host's recent activity.
+
+The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command (`npm install -g
+pikibun@latest`, which the page offers when it's missing or too old) as `pikibun host --stdio`
+(`apps/runner/src/host-cli.ts`, the same host the Electron app bundles: `app-host.ts`), and talks to it with JSON lines
+on its stdin and stdout (`desktop-protocol.ts`), where pairing codes and API keys travel; never its command line.
+NSH starts a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,
+nvm's and npm's directories, so the owner's login shell starts it (`$SHELL -ilc 'exec pikibun host --stdio'`, as
+Terminal would; zsh, bash or sh, else the platform's), and on Windows `cmd /d /c pikibun host --stdio`, which finds
+npm's `pikibun.cmd`. `nsh.json` grants exactly those programs (`capabilities.process`), by name, since it is every
+target's and an absolute path of one platform isn't one on another (NSH refuses to build or start with one), and the
+environment the connector needs. The host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
+one of them runs at a time. Hosting lasts while the app is open, and starts again at the next launch if it was running
+when the app quit, with the consent given then (`src/lib/this-computer.ts`).
+
+`tests/this-computer.test.tsx` runs the page against a stand-in for the command that speaks its protocol
+(`tests/harness/this-computer.tsx`); `tests/host-cli.test.ts`, at the repository's root, runs the command itself.
 
 ## Known gaps, from NSH itself
 

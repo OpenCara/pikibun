@@ -15,13 +15,13 @@ import { requireConnectorSession } from './hosts.js';
 const actionPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write',
-  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write',
+  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write',
 };
 
 export const connectorPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write',
-  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write',
+  revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write',
 };
 /** What only the session's owner asks of its host. */
 export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack'];
@@ -50,7 +50,7 @@ export async function requireRunnerAccess(c: AppContext, actorId: string, row: S
   // A session that pinned its repositories stays readable only.
   // A read-only session still opens (create, restart) to show its history and files, and can be stopped; nothing new runs in it.
   // Its files were never packed (it can't be), but unpacking stays possible whatever happens.
-  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'unpack'].includes(action)) requireUnfrozen(access.row);
+  if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'image', 'unpack'].includes(action)) requireUnfrozen(access.row);
   if (ownerActions.includes(action) && actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
   if (action !== 'restore' && await c.env.DB.query("SELECT 1 FROM restore_jobs WHERE target_session_id = ? AND status <> 'completed'").bind(row.id).first()) {
     fail(409, 'restore_pending', 'Session restoration is not complete.');

@@ -57,6 +57,33 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+  /*
+   * An entry's images, below its text: thumbnails as tall as each other, at their own aspect ratio, read from the host as
+   * they come into view; pressing one shows it whole. One that hasn't loaded yet, or can't be shown, keeps a square.
+   */
+  .entry-images { display: flex; flex-wrap: wrap; gap: var(--space-2); max-width: 85%; }
+  .entry-user > .entry-images { justify-content: flex-end; }
+  .entry-tool > .entry-images { max-width: 100%; margin-top: var(--space-2); }
+  .entry-image {
+    display: block;
+    min-width: 64px;
+    max-width: min(320px, 100%);
+    height: 160px;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface2);
+    color: var(--foreground-muted);
+    cursor: zoom-in;
+  }
+  .entry-image:hover, .entry-image:focus-visible { border-color: var(--border-accent); }
+  .entry-image > img { display: block; width: auto; max-width: 100%; height: 100%; object-fit: contain; }
+  .entry-image:is(.loading, .failed) { display: grid; place-items: center; align-content: center; gap: 2px; width: 160px; }
+  .entry-image.loading { cursor: progress; }
+  .entry-image.failed { cursor: pointer; }
+  .entry-image-loading { display: flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: 200px; color: var(--foreground-muted); }
+  @media (max-width: 640px) { .entry-image { height: 120px; } .entry-image:is(.loading, .failed) { width: 120px; } }
   /* min-width 0 keeps wide tables and code scrolling inside the column instead of widening it. */
   .entry-assistant { min-width: 0; font-size: var(--font-content); line-height: 1.6; }
   .entry-actor { color: var(--foreground-muted); font-size: var(--font-xs); }
