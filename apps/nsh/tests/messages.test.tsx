@@ -61,6 +61,22 @@ describe("selecting a message's text", () => {
     expect(withdrawn(app)).toBe(1);
   });
 
+  test("on a desktop, in the approvals docked above the chat box, takes the focus from the chat box too", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, platform: "macos", width: 1200, height: 800, network: server({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: queued, revision: "r1" } },
+      [`POST ${ORIGIN}/api/sessions/s1/withdraw`]: { body: { content: "Also cover the logout test", mode: "write" } },
+    }) });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:approval-dock >> text:Fix the flaky login test → main");
+    await app.type("id:composer-input", "x");
+    await app.clear("id:composer-input");
+    // Selects the pending approval's pull request title with the mouse.
+    await app.drag("id:approval-dock >> text:Fix the flaky login test → main", { x: 60, y: 0 });
+    await app.keyboard.press("up");
+    expect(withdrawn(app)).toBe(0);
+    expect(app.value("id:composer-input")).toBe("");
+  });
+
   test("on a phone, leaves the chat box its focus", async () => {
     const app = await open("../App.tsx", { storage: signedIn, platform: "ios", network: server({
       [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: queued, revision: "r1" } },
