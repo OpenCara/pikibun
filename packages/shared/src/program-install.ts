@@ -16,7 +16,8 @@ const steps: readonly InstallStep[] = Object.freeze([
   { programs: ["corepack"], how: "npm install -g corepack with the npm of the Node.js the connector runs on (Node.js 25 and newer no longer bundle it), then corepack enable" },
   { programs: ["npm", "npx", "node"], how: "the Node.js the connector runs on has them: run the connector on an installation of Node.js 24 or newer that includes npm" },
   { programs: ["uv", "uvx"], how: "uv for the whole system: curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin sh" },
-  { programs: ["poetry"], how: "sudo pipx install --global poetry (pipx 1.5 or newer), or the distribution's python3-poetry package" },
+  // pipx's --global keeps its environments in /opt/pipx unless told otherwise, which the sandbox doesn't see.
+  { programs: ["poetry"], how: "the distribution's python3-poetry package, or sudo env PIPX_GLOBAL_HOME=/usr/local/share/pipx PIPX_GLOBAL_BIN_DIR=/usr/local/bin pipx install --global poetry (pipx 1.5 or newer)" },
   { programs: ["pytest"], how: "the distribution's python3-pytest package; without it, a session installs pytest into a virtual environment itself (pip install pytest with venv .venv)" },
   { programs: ["pip", "pip3"], how: "the distribution's python3-pip package" },
   { programs: ["python3"], how: "the distribution's python3 package" },

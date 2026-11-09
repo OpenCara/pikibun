@@ -1569,18 +1569,25 @@ export class RunnerSession {
    * as they were before they became switchable. A fail-closed one (the shells) also stays off while the last answer this
    * connector read turned it off, however old, so losing the control plane never turns a shell back on.
    */
+  /**
+   * `off` (sessionToolsOff of the workspace's `extensions`) with the tools defined as data decided by their definitions'
+   * extensions, which a newer control plane may name: each is off where none of them is on.
+   */
+  private definedToolsOff(off: Set<string>, extensions: Parameters<typeof sessionToolsOff>[0]): Set<string> {
+    for (const definition of this.#definitions) {
+      off.delete(definition.name);
+      if (!definition.extensions.some(extension => extensionSwitchOn(extension, extensions))) off.add(definition.name);
+    }
+    return off;
+  }
+
   private async sessionToolsOff(): Promise<Set<string>> {
     const config = this.config.extensions;
     // Opt-in tools (piki:tunnel) are off unless the workspace's answer turns them on.
     const workspaceId = this.binding.session.workspaceId;
     const answer = config ? await config.workspace(workspaceId).catch(() => undefined) : undefined;
     const extensions = answer?.extensions ?? [];
-    const off = sessionToolsOff(extensions);
-    // A tool defined as data goes by its definition's extensions, which a newer control plane may name.
-    for (const definition of this.#definitions) {
-      off.delete(definition.name);
-      if (!definition.extensions.some(extension => extensionSwitchOn(extension, extensions))) off.add(definition.name);
-    }
+    const off = this.definedToolsOff(sessionToolsOff(extensions), extensions);
     if (!config) return off;
     const last = config.lastKnown?.(workspaceId);
     if (last) for (const tool of sessionToolsOff(last.extensions, { failClosedOnly: true })) off.add(tool);
@@ -3497,7 +3504,7 @@ export class RunnerSession {
       // As the next message selects them: after the workspace's, which may replace one.
       const builtin = this.#builtins?.select(enabled, new Set(running.flatMap(item => item.tools))).map(item => item.name) ?? [];
       // Pikibun's own the workspace has on that this session can't offer: the browser, without Chromium on the host, say.
-      const off = sessionToolsOff(answer.extensions);
+      const off = this.definedToolsOff(sessionToolsOff(answer.extensions), answer.extensions);
       const browserReason = off.has("browser") ? undefined : this.browserUnavailable();
       const tunnelReason = off.has("tunnel") ? undefined : this.tunnelUnavailable();
       const unavailable = [...(browserReason ? [{ source: "piki:browser", tools: ["browser"], reason: browserReason }] : []),

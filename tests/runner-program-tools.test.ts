@@ -497,20 +497,23 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   const models = createModels();
   models.setProvider(faux.provider);
   // A tool defined as data whose one program no host has, and whose other every Linux has in /usr/bin.
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
   const { summary: _summary, ...make } = bundledToolDefinitions.find(definition => definition.name === "make") as ProgramToolDefinition;
   const frob: ProgramToolDefinition = { ...make, name: "frob", extensions: ["piki:frob"], programs: ["frob-not-installed-anywhere", "env"] };
   const service = new RunnerService({
     dataDir: directory, sharedSecret: "runner-missing-programs-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    extensions: { installed: () => [], workspace: async () => ({ extensions: [], automaticTools: false }) },
+    extensions: { installed: () => [], workspace: async () => answer },
     toolDefinitions: async () => [frob],
   });
   await service.initialize();
   t.after(() => service.close());
   const id = "missing-programs-session";
-  // The agent has the defined tool, as a control plane that defines it lists it.
+  // The agent has the defined tool, as a control plane that defines it lists it. Not a clone session: its sandbox needs
+  // nothing of the control plane's repositories to run the command.
   const bound = binding(id);
+  delete bound.session.repositoryMode;
   const session = await service.provision({ ...bound, agent: { ...bound.agent, tools: [...bound.agent.tools, "frob"] } }, await ticket(id, "create"));
   assert.deepEqual((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"),
     { source: "piki:frob", tools: ["frob"], reason: "programs", programs: ["frob-not-installed-anywhere"] });
@@ -525,4 +528,7 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   assert.match(view.entries.map(entry => entry.text).join("\n"), /frob-not-installed-anywhere isn't installed on this host where the session's sandbox sees it[^]*Nothing ran\./);
   assert.match(instructions, /This host doesn't have the frob tool's frob-not-installed-anywhere where the session's sandbox sees them/);
   assert.match(instructions, /Calls to them are refused before they run/);
+  // The workspace turns the tool off: the panel no longer lists its programs (review of #216).
+  answer = { extensions: [{ source: "piki:frob", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  assert.equal((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"), undefined);
 });
