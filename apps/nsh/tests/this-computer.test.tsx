@@ -17,11 +17,12 @@ async function openPanel(params: Record<string, unknown> = {}) {
 
 describe("starting Pikibun's command", () => {
   test("runs it through the owner's login shell, as Terminal would, or cmd.exe on Windows; never another program", () => {
-    expect(hostCommand("macos", "/bin/zsh")).toEqual({ command: "/bin/zsh", args: ["-ilc", "exec pikibun host --stdio"] });
-    expect(hostCommand("linux", "/usr/bin/bash")).toEqual({ command: "/usr/bin/bash", args: ["-ilc", "exec pikibun host --stdio"] });
-    // A shell the app isn't granted (fish, a path of the owner's) falls back to the platform's own.
-    expect(hostCommand("macos", "/opt/homebrew/bin/fish").command).toBe("/bin/zsh");
-    expect(hostCommand("linux", undefined).command).toBe("/bin/bash");
+    // The owner's shell, by name: nsh.json grants names, found through the app's PATH.
+    expect(hostCommand("macos", "/bin/zsh")).toEqual({ command: "zsh", args: ["-ilc", "exec pikibun host --stdio"] });
+    expect(hostCommand("linux", "/usr/bin/bash")).toEqual({ command: "bash", args: ["-ilc", "exec pikibun host --stdio"] });
+    // A shell the app isn't granted (fish) falls back to the platform's own.
+    expect(hostCommand("macos", "/opt/homebrew/bin/fish").command).toBe("zsh");
+    expect(hostCommand("linux", undefined).command).toBe("bash");
     expect(hostCommand("windows", "/bin/zsh")).toEqual({ command: "cmd", args: ["/d", "/c", "pikibun", "host", "--stdio"] });
   });
 

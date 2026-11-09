@@ -131,9 +131,10 @@ pikibun@latest`, which the page offers when it's missing or too old) as `pikibun
 on its stdin and stdout (`desktop-protocol.ts`), where pairing codes and API keys travel; never its command line.
 NSH starts a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,
 nvm's and npm's directories, so the owner's login shell starts it (`$SHELL -ilc 'exec pikibun host --stdio'`, as
-Terminal would; zsh or bash, else the platform's), and on Windows `cmd /d /c pikibun host --stdio`, which finds npm's
-`pikibun.cmd`. `nsh.json` grants exactly those programs (`capabilities.process`) and the environment the connector
-needs. The host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
+Terminal would; zsh, bash or sh, else the platform's), and on Windows `cmd /d /c pikibun host --stdio`, which finds
+npm's `pikibun.cmd`. `nsh.json` grants exactly those programs (`capabilities.process`), by name, since it is every
+target's and an absolute path of one platform isn't one on another (NSH refuses to build or start with one), and the
+environment the connector needs. The host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
 one of them runs at a time. Hosting lasts while the app is open, and starts again at the next launch if it was running
 when the app quit, with the consent given then (`src/lib/this-computer.ts`).
 

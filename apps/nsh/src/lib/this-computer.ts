@@ -24,9 +24,12 @@ export const computerName = platform.os === "macos" ? "this Mac" : "this compute
 
 /** desktop-protocol.ts's STDIO_FRAME: the host's own lines on its stdout start with it; anything else is output. */
 const STDIO_FRAME = "\u001epikibun ";
-/** The login shells the app may start the command with (nsh.json grants them); others fall back to the platform's. */
-const SHELLS = ["/bin/zsh", "/bin/bash", "/usr/bin/zsh", "/usr/bin/bash", "/bin/sh"];
-/** Bare, as nsh.json grants it: NSH finds cmd.exe in System32 through PATH (an absolute Windows path isn't one on other build hosts). */
+/**
+ * The login shells the app may start the command with, and cmd on Windows: bare names, as nsh.json grants them, which
+ * NSH finds through the app's PATH (launchd's /usr/bin:/bin on a Mac, System32 on Windows). nsh.json is every target's,
+ * and an absolute path of one platform isn't one on another, so no paths. Another shell falls back to the platform's.
+ */
+const SHELLS = ["zsh", "bash", "sh"];
 const CMD = "cmd";
 /** What the owner runs to get the command, with Node.js 24 or newer. */
 export const INSTALL_COMMAND = "npm install -g pikibun@latest";
@@ -36,7 +39,8 @@ const NOTICES = 20;
 /** How the app starts the host on this desktop: a login shell (macOS, Linux) or cmd.exe (Windows). */
 export function hostCommand(os: string, shell: string | undefined): { command: string; args: string[] } {
   if (os === "windows") return { command: CMD, args: ["/d", "/c", "pikibun", "host", "--stdio"] };
-  const chosen = shell && SHELLS.includes(shell) ? shell : os === "macos" ? "/bin/zsh" : "/bin/bash";
+  const name = shell?.split("/").pop();
+  const chosen = name && SHELLS.includes(name) ? name : os === "macos" ? "zsh" : "bash";
   return { command: chosen, args: ["-ilc", "exec pikibun host --stdio"] };
 }
 

@@ -13,7 +13,7 @@
     "statusBar": true,
     "fs": { "read": ["${homeDir}"] },
     "process": {
-      "execute": ["/bin/zsh", "/bin/bash", "/usr/bin/zsh", "/usr/bin/bash", "/bin/sh", "cmd"],
+      "execute": ["zsh", "bash", "sh", "cmd"],
       "env": [
         "SHELL", "USER", "LOGNAME", "TERM", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
         "PATHEXT", "ComSpec", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramData", "SystemDrive", "windir", "USERNAME", "COMPUTERNAME",
