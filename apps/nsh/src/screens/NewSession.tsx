@@ -150,17 +150,20 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
   // The first message's images and files, as a session's chat box takes them.
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
-  // A trust acknowledgement covers one host against one repository set.
+  // A trust acknowledgement covers one host against one repository set; each host starts in the sandbox, running on one
+  // being chosen for it, never carried over from another. Both go only when what they were given for changes: the host
+  // listing is fetched again every 10 seconds, with new objects for the same host.
+  let trustKey: string | undefined;
   effect(() => {
-    host()?.id;
-    host()?.ownerId;
-    repositories();
-    trustedHost.set("");
+    const key = JSON.stringify([host()?.id ?? null, host()?.ownerId ?? null, (repositories() ?? []).map(repository => repository.id)]);
+    if (trustKey !== undefined && key !== trustKey) trustedHost.set("");
+    trustKey = key;
   });
-  // Each host starts in the sandbox: running on one is chosen for it, never carried over from another.
+  let environmentHost: string | null | undefined;
   effect(() => {
-    host()?.id;
-    onHost.set(false);
+    const id = host()?.id ?? null;
+    if (environmentHost !== undefined && id !== environmentHost) onHost.set(false);
+    environmentHost = id;
   });
 
   async function start() {

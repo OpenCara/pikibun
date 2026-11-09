@@ -89,6 +89,37 @@ describe("a new session", () => {
     expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ workspaceId: "w1", hostEnvironment: true });
   });
 
+  test("keeps running on its host while the host listing refreshes", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, clock: {}, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
+    }) });
+    await app.press("id:new-session");
+    await app.waitFor("id:new-environment");
+    await app.press("id:new-environment");
+    await app.press("text:On this host");
+    await app.waitFor("id:new-on-host");
+    const polls = () => app.requests().filter(request => request.url === `${ORIGIN}/api/workspaces/w1/connectors`).length;
+    const before = polls();
+    // The listing is fetched again every 10 seconds, with new objects for the same host.
+    await app.clock!.runFor(25_000);
+    expect(polls()).toBeGreaterThan(before);
+    expect(app.shows("id:new-on-host")).toBe(true);
+  });
+
+  test("keeps trusting another member's host while the host listing refreshes", async () => {
+    const shared = { ...host, ownerId: "u2", ownerName: "grace", name: "grace-mac" };
+    const app = await open("../App.tsx", { storage: signedIn, clock: {}, network: server({
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [shared] } },
+    }) });
+    await app.press("id:new-session");
+    await app.waitFor("id:new-trust");
+    await app.press("id:new-trust");
+    await app.type("id:new-message", "Run the benchmarks");
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.clock!.runFor(25_000);
+    expect(app.enabled("id:new-start")).toBe(true);
+  });
+
   test("keeps its unsent first message when another page opens in between", async () => {
     const app = await open("../App.tsx", { storage: signedIn, network: server() });
     await app.press("id:new-session");
