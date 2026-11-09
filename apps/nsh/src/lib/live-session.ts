@@ -1,8 +1,16 @@
 import { cleanup, effect, signal, untracked, type Accessor } from "nsh";
 import { lifecycle } from "./lifecycle";
-import { openFetchEventStream, startLiveSession, type SessionRecord, type SessionView, type StreamStatus } from "../shared";
+import { createViewCache, openFetchEventStream, startLiveSession, type SessionRecord, type SessionView, type StreamStatus } from "../shared";
 import { session as signedIn } from "./auth";
+import { onClearDrafts } from "./drafts";
 import { inBackground } from "./resource";
+
+/**
+ * The views of the sessions opened most recently, in memory only, so going back to one shows it as soon as its access
+ * is confirmed instead of after the host answers. They belong to the signed-in account and go with its drafts.
+ */
+const viewCache = createViewCache(8);
+onClearDrafts(() => viewCache.clear());
 
 export interface LiveSessionState {
   session: Accessor<SessionRecord | null>;
@@ -44,6 +52,7 @@ export function createLiveSession(id: string): LiveSessionState {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       }),
       hidden: inBackground,
+      cache: viewCache,
       onVisibilityChange(listener) {
         visibility.add(listener);
         return () => visibility.delete(listener);

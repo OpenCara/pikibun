@@ -56,10 +56,10 @@ async function measure(name: string, { entries: count, metaMs = 0, viewMs = 0, l
         at("view");
         return { headers: { "content-type": "application/json" }, body: payload, delay: viewMs };
       },
+      // The stream's first snapshot is the whole view, as the server's is; it takes as long as /view to come.
       [`GET ${ORIGIN}/api/sessions/s1/events*`]: (_request: Request) => {
         at("events");
-        // A quiet session's stream sends nothing while it is open, as the server's does when the client is up to date.
-        return { status: 200, headers: { "content-type": "text/event-stream" }, body: "", delay: 600_000 };
+        return { status: 200, headers: { "content-type": "text/event-stream" }, body: `event: view\ndata: ${payload}\n\n`, delay: viewMs };
       },
     }),
   });
@@ -73,7 +73,7 @@ async function measure(name: string, { entries: count, metaMs = 0, viewMs = 0, l
   await app.waitFor(`text:${last}`, { timeout: 60_000 });
   const shown = Date.now() - clicked;
   const waterfall = arrivals.join(" ");
-  // Opening it again (another session, then back): the client keeps nothing, so it loads it all again.
+  // Opening it again (another session, then back): the view it kept shows once the metadata confirms access.
   await app.press("id:session-row-s3");
   await app.waitFor("id:composer-input", { timeout: 20_000 });
   const again = Date.now();

@@ -1,7 +1,8 @@
 /**
  * Measures what the NSH desktop client waits for when it opens a session, against a real server and a real connector host
  * on this machine (as `pnpm dev:native` runs them, the host offering the deterministic fixture model): the requests it
- * makes in order (GET /api/sessions/:id, GET /view, then the first event of /events), with its bearer token, as the
+ * made in order before (GET /api/sessions/:id, GET /view, then the first event of /events: shownMs), and at once now
+ * (the metadata beside /events, whose first event is the whole view: atOnceShownMs), with its bearer token, as the
  * session's transcript grows.
  *
  *   node --import tsx scripts/perf/session-load-server.ts [--port 8799] [--turns 25,125] [--cold]
@@ -114,6 +115,27 @@ try {
     return { entries: view.entries.length, viewKB: Math.round(text.length / 1024), meta, viewMs, shown, firstEvent };
   }
 
+  /** One open as the client does it now: the metadata and the stream at once, the stream's first snapshot the whole view. */
+  async function openAtOnce() {
+    const started = performance.now();
+    const controller = new AbortController();
+    const metadata = api("GET", base);
+    const events = await fetch(`${origin}${base}/events?since=`, { headers: { Authorization: `Bearer ${native.token}` }, signal: controller.signal });
+    const reader = events.body!.getReader();
+    let snapshot: { view?: View; revision?: string } | undefined;
+    for (let buffered = ""; ;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += Buffer.from(value).toString();
+      const event = /(?:^|\n)event: view\ndata: ([^\n]*)\n\n/.exec(buffered);
+      if (event) { snapshot = JSON.parse(event[1]!); break; }
+    }
+    controller.abort();
+    await metadata;
+    if (!snapshot?.view || !snapshot.revision) throw new Error("The stream's first event was not a whole view with its revision");
+    return { entries: snapshot.view.entries.length, shown: performance.now() - started };
+  }
+
   let turns = 0;
   const round = (value: number) => Math.round(value);
   for (const target of values.turns.split(",").map(Number)) {
@@ -130,12 +152,20 @@ try {
       cold = await openOnce();
     }
     const warm = [];
-    for (let run = 0; run < 7; run++) { warm.push(await openOnce()); await delay(1_100); }
+    const atOnce = [];
+    for (let run = 0; run < 7; run++) {
+      warm.push(await openOnce());
+      await delay(1_100);
+      atOnce.push(await openAtOnce());
+      if (atOnce.at(-1)!.entries !== warm.at(-1)!.entries) throw new Error("The stream's view differs from GET /view's");
+      await delay(1_100);
+    }
     const result = {
       turns, entries: warm[0]!.entries, viewKB: warm[0]!.viewKB,
       ...(cold ? { coldMetaMs: round(cold.meta), coldViewMs: round(cold.viewMs), coldShownMs: round(cold.shown) } : {}),
       metaMs: round(median(warm.map(item => item.meta))), viewMs: round(median(warm.map(item => item.viewMs))),
       shownMs: round(median(warm.map(item => item.shown))), eventsFirstMs: round(median(warm.map(item => item.firstEvent))),
+      atOnceShownMs: round(median(atOnce.map(item => item.shown))),
     };
     console.log(`PERF ${JSON.stringify(result)}`);
   }

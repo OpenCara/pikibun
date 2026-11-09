@@ -19,6 +19,16 @@ test("events parse the same wherever the network splits them, including a CRLF a
   assert.deepEqual(parse([...stream]), expected);
 });
 
+test("a whole session view, one line of megabytes in many chunks, arrives whole", () => {
+  const data = JSON.stringify({ view: { entries: Array.from({ length: 2000 }, (_, index) => ({ id: `0:${index}`, text: "x".repeat(1500) })) } });
+  const stream = `event: view\ndata: ${data}\n\nevent: ping\ndata: {}\n\n`;
+  const chunks = Array.from({ length: Math.ceil(stream.length / 16384) }, (_, index) => stream.slice(index * 16384, (index + 1) * 16384));
+  const started = performance.now();
+  assert.deepEqual(parse(chunks), [["view", data], ["ping", "{}"]]);
+  // Linear in the line's size: each chunk is searched once, and the line joined once.
+  assert.ok(performance.now() - started < 1000, `${Math.round(performance.now() - started)} ms`);
+});
+
 test("an event cut off by the end of the stream is never dispatched, and a blank event dispatches nothing", () => {
   assert.deepEqual(parse(["event: view\n\n", "event: view\ndata: partial"]), []);
 });

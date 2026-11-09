@@ -35,6 +35,45 @@ export interface LiveSessionHandlers {
   status(status: StreamStatus): void;
 }
 
+/** A session's view as this client last showed it, and its revision. */
+export interface CachedView {
+  view: SessionView;
+  revision?: string;
+}
+
+/**
+ * Views of sessions this client showed, so reopening one shows it again at once (see startLiveSession). It must belong
+ * to one signed-in account: clear it whenever another account signs in or the account signs out.
+ */
+export interface ViewCache {
+  get(sessionId: string): CachedView | undefined;
+  set(sessionId: string, value: CachedView): void;
+  delete(sessionId: string): void;
+  clear(): void;
+}
+
+/** A view cache holding the `limit` sessions shown most recently. */
+export function createViewCache(limit = 8): ViewCache {
+  const views = new Map<string, CachedView>();
+  return {
+    get(sessionId) {
+      const value = views.get(sessionId);
+      if (value) { views.delete(sessionId); views.set(sessionId, value); }
+      return value;
+    },
+    set(sessionId, value) {
+      views.delete(sessionId);
+      views.set(sessionId, value);
+      for (const oldest of views.keys()) {
+        if (views.size <= limit) break;
+        views.delete(oldest);
+      }
+    },
+    delete(sessionId) { views.delete(sessionId); },
+    clear() { views.clear(); },
+  };
+}
+
 export interface LiveSessionDependencies {
   api<T>(path: string, options: { signal: AbortSignal }): Promise<T>;
   /** Opens the session's /events stream; `path` starts with /api/. */
@@ -42,6 +81,8 @@ export interface LiveSessionDependencies {
   /** The page is hidden or the app is in the background: no streams then. */
   hidden(): boolean;
   onVisibilityChange(listener: () => void): () => void;
+  /** The signed-in account's views of the sessions it opened before; none are kept without one. */
+  cache?: ViewCache;
 }
 
 export interface LiveSession {
@@ -68,9 +109,15 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
   let loading = false;
   let pending: boolean | undefined;
   let revoked = false;
-  /** The view shown and its revision: streams send only what changed since it. */
-  let current: SessionView | null = null;
-  let revision: string | undefined;
+  /**
+   * The view held and its revision: streams send only what changed since it. A cached view is held from the start, so
+   * the first stream asks only for what changed since, but it is shown only once the session's metadata confirms access.
+   */
+  const cached = dependencies.cache?.get(id);
+  let current: SessionView | null = cached?.view ?? null;
+  let revision: string | undefined = cached?.revision;
+  /** Whether a view was shown: the cached one waits for the metadata, which rechecks access. */
+  let shown = false;
   /** Earlier entries read for a paged view, which streams never send again. */
   let earlier: EarlierEntries = new Map();
   const reading = new Map<string, Promise<void>>();
@@ -80,6 +127,8 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     earlier = carryEarlier(earlier, current, view);
     current = view;
     revision = typeof at === "string" ? at : undefined;
+    shown = true;
+    dependencies.cache?.set(id, { view, revision });
     // A cache host preparing repositories reports progress worth showing every second, even before any message.
     active = view.busy || (view.queue ?? []).some(item => activeStatuses.includes(item.status)) || view.repositories?.status === "preparing";
     handlers.view(withEarlier(view, earlier));
@@ -118,6 +167,7 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     current = null;
     revision = undefined;
     earlier = new Map();
+    dependencies.cache?.delete(id);
     closeStream();
     cancelReopen();
     handlers.session(null);
@@ -136,6 +186,8 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
       checkingAccess = false;
       if (!running()) return;
       handlers.session(metadata.session);
+      // Access is confirmed: a view this client showed before goes up at once, and the stream brings it up to date.
+      if (!shown && current) showView(current, revision);
       if (!withView) return;
       const snapshot = await dependencies.api<{ view: SessionView; revision?: string }>(`${base}/view`, { signal: controller.signal });
       if (running()) showView(snapshot.view, snapshot.revision);
@@ -222,7 +274,10 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
   });
   // Revalidate access even when a quiet session produces no snapshots.
   const accessTimer = setInterval(() => { if (!dependencies.hidden()) void load(false); }, liveTiming.accessCheckMs);
-  void load(true).then(openStream);
+  // The metadata (which checks access) and the stream at once: the stream's first snapshot is the whole view (or what
+  // changed since a cached one), so no GET /view waits between them. A stream that fails reads /view to say why.
+  void load(false);
+  openStream();
 
   return {
     refresh() {
