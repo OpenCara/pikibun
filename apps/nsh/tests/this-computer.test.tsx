@@ -48,7 +48,8 @@ describe("starting Pikibun's command", () => {
     const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
     expect(installCommand("macos", "/bin/zsh", mac)).toEqual({ command: "zsh",
       args: ["-ilc", "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest"],
-      line: "npm install --prefix /Users/ada/Library/Application Support/com.pikibun.app/cli --no-audit --no-fund pikibun@latest" });
+      // What the activity shows is what runs: copied into a terminal, it runs as it reads.
+      line: "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest" });
     expect(installCommand("macos", "/opt/homebrew/bin/fish", mac).command).toBe("zsh");
     expect(installCommand("windows", "/bin/zsh", "C:\\data\\cli").args).toEqual(["/d", "/c", "npm", "install", "--prefix", "cli", "--no-audit", "--no-fund", "pikibun@latest"]);
     expect(installCommand("linux", "/usr/bin/bash", null)).toEqual({ command: "bash", args: ["-ilc", "npm install -g pikibun@latest"], line: "npm install -g pikibun@latest" });
@@ -161,6 +162,18 @@ describe("This Mac", () => {
     await rootCache.app.press("id:this-computer-install-button");
     await rootCache.app.waitFor("id:this-computer-install");
     expect(rootCache.showsText("npm's cache on this Mac has files it can't write, left by an earlier sudo npm. Fix them in a terminal with sudo chown -R 501:20 \"/Users/ada/.npm\", then choose Install again.")).toBe(true);
+  });
+
+  test("an install's failure is forgotten once the command is there, so it never comes back stale", async () => {
+    const { app, showsText } = await openPanel({ command: "missing", npm: "denied" });
+    await app.waitFor("id:this-computer-install-button");
+    await app.press("id:this-computer-install-button");
+    await app.waitUntil(() => showsText("install error: npm couldn't write a folder it needs"));
+    // The owner installs it in a terminal, then chooses Refresh.
+    await app.press("id:fake-terminal-install");
+    await app.press("id:this-computer-retry");
+    await app.waitFor("id:this-computer-pair-button");
+    expect(app.texts()).toContain("install error: ");
   });
 
   test("a global install (with no app folder) the login shell can't find afterwards says to put npm's folder on PATH", async () => {

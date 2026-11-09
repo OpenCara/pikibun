@@ -1,16 +1,18 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection, LoginProvider } from "../../../runner/src/desktop-protocol";
-import { setHostLauncher, setInstaller, thisComputer, type HostLink, type InstallRun } from "../../src/lib/this-computer";
+import { appCliFolder, installCommand, setHostLauncher, setInstaller, thisComputer, type HostLink, type InstallRun } from "../../src/lib/this-computer";
+import { Button } from "../../src/ui";
 import { ThisComputerPanel } from "../../src/settings/ThisComputer";
 
 // Settings › This Mac against a stand-in for `pikibun host --stdio`: it answers the desktop host's protocol as the real
 // one does, for a Mac without a sandbox. `host.params`: `command`, how the command fares ("ok", "missing": not
 // installed, "outdated": a CLI without `host`); `paired`, the server it is paired with; `piSignedIn` (true), whether Pi
-// has a provider yet; `server`, the one the page is signed in to; `npm`, how `npm install -g pikibun@latest` fares
+// has a provider yet; `server`, the one the page is signed in to; `npm`, how the Install button's npm fares
 // ("ok": it installs a current command in the app's folder, "missing": no npm, "denied": EACCES, "root-cache": EACCES
 // on a cache an earlier sudo npm left, "elsewhere": with no app folder, it installs globally where the shell doesn't
-// look). What the app sent is listed under the panel, secrets left out, for the tests
-// to read; an install is listed as `install`.
+// look). What the app sent is listed under the panel, secrets left out, for the tests to read; an install is listed as
+// `install`. Under it, `fake-terminal-install` installs the command as the owner would in a terminal, and the host's
+// install error is shown as `install error: …`.
 
 const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; npm?: unknown };
 const SERVER = typeof params.server === "string" ? params.server : "https://pikibun.test";
@@ -113,7 +115,7 @@ function fakeInstall(): InstallRun {
   }, 5);
   const global = npm === "elsewhere";
   return {
-    line: global ? "npm install -g pikibun@latest" : "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest",
+    line: installCommand("macos", "/bin/zsh", global ? null : appCliFolder("macos", "/Users/ada/Library/Application Support/com.pikibun.app")).line,
     where: global ? "global" : "app",
     onOutput: listener => { output.push(listener); },
     onExit: listener => { exits.push(listener); },
@@ -129,6 +131,8 @@ mount(() => (
       sent.update(list => [...list, `pairing ${name}`]);
       return { id: "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", code: "Z3AQnmLC6x9-xm2HZqXObhdMmKQhqLOKk3ST1ZuBYIw" };
     }} />
+    <Button testID="fake-terminal-install" label="Install in a terminal" onPress={() => { command = "ok"; }} />
+    <Text>{`install error: ${host.installError()}`}</Text>
     <View testID="fake-host-sent">
       <Each of={sent()} key="index">{line => <Text>{`sent ${line()}`}</Text>}</Each>
     </View>

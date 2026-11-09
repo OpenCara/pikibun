@@ -84,9 +84,13 @@ export function hostCommand(os: string, shell: string | undefined, cli?: string 
  */
 export function installCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[]; line: string } {
   const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", "pikibun@latest"];
-  const line = cli ? own.join(" ") : INSTALL_COMMAND;
-  if (os === "windows") return { command: CMD, args: ["/d", "/c", ...(cli ? own : INSTALL_COMMAND.split(" "))], line };
-  return { command: loginShell(os, shell), args: ["-ilc", cli ? own.map((word, index) => (index === 3 ? shellWord(word) : word)).join(" ") : INSTALL_COMMAND], line };
+  // `line` is exactly what runs (the folder quoted as the shell takes it), so the activity's copy runs as it reads.
+  if (os === "windows") {
+    const words = cli ? own : INSTALL_COMMAND.split(" ");
+    return { command: CMD, args: ["/d", "/c", ...words], line: words.join(" ") };
+  }
+  const line = cli ? own.map((word, index) => (index === 3 ? shellWord(word) : word)).join(" ") : INSTALL_COMMAND;
+  return { command: loginShell(os, shell), args: ["-ilc", line], line };
 }
 
 /** One running host process, however it was started: the real command, or a test's stand-in. */
@@ -456,6 +460,8 @@ export class ThisComputerHost {
       const result = await this.channel.request({ type: "inspect", ...this.isolation(), ...(origin && isLoopbackHttp(origin) ? { allowInsecureLoopback: true } : {}) });
       const problem = this.channel.launchFailure;
       this.problem.set(!result.ok && problem ? problem : null);
+      // An install's failure belongs to the command being missing or too old: once it isn't, it is stale.
+      if (untracked(this.problem)?.kind !== "missing" && untracked(this.problem)?.kind !== "outdated") this.installError.set("");
       if (result.ok && result.inspection) {
         this.inspection.set(result.inspection);
         if (this.inspectError) { this.inspectError = false; this.error.set(""); }
