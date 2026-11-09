@@ -7,6 +7,7 @@ import {
 } from "../../../../packages/shared/src/policy";
 import { builtinExtensions } from "../../../../packages/shared/src/host-config";
 import { tunnelUnavailableText } from "../../../../packages/shared/src/tunnel";
+import { programsMissingText } from "../../../../packages/shared/src/program-install";
 import type { SessionLink } from "../../../../packages/shared/src/sharing";
 import type { CrossSessionMessage, SessionConnections } from "../../../../packages/shared/src/cross-session";
 import { browserUnavailableText, errorMessage, REDACTED, segment, userIdFromInput, usernameWithId, type ConnectorInfo } from "../shared";
@@ -132,9 +133,10 @@ function ExtensionsSection(props: { extensions: NonNullable<SessionView["extensi
       </Each>
       <Each of={props.extensions.unavailable ?? []} key={item => item.source}>
         {item => <Row leading={icon("alert")} title={item().source}
-          hint={item().source === "piki:browser" ? browserUnavailableText(item().reason as never) : item().source === "piki:tunnel" ? tunnelUnavailableText(item().reason as never)
+          hint={item().programs ? programsMissingText({ [item().tools[0] ?? item().source]: item().programs! }) ?? ""
+            : item().source === "piki:browser" ? browserUnavailableText(item().reason as never) : item().source === "piki:tunnel" ? tunnelUnavailableText(item().reason as never)
             : "The workspace has it on, but this session can't offer its tools"}
-          trailing={<Badge tone={["missing", "failed"].includes(item().reason) ? "warning" : "neutral"}>{item().reason === "downloading" ? "Not ready yet" : "Unavailable"}</Badge>} />}
+          trailing={<Badge tone={["missing", "failed", "programs"].includes(item().reason) ? "warning" : "neutral"}>{item().programs ? "Missing programs" : item().reason === "downloading" ? "Not ready yet" : "Unavailable"}</Badge>} />}
       </Each>
       <Each of={props.extensions.missingRequired ?? []}>
         {source => <Row leading={icon("alert")} title={source()} hint="The host's owner requires it of every session on the host, which can't run it now: no message is sent until it can" trailing={<Badge tone="danger">Missing</Badge>} />}
