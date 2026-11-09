@@ -87,6 +87,11 @@ export interface Workspace {
   name: string;
   ownerId: string;
   role?: WorkspaceRole;
+  /**
+   * The signed-in user's own private workspace: every user has one, listed first, that nobody else can join, where
+   * sessions need no source. Older servers leave it out.
+   */
+  personal?: boolean;
 }
 export interface ModelDefinition {
   id: string;

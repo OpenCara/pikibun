@@ -570,6 +570,8 @@
     font-weight: var(--weight-medium);
     line-height: 1;
   }
+  /* The user's own private workspace. */
+  .identity-private { background: var(--foreground); color: var(--background); }
 
   .content-column { width: 100%; max-width: var(--content-width); margin: 0 auto; padding: var(--space-8) var(--space-6) var(--space-12); }
 
@@ -619,6 +621,8 @@
   .nav-item > .meta { flex: 0 0 auto; color: var(--foreground-muted); font-size: var(--font-xs); }
 
   .workspace-group + .workspace-group { margin-top: var(--space-3); }
+  /* The pinned private workspace, set apart from the shared ones below it. */
+  .workspace-group.personal:has(+ .workspace-group) { padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
   .workspace-row { position: relative; display: flex; align-items: center; }
   .workspace-row > .nav-item { color: var(--foreground); padding-right: 64px; }
   .workspace-row > .row-actions {

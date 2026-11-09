@@ -22,6 +22,7 @@ export {
   listSessionAccess, requireMember, requireSession, requireSessionCreator, requireSessionManager, sessionAccess, sessionCreatorSQL, sessionManagerSQL,
   sessionReaders, workspaceSessionAccess,
 } from './access.js';
+export { isPersonalWorkspace, personalWorkspaceName, personalWorkspaceSQL, requireSharedWorkspace } from './personal-workspaces.js';
 export { authorizeConnectorTicket, connectorPermissions, requireRunnerAccess } from './runner-access.js';
 export { authorizeSession } from './authorize.js';
 export {
