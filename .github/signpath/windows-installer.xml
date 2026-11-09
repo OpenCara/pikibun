@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration "windows-installer" (project "pikibun"), used by release-app.yml's Windows job: paste
+  this into SignPath when it changes. The workflow uploads the Inno Setup installer as a GitHub artifact (a zip), and
+  SignPath signs the installer in it. Pikibun.exe inside the installer is Native Shell's prebuilt runner, upstream's
+  binary, so it is not signed with the SignPath Foundation certificate. The version is the installer's four-part file
+  version (1.2.3.0), passed by the workflow.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="Pikibun-*-windows-x64-setup.exe" product-name="Pikibun" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
