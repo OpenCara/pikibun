@@ -65,16 +65,20 @@ export function Composer(props: {
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", rowGap: 4, columnGap: 8 }}>
         {/* The pickers wrap rather than scroll: what a message runs with (Auto-approve above all) must never be out of sight. */}
         <If when={props.tools || (props.attachments && !props.disabled)}>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, flexShrink: 1 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, flexShrink: 1,
+            ...(props.hint ? {} : { flexGrow: 1, flexBasis: 0, minWidth: 0 }) }}>
             <If when={props.attachments && !props.disabled ? props.attachments : null}>
               {attachments => <AttachButton attachments={attachments()} disabled={props.busy} />}
             </If>
             {props.tools}
           </View>
         </If>
-        {/* .composer-hint: what is left of the row; on a narrow one it wraps to its own line rather than truncating. */}
-        <Text style={{ flexGrow: 1, flexShrink: 1, flexBasis: 160, fontSize: text.caption, color: palette().muted }}>{props.hint}</Text>
-        <View style={{ flexDirection: "row", gap: 4, marginLeft: "auto" }}>
+        {/* .composer-hint: what is left of the row; on a narrow one it wraps to its own line rather than truncating. Without
+            one, the send button keeps to the pickers' last line. */}
+        <If when={props.hint}>
+          <Text style={{ flexGrow: 1, flexShrink: 1, flexBasis: 160, fontSize: text.caption, color: palette().muted }}>{props.hint}</Text>
+        </If>
+        <View style={{ flexDirection: "row", gap: 4, marginLeft: "auto", alignSelf: "flex-end" }}>
           <If when={props.onStop}>
             <BaseButton testID="composer-stop" accessibilityLabel={props.stopping ? "Stopping..." : "Stop"} disabled={props.stopping} onPress={() => props.onStop?.()}
               style={{ width: control.small, height: control.small, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: palette().borderStrong }}

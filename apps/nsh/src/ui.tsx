@@ -241,20 +241,22 @@ export function NavItem(props: { icon?: IconName; leading?: JSX.Element; label: 
 /**
  * A quiet button that shows a choice and opens its picker (.btn.ghost.sm with a chevron): the chat box's model,
  * reasoning and access. As a `Picker`'s trigger it has no `onPress` of its own (the menu opens); its chevron says it
- * opens one unless it is `disabled`. A `tone` tints it (Auto-approve's warning).
+ * opens one unless it is `disabled`. A `tone` tints it (Auto-approve's warning). `small` is the quieter size of a
+ * row of settings under a chat box (the new session's workspace, host and visibility).
  */
-export function Chip(props: { label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean }) {
+export function Chip(props: { label: string; icon?: IconName; onPress?: () => void; disabled?: boolean; tone?: Tone; testID?: string; bordered?: boolean; small?: boolean }) {
   const color = () => (props.tone ? palette().tones[props.tone].text : palette().muted);
   return (
     <BaseButton testID={props.testID} accessibilityLabel={props.label} disabled={props.disabled} onPress={() => props.onPress?.()}
-      style={{ flexDirection: "row", alignItems: "center", gap: props.icon ? 4 : 8, borderRadius: radius.small, paddingHorizontal: 12, height: control.small, flexShrink: 1, maxWidth: 260,
+      style={{ flexDirection: "row", alignItems: "center", gap: props.icon ? 4 : 8, borderRadius: radius.small, paddingHorizontal: props.small ? 8 : 12,
+        height: props.small ? control.xsmall : control.small, flexShrink: 1, maxWidth: 260,
         borderWidth: 1, borderColor: props.bordered ? palette().borderStrong : "transparent",
         backgroundColor: props.tone ? palette().tones[props.tone].background : "transparent" }}
       hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.8 }} disabledStyle={{ opacity: 0.5 }}>
       <If when={props.icon}>{name => <Icon name={name()} size={14} color={color()} />}</If>
-      <Text style={{ fontSize: text.body, color: color(), numberOfLines: 1, flexShrink: 1 }}>{props.label}</Text>
+      <Text style={{ fontSize: props.small ? text.small : text.body, color: color(), numberOfLines: 1, flexShrink: 1 }}>{props.label}</Text>
       <If when={!props.disabled}>
-        <Icon name="chevron-down" size={14} color={color()} />
+        <Icon name="chevron-down" size={props.small ? 12 : 14} color={color()} />
       </If>
     </BaseButton>
   );

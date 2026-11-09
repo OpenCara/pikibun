@@ -7,7 +7,7 @@ import {
 import { ChatOptionsBar, confirmAutoApprove } from "../components/ChatOptionsBar";
 import { Composer } from "../components/Composer";
 import { NewWorkspaceSheet } from "../components/NewWorkspaceSheet";
-import { HostCapabilities } from "../hosts";
+import { HostDetails, UnsandboxedHost } from "../hosts";
 import { useAppData } from "../lib/app-data";
 import { createAttachments, createFileOptions, encodeImages, handOverAttachments, imagesUnavailable, withFilesNote } from "../lib/attachments";
 import { session } from "../lib/auth";
@@ -16,8 +16,8 @@ import { randomId } from "../lib/format";
 import type { PageRoute } from "../lib/page";
 import { createAction, createResource } from "../lib/resource";
 import { OwnJoinRequests } from "../settings/join-requests";
-import { palette, text } from "../theme";
-import { Banner, Button, Chip, EmptyState, Feedback, Loading, Logo, Picker, Segmented, Small } from "../ui";
+import { control, palette, radius, text } from "../theme";
+import { Banner, Button, Chip, EmptyState, Feedback, IconButton, Loading, Logo, Note, Picker, Small } from "../ui";
 
 const TITLE_LIMIT = 80;
 
@@ -43,7 +43,7 @@ export function NewSessionForm(props: { onStarted: (sessionId: string) => void; 
   const creating = signal(false);
   const workspacePicker = (current: Workspace) => (
     <Picker<string> title="Workspace" value={current.id} onSelect={value => chosen.set(value)} placement="bottom"
-      trigger={<Chip testID="new-workspace" icon="users" label={current.name} disabled={workspaces().length < 2} />}
+      trigger={<Chip small testID="new-workspace" icon="users" label={current.name} disabled={workspaces().length < 2} />}
       options={workspaces().map(item => ({ value: item.id, label: item.name, hint: item.role, icon: "users" }))} />
   );
   return (
@@ -245,69 +245,92 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
 
   const hostPicker = () => (
     <Picker<string> title="Host" value={host()?.id} onSelect={value => choice.set(value)} placement="bottom"
-      trigger={<Chip testID="new-host" icon="monitor" label={host() ? host()!.name : loading() ? "Loading…" : "No host"} disabled={hosts().length < 2 || action.busy()}
+      trigger={<Chip small testID="new-host" icon="monitor" label={host() ? host()!.name : loading() ? "Loading…" : "No host"} disabled={hosts().length < 2 || action.busy()}
         tone={host() && !host()!.online ? "warning" : undefined} />}
       options={hosts().map(item => ({ value: item.id, label: item.name, icon: "monitor" as const, hint: `${item.ownerId === user.id ? "Your host" : `${item.ownerName}'s host`} · ${hostState(item)}` }))} />
   );
   /** Where the session runs, where its host takes sessions on it: the sandbox, or the host itself. */
   const environmentPicker = () => (
     <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} onSelect={value => onHost.set(value === "host")} placement="bottom"
-      trigger={<Chip testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} tone={runOnHost() ? "danger" : undefined} disabled={action.busy()} />}
+      trigger={<Chip small testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} tone={runOnHost() ? "danger" : undefined} disabled={action.busy()} />}
       options={[
         { value: "sandbox", label: "Sandbox", icon: "shield", hint: "Isolated, with the workspace's network access" },
         { value: "host", label: "On this host", icon: "server", hint: "No sandbox: runs as the host's user" },
       ]} />
   );
 
+  /** The session owner's acknowledgement that another member's host processes the session. */
+  const trustSwitch = (trustHost: ConnectorInfo) => (
+    <Switch testID="new-trust" checked={trustedHost() === trustHost.id} disabled={action.busy()}
+      onChange={event => trustedHost.set(event.checked ? trustHost.id : "")}
+      style={{ flexDirection: "row", alignItems: "flex-start", gap: 10, flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 }}
+      trackClass="w-10 h-6 rounded-full bg-muted checked:bg-primary" thumbClass="w-5 h-5 m-0.5 rounded-full bg-background checked:translate-x-4">
+      <Text style={{ flex: 1, minWidth: 0, fontSize: text.small, lineHeight: 19, color: palette().text }}>
+        {`I trust ${trustHost.ownerName}'s host (${trustHost.name}) to process this session's prompts and repository files, including private repository snapshots; its operator can read them. Repository access uses my GitHub identity, not the host owner's or a workspace admin's. I remain the session owner.`}
+      </Text>
+    </Switch>
+  );
+  /** Who can see the session: the workspace's members, or only those it is shared with. */
+  const visibilityPicker = () => (
+    <Picker<"workspace" | "private"> title="Who can see it" value={visibility()} onSelect={value => visibility.set(value)} placement="bottom"
+      trigger={<Chip small testID="new-visibility" icon={visibility() === "workspace" ? "users" : "lock"} label={visibility() === "workspace" ? "Workspace" : "Private"} disabled={action.busy()} />}
+      options={[
+        { value: "workspace", label: "Workspace", icon: "users", hint: "Members can view the transcript; collaborators can message it. Approving tool calls needs an explicit grant." },
+        { value: "private", label: "Private", icon: "lock", hint: "Only you, the workspace's owner and admins, and people you give a session role." },
+      ]} />
+  );
+  const repositoryCount = () => { const count = repositories()?.length ?? 0; return count ? count === 1 ? "1 repository" : `${count} repositories` : ""; };
+  const showDetails = signal(false);
+
   return (
     <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1, justifyContent: props.home ? "center" : "flex-start", paddingHorizontal: 20, paddingVertical: props.home ? 40 : 24 }}>
-      <View style={{ gap: 14, width: "100%", maxWidth: 720, alignSelf: "center" }}>
-        <View style={{ alignItems: props.home ? "center" : "flex-start", gap: 12, paddingBottom: 6 }}>
+      <View style={{ gap: 12, width: "100%", maxWidth: 720, alignSelf: "center" }}>
+        <View style={{ alignItems: props.home ? "center" : "flex-start", gap: 14, paddingBottom: 10 }}>
           <If when={props.home}><Logo size={40} /></If>
           <Text role="header" style={{ fontSize: props.home ? 26 : 22, fontWeight: "300", color: palette().text, textAlign: props.home ? "center" : "auto" }}>What should we work on?</Text>
-          <If when={props.go}>
-            <Button testID="new-workspace-settings" small variant="ghost" icon="settings" label="Workspace settings" onPress={() => props.go!(workspaceSettings)} />
-          </If>
         </View>
+        {/* In the box, what the message runs with, as in a session's chat box; under it, where the session lives. */}
         <Composer testID="new-message" sendTestID="new-start" value={content()} onChange={value => content.set(value)} onSubmit={() => void start()}
-          busy={action.busy()} ready={canStart()} minHeight={88} sendText="Start session" sendLabel="Start session" attachments={attachments}
-          placeholder={`Describe a task for ${props.workspace.name}, or start without one`}
+          busy={action.busy()} ready={canStart()} minHeight={72} sendLabel="Start session" attachments={attachments}
+          placeholder="Describe a task, or start without one"
           hint=""
           tools={
-            <>
-              {props.workspacePicker}
-              {hostPicker()}
-              <If when={hostSessions()}>{environmentPicker()}</If>
-              <ChatOptionsBar host={host()} value={selection()} onChange={value => { const current = host(); if (current) chat.set({ key: current.id, value }); }}
-                owner showAccess unsandboxed={unsandboxed()} data={data} />
-            </>
+            <ChatOptionsBar host={host()} value={selection()} onChange={value => { const current = host(); if (current) chat.set({ key: current.id, value }); }}
+              owner showAccess unsandboxed={unsandboxed()} data={data} />
           } />
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10, paddingHorizontal: 4 }}>
-          <Segmented testID="new-visibility" value={visibility()} onChange={value => visibility.set(value)}
-            options={[{ value: "workspace", label: "Workspace", icon: "users" }, { value: "private", label: "Private", icon: "lock" }]} />
-          <Text style={{ flex: 1, minWidth: 220, fontSize: text.caption, lineHeight: 17, color: palette().muted }}>
-            {visibility() === "workspace"
-              ? "Workspace members can view prompts, output, tool results, and repository content shown in the transcript. Collaborators can also message it, and the workspace's owner and admins manage it; approving tool calls needs an explicit grant."
-              : "Workspace membership alone does not give access to a private session: only the workspace's owner and admins, who manage every session, and people you give a session role open it."}
-          </Text>
+        <View testID="new-context" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", rowGap: 4, columnGap: 2, paddingHorizontal: 4 }}>
+          {props.workspacePicker}
+          {hostPicker()}
+          <If when={hostSessions()}>{environmentPicker()}</If>
+          {visibilityPicker()}
+          {/* What the session starts from, and the way to the host's details and the workspace's settings: together, at the end. */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginLeft: "auto" }}>
+            <If when={repositoryCount()}>
+              {count => <Text style={{ fontSize: text.small, color: palette().faint, paddingHorizontal: 8 }}>{count()}</Text>}
+            </If>
+            <If when={host()}>
+              <Chip small testID="new-host-details" label="Host details" onPress={() => showDetails.update(open => !open)} />
+            </If>
+            <If when={props.go}>
+              <IconButton testID="new-workspace-settings" icon="settings" label="Workspace settings" size={control.xsmall} onPress={() => props.go!(workspaceSettings)} />
+            </If>
+          </View>
         </View>
+        <If when={showDetails() && !action.busy() ? host() : undefined}>
+          {current => (
+            <View testID="new-host-details-panel" style={{ gap: 10, padding: 16, borderWidth: 1, borderColor: palette().border, borderRadius: radius.large }}>
+              <Note>{`${current().name}: ${hostState(current())} · ${foreign() ? `Hosted by ${current().ownerName}` : "Your host"}, ${current().workspaceIds.includes(props.workspace.id) ? "shared with this workspace" : "private"}${model() ? ` · ${model()!.name}` : ""}.`}</Note>
+              <HostDetails connector={current()} />
+            </View>
+          )}
+        </If>
         <If when={blocking()}>
           {alert => (
+            /* The trust switch goes with the actions, which lay out as a row of their own, so its words wrap there. */
             <Banner tone={alert().tone} title={alert().title}
-              actions={alert().retry ? <Button small variant="outline" label="Retry" onPress={alert().retry!} /> : alert().refresh ? refreshHost() : alert().action}>
+              actions={alert().trust ? trustSwitch(alert().trust!) : alert().retry ? <Button small variant="outline" label="Retry" onPress={alert().retry!} /> : alert().refresh ? refreshHost() : alert().action}>
               {/* The reason changes in place (no host yet, then no sources once those load): its words follow it. */}
-              <If when={alert().trust} else={<Text>{alert().text}</Text>}>
-                {trustHost => (
-                  <Switch testID="new-trust" checked={trustedHost() === trustHost().id} disabled={action.busy()}
-                    onChange={event => trustedHost.set(event.checked ? trustHost().id : "")}
-                    style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}
-                    trackClass="w-10 h-6 rounded-full bg-muted checked:bg-primary" thumbClass="w-5 h-5 m-0.5 rounded-full bg-background checked:translate-x-4">
-                    <Text style={{ flex: 1, fontSize: text.small, lineHeight: 19, color: palette().text }}>
-                      {`I trust ${trustHost().ownerName}'s host (${trustHost().name}) to process this session's prompts and repository files, including private repository snapshots; its operator can read them. Repository access uses my GitHub identity, not the host owner's or a workspace admin's. I remain the session owner.`}
-                    </Text>
-                  </Switch>
-                )}
-              </If>
+              {alert().trust ? undefined : <Text>{alert().text}</Text>}
             </Banner>
           )}
         </If>
@@ -320,16 +343,11 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
             </Banner>
           )}
         </If>
-        <If when={host() && model()}>
-          <Small>
-            {`${hostState(host()!)} · ${host()!.name} · ${model()?.name ?? ""} · ${foreign() ? `Hosted by ${host()!.ownerName}` : "Your host"}, ${host()!.workspaceIds.includes(props.workspace.id) ? "shared with this workspace" : "private"}${repositories()?.length ? ` · ${repositories()!.length === 1 ? "1 repository" : `${repositories()!.length} repositories`}` : ""}`}
-          </Small>
-        </If>
+        <If when={host() && !action.busy() ? host() : undefined}>{current => <UnsandboxedHost connector={current()} />}</If>
         <Feedback error={action.error()} />
         <If when={action.busy()}>
           <Small>Resolving repository commits and downloading snapshots to the Pi host's private session cache. The agent starts once every repository is ready.</Small>
         </If>
-        <If when={host() && !action.busy() ? host() : undefined}>{current => <HostCapabilities connector={current()} />}</If>
       </View>
     </Scroll>
   );
