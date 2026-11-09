@@ -51,8 +51,8 @@ type Shown =
   | { kind: "user"; text: string; meta: string }
   | { kind: "assistant"; prose: string; tool: { icon: IconName; name: string; summary: string; meta: string; text: string } | null; meta: string };
 
-/** What an entry shows, as the Expo app's TranscriptEntry decided it. */
-function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string): Shown {
+/** What an entry shows, as the Expo app's TranscriptEntry decided it. `shared`: a share link's, whose readers get no advice. */
+function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string, shared = false): Shown {
   const actor = entry.actorId ? name(entry.actorId, true) : "";
   const { prose, calls } = entry.role === "assistant" ? splitToolCalls(entry.text) : { prose: entry.text, calls: [] };
   const marks = autoApprovedSuffix(entry.autoApproved);
@@ -75,8 +75,8 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
   }
   if (entry.error) {
     return entry.error.compaction
-      ? { kind: "error", title: COMPACTION_FAILED_TITLE, text: compactionFailureText(entry.error.compaction), by: actor }
-      : { kind: "error", title: "Model request failed", text: modelFailure(entry.error), by: actor };
+      ? { kind: "error", title: COMPACTION_FAILED_TITLE, text: compactionFailureText(entry.error.compaction, { advice: !shared }), by: actor }
+      : { kind: "error", title: "Model request failed", text: modelFailure(entry.error, { advice: !shared }), by: actor };
   }
   if (entry.role === "user") return { kind: "user", text: entry.text, meta: actor && entry.actorId !== userId ? actor : "" };
   const took = entry.durationMs !== undefined && entry.durationMs >= 1000 ? formatDuration(entry.durationMs) : "";
@@ -145,9 +145,9 @@ function Footer(props: { entry: EntryView; meta: string; onActions?: (entry: Ent
  * entries are one quiet line each. List rows are recycled, so `entry` changes under a row: everything here reads it in
  * bindings, and what is expanded is kept by entry id outside the row.
  */
-export function TranscriptEntry(props: { entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; onActions?: (entry: EntryView) => void }) {
+export function TranscriptEntry(props: { entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; onActions?: (entry: EntryView) => void; shared?: boolean }) {
   const name = createUsername();
-  const shown = computed(() => describe(props.entry, props.userId, name));
+  const shown = computed(() => describe(props.entry, props.userId, name, props.shared));
   const open = () => props.expanded(props.entry.id);
   const toggle = () => props.toggle(props.entry.id);
   // Every entry sits 16 points from the next, as the web app's transcript spaces them; consecutive tool lines closer.

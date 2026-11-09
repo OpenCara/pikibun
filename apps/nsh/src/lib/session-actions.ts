@@ -25,6 +25,8 @@ export interface SessionActions {
   backupsOff: Accessor<boolean>;
   backupsPending: Accessor<boolean>;
   conversationOnlyOff: Accessor<boolean>;
+  /** Backups need an idle session whose live state is confirmed. */
+  backupBlocked: Accessor<boolean>;
   changeVisibility: () => void;
   createBackup: (options?: { conversationOnly?: boolean }) => void;
   rename: (title: string) => Promise<boolean>;
@@ -126,7 +128,7 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
     }, "Session files packed");
   }
   return {
-    action, backup, backups, backupsOff, backupsPending, conversationOnlyOff,
+    action, backup, backups, backupsOff, backupsPending, conversationOnlyOff, backupBlocked: options.backupBlocked,
     changeVisibility: () => void changeVisibility(), createBackup: value => void createBackup(value), rename,
     archive: () => void archive(), unarchive, pack: () => void pack(),
   };

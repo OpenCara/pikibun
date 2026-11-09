@@ -6,11 +6,16 @@ import {
 } from "../shared";
 import { ChatOptionsBar, confirmAutoApprove } from "../components/ChatOptionsBar";
 import { Composer } from "../components/Composer";
+import { NewWorkspaceSheet } from "../components/NewWorkspaceSheet";
+import { HostCapabilities } from "../hosts";
 import { useAppData } from "../lib/app-data";
+import { createAttachments, createFileOptions, encodeImages, handOverAttachments, imagesUnavailable, withFilesNote } from "../lib/attachments";
 import { session } from "../lib/auth";
-import { saveDraft } from "../lib/drafts";
+import { createDraft, forgetSentDraft, newSessionDraftId, saveDraft } from "../lib/drafts";
 import { randomId } from "../lib/format";
+import type { PageRoute } from "../lib/page";
 import { createAction, createResource } from "../lib/resource";
+import { OwnJoinRequests } from "../settings/join-requests";
 import { palette, text } from "../theme";
 import { Banner, Button, Chip, EmptyState, Feedback, Loading, Logo, Picker, Segmented, Small } from "../ui";
 
@@ -26,14 +31,16 @@ const sameModel = (a: { provider: string; modelId: string }, b: { provider: stri
 /**
  * What should we work on: a chat box to describe the task, with the workspace, host, model and access to start it with
  * around it, like the web's new-session screen. `home` is the wide layout's home beside the sidebar, centered there.
+ * `go` follows its links to settings (a workspace's sources, pairing a host).
  */
-export function NewSessionForm(props: { onStarted: (sessionId: string) => void; workspaceId?: string; home?: boolean }) {
+export function NewSessionForm(props: { onStarted: (sessionId: string) => void; workspaceId?: string; home?: boolean; go?: (route: PageRoute) => void }) {
   const data = useAppData();
   // A viewer follows a workspace's sessions but starts none there.
   const workspaces = () => data.workspaces().filter(item => canCreateSessions(item.role));
   // A link to a workspace's new session (#/w/<id>/new) starts in that workspace.
   const chosen = signal(props.workspaceId ?? "");
   const workspace = () => workspaces().find(item => item.id === (chosen() || data.lastWorkspaceId())) ?? workspaces()[0];
+  const creating = signal(false);
   const workspacePicker = (current: Workspace) => (
     <Picker<string> title="Workspace" value={current.id} onSelect={value => chosen.set(value)} placement="bottom"
       trigger={<Chip testID="new-workspace" icon="users" label={current.name} disabled={workspaces().length < 2} />}
@@ -50,14 +57,29 @@ export function NewSessionForm(props: { onStarted: (sessionId: string) => void; 
         <If when={workspace()}
           else={
             <If when={data.workspaces().length > 0}
-              else={<EmptyState title="No workspace yet">Create a workspace, add a repository and pair a host to start your first session.</EmptyState>}>
+              else={
+                // No workspace yet, as the web app's home: create one, or follow an invite link to join one.
+                <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1, justifyContent: "center", padding: 24 }}>
+                  <View style={{ gap: 14, width: "100%", maxWidth: 520, alignSelf: "center", alignItems: "center" }}>
+                    <Logo size={40} />
+                    <Text role="header" style={{ fontSize: text.heading, fontWeight: "300", color: palette().text, textAlign: "center" }}>Welcome to Pikibun</Text>
+                    <Text style={{ fontSize: text.reading, lineHeight: 22, color: palette().muted, textAlign: "center" }}>
+                      Create a workspace for your team, add a repository and pair a host to start your first session.
+                    </Text>
+                    <Button testID="home-new-workspace" variant="primary" large label="New workspace" onPress={() => creating.set(true)} />
+                    <Small center>Joining a team? Open the invite link an owner or admin shared, or ask them to add you with your User ID from Settings.</Small>
+                    <View style={{ alignSelf: "stretch" }}><OwnJoinRequests /></View>
+                  </View>
+                  <NewWorkspaceSheet open={creating()} onClose={() => creating.set(false)} created={created => chosen.set(created.id)} />
+                </Scroll>
+              }>
               <EmptyState title="Viewer only">You're a viewer in every workspace you belong to, so you can follow their shared sessions but not start one. Ask a workspace owner or admin for the member role.</EmptyState>
             </If>
           }>
           {current => (
             /* Keyed so host, trust and repository state never carry across workspaces. */
             <Each of={[current()]} key={item => item.id}>
-              {item => <Form workspace={item()} onStarted={props.onStarted} home={props.home} workspacePicker={workspacePicker(item())} />}
+              {item => <Form workspace={item()} onStarted={props.onStarted} home={props.home} workspacePicker={workspacePicker(item())} go={props.go} />}
             </Each>
           )}
         </If>
@@ -66,7 +88,7 @@ export function NewSessionForm(props: { onStarted: (sessionId: string) => void; 
   );
 }
 
-function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => void; home?: boolean; workspacePicker: JSX.Element }) {
+function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => void; home?: boolean; workspacePicker: JSX.Element; go?: (route: PageRoute) => void }) {
   const { user } = untracked(session);
   const data = useAppData();
   const askAutoApprove = confirmAutoApprove(data);
@@ -76,9 +98,14 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const connections = createResource<{ connectors: ConnectorInfo[] }>(() => `${workspacePath}/connectors`, 10_000);
   const repos = createResource<WorkspaceRepositoryList>(() => `${workspacePath}/repositories`);
   const choice = signal("");
-  const content = signal("");
+  // Remembered per workspace, so switching to a session and back finds the unsent first message where it was.
+  const draftId = newSessionDraftId(props.workspace.id);
+  const content = createDraft(draftId);
   const visibility = signal<"workspace" | "private">("workspace");
   const trustedHost = signal("");
+  // Where the session runs: in the sandbox, or directly on the host, which only its owner, or a member they granted
+  // that, chooses where it accepts that.
+  const onHost = signal(false);
   const action = createAction();
 
   const modelList = () => models.data()?.models;
@@ -116,42 +143,72 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const sourceCount = () => { const list = repos.data(); return list ? list.sources ?? list.repositories.length : 0; };
   const repositoriesReady = () => Boolean(repositories() && !repos.error() && !repos.loading() && (sourceCount() || !repositoriesRequired()));
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
+  // The listing offers it to the host's owner, and to members whose grant in this workspace includes it.
+  const hostSessions = () => Boolean(host()?.hostSessions);
+  const runOnHost = () => hostSessions() && onHost();
+  const unsandboxed = () => Boolean(host()?.capabilities.unsandboxed || runOnHost());
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
-  // A trust acknowledgement covers one host against one repository set.
+  // The first message's images and files, as a session's chat box takes them.
+  const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
+  // A trust acknowledgement covers one host against one repository set; each host starts in the sandbox, running on one
+  // being chosen for it, never carried over from another. Both go only when what they were given for changes: the host
+  // listing is fetched again every 10 seconds, with new objects for the same host.
+  let trustKey: string | undefined;
   effect(() => {
-    host()?.id;
-    host()?.ownerId;
-    repositories();
-    trustedHost.set("");
+    const key = JSON.stringify([host()?.id ?? null, host()?.ownerId ?? null, (repositories() ?? []).map(repository => repository.id)]);
+    if (trustKey !== undefined && key !== trustKey) trustedHost.set("");
+    trustKey = key;
+  });
+  let environmentHost: string | null | undefined;
+  effect(() => {
+    const id = host()?.id ?? null;
+    if (environmentHost !== undefined && id !== environmentHost) onHost.set(false);
+    environmentHost = id;
   });
 
   async function start() {
     const current = host();
     const picked = model();
     if (!canStart() || !picked || !current || confirming) return;
-    const message = content().trim();
+    const typed = content();
+    const message = typed.trim();
+    const pasted = untracked(attachments.images);
+    const attached = untracked(attachments.files);
     const options = chatOptionsBody(current, selection(), "submit");
     if (mustConfirmAutoApprove(options, data.autoApproveConfirmed())) {
       confirming = true;
-      const confirmed = await askAutoApprove(current, Boolean(current.capabilities.unsandboxed)).finally(() => { confirming = false; });
+      const confirmed = await askAutoApprove(current, unsandboxed()).finally(() => { confirming = false; });
       if (!confirmed) { chat.set({ key: current.id, value: { ...selection(), access: "approval" } }); return; }
     }
+    const hostEnvironment = runOnHost();
     void action.run(async () => {
       const { api } = session();
+      // Before the session exists: an image that can't be read stops the start instead of leaving a session behind.
+      const images = await encodeImages(pasted);
       const result = await api<{ session: SessionRecord }>("/api/sessions", { method: "POST", body: {
-        workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(content(), picked.name), visibility: visibility(), ...(foreign() ? { trustedConnectorId: current.id } : {}),
+        workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name), visibility: visibility(),
+        ...(foreign() ? { trustedConnectorId: current.id } : {}), ...(hostEnvironment ? { hostEnvironment: true } : {}),
       } });
       const sessionId = result.session.id;
       data.setLastWorkspaceId(props.workspace.id);
       data.rememberChat(current, selection());
-      if (message) {
+      if (message || images.length || attached.length) {
         try {
-          await api(`/api/sessions/${segment(sessionId)}/submit`, { method: "POST", body: { content: message, requestId: randomId(), ...(options ? { options } : {}) } });
+          // Files go into the new session's worktree first, and the message says where.
+          const note = await attachments.upload(sessionId, attached);
+          await api(`/api/sessions/${segment(sessionId)}/submit`, { method: "POST", body: {
+            content: withFilesNote(message, note), requestId: randomId(), ...(options ? { options } : {}), ...(images.length ? { images } : {}),
+          } });
         } catch {
-          // The session exists; keep the unsent text for its chat box instead of failing the start.
+          // The session exists; keep the unsent text, images and files for its chat box instead of failing the start.
           saveDraft(sessionId, message);
+          handOverAttachments(sessionId, pasted, attached);
         }
       }
+      // The session took the message (or its own draft holds it now): this screen starts empty next time, unless the text
+      // was edited meanwhile.
+      forgetSentDraft(draftId, typed);
+      attachments.sent(pasted, attached);
       data.refreshSessions();
       props.onStarted(sessionId);
     });
@@ -159,16 +216,24 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
 
   const loading = () => models.loading() || connections.loading();
   const refreshHost = () => <Button small variant="outline" label="Refresh host status" onPress={connections.refresh} />;
+  const settings = (route: PageRoute, label: string, testID: string) => (props.go ? <Button testID={testID} small variant="outline" label={label} onPress={() => props.go!(route)} /> : undefined);
+  const workspaceSettings: PageRoute = { name: "settings", section: "workspaces", id: props.workspace.id };
   const hostState = (item: ConnectorInfo) => item.revokedAt ? "Revoked" : !item.online ? "Offline" : item.capabilities.unsandboxed ? "Unsandboxed"
     : !item.capabilities.sandbox ? "Sandbox unverified" : "Online";
   /** What keeps the session from starting, the first thing first. */
-  const blocking = (): { tone: "danger" | "warning" | "info"; title: string; text: string; retry?: () => void; refresh?: boolean; trust?: ConnectorInfo } | null => {
+  const blocking = (): { tone: "danger" | "warning" | "info"; title: string; text: string; retry?: () => void; refresh?: boolean; trust?: ConnectorInfo; action?: JSX.Element } | null => {
     if (repos.error()) return { tone: "warning", title: "Unable to load sources", text: repos.error(), retry: repos.refresh };
-    if (repositories() && !sourceCount() && repositoriesRequired()) return { tone: "warning", title: "No sources in this workspace", text: "Sessions need at least one source, such as a repository or a Notion page. Workspace owners and admins add them in workspace settings on the web." };
+    if (repositories() && !sourceCount() && repositoriesRequired()) {
+      return { tone: "warning", title: "No sources in this workspace", text: "Sessions need at least one source, such as a repository or a Notion page. Workspace owners and admins add them in workspace settings.",
+        action: settings(workspaceSettings, "Add a source", "new-add-source") };
+    }
     if (models.error()) return { tone: "danger", title: "Unable to load models", text: models.error(), retry: models.refresh };
     if (connections.error()) return { tone: "warning", title: "Unable to check host", text: connections.error(), refresh: true };
     if (loading() || !modelList() || !connectors()) return null;
-    if (!hosts().length) return { tone: "info", title: "No host to chat with yet", text: "Pair your own Pi to chat with its models, or ask a workspace member to share their host here." };
+    if (!hosts().length) {
+      return { tone: "info", title: "No host to chat with yet", text: "Pair your own Pi to chat with its models, or ask a workspace member to share their host here.",
+        action: settings({ name: "settings", section: "hosts" }, "Pair a host", "new-pair-host") };
+    }
     const current = host();
     if (!current) return null;
     if (!model()) return { tone: "warning", title: `No model on ${current.name}`, text: `${current.name} offers no model you can use in this workspace.`, refresh: true };
@@ -184,6 +249,15 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         tone={host() && !host()!.online ? "warning" : undefined} />}
       options={hosts().map(item => ({ value: item.id, label: item.name, icon: "monitor" as const, hint: `${item.ownerId === user.id ? "Your host" : `${item.ownerName}'s host`} · ${hostState(item)}` }))} />
   );
+  /** Where the session runs, where its host takes sessions on it: the sandbox, or the host itself. */
+  const environmentPicker = () => (
+    <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} onSelect={value => onHost.set(value === "host")} placement="bottom"
+      trigger={<Chip testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} tone={runOnHost() ? "danger" : undefined} disabled={action.busy()} />}
+      options={[
+        { value: "sandbox", label: "Sandbox", icon: "shield", hint: "Isolated, with the workspace's network access" },
+        { value: "host", label: "On this host", icon: "server", hint: "No sandbox: runs as the host's user" },
+      ]} />
+  );
 
   return (
     <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1, justifyContent: props.home ? "center" : "flex-start", paddingHorizontal: 20, paddingVertical: props.home ? 40 : 24 }}>
@@ -191,17 +265,21 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         <View style={{ alignItems: props.home ? "center" : "flex-start", gap: 12, paddingBottom: 6 }}>
           <If when={props.home}><Logo size={40} /></If>
           <Text role="header" style={{ fontSize: props.home ? 26 : 22, fontWeight: "300", color: palette().text, textAlign: props.home ? "center" : "auto" }}>What should we work on?</Text>
+          <If when={props.go}>
+            <Button testID="new-workspace-settings" small variant="ghost" icon="settings" label="Workspace settings" onPress={() => props.go!(workspaceSettings)} />
+          </If>
         </View>
         <Composer testID="new-message" sendTestID="new-start" value={content()} onChange={value => content.set(value)} onSubmit={() => void start()}
-          busy={action.busy()} ready={canStart()} minHeight={88} sendText="Start session" sendLabel="Start session"
+          busy={action.busy()} ready={canStart()} minHeight={88} sendText="Start session" sendLabel="Start session" attachments={attachments}
           placeholder={`Describe a task for ${props.workspace.name}, or start without one`}
           hint=""
           tools={
             <>
               {props.workspacePicker}
               {hostPicker()}
+              <If when={hostSessions()}>{environmentPicker()}</If>
               <ChatOptionsBar host={host()} value={selection()} onChange={value => { const current = host(); if (current) chat.set({ key: current.id, value }); }}
-                owner showAccess unsandboxed={Boolean(host()?.capabilities.unsandboxed)} data={data} />
+                owner showAccess unsandboxed={unsandboxed()} data={data} />
             </>
           } />
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10, paddingHorizontal: 4 }}>
@@ -216,8 +294,9 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         <If when={blocking()}>
           {alert => (
             <Banner tone={alert().tone} title={alert().title}
-              actions={alert().retry ? <Button small variant="outline" label="Retry" onPress={alert().retry!} /> : alert().refresh ? refreshHost() : undefined}>
-              <If when={alert().trust} else={alert().text}>
+              actions={alert().retry ? <Button small variant="outline" label="Retry" onPress={alert().retry!} /> : alert().refresh ? refreshHost() : alert().action}>
+              {/* The reason changes in place (no host yet, then no sources once those load): its words follow it. */}
+              <If when={alert().trust} else={<Text>{alert().text}</Text>}>
                 {trustHost => (
                   <Switch testID="new-trust" checked={trustedHost() === trustHost().id} disabled={action.busy()}
                     onChange={event => trustedHost.set(event.checked ? trustHost().id : "")}
@@ -232,8 +311,14 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
             </Banner>
           )}
         </If>
-        <If when={host()?.capabilities.unsandboxed}>
-          <Banner tone="danger" title="Unsandboxed host">Agent work runs directly on the owner's machine without isolation: approved commands and commits run as their user, with access to their files, credentials and network, and no resource limits.</Banner>
+        <If when={runOnHost() ? host() : undefined}>
+          {current => (
+            <Banner testID="new-on-host" tone="warning" title={foreign() ? `Runs on ${current().ownerName}'s host, without the sandbox` : "Runs on your host, without the sandbox"}>
+              {`${foreign() ? `${current().ownerName} granted you sessions on ${current().name}. ` : ""}Its commands run on ${current().name} as its user, with its files, credentials, network and GPU, and no resource limits; the workspace's network access doesn't apply. Approve them as you would commands you run yourself: ${foreign()
+                ? `people you share the session with can decide them only if they also hold host commands on ${current().name}.`
+                : "people you share the session with can't decide them unless you granted them host commands."}`}
+            </Banner>
+          )}
         </If>
         <If when={host() && model()}>
           <Small>
@@ -244,6 +329,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         <If when={action.busy()}>
           <Small>Resolving repository commits and downloading snapshots to the Pi host's private session cache. The agent starts once every repository is ready.</Small>
         </If>
+        <If when={host() && !action.busy() ? host() : undefined}>{current => <HostCapabilities connector={current()} />}</If>
       </View>
     </Scroll>
   );

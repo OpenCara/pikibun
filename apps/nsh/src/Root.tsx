@@ -1,8 +1,12 @@
 import { computed, effect, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
+import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
 import { auth, restore, session } from "./lib/auth";
+import { createNotificationDelivery } from "./lib/notifications";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
+import { usesBrowserSession } from "./lib/server";
+import { takeRememberedInvite, takeReturn } from "./lib/sign-in-memory";
 import { JoinWorkspace } from "./screens/JoinWorkspace";
 import { NewSessionForm } from "./screens/NewSession";
 import { OpenSession } from "./screens/OpenSession";
@@ -43,13 +47,18 @@ export function Root() {
     const route = pageRoute();
     return route.name === "shared" ? route.token : null;
   };
+  /** An invite link opened while signed out: signing in asks to join its workspace. */
+  const invite = () => {
+    const route = pageRoute();
+    return route.name === "join" ? route.token : undefined;
+  };
   return (
     <View style={{ flex: 1, backgroundColor: palette().background }}>
       {/* A share link needs no sign-in: its token is the access. */}
       <If when={shared()}
         else={
           <If when={auth().status !== "loading"} else={<Loading />}>
-            <If when={signedIn()} else={<SignIn />}>
+            <If when={signedIn()} else={<SignIn inviteToken={invite()} />}>
               {/* A new GitHub account chooses its username before anything else; the route waits, invite links included. */}
               <If when={!(auth().status === "signedIn" && (auth() as { user: { usernameRequired?: boolean } }).user.usernameRequired)} else={<UsernameSetup />}>
                 <Shell />
@@ -66,6 +75,8 @@ export function Root() {
 /** Everything behind sign-in. Created per sign-in, so lists never carry over to another account. */
 function Shell() {
   const data = createAppData();
+  // Where notifications are on for this browser: shown while the app is open, and pushes kept on this sign-in.
+  createNotificationDelivery(untracked(session).user.id);
   const nav = createNavStack<Route>([{ name: "sessions" }]);
   // A size of zero is no layout to follow (a minimized window; NSH 0.4's headless engine also reports 0×0 after an
   // appearance change): the last real width stands.
@@ -87,6 +98,8 @@ function Shell() {
    * replacing the page slid all of Settings in again, and swallowed a Back pressed while it did.
    */
   const settingsAt = signal<{ section?: string; id?: string }>({});
+  /** The New workspace sheet, from the sidebar or the session list; once created, a session starts in it. */
+  const creatingWorkspace = signal(false);
 
   function openSession(id: string) {
     if (wide()) {
@@ -145,6 +158,15 @@ function Shell() {
     const route = pageRoute();
     untracked(() => go(route));
   });
+  // A browser sign-in started from an invite link returns to the app's root; pick the invite up where it left off. So
+  // does one started again for what needs a recent GitHub sign-in, such as setting a password: back to where it was.
+  if (usesBrowserSession) {
+    void Promise.all([takeRememberedInvite(), takeReturn()]).then(([token, back]) => {
+      const at = untracked(pageRoute);
+      if (token && at.name !== "join") go({ name: "join", token });
+      else if (back && at.name === "home") go(back);
+    });
+  }
   // The address follows where the app is, so it can be shared or bookmarked.
   effect(() => {
     const top = nav.routes().at(-1);
@@ -186,6 +208,7 @@ function Shell() {
   });
 
   const back = () => nav.pop();
+  const workspaceSettings = (workspaceId: string) => openSettings("workspaces", workspaceId);
   const listActions = () => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
       <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
@@ -204,18 +227,20 @@ function Shell() {
                 <If when={wide()}
                   else={
                     <NavPage title="Sessions" {...headerProps({ title: "Sessions", leading: drawsHeaders ? <Logo size={22} /> : settingsButton(), actions: drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions() })}>
-                      <SessionList onOpen={openSession} onNew={() => startNew()} />
+                      <SessionList onOpen={openSession} onNew={() => startNew()} onNewIn={startNew} onWorkspaceSettings={workspaceSettings}
+                        onNewWorkspace={() => creatingWorkspace.set(true)} />
                     </NavPage>
                   }>
                   <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
                     <View style={{ flex: 1, flexDirection: "row" }}>
                       <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()}
-                        onOpenById={() => nav.push({ name: "open" })} onAll={() => nav.push({ name: "all-sessions" })} onSettings={section => openSettings(section)} />
+                        onOpenById={() => nav.push({ name: "open" })} onAll={() => nav.push({ name: "all-sessions" })} onSettings={section => openSettings(section)}
+                        onNewIn={startNew} onWorkspaceSettings={workspaceSettings} onNewWorkspace={() => creatingWorkspace.set(true)} />
                       <View style={{ flex: 1, backgroundColor: palette().background }}>
                         <If when={selected()}
                           else={
                             <Each of={[homeKey()]} key={value => String(value)}>
-                              {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} />}
+                              {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} go={go} />}
                             </Each>
                           }>
                           {/* Keyed by id: another session is another view, with its own stream, drafts and picks. */}
@@ -233,7 +258,7 @@ function Shell() {
             case "new":
               return (
                 <NavPage title="New session" {...headerProps({ title: "New session", onBack: back })}>
-                  <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} />
+                  <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} go={go} />
                 </NavPage>
               );
             case "all-sessions":
@@ -271,6 +296,7 @@ function Shell() {
           }
         }}
       </NavStack>
+      <NewWorkspaceSheet open={creatingWorkspace()} onClose={() => creatingWorkspace.set(false)} created={created => startNew(created.id)} />
     </AppDataContext.Provider>
   );
 }
@@ -279,7 +305,10 @@ function Shell() {
  * The wide layout's sidebar, as the web app's (Sidebar.tsx): the app, a new session and opening one by ID; every session
  * by workspace; and the signed-in person, hosts and settings along its foot.
  */
-function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void }) {
+function Sidebar(props: {
+  selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void;
+  onNewIn: (workspaceId: string) => void; onWorkspaceSettings: (workspaceId: string) => void; onNewWorkspace: () => void;
+}) {
   const user = () => session().user;
   return (
     <View testID="sidebar" style={{ width: layout.sidebar, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
@@ -289,7 +318,8 @@ function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id:
         <NavItem testID="all-sessions" icon="history" label="Sessions" onPress={props.onAll} />
         <NavItem testID="open-by-id" icon="hash" label="Open by ID" onPress={props.onOpenById} />
       </View>
-      <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} />
+      <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} onNewIn={props.onNewIn} onWorkspaceSettings={props.onWorkspaceSettings}
+        onNewWorkspace={props.onNewWorkspace} />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>
         <NavItem testID="open-profile" style={{ flex: 1 }} label={user().username || user().githubLogin ? `@${user().username || user().githubLogin}` : user().displayName}
           leading={<IdentityBadge name={user().displayName || user().githubLogin || "?"} id={user().id} />} onPress={() => props.onSettings("profile")} />

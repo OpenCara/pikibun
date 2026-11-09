@@ -132,6 +132,9 @@ export async function buildWeb(out = path.join(repository, "dist", "web")) {
   if (!site || !existsSync(path.join(staging, site, "index.html"))) throw new Error(`nsh package wrote no site into ${staging}`);
   // Firefox and older Safari: the import map before the first module (longbridge/nsh#582).
   fixWebSite(path.join(staging, site));
+  // The service worker that shows the notifications the server pushes, and their icon, as the React web app serves them
+  // (its public/ directory): notifications on this device work the same in both web clients.
+  for (const name of ["sw.js", "favicon.svg"]) cpSync(path.join(repository, "apps", "web", "public", name), path.join(staging, site, name));
   rmSync(out, { recursive: true, force: true });
   mkdirSync(path.dirname(out), { recursive: true });
   cpSync(path.join(staging, site), out, { recursive: true });

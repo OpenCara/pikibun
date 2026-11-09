@@ -405,7 +405,7 @@ function ConnectionsSection(props: Part) {
   const open = (id: string) => props.go({ name: "session", sessionId: id });
   return (
     <If when={data() && (data()!.parent || data()!.children.length || data()!.messages.length)}>
-      <Section title="Connected sessions" info="Agents work with other sessions through the sessions tool, always as the person whose message they work on, with that person's own permissions there. Pikibun records each message here.">
+      <Section title="Connected sessions" info="Agents work with other sessions through the sessions tool, always as the person whose message they work on, with that person's own permissions there. Messages they send name this session and their sender in their first line; Pikibun also records each one here. Approvals in another session are decided only by people there.">
         <If when={data()?.parent}>{parent => <Row leading={icon("link")} title={parent().title} hint={`Started this session · ${parent().status === "archived" ? "Archived" : parent().activity ?? parent().status}`} chevron onPress={() => open(parent().id)} />}</If>
         <Each of={data()?.children ?? []} key={child => child.id}>
           {child => <Row leading={icon("link")} title={child().title} hint={`Started by this session · ${child().status === "archived" ? "Archived" : child().activity ?? child().status}`} chevron onPress={() => open(child().id)} />}
@@ -436,7 +436,7 @@ function BackupsSection(props: Part) {
   const actions = props.actions;
   const listing = () => actions.backups.data();
   const off = () => actions.backupsOff();
-  const blocked = () => !props.view() || props.view()!.busy;
+  const blocked = () => actions.backupBlocked();
   return (
     <Section title="Backups" testID="panel-backups" info={<View style={{ gap: 8 }}>
       <Note>Only the session owner can create, download or restore backups. Backups need the session to be idle.</Note>
@@ -451,7 +451,8 @@ function BackupsSection(props: Part) {
     </View>}>
       <If when={blocked() && !off()}><Row title="Backup unavailable right now" hint="Unavailable while work is queued or running, or the live state can't be confirmed" /></If>
       <If when={actions.backup()}>
-        {backup => <Row leading={icon("check")} title={`Backup created ${timestamp(backup().createdAt)}`} hint={`${backup().size} bytes${backupLocationLabel(backup())} · ID ${backup().id}`} />}
+        {backup => <Row leading={icon("check")} title={`Backup created ${timestamp(backup().createdAt)}`} hint={`${backup().size} bytes${backupLocationLabel(backup())} · ID ${backup().id} · SHA-256 ${backup().sha256}`}
+          trailing={opensServerPages ? <Button small variant="outline" label="Download" onPress={() => openServerLink(`/api/sessions/${segment(props.current.id)}/backups/${segment(backup().id)}/download`)} /> : undefined} />}
       </If>
       <If when={!actions.backups.loading() || listing()} else={<Row title="Loading backups…" />}>
         <If when={!actions.backups.error()} else={<Row title="Unable to load backups" hint={actions.backups.error()} trailing={<Button small variant="outline" label="Try again" onPress={actions.backups.refresh} />} />}>
@@ -537,13 +538,17 @@ function BackupItem(props: Part & { backup: Backup }) {
         <TextField value={title()} onChange={value => title.set(value)} maxLength={200} disabled={Boolean(attempt()) || unreadable() || pending()} />
       </Field>
       <If when={attempt()}><Note>{`Restore request ${attempt()?.requestId}. Retrying reuses this request ID and title, so it resolves the same new session instead of creating another.`}</Note></If>
-      <View style={{ flexDirection: "row" }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
         <Button small label={pending() ? "Restoring…" : attempt()?.targetSessionId ? "Open restored session" : attempt() ? "Retry same restore" : "Restore into new private session"}
           disabled={unreadable() || pending()} onPress={() => void restore()} />
+        <If when={pending()}><Small>Waiting for the server to confirm the new session…</Small></If>
       </View>
       <Feedback error={error()} />
       <If when={error() && attempt() && !attempt()?.targetSessionId}>
         <Banner tone="warning" title="Outcome not confirmed">Retry the same restore; an error doesn't mean no session was created.</Banner>
+      </If>
+      <If when={attempt()?.targetSessionId}>
+        {target => <Small>{`Restored session: ${target()}. It is private; only its owner, or the workspace's owner or an admin, can change visibility.`}</Small>}
       </If>
     </CollapsibleRow>
   );
@@ -637,7 +642,10 @@ function MoveHostSection(props: Part) {
                 </If>
                 <If when={choice() && !choice()!.host.online}><Banner tone="warning" title="Host offline">{`${choice()?.host.name} must be connected to receive the session.`}</Banner></If>
                 <If when={!source()?.online}><Banner tone="warning" title="This session's host is offline">Both hosts must be connected to start a move.</Banner></If>
-                <View style={{ flexDirection: "row" }}><Button small label={pending() ? "Moving…" : "Move session"} disabled={!canMove()} onPress={() => void move()} /></View>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                  <Button small label={pending() ? "Moving…" : "Move session"} disabled={!canMove()} onPress={() => void move()} />
+                  <If when={pending()}><Small>Copying the session to the new host…</Small></If>
+                </View>
               </CardBody>
             </If>
           </If>
@@ -647,10 +655,11 @@ function MoveHostSection(props: Part) {
             <Row leading={icon("refresh")} title="Move in progress"
               hint={`To ${connectors().find(host => host.id === current().targetConnectorId)?.name ?? "another host"}. This session accepts only reads until the move finishes or is cancelled`} />
             <CardBody>
-              <View style={{ flexDirection: "row", gap: 8 }}>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
                 <Button small label={pending() ? "Moving…" : "Retry move"} disabled={pending()}
                   onPress={() => void send({ requestId: current().requestId, modelId: current().modelId, ...(current().title !== null ? { title: current().title } : {}), trustedConnectorId: current().targetConnectorId })} />
                 <Button small variant="outline" label="Cancel move" disabled={pending()} onPress={() => void cancel()} />
+                <If when={pending()}><Small>Waiting for the other host…</Small></If>
               </View>
             </CardBody>
           </>

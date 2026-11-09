@@ -1,7 +1,8 @@
 /**
  * Runs the web client (apps/nsh built for the web, as the server ships it) in a real headless Chrome against a test-mode
  * server on this machine: signed out, signed in with the browser's own session cookie, Settings and Back, Back between
- * typed addresses, a settings page opened from its address, and signing out. Fails on any page error, any
+ * typed addresses, a settings page opened from its address, and signing out; then, for NSH, a new account made with a
+ * password, its first workspace, and a file attached through the browser's own file chooser. Fails on any page error, any
  * Content-Security-Policy violation and any console error but the expected 401 of a signed-out page and the 404 of the
  * made-up sessions whose addresses it types. Native Shell's headless engine can't catch these: it is not a browser, and
  * it has APIs the web runtime lacks. Uses the Chrome or Chromium CHROME_BIN names, or the first on PATH, over the
@@ -11,7 +12,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
@@ -45,6 +46,7 @@ async function freePort(): Promise<number> {
 class Page {
   private next = 1;
   private readonly pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+  private readonly listeners = new Map<string, ((params: any) => void)[]>();
   /** What went wrong on the page: errors, refused resources, console errors. */
   readonly problems: string[] = [];
 
@@ -59,6 +61,7 @@ class Page {
         return;
       }
       const { method, params } = message;
+      for (const listener of this.listeners.get(method) ?? []) listener(params);
       if (method === "Runtime.exceptionThrown") {
         this.problems.push(`page error: ${params.exceptionDetails.exception?.description ?? params.exceptionDetails.text}`);
       } else if (method === "Runtime.consoleAPICalled" && params.type === "error") {
@@ -82,6 +85,17 @@ class Page {
     return page;
   }
 
+  /** Hears the protocol's event `method` from now on. */
+  on(method: string, listener: (params: any) => void) {
+    this.listeners.set(method, [...(this.listeners.get(method) ?? []), listener]);
+  }
+
+  /** Types `text` into the input labelled `label`, as a person would: a click to focus it, then the text. */
+  async type(label: string, text: string) {
+    await this.click(label);
+    await this.send("Input.insertText", { text });
+  }
+
   send(method: string, params: Record<string, unknown> = {}): Promise<any> {
     const id = this.next++;
     this.socket.send(JSON.stringify({ id, method, params }));
@@ -102,8 +116,24 @@ class Page {
     await this.send("Page.navigate", { url });
   }
 
-  async waitForText(wanted: string) {
-    const deadline = Date.now() + TIMEOUT_MS;
+  /**
+   * Clicks `label` until `wanted` shows: a page sliding in or a list still scrolling can take a press elsewhere, as it
+   * can a person's, who presses again.
+   */
+  async clickUntil(label: string, wanted: string, options: { scroll?: boolean } = {}) {
+    for (let attempt = 1; ; attempt++) {
+      await this.click(label, options);
+      try {
+        await this.waitForText(wanted, attempt < 4 ? 3_000 : TIMEOUT_MS);
+        return;
+      } catch (error) {
+        if (attempt >= 4) throw error;
+      }
+    }
+  }
+
+  async waitForText(wanted: string, timeout = TIMEOUT_MS) {
+    const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       if ((await this.text().catch(() => "")).includes(wanted)) return;
       await new Promise(done => setTimeout(done, 200));
@@ -174,7 +204,9 @@ async function launchChrome(profile: string): Promise<{ chrome: ChildProcess; pa
   return { chrome, page: await Page.open(target.webSocketDebuggerUrl) };
 }
 
-const work = await mkdtemp(join(tmpdir(), "pikibun-web-smoke-"));
+// Absolute, whatever TMPDIR says: a short relative one keeps Chrome's socket paths within their limit on hosts whose
+// temporary directory is deep.
+const work = resolve(await mkdtemp(join(tmpdir(), "pikibun-web-smoke-")));
 const port = await freePort();
 const origin = `http://127.0.0.1:${port}`;
 const secret = randomBytes(32).toString("base64url");
@@ -186,15 +218,19 @@ try {
     const { build } = await import("vite");
     await build({ configFile: resolve("apps/web/vite.config.ts"), build: { outDir: join(work, "web") } });
   } else await buildWeb(join(work, "web"));
-  const config = await loadConfig({
-    APP_ORIGIN: origin, HOST: "127.0.0.1", PORT: String(port), DATABASE_URL: `sqlite://${join(work, "pikibun.sqlite")}`,
-    SESSION_SECRET: randomBytes(32).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"),
-    TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3_600_000).toISOString(),
-    STATIC_DIR: join(work, "web"), STATIC_CLIENT: react ? "web" : "nsh",
-    GITHUB_CLIENT_ID: "web-smoke-client", GITHUB_CLIENT_SECRET: "web-smoke-secret",
-  });
-  const server = await startServer(config);
-  cleanups.push(() => server.close());
+  /** A test-mode server of the built client on `serverPort`, with a database of its own named `name`. */
+  const serve = async (serverPort: number, name: string, extra: Record<string, string> = {}) => {
+    const started = await startServer(await loadConfig({
+      APP_ORIGIN: `http://127.0.0.1:${serverPort}`, HOST: "127.0.0.1", PORT: String(serverPort), DATABASE_URL: `sqlite://${join(work, `${name}.sqlite`)}`,
+      SESSION_SECRET: randomBytes(32).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"),
+      TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3_600_000).toISOString(),
+      STATIC_DIR: join(work, "web"), STATIC_CLIENT: react ? "web" : "nsh",
+      GITHUB_CLIENT_ID: "web-smoke-client", GITHUB_CLIENT_SECRET: "web-smoke-secret",
+      ...extra,
+    }));
+    cleanups.push(() => started.close());
+  };
+  await serve(port, "pikibun");
 
   const { chrome, page } = await launchChrome(join(work, "chrome"));
   // Chrome writes its profile until it has exited, so it must be gone before the profile is removed.
@@ -229,7 +265,8 @@ try {
   }
 
   await page.goto(`${origin}/`);
-  await page.waitForText(react ? "What should we work on?" : "No sessions yet");
+  // React's smoke made a workspace, so it starts a session; NSH's has none, so it welcomes as the web app's home does.
+  await page.waitForText(react ? "What should we work on?" : "Welcome to Pikibun");
   console.log("✓ signed in with the browser's session, the session list shows");
 
   if (!react) {
@@ -246,8 +283,10 @@ try {
       throw new Error(`The address is ${hash}, not ${wanted}.`);
     };
     await page.click("Settings");
-    await page.click("Appearance");
-    await page.waitForText("System follows");
+    // As a person would, once Settings has slid in: a press on a section while it still moves can miss it.
+    await page.waitForText("Appearance");
+    await new Promise(done => setTimeout(done, 600));
+    await page.clickUntil("Appearance", "System follows");
     await waitForAddress("#/settings/appearance");
     // As a person would, once Settings has slid in: Native Shell lets a press go while its button still moves under it.
     await new Promise(done => setTimeout(done, 600));
@@ -283,15 +322,68 @@ try {
     .filter(element => element.getAttribute('aria-label') === 'Sign out' || element.textContent.trim() === 'Sign out')
     .at(-1)?.scrollIntoView({ block: 'center' })`);
 
-  await page.click("Sign out", { scroll: true });
   if (!react) {
-    await page.waitForText("Sign out?");
+    await page.clickUntil("Sign out", "Sign out?", { scroll: true });
     await page.click("Sign out");
+  } else {
+    await page.click("Sign out", { scroll: true });
   }
   await page.waitForText("Continue with GitHub");
   const after = await page.evaluate<number>("fetch('/api/me').then(response => response.status)");
   if (after !== 401) throw new Error(`the browser is still signed in after signing out (${after})`);
   console.log("✓ signing out ended the browser's session on the server");
+
+  if (!react) {
+    // A new account with a username and password, on a server of its own that takes them and new accounts, as the React
+    // client makes one.
+    const passwordPort = await freePort();
+    await serve(passwordPort, "passwords", { PASSWORD_AUTH: "true", SIGNUP: "open" });
+    await page.goto(`http://127.0.0.1:${passwordPort}/#/`);
+    await page.click("New here? Create an account");
+    await page.type("Username", "smoke-tester");
+    await page.type("Password", "correct horse battery staple");
+    await page.type("Confirm password", "correct horse battery staple");
+    await page.click("Create account");
+    await page.waitForText("Welcome to Pikibun");
+    console.log("✓ a new account made with a password, signed in, is welcomed");
+
+    // Its first workspace, from the home.
+    await page.click("New workspace");
+    await page.type("The field studio", "Smoke workspace");
+    await page.click("Create workspace");
+    await page.waitForText("What should we work on?");
+    console.log("✓ the home makes a first workspace and starts a session there");
+
+    // A file attached through the browser's own file chooser (the page's host), as NSH's picker takes only photos; then
+    // an image, which shows as a thumbnail (a blob: URL the page's policy allows).
+    const file = join(work, "notes.txt");
+    const image = join(work, "pixel.png");
+    await writeFile(file, "hello from the smoke test\n");
+    await writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==", "base64"));
+    let picking = file;
+    await page.send("Page.setInterceptFileChooserDialog", { enabled: true });
+    page.on("Page.fileChooserOpened", ({ backendNodeId }) => void page.send("DOM.setFileInputFiles", { files: [picking], backendNodeId }));
+    await page.click("Attach files");
+    await page.waitForText("notes.txt");
+    picking = image;
+    await page.click("Attach files");
+    const deadline = Date.now() + TIMEOUT_MS;
+    while (!await page.evaluate<boolean>(`Boolean(document.querySelector('[aria-label="Remove image 1"]'))`)) {
+      if (Date.now() > deadline) throw new Error(`The picked image never showed. The page says:\n${await page.text()}`);
+      await new Promise(done => setTimeout(done, 200));
+    }
+    console.log("✓ a file and an image picked in the browser's own chooser are attached to the first message");
+
+    // Notifications on this device: this browser can take pushes, through the service worker the build ships.
+    await page.evaluate("location.hash = '#/settings/notifications'");
+    await page.waitForText("This browser shows notifications even when no Pikibun tab is open.");
+    const worker = await page.evaluate<{ status: number; type: string; text: string }>(
+      "fetch('/sw.js').then(async response => ({ status: response.status, type: response.headers.get('content-type') ?? '', text: await response.text() }))");
+    if (worker.status !== 200 || !worker.type.includes("javascript") || !worker.text.includes("pikibun-open")) {
+      throw new Error(`The service worker isn't served: ${worker.status} ${worker.type}`);
+    }
+    console.log("✓ notifications on this device can be turned on, and the service worker that shows pushes is served");
+  }
 
   if (page.problems.length) throw new Error(`The page reported problems:\n${page.problems.join("\n")}`);
   console.log("✓ no page errors, policy violations or console errors");

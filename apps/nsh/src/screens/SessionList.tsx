@@ -1,20 +1,18 @@
 import { computed, List, signal, Text, untracked, View } from "nsh";
 import { Button as BaseButton, Input } from "nsh/base";
-import { nestSessions, pullRequestStateLabels, pullRequestStateTones, sessionStatus, type SessionPullRequest, type SessionRecord } from "../shared";
+import { canCreateSessions, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord } from "../shared";
+import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../components/PullRequest";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
-import { Banner, Button, EmptyState, IdentityBadge, Loading, StatusDot } from "../ui";
+import { Banner, Button, DropdownMenu, EmptyState, IconButton, IdentityBadge, Loading, StatusDot } from "../ui";
 
 type Row =
-  | { kind: "workspace"; key: string; id: string; title: string; count: number }
-  | { kind: "session"; key: string; session: SessionRecord; depth: number };
-
-/** "#12", or "PR" for a pull request URL with no number (pull-request.tsx). */
-function pullLabel(pull: SessionPullRequest): string {
-  return pull.number === undefined ? "PR" : `#${pull.number}`;
-}
+  | { kind: "workspace"; key: string; id: string; title: string; count: number; canCreate: boolean }
+  | { kind: "session"; key: string; session: SessionRecord; depth: number }
+  /** A workspace without sessions yet: a row that starts one there. */
+  | { kind: "start"; key: string; workspaceId: string };
 
 /** "3m", "2h", "5d", "6 Nov": a session's age, as short as a sidebar has room for. */
 export function shortAge(value: string, now = Date.now()): string {
@@ -32,10 +30,15 @@ export function shortAge(value: string, now = Date.now()): string {
 /**
  * Sessions by workspace, as the web app's sidebar lists them (Sidebar.tsx): each workspace a row with its identity
  * badge that folds its sessions away, each session one step in under it, newest first; sessions another session's agent
- * started follow it, one more step in. Archived ones only on request. `selectedId` marks the open one. `compact` is the
+ * started follow it, one more step in. Archived ones only on request. Every workspace has its row, one without sessions
+ * a row that starts one there; a workspace's row starts a session in it and opens its settings (`onNewIn`,
+ * `onWorkspaceSettings`), and `onNewWorkspace` creates another. `selectedId` marks the open one. `compact` is the
  * desktop sidebar's density; the phone's list has bigger rows to tap.
  */
-export function SessionList(props: { selectedId?: string | null; onOpen: (id: string) => void; onNew: () => void; compact?: boolean }) {
+export function SessionList(props: {
+  selectedId?: string | null; onOpen: (id: string) => void; onNew: () => void; compact?: boolean;
+  onNewIn?: (workspaceId: string) => void; onWorkspaceSettings?: (workspaceId: string) => void; onNewWorkspace?: () => void;
+}) {
   const data = useAppData();
   const query = signal("");
   const showArchived = signal(false);
@@ -53,12 +56,20 @@ export function SessionList(props: { selectedId?: string | null; onOpen: (id: st
       if (list) list.push(item);
       else byWorkspace.set(item.workspaceId, [item]);
     }
+    // Every workspace, those without sessions too (unless searching), then any a session names that isn't listed.
+    if (!needle) for (const workspace of data.workspaces()) if (!byWorkspace.has(workspace.id)) byWorkspace.set(workspace.id, []);
     const order = data.workspaces().map(workspace => workspace.id);
     const rank = (id: string) => { const index = order.indexOf(id); return index < 0 ? order.length : index; };
-    return [...byWorkspace.entries()].sort(([a], [b]) => rank(a) - rank(b)).flatMap(([id, sessions]): Row[] => [
-      { kind: "workspace", key: `workspace:${id}`, id, count: sessions.length, title: data.workspaces().find(workspace => workspace.id === id)?.name ?? "Other workspace" },
-      ...(collapsed().includes(id) && !needle ? [] : nestSessions(sessions).map(({ session: item, depth }): Row => ({ kind: "session", key: item.id, session: item, depth }))),
-    ]);
+    return [...byWorkspace.entries()].sort(([a], [b]) => rank(a) - rank(b)).flatMap(([id, sessions]): Row[] => {
+      const workspace = data.workspaces().find(item => item.id === id);
+      const canCreate = Boolean(workspace && canCreateSessions(workspace.role));
+      const folded = collapsed().includes(id) && !needle;
+      return [
+        { kind: "workspace", key: `workspace:${id}`, id, count: sessions.length, canCreate, title: workspace?.name ?? "Other workspace" },
+        ...(folded ? [] : nestSessions(sessions).map(({ session: item, depth }): Row => ({ kind: "session", key: item.id, session: item, depth }))),
+        ...(!folded && !sessions.length && canCreate && props.onNewIn ? [{ kind: "start" as const, key: `start:${id}`, workspaceId: id }] : []),
+      ];
+    });
   });
   const toggle = (id: string) => collapsed.update(current => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]));
   const pulled = signal(false);
@@ -89,8 +100,8 @@ export function SessionList(props: { selectedId?: string | null; onOpen: (id: st
           </View>
         )}
         footer={() => (
-          <If when={archivedCount() > 0}>
-            <View style={{ paddingHorizontal: inset(), paddingTop: 12 }}>
+          <View style={{ paddingHorizontal: inset(), paddingTop: 12, gap: 2 }}>
+            <If when={archivedCount() > 0}>
               <BaseButton testID="toggle-archived" accessibilityLabel={showArchived() ? "Hide archived" : `Show archived (${archivedCount()})`}
                 onPress={() => showArchived.update(value => !value)}
                 style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, minHeight: 34, borderRadius: radius.medium }}
@@ -98,12 +109,29 @@ export function SessionList(props: { selectedId?: string | null; onOpen: (id: st
                 <Icon name="archive" size={14} color={palette().muted} />
                 <Text style={{ fontSize: text.body, color: palette().muted }}>{showArchived() ? "Hide archived" : `Show archived (${archivedCount()})`}</Text>
               </BaseButton>
-            </View>
-          </If>
+            </If>
+            <If when={props.onNewWorkspace && data.workspaces().length > 0}>
+              <BaseButton testID="sidebar-new-workspace" accessibilityLabel="New workspace" onPress={() => props.onNewWorkspace?.()}
+                style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, minHeight: 34, borderRadius: radius.medium }}
+                hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
+                <Icon name="plus" size={14} color={palette().muted} />
+                <Text style={{ fontSize: text.body, color: palette().muted }}>New workspace</Text>
+              </BaseButton>
+            </If>
+          </View>
         )}
         empty={() => (
           <If when={data.sessions().length > 0}
-            else={<EmptyState title="No sessions yet" action={<Button label="New session" icon="plus" variant="primary" onPress={props.onNew} />}>Start one to put an agent to work on your workspace's repositories.</EmptyState>}>
+            else={
+              <If when={data.workspaces().length > 0 || !props.onNewWorkspace}
+                else={
+                  <EmptyState title="No workspaces yet" action={<Button testID="list-new-workspace" label="New workspace" icon="plus" small onPress={() => props.onNewWorkspace?.()} />}>
+                    A workspace groups people, repositories, hosts and sessions.
+                  </EmptyState>
+                }>
+                <EmptyState title="No sessions yet" action={<Button label="New session" icon="plus" variant="primary" onPress={props.onNew} />}>Start one to put an agent to work on your workspace's repositories.</EmptyState>
+              </If>
+            }>
             <EmptyState title={!query().trim() && !showArchived() ? "All sessions are archived" : "No matching sessions"} />
           </If>
         )}>
@@ -111,8 +139,19 @@ export function SessionList(props: { selectedId?: string | null; onOpen: (id: st
           <View style={{ paddingHorizontal: inset() }}>
             <If when={row().kind === "session" ? row() as Extract<Row, { kind: "session" }> : null}
               else={
-                <WorkspaceRow row={row() as Extract<Row, { kind: "workspace" }>} collapsed={collapsed().includes((row() as Extract<Row, { kind: "workspace" }>).id)}
-                  onToggle={toggle} compact={props.compact} />
+                <If when={row().kind === "start" ? row() as Extract<Row, { kind: "start" }> : null}
+                  else={
+                    <WorkspaceRow row={row() as Extract<Row, { kind: "workspace" }>} collapsed={collapsed().includes((row() as Extract<Row, { kind: "workspace" }>).id)}
+                      onToggle={toggle} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} />
+                  }>
+                  {start => (
+                    <BaseButton testID={`workspace-start-${start().workspaceId}`} accessibilityLabel="Start a session" onPress={() => props.onNewIn?.(start().workspaceId)}
+                      style={{ flexDirection: "row", alignItems: "center", minHeight: props.compact ? 34 : 44, paddingLeft: 32, paddingRight: 8, borderRadius: radius.medium }}
+                      hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
+                      <Text style={{ fontSize: text.body, color: palette().muted }}>Start a session</Text>
+                    </BaseButton>
+                  )}
+                </If>
               }>
               {item => <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId} onOpen={props.onOpen} compact={props.compact} />}
             </If>
@@ -123,19 +162,37 @@ export function SessionList(props: { selectedId?: string | null; onOpen: (id: st
   );
 }
 
-/** A workspace's row (.workspace-row): its badge and name; pressing it folds its sessions away or back. */
-function WorkspaceRow(props: { row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; compact?: boolean }) {
+/**
+ * A workspace's row (.workspace-row): its badge and name, pressing which folds its sessions away or back, then a new
+ * session there and its options (a new session, the workspace's settings), as the web app's sidebar has them.
+ */
+function WorkspaceRow(props: {
+  row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; compact?: boolean;
+  onNewIn?: (workspaceId: string) => void; onSettings?: (workspaceId: string) => void;
+}) {
+  const options = () => [
+    ...(props.row.canCreate && props.onNewIn ? [{ label: "New session", icon: "plus" as const, onSelect: () => props.onNewIn!(props.row.id) }] : []),
+    ...(props.onSettings ? [{ label: "Workspace settings", icon: "settings" as const, testID: `workspace-settings-${props.row.id}`, onSelect: () => props.onSettings!(props.row.id) }] : []),
+  ];
   return (
-    <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={() => props.onToggle(props.row.id)}
-      style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingHorizontal: 8, paddingVertical: 6, marginTop: 8,
-        borderRadius: radius.medium }}
-      hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
-      <IdentityBadge name={props.row.title} id={props.row.id} />
-      <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.body, color: palette().text }}>{props.row.title}</Text>
-      <If when={props.collapsed}>
-        <Text style={{ fontSize: text.caption, color: palette().muted }}>{String(props.row.count)}</Text>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 8 }}>
+      <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={() => props.onToggle(props.row.id)}
+        style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingHorizontal: 8, paddingVertical: 6,
+          borderRadius: radius.medium }}
+        hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
+        <IdentityBadge name={props.row.title} id={props.row.id} />
+        <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.body, color: palette().text }}>{props.row.title}</Text>
+        <If when={props.collapsed}>
+          <Text style={{ fontSize: text.caption, color: palette().muted }}>{String(props.row.count)}</Text>
+        </If>
+      </BaseButton>
+      <If when={props.row.canCreate && props.onNewIn}>
+        <IconButton testID={`workspace-new-${props.row.id}`} icon="plus" label={`New session in ${props.row.title}`} size={28} onPress={() => props.onNewIn!(props.row.id)} />
       </If>
-    </BaseButton>
+      <If when={options().length > 0}>
+        <DropdownMenu label={`${props.row.title} options`} testID={`workspace-options-${props.row.id}`} items={options()} />
+      </If>
+    </View>
   );
 }
 
@@ -152,15 +209,12 @@ function SessionRow(props: { item: SessionRecord; depth: number; selected: boole
     return sessionStatus(props.item, live?.sessionId === props.item.id ? live.activity : undefined);
   };
   const relation = () => (props.item.ownerId === user.id ? "" : props.item.permissions?.every(permission => permission === "read") ? "Viewer" : "Shared");
-  const pullColor = () => {
-    const tone = props.item.pullRequest?.state && pullRequestStateTones[props.item.pullRequest.state];
-    return tone === "merged" ? palette().merged : tone && tone !== "neutral" ? palette().tones[tone].text : palette().muted;
-  };
+  const pullColor = () => (props.item.pullRequest ? pullRequestColor(props.item.pullRequest) : palette().muted);
   const statusColor = () => {
     const tone = statusColors[status().tone];
     return tone ? palette().tones[tone].text : palette().muted;
   };
-  const details = () => Boolean(status().label) || Boolean(props.item.pullRequest) || Boolean(relation());
+  const details = () => Boolean(status().label) || Boolean(props.item.pullRequest) || Boolean(props.item.tunnel) || Boolean(relation());
   return (
     <BaseButton testID={`session-row-${props.item.id}`} selected={props.selected} accessibilityLabel={props.item.title} onPress={() => props.onOpen(props.item.id)}
       style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8,
@@ -181,18 +235,27 @@ function SessionRow(props: { item: SessionRecord; depth: number; selected: boole
             <If when={status().label}>
               <Text testID={`session-status-${props.item.id}`} style={{ color: statusColor() }}>{status().label}</Text>
             </If>
+            <If when={props.item.tunnel}>
+              {tunnel => (
+                <>
+                  <If when={status().label}><Text>{" · "}</Text></If>
+                  <Text testID={`session-tunnel-${props.item.id}`} accessibilityLabel={`Online at ${tunnel().url.replace(/^https:\/\//, "")}`}
+                    style={{ color: palette().tones.success.text }}>Online</Text>
+                </>
+              )}
+            </If>
             <If when={props.item.pullRequest}>
               {pull => (
                 <>
-                  <If when={status().label}><Text>{" · "}</Text></If>
-                  <Text testID={`session-pull-${props.item.id}`} style={{ color: pullColor() }}>
-                    {`${pullLabel(pull())}${pull().state ? ` ${pullRequestStateLabels[pull().state!]}` : ""}`}
+                  <If when={status().label || props.item.tunnel}><Text>{" · "}</Text></If>
+                  <Text testID={`session-pull-${props.item.id}`} accessibilityLabel={pullRequestTitle(pull())} style={{ color: pullColor() }}>
+                    {`${pullRequestLabel(pull())}${pull().state ? ` ${pullRequestStateLabels[pull().state!]}` : ""}`}
                   </Text>
                 </>
               )}
             </If>
             <If when={relation()}>
-              <Text>{`${status().label || props.item.pullRequest ? " · " : ""}${relation()}`}</Text>
+              <Text>{`${status().label || props.item.pullRequest || props.item.tunnel ? " · " : ""}${relation()}`}</Text>
             </If>
           </Text>
         </If>

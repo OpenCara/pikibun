@@ -1,14 +1,20 @@
 import { ApiError, type UserProfile } from "../shared";
 import { session } from "./auth";
 import { openServerLink, opensServerPages } from "./links";
+import { routeHash, shownRoute } from "./page";
+import { rememberReturn } from "./sign-in-memory";
 
 // What needs a recent GitHub sign-in (setting a password without the current one), as the web app's sign-in-again.ts.
 
 /** Whether signing in with GitHub again can be offered here: on the web, through the server's own sign-in page. */
 export const canSignInAgain = opensServerPages;
 
-/** Signs in with GitHub again, in the page (web only). */
-export function signInWithGitHubAgain(): void {
+/**
+ * Signs in with GitHub again, in the page (web only), and comes back to the page it started from: GitHub's callback
+ * lands on the app's root, which loses the fragment.
+ */
+export async function signInWithGitHubAgain(): Promise<void> {
+  await rememberReturn(routeHash(shownRoute()));
   openServerLink("/api/auth/github");
 }
 

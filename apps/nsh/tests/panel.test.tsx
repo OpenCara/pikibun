@@ -39,6 +39,12 @@ describe("a session's panel", () => {
     await app.press("id:file-README.md");
     await app.waitFor("id:file-text");
     expect(app.texts().join(" ")).toContain("The login test races the cookie.");
+    // Highlighted for its language, as the web app's Files tab does.
+    expect(app.shows("label:README.md, markdown")).toBe(true);
+    // In a read-only editor with line numbers, as the web app's preview has them.
+    expect(app.shows("label:README.md")).toBe(true);
+    const texts = app.texts();
+    expect(texts.slice(texts.indexOf("# Pikibun") - 2, texts.indexOf("# Pikibun"))).toEqual(["1", "2"]);
     await app.press("id:file-back");
     await app.waitFor("id:file-src");
   });

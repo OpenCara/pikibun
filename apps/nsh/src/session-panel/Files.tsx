@@ -1,4 +1,5 @@
 import { effect, Image, signal, Text, untracked, View } from "nsh";
+import { Editor } from "nsh/base";
 import { fileBrowserLimits, type FileEntry, type SessionFiles, type SessionRecord } from "../../../../packages/shared/src/types";
 import { REDACTED, segment } from "../shared";
 import { createResource } from "../lib/resource";
@@ -135,7 +136,7 @@ function FilePreview(props: { sessionId: string; path: string; onBack: () => voi
               <If when={current().redacted}><Banner title="Secret hidden">{`Something that looks like a secret is shown as ${REDACTED}, as in the conversation.`}</Banner></If>
               <If when={current().text !== undefined}>
                 <If when={current().text} else={<EmptyState title="Empty file" />}>
-                  <If when={/\.svg$/i.test(props.path) && !current().truncated} else={<CodeView text={current().text ?? ""} />}>
+                  <If when={/\.svg$/i.test(props.path) && !current().truncated} else={<CodeView text={current().text ?? ""} path={props.path} />}>
                     <SvgPreview text={current().text ?? ""} path={props.path} />
                   </If>
                 </If>
@@ -154,26 +155,84 @@ function FilePreview(props: { sessionId: string; path: string; onBack: () => voi
   );
 }
 
-/** A file's text, selectable, in the code block's look. */
-export function CodeView(props: { text: string }) {
+/** Files named for what they are, without an extension that names their language (the web app's code-highlight.tsx). */
+const namedFiles: Record<string, string> = {
+  makefile: "makefile", gnumakefile: "makefile", gemfile: "ruby", rakefile: "ruby", podfile: "ruby", vagrantfile: "ruby",
+  "cmakelists.txt": "plaintext", ".bashrc": "bash", ".zshrc": "bash", ".profile": "bash", ".env": "bash",
+  ".gitconfig": "ini", ".editorconfig": "ini", ".npmrc": "ini", "pipfile": "ini",
+};
+/** Extensions that aren't a language's own name. */
+const extensions: Record<string, string> = {
+  h: "c", hh: "cpp", hxx: "cpp", ipp: "cpp", mdx: "markdown", md: "markdown", jsonc: "json", json5: "json", geojson: "json", webmanifest: "json",
+  lock: "plaintext", txt: "plaintext", log: "plaintext", csv: "plaintext", svelte: "xml", vue: "xml", astro: "xml", html: "html", svg: "xml",
+  py: "python", pyi: "python", pyw: "python", rb: "ruby", gemspec: "ruby", rake: "ruby", ru: "ruby", kt: "kotlin", kts: "kotlin", gradle: "kotlin",
+  js: "javascript", cjs: "javascript", mjs: "javascript", jsx: "jsx", ts: "typescript", mts: "typescript", cts: "typescript", tsx: "tsx",
+  rs: "rust", sh: "bash", bash: "bash", zsh: "bash", fish: "bash", ksh: "bash", yml: "yaml", conf: "ini", cfg: "ini", properties: "ini",
+  env: "bash", pem: "plaintext", tf: "plaintext", proto: "plaintext", cs: "csharp", hpp: "cpp", cc: "cpp",
+};
+/** Larger text shows plain, as in the web app: highlighting it would hold the view up. */
+const HIGHLIGHT_LIMIT = 128 * 1024;
+
+/** The language a file's text is highlighted as, by its name; null for plain text. */
+export function languageFor(path: string): string | null {
+  const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
+  if (namedFiles[name]) return namedFiles[name] === "plaintext" ? null : namedFiles[name]!;
+  if (name.startsWith(".env.")) return "bash";
+  if (name.startsWith("dockerfile")) return "dockerfile";
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const extension = name.slice(dot + 1);
+  const language = extensions[extension] ?? extension;
+  return language === "plaintext" ? null : language;
+}
+
+/**
+ * A file's text, selectable, in the code block's look; with `path`, as the web app's Files tab shows it: with line
+ * numbers, highlighted for its language, in NSH's read-only editor. Text over 128 KB shows plain, as there.
+ */
+export function CodeView(props: { text: string; path?: string }) {
+  const language = () => (props.path ? languageFor(props.path) : null);
+  const tooLarge = () => props.text.length > HIGHLIGHT_LIMIT;
   return (
-    <View selectable testID="file-text" style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
-      <Text style={{ fontFamily: monospace, fontSize: text.small, lineHeight: 20, color: palette().text }}>{props.text}</Text>
-    </View>
+    <If when={props.path && !tooLarge() ? props.path : null}
+      else={
+        <View style={{ gap: 6 }}>
+          <View selectable testID="file-text" style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
+            <Text style={{ fontFamily: monospace, fontSize: text.small, lineHeight: 20, color: palette().text }}>{props.text}</Text>
+          </View>
+          <If when={language() && tooLarge()}><Small>Highlighting is off for text over 128 KB.</Small></If>
+        </View>
+      }>
+      {path => (
+        <View testID="file-text" accessibilityLabel={`${path()}, ${language() ?? "plain text"}`}
+          style={{ overflow: "hidden", borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border }}>
+          <Editor value={props.text.replace(/\n$/, "")} readOnly lineNumbers language={language()} accessibilityLabel={path()}
+            minRows={1} maxRows={48} scrollBeyondLastLine={false} activeLine={false} fontSize={text.small} />
+        </View>
+      )}
+    </If>
   );
 }
 
-/** An image fit to the panel; pressing it switches to its actual size and back. */
+/**
+ * An image fit to the panel; pressing it switches to its actual size and back. Its size in pixels shows below it, and
+ * one that can't be decoded says so.
+ */
 export function ImageView(props: { src: string; path: string }) {
   const actual = signal(false);
+  const size = signal<{ width: number; height: number } | null>(null);
+  const failed = signal(false);
   return (
-    <View style={{ gap: 6 }}>
-      <View onPress={() => actual.update(value => !value)} accessibilityLabel={actual() ? "Fit image to panel" : "Show image at actual size"}
-        style={{ borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, overflow: "hidden", backgroundColor: palette().surfaceRaised }}>
-        <Image src={props.src} accessibilityLabel={props.path} style={actual() ? {} : { width: "100%", aspectRatio: 16 / 10, objectFit: "contain" }} />
+    <If when={!failed()} else={<EmptyState title="Can't show this image">This image couldn't be decoded.</EmptyState>}>
+      <View style={{ gap: 6 }}>
+        <View onPress={() => actual.update(value => !value)} accessibilityLabel={actual() ? "Fit image to panel" : "Show image at actual size"}
+          style={{ borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, overflow: "hidden", backgroundColor: palette().surfaceRaised }}>
+          <Image src={props.src} accessibilityLabel={props.path} onLoad={event => size.set(event.size)} onError={() => failed.set(true)}
+            style={actual() && size() ? { width: size()!.width, height: size()!.height } : { width: "100%", aspectRatio: size() ? size()!.width / Math.max(1, size()!.height) : 16 / 10, objectFit: "contain" }} />
+        </View>
+        <Small>{`${size() ? `${size()!.width} × ${size()!.height} px · ` : ""}${actual() ? "actual size · press to fit" : "fit to panel · press for actual size"}`}</Small>
       </View>
-      <Small>{actual() ? "Actual size · press to fit" : "Fit to panel · press for actual size"}</Small>
-    </View>
+    </If>
   );
 }
 
@@ -183,7 +242,7 @@ function SvgPreview(props: { text: string; path: string }) {
   return (
     <View style={{ gap: 8 }}>
       <Segmented small value={mode()} onChange={value => mode.set(value)} options={[{ value: "preview", label: "Preview" }, { value: "source", label: "Source" }]} />
-      <If when={mode() === "preview"} else={<CodeView text={props.text} />}>
+      <If when={mode() === "preview"} else={<CodeView text={props.text} path={props.path} />}>
         <ImageView src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(props.text)}`} path={props.path} />
       </If>
     </View>

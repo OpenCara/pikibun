@@ -24,18 +24,22 @@ export interface SettingsSection {
   Component: (props: SectionProps) => JSX.Element;
 }
 
-/** Whether the server takes passwords (its health check), asked once per sign-in. */
-const passwordAuth = signal(false);
-let askedPasswordAuth: string | null = null;
-function passwordsOffered(): boolean {
+/** What the server's health check says of it, asked once per sign-in: whether it takes passwords, and its release. */
+const health = signal<{ passwordAuth?: boolean; version?: string | null } | null>(null);
+let askedHealth: string | null = null;
+function serverHealth() {
   const { api, origin, user } = session();
   const key = `${origin} ${user.id}`;
-  if (askedPasswordAuth !== key) {
-    askedPasswordAuth = key;
-    api<{ passwordAuth?: boolean }>("/api/health").then(health => passwordAuth.set(health.passwordAuth === true), () => undefined);
+  if (askedHealth !== key) {
+    askedHealth = key;
+    health.set(null);
+    api<{ passwordAuth?: boolean; version?: string | null }>("/api/health").then(value => { if (askedHealth === key) health.set(value); }, () => undefined);
   }
-  return passwordAuth();
+  return health();
 }
+const passwordsOffered = () => serverHealth()?.passwordAuth === true;
+/** The release the server runs, as its health check reports it; null in development, or until it loads. */
+export const serverVersion = () => serverHealth()?.version ?? null;
 
 /** Every section, in order. A section ported from the web app replaces its file's placeholder; nothing else changes. */
 export const settingsSections: readonly SettingsSection[] = [
@@ -90,6 +94,9 @@ export function SectionList(props: { selected?: string; onOpen: (id: string) => 
               onPress={() => props.onOpen(section().id)} />
           )}
         </Each>
+        <If when={serverVersion()}>
+          {version => <Text testID="settings-server-version" style={{ paddingTop: 16, paddingHorizontal: 12, fontSize: text.caption, color: palette().faint }}>{`Pikibun server ${version()}`}</Text>}
+        </If>
       </View>
     </If>
   );

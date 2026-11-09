@@ -35,9 +35,17 @@ export function timestamp(value: string): string {
   return Number.isNaN(date.getTime()) ? value : `${dateLabel(date)}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Why a model request failed, from the only details that cross the host boundary: provider, model and HTTP status. */
-export function modelFailure({ provider, modelId, status }: NonNullable<EntryView["error"]>): string {
+/**
+ * Why a model request failed, from the only details that cross the host boundary: provider, model and HTTP status.
+ * `advice: false` (a share link, whose readers can't act on it) gives the cause alone.
+ */
+export function modelFailure({ provider, modelId, status }: NonNullable<EntryView["error"]>, { advice = true }: { advice?: boolean } = {}): string {
   const name = provider ?? "the provider";
+  if (!advice) {
+    if (status === 401 || status === 403) return `The host's Pi credentials for ${name} were rejected.`;
+    if (status === 429) return `Rate limited by ${name}.`;
+    if (status !== undefined && status >= 500 && status < 600) return `${name} was unavailable.`;
+  }
   if (status === 401 || status === 403) return `The host's Pi credentials for ${name} were rejected. The host owner should check Pi's login or API key, then restart the connector.`;
   if (status === 429) return `Rate limited by ${name}. Try again shortly.`;
   if (status !== undefined && status >= 500 && status < 600) return `${name} is unavailable. Try again shortly.`;
