@@ -1,5 +1,5 @@
 import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, windowSize, type Accessor, type JSX, type ListRef } from "nsh";
-import { AlertDialog, Button as BaseButton, NavPage, Sheet } from "nsh/base";
+import { Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
   initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, preparingRepositories,
@@ -12,7 +12,7 @@ import { ChatOptionsBar, confirmAutoApprove } from "../components/ChatOptionsBar
 import { Composer } from "../components/Composer";
 import { PullRequestLink } from "../components/PullRequest";
 import { RepositoryPreparationCard } from "../components/RepositoryPreparation";
-import { TranscriptEntry } from "../components/TranscriptEntry";
+import { TranscriptEntry, type MessageActions } from "../components/TranscriptEntry";
 import { createAttachments, createFileOptions, encodeImages, imageBlobs, imagesUnavailable, restoreImages, withFilesNote } from "../lib/attachments";
 import type { ChatImage } from "../../../../packages/shared/src/chat-images";
 import type { WithdrawResult } from "../../../../packages/shared/src/types";
@@ -421,8 +421,6 @@ function ApprovalsSheet(props: {
   );
 }
 
-type MessageAction = "copy" | "revert" | "fork";
-
 function Conversation(props: { id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; openSession: (id: string) => void }) {
   const { user } = untracked(session);
   const data = useAppData();
@@ -443,6 +441,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const submission = createAction();
   const stopping = createAction();
   const rewinding = createAction();
+  const copying = createAction();
   const receipt = signal<SubmitResult | null>(null);
   const list = signal<ListRef>();
   const expanded = signal<ReadonlySet<string>>(new Set());
@@ -583,21 +582,26 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
 
   const working = () => view().busy || activeQueue().length > 0;
 
-  /** A message's actions, in the platform's own action sheet: copy it; go back to it; fork a new session from it. */
-  async function showActions(entry: EntryView) {
-    const cut = rewindable(view()) && actualMode() === "write" && !readOnly() ? messageCut(entry) : undefined;
-    const actions: { id: MessageAction; label: string; role?: "destructive" }[] = [
-      { id: "copy", label: "Copy message" },
-      ...(cut && canWrite() ? [{ id: "revert" as const, label: cut.before ? "Go back to before this message" : "Go back to this reply", role: "destructive" as const }] : []),
-      ...(cut && owner() ? [{ id: "fork" as const, label: "Fork a new session from here" }] : []),
-    ];
-    const result = await AlertDialog.show({ title: "Message", presentation: "actionSheet", actions: [...actions, { id: "cancel", label: "Cancel", role: "cancel" }] });
-    const choice = result.action as MessageAction | "cancel" | null | undefined;
-    if (choice === "copy") { void rewinding.run(() => Clipboard.writeText(copyText(entry)), "Message copied"); return; }
-    if (!cut || (choice !== "revert" && choice !== "fork")) return;
-    if (choice === "revert") await revert(entry, cut.entryId, cut.before);
-    else await fork(entry, cut.entryId, cut.before);
+  /** Copies a message's text, or a reply's Markdown without its tool calls (the copy icon beside it). */
+  async function copyMessage(entry: EntryView) {
+    // Its own action, so copying neither waits for nor holds up going back and forking. The copy icon turns to a check
+    // and the notice says so; a failure shows below the transcript, and the icon stays a copy icon.
+    if (!await copying.run(() => Clipboard.writeText(copyText(entry)), "Message copied")) throw new Error("Not copied");
   }
+
+  /**
+   * A message's actions beside its copy icon, where the viewer may take them: go back to it (anyone who drives the work);
+   * fork a new session from it (only the owner, as the fork is a session of theirs with this one's history).
+   */
+  const messageActions: MessageActions = entry => {
+    const cut = rewindable(view()) && actualMode() === "write" && !readOnly() ? messageCut(entry) : undefined;
+    if (!cut) return {};
+    const busy = rewinding.busy();
+    return {
+      ...(canWrite() ? { revert: { label: cut.before ? "Go back to before this message" : "Go back to this reply", disabled: busy, run: () => void revert(entry, cut.entryId, cut.before) } } : {}),
+      ...(owner() ? { fork: { label: "Fork a new session from here", disabled: busy, run: () => void fork(entry, cut.entryId, cut.before) } } : {}),
+    };
+  };
 
   async function revert(entry: EntryView, entryId: string, before: boolean) {
     if (working()) { void rewinding.run(async () => { throw new Error("Stop the session's work to go back to an earlier message."); }); return; }
@@ -679,7 +683,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
         footer={() => <View style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}>{props.pinned}</View>}>
         {entry => (
           <View style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}>
-            <TranscriptEntry entry={entry()} userId={user.id} imagesOf={imagesOf()} expanded={id => expanded().has(id)} onActions={entry => void showActions(entry)}
+            <TranscriptEntry entry={entry()} userId={user.id} imagesOf={imagesOf()} expanded={id => expanded().has(id)} onCopy={copyMessage} actions={messageActions}
               toggle={id => expanded.update(set => { const next = new Set(set); if (!next.delete(id)) next.add(id); return next; })} />
           </View>
         )}
@@ -768,7 +772,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           <If when={draftHasSecret()}>
             <Small testID="draft-secret" tone="warning">{`This message looks like it holds a secret. Everyone, you included, sees it as ${REDACTED} in the transcript, but the agent and its host receive it as typed.`}</Small>
           </If>
-          <Feedback error={submission.error() || stopping.error() || withdrawing.error() || rewinding.error()} notice={withdrawNotice() || rewinding.notice()} />
+          <Feedback error={submission.error() || stopping.error() || withdrawing.error() || rewinding.error() || copying.error()} notice={withdrawNotice() || rewinding.notice() || copying.notice()} />
         </View>
       </View>
     </>

@@ -1,5 +1,5 @@
-import { computed, platform, Text, View, type JSX } from "nsh";
-import { Button as BaseButton, TextView } from "nsh/base";
+import { computed, effect, platform, signal, Text, View, type JSX } from "nsh";
+import { Button as BaseButton, TextView, Tooltip } from "nsh/base";
 import { COMPACTION_FAILED_TITLE, compactionFailureText, copyText, shownImages, splitToolCalls, textBesideImages, type EntryView } from "../shared";
 import { EntryImages } from "./EntryImages";
 import { formatDuration, modelFailure } from "../lib/format";
@@ -128,21 +128,67 @@ function ToolRow(props: { icon: IconName; name: string; summary: string; meta: s
   );
 }
 
-/** Who sent a message and how long it took, then the button that opens its actions (copy, go back, fork). */
-function Footer(props: { entry: EntryView; meta: string; onActions?: (entry: EntryView) => void; end?: boolean }) {
-  const actions = () => Boolean(props.onActions) && copyText(props.entry) !== "";
+/** One of a message's actions, where its viewer may take it now. */
+export type MessageAction = { label: string; run: () => void; disabled?: boolean };
+/**
+ * A message's actions besides copying it, which every message with text offers: going back to it and forking a new
+ * session from it, where the viewer may (see messageCut). Read in a binding, as rows are recycled.
+ */
+export type MessageActions = (entry: EntryView) => { revert?: MessageAction; fork?: MessageAction };
+
+/** Whether a pointer is how the person points (desktops, browsers), rather than a finger. */
+const pointer = platform.desktop || platform.os === "web";
+
+/**
+ * A small icon button of a message's footer, its label the tooltip on the desktop and what screen readers say: quiet
+ * beside the message where a pointer brings each up; at full strength on touch screens, with room for a finger.
+ */
+function ActionButton(props: { icon: IconName; label: string; onPress: () => void; disabled?: boolean; testID?: string }) {
+  const size = pointer ? 24 : 32;
   return (
-    <If when={props.meta || actions()}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, justifyContent: props.end ? "flex-end" : "flex-start" }}>
+    <BaseButton testID={props.testID} accessibilityLabel={props.label} hitSlop={pointer ? 4 : 8} disabled={props.disabled} onPress={props.onPress}
+      tooltip={<Tooltip style={{ backgroundColor: palette().primary, borderRadius: radius.small, paddingHorizontal: 8, paddingVertical: 4 }}>
+        <Text style={{ fontSize: text.caption, color: palette().onPrimary }}>{props.label}</Text>
+      </Tooltip>}
+      style={{ width: size, height: size, alignItems: "center", justifyContent: "center", borderRadius: radius.small, opacity: pointer ? 0.55 : 1 }}
+      hoverStyle={{ backgroundColor: palette().hover, opacity: 1 }} activeStyle={{ opacity: 0.5 }} disabledStyle={{ opacity: 0.3 }}>
+      <Icon name={props.icon} size={14} color={palette().muted} />
+    </BaseButton>
+  );
+}
+
+/** Who sent a message and how long it took, then its actions as small icons: copy, go back, fork. */
+function Footer(props: { entry: EntryView; meta: string; actions?: MessageActions; onCopy?: (entry: EntryView) => Promise<void>; end?: boolean }) {
+  const copyable = () => Boolean(props.onCopy) && copyText(props.entry) !== "";
+  const offered = computed((): ReturnType<MessageActions> => (props.actions ? props.actions(props.entry) : {}));
+  // The copy icon turns to a check for a moment once the message is copied; by entry id, as rows are recycled.
+  const copied = signal<string | null>(null);
+  effect(() => {
+    if (!copied()) return;
+    const timer = setTimeout(() => copied.set(null), 1500);
+    return () => clearTimeout(timer);
+  });
+  const justCopied = () => copied() === props.entry.id;
+  // Test IDs name the entry: `message-copy-0-12` for entry `0:12`.
+  const testID = (action: string) => `message-${action}-${props.entry.id.replace(/[^\w-]/g, "-")}`;
+  function copy() {
+    const id = props.entry.id;
+    void props.onCopy?.(props.entry).then(() => copied.set(id), () => {});
+  }
+  return (
+    <If when={props.meta || copyable() || offered().revert || offered().fork}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: pointer ? 2 : 4, justifyContent: props.end ? "flex-end" : "flex-start" }}>
         <If when={props.meta}>
-          <Text style={{ fontSize: text.caption, color: palette().muted }}>{props.meta}</Text>
+          <Text style={{ fontSize: text.caption, color: palette().muted, marginRight: 4 }}>{props.meta}</Text>
         </If>
-        <If when={actions()}>
-          <BaseButton accessibilityLabel="Message actions" hitSlop={10} onPress={() => props.onActions?.(props.entry)}
-            style={{ width: 28, height: 24, alignItems: "center", justifyContent: "center", borderRadius: radius.small, opacity: platform.desktop || platform.os === "web" ? 0.55 : 1 }}
-            hoverStyle={{ backgroundColor: palette().hover, opacity: 1 }} activeStyle={{ opacity: 0.5 }}>
-            <Icon name="more" size={14} color={palette().muted} />
-          </BaseButton>
+        <If when={copyable()}>
+          <ActionButton testID={testID("copy")} icon={justCopied() ? "check" : "copy"} label={justCopied() ? "Copied" : "Copy message"} onPress={copy} />
+        </If>
+        <If when={offered().revert}>
+          {revert => <ActionButton testID={testID("revert")} icon="history" label={revert().label} disabled={revert().disabled} onPress={() => revert().run()} />}
+        </If>
+        <If when={offered().fork}>
+          {fork => <ActionButton testID={testID("fork")} icon="branch" label={fork().label} disabled={fork().disabled} onPress={() => fork().run()} />}
         </If>
       </View>
     </If>
@@ -155,7 +201,11 @@ function Footer(props: { entry: EntryView; meta: string; onActions?: (entry: Ent
  * bindings, and what is expanded is kept by entry id outside the row.
  */
 export function TranscriptEntry(props: {
-  entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; onActions?: (entry: EntryView) => void; shared?: boolean;
+  entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; shared?: boolean;
+  /** Copies a message: without it, messages show no copy icon. It rejects when the message wasn't copied. */
+  onCopy?: (entry: EntryView) => Promise<void>;
+  /** Going back to a message and forking from it, where offered. */
+  actions?: MessageActions;
   /** The session whose transcript images this person sees (seesEntryImages): shown as thumbnails in place of their lines. */
   imagesOf?: string;
 }) {
@@ -208,7 +258,7 @@ export function TranscriptEntry(props: {
               </View>
             </If>
             {thumbnails(true)}
-            <Footer entry={props.entry} meta="" onActions={props.onActions} end />
+            <Footer entry={props.entry} meta="" onCopy={props.onCopy} actions={props.actions} end />
           </View>
         )}
       </If>
@@ -222,7 +272,7 @@ export function TranscriptEntry(props: {
             <If when={assistant().tool}>
               {tool => <ToolRow icon={tool().icon} name={tool().name} summary={tool().summary} meta={tool().meta} text={tool().text} trimmed={props.entry.trimmed} open={open()} onToggle={toggle} />}
             </If>
-            <Footer entry={props.entry} meta={assistant().meta} onActions={props.onActions} />
+            <Footer entry={props.entry} meta={assistant().meta} onCopy={props.onCopy} actions={props.actions} />
           </>
         )}
       </If>
