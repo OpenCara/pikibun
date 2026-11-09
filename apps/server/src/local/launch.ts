@@ -18,15 +18,14 @@ export const LOCAL_ORIGIN_HOST = '127.0.0.1';
 export const githubCallbackPath = '/api/auth/github/callback';
 
 /**
- * The client built for the web: `web/` beside the bundle (the published CLI stages the NSH build there, the Electron app
- * its React one), else the repository's `dist/preview` (`pnpm build`, NSH) or `dist/web` (`pnpm build:web`, the
- * deprecated React client) when running from source. Builds have assets or a web manifest beside their page; which
- * client one is, the server tells from its files (static.ts detectWebClient).
+ * The client built for the web: `web/` beside the bundle (the published CLI stages the NSH build there), else the
+ * repository's `dist/preview` (`pnpm build`) when running from source. Builds have assets or a web manifest beside
+ * their page.
  */
 export function defaultStaticDir(): string | undefined {
   let directory = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 6; depth++) {
-    for (const candidate of [join(directory, 'web'), join(directory, 'dist', 'preview'), join(directory, 'dist', 'web')]) {
+    for (const candidate of [join(directory, 'web'), join(directory, 'dist', 'preview')]) {
       if (existsSync(join(candidate, 'index.html'))
         && (existsSync(join(candidate, 'assets')) || existsSync(join(candidate, 'manifest.webmanifest')))) return candidate;
     }

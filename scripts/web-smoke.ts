@@ -1,13 +1,12 @@
 /**
  * Runs the web client (apps/nsh built for the web, as the server ships it) in a real headless Chrome against a test-mode
  * server on this machine: signed out, signed in with the browser's own session cookie, Settings and Back, Back between
- * typed addresses, a settings page opened from its address, and signing out; then, for NSH, a new account made with a
+ * typed addresses, a settings page opened from its address, and signing out; then a new account made with a
  * password, its first workspace, and a file attached through the browser's own file chooser. Fails on any page error, any
  * Content-Security-Policy violation and any console error but the expected 401 of a signed-out page and the 404 of the
  * made-up sessions whose addresses it types. Native Shell's headless engine can't catch these: it is not a browser, and
  * it has APIs the web runtime lacks. Uses the Chrome or Chromium CHROME_BIN names, or the first on PATH, over the
- * DevTools protocol (Node's own WebSocket; no browser library). `pnpm test:client-web` tests NSH; `pnpm test:web`
- * tests the restored production React client with its stricter policy.
+ * DevTools protocol (Node's own WebSocket; no browser library). Run it with `pnpm test:client-web`.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -21,7 +20,6 @@ import { startServer } from "../apps/server/src/serve.ts";
 import { buildWeb } from "./nsh.mjs";
 
 const TIMEOUT_MS = 20_000;
-const react = process.argv.includes("--react");
 
 function findChrome(): string {
   if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
@@ -214,17 +212,14 @@ const cleanups: (() => unknown)[] = [];
 let failed = false;
 try {
   console.log("Building the client for the web…");
-  if (react) {
-    const { build } = await import("vite");
-    await build({ configFile: resolve("apps/web/vite.config.ts"), build: { outDir: join(work, "web") } });
-  } else await buildWeb(join(work, "web"));
+  await buildWeb(join(work, "web"));
   /** A test-mode server of the built client on `serverPort`, with a database of its own named `name`. */
   const serve = async (serverPort: number, name: string, extra: Record<string, string> = {}) => {
     const started = await startServer(await loadConfig({
       APP_ORIGIN: `http://127.0.0.1:${serverPort}`, HOST: "127.0.0.1", PORT: String(serverPort), DATABASE_URL: `sqlite://${join(work, `${name}.sqlite`)}`,
       SESSION_SECRET: randomBytes(32).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"),
       TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3_600_000).toISOString(),
-      STATIC_DIR: join(work, "web"), STATIC_CLIENT: react ? "web" : "nsh",
+      STATIC_DIR: join(work, "web"),
       GITHUB_CLIENT_ID: "web-smoke-client", GITHUB_CLIENT_SECRET: "web-smoke-secret",
       ...extra,
     }));
@@ -256,128 +251,110 @@ try {
   if (!login.ok || !cookie) throw new Error(`test sign-in failed: ${login.status} ${await login.text()}`);
   const [name, ...value] = cookie.split("=");
   await page.send("Network.setCookie", { name, value: value.join("="), url: origin });
-  if (react) {
-    const { csrfToken } = await (await fetch(`${origin}/api/auth/csrf`, { headers: { Cookie: cookie } })).json() as { csrfToken: string };
-    const workspace = await fetch(`${origin}/api/workspaces`, { method: "POST", headers: {
-      Cookie: cookie, Origin: origin, "X-CSRF-Token": csrfToken, "Content-Type": "application/json",
-    }, body: JSON.stringify({ name: "Browser smoke" }) });
-    if (!workspace.ok) throw new Error(`creating the smoke workspace failed (${workspace.status})`);
-  }
 
   await page.goto(`${origin}/`);
-  // Everyone has a private workspace, pinned first, so both clients open on a new session there.
+  // Everyone has a private workspace, pinned first, so the client opens on a new session there.
   await page.waitForText("What should we work on?");
   console.log("✓ signed in with the browser's session, the session list shows");
 
-  if (!react) {
-    // Settings opened in the app and left with Back: the address follows each page, and Back stays back. The address was
-    // once set on the entry of the page underneath before Native Shell pushed its own, so Back reopened Settings.
-    const waitForAddress = async (wanted: string) => {
-      const deadline = Date.now() + TIMEOUT_MS;
-      let hash = "";
-      while (Date.now() < deadline) {
-        hash = await page.evaluate<string>("location.hash");
-        if (hash === wanted) return;
-        await new Promise(done => setTimeout(done, 100));
-      }
-      throw new Error(`The address is ${hash}, not ${wanted}.`);
-    };
-    await page.click("Settings");
-    // As a person would, once Settings has slid in: a press on a section while it still moves can miss it.
-    await page.waitForText("Appearance");
-    await new Promise(done => setTimeout(done, 600));
-    await page.clickUntil("Appearance", "System follows");
-    await waitForAddress("#/settings/appearance");
-    // As a person would, once Settings has slid in: Native Shell lets a press go while its button still moves under it.
-    await new Promise(done => setTimeout(done, 600));
-    await page.click("Back");
-    await waitForAddress("#/");
-    await new Promise(done => setTimeout(done, 1000));
-    if ((await page.text()).includes("System follows") || await page.evaluate<string>("location.hash") !== "#/") {
-      throw new Error("Back from Settings came back to Settings.");
+  // Settings opened in the app and left with Back: the address follows each page, and Back stays back. The address was
+  // once set on the entry of the page underneath before Native Shell pushed its own, so Back reopened Settings.
+  const waitForAddress = async (wanted: string) => {
+    const deadline = Date.now() + TIMEOUT_MS;
+    let hash = "";
+    while (Date.now() < deadline) {
+      hash = await page.evaluate<string>("location.hash");
+      if (hash === wanted) return;
+      await new Promise(done => setTimeout(done, 100));
     }
-    console.log("✓ settings opened in the app follow the address, and Back leaves them");
-
-    // Two sessions' addresses typed one after the other, then the browser's Back: it goes to the first. Wide windows show
-    // a session beside the list, without a page of its own, and Back between two once did nothing. (A session the server
-    // doesn't have opens all the same, saying so.)
-    await page.evaluate("location.hash = '#/s/smoke-first'");
-    await waitForAddress("#/s/smoke-first");
-    await page.evaluate("location.hash = '#/s/smoke-second'");
-    await waitForAddress("#/s/smoke-second");
-    await page.evaluate("history.back()");
-    await waitForAddress("#/s/smoke-first");
-    await new Promise(done => setTimeout(done, 1000));
-    if (await page.evaluate<string>("location.hash") !== "#/s/smoke-first") throw new Error("Back from a typed session address didn't stay on the one before.");
-    console.log("✓ Back goes to the session address typed before");
+    throw new Error(`The address is ${hash}, not ${wanted}.`);
+  };
+  await page.click("Settings");
+  // As a person would, once Settings has slid in: a press on a section while it still moves can miss it.
+  await page.waitForText("Appearance");
+  await new Promise(done => setTimeout(done, 600));
+  await page.clickUntil("Appearance", "System follows");
+  await waitForAddress("#/settings/appearance");
+  // As a person would, once Settings has slid in: Native Shell lets a press go while its button still moves under it.
+  await new Promise(done => setTimeout(done, 600));
+  await page.click("Back");
+  await waitForAddress("#/");
+  await new Promise(done => setTimeout(done, 1000));
+  if ((await page.text()).includes("System follows") || await page.evaluate<string>("location.hash") !== "#/") {
+    throw new Error("Back from Settings came back to Settings.");
   }
+  console.log("✓ settings opened in the app follow the address, and Back leaves them");
+
+  // Two sessions' addresses typed one after the other, then the browser's Back: it goes to the first. Wide windows show
+  // a session beside the list, without a page of its own, and Back between two once did nothing. (A session the server
+  // doesn't have opens all the same, saying so.)
+  await page.evaluate("location.hash = '#/s/smoke-first'");
+  await waitForAddress("#/s/smoke-first");
+  await page.evaluate("location.hash = '#/s/smoke-second'");
+  await waitForAddress("#/s/smoke-second");
+  await page.evaluate("history.back()");
+  await waitForAddress("#/s/smoke-first");
+  await new Promise(done => setTimeout(done, 1000));
+  if (await page.evaluate<string>("location.hash") !== "#/s/smoke-first") throw new Error("Back from a typed session address didn't stay on the one before.");
+  console.log("✓ Back goes to the session address typed before");
 
   // An address the page is opened at goes where it points.
   await page.goto(`${origin}/#/settings/profile`);
   await page.waitForText("Ada Lovelace");
   console.log("✓ a settings address opens that section");
-  // Both clients' Profile ends with the Account section: bring its Sign out button up from below the fold.
+  // Profile ends with the Account section: bring its Sign out button up from below the fold.
   await page.waitForText("Sign out");
-  await page.evaluate(`[...document.querySelectorAll('#app [aria-label="Sign out"], #root button')]
-    .filter(element => element.getAttribute('aria-label') === 'Sign out' || element.textContent.trim() === 'Sign out')
-    .at(-1)?.scrollIntoView({ block: 'center' })`);
+  await page.evaluate(`[...document.querySelectorAll('#app [aria-label="Sign out"]')].at(-1)?.scrollIntoView({ block: 'center' })`);
 
-  if (!react) {
-    await page.clickUntil("Sign out", "Sign out?", { scroll: true });
-    await page.click("Sign out");
-  } else {
-    await page.click("Sign out", { scroll: true });
-  }
+  await page.clickUntil("Sign out", "Sign out?", { scroll: true });
+  await page.click("Sign out");
   await page.waitForText("Continue with GitHub");
   const after = await page.evaluate<number>("fetch('/api/me').then(response => response.status)");
   if (after !== 401) throw new Error(`the browser is still signed in after signing out (${after})`);
   console.log("✓ signing out ended the browser's session on the server");
 
-  if (!react) {
-    // A new account with a username and password, on a server of its own that takes them and new accounts, as the React
-    // client makes one.
-    const passwordPort = await freePort();
-    await serve(passwordPort, "passwords", { PASSWORD_AUTH: "true", SIGNUP: "open" });
-    await page.goto(`http://127.0.0.1:${passwordPort}/#/`);
-    await page.click("New here? Create an account");
-    await page.type("Username", "smoke-tester");
-    await page.type("Password", "correct horse battery staple");
-    await page.type("Confirm password", "correct horse battery staple");
-    await page.click("Create account");
-    // A new account starts in its own private workspace, made for it, where a session needs no source.
-    await page.waitForText("What should we work on?");
-    console.log("✓ a new account made with a password, signed in, starts a session in its private workspace");
+  // A new account with a username and password, on a server of its own that takes them and new accounts.
+  const passwordPort = await freePort();
+  await serve(passwordPort, "passwords", { PASSWORD_AUTH: "true", SIGNUP: "open" });
+  await page.goto(`http://127.0.0.1:${passwordPort}/#/`);
+  await page.click("New here? Create an account");
+  await page.type("Username", "smoke-tester");
+  await page.type("Password", "correct horse battery staple");
+  await page.type("Confirm password", "correct horse battery staple");
+  await page.click("Create account");
+  // A new account starts in its own private workspace, made for it, where a session needs no source.
+  await page.waitForText("What should we work on?");
+  console.log("✓ a new account made with a password, signed in, starts a session in its private workspace");
 
-    // A file attached through the browser's own file chooser (the page's host), as NSH's picker takes only photos; then
-    // an image, which shows as a thumbnail (a blob: URL the page's policy allows).
-    const file = join(work, "notes.txt");
-    const image = join(work, "pixel.png");
-    await writeFile(file, "hello from the smoke test\n");
-    await writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==", "base64"));
-    let picking = file;
-    await page.send("Page.setInterceptFileChooserDialog", { enabled: true });
-    page.on("Page.fileChooserOpened", ({ backendNodeId }) => void page.send("DOM.setFileInputFiles", { files: [picking], backendNodeId }));
-    await page.click("Attach files");
-    await page.waitForText("notes.txt");
-    picking = image;
-    await page.click("Attach files");
-    const deadline = Date.now() + TIMEOUT_MS;
-    while (!await page.evaluate<boolean>(`Boolean(document.querySelector('[aria-label="Remove image 1"]'))`)) {
-      if (Date.now() > deadline) throw new Error(`The picked image never showed. The page says:\n${await page.text()}`);
-      await new Promise(done => setTimeout(done, 200));
-    }
-    console.log("✓ a file and an image picked in the browser's own chooser are attached to the first message");
-
-    // Notifications on this device: this browser can take pushes, through the service worker the build ships.
-    await page.evaluate("location.hash = '#/settings/notifications'");
-    await page.waitForText("This browser shows notifications even when no Pikibun tab is open.");
-    const worker = await page.evaluate<{ status: number; type: string; text: string }>(
-      "fetch('/sw.js').then(async response => ({ status: response.status, type: response.headers.get('content-type') ?? '', text: await response.text() }))");
-    if (worker.status !== 200 || !worker.type.includes("javascript") || !worker.text.includes("pikibun-open")) {
-      throw new Error(`The service worker isn't served: ${worker.status} ${worker.type}`);
-    }
-    console.log("✓ notifications on this device can be turned on, and the service worker that shows pushes is served");
+  // A file attached through the browser's own file chooser (the page's host), as NSH's picker takes only photos; then
+  // an image, which shows as a thumbnail (a blob: URL the page's policy allows).
+  const file = join(work, "notes.txt");
+  const image = join(work, "pixel.png");
+  await writeFile(file, "hello from the smoke test\n");
+  await writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==", "base64"));
+  let picking = file;
+  await page.send("Page.setInterceptFileChooserDialog", { enabled: true });
+  page.on("Page.fileChooserOpened", ({ backendNodeId }) => void page.send("DOM.setFileInputFiles", { files: [picking], backendNodeId }));
+  await page.click("Attach files");
+  await page.waitForText("notes.txt");
+  picking = image;
+  await page.click("Attach files");
+  const deadline = Date.now() + TIMEOUT_MS;
+  while (!await page.evaluate<boolean>(`Boolean(document.querySelector('[aria-label="Remove image 1"]'))`)) {
+    if (Date.now() > deadline) throw new Error(`The picked image never showed. The page says:\n${await page.text()}`);
+    await new Promise(done => setTimeout(done, 200));
   }
+  console.log("✓ a file and an image picked in the browser's own chooser are attached to the first message");
+
+  // Notifications on this device: this browser can take pushes, through the service worker the build ships.
+  await page.evaluate("location.hash = '#/settings/notifications'");
+  await page.waitForText("This browser shows notifications even when no Pikibun tab is open.");
+  const worker = await page.evaluate<{ status: number; type: string; text: string }>(
+    "fetch('/sw.js').then(async response => ({ status: response.status, type: response.headers.get('content-type') ?? '', text: await response.text() }))");
+  if (worker.status !== 200 || !worker.type.includes("javascript") || !worker.text.includes("pikibun-open")) {
+    throw new Error(`The service worker isn't served: ${worker.status} ${worker.type}`);
+  }
+  console.log("✓ notifications on this device can be turned on, and the service worker that shows pushes is served");
 
   if (page.problems.length) throw new Error(`The page reported problems:\n${page.problems.join("\n")}`);
   console.log("✓ no page errors, policy violations or console errors");

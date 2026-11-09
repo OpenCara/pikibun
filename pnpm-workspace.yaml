@@ -2,8 +2,6 @@ packages:
   - .
   - packages/cli
   - packages/client
-  - apps/desktop
 onlyBuiltDependencies:
-  - electron
   - esbuild
   - workerd

@@ -10,12 +10,12 @@ import { loadLocalState } from "../apps/server/src/local/state.js";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 
-test("a packaged local server discovers its build without --static-dir, React or NSH, and serves each with its own policy", async t => {
+test("a packaged local server discovers its build without --static-dir, and serves it with Native Shell's policy", async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-packaged-web-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const dist = join(root, "dist"), web = join(dist, "web");
   await mkdir(web, { recursive: true });
-  // Match the CLI/Electron layout, with dependencies external to the server bundle.
+  // Match the published CLI's layout, with dependencies external to the server bundle.
   await symlink(join(repository, "node_modules"), join(root, "node_modules"), "junction");
   await cp(join(repository, "apps/server/migrations"), join(dist, "migrations"), { recursive: true });
   const bundle = join(dist, "local-server.mjs");
@@ -23,10 +23,12 @@ test("a packaged local server discovers its build without --static-dir, React or
     bundle: true, splitting: false, platform: "node", format: "esm", target: "node24", packages: "external", logLevel: "silent" });
   const { defaultStaticDir, startLocalServer } = await import(pathToFileURL(bundle).href) as typeof import("../apps/server/src/local/launch.js");
   assert.equal(defaultStaticDir(), undefined);
-  await writeFile(join(web, "index.html"), '<!doctype html><html><head></head><body><div id="root">Packaged React</div></body></html>');
+  // The NSH build the published CLI ships: its page, Native Shell's runtime and a web manifest.
+  await writeFile(join(web, "index.html"), '<!doctype html><html><head></head><body>Packaged NSH</body></html>');
   assert.equal(defaultStaticDir(), undefined, "a page without its build artifacts is not a client build");
-  await mkdir(join(web, "assets"));
-  assert.equal(defaultStaticDir(), web, "React has assets, not manifest.webmanifest");
+  await writeFile(join(web, "manifest.webmanifest"), '{}');
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
+  assert.equal(defaultStaticDir(), web, "NSH builds are discoverable");
 
   const socket = createServer();
   await new Promise<void>(resolve => socket.listen(0, "127.0.0.1", resolve));
@@ -38,26 +40,11 @@ test("a packaged local server discovers its build without --static-dir, React or
   try {
     const page = await fetch(server.origin);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /Packaged React/);
-    assert.match(page.headers.get("Content-Security-Policy")!, /script-src 'self';/);
+    assert.match(await page.text(), /<base href="\/">[\s\S]*Packaged NSH/);
+    assert.match(page.headers.get("Content-Security-Policy")!, /'wasm-unsafe-eval'/);
     assert.equal((await fetch(`${server.origin}/api/health`)).status, 200);
   } finally {
     await server.close();
-  }
-
-  // The NSH build the published CLI ships: its page, Native Shell's runtime and a web manifest.
-  await rm(join(web, "assets"), { recursive: true });
-  await writeFile(join(web, "manifest.webmanifest"), '{}');
-  assert.equal(defaultStaticDir(), web, "NSH builds are discoverable");
-  await writeFile(join(web, "index.html"), '<!doctype html><html><head></head><body>Packaged NSH</body></html>');
-  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
-  const nsh = await startLocalServer({ stateDir, state });
-  try {
-    const page = await fetch(nsh.origin);
-    assert.match(await page.text(), /<base href="\/">[\s\S]*Packaged NSH/);
-    assert.match(page.headers.get("Content-Security-Policy")!, /'wasm-unsafe-eval'/);
-  } finally {
-    await nsh.close();
   }
   await rm(join(web, "index.html"));
   assert.equal(defaultStaticDir(), undefined, "a manifest alone is not a client build");

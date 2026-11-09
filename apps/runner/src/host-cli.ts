@@ -2,8 +2,8 @@ import { runAppHost } from "./app-host.js";
 import { ConnectorSetupError } from "./protocol.js";
 
 // `pikibun host --stdio`: this computer's host for the Pikibun app (apps/nsh's This Computer), which starts the command
-// itself and talks to it over stdin and stdout, as the Electron app talks to its bundled host (app-host.ts,
-// desktop-protocol.ts). Pairing codes reach it only on stdin, never on the command line.
+// itself and talks to it over stdin and stdout (app-host.ts, desktop-protocol.ts). Pairing codes reach it only on stdin,
+// never on the command line.
 
 const HELP = `Usage: pikibun host --stdio [--state-dir PATH]
 

@@ -1,7 +1,6 @@
 # Notifications
 
-Pikibun tells you when one of your sessions needs you or is done, on the web, in the Mac and Windows app, and on your
-iPhone or iPad:
+Pikibun tells you when one of your sessions needs you or is done, on the web and on your iPhone or iPad:
 
 - **Needs approval**: a session's agent waits for someone to approve what it wants to do (see
   [Approvals](approvals.md)).
@@ -18,10 +17,8 @@ device.
   browsers with Web Push (Chrome, Edge, Firefox, and Safari on macOS), notifications arrive even when no Pikibun tab is
   open. In other browsers, and on servers that can't send Web Push (see below), they arrive while a Pikibun tab is
   open. On iPhone and iPad, Safari only allows Web Push for a site added to the Home Screen, so use the app there.
-- **Mac and Windows app**: the same switch, in the app's **Settings → Notifications**. The app shows its own
-  notifications while a Pikibun window is open, even one that is minimized or behind other windows. Once every
-  window is closed (the app still running in the menu bar), they stop until you open one again. On macOS, allow
-  Pikibun in **System Settings → Notifications** if macOS asks.
+- **Desktop apps**: they don't show notifications yet (Native Shell has none to show); their **Settings →
+  Notifications** manages what you're told and on which devices.
 - **iPhone and iPad app**: **Settings → Notifications → On this device**. iOS asks for permission first.
 
 Clicking or tapping a notification opens its session. A notification about the session you're looking at isn't shown

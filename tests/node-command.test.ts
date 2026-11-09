@@ -137,7 +137,6 @@ test("the connector's own Node.js: only its node, package managers and headers, 
   assert.equal(connectorNode(join(root, "loose", "node"), versions), undefined);
   assert.equal(connectorNode(join(root, "alice", "bin", "nodejs"), versions), undefined);
   assert.equal(connectorNode(join(root, "missing")), undefined);
-  assert.equal(connectorNode(process.execPath, { ...process.versions, electron: "38.0.0" }), undefined, "the desktop app runs on Electron, not Node.js");
 
   const usr = { version: "24.11.0", packages: [], links: [], headers: false };
   assert.deepEqual(sandboxNodeMount({ ...usr, prefix: "/usr/local", bin: "/usr/local/bin" }), { bin: "/usr/local/bin" }, "already in /usr");

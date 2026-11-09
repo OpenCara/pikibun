@@ -1,5 +1,5 @@
 // Embeds the sandbox's Python programs (apps/runner/src/sandbox-python/*.py) in the connector as
-// apps/runner/src/sandbox-python.generated.ts, so every bundle (the CLI, the desktop app, the server's own runner) carries
+// apps/runner/src/sandbox-python.generated.ts, so every bundle (the CLI, the server's own runner) carries
 // them without copying files next to it. The .py files are the source, linted and type-checked as Python
 // (`pnpm python:check`); this writes the module (`pnpm python:embed`), and `--check` fails where it is out of date, as
 // tests/sandbox-python.test.ts does.

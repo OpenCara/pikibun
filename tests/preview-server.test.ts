@@ -19,14 +19,14 @@ test("preview configuration is explicit: an exact, distinct HTTPS origin, never 
     await assert.rejects(loadConfig({ ...environment, PREVIEW_ORIGIN: origin }), /PREVIEW_ORIGIN/, origin);
   }
   await assert.rejects(loadConfig({ ...environment, PREVIEW_STATIC_DIR: "dist/preview" }), /requires PREVIEW_ORIGIN/);
-  await assert.rejects(loadConfig({ ...environment, STATIC_CLIENT: "unknown" }), /STATIC_CLIENT/);
+  // The React client is gone: a server still set to serve it says so.
+  await assert.rejects(loadConfig({ ...environment, STATIC_CLIENT: "web" }), /React web client was removed/);
   await assert.rejects(loadConfig({ ...environment, APP_ORIGIN: "http://127.0.0.1", LOCAL_MODE: "true",
     LOCAL_CLAIM_SECRET: "x".repeat(43), PREVIEW_ORIGIN: preview }), /PREVIEW_ORIGIN/);
   const config = await loadConfig({ ...environment, PREVIEW_ORIGIN: preview });
   try {
     // Unset, the server serves the NSH build (dist/preview), whether it's built yet or not.
     assert.equal(config.staticDir, resolve("dist/preview"));
-    assert.equal(config.staticClient, "nsh");
     assert.deepEqual(config.preview, { origin: preview, staticDir: resolve("dist/preview") });
   } finally {
     await config.env.CONNECTOR_HUB!.close();
@@ -34,14 +34,14 @@ test("preview configuration is explicit: an exact, distinct HTTPS origin, never 
   }
 });
 
-test("production serves React/Electron, preview serves NSH, and each host's authentication keeps its own origin", async t => {
+test("each origin serves its own NSH build, and each host's authentication keeps its own origin", async t => {
   const root = await mkdtemp(join(tmpdir(), "pikibun-preview-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const web = join(root, "web"), nsh = join(root, "nsh");
   await mkdir(web);
   await mkdir(nsh);
-  await writeFile(join(web, "index.html"), '<html><head></head><body>React/Electron production</body></html>');
-  await writeFile(join(web, "production-ABCd1234.js"), 'console.log("production");');
+  await writeFile(join(web, "index.html"), '<html><head></head><body>NSH production</body></html>');
+  await writeFile(join(web, "nsh.abcdef0123.wasm"), new Uint8Array([0, 97, 115, 109]));
   await writeFile(join(nsh, "index.html"), '<html><head></head><body>NSH preview</body></html>');
   await writeFile(join(nsh, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
   const config = await loadConfig({ ...environment, STATIC_DIR: web, PREVIEW_ORIGIN: preview, PREVIEW_STATIC_DIR: nsh,
@@ -56,17 +56,16 @@ test("production serves React/Electron, preview serves NSH, and each host's auth
   });
   for (const path of ["/", "/index.html", "/settings/hosts"]) {
     const stable = await request(production, path);
-    assert.match(await stable.text(), /React\/Electron production/);
-    assert.match(stable.headers.get("content-security-policy")!, /script-src 'self';/);
-    assert.doesNotMatch(stable.headers.get("content-security-policy")!, /wasm-unsafe-eval/);
+    assert.match(await stable.text(), /<base href="\/">[\s\S]*NSH production/);
+    assert.match(stable.headers.get("content-security-policy")!, /wasm-unsafe-eval/);
     const experimental = await request(preview, path);
     assert.match(await experimental.text(), /<base href="\/">[\s\S]*NSH preview/);
     assert.match(experimental.headers.get("content-security-policy")!, /wasm-unsafe-eval/);
   }
   assert.equal((await request(preview, "/nsh.0123456789.wasm")).headers.get("content-type"), "application/wasm");
   assert.equal((await request(production, "/nsh.0123456789.wasm")).headers.get("content-type"), "text/html; charset=utf-8");
-  assert.match(await (await request("https://preview.pikibun.com.evil.example")).text(), /React\/Electron production/);
-  assert.match(await (await request(production, "/?preview=true")).text(), /React\/Electron production/);
+  assert.match(await (await request("https://preview.pikibun.com.evil.example")).text(), /NSH production/);
+  assert.match(await (await request(production, "/?preview=true")).text(), /NSH production/);
   assert.equal(await (await request(preview, "/", { method: "HEAD" })).text(), "");
   const apiMiss = await request(preview, "/api/no-such-route");
   assert.equal(apiMiss.status, 401, "API paths still require authentication, not the SPA page");
@@ -104,7 +103,7 @@ test("production serves React/Electron, preview serves NSH, and each host's auth
     t.after(() => direct.close());
     const spoofed = (path: string) => fetch(`http://127.0.0.1:${direct.address.port}${path}`, { redirect: "manual",
       headers: { "X-Forwarded-Proto": "https", "X-Forwarded-Host": new URL(preview).host } });
-    assert.match(await (await spoofed("/")).text(), /React\/Electron production/);
+    assert.match(await (await spoofed("/")).text(), /NSH production/);
     const auth = await spoofed("/api/auth/github");
     assert.equal(auth.status, 302);
     assert.equal(new URL(auth.headers.get("location")!).searchParams.get("redirect_uri"), `${production}/api/auth/github/callback`);

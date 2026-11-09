@@ -63,8 +63,7 @@ jobs:
       # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
       # lacks `lifecycle`, and the page's Content-Security-Policy applies), and only a browser shows it.
       - run: pnpm test:client-web
-      # The NSH web client into dist/preview. The deprecated React web client and Electron app (apps/web, apps/desktop)
-      # are no longer built or released here.
+      # The NSH web client into dist/preview.
       - run: pnpm build
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build

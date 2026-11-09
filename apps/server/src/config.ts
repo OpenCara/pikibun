@@ -4,7 +4,6 @@ import { ConnectorHubRegistry } from './connector-hub.js';
 import { openDatabase } from './db/index.js';
 import { openStorage } from './storage/index.js';
 import type { Env } from './types.js';
-import { detectWebClient, type WebClient } from './static.js';
 
 export interface ServerConfig {
   env: Env;
@@ -12,10 +11,8 @@ export interface ServerConfig {
   port: number;
   /** Honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a TLS-terminating proxy. */
   trustProxy: boolean;
-  /** The web client's build: the Native Shell client (`dist/preview`) by default, or the deprecated React one (`dist/web`). */
+  /** The web client's build: the Native Shell client, `dist/preview` by default. */
   staticDir: string;
-  /** The client `staticDir` holds: `STATIC_CLIENT`, else what the build is (static.ts detectWebClient). */
-  staticClient?: WebClient;
   /** Optional, exact origin serving the NSH preview, with the same API and separate host-only cookies. */
   preview?: { origin: string; staticDir: string };
   databaseUrl: string;
@@ -87,8 +84,10 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     }
   }
   const staticDir = resolve(processEnv.STATIC_DIR || 'dist/preview');
-  const staticClient = processEnv.STATIC_CLIENT || detectWebClient(staticDir);
-  if (staticClient !== 'web' && staticClient !== 'nsh') throw new ConfigurationError('STATIC_CLIENT must be "web" or "nsh".');
+  // The React web client is gone: a server still set to serve it says so rather than serving its build as NSH.
+  if (processEnv.STATIC_CLIENT && processEnv.STATIC_CLIENT !== 'nsh') {
+    throw new ConfigurationError('STATIC_CLIENT: the React web client was removed. Remove STATIC_CLIENT, and STATIC_DIR if it names dist/web, to serve the Native Shell client.');
+  }
   let preview: ServerConfig['preview'];
   if (processEnv.PREVIEW_ORIGIN) {
     try {
@@ -125,7 +124,7 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     env, port, databaseUrl, storageUrl,
     host: listenHost,
     trustProxy: trustProxyValue === 'true',
-    staticDir, staticClient,
+    staticDir,
     ...(preview ? { preview } : {}),
   };
 }

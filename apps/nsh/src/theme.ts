@@ -1,9 +1,8 @@
 import { colorScheme, signal } from "nsh";
 import { themes, type ThemeTokens } from "./tokens";
 
-// The web app's design system (apps/web/src/styles.css, "modelled on Paseo: minimal, spacious, quiet"), ported to NSH:
-// the same three themes (tokens.ts, checked against the stylesheet by tests/nsh-theme.test.ts), under the names this
-// app's kit reads. Hierarchy comes from weight and color, not size; one accent CTA per surface.
+// Pikibun's design system ("modelled on Paseo: minimal, spacious, quiet"), first drawn for the React web client: its
+// three themes (tokens.ts), under the names this app's kit reads. Hierarchy comes from weight and color, not size; one accent CTA per surface.
 
 export type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "running";
 

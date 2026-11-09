@@ -2,9 +2,9 @@ import { homedir } from "node:os";
 import type { AuthEvent, AuthInteraction, AuthPrompt, LoginOptions } from "@earendil-works/pi-ai";
 import type { LoginEvent, LoginMethodType, LoginPrompt, LoginProvider } from "./desktop-protocol.js";
 
-// Signing Pi in to a provider from a desktop app, as `pi`'s /login does: the provider's own sign-in flow (a browser
-// page, a device code, an API key) runs here on the host, through Pi's ModelRuntime, and saves its credential in Pi's
-// auth.json here. What the flow shows and asks goes to the app as LoginEvents; the owner's answers come back by prompt
+// Signing Pi in to a provider from the app (`pikibun host --stdio`), as `pi`'s /login does: the provider's own sign-in
+// flow (a browser page, a device code, an API key) runs here on the host, through Pi's ModelRuntime, and saves its
+// credential in Pi's auth.json here. What the flow shows and asks goes to the app as LoginEvents; the owner's answers come back by prompt
 // number. Credentials never cross to the app, and nothing a provider says is passed on unchecked.
 
 /** What of Pi's ModelRuntime signing in needs; tests pass their own. */
