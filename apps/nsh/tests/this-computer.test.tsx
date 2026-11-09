@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { hostCommand, installCommand, installFailure, launchProblem } from "../src/lib/this-computer";
+import { appCliFolder, hostCommand, installCommand, installFailure, launchProblem } from "../src/lib/this-computer";
 import { server, signedIn } from "./fixtures";
 
 // Settings › This Mac in the desktop builds: this computer as one of your hosts, through `pikibun host --stdio`, here a
@@ -26,17 +26,41 @@ describe("starting Pikibun's command", () => {
     expect(hostCommand("windows", "/bin/zsh")).toEqual({ command: "cmd", args: ["/d", "/c", "pikibun", "host", "--stdio"] });
   });
 
-  test("installs it with npm the same way, so the host's shell finds what npm installed", () => {
-    expect(installCommand("macos", "/bin/zsh")).toEqual({ command: "zsh", args: ["-ilc", "npm install -g pikibun@latest"] });
-    expect(installCommand("linux", "/usr/bin/bash")).toEqual({ command: "bash", args: ["-ilc", "npm install -g pikibun@latest"] });
-    expect(installCommand("macos", "/opt/homebrew/bin/fish").command).toBe("zsh");
-    expect(installCommand("windows", "/bin/zsh")).toEqual({ command: "cmd", args: ["/d", "/c", "npm", "install", "-g", "pikibun@latest"] });
+  test("keeps the app's own copy of the command in its data directory", () => {
+    expect(appCliFolder("macos", "/Users/ada/Library/Application Support/com.pikibun.app/")).toBe("/Users/ada/Library/Application Support/com.pikibun.app/cli");
+    expect(appCliFolder("windows", "C:\\Users\\Ada\\AppData\\Roaming\\com.pikibun.app")).toBe("C:\\Users\\Ada\\AppData\\Roaming\\com.pikibun.app\\cli");
+    expect(appCliFolder("linux", null)).toBe(null);
+  });
+
+  test("starts the app's own copy where there is one, else the one on PATH", () => {
+    const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
+    expect(hostCommand("macos", "/bin/zsh", mac)).toEqual({ command: "zsh",
+      args: ["-ilc", "PATH='/Users/ada/Library/Application Support/com.pikibun.app/cli/node_modules/.bin':\"$PATH\"; export PATH; exec pikibun host --stdio"] });
+    // Any path is one word to the shell, a quote included.
+    expect(hostCommand("linux", "/bin/bash", "/home/o'neil/.local/share/pikibun/cli").args[1])
+      .toBe("PATH='/home/o'\\''neil/.local/share/pikibun/cli/node_modules/.bin':\"$PATH\"; export PATH; exec pikibun host --stdio");
+    // Windows names it from the data directory, cmd's working directory, so no quoting through cmd.
+    expect(hostCommand("windows", undefined, "C:\\Users\\Ada Lovelace\\AppData\\Roaming\\com.pikibun.app\\cli")).toEqual({ command: "cmd",
+      args: ["/d", "/c", "if", "exist", "cli\\node_modules\\.bin\\pikibun.cmd", "(", "cli\\node_modules\\.bin\\pikibun.cmd", "host", "--stdio", ")", "else", "pikibun", "host", "--stdio"] });
+  });
+
+  test("installs it with npm the same way, into the app's own folder, or npm's global one without it", () => {
+    const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
+    expect(installCommand("macos", "/bin/zsh", mac)).toEqual({ command: "zsh",
+      args: ["-ilc", "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest"],
+      line: "npm install --prefix /Users/ada/Library/Application Support/com.pikibun.app/cli --no-audit --no-fund pikibun@latest" });
+    expect(installCommand("macos", "/opt/homebrew/bin/fish", mac).command).toBe("zsh");
+    expect(installCommand("windows", "/bin/zsh", "C:\\data\\cli").args).toEqual(["/d", "/c", "npm", "install", "--prefix", "cli", "--no-audit", "--no-fund", "pikibun@latest"]);
+    expect(installCommand("linux", "/usr/bin/bash", null)).toEqual({ command: "bash", args: ["-ilc", "npm install -g pikibun@latest"], line: "npm install -g pikibun@latest" });
+    expect(installCommand("windows", undefined, null).args).toEqual(["/d", "/c", "npm", "install", "-g", "pikibun@latest"]);
   });
 
   test("says why an install failed in a way the owner can act on", () => {
     expect(installFailure(["zsh:1: command not found: npm"], { code: 127 })).toMatch(/^npm isn't installed on this (computer|Mac)\. Install Node\.js 24 or newer/);
     expect(installFailure(["'npm' is not recognized as an internal or external command,"], { code: 1 })).toMatch(/^npm isn't installed/);
     expect(installFailure(["npm error Error: EACCES: permission denied, mkdir '/usr/local/lib/node_modules/pikibun'"], { code: 243 })).toMatch(/permission denied/);
+    expect(installFailure(["npm error code EACCES", "npm error   sudo chown -R 501:20 \"/Users/ada/.npm\""], { code: 243 }))
+      .toMatch(/Fix them in a terminal with sudo chown -R 501:20 "\/Users\/ada\/\.npm", then choose Install again\.$/);
     expect(installFailure([], { code: null, error: "timed out after 300000 ms" })).toBe("The install didn't finish: timed out after 300000 ms");
     expect(installFailure(["npm error code E404", "npm error 404 Not Found"], { code: 1 })).toBe("npm couldn't install pikibun: npm error code E404 npm error 404 Not Found");
   });
@@ -105,8 +129,8 @@ describe("This Mac", () => {
     // What npm said is in the activity.
     await app.press("text:Recent activity");
     await app.waitUntil(() => showsText("added 1 package in 2s"));
-    expect(showsText("Running npm install -g pikibun@latest.")).toBe(true);
-    expect(showsText("added 1 package in 2s")).toBe(true);
+    expect(showsText("Running npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest.")).toBe(true);
+    expect(showsText("npm installed pikibun in Pikibun's own folder.")).toBe(true);
   });
 
   test("too old a command is updated from npm the same way", async () => {
@@ -131,10 +155,15 @@ describe("This Mac", () => {
     await denied.app.waitFor("id:this-computer-install-button");
     await denied.app.press("id:this-computer-install-button");
     await denied.app.waitFor("id:this-computer-install");
-    expect(denied.showsText("npm couldn't write to its global folder on this Mac: permission denied. Run the command below in a terminal with sudo in front, then choose Refresh.")).toBe(true);
+    expect(denied.showsText("npm couldn't write a folder it needs on this Mac: permission denied. Run the command below in a terminal with sudo in front, then choose Refresh.")).toBe(true);
+    const rootCache = await openPanel({ command: "missing", npm: "root-cache" });
+    await rootCache.app.waitFor("id:this-computer-install-button");
+    await rootCache.app.press("id:this-computer-install-button");
+    await rootCache.app.waitFor("id:this-computer-install");
+    expect(rootCache.showsText("npm's cache on this Mac has files it can't write, left by an earlier sudo npm. Fix them in a terminal with sudo chown -R 501:20 \"/Users/ada/.npm\", then choose Install again.")).toBe(true);
   });
 
-  test("an install the login shell can't find afterwards says to put npm's folder on PATH", async () => {
+  test("a global install (with no app folder) the login shell can't find afterwards says to put npm's folder on PATH", async () => {
     const { app, showsText } = await openPanel({ command: "missing", npm: "elsewhere" });
     await app.waitFor("id:this-computer-install-button");
     await app.press("id:this-computer-install-button");

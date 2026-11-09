@@ -86,7 +86,8 @@ export function ThisComputerPanel(props: { host: ThisComputerHost; server: strin
 
 /**
  * Pikibun's command isn't installed, is too old for this app, or couldn't start: what to do about it. Install (or
- * Update) runs npm for the owner; the command to run in a terminal shows only when that didn't work.
+ * Update) runs npm for the owner, into the app's own folder; the command to run in a terminal shows only when that
+ * didn't work.
  */
 function CommandProblem(props: { problem: LaunchProblem; host: ThisComputerHost; server: string }) {
   const host = props.host;
@@ -111,7 +112,7 @@ function CommandProblem(props: { problem: LaunchProblem; host: ThisComputerHost;
             <Button variant="primary" icon="download" testID="this-computer-install-button" busy={host.installing()} disabled={host.installing() || host.inspecting()}
               label={host.installing() ? (update() ? "Updating pikibun" : "Installing pikibun") : update() ? "Update pikibun" : "Install pikibun"} onPress={install} />
           </View>
-          <If when={host.installing()}><Small>{`Running ${INSTALL_COMMAND}: this takes a minute. Its output is under Recent activity below.`}</Small></If>
+          <If when={host.installing()}><Small>npm is installing pikibun: this takes a minute. Its output is under Recent activity below.</Small></If>
           <If when={host.installError()}>
             <Feedback error={host.installError()} />
             <Small>To install it in a terminal instead:</Small>
