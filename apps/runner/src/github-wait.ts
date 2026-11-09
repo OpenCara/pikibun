@@ -21,6 +21,26 @@ export const githubWaitLimits = Object.freeze({
   noChecksSeconds: 120,
 });
 
+/**
+ * What the agent's instructions say about GitHub, by the tools it has: `github` for github_read and the brokered writes
+ * (piki:github), `gh` for the gh tool (piki:gh). Every github_read read goes against the session owner's own hourly
+ * quota (a wait reads again every `pollSeconds`), which sessions that read and wait with it can run out, while gh reads
+ * with the workspace's GitHub App token. So with gh the agent reads and waits for checks with gh, and keeps github_read for
+ * waiting for anything else to change, which gh has no command for, and github_comment, github_issue and github_merge for
+ * the writes gh refuses: on a host that isn't the session owner's own, with gh read-only, or in a call no person decided.
+ */
+export function githubInstructions(tools: { github: boolean; gh: boolean }): string {
+  if (!tools.github) return "";
+  if (!tools.gh) return "To wait for a pull request's CI or reviews, "
+    + "call github_read with wait: \"checks\" (until its checks complete) or \"change\" (until anything on it changes).";
+  return "For GitHub, use the gh tool rather than github_read, which spends the session owner's own GitHub rate limit: "
+    + "read issues and pull requests with it (gh issue view, gh pr view --comments, gh pr checks, gh run view <id> --log-failed, gh api), "
+    + "and wait for a pull request's CI with gh pr checks <n> --watch or gh run watch <id>, with a timeout_seconds long enough, rather than sleeping. "
+    + "Use github_read only to wait for anything else on a pull request (a comment, review or push), with wait: \"change\", "
+    + "and github_comment, github_issue and github_merge only where gh refuses to write: on a host that isn't the session owner's own, "
+    + "where the workspace set gh read-only, or in a call no person decided.";
+}
+
 /** Why a wait ended: what it waited for happened, or it didn't within its time. */
 export type GitHubWaitOutcome = "checks-completed" | "no-checks" | "changed" | "closed" | "timeout" | "stopped";
 
