@@ -116,8 +116,24 @@ class Page {
     await this.send("Page.navigate", { url });
   }
 
-  async waitForText(wanted: string) {
-    const deadline = Date.now() + TIMEOUT_MS;
+  /**
+   * Clicks `label` until `wanted` shows: a page sliding in or a list still scrolling can take a press elsewhere, as it
+   * can a person's, who presses again.
+   */
+  async clickUntil(label: string, wanted: string, options: { scroll?: boolean } = {}) {
+    for (let attempt = 1; ; attempt++) {
+      await this.click(label, options);
+      try {
+        await this.waitForText(wanted, attempt < 4 ? 3_000 : TIMEOUT_MS);
+        return;
+      } catch (error) {
+        if (attempt >= 4) throw error;
+      }
+    }
+  }
+
+  async waitForText(wanted: string, timeout = TIMEOUT_MS) {
+    const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       if ((await this.text().catch(() => "")).includes(wanted)) return;
       await new Promise(done => setTimeout(done, 200));
@@ -267,8 +283,10 @@ try {
       throw new Error(`The address is ${hash}, not ${wanted}.`);
     };
     await page.click("Settings");
-    await page.click("Appearance");
-    await page.waitForText("System follows");
+    // As a person would, once Settings has slid in: a press on a section while it still moves can miss it.
+    await page.waitForText("Appearance");
+    await new Promise(done => setTimeout(done, 600));
+    await page.clickUntil("Appearance", "System follows");
     await waitForAddress("#/settings/appearance");
     // As a person would, once Settings has slid in: Native Shell lets a press go while its button still moves under it.
     await new Promise(done => setTimeout(done, 600));
@@ -304,10 +322,11 @@ try {
     .filter(element => element.getAttribute('aria-label') === 'Sign out' || element.textContent.trim() === 'Sign out')
     .at(-1)?.scrollIntoView({ block: 'center' })`);
 
-  await page.click("Sign out", { scroll: true });
   if (!react) {
-    await page.waitForText("Sign out?");
+    await page.clickUntil("Sign out", "Sign out?", { scroll: true });
     await page.click("Sign out");
+  } else {
+    await page.click("Sign out", { scroll: true });
   }
   await page.waitForText("Continue with GitHub");
   const after = await page.evaluate<number>("fetch('/api/me').then(response => response.status)");
