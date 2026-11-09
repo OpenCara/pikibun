@@ -88,14 +88,26 @@ export function ownerGitAuthorization(access: RepositoryAccess): string {
   }
 }
 
-/** One bounded JSON exchange: manual redirects, fixed timeout, no upstream text in errors. */
-async function call(target: Api, url: string, init: { method?: string; body?: unknown } = {}): Promise<{ status: number; body: unknown }> {
+/**
+ * One bounded JSON exchange: manual redirects, fixed timeout, no upstream text in errors. `errorBody` reads a 4xx
+ * answer's JSON too (bounded, and undefined where it has none), for telling refusals apart; never to show it.
+ */
+async function call(target: Api, url: string, init: { method?: string; body?: unknown; errorBody?: boolean } = {}): Promise<{ status: number; body: unknown }> {
   let response: Response;
   try {
     response = await fetch(url, { method: init.method ?? 'GET', redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout),
       headers: { Accept: 'application/json', ...target.headers, 'User-Agent': userAgent, ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) });
   } catch { return unavailable(target.provider); }
+  if (init.errorBody && response.status >= 400 && response.status < 500) {
+    try {
+      const bytes = await boundedRepositoryBody(response, jsonBytes);
+      return { status: response.status, body: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) };
+    } catch {
+      await response.body?.cancel().catch(() => {});
+      return { status: response.status, body: undefined };
+    }
+  }
   if (response.status < 200 || response.status >= 300 || response.status === 204) {
     await response.body?.cancel().catch(() => {});
     return { status: response.status, body: undefined };
@@ -354,18 +366,22 @@ export async function openPullRequest(access: RepositoryAccess, pin: SessionRepo
         const item = object(target, value);
         return { url: webURL(target, item.html_url), number: positive(target, item.number), draft: item.draft === true, node: item.node_id };
       };
-      const made = await created(`${target.base}/repos/${pin.fullName}/pulls`, { title: input.title, head: input.head, base: input.base, body: input.body,
-        ...(input.draft ? { draft: true } : {}) }, [422]);
-      if (made !== null) { const { node: _node, ...pull } = parse(made); return { ...pull, created: true }; }
+      const answer = await call(target, `${target.base}/repos/${pin.fullName}/pulls`, { method: 'POST', errorBody: true,
+        body: { title: input.title, head: input.head, base: input.base, body: input.body, ...(input.draft ? { draft: true } : {}) } });
+      if (answer.status === 200 || answer.status === 201) { const { node: _node, ...pull } = parse(answer.body); return { ...pull, created: true }; }
+      if ([401, 403, 404].includes(answer.status)) permissionRequired(target.provider);
+      if (answer.status !== 422) unavailable(target.provider);
+      // GitHub answers 422 both for one already open and for a draft the repository can't have (drafts need a plan that
+      // has them, on private repositories), among others (no commits between the branches): its message tells them apart.
+      const refusal = JSON.stringify(answer.body ?? '').toLowerCase();
+      if (input.draft && /draft pull requests? (?:are|is) not supported|draft.*not (?:supported|available|enabled)/.test(refusal)) {
+        fail(422, 'draft_unsupported', 'GitHub refused a draft pull request for this repository; open it without draft: true.');
+      }
       const owner = pin.fullName.split('/')[0]!;
       const found = await existing(`${target.base}/repos/${pin.fullName}/pulls?state=open&head=${encodeURIComponent(`${owner}:${input.head}`)}&base=${encodeURIComponent(input.base)}`,
         body => array(target, body)[0] ?? null);
-      // GitHub answers 422 both for one already open and for a draft the repository can't have (drafts need a plan
-      // that has them, on private repositories): with none open, a draft that was asked for is the reason.
-      if (found === null) {
-        if (input.draft) fail(422, 'draft_unsupported', 'GitHub refused a draft pull request for this repository; open it without draft: true.');
-        unavailable(target.provider);
-      }
+      // None open: the 422 was another refusal (no commits between the branches, say).
+      if (found === null) unavailable(target.provider);
       const { node, ...open } = parse(found);
       if (!ready || !open.draft) return { ...open, created: false };
       // REST can't take a pull request out of draft: GraphQL's markPullRequestReadyForReview does, by its node id.

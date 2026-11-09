@@ -67,6 +67,8 @@ export interface PullRequestFlow {
   /** When its review window began: when it was made ready, or a push since then. */
   windowStart?: number;
   merged?: boolean;
+  /** Closed without merging, as github_read said. */
+  closed?: boolean;
   /** Whether the agent was already told to open its draft. */
   told?: boolean;
 }
@@ -89,14 +91,28 @@ const upToDate = /\bEverything up-to-date\b|\bis already up to date\b/;
 
 /**
  * The branches a `git push` names as its destinations (`git push origin HEAD:x`, `git push origin x`), without
- * `refs/heads/` or a force `+`; none where it names no refspec, and so pushes the branch's upstream.
+ * `refs/heads/` or a force `+`; none where it names no refspec, and so pushes the branch's upstream. `HEAD` (or `@`)
+ * stays as it is: the checked-out branch, whichever it is.
  */
 export function pushedBranches(args: readonly unknown[]): string[] {
   const positional = args.slice(1).filter((arg): arg is string => typeof arg === "string" && !arg.startsWith("-"));
   return positional.slice(1).map(refspec => {
     const destination = refspec.includes(":") ? refspec.slice(refspec.lastIndexOf(":") + 1) : refspec;
-    return destination.replace(/^\+/, "").replace(/^refs\/heads\//, "");
+    const branch = destination.replace(/^\+/, "").replace(/^refs\/heads\//, "");
+    return branch === "@" ? "HEAD" : branch;
   }).filter(Boolean);
+}
+
+/** Whether a push naming `branches` (pushedBranches) may have moved `branch`. */
+function pushMoves(branches: readonly string[], branch: string | undefined): boolean {
+  return !branch || !branches.length || branches.includes(branch) || branches.includes("HEAD");
+}
+
+/** Whether `url` is a pull request of the forge `tool` acts on, so a number it names means that one. */
+export function forgeOwns(tool: string, url: string): boolean {
+  if (tool === "glab") return /\/merge_requests\/\d+$/.test(url);
+  if (tool === "az") return /\/pullrequest\/\d+$/.test(url);
+  return tool === "gh" && /\/pull\/\d+$/.test(url);
 }
 
 /** A pull or merge request's web address in a forge tool's output, and its number. */
@@ -118,7 +134,8 @@ export function forgeStep(tool: string, args: readonly unknown[]): "create" | "r
   }
   if (tool === "glab" && first === "mr") {
     if (second === "create" || second === "new") return "create";
-    if (second === "update" && has("--ready", "-r")) return "ready";
+    // --ready has no short form (glab's -r is something else).
+    if (second === "update" && has("--ready")) return "ready";
     // It merges at once, or once a running pipeline succeeds: its output tells (see scheduledMerge).
     if (second === "merge" || second === "accept") return "merge";
   }
@@ -134,14 +151,31 @@ export function forgeStep(tool: string, args: readonly unknown[]): "create" | "r
 /** A merge command's output saying the merge is only scheduled (glab's auto-merge, once the pipeline succeeds). */
 const scheduledMerge = /when (?:the )?pipeline succeeds|auto-?merge|will be merged/i;
 
-/** Whether a create command asked for a draft: gh's and glab's --draft (-d), az's --draft true. */
-function asksDraft(args: readonly unknown[]): boolean {
+/**
+ * Whether a create command asked for a draft: gh's --draft (-d), glab's --draft or --wip (its -d is --description), az's
+ * --draft with a value (true unless false).
+ */
+export function asksDraft(tool: string, args: readonly unknown[]): boolean {
   const words = args.filter((arg): arg is string => typeof arg === "string");
-  const at = words.findIndex(word => word === "--draft" || word === "-d" || word.startsWith("--draft="));
+  if (tool === "gh") return words.some(word => word === "--draft" || word === "-d" || word === "--draft=true");
+  if (tool === "glab") return words.some(word => word === "--draft" || word === "--wip" || word === "--draft=true");
+  const at = words.findIndex(word => word === "--draft" || word.startsWith("--draft="));
   if (at < 0) return false;
   const word = words[at]!;
-  const value = word.startsWith("--draft=") ? word.slice(8) : words[at + 1];
-  return value !== "false";
+  return (word.startsWith("--draft=") ? word.slice(8) : words[at + 1]) !== "false";
+}
+
+/** The head branch a create command names (gh --head/-H, glab and az --source-branch/-s); none for the checked-out one. */
+export function createdBranch(tool: string, args: readonly unknown[]): string | undefined {
+  const words = args.filter((arg): arg is string => typeof arg === "string");
+  const options = tool === "gh" ? ["--head", "-H"] : ["--source-branch", "-s"];
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index]!;
+    if (options.includes(word)) return words[index + 1]?.replace(/^refs\/heads\//, "") || undefined;
+    const long = options.find(option => option.startsWith("--") && word.startsWith(`${option}=`));
+    if (long) return word.slice(long.length + 1).replace(/^refs\/heads\//, "") || undefined;
+  }
+  return undefined;
 }
 
 /** The pull request number a forge tool's arguments name: a number, a web address, or az's --id. */
@@ -220,6 +254,11 @@ function draftNote(flow: PullRequestFlow, readyCall: string): string {
     + `once the change is done (its tests pass, its last commit pushed), make it ready for review: ${readyCall}.`;
 }
 
+/** Whether `flow`'s pull request is done with: merged, or closed. */
+function done(flow: PullRequestFlow | undefined): boolean {
+  return flow?.merged === true || flow?.closed === true;
+}
+
 /** A time as the agent reads it: UTC, to the minute's second. */
 function clock(at: number): string {
   return new Date(at).toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -294,13 +333,14 @@ export class PrFlowState {
     if (call.toolName === "git") return this.#git(call, settings, now);
     if (call.toolName === "git_push") return this.#pushed(call, settings, now);
     if (call.toolName === "github_merge") return this.#merged(call);
+    if (call.toolName === "github_read") return this.#read(call);
     if (call.toolName === "gh" || call.toolName === "glab" || call.toolName === "az") return this.#forge(call, settings, now);
     return undefined;
   }
 
   #changed(clones: readonly string[]): string | undefined {
     // A change after its pull request merged is new work: a new pull request, from its own draft.
-    for (const directory of clones) if (this.#flows.get(directory)?.merged) this.#flows.delete(directory);
+    for (const directory of clones) if (done(this.#flows.get(directory))) this.#flows.delete(directory);
     const due = clones.map(directory => this.#flow(directory)).filter(flow => !flow.pull && !flow.told);
     for (const flow of due) flow.told = true;
     if (!due.length) return undefined;
@@ -320,14 +360,15 @@ export class PrFlowState {
     if (subcommand !== "push") return undefined;
     const flow = this.#flows.get(directory);
     const branches = pushedBranches(args);
-    // A push of other branches leaves the pull request as it is; one naming none pushes the checked-out branch's upstream.
-    if (flow?.branch && branches.length && !branches.includes(flow.branch)) return undefined;
+    // A push of other branches leaves the pull request as it is; one naming none pushes the checked-out branch's upstream,
+    // and one naming HEAD the checked-out branch: either may be its branch.
+    if (!pushMoves(branches, flow?.branch)) return undefined;
     return this.#pushedAgain(flow, operationOutcome(call.content).result, settings, now);
   }
 
   /** A push to a pull request that is ready: new commits for its reviewers, so a new review window. Not one that moved nothing. */
   #pushedAgain(flow: PullRequestFlow | undefined, result: string, settings: PrFlowSettings, now: number): string | undefined {
-    if (!flow || flow.windowStart === undefined || flow.merged || upToDate.test(result)) return undefined;
+    if (!flow || flow.windowStart === undefined || done(flow) || upToDate.test(result)) return undefined;
     flow.windowStart = now;
     return reviewNote(flow, settings, true) || undefined;
   }
@@ -378,19 +419,27 @@ export class PrFlowState {
       const directory = directoryOf(call.input.directory);
       const pull = pullRequestAddress(output);
       if (!directory || !pull) return undefined;
+      if (done(this.#flows.get(directory))) this.#flows.delete(directory);
       const flow = this.#flow(directory);
       if (flow.pull?.number === pull.number) return undefined;
       flow.pull = pull;
-      flow.draft = asksDraft(args);
+      const branch = createdBranch(call.toolName, args);
+      if (branch) flow.branch = branch;
+      flow.draft = asksDraft(call.toolName, args);
       if (!flow.draft) return this.#ready(flow, false, settings, now);
       return draftNote(flow, call.toolName === "glab" ? `glab mr update ${pull.number} --ready (with --title and --description for the finished change)`
         : call.toolName === "az" ? `az repos pr update --id ${pull.number} --draft false (with --title and --description for the finished change)`
         : `gh pr ready ${pull.number} (after gh pr edit ${pull.number} --title --body for the finished change)`);
     }
-    // Readying and merging name the pull request, or (gh, glab) mean the checked-out branch's: then the only one open.
+    // Readying and merging name the pull request by number, or (gh, glab) mean the checked-out branch's. A call in a clone
+    // with a pull request is about that one only, never another clone's. Elsewhere, only open pull requests of this
+    // tool's forge count (GitHub's #4 and GitLab's !4 are different ones), and only one the call singles out.
     const number = namedPull(args);
-    const open = this.flows.filter(flow => flow.pull && !flow.merged);
-    const flow = number === undefined ? (open.length === 1 ? open[0] : undefined) : open.find(item => item.pull!.number === number);
+    const own = (() => { const directory = directoryOf(call.input.directory); return directory ? this.#flows.get(directory) : undefined; })();
+    const usable = (item: PullRequestFlow | undefined) => !!item?.pull && !done(item) && forgeOwns(call.toolName, item.pull.url)
+      && (number === undefined || item.pull.number === number);
+    const others = this.flows.filter(usable);
+    const flow = own?.pull ? (usable(own) ? own : undefined) : others.length === 1 ? others[0] : undefined;
     if (!flow) return undefined;
     if (step === "ready") return flow.draft === false ? undefined : this.#ready(flow, false, settings, now);
     return scheduledMerge.test(output) ? undefined : this.#merge(flow);
@@ -399,6 +448,19 @@ export class PrFlowState {
   #merge(flow: PullRequestFlow): string {
     flow.merged = true;
     return `[pr-flow] #${flow.pull!.number} is merged. Tell the person, with its link: ${flow.pull!.url}.`;
+  }
+
+  /** github_read of one of the session's pull requests: merged or closed some other way (by a person, say). */
+  #read(call: ObservedCall): string | undefined {
+    let view: { url?: unknown; state?: unknown; pullRequest?: { merged?: unknown } } | null;
+    try { view = JSON.parse(operationOutcome(call.content).result); } catch { return undefined; }
+    if (!view || typeof view !== "object" || typeof view.url !== "string") return undefined;
+    const flow = this.flows.find(item => item.pull?.url === view!.url && !done(item));
+    if (!flow) return undefined;
+    if (view.pullRequest && typeof view.pullRequest === "object" && view.pullRequest.merged === true) return this.#merge(flow);
+    if (view.state !== "closed") return undefined;
+    flow.closed = true;
+    return `[pr-flow] #${flow.pull!.number} was closed without merging. Tell the person, with its link: ${flow.pull!.url}; don't reopen it unless they ask.`;
   }
 
   #merged(call: ObservedCall): string | undefined {
@@ -415,6 +477,7 @@ function flowLine(flow: PullRequestFlow, settings: PrFlowSettings, now: number):
   if (!flow.pull) return `- ${flow.directory}: changed, no pull request yet: open its draft now.`;
   const pull = `#${flow.pull.number} (${flow.pull.url})`;
   if (flow.merged) return `- ${flow.directory}: ${pull} is merged.`;
+  if (flow.closed) return `- ${flow.directory}: ${pull} was closed without merging.`;
   if (flow.draft === true) return `- ${flow.directory}: draft ${pull}: make it ready for review once the change is done.`;
   // Found by a push that didn't say whether it is a draft.
   if (flow.draft === undefined) return `- ${flow.directory}: ${pull} is open; if it is still a draft, make it ready for review once the change is done.`;

@@ -10,7 +10,7 @@ import { ExtensionStore } from "../apps/runner/src/extensions/store.js";
 import { pullRequestLine } from "../apps/runner/src/push.js";
 import { pikiExtension, pikiWorkflowExtensions } from "../packages/shared/src/piki-extensions.js";
 import {
-  cloneOf, DEFAULT_REVIEW_MINUTES, forgeStep, githubRepository, MAX_REVIEW_MINUTES, mergeMethod, operationOutcome, prFlowExtension, prFlowPrompt, PrFlowState,
+  asksDraft, cloneOf, createdBranch, DEFAULT_REVIEW_MINUTES, forgeOwns, forgeStep, githubRepository, MAX_REVIEW_MINUTES, mergeMethod, operationOutcome, prFlowExtension, prFlowPrompt, PrFlowState,
   pullRequestAddress, pushedBranches, pushedPullRequest, reviewMinutes, type ObservedCall, type PrFlowSettings,
 } from "../extensions/pr-flow/pr-flow.js";
 
@@ -137,6 +137,70 @@ test("only a push that moves the pull request's own branch starts a new review w
     assert.match(observe(call("git", { directory: "app", args }, executed("ok")), later)!, /re-review window starts again/, args.join(" "));
   }
   assert.deepEqual(pushedBranches(["push", "-u", "origin", "a:b", "c"]), ["b", "c"]);
+  // HEAD is the checked-out branch, which may be its branch: it counts.
+  assert.deepEqual(pushedBranches(["push", "origin", "@"]), ["HEAD"]);
+  assert.match(observe(call("git", { directory: "app", args: ["push", "origin", "HEAD"] }, executed("ok")), later)!, /re-review window starts again/);
+});
+
+test("each forge tool's own flags: glab's -d is --description, not a draft, and --ready has no short form", () => {
+  assert.equal(asksDraft("gh", ["pr", "create", "-d"]), true);
+  assert.equal(asksDraft("glab", ["mr", "create", "-d", "Fixes the parser"]), false);
+  assert.equal(asksDraft("glab", ["mr", "create", "--wip"]), true);
+  assert.equal(asksDraft("glab", ["mr", "create", "--draft"]), true);
+  assert.equal(asksDraft("az", ["repos", "pr", "create", "--draft", "true"]), true);
+  assert.equal(asksDraft("az", ["repos", "pr", "create", "--draft", "false"]), false);
+  assert.equal(forgeStep("glab", ["mr", "update", "4", "-r"]), undefined);
+  assert.equal(createdBranch("gh", ["pr", "create", "--head", "pikibun/s"]), "pikibun/s");
+  assert.equal(createdBranch("glab", ["mr", "create", "--source-branch=pikibun/s"]), "pikibun/s");
+  assert.equal(createdBranch("az", ["repos", "pr", "create", "-s", "refs/heads/pikibun/s"]), "pikibun/s");
+  assert.equal(createdBranch("gh", ["pr", "create", "--draft"]), undefined);
+  assert.equal(forgeOwns("glab", "https://gitlab.com/g/p/-/merge_requests/4"), true);
+  assert.equal(forgeOwns("gh", "https://gitlab.com/g/p/-/merge_requests/4"), false);
+  assert.equal(forgeOwns("gh", "https://github.com/acme/app/pull/4"), true);
+
+  // A merge request opened with -d (a description) is ready: its window starts, and it records the branch it names.
+  const state = new PrFlowState();
+  const mr = "https://gitlab.com/g/p/-/merge_requests/4";
+  const note = state.observe(call("glab", { directory: "app", args: ["mr", "create", "-d", "Fixes", "-s", "pikibun/s"] }, [{ type: "text", text: mr }]), settings(), "/w", isClone, 0)!;
+  assert.match(note, /#4 is ready for review/);
+  assert.equal(state.flows[0]!.branch, "pikibun/s");
+  assert.equal(state.observe(call("git", { directory: "app", args: ["push", "origin", "HEAD:other"] }, executed("ok")), settings(), "/w", isClone, 1), undefined);
+});
+
+test("a ready or merge call means its own clone's pull request, of its own forge, never another clone's of the same number", () => {
+  const state = new PrFlowState();
+  const observe = (item: ObservedCall) => state.observe(item, settings(30), "/w", isClone, 0);
+  // GitHub #4 in app, GitLab !4 in libs/core.
+  observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: false } },
+    executed(pullRequestLine({ url: "https://github.com/acme/app/pull/4", number: 4, created: true, draft: false }))));
+  observe(call("glab", { directory: "libs/core", args: ["mr", "create"] }, [{ type: "text", text: "https://gitlab.com/g/p/-/merge_requests/4" }]));
+  // gh in libs/core: that clone's pull request is GitLab's, so nothing.
+  assert.equal(observe(call("gh", { directory: "libs/core", args: ["pr", "merge", "4"] }, [{ type: "text", text: "Merged" }])), undefined);
+  // glab anywhere: only GitLab's !4.
+  assert.match(observe(call("glab", { args: ["mr", "merge", "4"] }, [{ type: "text", text: "Merged!" }]))!, /merge_requests\/4/);
+  const [app, core] = [state.flows.find(item => item.directory === "app")!, state.flows.find(item => item.directory === "libs/core")!];
+  assert.deepEqual([app.merged, core.merged], [undefined, true]);
+  // gh in app: app's #4.
+  assert.match(observe(call("gh", { directory: "app", args: ["pr", "merge", "4", "--squash"] }, [{ type: "text", text: "Merged" }]))!, /github\.com\/acme\/app\/pull\/4/);
+});
+
+test("github_read of a pull request merged or closed some other way ends its flow", () => {
+  const state = new PrFlowState();
+  const observe = (item: ObservedCall) => state.observe(item, settings(30), "/w", isClone, 0);
+  const read = (url: string, state: string, merged: boolean) => call("github_read", { repository: "acme/app", issue: 12 },
+    [{ type: "text", text: JSON.stringify({ url, state, pullRequest: { merged } }) }]);
+  observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: true, draft: false })));
+  assert.equal(observe(read(url, "open", false)), undefined);
+  assert.equal(observe(read("https://github.com/acme/app/pull/99", "closed", true)), undefined, "not this session's");
+  assert.match(observe(read(url, "closed", true))!, /#12 is merged/);
+  assert.equal(observe(read(url, "closed", true)), undefined, "said once");
+
+  const closing = new PrFlowState();
+  closing.observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: true } }, pushed({ created: true, draft: true })), settings(), "/w", isClone, 0);
+  assert.match(closing.observe(read(url, "closed", false), settings(), "/w", isClone, 0)!, /#12 was closed without merging/);
+  assert.match(prFlowPrompt(settings(), closing.flows, 0), /- app: #12 .* was closed without merging\./);
+  // New work in it is a new pull request.
+  assert.match(closing.observe(call("write_file", { path: "app/x.ts" }), settings(), "/w", isClone, 0)!, /first change in app/);
 });
 
 test("a pull request opened, readied or merged with the forge's own tool (gh, glab, az) is followed too", () => {

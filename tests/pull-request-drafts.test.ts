@@ -100,15 +100,20 @@ test('GitHub: draft: false marks the open draft ready for review, with the appro
   assert.deepEqual(await failure(openPullRequest(github, githubPin, input)), { status: 502, code: 'git_provider_unavailable' });
 });
 
-test('GitHub: a draft the repository refuses (422 with none open) says so, rather than that GitHub failed', async t => {
-  forge(t, call => {
-    if (call.method === 'POST' && call.url === 'https://api.github.com/repos/owner/repo/pulls') return Response.json({ message: 'Draft pull requests are not supported in this repository.' }, { status: 422 });
+test('GitHub: a draft the repository refuses says so, by GitHub\'s message; another 422 with none open is GitHub failing, as before', async t => {
+  let refusal = { message: 'Validation Failed', errors: [{ resource: 'PullRequest', code: 'custom', message: 'Draft pull requests are not supported in this repository.' }] };
+  const calls = forge(t, call => {
+    if (call.method === 'POST' && call.url === 'https://api.github.com/repos/owner/repo/pulls') return Response.json(refusal, { status: 422 });
     if (call.method === 'GET' && call.url.startsWith('https://api.github.com/repos/owner/repo/pulls?state=open')) return Response.json([]);
     return undefined;
   });
   const input = { head: 'pikibun/session', base: 'main', title: 'T', body: '' };
   assert.deepEqual(await failure(openPullRequest(github, githubPin, { ...input, draft: true })), { status: 422, code: 'draft_unsupported' });
+  assert.ok(!calls.some(call => call.method === 'GET'), 'no lookup: GitHub said why');
   assert.deepEqual(await failure(openPullRequest(github, githubPin, input)), { status: 502, code: 'git_provider_unavailable' }, 'without a draft, as before');
+  refusal = { message: 'Validation Failed', errors: [{ resource: 'PullRequest', code: 'custom', message: 'No commits between main and pikibun/session' }] };
+  assert.deepEqual(await failure(openPullRequest(github, githubPin, { ...input, draft: true })), { status: 502, code: 'git_provider_unavailable' },
+    'a draft refused for another reason isn\'t called unsupported');
 });
 
 test('GitHub Enterprise marks drafts ready through its own GraphQL endpoint', async t => {

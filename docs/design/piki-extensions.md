@@ -485,7 +485,8 @@ fixes the review points it judges valid, then the merge.
     (`Draft:`, `WIP:`, taken off again with every such prefix, never down to nothing); Bitbucket `draft`; Azure DevOps
     `isDraft`. The forge's answer to making it ready is checked on each: one still saying draft (a Gitea with prefixes of
     its own, say) fails as `pull_request_still_draft` rather than passing for ready. GitHub's 422 means both "already
-    open" and "no drafts here"; with none open and a draft asked for, it is `draft_unsupported`. The key is canonical after `base`, and both sides' validators take it, so approvals still compare equal;
+    open", "no drafts here" and "no commits between"; its message (read, bounded, never shown) tells "no drafts here"
+    apart, `draft_unsupported`. The key is canonical after `base`, and both sides' validators take it, so approvals still compare equal;
     a control plane that predates it refuses the push (400), as for any key it doesn't know. The completion says
     `draft` only for a push that asked, since connectors parse it strictly, and the push summary then says
     `, a draft` or `, ready for review`, which the extension reads back.
@@ -498,7 +499,11 @@ fixes the review points it judges valid, then the merge.
     the pull request's own branch (named by the push that opened it; a `git push` naming no refspec pushes the upstream),
     never one that answered up to date; a merge. The forges' tools count too: `gh pr create`/`ready`/`merge`, `glab mr
     create`/`update --ready`/`merge`, `az repos pr create`/`update --draft false`/`--status completed`, but not a merge
-    they only queue (`gh --auto`, `az --auto-complete`, glab's "when pipeline succeeds"). A change
+    they only queue (`gh --auto`, `az --auto-complete`, glab's "when pipeline succeeds"). Their flags are each tool's own
+    (glab's `-d` is `--description`; `--ready` has no short form), and a create's `--head`/`--source-branch` is the
+    flow's branch. A ready or merge call in a clone with a pull request means that one; elsewhere one of that tool's forge
+    the call singles out (GitHub's #4 and GitLab's !4 are different pull requests). `github_read` of a pull request
+    merged or closed by someone else ends its flow. A change
     after its merge is new work, with a new draft. Notes go on results the agent reads anyway, so nothing interrupts a
     message, and they never refuse or change what ran. The person's words come first: the prompt leaves the flow out
     where they ask for no pull request or no merge.
