@@ -12,6 +12,7 @@ import type { AuthorizationRequest, RunnerBinding, RunnerTicket, SubmitInput } f
 import { RunnerService } from "../apps/runner/src/server.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
+import { inTurn } from "../apps/runner/src/images.js";
 
 const SECRET = "runner-images-test-secret-not-a-production-secret";
 const hostMode = { skip: !["linux", "darwin"].includes(process.platform) || spawnSync("git", ["--version"]).status !== 0 };
@@ -198,6 +199,24 @@ test("collaborators' clients read the transcript's images as thumbnails or as th
     { entryId: message.id, index: 0, size: "full", path: "x" }, null]) {
     await assert.rejects(ask(input), refused(400, /Invalid image request/));
   }
+});
+
+test("one image is prepared at a time; the model's go ahead of waiting thumbnails, and each waits in a line of its own", async () => {
+  const ran: string[] = [];
+  const held = Promise.withResolvers<void>();
+  const work = (name: string, wait?: Promise<void>) => async () => { ran.push(`start ${name}`); await wait; ran.push(`end ${name}`); return name; };
+  const first = inTurn("thumbnail", work("thumbnail 0", held.promise));
+  const thumbnails = Array.from({ length: 32 }, (_, index) => inTurn("thumbnail", work(`thumbnail ${index + 1}`)));
+  // The thumbnails' line is full: one more is refused, and the model's line is still open.
+  assert.equal(typeof await inTurn("thumbnail", work("refused")), "symbol");
+  const model = inTurn("model", work("model"));
+  await delay(10);
+  assert.deepEqual(ran, ["start thumbnail 0"], "nothing starts while an image is prepared");
+  held.resolve();
+  assert.deepEqual(await Promise.all([first, model, ...thumbnails]), ["thumbnail 0", "model", ...Array.from({ length: 32 }, (_, index) => `thumbnail ${index + 1}`)]);
+  // Each ran alone, the model's right after the thumbnail under way, before the thumbnails that waited longer.
+  assert.deepEqual(ran.slice(0, 4), ["start thumbnail 0", "end thumbnail 0", "start model", "end model"]);
+  assert.ok(ran.every((line, index) => line.startsWith(index % 2 ? "end" : "start")));
 });
 
 test("pasted images the host can't read or take are refused before anything is queued, and a request ID binds its images", hostMode, async t => {

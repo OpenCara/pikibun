@@ -3530,10 +3530,6 @@ export class RunnerSession {
   }
 
   /**
-   * The session panel's file browser: one worktree path, read-only, as `write` sees it, since a collaborator could already
-   * have the agent read any file. Not exclusive with runs: it waits only for the sandbox's own queue, like a file tool.
-   */
-  /**
    * One image of the transcript as people's clients show it (see entry-images.ts): a thumbnail, or the image as the model
    * got it. Only an entry the view shows has its images read, and only by people who could already have the agent read
    * the files they came from (`write`), as the file browser takes. Not exclusive with runs: it reads the committed
@@ -3564,6 +3560,10 @@ export class RunnerSession {
     return { image: checked };
   }
 
+  /**
+   * The session panel's file browser: one worktree path, read-only, as `write` sees it, since a collaborator could already
+   * have the agent read any file. Not exclusive with runs: it waits only for the sandbox's own queue, like a file tool.
+   */
   async browse(ticket: RunnerTicket, path: string): Promise<SessionFiles> {
     this.assertTicket(ticket);
     await this.authorize(ticket.actorId, "write", ticket.policyVersion);

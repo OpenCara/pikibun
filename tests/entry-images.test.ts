@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { checkEntryImage, entryIdParts, entryImageLimits, entryImageRequest, withoutImageLines } from "../packages/shared/src/entry-images.js";
-import { createEntryImageCache, entryImageHref, seesEntryImages, shownImages, textBesideImages } from "../packages/client/src/entry-images.js";
+import { createEntryImageCache, entryImageCaches, entryImageHref, seesEntryImages, shownImages, textBesideImages } from "../packages/client/src/entry-images.js";
 import type { EntryView } from "../packages/shared/src/types.js";
 
 const png = Buffer.from("89504e470d0a1a0a", "hex").toString("base64");
@@ -35,8 +35,10 @@ test("collaborators see a transcript's images in place of the lines that stand f
   assert.deepEqual(shownImages(entry, true), entry.images);
   assert.deepEqual(shownImages(entry, false), []);
   assert.deepEqual(shownImages({ ...entry, images: undefined }, true), [], "an older host lists none: its lines stay");
-  assert.equal(textBesideImages(entry.text), "Look");
-  assert.equal(textBesideImages("[image image/png]"), "");
+  assert.equal(textBesideImages(entry.text, 2), "Look");
+  assert.equal(textBesideImages("[image image/png]", 1), "");
+  // Only the lines that stand for the entry's images, its last ones: a line typed to look like one stays.
+  assert.equal(textBesideImages("Like this:\n[image image/png]\nsee?\n[image image/png]", 1), "Like this:\n[image image/png]\nsee?");
   assert.equal(withoutImageLines("[image] is text\n[image image/png]"), "[image] is text");
   assert.equal(entryImageHref("s 1", "0:4", 1, "thumbnail"), "/api/sessions/s%201/images?entry=0%3A4&index=1&size=thumbnail");
 });
@@ -60,4 +62,15 @@ test("a client reads each image once, keeps the latest, and asks again for one t
   // Two are kept: "a" was the least recently asked for.
   assert.equal(cache.loaded("a"), undefined);
   assert.deepEqual(asked, ["a", "b", "b", "c"]);
+});
+
+test("a client keeps many thumbnails but only the few whole images last opened", async () => {
+  const caches = entryImageCaches(async () => ({ image: { mimeType: "image/png", data: png } }));
+  for (let index = 0; index < 5; index++) {
+    await caches.thumbnail.get(`thumbnail ${index}`);
+    await caches.full.get(`full ${index}`);
+  }
+  assert.ok(caches.thumbnail.loaded("thumbnail 0"));
+  assert.equal(caches.full.loaded("full 0"), undefined);
+  assert.ok(caches.full.loaded("full 1") && caches.full.loaded("full 4"));
 });

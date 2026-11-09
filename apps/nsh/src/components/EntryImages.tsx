@@ -1,7 +1,7 @@
 import { effect, Image, signal, Text, untracked, View } from "nsh";
 import { Button as BaseButton } from "nsh/base";
 import type { EntryImage, EntryImageSize } from "../../../../packages/shared/src/entry-images";
-import { createEntryImageCache, entryImageHref, errorMessage } from "../shared";
+import { entryImageCaches, entryImageHref, errorMessage } from "../shared";
 import { session } from "../lib/auth";
 import { Icon } from "../icons";
 import { ImageView } from "../session-panel/Files";
@@ -11,13 +11,14 @@ import { Banner, Button, FormSheet } from "../ui";
 // A transcript entry's images, as the web app's (entry-images.tsx): a thumbnail for each, read from the host as its row
 // is drawn (the transcript's list draws only rows near the screen), and the whole image in a sheet when it is pressed.
 
-const cache = createEntryImageCache(href => untracked(session).api<{ image: EntryImage }>(href));
+const caches = entryImageCaches(href => untracked(session).api<{ image: EntryImage }>(href));
 
 /** Thumbnails this tall, at their own aspect ratio up to twice as wide. */
 const HEIGHT = 120;
 
-/** The image at `href()` as a data: URL once loaded, or why it couldn't be. Rows are recycled, so `href` may change. */
-function createEntryImage(href: () => string) {
+/** The image at `href()`, of `size`, as a data: URL once loaded, or why it couldn't be. Rows are recycled, so `href` may change. */
+function createEntryImage(href: () => string, size: EntryImageSize) {
+  const cache = caches[size];
   const source = signal<string | undefined>(undefined);
   const error = signal("");
   const attempt = signal(0);
@@ -67,7 +68,7 @@ export function EntryImages(props: { sessionId: string; entryId: string; images:
 }
 
 function Thumbnail(props: { href: string; label: string; onOpen: () => void }) {
-  const image = createEntryImage(() => props.href);
+  const image = createEntryImage(() => props.href, "thumbnail");
   const size = signal<{ width: number; height: number } | null>(null);
   // A recycled row's new image has its own size.
   effect(() => { void props.href; size.set(null); });
@@ -97,7 +98,7 @@ function Thumbnail(props: { href: string; label: string; onOpen: () => void }) {
 }
 
 function WholeImage(props: { href: string; label: string }) {
-  const image = createEntryImage(() => props.href);
+  const image = createEntryImage(() => props.href, "full");
   return (
     <If when={!image.error()} else={<Banner tone="danger" title="Can't show this image" actions={<Button small variant="outline" label="Try again" onPress={image.retry} />}>{image.error()}</Banner>}>
       <If when={image.source()} else={<Text style={{ fontSize: text.body, color: palette().muted, padding: 16 }}>Loading image…</Text>}>

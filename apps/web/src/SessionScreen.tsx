@@ -158,7 +158,7 @@ function MessageActions({ entry, actions }: { entry: EntryView; actions?: Messag
 function TranscriptEntry({ entry, userId, actions, imagesOf }: { entry: EntryView; userId: string; actions?: MessageActionHandlers; imagesOf?: string }) {
   const actor = entry.actorId && <Username id={entry.actorId} you />;
   const images = shownImages(entry, imagesOf !== undefined);
-  const text = images.length ? textBesideImages(entry.text) : entry.text;
+  const text = images.length ? textBesideImages(entry.text, images.length) : entry.text;
   const thumbnails = images.length > 0 && imagesOf !== undefined && <EntryImages sessionId={imagesOf} entryId={entry.id} images={images} />;
   const { prose, calls } = entry.role === "assistant" ? splitToolCalls(entry.text) : { prose: entry.text, calls: [] };
   const toolLabel = calls.length > 0 && `Tool · ${calls[0].name}`;

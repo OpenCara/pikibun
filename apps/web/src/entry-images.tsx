@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { createEntryImageCache, entryImageHref } from "../../../packages/client/src/entry-images";
+import { entryImageCaches, entryImageHref } from "../../../packages/client/src/entry-images";
 import type { EntryImage, EntryImageSize } from "../../../packages/shared/src/entry-images";
 import { api, errorMessage } from "./api";
 import { Icon } from "./icons";
@@ -11,10 +11,11 @@ import { Alert, Button, Sheet, Spinner } from "./ui";
  * scrolls into view, and the whole image in a sheet when it is pressed.
  */
 
-const cache = createEntryImageCache(href => api<{ image: EntryImage }>(href));
+const caches = entryImageCaches(href => api<{ image: EntryImage }>(href));
 
-/** The image at `href` as a data: URL once loaded (null: not yet asked for), or why it couldn't be. */
-function useEntryImage(href: string | null) {
+/** The image at `href`, of `size`, as a data: URL once loaded (null: not yet asked for), or why it couldn't be. */
+function useEntryImage(href: string | null, size: EntryImageSize) {
+  const cache = caches[size];
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<{ source?: string; error?: string }>(() => ({ source: href ? cache.loaded(href) : undefined }));
   useEffect(() => {
@@ -25,7 +26,7 @@ function useEntryImage(href: string | null) {
     setState({});
     cache.get(href).then(source => { if (current) setState({ source }); }, error => { if (current) setState({ error: errorMessage(error) }); });
     return () => { current = false; };
-  }, [href, attempt]);
+  }, [href, attempt, cache]);
   return { ...state, retry: () => setAttempt(value => value + 1) };
 }
 
@@ -68,7 +69,7 @@ export function EntryImages({ sessionId, entryId, images }: { sessionId: string;
 function Thumbnail({ href, label, onOpen }: { href: string; label: string; onOpen: () => void }) {
   const ref = useRef<HTMLButtonElement>(null);
   const seen = useSeen(ref);
-  const image = useEntryImage(seen ? href : null);
+  const image = useEntryImage(seen ? href : null, "thumbnail");
   if (image.error) {
     return <button ref={ref} type="button" className="entry-image failed" onClick={image.retry} title={`${image.error} Press to try again.`} aria-label={`${label}: can't be shown. Try again`}>
       <Icon name="image" size={20} /><span className="small">Can't show</span>
@@ -80,7 +81,7 @@ function Thumbnail({ href, label, onOpen }: { href: string; label: string; onOpe
 }
 
 function WholeImage({ href, label }: { href: string; label: string }) {
-  const image = useEntryImage(href);
+  const image = useEntryImage(href, "full");
   if (image.error) {
     return <Alert variant="error" title="Can't show this image" actions={<Button variant="outline" size="sm" icon="refresh" onClick={image.retry}>Try again</Button>}>{image.error}</Alert>;
   }

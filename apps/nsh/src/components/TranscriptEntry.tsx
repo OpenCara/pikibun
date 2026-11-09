@@ -54,11 +54,11 @@ type Shown =
 
 /**
  * What an entry shows, as the Expo app's TranscriptEntry decided it. `shared`: a share link's, whose readers get no advice.
- * `images`: its images show as thumbnails, so their `[image <type>]` lines don't.
+ * `images`: how many of its images show as thumbnails, whose `[image <type>]` lines don't.
  */
-function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string, shared = false, images = false): Shown {
+function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string, shared = false, images = 0): Shown {
   const actor = entry.actorId ? name(entry.actorId, true) : "";
-  if (images) entry = { ...entry, text: textBesideImages(entry.text) };
+  if (images) entry = { ...entry, text: textBesideImages(entry.text, images) };
   const { prose, calls } = entry.role === "assistant" ? splitToolCalls(entry.text) : { prose: entry.text, calls: [] };
   const marks = autoApprovedSuffix(entry.autoApproved);
   const callName = calls.length > 1 ? `${calls[0]!.name} +${calls.length - 1}` : calls[0]?.name ?? "";
@@ -160,7 +160,7 @@ export function TranscriptEntry(props: {
 }) {
   const name = createUsername();
   const images = () => shownImages(props.entry, props.imagesOf !== undefined);
-  const shown = computed(() => describe(props.entry, props.userId, name, props.shared, images().length > 0));
+  const shown = computed(() => describe(props.entry, props.userId, name, props.shared, images().length));
   const thumbnails = (end?: boolean) => (
     <If when={images().length > 0 ? props.imagesOf : undefined}>
       {sessionId => <EntryImages sessionId={sessionId()} entryId={props.entry.id} images={images()} end={end} />}

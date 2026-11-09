@@ -56,9 +56,9 @@ export function briefEntry(entry: EntryView): EntryView {
   if (entry.role === "toolResult") {
     const lines = text.split("\n");
     const first = cut((lines.find(line => line.trim()) ?? "").trimEnd(), briefChars);
-    if (first === text) return entry;
-    // Its images go with the lines that stood for them.
-    const { images: _images, ...rest } = entry;
+    // Its images go with the lines that stood for them, even where its only line is one of them (a screenshot alone).
+    const { images, ...rest } = entry;
+    if (first === text) return images === undefined ? entry : rest;
     return { ...rest, text: first, trimmed: { lines: lines.length, chars: characters(text) } };
   }
   if (entry.role !== "assistant") return entry;

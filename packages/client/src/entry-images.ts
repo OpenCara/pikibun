@@ -1,4 +1,4 @@
-import { withoutImageLines, type EntryImage, type EntryImageSize } from "../../shared/src/entry-images";
+import { IMAGE_LINE, type EntryImage, type EntryImageSize } from "../../shared/src/entry-images";
 import type { EntryView, SessionRecord } from "../../shared/src/types";
 import { segment } from "./api";
 
@@ -23,9 +23,17 @@ export function shownImages(entry: EntryView, sees: boolean): { mimeType: string
   return sees && Array.isArray(entry.images) ? entry.images : [];
 }
 
-/** An entry's text beside its thumbnails: without the lines that stood for them, and without the blank end they leave. */
-export function textBesideImages(text: string): string {
-  return withoutImageLines(text).replace(/\s+$/, "");
+/**
+ * An entry's text beside its `count` thumbnails: without the lines that stood for them, and without the blank end they
+ * leave. The runner writes them after everything else the entry says, so they are its last `count` image lines: a line
+ * typed to look like one, above them, stays.
+ */
+export function textBesideImages(text: string, count: number): string {
+  const lines = text.split("\n");
+  for (let index = lines.length - 1, left = count; index >= 0 && left > 0; index--) {
+    if (IMAGE_LINE.test(lines[index]!)) { lines.splice(index, 1); left--; }
+  }
+  return lines.join("\n").replace(/\s+$/, "");
 }
 
 /** A data: URL of an image. */
@@ -33,7 +41,9 @@ export const imageSource = (image: EntryImage) => `data:${image.mimeType};base64
 
 /**
  * Images read for a client, by their href, so a transcript drawn again (a new view, a recycled row) asks the host once:
- * at most `limit`, the least recently shown going first. One that failed is asked for again when next shown.
+ * at most `limit`, the least recently shown going first. One that failed is asked for again when next shown. Clients
+ * keep thumbnails (up to 64 KiB each) in one, and whole images (up to megabytes) in a much smaller other
+ * (`entryImageCaches`).
  */
 export function createEntryImageCache(load: (href: string) => Promise<{ image: EntryImage }>, limit = 200) {
   const kept = new Map<string, { loading: Promise<string>; source?: string }>();
@@ -59,3 +69,8 @@ export function createEntryImageCache(load: (href: string) => Promise<{ image: E
   };
 }
 export type EntryImageCache = ReturnType<typeof createEntryImageCache>;
+
+/** A client's caches: the transcript's thumbnails, and the few whole images last opened. */
+export function entryImageCaches(load: (href: string) => Promise<{ image: EntryImage }>): Record<EntryImageSize, EntryImageCache> {
+  return { thumbnail: createEntryImageCache(load, 200), full: createEntryImageCache(load, 4) };
+}

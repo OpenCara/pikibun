@@ -9,7 +9,7 @@ export {
   type StreamStatus,
 } from "./live-session";
 export { COMPACTION_FAILED_TITLE, compactionFailureText } from "./compaction";
-export { createEntryImageCache, entryImageHref, imageSource, seesEntryImages, shownImages, textBesideImages, type EntryImageCache } from "./entry-images";
+export { createEntryImageCache, entryImageCaches, entryImageHref, imageSource, seesEntryImages, shownImages, textBesideImages, type EntryImageCache } from "./entry-images";
 export { copyText, messageCut, resendText, restoredDraft, rewindable, type MessageCut } from "./message-actions";
 export type { CompactionFailure } from "../../shared/src/types";
 export { decidedAsHostCommand, decidesHostCommand, decidesHostCommands, hostCommandWaiting, isHostCommand, offersAlwaysApprove, requesterAutoApproves, automaticNote, extensionToolArguments, extensionToolNotice } from "./host-commands";
