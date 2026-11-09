@@ -859,8 +859,10 @@ export class RunnerSession {
       if (this.binding.agent.tools.includes("git_push") && !off.has("git_push"))
         instructions += "\ngit_push publishes a clone's checked-out commit, as it is, to another branch of the workspace repository it was cloned from, "
           + "with approval: git_push {directory, branch}, where directory is the clone's path in the worktree. Pushes are fast-forward only (never forced); "
-          + "if the branch moved, fetch and merge or rebase first. Optionally request a pull request with pull_request {title, body, base?}; "
+          + "if the branch moved, fetch and merge or rebase first. Optionally request a pull request with pull_request {title, body, base?, draft?}; "
           + `to open one from the session branch once you pushed it, call git_push with branch ${branch}. `
+          + "With draft: true it opens as a draft; with draft: false it opens ready for review, or marks the branch's open draft ready for review, "
+          + "with that title and body. "
           + "To tag a commit that is already on a branch (a release tag on main, say), check it out in the clone and call "
           + "git_push {directory, branch, tag}: it creates that tag at the commit and moves no branch. Tags are never moved; "
           + "plain git push of tags is refused.";
@@ -2339,9 +2341,9 @@ export class RunnerSession {
 
   private clonePushTool(): ToolRegistration {
     const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first. Waits for an exact human approval unless the owner enabled auto-approve for this request.", parameters: obj({
+    return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. pull_request.draft true opens it as a draft; false opens it ready for review, or marks the branch's open draft ready for review with this title and body. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first. Waits for an exact human approval unless the owner enabled auto-approve for this request.", parameters: obj({
       directory: str(), branch: str(), tag: opt(str()),
-      pull_request: opt(obj({ title: str(), body: str(), base: opt(str()) }, { open: true })),
+      pull_request: opt(obj({ title: str(), body: str(), base: opt(str()), draft: opt(bool()) }, { open: true })),
     }, { open: true }), execute: async (args, api, call) => {
       await this.requireSessionTool("git_push");
       const attribution = await this.toolActor(api, true);
@@ -2356,7 +2358,8 @@ export class RunnerSession {
       const request = args.pull_request;
       const operation: GitPushOperation = { kind: "git.push", repository: repositoryPath(repository), directory: args.directory, branch: args.branch,
         ...(args.tag !== undefined ? { tag: args.tag } : {}), commit: head.commit,
-        ...(request ? { pullRequest: { title: request.title, body: request.body, ...(request.base !== undefined ? { base: request.base } : {}) } } : {}) };
+        ...(request ? { pullRequest: { title: request.title, body: request.body, ...(request.base !== undefined ? { base: request.base } : {}),
+          ...(request.draft !== undefined ? { draft: request.draft } : {}) } } : {}) };
       const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, operation, String(api.taskId), { permitted: true }), call);
       return text({ ...approval, admissionId: undefined });
     } });

@@ -471,6 +471,64 @@ of the host check each message before the agent sees it, and refuses those that 
    thing flagged, in fixed text within the charset the control plane's relay passes on; the auditor's own reason is
    model text a crafted message could steer, so it goes to standard error without a UI: the connector's log.
 
+## The pull request flow: piki:pr-flow
+
+Sessions opened pull requests when asked, at the end, and left them for people to review and merge. `piki:pr-flow` makes
+the pull request the session's way of working: a draft as soon as it starts changing a repository, ready for review once
+the change is done, a review window the workspace chooses (again after each fix, for a re-review) in which the agent
+fixes the review points it judges valid, then the merge.
+
+37. **A workflow, not a tool.** Every step is a tool the session has (`git`, `git_push`, `github_read` with `wait`,
+    `github_comment`, `github_merge`; `gh`, `glab`, `az` where those don't reach), each approved as it always is, so the
+    extension registers none. Its own tool would be an `extension.tool` card decided by the host's owner, and a second
+    path to the forge beside the broker. It is a Pi extension like the prompt audit, in its own package
+    (`extensions/pr-flow/`), built into the connector as `piki:pr-flow`, marked `workflow` in the catalogue so the
+    workspace page offers it when adding an extension (**Workflows**), beside the command-line tools.
+38. **Drafts through the broker.** `PullRequestRequest.draft` (types.ts) is the one change outside the extension:
+    `true` opens the pull request as a draft, leaving an open one as it is (never back to a draft); `false` opens it
+    ready, and marks the branch's open draft ready for review with the request's title and body, which the card shows
+    (`Push and make the pull request ready for review`); without it nothing changes. `openPullRequest`
+    (`push/targets.ts`) does it per forge: GitHub `draft` on create, and REST can't take a pull request out of draft, so
+    a `PATCH` of the title and body, then GraphQL's `markPullRequestReadyForReview` by its `node_id` (at
+    `/api/graphql` on GitHub Enterprise), whose 200 with `errors` is a refusal; GitLab and Gitea mark drafts by title
+    (`Draft:`, `WIP:`, taken off again with every such prefix, never down to nothing); Bitbucket `draft`; Azure DevOps
+    `isDraft`. The forge's answer to making it ready is checked on each: one still saying draft (a Gitea with prefixes of
+    its own, say) fails as `pull_request_still_draft` rather than passing for ready. GitHub's 422 means both "already
+    open", "no drafts here" and "no commits between"; its message (read, bounded, never shown) tells "no drafts here"
+    apart, `draft_unsupported`. The key is canonical after `base`, and both sides' validators take it, so approvals still compare equal;
+    a control plane that predates it refuses the push (400), as for any key it doesn't know. The completion says
+    `draft` only for a push that asked, since connectors parse it strictly, and the push summary then says
+    `, a draft` or `, ready for review`, which the extension reads back.
+39. **Guided by the prompt and by the results.** `before_agent_start` adds the flow to each message, with the
+    workspace's settings and where the session's pull requests stand. `tool_result` adds a note, `[pr-flow] ...`, to the
+    result where a step is due: the first change in a clone without a pull request (a file tool's path in a directory of
+    the worktree holding `.git`, or a `git commit`, `merge`, `rebase` ... there), once per clone; a draft opened, once;
+    a pull request made ready, with the time its window ends and the `github_read` and `github_merge` calls for it; a push
+    after that, plain `git push` or `git_push` without a pull request, which starts a new window, but only one that moved
+    the pull request's own branch (named by the push that opened it; a `git push` naming no refspec pushes the upstream),
+    never one that answered up to date; a merge. The forges' tools count too: `gh pr create`/`ready`/`merge`, `glab mr
+    create`/`update --ready`/`merge`, `az repos pr create`/`update --draft false`/`--status completed`, but not a merge
+    they only queue (`gh --auto`, `az --auto-complete`, glab's "when pipeline succeeds"). Their flags are each tool's own
+    (glab's `-d` is `--description`; `--ready` has no short form), and a create's `--head`/`--source-branch` is the
+    flow's branch. A ready or merge call in a clone with a pull request means that one; elsewhere one of that tool's forge
+    the call singles out (GitHub's #4 and GitLab's !4 are different pull requests). `github_read` of a pull request
+    merged or closed by someone else ends its flow. A change
+    after its merge is new work, with a new draft. Notes go on results the agent reads anyway, so nothing interrupts a
+    message, and they never refuse or change what ran. The person's words come first: the prompt leaves the flow out
+    where they ask for no pull request or no merge.
+40. **The review window is the agent's to keep.** `review-minutes` (a string flag, as settings are strings or
+    booleans; whole minutes, 0 to a week, 30 otherwise) is how long it waits once the pull request is ready, and again
+    after each pushed fix. On GitHub it waits with `github_read`'s `wait: "change"` (at most 30 minutes a call, so
+    again, or in a code mode script, until the window's end). It fixes what it judges valid and answers each point (why,
+    for what it doesn't change); it merges once approved with nothing left, or once a window ends with nothing new, and
+    never over a reviewer's latest request for changes it didn't make, which it leaves for the people. 0 merges as soon
+    as the pull request is ready; `wait-for-checks` (on) still lets checks finish and has failing ones fixed first.
+    `merge-method` picks `github_merge`'s method. What it saw is kept in memory, per session: a restarted connector
+    forgets the notes, never the flow, which every message's prompt restates.
+
+Later: waiting on GitLab and Azure DevOps reviews without polling (a `wait` for the forges' own read tools); a window
+kept by the session rather than the agent, so a long one survives the session closing (a scheduled prompt at its end).
+
 ## Where things are
 
 | Part | Where |
@@ -479,6 +537,8 @@ of the host check each message before the agent sees it, and refuses those that 
 | `piki:` sources | `packages/shared/src/host-extensions.ts` |
 | The command tool, its environment and output, in the sandbox or on the host | `apps/runner/src/extensions/piki/command.ts` |
 | The prompt audit, a Pi package of its own | `extensions/prompt-audit/` (`prompt-audit.ts`, `index.ts`, `package.json`); tests in `tests/prompt-audit.test.ts` |
+| The pull request flow, a Pi package of its own | `extensions/pr-flow/` (`pr-flow.ts`, `index.ts`, `package.json`); tests in `tests/pr-flow.test.ts` |
+| Draft pull requests and marking them ready | `apps/server/src/authority/push/targets.ts` (`openPullRequest`), `broker.ts`; `PullRequestRequest.draft` (types.ts); tests in `tests/pull-request-drafts.test.ts` |
 | The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session.ts` (the `browser` tool, `browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
 | The host's Chromium and its mounts | `apps/runner/src/browser-toolchain.ts`; `sandbox.ts` (`browser`) |

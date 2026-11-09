@@ -172,8 +172,8 @@ export const extensionLimits = Object.freeze({
   workspace: 32,
   installed: 64,
   /**
-   * Pikibun extensions a connector reports besides what it installed (piki-extensions.ts): 25 with one per kind of
-   * document source, room for more. A control plane from before takes 64 + 16 entries in all, so it refuses only a
+   * Pikibun extensions a connector reports besides what it installed (piki-extensions.ts): 27 with one per kind of
+   * document source and the pull request flow, room for more. A control plane from before takes 64 + 16 entries in all, so it refuses only a
    * report that also holds more than 55 installed extensions.
    */
   connector: 32,

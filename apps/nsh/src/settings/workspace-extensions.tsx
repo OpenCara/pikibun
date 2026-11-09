@@ -1,5 +1,5 @@
 import { signal, Text, untracked, View } from "nsh";
-import { pikiCommandExtensions, pikiExtension, pikiSessionToolExtensions, sessionToolExtensionOn } from "../../../../packages/shared/src/piki-extensions";
+import { pikiCommandExtensions, pikiExtension, pikiSessionToolExtensions, pikiWorkflowExtensions, sessionToolExtensionOn } from "../../../../packages/shared/src/piki-extensions";
 import {
   descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, workspaceTools, type ExtensionOffer, type ShadowKind, type WorkspaceTool, type WorkspaceTools,
 } from "../../../../packages/shared/src/workspace-tools";
@@ -293,6 +293,7 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
   const cli = () => (normalized() ? pikiExtension(normalized()!) : undefined);
   const offer = () => (normalized() ? extensionOffer(normalized()!, props.installed) : undefined);
   const offered = () => pikiCommandExtensions().filter(item => !props.taken.some(used => used.source === item.source));
+  const workflows = () => pikiWorkflowExtensions().filter(item => !props.taken.some(used => used.source === item.source));
   const editingCli = Boolean(existing && isPikiExtensionSource(existing.source));
   const extra = () => Object.keys(settings()).filter(name => !props.flags?.some(flag => flag.name === name));
   function submit() {
@@ -309,6 +310,15 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
         <Field label="Command-line tools" hint="These come with every host's connector: each host needs only the command itself, signed in by its owner.">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             <Each of={offered()} key={item => item.source}>
+              {item => <Button small variant={normalized() === item().source ? "primary" : "outline"} label={item().title} disabled={props.busy} onPress={() => source.set(item().source)} />}
+            </Each>
+          </View>
+        </Field>
+      </If>
+      <If when={!existing && workflows().length}>
+        <Field label="Workflows" hint="These come with every host's connector too: they guide how the agent works with the session's own tools, and add none. Set their settings with Edit once added.">
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            <Each of={workflows()} key={item => item.source}>
               {item => <Button small variant={normalized() === item().source ? "primary" : "outline"} label={item().title} disabled={props.busy} onPress={() => source.set(item().source)} />}
             </Each>
           </View>

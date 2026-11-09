@@ -138,10 +138,11 @@ export function validateOperation(value: unknown): Operation {
     const keys = Object.keys(op);
     const request = op.pullRequest as Record<string, unknown> | undefined;
     const validRequest = request === undefined || (!!request && typeof request === "object" && !Array.isArray(request)
-      && Object.keys(request).every(key => ["title", "body", "base"].includes(key))
+      && Object.keys(request).every(key => ["title", "body", "base", "draft"].includes(key))
       && text(request.title, 256) && !/[\r\n]/.test(request.title as string)
       && typeof request.body === "string" && request.body.length <= 60000 && !request.body.includes("\0")
-      && (request.base === undefined || validPushBranch(request.base)));
+      && (request.base === undefined || validPushBranch(request.base))
+      && (request.draft === undefined || typeof request.draft === "boolean"));
     if (typeof op.repository === "string" && op.repository.length <= 512 && /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){1,63}$/.test(op.repository)
       && !op.repository.split("/").some(part => [".", "..", ".git"].includes(part.toLowerCase()))
       && (op.directory === undefined || validCloneDirectory(op.directory))

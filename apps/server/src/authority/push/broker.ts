@@ -325,8 +325,8 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
     await recheckAccess(c.env, access);
     await authorize();
     await requireBinding(c, row.workspace_id, pin);
-    const pullRequest = await openPullRequest(access, pin, { head: operation.branch, base, title: pullRequestInput.title, body: pullRequestInput.body },
-      target.azureProjectId);
+    const pullRequest = await openPullRequest(access, pin, { head: operation.branch, base, title: pullRequestInput.title, body: pullRequestInput.body,
+      ...(pullRequestInput.draft === undefined ? {} : { draft: pullRequestInput.draft }) }, target.azureProjectId);
     // A push to a pull request this session already pushed to keeps showing its last read state until it is read again
     // (left unread, so the next sweep reads it first); merged and closed ones aren't carried over.
     await c.env.DB.query(`UPDATE push_credentials SET pull_request_url = ?, pull_request_checked_at = NULL, pull_request_state = (SELECT p.pull_request_state
@@ -335,8 +335,11 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
       ORDER BY p.completed_at DESC, p.created_at DESC, p.id DESC LIMIT 1) WHERE id = ?`).bind(pullRequest.url, sessionId, pullRequest.url, credentialId).run();
     await auditStatement(c.env, ledger.requested_by, 'git.push.pull_request', session.workspace_id, sessionId, {
       approvalId, credentialId, url: pullRequest.url, number: pullRequest.number, created: pullRequest.created, actingAs: row.owner_id,
+      ...(pullRequestInput.draft === undefined ? {} : { draft: pullRequest.draft }),
     }).run();
-    result.pullRequest = pullRequest;
+    // `draft` only for a push that asked about it: a connector that predates drafts takes no key it doesn't know.
+    result.pullRequest = { url: pullRequest.url, number: pullRequest.number, created: pullRequest.created,
+      ...(pullRequestInput.draft === undefined ? {} : { draft: pullRequest.draft }) };
   } catch (error) {
     let code = 'internal_error';
     if (error instanceof HTTPException && error.res) {

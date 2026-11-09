@@ -69,6 +69,11 @@ export interface PikiExtensionInfo {
    * is on. `source_read` is offered while any of them is on, and lists and reads only the sources of kinds that are on.
    */
   documentKinds?: readonly DocumentKind[];
+  /**
+   * A workflow: no tool of its own, but how the agent goes about its work with the session's tools (the pull request
+   * flow). The workspace page offers it when adding an extension, as it offers the command-line tools.
+   */
+  workflow?: boolean;
 }
 
 /** A document-source extension, one per kind of source: each turns source_read on for its kind. */
@@ -195,6 +200,11 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
     description: "Has a model of the host check each message from anyone but the host's owner before it reaches the agent, and refuses ones that reach for the host's credentials, files, environment or network. A message it can't check is refused too.",
     providers: [],
   },
+  {
+    name: "pr-flow", source: "piki:pr-flow", title: "Pull request flow", workflow: true,
+    description: "Has the agent carry each change through a pull request (a merge request on GitLab): a draft as soon as it starts changing a repository's files, ready for review once the change is done, then a review window (review-minutes) in which it fixes the valid review points and waits again for a re-review, then the merge. A review-minutes of 0 merges as soon as it is ready. Each step is the session's own tools, approved as always.",
+    providers: [],
+  },
 ] as const satisfies readonly PikiExtensionInfo[]);
 
 /** The Pikibun extension `source` names, if this version knows it. */
@@ -205,6 +215,11 @@ export function pikiExtension(source: string): PikiExtensionInfo | undefined {
 /** The Pikibun extensions that run a command-line tool, which the workspace page offers as such. */
 export function pikiCommandExtensions(): PikiExtensionInfo[] {
   return pikiExtensions.filter(item => item.tool !== undefined);
+}
+
+/** The Pikibun workflow extensions (`workflow`), which the workspace page offers when adding an extension. */
+export function pikiWorkflowExtensions(): PikiExtensionInfo[] {
+  return pikiExtensions.filter(item => item.workflow === true);
 }
 
 /** The Pikibun extensions that turn on session tools, which the workspace page lists whether or not the workspace chose them. */

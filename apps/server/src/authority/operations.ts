@@ -24,12 +24,15 @@ export function validRepositoryPath(value: unknown): value is string {
 function pullRequest(value: unknown): PullRequestRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(400, 'invalid_operation', 'Invalid pull request.');
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some(key => !['title', 'body', 'base'].includes(key))) fail(400, 'invalid_operation', 'Invalid pull request.');
+  if (Object.keys(input).some(key => !['title', 'body', 'base', 'draft'].includes(key))) fail(400, 'invalid_operation', 'Invalid pull request.');
   const title = text(input.title, 'pull request title', 256);
   if (!title.trim() || /[\r\n]/.test(title)) fail(400, 'invalid_operation', 'Invalid pull request title.');
   const body = text(input.body, 'pull request body', 60000, 0);
   if (input.base !== undefined && !validPushBranch(input.base)) fail(400, 'invalid_operation', 'Invalid pull request base branch.');
-  return { title, body, ...(input.base === undefined ? {} : { base: input.base as string }) };
+  if (input.draft !== undefined && typeof input.draft !== 'boolean') fail(400, 'invalid_operation', 'Invalid pull request draft flag.');
+  // Canonical key order (title, body, base, draft): approval review and broker hashes are computed over JSON.stringify.
+  return { title, body, ...(input.base === undefined ? {} : { base: input.base as string }),
+    ...(input.draft === undefined ? {} : { draft: input.draft as boolean }) };
 }
 
 /** A github.com repository as owner/name, never a URL or a path. */
