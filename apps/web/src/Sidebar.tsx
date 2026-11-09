@@ -11,7 +11,7 @@ import { sessionStatus } from "../../../packages/client/src/session-status";
 import { nestSessions } from "../../../packages/client/src/session-tree";
 import { canCreateSessions } from "../../../packages/shared/src/policy";
 import { copyWithNotice, useSessionMenu } from "./session-menu";
-import { DropdownMenu, IdentityBadge, Loading, RelativeTime, StatusDot, useContextMenu, useToast, type MenuEntry } from "./ui";
+import { DropdownMenu, IdentityBadge, Loading, RelativeTime, StatusDot, useContextMenu, useToast, WorkspaceBadge, type MenuEntry } from "./ui";
 
 /** Opens a right-click menu of `items` on the element that got the event (useContextMenu). */
 type OpenMenu = (event: MouseEvent<HTMLElement>, label: string, items: MenuEntry[]) => void;
@@ -41,10 +41,11 @@ function WorkspaceGroup({ workspace, sessions, route, collapsed, toggle, onNavig
     { label: "Copy workspace ID", icon: "copy", onSelect: () => copyWithNotice(workspace.id, "Workspace ID copied", notify) },
     { label: "Workspace settings", icon: "settings", onSelect: () => { window.location.hash = href({ name: "settings", section: "workspaces", id: workspace.id }); onNavigate(); } },
   ];
-  return <div className="workspace-group">
+  // The user's own private workspace is pinned first, set apart from the shared ones below it.
+  return <div className={workspace.personal ? "workspace-group personal" : "workspace-group"}>
     <div className="workspace-row" onContextMenu={event => openMenu(event, `${workspace.name} options`, workspaceItems)}>
-      <button type="button" className="nav-item" onClick={toggle} aria-expanded={!collapsed} title={workspace.name}>
-        <IdentityBadge name={workspace.name} id={workspace.id} />
+      <button type="button" className="nav-item" onClick={toggle} aria-expanded={!collapsed} title={workspace.personal ? `${workspace.name}: your private workspace, only for you` : workspace.name}>
+        <WorkspaceBadge workspace={workspace} />
         <span className="label">{workspace.name}</span>
       </button>
       <div className="row-actions">

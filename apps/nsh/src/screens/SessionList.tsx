@@ -77,13 +77,16 @@ export function SessionList(props: {
     });
   });
   const toggle = (id: string) => collapsed.update(current => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]));
-  const pulled = signal(false);
+  // The pull-to-refresh spinner shows while the reload a pull started runs, and only then: background reloads
+  // (polling, opening or leaving a session) keep the list where it is rather than pushing it down under a spinner.
+  const refreshing = signal(false);
+  /** The latest pull: an earlier one's reloads finishing don't hide the spinner of a later one still loading. */
+  let pulls = 0;
   function pullToRefresh() {
-    pulled.set(true);
-    data.refreshSessions();
-    data.refreshWorkspaces();
+    const pull = ++pulls;
+    refreshing.set(true);
+    void Promise.all([data.refreshSessions(), data.refreshWorkspaces()]).finally(() => { if (pull === pulls) refreshing.set(false); });
   }
-  const refreshing = () => pulled() && data.sessionsReloading();
   const inset = () => (props.compact ? 8 : 12);
 
   return (

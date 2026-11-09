@@ -9,6 +9,7 @@ import { ConstraintError, type Database } from '../db/types.js';
 import { fail, id, jsonObject, now, PASSWORD_USERNAME, passwordAuthEnabled, requireOrigin, signupMode, testMode } from '../http.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 import type { AppContext, Env, UserRow, WorkerEnv } from '../types.js';
+import type { NativeSignIn } from '../../../../packages/shared/src/types.js';
 
 /**
  * Username and password accounts, for servers whose operator sets PASSWORD_AUTH=true: people sign up as
@@ -16,8 +17,8 @@ import type { AppContext, Env, UserRow, WorkerEnv } from '../types.js';
  * default only someone holding a workspace's invite link, whose request to join that workspace is filed with the account.
  * The operator creates accounts from the command line as well (password-accounts-cli.ts). They are full accounts that
  * sign in with a cookie like GitHub's, but hold no GitHub token: github.com repositories need a GitHub sign-in, and other
- * providers work through personal access tokens under Settings → Profile → Connected accounts. Native apps still sign in with
- * GitHub only.
+ * providers work through personal access tokens under Settings → Profile → Connected accounts. Native apps sign in with
+ * them too (POST /api/auth/native/password), for a bearer token instead of the cookie.
  *
  * Usernames are one namespace for every account (users.username). A GitHub account chooses its own once, right after
  * signing up (POST /api/me/username), optionally with a password; it can then sign in with either, and set, change or
@@ -250,11 +251,11 @@ function signsInWithPassword(row: { user_id: string; auth_kind: UserRow['auth_ki
   return row.auth_kind === 'password' ? row.user_id.startsWith('password:') : row.auth_kind === 'github';
 }
 
-async function signIn(c: AppContext) {
-  requireEnabled(c.env);
-  requireOrigin(c);
-  const body = await jsonObject(c, 4096);
-  input(body, ['username', 'password']);
+/**
+ * Checks a typed username and password and starts a sign-in for its account: a browser's (cookie) or, with `native`, a
+ * native app's bearer session listed under its device name. Every wrong guess gets the same answer.
+ */
+async function passwordSignIn(c: AppContext, body: Record<string, unknown>, native?: { deviceName: string | null }) {
   // A malformed username can't name an account, so it gets the same answer as a wrong password.
   const typed = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
   const password = typedPassword(body.password);
@@ -274,7 +275,7 @@ async function signIn(c: AppContext) {
   }
   // Only a correct password says the account is suspended.
   if (row.suspended_at) fail(403, 'account_suspended', SUSPENDED);
-  const session = await newSession(c.env, row.user_id, 'password');
+  const session = await newSession(c.env, row.user_id, 'password', native);
   // Only while the password checked above is still the account's: a reset or change that landed while it was being
   // hashed signs the account out everywhere, and this sign-in must not outlive it.
   const [cleared, created] = await dbResult(c.env.DB.batch([
@@ -283,10 +284,33 @@ async function signIn(c: AppContext) {
     session.statementWhere('EXISTS (SELECT 1 FROM password_credentials WHERE user_id = ? AND password_hash = ?)', row.user_id, row.password_hash),
   ]));
   if (cleared!.changes !== 1 || created!.changes !== 1) fail(401, 'invalid_credentials', INCORRECT);
-  sessionCookie(c, session);
   const user = await dbResult(getUser(c.env, row.user_id));
   if (!user) fail(401, 'unauthorized', 'Authentication is required.');
+  return { session, user };
+}
+
+async function signIn(c: AppContext) {
+  requireEnabled(c.env);
+  requireOrigin(c);
+  const body = await jsonObject(c, 4096);
+  input(body, ['username', 'password']);
+  const { session, user } = await passwordSignIn(c, body);
+  sessionCookie(c, session);
   return c.json({ user: ownProfile(c.env, user) });
+}
+
+/**
+ * A native app's sign-in with a username and password: a bearer token in the answer, as /api/auth/native/token gives for
+ * GitHub, never a cookie. Like that route it has no origin check: it sets nothing a browser would send by itself, and a
+ * page of another site can't post its JSON without a CORS preflight the server never grants.
+ */
+async function nativeSignIn(c: AppContext) {
+  requireEnabled(c.env);
+  const body = await jsonObject(c, 4096);
+  input(body, ['username', 'password', 'deviceName']);
+  const deviceName = body.deviceName === undefined || body.deviceName === null ? null : safeText(body.deviceName, 'deviceName', 100);
+  const { session, user } = await passwordSignIn(c, body, { deviceName });
+  return c.json({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), user: ownProfile(c.env, user) } satisfies NativeSignIn);
 }
 
 /** The account's username: the one it chose, or a password account's from its ID (see USERNAME_MATCH). */
@@ -472,6 +496,7 @@ async function chooseUsername(c: AppContext) {
 export function registerPasswordAuth(app: Hono<WorkerEnv>): void {
   app.post('/api/auth/password/signup', privateResponse, signUp);
   app.post('/api/auth/password/login', privateResponse, signIn);
+  app.post('/api/auth/native/password', privateResponse, nativeSignIn);
   app.post('/api/me/password', privateResponse, authenticate, csrfGuard, setPassword);
   app.delete('/api/me/password', privateResponse, authenticate, csrfGuard, removePassword);
   app.post('/api/me/username', privateResponse, authenticate, csrfGuard, chooseUsername);

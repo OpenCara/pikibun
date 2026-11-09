@@ -5,6 +5,7 @@ import { containsRedaction, REDACTED } from "../../../packages/shared/src/redact
 import { builtinExtensions } from "../../../packages/shared/src/host-config";
 import { browserUnavailableText } from "../../../packages/shared/src/browser";
 import { tunnelUnavailableText, type SessionTunnelView } from "../../../packages/shared/src/tunnel";
+import { programsMissingText } from "../../../packages/shared/src/program-install";
 import { useSessionLink } from "./session-link";
 import { api, segment } from "./api";
 import { BackupList, backupDatabaseLabel, backupDownloadHref, backupLocationLabel, type Backup, type BackupDatabase, type BackupListing, type BackupListingResource } from "./backups";
@@ -473,9 +474,10 @@ function ExtensionsSection({ extensions }: { extensions: NonNullable<SessionView
       hint={item.tools.length ? `Tools: ${item.tools.join(", ")}` : "No tools: prompt or hooks only"}
       trailing={item.dev ? <StatusBadge tone="warning">Dev</StatusBadge> : item.required ? <StatusBadge tone="success">Required by the host</StatusBadge> : <StatusBadge tone="success">Running</StatusBadge>} />)}
     {(extensions.unavailable ?? []).map(item => <Row key={`unavailable ${item.source}`} leading={<Icon name="alert" size={16} />} title={<code>{item.source}</code>}
-      hint={item.source === "piki:browser" ? browserUnavailableText(item.reason) : item.source === "piki:tunnel" ? tunnelUnavailableText(item.reason)
+      hint={item.programs ? programsMissingText({ [item.tools[0] ?? item.source]: item.programs })
+        : item.source === "piki:browser" ? browserUnavailableText(item.reason) : item.source === "piki:tunnel" ? tunnelUnavailableText(item.reason)
         : "The workspace has it on, but this session can't offer its tools"}
-      trailing={<StatusBadge tone={["missing", "failed"].includes(item.reason) ? "warning" : "neutral"}>{item.reason === "downloading" ? "Not ready yet" : "Unavailable"}</StatusBadge>} />)}
+      trailing={<StatusBadge tone={["missing", "failed", "programs"].includes(item.reason) ? "warning" : "neutral"}>{item.programs ? "Missing programs" : item.reason === "downloading" ? "Not ready yet" : "Unavailable"}</StatusBadge>} />)}
     {(extensions.missingRequired ?? []).map(source => <Row key={`required ${source}`} leading={<Icon name="alert" size={16} />} title={<code>{source}</code>}
       hint="The host's owner requires it of every session on the host, which can't run it now: no message is sent until it can" trailing={<StatusBadge tone="danger">Missing</StatusBadge>} />)}
     {extensions.missing.map(source => <Row key={source} title={<code>{source}</code>} hint="Not on this host at this version: the session runs without it until the host's owner installs it"

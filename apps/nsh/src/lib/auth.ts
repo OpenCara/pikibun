@@ -23,6 +23,8 @@ const ORIGIN_KEY = "pikibun.origin";
  * scheme to be sent to.
  */
 const CALLBACK_PATH = "/api/auth/native/done";
+/** The name a native sign-in is listed under in Settings → Profile → Signed-in apps. */
+const deviceName = () => `Pikibun NSH (${platform.os})`;
 
 /** Who may create an account with a method, as /api/health reports it (the server's SIGNUP). */
 export type SignupMode = "open" | "invite" | "off";
@@ -216,7 +218,7 @@ export async function startGitHubSignIn(origin: string): Promise<GitHubSignIn> {
       const code = params.get("code");
       if (!code) throw new Error("The server did not return a sign-in code. Try again.");
       const exchange = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
-        "/api/auth/native/token", { method: "POST", body: { code, verifier, deviceName: `Pikibun NSH (${platform.os})` } });
+        "/api/auth/native/token", { method: "POST", body: { code, verifier, deviceName: deviceName() } });
       await establish(origin, exchange.token, exchange.expiresAt, exchange.user);
     },
   };
@@ -256,8 +258,17 @@ async function signedOutRequest<T>(path: string, body: Record<string, string>, f
   return answer as T;
 }
 
-/** The web: a username and password on a server that allows them; the server sets the browser session's cookie. */
-export async function signInWithPassword(username: string, password: string): Promise<void> {
+/**
+ * A username and password on a server that allows them. On the web the server sets the browser session's cookie; a
+ * native build gets a bearer token for `origin`, as GitHub's native sign-in does, kept like that one.
+ */
+export async function signInWithPassword(origin: string, username: string, password: string): Promise<void> {
+  if (!usesBrowserSession) {
+    const signIn = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
+      "/api/auth/native/password", { method: "POST", body: { username, password, deviceName: deviceName() } });
+    await establish(origin, signIn.token, signIn.expiresAt, signIn.user);
+    return;
+  }
   await signedOutRequest("/api/auth/password/login", { username, password }, "Sign-in failed");
   if (!await establishBrowserSession()) throw new Error("Signed in, but the server did not keep the session. Check that cookies are allowed.");
 }
