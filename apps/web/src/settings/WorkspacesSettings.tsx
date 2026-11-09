@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type UserProfile, type Workspace, type WorkspaceRole } from "../../../../packages/shared/src/types";
 import { adminManagedRoles, canCreateSessions } from "../../../../packages/shared/src/policy";
 import { gitProviderHasForge, gitProviderNames, repositoryLimits, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type WorkspaceRepository } from "../../../../packages/shared/src/repositories";
@@ -80,10 +80,7 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
   // A source's read setting changes what the connections list counts, and the reverse.
   const sourcesChanged = () => { repositories.refresh(); sources.refresh(); connections.refresh(); };
   return <>
-    <Section title="General">
-      <Row title="Name" trailing={<span>{workspace.name}</span>} />
-      <Row title="Your role" trailing={<StatusBadge tone={admin ? "success" : "neutral"}>{roleLabel[role]}</StatusBadge>} />
-    </Section>
+    <General workspace={workspace} admin={admin} role={role} />
     {canCreateSessions(role) && <Setup user={user} workspace={workspace} admin={admin} sourceCount={repositories.sourceCount} />}
     <Repositories workspace={workspace} admin={admin} {...repositories} connections={connections.connections} changed={sourcesChanged}
       documents={<DocumentSources workspaceId={workspace.id} workspaceName={workspace.name} admin={admin} {...sources} connections={connections.connections} changed={sourcesChanged} />} />
@@ -99,6 +96,44 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
     <Members workspace={workspace} admin={admin} owner={role === "owner"} />
     {admin && <DataExport workspace={workspace} />}
   </>;
+}
+
+/** The workspace's name, which its owner and admins can change, and the person's role. */
+function General({ workspace, admin, role }: { workspace: Workspace; admin: boolean; role: WorkspaceRole }) {
+  const { refreshWorkspaces } = useApp();
+  const action = useAction();
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(workspace.name);
+  // Start from the current name each time the sheet opens.
+  useEffect(() => { if (renaming) setName(workspace.name); }, [renaming, workspace.name]);
+  const next = name.trim();
+  function rename(event: FormEvent) {
+    event.preventDefault();
+    if (action.busy || !admin || !next) return;
+    if (next === workspace.name) { setRenaming(false); return; }
+    void action.run(async () => {
+      await api<{ workspace: Workspace }>(`/api/workspaces/${segment(workspace.id)}`, { method: "PATCH", body: { name: next } });
+      refreshWorkspaces();
+      setRenaming(false);
+    }, "Workspace renamed");
+  }
+  return <Section title="General">
+    <Row title="Name" trailing={<span className="inline"><span>{workspace.name}</span>
+      {admin && <Button variant="outline" size="sm" icon="pencil" disabled={action.busy} onClick={() => setRenaming(true)}>Rename</Button>}</span>} />
+    <Row title="Your role" trailing={<StatusBadge tone={admin ? "success" : "neutral"}>{roleLabel[role]}</StatusBadge>} />
+    {!renaming && action.notice && <CardBody><Feedback notice={action.notice} /></CardBody>}
+    <Sheet open={renaming} title="Rename workspace" onClose={() => { if (!action.busy) setRenaming(false); }} footer={<>
+      <Button variant="ghost" disabled={action.busy} onClick={() => setRenaming(false)}>Cancel</Button>
+      <Button type="submit" form="rename-workspace-form" variant="default" disabled={action.busy || !next}>{action.busy ? "Saving..." : "Rename"}</Button>
+    </>}>
+      <form id="rename-workspace-form" className="stack" onSubmit={rename}>
+        <Field label="Name" hint="Everyone in the workspace sees the new name">
+          <input className="input" required autoFocus maxLength={120} value={name} onChange={event => setName(event.target.value)} autoComplete="off" />
+        </Field>
+        <Feedback error={action.error} />
+      </form>
+    </Sheet>
+  </Section>;
 }
 
 function DataExport({ workspace }: { workspace: Workspace }) {

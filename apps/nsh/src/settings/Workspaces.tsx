@@ -1,4 +1,4 @@
-import { signal, untracked, View } from "nsh";
+import { signal, Text, untracked, View } from "nsh";
 import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type UserProfile, type WorkspaceRole } from "../../../../packages/shared/src/types";
 import { adminManagedRoles } from "../../../../packages/shared/src/policy";
 import {
@@ -16,7 +16,7 @@ import { openServerLink, opensServerPages } from "../lib/links";
 import { createAction, createResource } from "../lib/resource";
 import { createConnections } from "../hosts";
 import { Icon } from "../icons";
-import { palette } from "../theme";
+import { palette, text } from "../theme";
 import { Checkbox, Field, Select, TextField } from "../form";
 import {
   Badge, Banner, Button, CardBody, confirm, CopyField, DropdownMenu, EmptyState, Feedback, FormSheet, IconButton, IdentityBadge, Note, ResourceState, Row, Section, Small, StatusDot,
@@ -97,10 +97,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   const sourceCount = () => (repositories.data() ? repositories.data()!.sources ?? repositories.data()!.repositories.length : null);
   return (
     <>
-      <Section title="General">
-        <Row title="Name" trailing={workspace().name} />
-        <Row title="Your role" trailing={<Badge tone={admin() ? "success" : "neutral"}>{roleLabel[role()]}</Badge>} />
-      </Section>
+      <General workspace={workspace()} admin={admin()} role={role()} />
       <If when={canCreateSessions(role())}><Setup workspace={workspace()} admin={admin()} sourceCount={sourceCount()} go={props.go} /></If>
       <Repositories workspace={workspace()} admin={admin()} repositories={repositories.data()?.repositories ?? null} sourceCount={sourceCount()}
         loading={repositories.loading() && !repositories.data()} error={repositories.error()} refresh={repositories.refresh}
@@ -129,6 +126,46 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
         </Section>
       </If>
     </>
+  );
+}
+
+/** The workspace's name, which its owner and admins can change, and the person's role, as the web app's General. */
+function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceRole }) {
+  const data = useAppData();
+  const action = createAction();
+  const renaming = signal(false);
+  const name = signal("");
+  const open = () => { action.clear(); name.set(props.workspace.name); renaming.set(true); };
+  async function rename() {
+    const next = name().trim();
+    if (action.busy() || !props.admin || !next) return;
+    if (next === props.workspace.name) { renaming.set(false); return; }
+    const saved = await action.run(async () => {
+      await session().api<{ workspace: Workspace }>(`/api/workspaces/${segment(props.workspace.id)}`, { method: "PATCH", body: { name: next } });
+      data.refreshWorkspaces();
+    }, "Workspace renamed");
+    if (saved) renaming.set(false);
+  }
+  return (
+    <Section title="General">
+      <Row title="Name" trailing={<If when={props.admin} else={props.workspace.name}>
+        <Text style={{ fontSize: text.body, color: palette().muted, textAlign: "right" }}>{props.workspace.name}</Text>
+        <Button small variant="outline" icon="pencil" label="Rename" testID="workspace-rename" disabled={action.busy()} onPress={open} />
+      </If>} />
+      <Row title="Your role" trailing={<Badge tone={props.admin ? "success" : "neutral"}>{roleLabel[props.role]}</Badge>} />
+      <If when={!renaming() && action.notice()}><CardBody><Feedback notice={action.notice()} /></CardBody></If>
+      <FormSheet open={renaming()} title="Rename workspace" onClose={() => { if (!action.busy()) renaming.set(false); }} testID="rename-workspace-sheet"
+        footer={<>
+          <Button label="Cancel" disabled={action.busy()} onPress={() => renaming.set(false)} />
+          <Button testID="workspace-rename-save" variant="primary" label={action.busy() ? "Saving…" : "Rename"} disabled={action.busy() || !name().trim()}
+            onPress={() => void rename()} />
+        </>}>
+        <Field label="Name" hint="Everyone in the workspace sees the new name">
+          <TextField testID="workspace-rename-name" value={name()} onChange={value => name.set(value)} maxLength={120} autoFocus onSubmit={() => void rename()} />
+        </Field>
+        <Feedback error={action.error()} />
+      </FormSheet>
+    </Section>
   );
 }
 

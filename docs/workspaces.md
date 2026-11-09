@@ -2,6 +2,8 @@
 
 Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Transcripts**, **Approvals**, **Sub-task sessions**, **Session database**, **Members** and, for owners and admins, **Data export**.
 
+Owners and admins rename a workspace with **General → Rename** (`PATCH /api/workspaces/:id` with `{"name": "…"}`); everyone in it sees the new name. The audit log records who renamed it, not the names.
+
 Owners and admins add people with **Members → Add member**, entering the person's **User ID** and a role; saving an existing member changes their role, which takes effect at once. Or they share an invite link instead (see [Invite links and pending members](#invite-links-and-pending-members)). Below the owner there are four tiers:
 
 - **Viewer**: follows workspace-visible sessions read-only and can't start sessions, restore a backup into a new one, or move one to another host. A session role can't give a viewer more than session viewer (read).
@@ -16,6 +18,7 @@ Owners and admins add people with **Members → Add member**, entering the perso
 | Send messages to any workspace-visible session | ✓ | ✓ | ✓ | | |
 | View, message and stop any session, private ones included | ✓ | ✓ | | | |
 | Rename, archive or unarchive any session, change its visibility and tool output, give it session roles, turn off its share link | ✓ | ✓ | | | |
+| Rename the workspace | ✓ | ✓ | | | |
 | Add and remove sources (repositories, documents), set repositories' push policy and Git LFS | ✓ | ✓ | | | |
 | Manage push identities | ✓ | ✓ | | | |
 | Set network access | ✓ | ✓ | | | |

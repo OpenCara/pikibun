@@ -256,6 +256,31 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
     return c.json({ workspace }, 201);
   });
 
+  // Its owner or an admin renames a workspace. The audit records that it was renamed, never the names.
+  app.patch('/api/workspaces/:id', async c => {
+    const workspaceId = identifier(c.req.param('id'), 'workspaceId');
+    const actorId = c.get('auth').userId;
+    await requireMember(c.env, workspaceId, actorId, ['owner', 'admin']);
+    const body = await jsonObject(c);
+    onlyFields(body, ['name']);
+    const name = nameInput(body.name);
+    const result = await c.env.DB.batch<Workspace>([
+      // The authority is checked again in the write: a demotion racing the rename changes nothing.
+      c.env.DB.query<never>(`UPDATE workspaces SET name = ?
+        WHERE id = ? AND EXISTS (SELECT 1 FROM workspace_members actor
+          WHERE actor.workspace_id = workspaces.id AND actor.user_id = ? AND actor.role IN ('owner', 'admin'))`)
+        .bind(name, workspaceId, actorId),
+      auditAfterChange(c.env, actorId, 'workspace.renamed', workspaceId, {}),
+      c.env.DB.query<Workspace>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role
+        FROM workspaces w
+        INNER JOIN workspace_members member ON member.workspace_id = w.id AND member.user_id = ?
+        WHERE w.id = ?`).bind(actorId, workspaceId),
+    ]);
+    const workspace = result[2].results[0];
+    if (result[0].changes !== 1 || !workspace) fail(403, 'forbidden', 'Workspace administrator access is required.');
+    return c.json({ workspace });
+  });
+
   app.get('/api/workspaces/:id/members', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;
