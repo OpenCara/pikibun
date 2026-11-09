@@ -501,7 +501,7 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   const { summary: _summary, ...make } = bundledToolDefinitions.find(definition => definition.name === "make") as ProgramToolDefinition;
   const frob: ProgramToolDefinition = { ...make, name: "frob", extensions: ["piki:frob"], programs: ["frob-not-installed-anywhere", "env"] };
   const service = new RunnerService({
-    dataDir: directory, sharedSecret: "runner-missing-programs-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true,
+    dataDir: directory, sharedSecret: "runner-missing-programs-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, allowTestShell: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
     extensions: { installed: () => [], workspace: async () => answer },
@@ -519,7 +519,12 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
     { source: "piki:frob", tools: ["frob"], reason: "programs", programs: ["frob-not-installed-anywhere"] });
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("missing programs admission") }, "write");
   // The program it has asks for approval as before.
-  const approval = await pendingApproval(session);
+  let approval;
+  for (let count = 0; count < 1000 && !approval; count++) {
+    approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
+    if (!approval) await delay(20);
+  }
+  if (!approval) assert.fail(`no pending approval: ${(await session.view()).entries.map(entry => entry.text).join("\n").slice(-3000)}`);
   assert.equal(approval.operation.kind === "program" && approval.operation.tool, "frob");
   await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
   await idle(session);
