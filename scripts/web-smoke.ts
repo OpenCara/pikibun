@@ -202,17 +202,19 @@ try {
     const { build } = await import("vite");
     await build({ configFile: resolve("apps/web/vite.config.ts"), build: { outDir: join(work, "web") } });
   } else await buildWeb(join(work, "web"));
-  const config = await loadConfig({
-    APP_ORIGIN: origin, HOST: "127.0.0.1", PORT: String(port), DATABASE_URL: `sqlite://${join(work, "pikibun.sqlite")}`,
-    SESSION_SECRET: randomBytes(32).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"),
-    TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3_600_000).toISOString(),
-    STATIC_DIR: join(work, "web"), STATIC_CLIENT: react ? "web" : "nsh",
-    GITHUB_CLIENT_ID: "web-smoke-client", GITHUB_CLIENT_SECRET: "web-smoke-secret",
-    // NSH's run also makes an account with a password.
-    ...(react ? {} : { PASSWORD_AUTH: "true", SIGNUP: "open" }),
-  });
-  const server = await startServer(config);
-  cleanups.push(() => server.close());
+  /** A test-mode server of the built client on `serverPort`, with a database of its own named `name`. */
+  const serve = async (serverPort: number, name: string, extra: Record<string, string> = {}) => {
+    const started = await startServer(await loadConfig({
+      APP_ORIGIN: `http://127.0.0.1:${serverPort}`, HOST: "127.0.0.1", PORT: String(serverPort), DATABASE_URL: `sqlite://${join(work, `${name}.sqlite`)}`,
+      SESSION_SECRET: randomBytes(32).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"),
+      TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3_600_000).toISOString(),
+      STATIC_DIR: join(work, "web"), STATIC_CLIENT: react ? "web" : "nsh",
+      GITHUB_CLIENT_ID: "web-smoke-client", GITHUB_CLIENT_SECRET: "web-smoke-secret",
+      ...extra,
+    }));
+    cleanups.push(() => started.close());
+  };
+  await serve(port, "pikibun");
 
   const { chrome, page } = await launchChrome(join(work, "chrome"));
   // Chrome writes its profile until it has exited, so it must be gone before the profile is removed.
@@ -313,9 +315,11 @@ try {
   console.log("✓ signing out ended the browser's session on the server");
 
   if (!react) {
-    // A new account with a username and password, where the server takes them, as the React client makes one: from the
-    // app's root, as the address still names the settings signing out left.
-    await page.goto(`${origin}/#/`);
+    // A new account with a username and password, on a server of its own that takes them and new accounts, as the React
+    // client makes one.
+    const passwordPort = await freePort();
+    await serve(passwordPort, "passwords", { PASSWORD_AUTH: "true", SIGNUP: "open" });
+    await page.goto(`http://127.0.0.1:${passwordPort}/#/`);
     await page.click("New here? Create an account");
     await page.type("Username", "smoke-tester");
     await page.type("Password", "correct horse battery staple");
