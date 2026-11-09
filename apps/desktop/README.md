@@ -37,7 +37,8 @@ for later. On Windows, each server's host runs its sessions in WSL2 or natively:
   Their preload exposes a small typed bridge (`src/shared/bridge.ts`); the main process checks the sender and
   validates every call.
 - Each server's connector runs in an Electron utility process of its own (Electron's own Node.js 24):
-  `dist/host/desktop-host.mjs`, which `scripts/build.mjs` bundles from `apps/runner/src/desktop-host.ts`. The primary
+  `dist/host/desktop-host.mjs`, which `scripts/build.mjs` bundles from `apps/runner/src/desktop-host.ts` (its logic is
+  `app-host.ts`, which the CLI also runs as `pikibun host --stdio` for the Native Shell app's This Computer). The primary
   server's uses the CLI's private state (`~/.local/share/pikibun/connector`), so a computer paired with
   `pikibun connect` is adopted as is; only one of the two can run at a time, and the app says so when the CLI holds the
   pairing. Every other server's has its own (`~/.local/share/pikibun/connections/<id>`), and This Mac shows the
