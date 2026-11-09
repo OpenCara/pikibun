@@ -1,5 +1,6 @@
 import { computed, effect, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
+import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
 import { auth, restore, session } from "./lib/auth";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
@@ -87,6 +88,8 @@ function Shell() {
    * replacing the page slid all of Settings in again, and swallowed a Back pressed while it did.
    */
   const settingsAt = signal<{ section?: string; id?: string }>({});
+  /** The New workspace sheet, from the sidebar or the session list; once created, a session starts in it. */
+  const creatingWorkspace = signal(false);
 
   function openSession(id: string) {
     if (wide()) {
@@ -186,6 +189,7 @@ function Shell() {
   });
 
   const back = () => nav.pop();
+  const workspaceSettings = (workspaceId: string) => openSettings("workspaces", workspaceId);
   const listActions = () => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
       <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
@@ -204,18 +208,20 @@ function Shell() {
                 <If when={wide()}
                   else={
                     <NavPage title="Sessions" {...headerProps({ title: "Sessions", leading: drawsHeaders ? <Logo size={22} /> : settingsButton(), actions: drawsHeaders ? <>{listActions()}{settingsButton()}</> : listActions() })}>
-                      <SessionList onOpen={openSession} onNew={() => startNew()} />
+                      <SessionList onOpen={openSession} onNew={() => startNew()} onNewIn={startNew} onWorkspaceSettings={workspaceSettings}
+                        onNewWorkspace={() => creatingWorkspace.set(true)} />
                     </NavPage>
                   }>
                   <NavPage title="Pikibun" headerVisible={false} header={drawsHeaders ? <View /> : undefined} style={pageStyle()}>
                     <View style={{ flex: 1, flexDirection: "row" }}>
                       <Sidebar selectedId={selected()} home={!selected()} onOpen={openSession} onNew={() => startNew()}
-                        onOpenById={() => nav.push({ name: "open" })} onAll={() => nav.push({ name: "all-sessions" })} onSettings={section => openSettings(section)} />
+                        onOpenById={() => nav.push({ name: "open" })} onAll={() => nav.push({ name: "all-sessions" })} onSettings={section => openSettings(section)}
+                        onNewIn={startNew} onWorkspaceSettings={workspaceSettings} onNewWorkspace={() => creatingWorkspace.set(true)} />
                       <View style={{ flex: 1, backgroundColor: palette().background }}>
                         <If when={selected()}
                           else={
                             <Each of={[homeKey()]} key={value => String(value)}>
-                              {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} />}
+                              {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} go={go} />}
                             </Each>
                           }>
                           {/* Keyed by id: another session is another view, with its own stream, drafts and picks. */}
@@ -233,7 +239,7 @@ function Shell() {
             case "new":
               return (
                 <NavPage title="New session" {...headerProps({ title: "New session", onBack: back })}>
-                  <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} />
+                  <NewSessionForm workspaceId={route.workspaceId} onStarted={openFromPage} go={go} />
                 </NavPage>
               );
             case "all-sessions":
@@ -271,6 +277,7 @@ function Shell() {
           }
         }}
       </NavStack>
+      <NewWorkspaceSheet open={creatingWorkspace()} onClose={() => creatingWorkspace.set(false)} created={created => startNew(created.id)} />
     </AppDataContext.Provider>
   );
 }
@@ -279,7 +286,10 @@ function Shell() {
  * The wide layout's sidebar, as the web app's (Sidebar.tsx): the app, a new session and opening one by ID; every session
  * by workspace; and the signed-in person, hosts and settings along its foot.
  */
-function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void }) {
+function Sidebar(props: {
+  selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void;
+  onNewIn: (workspaceId: string) => void; onWorkspaceSettings: (workspaceId: string) => void; onNewWorkspace: () => void;
+}) {
   const user = () => session().user;
   return (
     <View testID="sidebar" style={{ width: layout.sidebar, paddingTop: safeArea().top, backgroundColor: palette().sidebar, borderRightWidth: 1, borderColor: palette().border }}>
@@ -289,7 +299,8 @@ function Sidebar(props: { selectedId: string | null; home: boolean; onOpen: (id:
         <NavItem testID="all-sessions" icon="history" label="Sessions" onPress={props.onAll} />
         <NavItem testID="open-by-id" icon="hash" label="Open by ID" onPress={props.onOpenById} />
       </View>
-      <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} />
+      <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} onNewIn={props.onNewIn} onWorkspaceSettings={props.onWorkspaceSettings}
+        onNewWorkspace={props.onNewWorkspace} />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>
         <NavItem testID="open-profile" style={{ flex: 1 }} label={user().username || user().githubLogin ? `@${user().username || user().githubLogin}` : user().displayName}
           leading={<IdentityBadge name={user().displayName || user().githubLogin || "?"} id={user().id} />} onPress={() => props.onSettings("profile")} />
