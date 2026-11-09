@@ -877,6 +877,11 @@ export interface SessionView {
    * (`POST /api/sessions/:id/revert` and `/fork`). Absent from older runners.
    */
   rewindable?: boolean;
+  /**
+   * Besides the session's owner, anyone who may write to it can fork a new session of their own from one of its
+   * messages. Absent from older runners, which fork only for the owner.
+   */
+  memberForks?: boolean;
   /** The shared conversation's current model and reasoning level. */
   agent?: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
   /**

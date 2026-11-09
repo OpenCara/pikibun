@@ -264,8 +264,9 @@ export class RunnerService {
   }
 
   /**
-   * Starts `target`, a new session of the ticket's owner, from the shared conversation of `sourceSessionId`, another of
-   * their sessions on this host, up to one of its messages. The transcript goes from one to the other here, on the host.
+   * Starts `target`, a new session of the ticket's owner, from the shared conversation of `sourceSessionId`, another
+   * session of the same workspace on this host that they may write to (theirs, or one they collaborate on), up to one of
+   * its messages. The transcript goes from one to the other here, on the host.
    */
   async fork(target: RunnerSession, ticket: RunnerTicket, input: unknown): Promise<{ conversationId: string; entries: number }> {
     const value = input as { sourceSessionId?: unknown; entryId?: unknown } | null;
@@ -275,9 +276,7 @@ export class RunnerService {
     if (sourceId === target.binding.session.id) throw new RunnerError(400, "A session can't be forked into itself");
     if (ticket.actorId !== target.binding.owner.id) throw new RunnerError(403, "Only the session's owner can fork into it");
     const source = await this.get(sourceId);
-    if (source.binding.owner.id !== ticket.actorId || source.binding.session.workspaceId !== target.binding.session.workspaceId) {
-      throw new RunnerError(403, "Only the session's owner can fork it, into the same workspace");
-    }
+    if (source.binding.session.workspaceId !== target.binding.session.workspaceId) throw new RunnerError(403, "A session forks only into the same workspace");
     const entries = await source.forkEntries(ticket.actorId, value.entryId);
     return target.seed(ticket, { sessionId: sourceId, entryId: value.entryId }, entries);
   }

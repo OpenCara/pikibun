@@ -591,7 +591,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
 
   /**
    * A message's actions beside its copy icon, where the viewer may take them: go back to it (anyone who drives the work);
-   * fork a new session from it (only the owner, as the fork is a session of theirs with this one's history).
+   * fork a new session of their own from it (its owner, and on a host that allows it, anyone who drives the work).
    */
   const messageActions: MessageActions = entry => {
     const cut = rewindable(view()) && actualMode() === "write" && !readOnly() ? messageCut(entry) : undefined;
@@ -599,7 +599,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     const busy = rewinding.busy();
     return {
       ...(canWrite() ? { revert: { label: cut.before ? "Go back to before this message" : "Go back to this reply", disabled: busy, run: () => void revert(entry, cut.entryId, cut.before) } } : {}),
-      ...(owner() ? { fork: { label: "Fork a new session from here", disabled: busy, run: () => void fork(entry, cut.entryId, cut.before) } } : {}),
+      ...(owner() || (canWrite() && view().memberForks === true) ? { fork: { label: "Fork a new session from here", disabled: busy, run: () => void fork(entry, cut.entryId, cut.before) } } : {}),
     };
   };
 
@@ -619,9 +619,12 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   }
 
   async function fork(entry: EntryView, entryId: string, before: boolean) {
+    // Someone else's host can access the new session, as it can this one.
+    const host = props.host();
+    const hostOwner = host && host.ownerId !== user.id ? ` The host is ${host.ownerName}'s: it can access the new session, as it does this one.` : "";
     const confirmed = await confirm({
       title: "Fork a new session from here?",
-      message: `A new session of yours starts on the same host and model with this conversation up to ${before ? "just before this message, which goes into its chat box" : "this reply"}. This session stays as it is. Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again.`,
+      message: `A new session of yours starts on the same host and model with this conversation up to ${before ? "just before this message, which goes into its chat box" : "this reply"}, with this session's visibility. This session stays as it is.${hostOwner} Like every new session, the fork's worktree starts empty: its agent clones the workspace's repositories again.`,
       confirmLabel: "Fork session",
     });
     if (!confirmed) return;
