@@ -148,10 +148,13 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
   }
   return (
     <Section title="General">
-      <Row title="Name" trailing={<If when={props.admin} else={props.workspace.name}>
+      {/* The name is always drawn as text: a bare string in a View (as an If's branch would leave it) shows nothing. */}
+      <Row title="Name" trailing={<>
         <Text style={{ fontSize: text.body, color: palette().muted, textAlign: "right" }}>{props.workspace.name}</Text>
-        <Button small variant="outline" icon="pencil" label="Rename" testID="workspace-rename" disabled={action.busy()} onPress={open} />
-      </If>} />
+        <If when={props.admin}>
+          <Button small variant="outline" icon="pencil" label="Rename" testID="workspace-rename" disabled={action.busy()} onPress={open} />
+        </If>
+      </>} />
       <Row title="Your role" trailing={<Badge tone={props.admin ? "success" : "neutral"}>{roleLabel[props.role]}</Badge>} />
       <If when={!renaming() && action.notice()}><CardBody><Feedback notice={action.notice()} /></CardBody></If>
       <FormSheet open={renaming()} title="Rename workspace" onClose={() => { if (!action.busy()) renaming.set(false); }} testID="rename-workspace-sheet"
