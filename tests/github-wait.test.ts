@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { githubWaiter, githubWaitLimits, viewFingerprint, waitForGitHub, type GitHubWait } from "../apps/runner/src/github-wait.js";
+import { githubInstructions, githubWaiter, githubWaitLimits, viewFingerprint, waitForGitHub, type GitHubWait } from "../apps/runner/src/github-wait.js";
 import type { GitHubIssueView, GitHubPullRequestView } from "../packages/shared/src/types.js";
 
 const pull = (change: Partial<GitHubPullRequestView> = {}): GitHubPullRequestView => ({
@@ -101,4 +101,21 @@ test("a wait reads again until it is over, its last sleep cut to end at the dead
   const failed = await run("change", [running], 600, 2);
   assert.equal(failed.view, running);
   assert.deepEqual(failed.waited, { for: "change", outcome: "stopped", seconds: 60, reason: "GitHub reads need a write message from the requester sent within the last hour." });
+});
+
+test("with the gh tool, the instructions read and wait for checks with gh, keeping github_* for a change and the writes gh refuses", () => {
+  // Without piki:github's tools, nothing to say.
+  assert.equal(githubInstructions({ github: false, gh: true }), "");
+  assert.equal(githubInstructions({ github: false, gh: false }), "");
+  // github_read alone waits for both, as before.
+  const alone = githubInstructions({ github: true, gh: false });
+  assert.match(alone, /github_read with wait: "checks".*"change"/);
+  assert.doesNotMatch(alone, /gh tool/);
+  // With gh, gh first: it spares the session owner's rate limit, which github_read spends.
+  const both = githubInstructions({ github: true, gh: true });
+  assert.match(both, /^For GitHub, use the gh tool rather than github_read, which spends the session owner's own GitHub rate limit/);
+  assert.match(both, /gh pr checks <n> --watch/);
+  assert.match(both, /github_read only to wait for anything else .* wait: "change"/);
+  assert.doesNotMatch(both, /wait: "checks"/);
+  assert.match(both, /github_comment, github_issue and github_merge only where gh refuses to write: on a host that isn't the session owner's own, where the workspace set gh read-only/);
 });

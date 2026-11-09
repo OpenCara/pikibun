@@ -314,6 +314,15 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     those kinds need no connector release. Their extensions switch them as before, and a definition names its own, so a
     connector switches a tool by an extension it doesn't know yet. See [tool definitions](tool-definitions.md).
 
+37. **`gh` before `github_read`.** `github_read` reads as the session owner, against their hourly GitHub quota, and a
+    wait reads again every 30 seconds (note 25), so sessions that read and wait with it can run the owner out; `gh`
+    reads with the workspace's GitHub App token (rule 8). Where a message runs with both `piki:github` and `piki:gh`,
+    the agent's instructions (`githubInstructions`, `github-wait.ts`) say to read issues and pull requests and wait for
+    CI with `gh` (`pr checks <n> --watch`, `run watch <id>`), and to keep `github_read` for `wait: "change"`, which gh
+    has no command for, and `github_comment`, `github_issue` and `github_merge` for the writes `gh` refuses (rule 8:
+    another's host, read-only, a call the workspace ran automatically). Without `gh` they say what they said before.
+    The tools' descriptions say the same, since a description can't tell whether the other tool is there.
+
 Next: other ecosystems as usage asks for them (`jvm`).
 
 ## A browser: piki:browser
