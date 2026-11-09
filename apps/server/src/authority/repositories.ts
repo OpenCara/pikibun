@@ -5,6 +5,7 @@ import type { Env, RepositoryRow, SessionRow, WorkerEnv } from '../types.js';
 import { auditStatement } from './audit.js';
 import { getUser } from '../db.js';
 import { requireMember } from './access.js';
+import { isPersonalWorkspace } from './personal-workspaces.js';
 import { fail, id, identifier, jsonObject, now, testMode } from '../http.js';
 import { decryptToken } from './vault.js';
 import {
@@ -26,6 +27,8 @@ interface RepositoryResolution {
   githubAuthority: Pick<GitHubAccess, 'ciphertext' | 'githubId'> | null;
   /** Token accounts that resolved the pins; session admission requires each to be unchanged. */
   credentials: { id: string; ciphertext: string }[];
+  /** The session may start with no source: the workspace is its owner's private one. */
+  sourcesOptional?: boolean;
 }
 const apiOrigin = 'https://api.github.com';
 const jsonBytes = 512 * 1024;
@@ -215,20 +218,23 @@ export async function cloneSessionRepository(env: Env, row: SessionRow, matches:
 }
 /**
  * A clone session pins nothing and borrows no owner credential at creation: the egress relay checks the owner's own
- * access on every read. The workspace still needs a source (a repository, say), and its sources must not change before
- * the insert.
+ * access on every read. The workspace still needs a source (a repository, say), unless it is the owner's private
+ * workspace, and its sources must not change before the insert.
  */
 export async function cloneRepositories(env: Env, workspaceId: string, ownerId: string): Promise<RepositoryResolution> {
   await requireMember(env, workspaceId, ownerId);
   const sources = await workspaceSourceIds(env, workspaceId);
-  if (!sources.length && !await legacyRepositoryFixture(env, ownerId)) fail(409, sourcesRequired, 'Add at least one source, such as a repository, before starting a session.');
-  return { repositories: [], sourceIds: JSON.stringify(sources), githubAuthority: null, credentials: [] };
+  const sourcesOptional = !sources.length && await isPersonalWorkspace(env, workspaceId, ownerId);
+  if (!sources.length && !sourcesOptional && !await legacyRepositoryFixture(env, ownerId)) fail(409, sourcesRequired, 'Add at least one source, such as a repository, before starting a session.');
+  return { repositories: [], sourceIds: JSON.stringify(sources), githubAuthority: null, credentials: [], sourcesOptional };
 }
 export function registerRepositories(app: Hono<WorkerEnv>): void {
   app.get('/api/workspaces/:id/repositories', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor);
-    return c.json({ repositories: await workspaceRepositories(c.env, workspaceId), required: !await legacyRepositoryFixture(c.env, actor),
+    // A private workspace's sessions need no source; every other's do.
+    const required = !await isPersonalWorkspace(c.env, workspaceId, actor) && !await legacyRepositoryFixture(c.env, actor);
+    return c.json({ repositories: await workspaceRepositories(c.env, workspaceId), required,
       sources: (await workspaceSourceIds(c.env, workspaceId)).length } satisfies WorkspaceRepositoryList);
   });
   app.post('/api/workspaces/:id/repositories', async c => {

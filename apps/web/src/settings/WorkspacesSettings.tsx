@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { assignableWorkspaceRoles, type AssignableWorkspaceRole, type UserProfile, type Workspace, type WorkspaceRole } from "../../../../packages/shared/src/types";
 import { adminManagedRoles, canCreateSessions } from "../../../../packages/shared/src/policy";
 import { gitProviderHasForge, gitProviderNames, repositoryLimits, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type WorkspaceRepository } from "../../../../packages/shared/src/repositories";
@@ -12,7 +12,7 @@ import { href } from "../router";
 import { DocumentSources, useWorkspaceSources } from "../sources";
 import { ReadAsControl, WorkspaceConnections, connectionLabel, gitConnectionFor, useWorkspaceConnections } from "../workspace-connections";
 import type { WorkspaceConnection } from "../../../../packages/shared/src/workspace-connections";
-import { Alert, Button, CardBody, Combobox, CopyField, DropdownMenu, EmptyState, Feedback, Field, IdentityBadge, LinkButton, PageLoading, RelativeTime, ResourceState, Row, Section, Sheet, StatusBadge, StatusDot, confirmDialog, useAction, useResource } from "../ui";
+import { Alert, Button, CardBody, Combobox, CopyField, DropdownMenu, EmptyState, Feedback, Field, IdentityBadge, LinkButton, PageLoading, RelativeTime, ResourceState, Row, Section, Sheet, StatusBadge, StatusDot, WorkspaceBadge, confirmDialog, useAction, useResource } from "../ui";
 import type { WorkspaceInviteLink, WorkspaceJoinRequest } from "../../../../packages/shared/src/invites";
 import { memberPerson, userIdFromInput, username, usernameWithId, type WorkspaceMember } from "../../../../packages/client/src/usernames";
 import { NetworkAccess } from "./NetworkAccess";
@@ -57,7 +57,8 @@ export function WorkspacesSettings({ id }: { id?: string }) {
   </>;
   return <>
     <Section title="Workspaces" info="A shared home for your repositories, people, agents and sessions" action={<Button variant="outline" size="sm" icon="plus" onClick={() => setCreating(true)}>New workspace</Button>}>
-      {workspaces.map(workspace => <Row key={workspace.id} leading={<IdentityBadge name={workspace.name} id={workspace.id} />} title={workspace.name} hint={roleLabel[workspaceRole(workspace, user)]} href={href({ name: "settings", section: "workspaces", id: workspace.id })} chevron />)}
+      {workspaces.map(workspace => <Row key={workspace.id} leading={<WorkspaceBadge workspace={workspace} />} title={workspace.name}
+        hint={workspace.personal ? "Your private workspace, only for you" : roleLabel[workspaceRole(workspace, user)]} href={href({ name: "settings", section: "workspaces", id: workspace.id })} chevron />)}
     </Section>
     {sheet}
   </>;
@@ -80,10 +81,7 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
   // A source's read setting changes what the connections list counts, and the reverse.
   const sourcesChanged = () => { repositories.refresh(); sources.refresh(); connections.refresh(); };
   return <>
-    <Section title="General">
-      <Row title="Name" trailing={<span>{workspace.name}</span>} />
-      <Row title="Your role" trailing={<StatusBadge tone={admin ? "success" : "neutral"}>{roleLabel[role]}</StatusBadge>} />
-    </Section>
+    <General workspace={workspace} admin={admin} role={role} />
     {canCreateSessions(role) && <Setup user={user} workspace={workspace} admin={admin} sourceCount={repositories.sourceCount} />}
     <Repositories workspace={workspace} admin={admin} {...repositories} connections={connections.connections} changed={sourcesChanged}
       documents={<DocumentSources workspaceId={workspace.id} workspaceName={workspace.name} admin={admin} {...sources} connections={connections.connections} changed={sourcesChanged} />} />
@@ -92,13 +90,53 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
     <NetworkAccess workspace={workspace} admin={admin} />
     <WorkspaceExtensions workspace={workspace} userId={user.id} />
     <TranscriptSettings workspace={workspace} admin={admin} />
-    <ApprovalSettings workspace={workspace} admin={admin} />
+    {!workspace.personal && <ApprovalSettings workspace={workspace} admin={admin} />}
     <ChildSessionSettings workspace={workspace} admin={admin} />
     <AttachmentSettings workspace={workspace} admin={admin} />
     <WorkspaceDatabaseSection workspace={workspace} owner={role === "owner"} />
-    <Members workspace={workspace} admin={admin} owner={role === "owner"} />
+    {!workspace.personal && <Members workspace={workspace} admin={admin} owner={role === "owner"} />}
     {admin && <DataExport workspace={workspace} />}
   </>;
+}
+
+/** The workspace's name, which its owner and admins can change, and the person's role. */
+function General({ workspace, admin, role }: { workspace: Workspace; admin: boolean; role: WorkspaceRole }) {
+  const { refreshWorkspaces } = useApp();
+  const action = useAction();
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(workspace.name);
+  // Start from the current name each time the sheet opens.
+  useEffect(() => { if (renaming) setName(workspace.name); }, [renaming, workspace.name]);
+  const next = name.trim();
+  function rename(event: FormEvent) {
+    event.preventDefault();
+    if (action.busy || !admin || !next) return;
+    if (next === workspace.name) { setRenaming(false); return; }
+    void action.run(async () => {
+      await api<{ workspace: Workspace }>(`/api/workspaces/${segment(workspace.id)}`, { method: "PATCH", body: { name: next } });
+      refreshWorkspaces();
+      setRenaming(false);
+    }, "Workspace renamed");
+  }
+  return <Section title="General">
+    <Row title="Name" trailing={<span className="inline"><span>{workspace.name}</span>
+      {admin && <Button variant="outline" size="sm" icon="pencil" disabled={action.busy} onClick={() => setRenaming(true)}>Rename</Button>}</span>} />
+    <Row title="Your role" trailing={<StatusBadge tone={admin ? "success" : "neutral"}>{roleLabel[role]}</StatusBadge>} />
+    {workspace.personal && <Row leading={<WorkspaceBadge workspace={workspace} />} title="Private workspace"
+      hint="Every account has one, pinned at the top of the sidebar. Nobody else can join it, and its sessions need no source: run an agent here on your own hosts, privately. Create a workspace to work with others" />}
+    {!renaming && action.notice && <CardBody><Feedback notice={action.notice} /></CardBody>}
+    <Sheet open={renaming} title="Rename workspace" onClose={() => { if (!action.busy) setRenaming(false); }} footer={<>
+      <Button variant="ghost" disabled={action.busy} onClick={() => setRenaming(false)}>Cancel</Button>
+      <Button type="submit" form="rename-workspace-form" variant="default" disabled={action.busy || !next}>{action.busy ? "Saving..." : "Rename"}</Button>
+    </>}>
+      <form id="rename-workspace-form" className="stack" onSubmit={rename}>
+        <Field label="Name" hint="Everyone in the workspace sees the new name">
+          <input className="input" required autoFocus maxLength={120} value={name} onChange={event => setName(event.target.value)} autoComplete="off" />
+        </Field>
+        <Feedback error={action.error} />
+      </form>
+    </Sheet>
+  </Section>;
 }
 
 function DataExport({ workspace }: { workspace: Workspace }) {
@@ -117,7 +155,8 @@ function Setup({ user, workspace, admin, sourceCount }: { user: UserProfile; wor
   // Only show the checklist once every signal is known, so it never flashes in and out.
   if (sourceCount === null || !connectors.data || sessionsLoading) return null;
   const steps = [
-    { label: "Add a source", done: sourceCount > 0, hint: admin ? undefined : "An owner or admin does this", onClick: () => document.getElementById("workspace-repositories")?.scrollIntoView({ behavior: "smooth" }) },
+    // A private workspace's sessions need no source.
+    ...workspace.personal ? [] : [{ label: "Add a source", done: sourceCount > 0, hint: admin ? undefined : "An owner or admin does this", onClick: () => document.getElementById("workspace-repositories")?.scrollIntoView({ behavior: "smooth" }) }],
     { label: "Pair a host", done: connectors.data.connectors.some(connector => !connector.revokedAt && connector.online && (connector.ownerId === user.id || connector.workspaceIds.includes(workspace.id))), link: href({ name: "settings", section: "hosts" }) },
     { label: "Start a session", done: sessions.some(session => session.workspaceId === workspace.id), link: href({ name: "new", workspaceId: workspace.id }) },
   ];

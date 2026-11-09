@@ -10,7 +10,8 @@ export interface Resource<T> {
   data: Accessor<T | null>;
   loading: Accessor<boolean>;
   error: Accessor<string>;
-  refresh: () => void;
+  /** Loads again; resolves once that load is done, whether it succeeded or not. */
+  refresh: () => Promise<void>;
 }
 
 /**
@@ -24,9 +25,16 @@ export function createResource<T>(path: Accessor<string | null>, pollMs?: Access
   const error = signal("");
   const revision = signal(0);
   let previousPath: string | null | undefined;
+  /** Those waiting on a refresh, each with the revision it asked for: the first load at that revision or after ends it. */
+  let waiting: { revision: number; done: () => void }[] = [];
+  const settle = (upTo: number) => {
+    const done = waiting.filter(item => item.revision <= upTo);
+    waiting = waiting.filter(item => item.revision > upTo);
+    for (const item of done) item.done();
+  };
   effect(() => {
     const current = path();
-    revision();
+    const run = revision();
     const interval = typeof pollMs === "function" ? pollMs() : pollMs;
     const { api } = untracked(session);
     const controller = new AbortController();
@@ -37,6 +45,7 @@ export function createResource<T>(path: Accessor<string | null>, pollMs?: Access
     error.set("");
     if (!current) {
       loading.set(false);
+      settle(run);
       return () => controller.abort();
     }
     loading.set(true);
@@ -51,7 +60,7 @@ export function createResource<T>(path: Accessor<string | null>, pollMs?: Access
         if (!controller.signal.aborted) error.set(errorMessage(reason));
       } finally {
         pending = false;
-        if (!controller.signal.aborted) loading.set(false);
+        if (!controller.signal.aborted) { loading.set(false); settle(run); }
       }
     };
     void load();
@@ -66,7 +75,14 @@ export function createResource<T>(path: Accessor<string | null>, pollMs?: Access
     if (active && !wasActive && pollMs) revision.update(value => value + 1);
     wasActive = active;
   });
-  return { data, loading, error, refresh: () => revision.update(value => value + 1) };
+  return {
+    data, loading, error,
+    refresh: () => new Promise<void>(done => {
+      const next = untracked(revision) + 1;
+      waiting.push({ revision: next, done });
+      revision.set(next);
+    }),
+  };
 }
 
 export interface Action {

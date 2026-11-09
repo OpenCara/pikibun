@@ -16,6 +16,7 @@ import { sha256 } from "../packages/shared/src/crypto.js";
 import { browserAt, hostBrowser, SANDBOX_BROWSER_DRIVER } from "../apps/runner/src/browser-toolchain.js";
 import type { HostBrowserStatus } from "../packages/shared/src/browser.js";
 import { linuxSandboxMissing } from "./helpers/workspaces.js";
+import { bundledToolDefinitions, type ProgramToolDefinition } from "../packages/shared/src/tool-definitions.js";
 
 function binding(id: string): RunnerBinding {
   return {
@@ -419,7 +420,9 @@ test("a sandboxed session whose host has no Chromium yet says why it has no brow
   const id = "browser-missing-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   assert.equal(session.sandbox.browser, undefined);
-  assert.deepEqual((await session.view()).extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "downloading" }]);
+  // The browser's entry: program tools whose programs this host lacks have theirs (reason "programs").
+  const browserEntries = async () => (await session.view()).extensions?.unavailable?.filter(item => item.source === "piki:browser") ?? [];
+  assert.deepEqual(await browserEntries(), [{ source: "piki:browser", tools: ["browser"], reason: "downloading" }]);
   await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser missing admission") }, "write");
   await idle(session);
   assert.ok(!offered[0]!.includes("browser"));
@@ -427,7 +430,7 @@ test("a sandboxed session whose host has no Chromium yet says why it has no brow
   // The download is done: the next message has the tool, with no restart.
   current = { executable: "/opt/chrome-headless-shell/chrome-headless-shell", directory: "/opt/chrome-headless-shell" };
   status = { source: "download", state: "ready", executable: current.executable, version: "131.0.6778.85", downloadable: true };
-  assert.equal((await session.view()).extensions?.unavailable, undefined);
+  assert.deepEqual(await browserEntries(), []);
   assert.deepEqual(session.sandbox.browser, { driver: SANDBOX_BROWSER_DRIVER, chromium: "/opt/pikibun/chromium/chrome-headless-shell" });
   await session.submit(await ticket(id, "submit"), { content: "Again.", requestId: "again", admissionId: await sha256("browser missing admission again") }, "write");
   await idle(session);
@@ -476,4 +479,62 @@ test("the make tool runs make without a shell of its own, as one exact command c
   const view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool make is not available/);
   assert.equal(view.approvals.length, 1);
+});
+
+test("in the Linux sandbox, a program tool's program the host lacks is named with how its owner installs it, and a call to it is refused before anyone is asked", { skip: linuxSandboxMissing() }, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-missing-programs-")));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let instructions = "";
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  faux.setResponses([
+    ((context: unknown) => {
+      instructions = JSON.stringify(context);
+      return fauxAssistantMessage([fauxToolCall("frob", { program: "frob-not-installed-anywhere", args: ["test"] })], { stopReason: "toolUse" });
+    }) as never,
+    fauxAssistantMessage([fauxToolCall("frob", { program: "env", args: [] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Asked."),
+  ]);
+  const models = createModels();
+  models.setProvider(faux.provider);
+  // A tool defined as data whose one program no host has, and whose other every Linux has in /usr/bin.
+  let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
+  const { summary: _summary, ...make } = bundledToolDefinitions.find(definition => definition.name === "make") as ProgramToolDefinition;
+  const frob: ProgramToolDefinition = { ...make, name: "frob", extensions: ["piki:frob"], programs: ["frob-not-installed-anywhere", "env"] };
+  const service = new RunnerService({
+    dataDir: directory, sharedSecret: "runner-missing-programs-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, allowTestShell: true,
+    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
+    extensions: { installed: () => [], workspace: async () => answer },
+    toolDefinitions: async () => [frob],
+  });
+  await service.initialize();
+  t.after(() => service.close());
+  const id = "missing-programs-session";
+  // The agent has the defined tool, as a control plane that defines it lists it. Not a clone session: its sandbox needs
+  // nothing of the control plane's repositories to run the command.
+  const bound = binding(id);
+  delete bound.session.repositoryMode;
+  const session = await service.provision({ ...bound, agent: { ...bound.agent, tools: [...bound.agent.tools, "frob"] } }, await ticket(id, "create"));
+  assert.deepEqual((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"),
+    { source: "piki:frob", tools: ["frob"], reason: "programs", programs: ["frob-not-installed-anywhere"] });
+  await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("missing programs admission") }, "write");
+  // The program it has asks for approval as before.
+  let approval;
+  for (let count = 0; count < 1000 && !approval; count++) {
+    approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
+    if (!approval) await delay(20);
+  }
+  if (!approval) assert.fail(`no pending approval: ${(await session.view()).entries.map(entry => entry.text).join("\n").slice(-3000)}`);
+  assert.equal(approval.operation.kind === "program" && approval.operation.tool, "frob");
+  await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
+  await idle(session);
+  const view = await session.view();
+  assert.equal(view.approvals.length, 1, "the missing program's call left no card");
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /frob-not-installed-anywhere isn't installed on this host where the session's sandbox sees it[^]*Nothing ran\./);
+  // Other tools' missing programs (the python tool's uv, say) may follow in the same sentence, as the host has them.
+  assert.match(instructions, /This host doesn't have the frob tool's frob-not-installed-anywhere[^.]* where the session's sandbox sees them/);
+  assert.match(instructions, /Calls to them are refused before they run/);
+  // The workspace turns the tool off: the panel no longer lists its programs (review of #216).
+  answer = { extensions: [{ source: "piki:frob", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  assert.equal((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"), undefined);
 });

@@ -327,6 +327,12 @@ export function IdentityBadge({ name, id }: { name: string; id: string }) {
   return <span className="identity" style={{ background: identityColors[hash % identityColors.length] }} aria-hidden="true">{(name.trim()[0] ?? "?").toUpperCase()}</span>;
 }
 
+/** A workspace's badge: a lock for the user's own private workspace, its letter badge for any other. */
+export function WorkspaceBadge({ workspace }: { workspace: { id: string; name: string; personal?: boolean } }) {
+  if (workspace.personal) return <span className="identity identity-private" aria-hidden="true"><Icon name="lock" size={12} /></span>;
+  return <IdentityBadge name={workspace.name} id={workspace.id} />;
+}
+
 /* ---------- Text and values ---------- */
 
 export function Timestamp({ value }: { value: string }) {

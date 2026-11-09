@@ -120,9 +120,17 @@ test("a username chosen with a password signs the GitHub account in with either,
   const viaPassword = f.cookieOf(signedIn);
   assert.equal((await f.me(viaPassword))?.id, "github:1001");
   assert.equal((await f.signIn("newcomer", "not the password at all")).status, 401);
+  // A native app too, for a bearer token: still the GitHub account.
+  const native = await f.request("POST", "/api/auth/native/password", { body: { username: "newcomer", password, deviceName: "Newcomer's Android" } });
+  assert.equal(native.status, 200);
+  const { token, user: nativeUser } = await native.json() as { token: string; user: UserProfile };
+  assert.equal(nativeUser.id, "github:1001");
+  const bearer = { Authorization: `Bearer ${token}` };
+  assert.equal((await f.request("GET", "/api/me", { headers: bearer })).status, 200);
 
   f.env.PASSWORD_AUTH = "false";
   assert.equal(await f.me(viaPassword), null, "the password's sign-in ends at once");
+  assert.equal((await f.request("GET", "/api/me", { headers: bearer })).status, 401, "the app's too");
   assert.equal((await f.me(viaGitHub))?.id, "github:1001", "GitHub's goes on");
   assert.equal((await f.signIn("newcomer", password)).status, 404);
 });

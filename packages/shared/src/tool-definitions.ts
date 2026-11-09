@@ -329,7 +329,7 @@ const nodePrograms = ["node", "npm", "npx", "pnpm", "yarn", "corepack"];
 
 const nodeTool: ProgramToolDefinition = {
   kind: "program", name: "node", extensions: ["piki:node"],
-  description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. ${approvalSentence}`,
+  description: `Run Node.js or a package manager in the session worktree without a shell: program is one of ${nodePrograms.join(", ")}; args is its arguments as a list, such as ["install"], ["test"], ["exec", "tsc", "--noEmit"] or ["--test", "tests/a.test.ts"]; directory is where it runs, such as the clone app (the worktree by default). It runs the sandbox's own Node.js, with no colours or prompts; commands that act on a package registry as an account (publish, login, token, owner ...) aren't taken. In the Linux sandbox, pnpm, yarn and corepack are there only where the host installed them (Node.js 25 and newer don't bundle corepack): a call to one it lacks is refused, saying how the host's owner installs it. ${approvalSentence}`,
   programs: nodePrograms, example: '["test"]',
   environment: [["NO_COLOR", "1"], ["COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"], ["npm_config_yes", "true"]],
   path: ["/usr/local/bin"], toolchain: "node",
@@ -357,7 +357,8 @@ function ecosystemTool(name: string, extension: string, what: string, programs: 
     description: `Run ${what} in the session worktree without a shell: program is one of ${programs.join(", ")}; `
       + `args is its arguments as a list, such as ${examples}; directory is where it runs, a path in the worktree such as a clone (app), the worktree by default. `
       + "It runs exactly that program there, as the approval card shows it: each call is approved as a command is, waiting for a human unless the owner enabled auto-approve for this request. "
-      + "Commands that act on a package registry as an account are refused: sessions have none.",
+      + "Commands that act on a package registry as an account are refused: sessions have none. "
+      + "In the Linux sandbox, its programs are those the host installed for the whole system (the sandbox sees only its /usr): a call to one it lacks is refused, saying how the host's owner installs it.",
     programs, example, environment, path, ...(systemDefaults ? { systemDefaults } : {}), grammar,
     refusal: "acts on a package registry as an account, which sessions don't have", windowsSandbox: false, summary,
   };

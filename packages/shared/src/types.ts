@@ -87,6 +87,11 @@ export interface Workspace {
   name: string;
   ownerId: string;
   role?: WorkspaceRole;
+  /**
+   * The signed-in user's own private workspace: every user has one, listed first, that nobody else can join, where
+   * sessions need no source. Older servers leave it out.
+   */
+  personal?: boolean;
 }
 export interface ModelDefinition {
   id: string;
@@ -883,8 +888,11 @@ export interface SessionView {
     /**
      * Pikibun's session-tool extensions the workspace has on whose tools this session can't offer, and why, as a fixed
      * reason (for piki:browser, browserUnavailableReasons in browser.ts): the browser without Chromium on the host, say.
+     * A program tool the session offers, some of whose programs its host doesn't have where the sandbox sees them, has
+     * reason "programs" and names them (`programs`: pnpm and yarn of piki:node, say), which programsMissingText in
+     * program-install.ts explains, with how the host's owner installs them.
      */
-    unavailable?: { source: string; tools: string[]; reason: string }[] };
+    unavailable?: { source: string; tools: string[]; reason: string; programs?: string[] }[] };
   /**
    * The session's server is online through its tunnel (piki:tunnel): its address, who started it and until when, which
    * the session panel shows with a Stop button (`POST /api/sessions/:id/tunnel/stop`). Absent while it isn't, and from

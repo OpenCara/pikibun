@@ -20,6 +20,45 @@ describe("signing in", () => {
     expect(me?.headers?.authorization ?? me?.headers?.Authorization).toBe(`Bearer ${TOKEN}`);
   });
 
+  test("a server that takes passwords signs in with a username and password, for a bearer token", async () => {
+    const app = await open("../App.tsx", {
+      network: server({
+        [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, passwordAuth: true, passwordSignup: "open" } },
+        [`POST ${ORIGIN}/api/auth/native/password`]: { body: { token: TOKEN, expiresAt: "2099-01-01T00:00:00.000Z", user } },
+      }),
+      storage: { "pikibun.origin": ORIGIN },
+    });
+    await app.waitFor("id:password-form");
+    expect(app.shows("id:github-sign-in")).toBe(true);
+    // New accounts are made on the web, whose sign-up starts a browser session.
+    expect(app.shows("id:password-mode")).toBe(false);
+    await app.type("id:password-username", "ada");
+    await app.type("id:password-password", "four unrelated words here");
+    await app.press("id:password-sign-in");
+    await app.waitFor("text:Fix the flaky login test");
+    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/password`)).toMatchObject({ username: "ada", password: "four unrelated words here" });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/auth/native/password`).deviceName).toContain("Pikibun NSH");
+  });
+
+  test("a server with passwords and no GitHub shows only the password form, and says why a sign-in failed", async () => {
+    const app = await open("../App.tsx", {
+      network: server({
+        [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: false, passwordAuth: true } },
+        [`POST ${ORIGIN}/api/auth/native/password`]: { status: 401, body: { error: "The username or password is incorrect.", code: "invalid_credentials" } },
+      }),
+      storage: { "pikibun.origin": ORIGIN },
+    });
+    await app.waitFor("id:password-form");
+    expect(app.shows("id:github-sign-in")).toBe(false);
+    await app.type("id:password-username", "ada");
+    await app.type("id:password-password", "not the password");
+    await app.press("id:password-sign-in");
+    await app.waitFor("id:sign-in-problem");
+    expect(app.texts().join(" ")).toContain("The username or password is incorrect.");
+    expect(app.storage()["pikibun.token"]).toBeUndefined();
+  });
+
   test("a sign-in the server revoked signs out", async () => {
     const app = await open("../App.tsx", {
       network: server({ [`GET ${ORIGIN}/api/me`]: { status: 401, body: { error: { code: "unauthorized", message: "Authentication is required." } } } }),
