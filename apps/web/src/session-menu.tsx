@@ -6,7 +6,7 @@ import { useApp } from "./app-context";
 import { desktopBridge } from "./desktop";
 import { href } from "./router";
 import { confirmArchive, confirmVisibilityChange, unarchiveNotice, visibilityNotice } from "./session-panel";
-import { Button, Field, Sheet, type MenuEntry } from "./ui";
+import { Button, Feedback, Field, Sheet, type MenuEntry } from "./ui";
 
 /** The full address of an app page, as the address bar shows it: what Copy link copies and a new window opens. */
 export function pageLink(hash: string): string {
@@ -35,8 +35,11 @@ export function useSessionMenu(notify: (text: string, options?: { error?: boolea
   const { user, workspaces, refreshSessions } = useApp();
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState<SessionRecord | null>(null);
+  const [renameError, setRenameError] = useState("");
+  const startRename = (session: SessionRecord | null) => { setRenameError(""); setRenaming(session); };
 
-  async function run(work: () => Promise<void>, success: string): Promise<boolean> {
+  /** `failed` takes a failure's message where the corner's note can't be seen (behind the modal rename sheet). */
+  async function run(work: () => Promise<void>, success: string, failed: (message: string) => void = message => notify(message, { error: true })): Promise<boolean> {
     setBusy(true);
     try {
       await work();
@@ -44,7 +47,7 @@ export function useSessionMenu(notify: (text: string, options?: { error?: boolea
       notify(success);
       return true;
     } catch (reason) {
-      notify(errorMessage(reason), { error: true });
+      failed(errorMessage(reason));
       return false;
     } finally {
       setBusy(false);
@@ -61,8 +64,9 @@ export function useSessionMenu(notify: (text: string, options?: { error?: boolea
   }
 
   async function rename(session: SessionRecord, title: string) {
-    if (title === session.title) { setRenaming(null); return; }
-    if (await run(() => api(`/api/sessions/${segment(session.id)}`, { method: "PATCH", body: { title } }), "Session renamed")) setRenaming(null);
+    if (title === session.title) { startRename(null); return; }
+    setRenameError("");
+    if (await run(() => api(`/api/sessions/${segment(session.id)}`, { method: "PATCH", body: { title } }), "Session renamed", setRenameError)) startRename(null);
   }
 
   function items(session: SessionRecord): MenuEntry[] {
@@ -78,7 +82,7 @@ export function useSessionMenu(notify: (text: string, options?: { error?: boolea
       { label: "Copy session ID", icon: "copy", onSelect: () => copyWithNotice(session.id, "Session ID copied", notify) },
     ];
     if (manages && !archived) menu.push("separator",
-      { label: "Rename", icon: "pencil", disabled: busy, onSelect: () => setRenaming(session) },
+      { label: "Rename", icon: "pencil", disabled: busy, onSelect: () => startRename(session) },
       { label: visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: visibility === "workspace" ? "lock" : "globe", disabled: busy, onSelect: () => void changeVisibility(session) },
       { label: "Archive", icon: "archive", disabled: busy, onSelect: () => void archive(session) });
     // Packed files come back as the session is unarchived, which only its owner may then do.
@@ -88,12 +92,13 @@ export function useSessionMenu(notify: (text: string, options?: { error?: boolea
     return menu;
   }
 
-  const element = <RenameSheet open={renaming !== null} title={renaming?.title ?? ""} busy={busy} onClose={() => setRenaming(null)}
+  const element = <RenameSheet open={renaming !== null} title={renaming?.title ?? ""} busy={busy} error={renameError} onClose={() => startRename(null)}
     onSave={title => { if (renaming) void rename(renaming, title); }} />;
   return { items, element };
 }
 
-export function RenameSheet({ open, title, busy, onClose, onSave }: { open: boolean; title: string; busy: boolean; onClose: () => void; onSave: (title: string) => void }) {
+/** `error`: why the last save failed, shown in the sheet, as the page behind a modal sheet can't be seen. */
+export function RenameSheet({ open, title, busy, error, onClose, onSave }: { open: boolean; title: string; busy: boolean; error?: string; onClose: () => void; onSave: (title: string) => void }) {
   const [value, setValue] = useState(title);
   // Start from the current title each time the sheet opens.
   useEffect(() => { if (open) setValue(title); }, [open, title]);
@@ -110,6 +115,7 @@ export function RenameSheet({ open, title, busy, onClose, onSave }: { open: bool
       <Field label="Title">
         <input className="input" required autoFocus maxLength={200} value={value} onChange={event => setValue(event.target.value)} autoComplete="off" />
       </Field>
+      <Feedback error={error} />
     </form>
   </Sheet>;
 }

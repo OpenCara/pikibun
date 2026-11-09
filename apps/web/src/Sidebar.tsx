@@ -25,7 +25,7 @@ function readCollapsed(): string[] {
 
 function WorkspaceGroup({ workspace, sessions, route, collapsed, toggle, onNavigate, openMenu, sessionItems, notify }: {
   workspace: Workspace; sessions: SessionRecord[]; route: Route; collapsed: boolean; toggle: () => void; onNavigate: () => void;
-  openMenu: OpenMenu; sessionItems: (session: SessionRecord) => MenuEntry[]; notify: (text: string) => void;
+  openMenu: OpenMenu; sessionItems: (session: SessionRecord) => MenuEntry[]; notify: (text: string, options?: { error?: boolean }) => void;
 }) {
   const { user, selectWorkspace, liveActivity } = useApp();
   const [expanded, setExpanded] = useState(false);

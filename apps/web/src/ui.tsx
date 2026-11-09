@@ -242,10 +242,18 @@ interface OpenContextMenu {
   point: { x: number; y: number };
   label: string;
   items: MenuEntry[];
-  /** The element it was opened on: marked while the menu is open, and focused again when Escape closes it. */
+  /** The element it was opened on: marked while the menu is open, and focused again (see rowFocus) when it closes from the keyboard or an item is chosen. */
   target: HTMLElement;
   /** Opened from the keyboard (the context menu key or Shift+F10), so its first item takes focus. */
   keyboard: boolean;
+  /** Tells one opening from the next, even at the same point. */
+  key: number;
+}
+
+/** What takes the focus back for `target`: itself where it can, else the first control in it (a workspace row's button). */
+function rowFocus(target: HTMLElement): HTMLElement | null {
+  if (target.tabIndex >= 0) return target;
+  return target.querySelector<HTMLElement>("a[href], button:not(:disabled), [tabindex]:not([tabindex='-1'])");
 }
 
 /**
@@ -255,8 +263,11 @@ interface OpenContextMenu {
  */
 export function useContextMenu(): { open: (event: ReactMouseEvent<HTMLElement>, label: string, items: MenuEntry[]) => void; menu: ReactNode } {
   const [state, setState] = useState<OpenContextMenu | null>(null);
+  const openings = useRef(0);
   const close = useCallback(() => setState(null), []);
   const open = useCallback((event: ReactMouseEvent<HTMLElement>, label: string, items: MenuEntry[]) => {
+    // React bubbles events out of portals: a right click in a popover the element holds (its options menu) isn't on it.
+    if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
     if (!items.some(item => item !== "separator")) return;
     event.preventDefault();
     event.stopPropagation();
@@ -267,9 +278,9 @@ export function useContextMenu(): { open: (event: ReactMouseEvent<HTMLElement>, 
     const keyboard = native.pointerType !== undefined ? native.pointerType === "" : event.clientX === 0 && event.clientY === 0;
     const rect = target.getBoundingClientRect();
     const point = keyboard ? { x: rect.left + 8, y: rect.bottom } : { x: event.clientX, y: event.clientY };
-    setState({ point, label, items, target, keyboard });
+    setState({ point, label, items, target, keyboard, key: ++openings.current });
   }, []);
-  return { open, menu: state && <ContextMenu key={`${state.point.x},${state.point.y}`} state={state} close={close} /> };
+  return { open, menu: state && <ContextMenu key={state.key} state={state} close={close} /> };
 }
 
 function ContextMenu({ state, close }: { state: OpenContextMenu; close: () => void }) {
@@ -284,25 +295,36 @@ function ContextMenu({ state, close }: { state: OpenContextMenu; close: () => vo
     const pointer = (event: PointerEvent) => { if (!inside(event.target)) close(); };
     // It stays where it opened, so anything that moves the page under it closes it, as native menus do.
     const scroll = (event: Event) => { if (!inside(event.target)) close(); };
+    // Escape closes it and Tab leaves it, back on the row, as a native menu does; the page's own Escape handlers (a
+    // sheet, another menu) don't hear the key, which was the menu's.
     const key = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" && event.key !== "Tab") return;
+      event.preventDefault();
+      event.stopPropagation();
       close();
-      target.focus({ preventScroll: true });
+      rowFocus(target)?.focus({ preventScroll: true });
     };
+    // Focus moved to something else (a script, an assistive technology): the menu is no longer what the person is in.
+    // With nowhere to go (Safari doesn't focus a pressed button), clicks outside and leaving the window close it instead.
+    const focusout = (event: FocusEvent) => { if (event.relatedTarget instanceof Node && !inside(event.relatedTarget)) close(); };
     document.addEventListener("pointerdown", pointer, true);
     document.addEventListener("scroll", scroll, true);
-    document.addEventListener("keydown", key);
+    document.addEventListener("keydown", key, true);
+    menu?.addEventListener("focusout", focusout);
     window.addEventListener("resize", close);
     window.addEventListener("blur", close);
     return () => {
       target.removeAttribute("data-context-menu");
       document.removeEventListener("pointerdown", pointer, true);
       document.removeEventListener("scroll", scroll, true);
-      document.removeEventListener("keydown", key);
+      document.removeEventListener("keydown", key, true);
+      menu?.removeEventListener("focusout", focusout);
       window.removeEventListener("resize", close);
       window.removeEventListener("blur", close);
     };
   }, [id, target, keyboard, close]);
+  // Choosing an item puts the focus back on the row first, so what the item opens (a sheet, a confirmation) returns it there.
+  const choose = useCallback(() => { close(); rowFocus(target)?.focus({ preventScroll: true }); }, [close, target]);
   function move(event: ReactKeyboardEvent<HTMLDivElement>) {
     const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
     const edge = event.key === "Home" ? "first" : event.key === "End" ? "last" : null;
@@ -317,14 +339,15 @@ function ContextMenu({ state, close }: { state: OpenContextMenu; close: () => vo
   }
   return <Popover anchor={state.point} role="menu" id={id} label={state.label} className="menu-scroll context-menu" tabIndex={-1}
     onKeyDown={move} onContextMenu={event => event.preventDefault()}>
-    <MenuItems items={state.items} close={close} />
+    <MenuItems items={state.items} close={choose} />
   </Popover>;
 }
 
 /** A short note in the corner of the screen, for actions whose result has no place on screen (a menu's, say). */
 export function useToast(): { show: (text: string, options?: { error?: boolean }) => void; toast: ReactNode } {
   const [current, setCurrent] = useState<{ text: string; error: boolean; key: number } | null>(null);
-  const show = useCallback((text: string, { error = false }: { error?: boolean } = {}) => setCurrent({ text, error, key: Date.now() }), []);
+  const shown = useRef(0);
+  const show = useCallback((text: string, { error = false }: { error?: boolean } = {}) => setCurrent({ text, error, key: ++shown.current }), []);
   useEffect(() => {
     if (!current) return;
     // Errors stay long enough to read.

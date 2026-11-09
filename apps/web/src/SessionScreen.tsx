@@ -219,6 +219,8 @@ function SessionPane({ id }: { id: string }) {
   const browserWarning = !archived && !frozen ? view?.extensions?.unavailable?.find(item => item.source === "piki:browser" && ["missing", "failed", "downloading"].includes(item.reason)) : undefined;
   const [dismissedBrowser, setDismissedBrowser] = useState<string>();
   const [renaming, setRenaming] = useState(false);
+  // A failed save shows in the rename sheet, over the page's own alerts; only one tried in this opening of it.
+  const [renameTried, setRenameTried] = useState(false);
   const hosts = useConnections(session?.connectorId ? `/api/workspaces/${segment(session.workspaceId)}/connectors` : null);
   const host = hosts.data?.connectors.find(item => item.id === session?.connectorId);
   const hostOnline = host?.online;
@@ -259,7 +261,7 @@ function SessionPane({ id }: { id: string }) {
 
   const menu: (MenuItem | "separator")[] = [{ label: "Copy session ID", icon: "copy", onSelect: () => void navigator.clipboard.writeText(id) }];
   if (session && manages && !archived) {
-    menu.push({ label: "Rename", icon: "pencil", disabled: actions.action.busy, onSelect: () => setRenaming(true) });
+    menu.push({ label: "Rename", icon: "pencil", disabled: actions.action.busy, onSelect: () => { setRenameTried(false); setRenaming(true); } });
     menu.push({ label: visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: visibility === "workspace" ? "lock" : "globe", disabled: actions.action.busy, onSelect: actions.changeVisibility });
     // Backups hold the owner's work and personal environment, so they stay the owner's.
     if (isOwner && !frozen) {
@@ -392,8 +394,8 @@ function SessionPane({ id }: { id: string }) {
       <button type="button" className="session-scrim" aria-label="Close session panel" onClick={() => setPanelOpen(false)} />
       <SessionPanel session={session} view={view} user={user} workspaceRole={workspaceRole} hosts={hosts} tab={tab} setTab={setTab} onClose={() => setPanelOpen(false)} refresh={live.refresh} audit={audit} actions={actions} openSession={openSession} />
     </>}
-    {session && manages && <RenameSheet open={renaming} title={session.title} busy={actions.action.busy} onClose={() => setRenaming(false)}
-      onSave={async title => { if (await actions.rename(title)) setRenaming(false); }} />}
+    {session && manages && <RenameSheet open={renaming} title={session.title} busy={actions.action.busy} error={renameTried ? actions.action.error : undefined}
+      onClose={() => setRenaming(false)} onSave={async title => { setRenameTried(true); if (await actions.rename(title)) setRenaming(false); }} />}
   </div></PeopleProvider>;
 }
 
