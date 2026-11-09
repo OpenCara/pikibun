@@ -18,13 +18,13 @@ export interface AppData {
   /** Every session the user can read, newest first. */
   sessions: Accessor<SessionRecord[]>;
   sessionsLoading: Accessor<boolean>;
-  sessionsReloading: Accessor<boolean>;
   sessionsError: Accessor<string>;
-  refreshSessions: () => void;
+  /** Reloads the list; resolves once it has. */
+  refreshSessions: () => Promise<void>;
   workspaces: Accessor<Workspace[]>;
   workspacesLoading: Accessor<boolean>;
   workspacesError: Accessor<string>;
-  refreshWorkspaces: () => void;
+  refreshWorkspaces: () => Promise<void>;
   /** The workspace the last session was started in; new sessions default to it. */
   lastWorkspaceId: Accessor<string>;
   setLastWorkspaceId: (id: string) => void;
@@ -60,7 +60,6 @@ export function createAppData(): AppData {
     sessions: sorted,
     // Keep the previous list visible while a background refresh is in flight.
     sessionsLoading: () => sessions.loading() && !sessions.data(),
-    sessionsReloading: sessions.loading,
     sessionsError: sessions.error,
     refreshSessions: sessions.refresh,
     workspaces: () => workspaces.data()?.workspaces ?? [],
