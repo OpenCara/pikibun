@@ -152,6 +152,9 @@ test('a host reports its extensions, its owner asks for installs it carries out 
   const install = (await json<{ request: { id: string } }>(await s.alice.request('POST', requests, { action: 'install', source: 'npm:cc-safety-net@2.7.2' }), 201)).request;
   assert.equal((await json<{ request: { id: string } }>(await s.alice.request('POST', requests, { action: 'install', source: 'npm:cc-safety-net@2.7.2' }))).request.id, install.id,
     'asking again while it waits is the same request');
+  // Requests wait in the order asked (requested_at, to the millisecond, then their random ids): ask the next one in a
+  // later millisecond, or the two can tie and come back in either order.
+  await new Promise(resolve => setTimeout(resolve, 2));
   const update = (await json<{ request: { id: string } }>(await s.alice.request('POST', requests, { action: 'install', source: 'npm:pi-memory@0.4.2' }), 201)).request;
   const answer = await json<{ requests: { id: string; action: string; source: string }[] }>(await self(f, s.connector, 'extensions', { report: page.report, results: [] }));
   assert.deepEqual(answer.requests, [{ id: install.id, action: 'install', source: 'npm:cc-safety-net@2.7.2' }, { id: update.id, action: 'install', source: 'npm:pi-memory@0.4.2' }]);

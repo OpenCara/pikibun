@@ -2,6 +2,16 @@ import { platform } from "nsh";
 
 export const DEFAULT_ORIGIN = "https://pikibun.com";
 
+/**
+ * Addresses a server answered at once and no longer does, each with where it moved: the same server and database, so a
+ * sign-in saved for the old address works at the new one as it is. preview.pikibun.com served this client from
+ * pikibun.com's server until pikibun.com served it itself.
+ */
+const movedOrigins: Record<string, string> = { "https://preview.pikibun.com": "https://pikibun.com" };
+
+/** Where a saved server is now: where it moved, or itself. */
+export const currentOrigin = (origin: string) => movedOrigins[origin] ?? origin;
+
 /** Hosts reachable over plain HTTP: a server running on this machine (a simulator shares its network). */
 const localHosts = ["localhost", "127.0.0.1"];
 

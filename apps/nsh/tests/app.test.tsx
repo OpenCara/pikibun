@@ -28,6 +28,25 @@ describe("signing in", () => {
     await app.waitFor("text:Your sign-in expired or was revoked. Sign in again to continue.");
     expect(app.storage()["pikibun.token"]).toBeUndefined();
   });
+
+  test("a sign-in saved for preview.pikibun.com goes on at pikibun.com, the same server, with the same token", async () => {
+    const moved = "https://pikibun.com";
+    // The stub server, at pikibun.com; preview.pikibun.com no longer answers.
+    const routes = Object.fromEntries(Object.entries(server()).map(([route, answer]) => [route.replace(ORIGIN, moved), answer]));
+    const app = await open("../App.tsx", { network: routes, storage: { "pikibun.token": TOKEN, "pikibun.origin": "https://preview.pikibun.com" } });
+    await app.waitFor("text:Fix the flaky login test");
+    expect(app.storage()["pikibun.origin"]).toBe(moved);
+    expect(app.storage()["pikibun.token"]).toBe(TOKEN);
+    const me = app.requests().find(item => item.url === `${moved}/api/me`);
+    expect(me?.headers?.authorization ?? me?.headers?.Authorization).toBe(`Bearer ${TOKEN}`);
+    expect(app.requests().some(item => item.url.startsWith("https://preview.pikibun.com"))).toBe(false);
+  });
+
+  test("any other saved server stays as it is", async () => {
+    const app = await open("../App.tsx", { network: server(), storage: signedIn });
+    await app.waitFor("text:Fix the flaky login test");
+    expect(app.storage()["pikibun.origin"]).toBe(ORIGIN);
+  });
 });
 
 describe("signing out", () => {
