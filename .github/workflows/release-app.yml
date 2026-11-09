@@ -453,10 +453,10 @@ jobs:
           # Signed with that key, not the debug one.
           build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)"
           "$build_tools/apksigner" verify --verbose "$apk"
-          # "Signer #1 certificate SHA-256 digest: …", or for a v3 signer "Signer (minSdkVersion=…) certificate …".
+          # "Signer #1 certificate SHA-256 digest: …", or by scheme, "V3.0 Signer: certificate SHA-256 digest: …".
           certificates=$("$build_tools/apksigner" verify --print-certs "$apk" 2> /dev/null)
           echo "$certificates"
-          signers=$(printf '%s\n' "$certificates" | awk '/^Signer.* certificate SHA-256 digest: / { print $NF }' | sort -u)
+          signers=$(printf '%s\n' "$certificates" | awk '/Signer.* certificate SHA-256 digest: / { print $NF }' | sort -u)
           if [ "$signers" != "$expected" ]; then
             echo "::error::The APK is signed by ${signers:-no certificate apksigner names}, not the keystore's key $alias ($expected)."
             exit 1
