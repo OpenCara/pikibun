@@ -441,6 +441,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const submission = createAction();
   const stopping = createAction();
   const rewinding = createAction();
+  const copying = createAction();
   const receipt = signal<SubmitResult | null>(null);
   const list = signal<ListRef>();
   const expanded = signal<ReadonlySet<string>>(new Set());
@@ -583,8 +584,9 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
 
   /** Copies a message's text, or a reply's Markdown without its tool calls (the copy icon beside it). */
   async function copyMessage(entry: EntryView) {
-    // A failure shows below the transcript, and the icon stays a copy icon.
-    if (!await rewinding.run(() => Clipboard.writeText(copyText(entry)))) throw new Error("Not copied");
+    // Its own action, so copying neither waits for nor holds up going back and forking. The copy icon turns to a check
+    // and the notice says so; a failure shows below the transcript, and the icon stays a copy icon.
+    if (!await copying.run(() => Clipboard.writeText(copyText(entry)), "Message copied")) throw new Error("Not copied");
   }
 
   /**
@@ -770,7 +772,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           <If when={draftHasSecret()}>
             <Small testID="draft-secret" tone="warning">{`This message looks like it holds a secret. Everyone, you included, sees it as ${REDACTED} in the transcript, but the agent and its host receive it as typed.`}</Small>
           </If>
-          <Feedback error={submission.error() || stopping.error() || withdrawing.error() || rewinding.error()} notice={withdrawNotice() || rewinding.notice()} />
+          <Feedback error={submission.error() || stopping.error() || withdrawing.error() || rewinding.error() || copying.error()} notice={withdrawNotice() || rewinding.notice() || copying.notice()} />
         </View>
       </View>
     </>

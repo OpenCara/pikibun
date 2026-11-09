@@ -136,17 +136,21 @@ export type MessageAction = { label: string; run: () => void; disabled?: boolean
  */
 export type MessageActions = (entry: EntryView) => { revert?: MessageAction; fork?: MessageAction };
 
+/** Whether a pointer is how the person points (desktops, browsers), rather than a finger. */
+const pointer = platform.desktop || platform.os === "web";
+
 /**
  * A small icon button of a message's footer, its label the tooltip on the desktop and what screen readers say: quiet
- * beside the message where a pointer brings each up, at full strength on touch screens.
+ * beside the message where a pointer brings each up; at full strength on touch screens, with room for a finger.
  */
 function ActionButton(props: { icon: IconName; label: string; onPress: () => void; disabled?: boolean; testID?: string }) {
+  const size = pointer ? 24 : 32;
   return (
-    <BaseButton testID={props.testID} accessibilityLabel={props.label} hitSlop={4} disabled={props.disabled} onPress={props.onPress}
+    <BaseButton testID={props.testID} accessibilityLabel={props.label} hitSlop={pointer ? 4 : 8} disabled={props.disabled} onPress={props.onPress}
       tooltip={<Tooltip style={{ backgroundColor: palette().primary, borderRadius: radius.small, paddingHorizontal: 8, paddingVertical: 4 }}>
         <Text style={{ fontSize: text.caption, color: palette().onPrimary }}>{props.label}</Text>
       </Tooltip>}
-      style={{ width: 24, height: 24, alignItems: "center", justifyContent: "center", borderRadius: radius.small, opacity: platform.desktop || platform.os === "web" ? 0.55 : 1 }}
+      style={{ width: size, height: size, alignItems: "center", justifyContent: "center", borderRadius: radius.small, opacity: pointer ? 0.55 : 1 }}
       hoverStyle={{ backgroundColor: palette().hover, opacity: 1 }} activeStyle={{ opacity: 0.5 }} disabledStyle={{ opacity: 0.3 }}>
       <Icon name={props.icon} size={14} color={palette().muted} />
     </BaseButton>
@@ -165,24 +169,26 @@ function Footer(props: { entry: EntryView; meta: string; actions?: MessageAction
     return () => clearTimeout(timer);
   });
   const justCopied = () => copied() === props.entry.id;
+  // Test IDs name the entry: `message-copy-0-12` for entry `0:12`.
+  const testID = (action: string) => `message-${action}-${props.entry.id.replace(/[^\w-]/g, "-")}`;
   function copy() {
     const id = props.entry.id;
     void props.onCopy?.(props.entry).then(() => copied.set(id), () => {});
   }
   return (
     <If when={props.meta || copyable() || offered().revert || offered().fork}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 2, justifyContent: props.end ? "flex-end" : "flex-start" }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: pointer ? 2 : 4, justifyContent: props.end ? "flex-end" : "flex-start" }}>
         <If when={props.meta}>
           <Text style={{ fontSize: text.caption, color: palette().muted, marginRight: 4 }}>{props.meta}</Text>
         </If>
         <If when={copyable()}>
-          <ActionButton testID="message-copy" icon={justCopied() ? "check" : "copy"} label={justCopied() ? "Copied" : "Copy message"} onPress={copy} />
+          <ActionButton testID={testID("copy")} icon={justCopied() ? "check" : "copy"} label={justCopied() ? "Copied" : "Copy message"} onPress={copy} />
         </If>
         <If when={offered().revert}>
-          {revert => <ActionButton testID="message-revert" icon="history" label={revert().label} disabled={revert().disabled} onPress={() => revert().run()} />}
+          {revert => <ActionButton testID={testID("revert")} icon="history" label={revert().label} disabled={revert().disabled} onPress={() => revert().run()} />}
         </If>
         <If when={offered().fork}>
-          {fork => <ActionButton testID="message-fork" icon="branch" label={fork().label} disabled={fork().disabled} onPress={() => fork().run()} />}
+          {fork => <ActionButton testID={testID("fork")} icon="branch" label={fork().label} disabled={fork().disabled} onPress={() => fork().run()} />}
         </If>
       </View>
     </If>
@@ -196,7 +202,7 @@ function Footer(props: { entry: EntryView; meta: string; actions?: MessageAction
  */
 export function TranscriptEntry(props: {
   entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; shared?: boolean;
-  /** Copies a message (the copy icon); without it, messages offer no actions. */
+  /** Copies a message: without it, messages show no copy icon. It rejects when the message wasn't copied. */
   onCopy?: (entry: EntryView) => Promise<void>;
   /** Going back to a message and forking from it, where offered. */
   actions?: MessageActions;
