@@ -40,7 +40,9 @@ function heading(op: Operation): { icon: IconName; title: string } {
     case "bash": return { icon: "terminal", title: "Run a command" };
     case "host.bash": return { icon: "monitor", title: "Run a command on the host" };
     case "git.commit": return { icon: "branch", title: "Commit" };
-    case "git.push": return { icon: "branch", title: op.tag !== undefined ? "Push a tag" : op.pullRequest ? "Push and open a pull request" : "Push" };
+    case "git.push": return { icon: "branch", title: op.tag !== undefined ? "Push a tag" : !op.pullRequest ? "Push"
+      : op.pullRequest.draft === true ? "Push and open a draft pull request"
+      : op.pullRequest.draft === false ? "Push and make the pull request ready for review" : "Push and open a pull request" };
     case "github.merge": return { icon: "pull-request", title: "Merge a pull request" };
     case "github.issue": return { icon: "pull-request", title: "Open an issue" };
     case "github.comment": return { icon: "pull-request", title: "Comment on GitHub" };
@@ -115,7 +117,8 @@ function GitPushSummary(props: { operation: GitPushOperation }) {
       <Detail label={props.operation.tag !== undefined ? "On branch (not moved)" : "Branch"}>{props.operation.branch}</Detail>
       <Detail label="Commit">{props.operation.commit.slice(0, 12)}</Detail>
       <If when={props.operation.pullRequest}>
-        {pull => <Detail label="Pull request">{`${pull().title} → ${pull().base ?? "default branch"}`}</Detail>}
+        {pull => <Detail label="Pull request">{`${pull().title} → ${pull().base ?? "default branch"}${pull().draft === true ? " (draft)"
+          : pull().draft === false ? " (ready for review; marks an open draft ready)" : ""}`}</Detail>}
       </If>
     </View>
   );

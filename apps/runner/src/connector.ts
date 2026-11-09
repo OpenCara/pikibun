@@ -862,7 +862,7 @@ export class LocalConnector {
         };
         return z.object({
           pullRequest: z.object({
-            url: z.string().max(2048).regex(/^https:\/\/\S+$/), number: z.number().int().positive(), created: z.boolean(),
+            url: z.string().max(2048).regex(/^https:\/\/\S+$/), number: z.number().int().positive(), created: z.boolean(), draft: z.boolean().optional(),
           }).strict().optional(),
         }).strict().parse(await this.brokerCallback(await this.connection(), "/api/connectors/self/git/push/complete", payload));
       },

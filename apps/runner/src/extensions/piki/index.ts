@@ -5,6 +5,7 @@ import { commandExtension, noPikiSession, type CliSpec, type PikiSession } from 
 import { ghSpec } from "./gh.js";
 import { glabSpec } from "./glab.js";
 import { promptAuditExtension } from "../../../../../extensions/prompt-audit/prompt-audit.js";
+import { prFlowExtension } from "../../../../../extensions/pr-flow/pr-flow.js";
 
 /*
  * The extensions built into this connector (docs/design/piki-extensions.md), as Pi extension factories: every host
@@ -14,7 +15,7 @@ import { promptAuditExtension } from "../../../../../extensions/prompt-audit/pro
 /** The command-line tools, which each session runs as it may (in its sandbox, or with the host's sign-in). */
 const specs: Record<string, CliSpec> = { gh: ghSpec, glab: glabSpec, "azure-cli": azureCliSpec };
 /** The others, the same in every session. */
-const factories: Record<string, ExtensionFactory> = { "prompt-audit": promptAuditExtension };
+const factories: Record<string, ExtensionFactory> = { "prompt-audit": promptAuditExtension, "pr-flow": prFlowExtension };
 
 export interface PikiExtension {
   info: PikiExtensionInfo;

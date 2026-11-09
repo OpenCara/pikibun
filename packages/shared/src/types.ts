@@ -358,11 +358,17 @@ export interface AuthorizationResult {
    */
   autoApprove?: true;
 }
-/** A pull request the control plane opens as the session owner after a successful push. `base` defaults to the default branch. */
+/**
+ * A pull request the control plane opens as the session owner after a successful push. `base` defaults to the default
+ * branch. `draft: true` opens it as a draft (a merge request marked Draft on GitLab, WIP on Gitea), leaving one already
+ * open as it is; `draft: false` opens it ready for review, and marks the branch's open draft ready for review, with this
+ * title and body. Without `draft`, a new one opens as the forge's default and an open one is left as it is.
+ */
 export interface PullRequestRequest {
   title: string;
   body: string;
   base?: string;
+  draft?: boolean;
 }
 /**
  * Pushes the session commits of one pinned repository, up to `commit`, to `branch` on its Git provider.
@@ -370,7 +376,7 @@ export interface PullRequestRequest {
  * With `tag`, no branch moves: the push creates the lightweight tag refs/tags/<tag> at `commit`, which must already be on
  * the remote's `branch` (a release tag on main, say). A tag is only ever created, never moved or deleted, and takes no
  * pull request.
- * Key order is canonical: kind, repository, directory, branch, tag, commit, pullRequest (title, body, base).
+ * Key order is canonical: kind, repository, directory, branch, tag, commit, pullRequest (title, body, base, draft).
  */
 export interface GitPushOperation {
   kind: "git.push";
@@ -664,7 +670,11 @@ export interface HostPushCredential {
 /** `unknown`: the push failed during or after the upload, so the remote branch may or may not have moved. */
 export type PushOutcome = "pushed" | "up-to-date" | "failed" | "unknown";
 export interface PushCompletionResult {
-  pullRequest?: { url: string; number: number; created: boolean };
+  /**
+   * The pull request opened or found. `draft` is whether it is a draft now, given only when the push asked for one
+   * (`PullRequestRequest.draft`), so connectors that predate drafts never get a key they don't know.
+   */
+  pullRequest?: { url: string; number: number; created: boolean; draft?: boolean };
 }
 /** Runner -> control plane: mint the credential for one approved push. */
 export interface PushCredentialRequest {

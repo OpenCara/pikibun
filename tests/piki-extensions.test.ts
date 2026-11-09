@@ -41,7 +41,7 @@ test('Pikibun extension sources parse as piki:<name>, are their own package, and
   assert.deepEqual(sessionExtensions(parseWorkspaceExtensions([{ source: 'piki:gh' }, { source: 'piki:glab' }]), installed, { ownerId: 'bob', connectorOwnerId: 'alice' })
     .map(item => item.source), ['piki:gh'], 'every member\'s sessions run it, not only the host owner\'s');
 
-  assert.deepEqual(pikiExtensions.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit']);
+  assert.deepEqual(pikiExtensions.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow']);
   assert.deepEqual(pikiExtensionsFor('github-enterprise').map(item => item.source), ['piki:gh']);
   assert.deepEqual(pikiExtensionsFor('azure-devops').map(item => item.tool), ['az']);
   assert.deepEqual(pikiExtensionsFor('bitbucket'), []);
@@ -61,7 +61,7 @@ test('every connector has its Pikibun extensions: each command-line one offers o
   const root = await directory(t);
   const store = new ExtensionStore(join(root, 'extensions'));
   const loaded = await loadInstalled(store);
-  assert.deepEqual(loaded.map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit']);
+  assert.deepEqual(loaded.map(item => item.summary.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow']);
   for (const item of loaded) {
     assert.equal(item.summary.error, undefined);
     const [module] = item.summary.modules;
@@ -78,13 +78,20 @@ test('every connector has its Pikibun extensions: each command-line one offers o
         ['audit-model', 'string', ''], ['policy', 'string', '']]);
       continue;
     }
+    if (item.summary.source === 'piki:pr-flow') {
+      // No tool: the flow as a prompt section, and notes on tool results where a step is due, with its settings.
+      assert.deepEqual([module!.tools, module!.events, module!.noops, module!.ignored], [[], ['before_agent_start', 'tool_result'], [], []]);
+      assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['review-minutes', 'string', '30'], ['merge-method', 'string', 'squash'],
+        ['wait-for-checks', 'boolean', true]]);
+      continue;
+    }
     assert.deepEqual(module!.tools.map(tool => tool.name), [pikiExtension(item.summary.source)!.tool]);
     assert.deepEqual(module!.flags, [{ name: 'read-only', type: 'boolean', default: false, description: module!.flags[0]!.description }]);
     assert.deepEqual([module!.noops, module!.ignored, module!.events], [[], [], []]);
   }
   const host = new HostExtensions(store, { remoteInstalls: true });
   await host.load();
-  assert.deepEqual(host.report().installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit']);
+  assert.deepEqual(host.report().installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow']);
   assert.deepEqual(host.reportWithoutPikiExtensions().installed, [], 'a control plane that predates them gets the report without them');
   // Nothing is installed in the store: the CLI's changes are compared with what is installed only.
   await host.refreshIfChanged();

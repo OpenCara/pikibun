@@ -160,8 +160,17 @@ async function performTagPush(options: {
   return { outcome: "pushed", ...result };
 }
 
+/**
+ * The pull request a push opened or found, in words. `draft` is given only for a push that asked about it: then it says
+ * whether the pull request is a draft or ready for review now.
+ */
+export function pullRequestLine(pull: { url: string; number: number; created: boolean; draft?: boolean }): string {
+  const state = pull.draft === undefined ? "" : pull.draft ? ", a draft" : ", ready for review";
+  return `Pull request #${pull.number} ${pull.created ? "opened" : "already open"}${state}: ${pull.url}`;
+}
+
 /** Human- and agent-readable outcome; never includes credentials. */
-export function pushSummary(result: PushResult, pullRequest?: { url: string; number: number; created: boolean }): string {
+export function pushSummary(result: PushResult, pullRequest?: { url: string; number: number; created: boolean; draft?: boolean }): string {
   if (result.tag !== undefined) {
     return result.outcome === "up-to-date"
       ? `Tag ${result.tag} already exists at ${result.tip}.`
@@ -172,6 +181,6 @@ export function pushSummary(result: PushResult, pullRequest?: { url: string; num
     : `Pushed ${result.total ?? result.commits.length} commit${(result.total ?? result.commits.length) === 1 ? "" : "s"} to ${result.branch} (${result.previous ? `${result.previous.slice(0, 12)}..` : "new branch at "}${result.tip.slice(0, 12)})${result.base ? `, based on ${result.base.slice(0, 12)}` : ""}.`];
   for (const commit of result.commits) lines.push(`- ${commit.rewritten.slice(0, 12)} ${commit.subject}`);
   if (result.total !== undefined && result.total > result.commits.length) lines.push(`- … and ${result.total - result.commits.length} older`);
-  if (pullRequest) lines.push(`Pull request #${pullRequest.number} ${pullRequest.created ? "opened" : "already open"}: ${pullRequest.url}`);
+  if (pullRequest) lines.push(pullRequestLine(pullRequest));
   return lines.join("\n");
 }
