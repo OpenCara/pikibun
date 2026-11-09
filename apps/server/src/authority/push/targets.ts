@@ -366,14 +366,14 @@ export async function openPullRequest(access: RepositoryAccess, pin: SessionRepo
         const item = object(target, value);
         return { url: webURL(target, item.html_url), number: positive(target, item.number), draft: item.draft === true, node: item.node_id };
       };
-      const answer = await call(target, `${target.base}/repos/${pin.fullName}/pulls`, { method: 'POST', errorBody: true,
+      const creation = await call(target, `${target.base}/repos/${pin.fullName}/pulls`, { method: 'POST', errorBody: true,
         body: { title: input.title, head: input.head, base: input.base, body: input.body, ...(input.draft ? { draft: true } : {}) } });
-      if (answer.status === 200 || answer.status === 201) { const { node: _node, ...pull } = parse(answer.body); return { ...pull, created: true }; }
-      if ([401, 403, 404].includes(answer.status)) permissionRequired(target.provider);
-      if (answer.status !== 422) unavailable(target.provider);
+      if (creation.status === 200 || creation.status === 201) { const { node: _node, ...pull } = parse(creation.body); return { ...pull, created: true }; }
+      if ([401, 403, 404].includes(creation.status)) permissionRequired(target.provider);
+      if (creation.status !== 422) unavailable(target.provider);
       // GitHub answers 422 both for one already open and for a draft the repository can't have (drafts need a plan that
       // has them, on private repositories), among others (no commits between the branches): its message tells them apart.
-      const refusal = JSON.stringify(answer.body ?? '').toLowerCase();
+      const refusal = JSON.stringify(creation.body ?? '').toLowerCase();
       if (input.draft && /draft pull requests? (?:are|is) not supported|draft.*not (?:supported|available|enabled)/.test(refusal)) {
         fail(422, 'draft_unsupported', 'GitHub refused a draft pull request for this repository; open it without draft: true.');
       }
