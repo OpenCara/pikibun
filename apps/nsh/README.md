@@ -86,7 +86,7 @@ browser and has APIs its web runtime lacks, so only this catches the web's own f
 ## Release it
 
 Pushing an `app-v1.2.3` tag on `main` packages the app for every platform (`.github/workflows/release-app.yml`): the
-signed Windows installer ([`windows/installer.iss`](windows/installer.iss), Inno Setup, per user), the signed and
+Windows installer ([`windows/installer.iss`](windows/installer.iss), Inno Setup, per user, signed through SignPath), the signed and
 notarized macOS `.dmg`, Linux and the signed Android `.apk` on the tag's GitHub release, "Pikibun 1.2.3", which becomes
 the latest (`app-v1.2.3-beta.1` makes a prerelease), and iOS to TestFlight. Its identity is `nsh.json`'s: the id
 `com.pikibun.app` (the iPhone and Android app's before it, so they update in place) and the icon `icon.png`. Signing

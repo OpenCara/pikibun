@@ -1,9 +1,7 @@
 ; The Windows installer for Pikibun's client (Inno Setup 6, preinstalled on GitHub's Windows runners), around the app
 ; directory `nsh package --target windows` writes: Pikibun.exe with its icon, and the bundle beside it in nsh\.
 ;
-;   ISCC.exe /DAppVersion=1.2.3-beta.1 /DNumericVersion=1.2.3 /DSourceDir=<that directory> /DOutputDir=<out> installer.iss
-;
-; With /DSign and "/Spikibun=<sign command, $f the file>", the installer and the uninstaller in it are signed with it.
+;   ISCC.exe /DAppVersion=1.2.3-beta.1 /DNumericVersion=1.2.3.0 /DSourceDir=<that directory> /DOutputDir=<out> installer.iss
 ;
 ; It installs for the current user, into %LOCALAPPDATA%\Programs\Pikibun, so it needs no administrator (one can
 ; choose all users in its first dialog), adds Pikibun to the Start menu and, if asked, the desktop, and registers an
@@ -18,7 +16,8 @@
 #ifndef OutputDir
   #define OutputDir "."
 #endif
-; The file version Windows shows takes only numbers: the version without a prerelease suffix.
+; The file version Windows shows takes only numbers: the version without a prerelease suffix, in four parts (1.2.3.0),
+; which SignPath checks as the product version before signing.
 #ifndef NumericVersion
   #define NumericVersion AppVersion
 #endif
@@ -30,6 +29,9 @@ AppName=Pikibun
 AppVersion={#AppVersion}
 AppVerName=Pikibun {#AppVersion}
 VersionInfoVersion={#NumericVersion}
+VersionInfoProductName=Pikibun
+VersionInfoProductVersion={#NumericVersion}
+VersionInfoProductTextVersion={#NumericVersion}
 AppPublisher=OpenCara
 AppPublisherURL=https://pikibun.com
 AppSupportURL=https://github.com/OpenCara/pikibun/issues
@@ -47,10 +49,6 @@ OutputBaseFilename=Pikibun-{#AppVersion}-windows-x64-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-#ifdef Sign
-SignTool=pikibun
-SignedUninstaller=yes
-#endif
 ; Pikibun running is closed to update it, and started again afterwards.
 CloseApplications=yes
 RestartApplications=yes

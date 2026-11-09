@@ -2,7 +2,7 @@ name: Release app
 # Pushing an app-v1.2.3 tag (app-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then packages the client
 # (apps/nsh) with Native Shell for every platform and attaches the packages to the tag's GitHub release, "Pikibun
 # <version>", which becomes the latest (a tag with a suffix such as -beta.1 makes a prerelease instead):
-#   Windows   Pikibun-<version>-windows-x64-setup.exe (Inno Setup, apps/nsh/windows/installer.iss), signed
+#   Windows   Pikibun-<version>-windows-x64-setup.exe (Inno Setup, apps/nsh/windows/installer.iss), signed by SignPath
 #   macOS     Pikibun-<version>-macos-arm64.dmg, the .app signed with a Developer ID and both notarized
 #   Linux     Pikibun-<version>-linux-x86_64.tar.gz
 #   Android   Pikibun-<version>-android.apk, signed with the release key
@@ -10,13 +10,18 @@ name: Release app
 # suffix (Apple's and Windows' version fields take only numbers) and their build number is this run's.
 #
 # Pull requests that change how the app is packaged build every platform too, without releasing; so does a run by
-# hand. They have no release secrets: Windows and Android are signed with a throwaway key made for the run, so their
-# signing runs as a release's does, and macOS is ad hoc signed.
+# hand. They have no release secrets: Android is signed with a throwaway key made for the run, so its signing runs as a
+# release's does, macOS is ad hoc signed, and Windows is unsigned.
 #
-# Signing, in the `release` environment, each platform's all or nothing. A release is never unsigned: a tag's run fails
-# for a platform whose signing is not configured.
-# - Windows: WIN_CERTIFICATE_P12 (base64 code-signing .p12) and WIN_CERTIFICATE_PASSWORD sign Pikibun.exe, the
-#   installer and its uninstaller.
+# Signing, in the `release` environment, each platform's all or nothing. A tag's run fails for macOS or Android while
+# its signing is not configured.
+# - Windows: SignPath Foundation's free signing for open source, through SignPath.io: the secret SIGNPATH_API_TOKEN (a
+#   submitter's API token) and the variable SIGNPATH_ORGANIZATION_ID, with the project `pikibun`, the signing policy
+#   `release-signing` and the artifact configuration `windows-installer` (.github/signpath/windows-installer.xml;
+#   the variables SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG and SIGNPATH_ARTIFACT_CONFIGURATION_SLUG name
+#   others). SignPath signs the installer once an approver approves the request there. Pikibun.exe inside it is
+#   Native Shell's prebuilt runner, which SignPath Foundation's certificate may not sign. Until SignPath is set up the
+#   installer is released unsigned, with a warning.
 # - macOS: MAC_CERTIFICATE_P12 (base64 Developer ID Application .p12), MAC_CERTIFICATE_PASSWORD, the variable
 #   MAC_SIGNING_IDENTITY (the certificate's name without "Developer ID Application: "), and for notarization
 #   APP_STORE_CONNECT_API_KEY (the .p8's contents), APP_STORE_CONNECT_API_KEY_ID and APP_STORE_CONNECT_API_ISSUER_ID.
@@ -57,9 +62,12 @@ jobs:
     needs: [check, ci]
     if: ${{ !cancelled() && !failure() }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Long enough for a release's signing request to wait for its approval in SignPath.
+    timeout-minutes: 270
     # The release's secrets only for a release: a pull request's build is unsigned.
     environment: ${{ github.event_name == 'push' && 'release' || '' }}
+    outputs:
+      signed: ${{ steps.signing.outputs.configured }}
     defaults:
       run:
         shell: pwsh
@@ -72,126 +80,103 @@ jobs:
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
+      # FILE_VERSION: Windows' four-part file and product version, 1.2.3.0, which SignPath checks before signing.
       - name: Version
         shell: bash
         env:
           TAG_VERSION: ${{ needs.check.outputs.version }}
         run: |
           version="${TAG_VERSION:-$(node -p 'require("./apps/nsh/nsh.json").version')-dev.$GITHUB_RUN_NUMBER}"
-          { echo "VERSION=$version"; echo "APP_VERSION=${version%%-*}"; echo "BUILD=$GITHUB_RUN_NUMBER"; } >> "$GITHUB_ENV"
-      - name: Package
-        run: node scripts/nsh.mjs package App.tsx --target windows --app-version $env:APP_VERSION --build $env:BUILD --out "$env:RUNNER_TEMP\app"
+          { echo "VERSION=$version"; echo "APP_VERSION=${version%%-*}"; echo "FILE_VERSION=${version%%-*}.0"; echo "BUILD=$GITHUB_RUN_NUMBER"; } >> "$GITHUB_ENV"
+      # Signed through SignPath Foundation's free open-source signing (.github/signpath/windows-installer.xml) once it
+      # is set up; until then a release's installer is unsigned, with a warning.
       - name: Signing configured
         id: signing
         env:
           EVENT: ${{ github.event_name }}
-          WIN_CERTIFICATE_P12: ${{ secrets.WIN_CERTIFICATE_P12 != '' }}
-          WIN_CERTIFICATE_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD != '' }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
         run: |
-          if ($env:WIN_CERTIFICATE_P12 -eq 'true' -and $env:WIN_CERTIFICATE_PASSWORD -eq 'true') {
+          if ($env:SIGNPATH_API_TOKEN -eq 'true' -and $env:SIGNPATH_ORGANIZATION_ID -eq 'true') {
             "configured=true" >> $env:GITHUB_OUTPUT
-          } elseif ($env:WIN_CERTIFICATE_P12 -eq 'true' -or $env:WIN_CERTIFICATE_PASSWORD -eq 'true') {
-            Write-Output "::error::Windows signing needs both WIN_CERTIFICATE_P12 and WIN_CERTIFICATE_PASSWORD."
-            exit 1
-          } elseif ($env:EVENT -eq 'push') {
-            Write-Output "::error::A release's Windows app is signed: set WIN_CERTIFICATE_P12 and WIN_CERTIFICATE_PASSWORD in the release environment."
+          } elseif ($env:SIGNPATH_API_TOKEN -eq 'true' -or $env:SIGNPATH_ORGANIZATION_ID -eq 'true') {
+            Write-Output "::error::SignPath signing needs both the secret SIGNPATH_API_TOKEN and the variable SIGNPATH_ORGANIZATION_ID."
             exit 1
           } else {
             "configured=false" >> $env:GITHUB_OUTPUT
-            Write-Output "::notice::Not a release: Windows is signed with a throwaway self-signed certificate, which Windows does not trust."
-          }
-      # In the user's certificate store, where signtool and Inno Setup find it by its thumbprint: no file or password on
-      # their command lines.
-      - name: Signing certificate
-        env:
-          SIGNED: ${{ steps.signing.outputs.configured }}
-          WIN_CERTIFICATE_P12: ${{ secrets.WIN_CERTIFICATE_P12 }}
-          WIN_CERTIFICATE_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
-        run: |
-          if ($env:SIGNED -eq 'true') {
-            $file = "$env:RUNNER_TEMP\signing.p12"
-            [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String($env:WIN_CERTIFICATE_P12))
-            try {
-              $password = ConvertTo-SecureString $env:WIN_CERTIFICATE_PASSWORD -AsPlainText -Force
-              $certificate = Import-PfxCertificate -FilePath $file -CertStoreLocation Cert:\CurrentUser\My -Password $password |
-                Where-Object HasPrivateKey | Select-Object -First 1
-            } finally {
-              Remove-Item -Force $file
+            if ($env:EVENT -eq 'push') {
+              Write-Output "::warning::SignPath is not set up (SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID): the Windows installer is unsigned, so SmartScreen warns before it runs."
             }
-            if (-not $certificate) { Write-Output "::error::WIN_CERTIFICATE_P12 holds no certificate with its private key."; exit 1 }
-          } else {
-            $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Pikibun test signing' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
           }
-          "WIN_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" >> $env:GITHUB_ENV
-          $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName
-          "SIGNTOOL=$signtool" >> $env:GITHUB_ENV
-      - name: Sign Pikibun.exe
-        run: |
-          & $env:SIGNTOOL sign /sha1 $env:WIN_CERTIFICATE_THUMBPRINT /s My /fd sha256 /tr http://timestamp.digicert.com /td sha256 "$env:RUNNER_TEMP\app\Pikibun\Pikibun.exe"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # Inno Setup signs the installer and the uninstaller it writes into it (installer.iss's SignTool), with $f the file
-      # and $q a quote.
+      - name: Package
+        run: node scripts/nsh.mjs package App.tsx --target windows --app-version $env:APP_VERSION --build $env:BUILD --out "$env:RUNNER_TEMP\app"
       - name: Installer
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          $sign = "`$q$env:SIGNTOOL`$q sign /sha1 $env:WIN_CERTIFICATE_THUMBPRINT /s My /fd sha256 /tr http://timestamp.digicert.com /td sha256 `$f"
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\release" | Out-Null
-          & $iscc /Q "/DAppVersion=$env:VERSION" "/DNumericVersion=$env:APP_VERSION" "/DSourceDir=$env:RUNNER_TEMP\app\Pikibun" "/DOutputDir=$env:RUNNER_TEMP\release" /DSign "/Spikibun=$sign" apps\nsh\windows\installer.iss
+          & $iscc /Q "/DAppVersion=$env:VERSION" "/DNumericVersion=$env:FILE_VERSION" "/DSourceDir=$env:RUNNER_TEMP\app\Pikibun" "/DOutputDir=$env:RUNNER_TEMP\release" apps\nsh\windows\installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # As a user would, silently: installed for this user with its Start menu entry, then uninstalled without a trace.
-      # The installer, the app and the uninstaller are each signed with the certificate, and for a release Windows trusts
-      # the signatures.
-      - name: The installer installs and uninstalls
-        env:
-          SIGNED: ${{ steps.signing.outputs.configured }}
+          "INSTALLER=$env:RUNNER_TEMP\release\Pikibun-$env:VERSION-windows-x64-setup.exe" >> $env:GITHUB_ENV
+      # What SignPath's artifact configuration requires of the file it signs.
+      - name: The installer's product name and version
         run: |
-          $installer = "$env:RUNNER_TEMP\release\Pikibun-$env:VERSION-windows-x64-setup.exe"
+          $info = (Get-Item $env:INSTALLER).VersionInfo
+          Write-Output "ProductName=$($info.ProductName) ProductVersion=$($info.ProductVersion) FileVersion=$($info.FileVersion)"
+          if ($info.ProductName -ne 'Pikibun' -or $info.ProductVersion -ne $env:FILE_VERSION) {
+            Write-Output "::error::The installer's product is '$($info.ProductName)' $($info.ProductVersion), not 'Pikibun' $env:FILE_VERSION."
+            exit 1
+          }
+      # As a user would, silently: installed for this user with its Start menu entry, then uninstalled without a trace.
+      - name: The installer installs and uninstalls
+        run: |
           $app = "$env:LOCALAPPDATA\Programs\Pikibun"
           $shortcut = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Pikibun.lnk"
-          function Assert-Signed($path) {
-            $signature = Get-AuthenticodeSignature $path
-            if ($signature.SignerCertificate.Thumbprint -ne $env:WIN_CERTIFICATE_THUMBPRINT) {
-              Write-Output "::error::$path is not signed with the signing certificate ($($signature.Status): $($signature.StatusMessage))."
-              exit 1
-            }
-            if (-not $signature.TimeStamperCertificate) { Write-Output "::error::$path's signature has no timestamp."; exit 1 }
-            if ($env:SIGNED -eq 'true' -and $signature.Status -ne 'Valid') {
-              Write-Output "::error::$path's signature is not trusted: $($signature.StatusMessage)"
-              exit 1
-            }
-          }
-          Assert-Signed $installer
-          Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait
+          Start-Process $env:INSTALLER -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait
           foreach ($path in "$app\Pikibun.exe", "$app\nsh\bundle.nshc", $shortcut) {
             if (-not (Test-Path $path)) { Write-Output "::error::The installer did not install $path."; exit 1 }
           }
-          Assert-Signed "$app\Pikibun.exe"
-          Assert-Signed "$app\unins000.exe"
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           # The uninstaller removes itself last, from a copy, so give it a moment.
           for ($i = 0; $i -lt 30 -and (Test-Path "$app\Pikibun.exe"); $i++) { Start-Sleep -Seconds 1 }
           foreach ($path in "$app\Pikibun.exe", $shortcut) {
             if (Test-Path $path) { Write-Output "::error::The uninstaller left $path."; exit 1 }
           }
-      - name: Remove the certificate
-        if: always()
+      # SignPath signs only what a GitHub-hosted run of this workflow uploaded as an artifact, and every release's
+      # request waits for an approver in SignPath.
+      - name: Upload the installer to sign
+        id: unsigned
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer-unsigned
+          path: ${{ env.INSTALLER }}
+          if-no-files-found: error
+      - name: Sign the installer with SignPath
+        if: steps.signing.outputs.configured == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'pikibun' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG || 'windows-installer' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          parameters: |
+            version: ${{ toJSON(env.FILE_VERSION) }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 14400
+          output-artifact-directory: ${{ runner.temp }}/signed
+      # The signed installer in place of the unsigned one, trusted by Windows and timestamped.
+      - name: Check the signature
+        if: steps.signing.outputs.configured == 'true'
         run: |
-          Remove-Item -Force -ErrorAction SilentlyContinue "$env:RUNNER_TEMP\signing.p12"
-          if (-not $env:WIN_CERTIFICATE_THUMBPRINT) { exit 0 }
-          # The certificate and its private key out of the store (PowerShell 7's Remove-Item has no -DeleteKey).
-          $store = [Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
-          $store.Open('ReadWrite')
-          foreach ($certificate in $store.Certificates.Find('FindByThumbprint', $env:WIN_CERTIFICATE_THUMBPRINT, $false)) {
-            try {
-              $key = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
-              if ($key -is [Security.Cryptography.RSACng]) { $key.Key.Delete() }
-              elseif ($key -is [Security.Cryptography.RSACryptoServiceProvider]) { $key.PersistKeyInCsp = $false; $key.Clear() }
-            } catch {
-              Write-Output "::warning::The signing key was not deleted: $_"
-            }
-            $store.Remove($certificate)
-          }
-          $store.Close()
+          $signed = Join-Path "$env:RUNNER_TEMP\signed" (Split-Path -Leaf $env:INSTALLER)
+          if (-not (Test-Path $signed)) { Write-Output "::error::SignPath returned no $(Split-Path -Leaf $env:INSTALLER)."; exit 1 }
+          Copy-Item -Force $signed $env:INSTALLER
+          $signature = Get-AuthenticodeSignature $env:INSTALLER
+          Write-Output "$($signature.Status): $($signature.SignerCertificate.Subject)"
+          if ($signature.Status -ne 'Valid') { Write-Output "::error::The installer's signature is not valid: $($signature.StatusMessage)"; exit 1 }
+          if (-not $signature.TimeStamperCertificate) { Write-Output "::error::The installer's signature has no timestamp."; exit 1 }
       - uses: actions/upload-artifact@v7
         with:
           name: app-windows
@@ -687,6 +672,7 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
           PRERELEASE: ${{ needs.check.outputs.prerelease }}
           PREVIOUS_TAG: ${{ needs.check.outputs.previous-tag }}
+          WINDOWS_SIGNED: ${{ needs.windows.outputs.signed }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" --clobber
@@ -695,5 +681,10 @@ jobs:
           # A release is the latest; only a tag with a suffix (app-v1.2.3-beta.1) makes a prerelease.
           if [ "$PRERELEASE" = true ]; then flags=(--prerelease --latest=false); else flags=(--latest); fi
           [ -n "$PREVIOUS_TAG" ] && flags+=(--notes-start-tag "$PREVIOUS_TAG")
+          # SignPath Foundation asks for its code signing policy on the download page; gh puts these notes before the
+          # generated ones.
+          if [ "$WINDOWS_SIGNED" = true ]; then
+            flags+=(--notes "Windows: free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). See the [code signing policy](https://github.com/$GITHUB_REPOSITORY#code-signing-policy).")
+          fi
           gh release create "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Pikibun $VERSION" --generate-notes "${flags[@]}"
