@@ -7,8 +7,8 @@ production React web client and Electron app at `pikibun.com`. Both use the same
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
 (longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), picking files other than photos
-(longbridge/nsh#162), and running the `pikibun` connector from the app (run `pikibun connect`, or `pikibun serve` for
-yourself, instead).
+outside a browser (longbridge/nsh#162; the web build picks any file through its page's host), and running the
+`pikibun` connector from the app (run `pikibun connect`, or `pikibun serve` for yourself, instead).
 
 ## Run it
 
@@ -22,9 +22,13 @@ pnpm dev:native               # a test-mode server with a host and a session to 
 ```
 
 On the web the client is served by the Pikibun server and signs in with its browser session (cookies and CSRF tokens):
-GitHub through the server's own sign-in page, or a username and password where the server allows them. The page's
-host (`web/host.js`, NSH's `web.host`) gives it the page's address, so the web app's links keep working: `#/s/<id>`,
-`#/w/<id>/new`, `#/settings/<section>/<id>`, `#/shared/<token>` (no sign-in) and `#/join/<token>`.
+GitHub through the server's own sign-in page, or a username and password where the server allows them, with a new
+account made there as its SIGNUP allows. An invite link opened signed out says so, signs in with GitHub for that
+workspace and is remembered across GitHub's redirect, as the web app does. The page's host (`web/host.js`, NSH's
+`web.host`) gives it the page's address, so the web app's links keep working: `#/s/<id>`, `#/w/<id>/new`,
+`#/settings/<section>/<id>`, `#/shared/<token>` (no sign-in) and `#/join/<token>`; it also does what NSH's web runtime
+can't: the browser's own file chooser for any file, an image too large for a message drawn again smaller, the query
+GitHub's sign-in comes back with, and GitHub's authorization page for an invite's sign-in.
 
 Native builds sign in to a server you enter: GitHub in the app's own web view, or a test-mode server's token.
 
@@ -68,7 +72,9 @@ Its storage is isolated and discarded when it ends. `--timeout-ms 600000` sets t
 [Mac test results](MACOS-TESTING.md) for what was observed on a Mac.
 
 `pnpm test:client-web` is the web's own: signed out, signed in with the browser's cookie, a settings address, signing
-out, and no page errors, Content-Security-Policy violations or console errors on the way. NSH's headless engine isn't a
+out, a new account made with a password, its first workspace, a file and an image picked in the browser's own chooser,
+and no page errors, Content-Security-Policy violations or console errors on the way. Where the temporary directory's
+path is long, Chrome's sockets don't fit: run it with a short relative `TMPDIR`. NSH's headless engine isn't a
 browser and has APIs its web runtime lacks, so only this catches the web's own failures.
 
 ## Release it
@@ -90,8 +96,11 @@ Administration). What is left out, and why:
 - **This Computer** settings belong to the Electron desktop app, which runs its own host.
 - **Notifications on this device** wait for NSH's push notifications (longbridge/nsh#1058); the account's preferences
   and devices are managed here.
-- **Attachments** in the chat box, and **Import dump** for a workspace database, wait for picking files other than
-  photos (longbridge/nsh#162).
+- **Files other than photos** outside a browser: the chat box attaches images everywhere (picked, scaled natively, or
+  pasted) and any file on the web or pasted; picking other files on iPhone, Android and the desktops, and **Import
+  dump** for a workspace database there, wait for NSH (longbridge/nsh#162). On the web both work.
+- **Up** in an empty chat box takes back a queued message on the desktops and in desktop browsers; on phones the
+  queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
   they are offered on the web build only; native builds point to Pikibun on the web.
 - **Syntax highlighting** in file previews: text shows as plain monospace.
