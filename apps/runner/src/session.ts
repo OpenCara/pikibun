@@ -920,7 +920,7 @@ export class RunnerSession {
     // With the gh tool, they read and wait for checks with gh, sparing the session owner's GitHub rate limit.
     const github = mode !== "ask" ? githubInstructions({
       github: this.tools.some(tool => tool.name === "github_read") && !off.has("github_read"),
-      gh: extensionTools.has("gh") && !this.tools.some(tool => tool.name === "gh"),
+      gh: extensionTools.has("gh"),
     }) : "";
     if (github) instructions += `\n\n${github}`;
     if (mode !== "ask" && this.sandbox.browser && this.tools.some(tool => tool.name === "browser") && !off.has("browser")) instructions += "\n\nTo look at or test a web page, "
