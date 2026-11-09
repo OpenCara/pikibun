@@ -1,4 +1,5 @@
 import { effect, Image, signal, Text, untracked, View } from "nsh";
+import { TextView } from "nsh/base";
 import { fileBrowserLimits, type FileEntry, type SessionFiles, type SessionRecord } from "../../../../packages/shared/src/types";
 import { REDACTED, segment } from "../shared";
 import { createResource } from "../lib/resource";
@@ -135,7 +136,7 @@ function FilePreview(props: { sessionId: string; path: string; onBack: () => voi
               <If when={current().redacted}><Banner title="Secret hidden">{`Something that looks like a secret is shown as ${REDACTED}, as in the conversation.`}</Banner></If>
               <If when={current().text !== undefined}>
                 <If when={current().text} else={<EmptyState title="Empty file" />}>
-                  <If when={/\.svg$/i.test(props.path) && !current().truncated} else={<CodeView text={current().text ?? ""} />}>
+                  <If when={/\.svg$/i.test(props.path) && !current().truncated} else={<CodeView text={current().text ?? ""} path={props.path} />}>
                     <SvgPreview text={current().text ?? ""} path={props.path} />
                   </If>
                 </If>
@@ -154,12 +155,60 @@ function FilePreview(props: { sessionId: string; path: string; onBack: () => voi
   );
 }
 
-/** A file's text, selectable, in the code block's look. */
-export function CodeView(props: { text: string }) {
+/** Files named for what they are, without an extension that names their language (the web app's code-highlight.tsx). */
+const namedFiles: Record<string, string> = {
+  makefile: "makefile", gnumakefile: "makefile", gemfile: "ruby", rakefile: "ruby", podfile: "ruby", vagrantfile: "ruby",
+  "cmakelists.txt": "plaintext", ".bashrc": "bash", ".zshrc": "bash", ".profile": "bash", ".env": "bash",
+  ".gitconfig": "ini", ".editorconfig": "ini", ".npmrc": "ini", "pipfile": "ini",
+};
+/** Extensions that aren't a language's own name. */
+const extensions: Record<string, string> = {
+  h: "c", hh: "cpp", hxx: "cpp", ipp: "cpp", mdx: "markdown", md: "markdown", jsonc: "json", json5: "json", geojson: "json", webmanifest: "json",
+  lock: "plaintext", txt: "plaintext", log: "plaintext", csv: "plaintext", svelte: "xml", vue: "xml", astro: "xml", html: "html", svg: "xml",
+  py: "python", pyi: "python", pyw: "python", rb: "ruby", gemspec: "ruby", rake: "ruby", ru: "ruby", kt: "kotlin", kts: "kotlin", gradle: "kotlin",
+  js: "javascript", cjs: "javascript", mjs: "javascript", jsx: "jsx", ts: "typescript", mts: "typescript", cts: "typescript", tsx: "tsx",
+  rs: "rust", sh: "bash", bash: "bash", zsh: "bash", fish: "bash", ksh: "bash", yml: "yaml", conf: "ini", cfg: "ini", properties: "ini",
+  env: "bash", pem: "plaintext", tf: "plaintext", proto: "plaintext", cs: "csharp", hpp: "cpp", cc: "cpp",
+};
+/** Larger text shows plain, as in the web app: highlighting it would hold the view up. */
+const HIGHLIGHT_LIMIT = 128 * 1024;
+
+/** The language a file's text is highlighted as, by its name; null for plain text. */
+export function languageFor(path: string): string | null {
+  const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
+  if (namedFiles[name]) return namedFiles[name] === "plaintext" ? null : namedFiles[name]!;
+  if (name.startsWith(".env.")) return "bash";
+  if (name.startsWith("dockerfile")) return "dockerfile";
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const extension = name.slice(dot + 1);
+  const language = extensions[extension] ?? extension;
+  return language === "plaintext" ? null : language;
+}
+
+/**
+ * A file's text, selectable, in the code block's look; with `path`, highlighted for its language by NSH's own
+ * highlighter (a TextView's code block), as the web app's Files tab highlights it.
+ */
+export function CodeView(props: { text: string; path?: string }) {
+  const language = () => (props.path ? languageFor(props.path) : null);
+  const tooLarge = () => props.text.length > HIGHLIGHT_LIMIT;
   return (
-    <View selectable testID="file-text" style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
-      <Text style={{ fontFamily: monospace, fontSize: text.small, lineHeight: 20, color: palette().text }}>{props.text}</Text>
-    </View>
+    <If when={language() && !tooLarge() ? language() : null}
+      else={
+        <View style={{ gap: 6 }}>
+          <View selectable testID="file-text" style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
+            <Text style={{ fontFamily: monospace, fontSize: text.small, lineHeight: 20, color: palette().text }}>{props.text}</Text>
+          </View>
+          <If when={language() && tooLarge()}><Small>Highlighting is off for text over 128 KB.</Small></If>
+        </View>
+      }>
+      {current => (
+        <View testID="file-text" accessibilityLabel={`${props.path ?? "File"}, ${current()}`}>
+          <TextView selectable document={{ blocks: [{ type: "codeBlock", language: current(), code: props.text.replace(/\n$/, "") }] }} />
+        </View>
+      )}
+    </If>
   );
 }
 
@@ -191,7 +240,7 @@ function SvgPreview(props: { text: string; path: string }) {
   return (
     <View style={{ gap: 8 }}>
       <Segmented small value={mode()} onChange={value => mode.set(value)} options={[{ value: "preview", label: "Preview" }, { value: "source", label: "Source" }]} />
-      <If when={mode() === "preview"} else={<CodeView text={props.text} />}>
+      <If when={mode() === "preview"} else={<CodeView text={props.text} path={props.path} />}>
         <ImageView src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(props.text)}`} path={props.path} />
       </If>
     </View>

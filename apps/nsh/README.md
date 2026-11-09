@@ -94,8 +94,9 @@ invite link, and every settings section (Profile, Notifications, Hosts, Workspac
 Administration). What is left out, and why:
 
 - **This Computer** settings belong to the Electron desktop app, which runs its own host.
-- **Notifications on this device** wait for NSH's push notifications (longbridge/nsh#1058); the account's preferences
-  and devices are managed here.
+- **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058); the
+  web build turns them on in the browser as the web app does (Web Push through the `sw.js` the build ships, or while a
+  tab is open), and every build manages the account's preferences and devices.
 - **Files other than photos** outside a browser: the chat box attaches images everywhere (picked, scaled natively, or
   pasted) and any file on the web or pasted; picking other files on iPhone, Android and the desktops, and **Import
   dump** for a workspace database there, wait for NSH (longbridge/nsh#162). On the web both work.
@@ -103,7 +104,8 @@ Administration). What is left out, and why:
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
   they are offered on the web build only; native builds point to Pikibun on the web.
-- **Syntax highlighting** in file previews: text shows as plain monospace.
+- **Line numbers** in file previews: their text is highlighted for its language by NSH's own highlighter, without a
+  gutter.
 
 ## Known gaps, from NSH itself
 
