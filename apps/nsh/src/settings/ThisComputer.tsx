@@ -84,23 +84,40 @@ export function ThisComputerPanel(props: { host: ThisComputerHost; server: strin
   );
 }
 
-/** Pikibun's command isn't installed, is too old for this app, or couldn't start: what to do about it. */
+/**
+ * Pikibun's command isn't installed, is too old for this app, or couldn't start: what to do about it. Install (or
+ * Update) runs npm for the owner; the command to run in a terminal shows only when that didn't work.
+ */
 function CommandProblem(props: { problem: LaunchProblem; host: ThisComputerHost; server: string }) {
-  const refresh = () => <Button small variant="outline" icon="refresh" label="Refresh" testID="this-computer-retry" disabled={props.host.inspecting()} onPress={() => void props.host.refresh(props.server)} />;
+  const host = props.host;
+  const update = () => props.problem.kind === "outdated";
+  const refresh = () => <Button small variant="outline" icon="refresh" label="Refresh" testID="this-computer-retry" disabled={host.inspecting() || host.installing()} onPress={() => void host.refresh(props.server)} />;
+  const install = () => { if (!host.installing()) void host.install(props.server); };
   return (
     <Section title="Pikibun's command" testID="this-computer-command">
       <CardBody>
         <If when={props.problem.kind === "failed"}
           else={
-            <Banner tone="warning" title={props.problem.kind === "outdated" ? `Update Pikibun's command on ${computerName}` : `Install Pikibun's command on ${computerName}`} actions={refresh()}>
-              {props.problem.kind === "outdated"
-                ? `${computerTitle}'s pikibun command is older than this app, which runs pikibun host. Update it with npm, then choose Refresh.`
-                : `${computerTitle} hosts sessions with the pikibun command, as pikibun connect does in a terminal. Install it with Node.js 24 or newer (nodejs.org${computerTitle === "This Mac" ? ", or brew install node" : ""}), then choose Refresh.`}
+            <Banner tone="warning" title={update() ? `Update Pikibun's command on ${computerName}` : `Install Pikibun's command on ${computerName}`} actions={refresh()}>
+              {update()
+                ? `${computerTitle}'s pikibun command is older than this app, which runs pikibun host. Update it from npm here.`
+                : `${computerTitle} hosts sessions with the pikibun command, as pikibun connect does in a terminal. Install it from npm here: it needs Node.js 24 or newer (nodejs.org${computerTitle === "This Mac" ? ", or brew install node" : ""}).`}
             </Banner>
           }>
           <Banner tone="danger" title="The host could not start" actions={refresh()}>{(props.problem as { message: string }).message}</Banner>
         </If>
-        <If when={props.problem.kind !== "failed"}><CopyField testID="this-computer-install" value={INSTALL_COMMAND} label="Copy command" /></If>
+        <If when={props.problem.kind !== "failed"}>
+          <View style={{ flexDirection: "row" }}>
+            <Button variant="primary" icon="download" testID="this-computer-install-button" busy={host.installing()} disabled={host.installing() || host.inspecting()}
+              label={host.installing() ? (update() ? "Updating pikibun" : "Installing pikibun") : update() ? "Update pikibun" : "Install pikibun"} onPress={install} />
+          </View>
+          <If when={host.installing()}><Small>{`Running ${INSTALL_COMMAND}: this takes a minute. Its output is under Recent activity below.`}</Small></If>
+          <If when={host.installError()}>
+            <Feedback error={host.installError()} />
+            <Small>To install it in a terminal instead:</Small>
+            <CopyField testID="this-computer-install" value={INSTALL_COMMAND} label="Copy command" />
+          </If>
+        </If>
       </CardBody>
     </Section>
   );

@@ -31,17 +31,32 @@ const STDIO_FRAME = "\u001epikibun ";
  */
 const SHELLS = ["zsh", "bash", "sh"];
 const CMD = "cmd";
-/** What the owner runs to get the command, with Node.js 24 or newer. */
+/** What gets the command, with Node.js 24 or newer: the Install button runs it, and a terminal can. */
 export const INSTALL_COMMAND = "npm install -g pikibun@latest";
+/** How long npm may take before the install is given up on. */
+const INSTALL_TIMEOUT_MS = 5 * 60_000;
 const LOG_LIMIT = 200;
 const NOTICES = 20;
+
+/** The owner's login shell by name, if the app is granted it, else the platform's. */
+function loginShell(os: string, shell: string | undefined): string {
+  const name = shell?.split("/").pop();
+  return name && SHELLS.includes(name) ? name : os === "macos" ? "zsh" : "bash";
+}
 
 /** How the app starts the host on this desktop: a login shell (macOS, Linux) or cmd.exe (Windows). */
 export function hostCommand(os: string, shell: string | undefined): { command: string; args: string[] } {
   if (os === "windows") return { command: CMD, args: ["/d", "/c", "pikibun", "host", "--stdio"] };
-  const name = shell?.split("/").pop();
-  const chosen = name && SHELLS.includes(name) ? name : os === "macos" ? "zsh" : "bash";
-  return { command: chosen, args: ["-ilc", "exec pikibun host --stdio"] };
+  return { command: loginShell(os, shell), args: ["-ilc", "exec pikibun host --stdio"] };
+}
+
+/**
+ * How the app installs or updates the command: npm, started as the host is, so it is the npm (and the global folder)
+ * Terminal would use, and the pikibun it installs is the one the host's shell then finds. The command line is fixed.
+ */
+export function installCommand(os: string, shell: string | undefined): { command: string; args: string[] } {
+  if (os === "windows") return { command: CMD, args: ["/d", "/c", ...INSTALL_COMMAND.split(" ")] };
+  return { command: loginShell(os, shell), args: ["-ilc", INSTALL_COMMAND] };
 }
 
 /** One running host process, however it was started: the real command, or a test's stand-in. */
@@ -91,6 +106,45 @@ export const spawnHost: HostLauncher = () => {
 let launcher: HostLauncher = spawnHost;
 /** Tests run a stand-in host instead of the command. Call before anything starts one. */
 export function setHostLauncher(next: HostLauncher): void { launcher = next; }
+
+/** One run of npm installing the command: its output lines, then how it ended. */
+export interface InstallRun {
+  onOutput(listener: (line: string) => void): void;
+  onExit(listener: (result: { code?: number | null; error?: string | null }) => void): void;
+}
+
+export type Installer = () => InstallRun;
+
+/** Runs `npm install -g pikibun@latest` with NSH's process API, as the owner's shell would. */
+export const spawnInstall: Installer = () => {
+  const { command, args } = installCommand(platform.os, nshProcess.env.SHELL);
+  let cwd: string | undefined;
+  if (!nshProcess.dataDir) { try { cwd = homedir(); } catch { cwd = undefined; } }
+  const child = nshProcess.spawn(command, args, { lines: true, timeoutMs: INSTALL_TIMEOUT_MS, ...(cwd ? { cwd } : {}) });
+  return {
+    onOutput: listener => { child.on("stdout", listener); child.on("stderr", listener); },
+    onExit: listener => { child.on("exit", result => listener(result)); },
+  };
+};
+
+let installer: Installer = spawnInstall;
+/** Tests run a stand-in for npm instead. */
+export function setInstaller(next: Installer): void { installer = next; }
+
+/** Why npm couldn't install the command, as the owner can fix it, from what it printed and how it ended. */
+export function installFailure(lines: readonly string[], result: { code?: number | null; error?: string | null }): string {
+  const text = lines.join("\n");
+  const node = `Node.js 24 or newer (from nodejs.org${platform.os === "macos" ? ", or brew install node" : ""})`;
+  if (result.code === 127 || result.code === 9009 || /npm: (command )?not found|not found: npm|'npm' is not recognized/i.test(text)) {
+    return `npm isn't installed on ${computerName}. Install ${node}, then choose Install again.`;
+  }
+  if (/\bEACCES\b|\bEPERM\b|permission denied/i.test(text)) {
+    return `npm couldn't write to its global folder on ${computerName}: permission denied. Run the command below in a terminal${platform.os === "windows" ? " as administrator" : " with sudo in front"}, then choose Refresh.`;
+  }
+  if (result.error) return `The install didn't finish: ${result.error}`;
+  const last = lines.filter(line => line.trim()).slice(-3).join(" ");
+  return last ? `npm couldn't install pikibun: ${last}` : `npm couldn't install pikibun (exit code ${result.code ?? "unknown"}).`;
+}
 
 /** Why the command couldn't start the host, as the owner can fix it. */
 export type LaunchProblem =
@@ -260,6 +314,10 @@ export class ThisComputerHost {
   readonly inspecting = signal(false);
   /** Why the command couldn't start the host: not installed, too old, or what it said. */
   readonly problem = signal<LaunchProblem | null>(null);
+  /** npm is installing or updating the command. */
+  readonly installing = signal(false);
+  /** Why the latest install didn't give this computer a command the host starts with. */
+  readonly installError = signal("");
   readonly error = signal("");
   readonly logs = signal<LogLine[]>([]);
   readonly providers = signal<LoginProvider[] | null>(null);
@@ -409,6 +467,51 @@ export class ThisComputerHost {
     });
     if (!result.ok) return this.refuse(result.error.message);
     this.setResume({ server, unsandboxedConsent });
+    return { ok: true };
+  }
+
+  /**
+   * Installs or updates the command with npm (`npm install -g pikibun@latest`), then looks at this computer again for
+   * `server`: once the command is there, the page carries on to pairing. Its output goes to the activity.
+   */
+  async install(server?: string): Promise<Outcome> {
+    if (untracked(this.installing)) return { ok: false, error: "pikibun is already being installed." };
+    if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first." };
+    this.installing.set(true);
+    this.installError.set("");
+    this.log("info", `Running ${INSTALL_COMMAND}.`);
+    const lines: string[] = [];
+    let failure: string | undefined;
+    try {
+      const result = await new Promise<{ code?: number | null; error?: string | null }>(resolve => {
+        let run: InstallRun;
+        try { run = installer(); }
+        catch (error) { resolve({ code: null, error: error instanceof Error ? error.message : String(error) }); return; }
+        run.onOutput(line => {
+          if (!line.trim()) return;
+          lines.push(line);
+          if (lines.length > 40) lines.shift();
+          this.log("info", line.slice(0, 1000));
+        });
+        run.onExit(resolve);
+      });
+      if (result.code !== 0) failure = installFailure(lines, result);
+    } finally {
+      this.installing.set(false);
+    }
+    if (failure) {
+      this.installError.set(failure);
+      this.log("error", failure);
+      return { ok: false, error: failure };
+    }
+    this.log("info", "npm installed pikibun.");
+    await this.refresh(server);
+    // Installed, yet still not found: npm's global folder isn't on the login shell's PATH.
+    if (untracked(this.problem)?.kind === "missing") {
+      const message = `npm installed pikibun, but ${computerName}'s ${platform.os === "windows" ? "PATH" : "login shell"} doesn't find it. Add npm's global folder (npm prefix -g${platform.os === "windows" ? "" : ", then its bin"}) to your PATH, then choose Refresh.`;
+      this.installError.set(message);
+      return { ok: false, error: message };
+    }
     return { ok: true };
   }
 

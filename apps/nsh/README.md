@@ -130,8 +130,10 @@ React web client's address for it) makes this computer one of your hosts:
   computer: its page opens in the browser, a device code or API key is asked here, and the credential stays in Pi's
   configuration), **Prerequisites** with what to run for each missing one, and the host's recent activity.
 
-The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command (`npm install -g
-pikibun@latest`, which the page offers when it's missing or too old) as `pikibun host --stdio`
+The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command (from npm: when it's missing
+or too old, the page's **Install pikibun** or **Update pikibun** button runs `npm install -g pikibun@latest` through
+the same login shell, shows npm's output under the host's activity, and offers the command to run in a terminal only
+when that fails) as `pikibun host --stdio`
 (`apps/runner/src/host-cli.ts` and `app-host.ts`), and talks to it with JSON lines
 on its stdin and stdout (`desktop-protocol.ts`), where pairing codes and API keys travel; never its command line.
 NSH starts a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,

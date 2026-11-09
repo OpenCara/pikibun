@@ -1,17 +1,20 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection, LoginProvider } from "../../../runner/src/desktop-protocol";
-import { setHostLauncher, thisComputer, type HostLink } from "../../src/lib/this-computer";
+import { setHostLauncher, setInstaller, thisComputer, type HostLink, type InstallRun } from "../../src/lib/this-computer";
 import { ThisComputerPanel } from "../../src/settings/ThisComputer";
 
 // Settings › This Mac against a stand-in for `pikibun host --stdio`: it answers the desktop host's protocol as the real
 // one does, for a Mac without a sandbox. `host.params`: `command`, how the command fares ("ok", "missing": not
 // installed, "outdated": a CLI without `host`); `paired`, the server it is paired with; `piSignedIn` (true), whether Pi
-// has a provider yet; `server`, the one the page is signed in to. What the app sent is listed under the panel, secrets
-// left out, for the tests to read.
+// has a provider yet; `server`, the one the page is signed in to; `npm`, how `npm install -g pikibun@latest` fares
+// ("ok": it installs a current command, "missing": no npm, "denied": EACCES on its global folder, "elsewhere": it
+// installs where the shell doesn't look). What the app sent is listed under the panel, secrets left out, for the tests
+// to read; an install is listed as `install`.
 
-const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown };
+const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; npm?: unknown };
 const SERVER = typeof params.server === "string" ? params.server : "https://pikibun.test";
-const command = String(params.command ?? "ok");
+let command = String(params.command ?? "ok");
+const npm = String(params.npm ?? "ok");
 const sent = signal<string[]>([]);
 let paired: string | undefined = typeof params.paired === "string" ? params.paired : undefined;
 let signedIn = params.piSignedIn !== false;
@@ -85,7 +88,32 @@ function fakeHost(): HostLink {
   };
 }
 
+/** One stand-in npm run. */
+function fakeInstall(): InstallRun {
+  sent.update(list => [...list, "install"]);
+  const output: ((line: string) => void)[] = [];
+  const exits: ((result: { code?: number | null }) => void)[] = [];
+  setTimeout(() => {
+    const say = (lines: string[]) => { for (const line of lines) for (const listener of output) listener(line); };
+    let code = 0;
+    if (npm === "missing") { say(["zsh:1: command not found: npm"]); code = 127; }
+    else if (npm === "denied") {
+      say(["npm error code EACCES", "npm error syscall mkdir", "npm error path /usr/local/lib/node_modules/pikibun", "npm error Error: EACCES: permission denied, mkdir '/usr/local/lib/node_modules/pikibun'"]);
+      code = 243;
+    } else {
+      if (npm === "ok") command = "ok";
+      say(["", "added 1 package in 2s"]);
+    }
+    for (const listener of exits) listener({ code });
+  }, 5);
+  return {
+    onOutput: listener => { output.push(listener); },
+    onExit: listener => { exits.push(listener); },
+  };
+}
+
 setHostLauncher(fakeHost);
+setInstaller(fakeInstall);
 const host = thisComputer();
 mount(() => (
   <View style={{ flex: 1 }}>
