@@ -1,4 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
+import { homedir } from "os";
 import { host, ORIGIN, server, sessionRecord, signedIn, view, workspace } from "./fixtures";
 
 // What the React web client does that this client once lacked: attachments, editing queued messages, the pull request
@@ -205,5 +206,44 @@ describe("a file attached to a message", () => {
     await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions/s1/submit") !== undefined);
     expect(bodyOf(app, "POST", "/api/sessions/s1/uploads")).toMatchObject({ name: "notes.txt", size: 6, offset: 0, data: base64(new TextEncoder().encode("hello\n")) });
     expect(bodyOf(app, "POST", "/api/sessions/s1/submit").content).toBe("Attached file, uploaded into the session worktree:\n- attachments/notes.txt (6 bytes)");
+  });
+});
+
+describe("local files a desktop hands over", () => {
+  // The harness puts the files in a folder of its own under the home folder, which the app may read (nsh.json).
+  const staged = async () => {
+    const folder = `${homedir()}/.cache/pikibun-nsh-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const app = await open("./harness/attach.tsx", { platform: "macos", width: 800, height: 600, host: { params: { folder } } });
+    await app.waitFor("id:clean-up");
+    return { app, url: (name: string) => `file://${folder.split("/").map(encodeURIComponent).join("/")}/${name}` };
+  };
+
+  test("dropped on the chat box, an image goes with the message and any other file into the worktree", async () => {
+    const { app, url } = await staged();
+    // Its attach button picks photos, as NSH does natively, and says other files are dropped or pasted.
+    expect(app.shows("label:Attach images (drop or paste other files)")).toBe(true);
+    await app.dropFiles("id:composer", [url("notes.txt"), url("dot.png")]);
+    await app.waitFor("id:attachment-file");
+    expect(app.shows("id:attachment-image-0")).toBe(true);
+    expect(app.shows("text:notes.txt")).toBe(true);
+    expect(app.shows("id:composer-notice")).toBe(false);
+    await app.press("id:clean-up");
+    await app.waitUntil(() => !app.shows("id:clean-up"));
+  });
+
+  test("copied in a file manager and pasted, says what it couldn't attach", async () => {
+    const { app, url } = await staged();
+    await app.paste("id:composer-input", { uris: [url("large.txt")] });
+    await app.waitFor("id:composer-notice");
+    expect(app.texts()).toContain("A file larger than 1 KB can't be attached in this workspace.");
+    await app.paste("id:composer-input", { uris: [url("missing.txt")] });
+    await app.waitFor("text:Couldn't read missing.txt.");
+    await app.dropFiles("id:composer", ["file://server/share/notes.txt"]);
+    await app.waitFor("text:Only files on this computer can be attached.");
+    await app.dropFiles("id:composer", ["file:///etc/hosts"]);
+    await app.waitFor("text:Only files in your home folder can be attached.");
+    expect(app.shows("id:attachment-file")).toBe(false);
+    await app.press("id:clean-up");
+    await app.waitUntil(() => !app.shows("id:clean-up"));
   });
 });

@@ -10,6 +10,7 @@
     "picker": true,
     "openUrl": true,
     "statusBar": true,
+    "fs": { "read": ["${homeDir}"], "write": ["${homeDir}"] },
     "host": ["page.*"]
   }
 }

@@ -1,5 +1,5 @@
 import { effect, Image, signal, Text, untracked, View } from "nsh";
-import { TextView } from "nsh/base";
+import { Editor } from "nsh/base";
 import { fileBrowserLimits, type FileEntry, type SessionFiles, type SessionRecord } from "../../../../packages/shared/src/types";
 import { REDACTED, segment } from "../shared";
 import { createResource } from "../lib/resource";
@@ -187,14 +187,14 @@ export function languageFor(path: string): string | null {
 }
 
 /**
- * A file's text, selectable, in the code block's look; with `path`, highlighted for its language by NSH's own
- * highlighter (a TextView's code block), as the web app's Files tab highlights it.
+ * A file's text, selectable, in the code block's look; with `path`, as the web app's Files tab shows it: with line
+ * numbers, highlighted for its language, in NSH's read-only editor. Text over 128 KB shows plain, as there.
  */
 export function CodeView(props: { text: string; path?: string }) {
   const language = () => (props.path ? languageFor(props.path) : null);
   const tooLarge = () => props.text.length > HIGHLIGHT_LIMIT;
   return (
-    <If when={language() && !tooLarge() ? language() : null}
+    <If when={props.path && !tooLarge() ? props.path : null}
       else={
         <View style={{ gap: 6 }}>
           <View selectable testID="file-text" style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
@@ -203,9 +203,11 @@ export function CodeView(props: { text: string; path?: string }) {
           <If when={language() && tooLarge()}><Small>Highlighting is off for text over 128 KB.</Small></If>
         </View>
       }>
-      {current => (
-        <View testID="file-text" accessibilityLabel={`${props.path ?? "File"}, ${current()}`}>
-          <TextView selectable document={{ blocks: [{ type: "codeBlock", language: current(), code: props.text.replace(/\n$/, "") }] }} />
+      {path => (
+        <View testID="file-text" accessibilityLabel={`${path()}, ${language() ?? "plain text"}`}
+          style={{ overflow: "hidden", borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border }}>
+          <Editor value={props.text.replace(/\n$/, "")} readOnly lineNumbers language={language()} accessibilityLabel={path()}
+            minRows={1} maxRows={48} scrollBeyondLastLine={false} activeLine={false} fontSize={text.small} />
         </View>
       )}
     </If>

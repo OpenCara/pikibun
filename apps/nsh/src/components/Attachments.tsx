@@ -1,4 +1,4 @@
-import { Image, Text, View } from "nsh";
+import { Image, platform, Text, View } from "nsh";
 import { Button as BaseButton } from "nsh/base";
 import { formatBytes } from "../../../../packages/shared/src/file-uploads";
 import type { Attachments } from "../lib/attachments";
@@ -57,12 +57,15 @@ export function AttachmentStrip(props: { attachments: Attachments; disabled?: bo
 
 /**
  * The button that attaches files from the platform's picker: in a browser, any file where the chat box takes files;
- * elsewhere (NSH picks only photos there, longbridge/nsh#162), images. Pasting works too.
+ * elsewhere (NSH picks only photos there, longbridge/nsh#162), images. Pasting works too, and on the desktops any file
+ * dropped on the chat box or copied in a file manager, which its label says where files are taken.
  */
 export function AttachButton(props: { attachments: Attachments; disabled?: boolean }) {
   const files = () => props.attachments.takesFiles() && pageAvailable();
+  const label = () => files() ? "Attach files"
+    : props.attachments.takesFiles() && platform.desktop ? "Attach images (drop or paste other files)" : "Attach images";
   return (
-    <IconButton testID="composer-attach" icon={files() ? "paperclip" : "image"} label={files() ? "Attach files" : "Attach images"} disabled={props.disabled}
+    <IconButton testID="composer-attach" icon={files() ? "paperclip" : "image"} label={label()} disabled={props.disabled}
       onPress={() => void props.attachments.pick()} />
   );
 }

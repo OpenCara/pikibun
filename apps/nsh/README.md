@@ -6,9 +6,10 @@ production React web client and Electron app at `pikibun.com`. Both use the same
 `packages/shared`. See [preview deployment](../../docs/self-hosting.md#native-shell-preview).
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
-(longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), picking files other than photos
-outside a browser (longbridge/nsh#162; the web build picks any file through its page's host), and running the
-`pikibun` connector from the app (run `pikibun connect`, or `pikibun serve` for yourself, instead).
+(longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), a chooser of any file outside
+a browser (longbridge/nsh#162; the web build picks any file through its page's host, the desktops take files dropped
+or pasted from a file manager, and phones pick photos), and running the `pikibun` connector from the app (run
+`pikibun connect`, or `pikibun serve` for yourself, instead).
 
 ## Run it
 
@@ -93,19 +94,21 @@ session with its header menu and its panel (Details, Approvals, Files, Browser, 
 invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
 Administration). What is left out, and why:
 
-- **This Computer** settings belong to the Electron desktop app, which runs its own host.
-- **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058); the
-  web build turns them on in the browser as the web app does (Web Push through the `sw.js` the build ships, or while a
-  tab is open), and every build manages the account's preferences and devices.
-- **Files other than photos** outside a browser: the chat box attaches images everywhere (picked, scaled natively, or
-  pasted) and any file on the web or pasted; picking other files on iPhone, Android and the desktops, and **Import
-  dump** for a workspace database there, wait for NSH (longbridge/nsh#162). On the web both work.
+- **This Computer** isn't a page of the web app: React lists it only inside the Electron desktop app, whose own
+  process runs this computer's host, its servers and a local Pikibun (`window.pikibunDesktop`). In a browser, as here,
+  there is no such section. The NSH desktop builds don't run the connector either: it ships only inside the Electron
+  app, and `pikibun connect` takes its pairing code only at a hidden terminal prompt.
+- **Notifications on this device** in the native apps wait for NSH's push notifications (longbridge/nsh#1058), and NSH
+  has no local notifications either; the web build turns them on in the browser as the web app does (Web Push through
+  the `sw.js` the build ships, or while a tab is open), and every build manages the account's preferences and devices.
+- **Files other than photos** on phones: the web build picks any file in the browser's chooser, as the web app does;
+  the desktop builds attach any file dropped on the chat box or copied in a file manager and pasted (read under the
+  home folder, `capabilities.fs.read`), and take a dump to import dropped on its sheet; iPhone and Android pick
+  photos only, and paste, until NSH picks other files (longbridge/nsh#162).
 - **Up** in an empty chat box takes back a queued message on the desktops and in desktop browsers; on phones the
   queue's Edit does.
 - **Downloads** (backups, exports) and **OAuth sign-ins** to document providers need the browser's own sign-in, so
   they are offered on the web build only; native builds point to Pikibun on the web.
-- **Line numbers** in file previews: their text is highlighted for its language by NSH's own highlighter, without a
-  gutter.
 
 ## Known gaps, from NSH itself
 

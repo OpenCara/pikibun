@@ -4,6 +4,7 @@ import { attachedFilesNote, fileUploadLimits, formatBytes, uploadFileName, type 
 import { segment, type ConnectorInfo } from "../shared";
 import { session } from "./auth";
 import { onClearDrafts } from "./drafts";
+import { readLocalFiles } from "./local-files";
 import { encodeImageInPage, pageAvailable, pickFilesInPage } from "./page";
 import { createResource } from "./resource";
 
@@ -133,6 +134,11 @@ export interface Attachments {
   attach: (chosen: readonly Blob[]) => void;
   /** Attaches images (a queued message's, taken back). */
   addImages: (chosen: readonly Blob[]) => void;
+  /**
+   * Attaches the local files `uris` name (`file:` URLs a desktop hands over: dropped on the chat box, or copied in a file
+   * manager and pasted), as `attach` does; NSH's native apps have no chooser of any file, as a browser does.
+   */
+  attachLocal: (uris: readonly string[]) => Promise<void>;
   /** Opens the platform's picker: any file in a browser where files are taken, else photos. */
   pick: () => Promise<void>;
   remove: (id: string) => void;
@@ -231,6 +237,26 @@ export function createAttachments(options: { imagesUnavailable: Accessor<string 
     }
   }
 
+  async function attachLocal(uris: readonly string[]) {
+    if (!uris.length) return;
+    notice.set("");
+    const anyFile = untracked(takesFiles);
+    const maxBytes = anyFile ? untracked(options.fileOptions!).maxBytes : MAX_PASTE_BYTES;
+    const read = await readLocalFiles(uris, maxBytes);
+    // Native apps can't draw an image again smaller, as a browser does: one too large to go with the message goes into
+    // the worktree as a file, where files are taken.
+    const chosen = read.files.flatMap(file => {
+      if (!MODEL_IMAGE_TYPES.includes(file.type) || base64Length(file.size) <= chatImageLimits.imageBase64) return [file];
+      return anyFile ? [new File([file], file.name)] : [];
+    });
+    if (chosen.length) attach(chosen);
+    // What `attach` said of the files it took stands, unless some weren't read at all.
+    const problem = read.problem
+      || (read.tooLarge ? (anyFile ? `A file larger than ${formatBytes(maxBytes)} can't be attached in this workspace.` : "An image larger than 32 MiB can't be attached.") : "")
+      || (chosen.length < read.files.length ? "An image too large to send can't be attached here." : "");
+    if (problem) notice.set(problem);
+  }
+
   function remove(id: string) {
     forget(untracked(images).filter(item => item.id === id));
     images.update(previous => previous.filter(item => item.id !== id));
@@ -275,7 +301,7 @@ export function createAttachments(options: { imagesUnavailable: Accessor<string 
   return {
     images, files, progress, notice, takesFiles,
     count: computed(() => images().length + files().length),
-    attach, addImages, pick, remove, sent, upload,
+    attach, addImages, attachLocal, pick, remove, sent, upload,
   };
 }
 

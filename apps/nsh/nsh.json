@@ -11,6 +11,7 @@
     "picker": true,
     "openUrl": true,
     "statusBar": true,
+    "fs": { "read": ["${homeDir}"] },
     "host": ["page.*"]
   },
   "web": { "host": "./web/host.js" }

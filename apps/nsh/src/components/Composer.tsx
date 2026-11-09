@@ -26,6 +26,11 @@ export function Composer(props: {
   onRecall?: () => void;
 }) {
   const focused = signal(false);
+  const dragging = signal(false);
+  const accepting = () => Boolean(props.attachments && !props.disabled && !props.busy);
+  // Files copied in a file manager arrive as their `file:` URLs (with, on some desktops, an icon as an image): those are
+  // what the person meant. Dropped ones are the same; both stand in for a chooser of any file natively.
+  const attachLocal = (uris: readonly string[]) => { if (accepting() && uris.length) void props.attachments!.attachLocal(uris); };
   const canSend = () => !props.disabled && !props.busy && (props.ready ?? (props.value.trim() !== "" || (props.attachments?.count() ?? 0) > 0));
   const submit = () => { if (canSend()) props.onSubmit(); };
   // ↑ is bound only while the box has the focus and is empty, so it still moves the caret through text being written
@@ -40,13 +45,19 @@ export function Composer(props: {
     }
   });
   return (
-    <View style={{ gap: 8, padding: 12, borderWidth: 1, borderRadius: radius.large,
-      borderColor: focused() ? palette().borderStrong : palette().border, backgroundColor: palette().surface }}>
+    <View testID="composer" style={{ gap: 8, padding: 12, borderWidth: 1, borderRadius: radius.large,
+      borderColor: dragging() ? palette().accent : focused() ? palette().borderStrong : palette().border, backgroundColor: palette().surface }}
+      onFileDragEnter={() => dragging.set(accepting())} onFileDragLeave={() => dragging.set(false)}
+      onFileDrop={event => { dragging.set(false); attachLocal(event.uris); }}>
       <If when={props.attachments}>{attachments => <AttachmentStrip attachments={attachments()} disabled={props.busy || props.disabled} />}</If>
       <Input testID={props.testID ?? "composer-input"} value={props.value} onChange={event => props.onChange(event.value)} multiline readonly={props.busy || props.disabled}
         placeholder={props.placeholder} accessibilityLabel={props.placeholder}
         submitBehavior={platform.desktop ? "submit" : "newline"} onSubmit={submit}
-        onPaste={event => { if (props.attachments && event.files.length && !props.disabled && !props.busy) props.attachments.attach(event.files); }}
+        onPaste={event => {
+          if (!accepting()) return;
+          if (event.uris.length) attachLocal(event.uris);
+          else if (event.files.length) props.attachments!.attach(event.files);
+        }}
         onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
         style={{ fontSize: text.reading, lineHeight: 22, minHeight: props.minHeight ?? 24, maxHeight: 220, paddingHorizontal: 4, paddingVertical: 0,
           color: palette().text, placeholderColor: palette().muted }} />

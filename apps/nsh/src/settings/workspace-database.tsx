@@ -1,12 +1,14 @@
-import { signal, untracked, View } from "nsh";
+import { platform, signal, untracked, View } from "nsh";
 import type { Workspace, WorkspaceDatabase, WorkspaceDatabaseTls } from "../../../../packages/shared/src/types";
 import { segment } from "../shared";
-import { decodeBase64 } from "../lib/attachments";
+import { decodeBase64, encodeBase64 } from "../lib/attachments";
+import { readLocalFiles } from "../lib/local-files";
 import { session } from "../lib/auth";
 import { timestamp } from "../lib/format";
 import { pageAvailable, pickFilesInPage, type PageFile } from "../lib/page";
 import { createAction, createResource } from "../lib/resource";
 import { Field, Select, TextField } from "../form";
+import { palette, radius } from "../theme";
 import { Badge, Banner, Button, CardBody, confirm, DropdownMenu, Feedback, FormSheet, Note, ResourceState, Row, Section, Small, type MenuAction } from "../ui";
 
 // A workspace's session database, as the web app's (settings/WorkspaceDatabase.tsx).
@@ -75,10 +77,10 @@ export function WorkspaceDatabaseSection(props: { workspace: Workspace; owner: b
   }
   const items = (): MenuAction[] => [
     ...(data()?.available ? [
-      // A browser's page picks the file; this app picks only photos elsewhere (longbridge/nsh#162).
-      pageAvailable()
+      // A browser's page picks the file; a desktop takes it dropped on the sheet; phones pick only photos (longbridge/nsh#162).
+      pageAvailable() || platform.desktop
         ? { label: "Import dump", icon: "folder" as const, hint: "A session or workspace export", disabled: action.busy(), onSelect: () => importing.set(true) }
-        : { label: "Import dump", icon: "folder" as const, hint: "From Pikibun on the web: this app can't pick files yet", disabled: true, onSelect: () => undefined },
+        : { label: "Import dump", icon: "folder" as const, hint: "From Pikibun on the web or a computer: this phone can't pick files yet", disabled: true, onSelect: () => undefined },
       { label: "Replace", icon: "refresh" as const, disabled: action.busy(), onSelect: () => editing.set(true) },
     ] : []),
     { label: "Disconnect", icon: "trash", destructive: true, disabled: action.busy(), onSelect: () => void disconnect() },
@@ -127,19 +129,36 @@ export function WorkspaceDatabaseSection(props: { workspace: Workspace; owner: b
   );
 }
 
-/** Imports an export of this workspace, or of one of its sessions, into the connected database (web only: it picks the file). */
+/**
+ * Imports an export of this workspace, or of one of its sessions, into the connected database. A browser's page picks
+ * the file; NSH's desktop apps, which have no chooser of any file, take it dropped on the sheet.
+ */
 function ImportSheet(props: { path: string; database: WorkspaceDatabase; close: () => void }) {
   const file = signal<PageFile | null>(null);
   const imported = signal<ImportSummary | null>(null);
+  const dragging = signal(false);
   const action = createAction();
   const dismiss = () => { if (!action.busy()) props.close(); };
+  const tooLarge = "This dump is larger than 32 MiB. The server's operator can import it with the --import-dump option.";
+  function dropped(uris: readonly string[]) {
+    dragging.set(false);
+    if (!uris.length || action.busy()) return;
+    void action.run(async () => {
+      const read = await readLocalFiles(uris.slice(0, 1), maxUploadBytes);
+      if (read.tooLarge) throw new Error(tooLarge);
+      const [chosen] = read.files;
+      if (!chosen) throw new Error(read.problem || "Couldn't read that file.");
+      imported.set(null);
+      file.set({ name: chosen.name, type: chosen.type, size: chosen.size, data: encodeBase64(new Uint8Array(await chosen.arrayBuffer())) });
+    });
+  }
   function choose() {
     void action.run(async () => {
       const [picked] = await pickFilesInPage({ accept: "application/json,.json", maxBytes: maxUploadBytes });
       if (!picked) return;
       imported.set(null);
       file.set(picked);
-      if (picked.data === undefined) throw new Error("This dump is larger than 32 MiB. The server's operator can import it with the --import-dump option.");
+      if (picked.data === undefined) throw new Error(tooLarge);
     });
   }
   function submit() {
@@ -167,10 +186,20 @@ function ImportSheet(props: { path: string; database: WorkspaceDatabase; close: 
       </>}>
       <Note>{`Adds an export of this workspace, or of one of its sessions, to ${databaseLabel(props.database)}: session records and details (grants, approvals, pushes, backups and restores), their activity and the workspace's settings. A record replaces an older one of the same session; activity is added once, so importing a dump again changes nothing. Pikibun itself is unchanged.`}</Note>
       <Field label="Dump file" hint="A JSON export from Pikibun, up to 32 MiB">
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <Button small variant="outline" icon="folder" label={file() ? "Choose another" : "Choose file"} disabled={action.busy()} onPress={choose} />
-          <Small>{file()?.name ?? "No file chosen"}</Small>
-        </View>
+        <If when={pageAvailable()}
+          else={
+            <View testID="database-import-drop" onFileDragEnter={() => dragging.set(true)} onFileDragLeave={() => dragging.set(false)} onFileDrop={event => dropped(event.uris)}
+              style={{ alignItems: "center", gap: 4, padding: 16, borderRadius: radius.medium, borderWidth: 1, borderStyle: "dashed",
+                borderColor: dragging() ? palette().accent : palette().borderStrong }}>
+              <Small>{file()?.name ?? "Drop the dump file here"}</Small>
+              <If when={file()}><Small>Drop another to replace it.</Small></If>
+            </View>
+          }>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <Button small variant="outline" icon="folder" label={file() ? "Choose another" : "Choose file"} disabled={action.busy()} onPress={choose} />
+            <Small>{file()?.name ?? "No file chosen"}</Small>
+          </View>
+        </If>
       </Field>
       <If when={imported()}>
         {summary => (
