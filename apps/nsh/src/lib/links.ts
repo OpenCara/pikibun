@@ -18,3 +18,19 @@ export function openServerLink(path: string): void {
 export function openExternal(url: string): void {
   void openUrl(url).catch(() => undefined);
 }
+
+/**
+ * The address a link in a message opens, or null: web and mail addresses only. Messages are Markdown that agents and
+ * people write, so their links open no other kind of address (`file:`, an app's own scheme), and anchors (`#…`) and
+ * relative paths, which name nothing outside the message, open nothing.
+ */
+export function messageLinkTarget(url: string): string | null {
+  const address = url.trim();
+  return /^(https?:\/\/|mailto:)/i.test(address) ? address : null;
+}
+
+/** A link pressed in a message (TextView's `onLinkPress`, which opens nothing itself): opens it in the browser. */
+export function openMessageLink(url: string): void {
+  const address = messageLinkTarget(url);
+  if (address) openExternal(address);
+}

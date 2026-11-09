@@ -3,6 +3,7 @@ import { Button as BaseButton, TextView } from "nsh/base";
 import { COMPACTION_FAILED_TITLE, compactionFailureText, copyText, shownImages, splitToolCalls, textBesideImages, type EntryView } from "../shared";
 import { EntryImages } from "./EntryImages";
 import { formatDuration, modelFailure } from "../lib/format";
+import { openMessageLink } from "../lib/links";
 import { createUsername } from "../lib/people";
 import { Icon, type IconName } from "../icons";
 import { monospace, palette, radius, text } from "../theme";
@@ -215,7 +216,8 @@ export function TranscriptEntry(props: {
         {assistant => (
           <>
             <If when={assistant().prose.trim()}>
-              <TextView markdown={assistant().prose} selectable options={{ streaming: true }} />
+              {/* TextView only reports a link's press; opening it is the app's. */}
+              <TextView markdown={assistant().prose} selectable options={{ streaming: true }} onLinkPress={event => openMessageLink(event.url)} />
             </If>
             <If when={assistant().tool}>
               {tool => <ToolRow icon={tool().icon} name={tool().name} summary={tool().summary} meta={tool().meta} text={tool().text} trimmed={props.entry.trimmed} open={open()} onToggle={toggle} />}

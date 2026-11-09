@@ -1,4 +1,4 @@
-import { cleanup, Clipboard, computed, effect, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, windowSize, type Accessor, type JSX, type ListRef } from "nsh";
+import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, windowSize, type Accessor, type JSX, type ListRef } from "nsh";
 import { AlertDialog, Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
@@ -30,6 +30,15 @@ import { drawsHeaders, PageHeader, pageStyle } from "./PageHeader";
 import type { PageRoute } from "../lib/page";
 import { SessionPanel } from "../session-panel";
 import { createSessionActions } from "../lib/session-actions";
+
+/**
+ * On the desktops, a press on the transcript or the approvals docked above the chat box takes the keyboard focus out of
+ * the chat box. The desktops leave the focus in a field when the mouse goes down elsewhere, as their own fields do, so
+ * Cmd/Ctrl+C went to the chat box, which had nothing selected, rather than to the text just selected in a message: a
+ * browser moves the focus off a field when its page's text is clicked, and so does this. The selection stays (the
+ * window's root takes the focus, and its Copy copies it). Phones keep their keyboard up as they scroll.
+ */
+const releaseChatBox = platform.desktop ? () => Keyboard.dismiss() : undefined;
 
 /**
  * One session: live transcript, pending approvals and the chat box. As a page of the stack (`page`) it carries its
@@ -283,7 +292,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   /** What waits for a decision, docked above the chat box so it can't scroll out of sight. */
   const approvalDock = (
     <If when={pending().length > 0 || approvalAction.error() || approvalAction.notice()}>
-      <Scroll testID="approval-dock" style={{ flexShrink: 1, maxHeight: "55%" }} contentStyle={{ gap: 10, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
+      <Scroll testID="approval-dock" onTouchStart={releaseChatBox} style={{ flexShrink: 1, maxHeight: "55%" }} contentStyle={{ gap: 10, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
         <Each of={pending()} key={approval => approval.id}>{approval => pendingApprovalCard(approval)}</Each>
         <Feedback error={approvalAction.error()} notice={approvalAction.notice()} />
       </Scroll>
@@ -644,7 +653,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
 
   return (
     <>
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1 }} onTouchStart={releaseChatBox}>
       <List each={entries()} keyExtractor={entry => entry.id} ref={list} style={{ flex: 1 }} contentStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 }}
         maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 80 }} testID="transcript"
         accessibilityLabel={actualMode() === "ask" ? "Side ask history" : "Shared session history"}
