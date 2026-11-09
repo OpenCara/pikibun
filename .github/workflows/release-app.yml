@@ -66,6 +66,10 @@ jobs:
     timeout-minutes: 270
     # The release's secrets only for a release: a pull request's build is unsigned.
     environment: ${{ github.event_name == 'push' && 'release' || '' }}
+    # SignPath downloads the unsigned installer's artifact with this job's GITHUB_TOKEN.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       signed: ${{ steps.signing.outputs.configured }}
     defaults:
