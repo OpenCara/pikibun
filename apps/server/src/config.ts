@@ -14,7 +14,7 @@ export interface ServerConfig {
   trustProxy: boolean;
   /** The production React/Electron web client (`dist/web`). */
   staticDir: string;
-  /** Standalone NSH development/test servers may opt in; production defaults to the React client. */
+  /** The client `staticDir` holds: React by default, `nsh` for the Native Shell build (as pikibun.com serves it). */
   staticClient?: WebClient;
   /** Optional, exact origin serving the NSH preview, with the same API and separate host-only cookies. */
   preview?: { origin: string; staticDir: string };

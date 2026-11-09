@@ -90,3 +90,10 @@ jobs:
           curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: pikibun.example' http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
           curl -fsS -H 'X-Forwarded-Proto: https' http://127.0.0.1:8787/ | grep -qi '<!doctype html'
           docker rm -f pikibun
+          # As pikibun.com runs it (deploy-server.yml): the NSH client at the server's own origin.
+          docker run -d --name pikibun -p 8787:8787 -e APP_ORIGIN=http://127.0.0.1:8787 -e STATIC_CLIENT=nsh -e STATIC_DIR=dist/preview \
+            -e SESSION_SECRET=ci-session-secret-ci-session-secret-ci -e VAULT_KEY=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=') pikibun:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/api/health && break; sleep 1; done
+          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
+          curl -fsS http://127.0.0.1:8787/ | grep -q '<base href="/">'
+          docker rm -f pikibun

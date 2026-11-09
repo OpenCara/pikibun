@@ -1,9 +1,9 @@
 # Pikibun's Native Shell Preview
 
 An experimental client written in TSX on [Native Shell](https://nsh.dev) (NSH, pinned in `scripts/nsh.mjs`) for the
-web, iOS, Android, macOS, Windows and Linux. Its web build lives at `preview.pikibun.com`, separately from the
-production React web client and Electron app at `pikibun.com`. Both use the same backend, `@pikibun/client` and
-`packages/shared`. See [preview deployment](../../docs/self-hosting.md#native-shell-preview).
+web, iOS, Android, macOS, Windows and Linux. Its web build is the client `pikibun.com` serves (`STATIC_CLIENT=nsh`, set
+by the deploy workflow); other servers serve the React web client unless they choose it too. Both use the same
+backend, `@pikibun/client` and `packages/shared`. See [choosing the web client](../../docs/self-hosting.md#choosing-the-web-client).
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
 (longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), a chooser of any file outside
@@ -67,7 +67,7 @@ pnpm test:client-macos --github --display 1  # also a live GitHub sign-in, which
 ```
 
 `pnpm test:client-macos` runs the stubbed app and screenshot tests in native macOS windows. `--github` adds an opt-in,
-interactive OAuth smoke test against `https://preview.pikibun.com` (or `--server https://your-server.example`): it takes no
+interactive OAuth smoke test against `https://pikibun.com` (or `--server https://your-server.example`): it takes no
 live screenshots, redacts URL queries from runtime output, and passes only when sign-in returns to the session list.
 Its storage is isolated and discarded when it ends. `--timeout-ms 600000` sets the interactive wait. See
 [Mac test results](MACOS-TESTING.md) for what was observed on a Mac.
