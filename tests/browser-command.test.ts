@@ -237,11 +237,14 @@ test("the driver opens a served page, runs the actions, and leaves a screenshot 
   });
   const report = parseBrowserReport(output);
   assert.ok(report, output);
-  assert.equal(report.title, "Second");
-  assert.equal(report.url, `http://127.0.0.1:${port}/second.html`);
-  assert.equal(report.status, 200);
-  assert.match(report.text ?? "", /Arrived/);
-  assert.deepEqual(report.actions?.map(item => [item.action, item.ok]), [["type", true], ["select", true], ["click", true], ["evaluate", true], ["screenshot", true], ["click", true], ["click", false]]);
+  // What the driver reported, for a failure to say what happened (an action's error, the browser's own words).
+  const { elements: _elements, ...said } = report;
+  const detail = JSON.stringify(said, null, 1);
+  assert.deepEqual(report.actions?.map(item => [item.action, item.ok]), [["type", true], ["select", true], ["click", true], ["evaluate", true], ["screenshot", true], ["click", true], ["click", false]], detail);
+  assert.equal(report.title, "Second", detail);
+  assert.equal(report.url, `http://127.0.0.1:${port}/second.html`, detail);
+  assert.equal(report.status, 200, detail);
+  assert.match(report.text ?? "", /Arrived/, detail);
   assert.equal(report.actions?.[3]?.value, "Hi Ada");
   assert.match(report.error ?? "", /action 7 \(click\) failed: no element matches #missing/);
   assert.equal(report.skipped, 1);
