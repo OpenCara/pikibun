@@ -1,4 +1,4 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, readdirSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
@@ -29,6 +29,20 @@ const contentTypes: Record<string, string> = {
 
 /** Assets named by their content (Native Shell's `.<hash>.`, or a hash after a dash), which never change. */
 const hashedName = /(?:\.[0-9a-f]{10}|-[A-Za-z0-9_-]{8,})\.[a-z0-9]+$/;
+
+/** Native Shell's web runtime, at the top of every NSH web build (nsh.<hash>.wasm). */
+const nshRuntime = /^nsh\.[0-9a-f]{10}\.wasm$/;
+
+/**
+ * What a build directory holds: `nsh`, Native Shell's web build (its page and runtime); `other`, a page without that
+ * runtime, such as the removed React client's; or `none`, no page at all (nothing built there yet).
+ */
+export function webBuild(root: string): 'nsh' | 'other' | 'none' {
+  let names: string[];
+  try { names = readdirSync(root); } catch { return 'none'; }
+  if (!names.includes('index.html')) return 'none';
+  return names.some(name => nshRuntime.test(name)) ? 'nsh' : 'other';
+}
 
 /**
  * The page's policy, as Native Shell 0.4's web runtime needs it to start:

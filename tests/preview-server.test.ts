@@ -44,6 +44,12 @@ test("each origin serves its own NSH build, and each host's authentication keeps
   await writeFile(join(web, "nsh.abcdef0123.wasm"), new Uint8Array([0, 97, 115, 109]));
   await writeFile(join(nsh, "index.html"), '<html><head></head><body>NSH preview</body></html>');
   await writeFile(join(nsh, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
+  // A page without Native Shell's runtime, such as an old React build, is refused rather than served as NSH.
+  const react = join(root, "react");
+  await mkdir(react);
+  await writeFile(join(react, "index.html"), '<div id="root"></div>');
+  await assert.rejects(loadConfig({ ...environment, STATIC_DIR: react }), /STATIC_DIR .* isn't the Native Shell client/);
+  await assert.rejects(loadConfig({ ...environment, PREVIEW_ORIGIN: preview, PREVIEW_STATIC_DIR: react }), /PREVIEW_STATIC_DIR .* isn't the Native Shell client/);
   const config = await loadConfig({ ...environment, STATIC_DIR: web, PREVIEW_ORIGIN: preview, PREVIEW_STATIC_DIR: nsh,
     TRUST_PROXY: "true", TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: secret,
     TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString(),

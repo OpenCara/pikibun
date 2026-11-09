@@ -64,8 +64,9 @@ and `blob:` scripts).
 
 > **Upgrading from a server that served the React client:** the React web client is removed. Both clients use the same
 > API, so switching moves, copies or restores no accounts, hosts or sessions. Drop `STATIC_DIR=dist/web` and
-> `STATIC_CLIENT` from `.env`: the server refuses to start with `STATIC_CLIENT=web`, and newer images no longer
-> contain `dist/web`.
+> `STATIC_CLIENT` from `.env`: the server refuses to start with `STATIC_CLIENT=web`, or with a `STATIC_DIR` (or
+> `PREVIEW_STATIC_DIR`) whose page isn't Native Shell's build (it has no `nsh.<hash>.wasm` beside it), and newer images
+> no longer contain `dist/web`.
 
 A server can also serve the NSH client at a second hostname, with `PREVIEW_ORIGIN` (an exact
 HTTPS origin) and optionally `PREVIEW_STATIC_DIR` (`dist/preview`). Route both hosts to the same listener with TLS,

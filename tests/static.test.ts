@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStaticHandler, pageContentSecurityPolicy } from "../apps/server/src/static.ts";
+import { createStaticHandler, pageContentSecurityPolicy, webBuild } from "../apps/server/src/static.ts";
 
 // The NSH client, built by `pnpm build`: an inline loader and content-named files.
 const page = `<!doctype html>\n<html lang="en">\n<head>\n<script>const fetches = new Map();</script><script type="module">import { createPlayer } from "./nsh.89070fe10a.js";</script><script src="./x.js"></script>\n</head><body></body></html>`;
@@ -63,4 +63,16 @@ test("answers HEAD without a body, and says so when the client isn't built", asy
   const missing = await createStaticHandler(join(tmpdir(), "no-such-web-build"))(get("/"));
   assert.equal(missing.status, 404);
   assert.match(await missing.text(), /pnpm build/);
+});
+
+test("a build is Native Shell's when its runtime, nsh.<hash>.wasm, is beside its page", async t => {
+  assert.equal(webBuild(await site(t)), "nsh");
+  const other = await mkdtemp(join(tmpdir(), "react-"));
+  t.after(() => rm(other, { recursive: true, force: true }));
+  assert.equal(webBuild(other), "none", "nothing built yet");
+  await writeFile(join(other, "index.html"), '<div id="root"></div>');
+  assert.equal(webBuild(other), "other", "a page without the runtime, such as the removed React client's");
+  await writeFile(join(other, "nsh-math.c2b0234f5a.wasm"), new Uint8Array([0, 97, 115, 109]));
+  assert.equal(webBuild(other), "other", "only Native Shell's own runtime counts, not its other modules");
+  assert.equal(webBuild(join(tmpdir(), "no-such-web-build")), "none");
 });

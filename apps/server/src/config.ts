@@ -4,6 +4,7 @@ import { ConnectorHubRegistry } from './connector-hub.js';
 import { openDatabase } from './db/index.js';
 import { openStorage } from './storage/index.js';
 import type { Env } from './types.js';
+import { webBuild } from './static.js';
 
 export interface ServerConfig {
   env: Env;
@@ -88,6 +89,9 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
   if (processEnv.STATIC_CLIENT && processEnv.STATIC_CLIENT !== 'nsh') {
     throw new ConfigurationError('STATIC_CLIENT: the React web client was removed. Remove STATIC_CLIENT, and STATIC_DIR if it names dist/web, to serve the Native Shell client.');
   }
+  if (webBuild(staticDir) === 'other') {
+    throw new ConfigurationError(`STATIC_DIR (${staticDir}) holds a web page that isn't the Native Shell client, such as the removed React client's. Point STATIC_DIR at the NSH build (pnpm build writes it to dist/preview), or leave it unset.`);
+  }
   let preview: ServerConfig['preview'];
   if (processEnv.PREVIEW_ORIGIN) {
     try {
@@ -96,6 +100,9 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
       preview = { origin: origin.origin, staticDir: resolve(processEnv.PREVIEW_STATIC_DIR || 'dist/preview') };
     } catch {
       throw new ConfigurationError('PREVIEW_ORIGIN must be a distinct https origin (no path or trailing slash), on a shared server.');
+    }
+    if (webBuild(preview.staticDir) === 'other') {
+      throw new ConfigurationError(`PREVIEW_STATIC_DIR (${preview.staticDir}) holds a web page that isn't the Native Shell client. Point it at the NSH build (dist/preview).`);
     }
   } else if (processEnv.PREVIEW_STATIC_DIR) {
     throw new ConfigurationError('PREVIEW_STATIC_DIR requires PREVIEW_ORIGIN.');
