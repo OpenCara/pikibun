@@ -117,13 +117,16 @@ jobs:
           & $iscc /Q "/DAppVersion=$env:VERSION" "/DNumericVersion=$env:FILE_VERSION" "/DSourceDir=$env:RUNNER_TEMP\app\Pikibun" "/DOutputDir=$env:RUNNER_TEMP\release" apps\nsh\windows\installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "INSTALLER=$env:RUNNER_TEMP\release\Pikibun-$env:VERSION-windows-x64-setup.exe" >> $env:GITHUB_ENV
-      # What SignPath's artifact configuration requires of the file it signs.
+      # What SignPath's artifact configuration requires of the file it signs. Inno Setup pads the strings of its version
+      # resource with spaces to a fixed size (its Setup stub's), so they compare trimmed.
       - name: The installer's product name and version
         run: |
           $info = (Get-Item $env:INSTALLER).VersionInfo
-          Write-Output "ProductName=$($info.ProductName) ProductVersion=$($info.ProductVersion) FileVersion=$($info.FileVersion)"
-          if ($info.ProductName -ne 'Pikibun' -or $info.ProductVersion -ne $env:FILE_VERSION) {
-            Write-Output "::error::The installer's product is '$($info.ProductName)' $($info.ProductVersion), not 'Pikibun' $env:FILE_VERSION."
+          $name = "$($info.ProductName)".Trim()
+          $version = "$($info.ProductVersion)".Trim()
+          Write-Output "ProductName='$($info.ProductName)' ProductVersion='$($info.ProductVersion)' FileVersion='$($info.FileVersion)'"
+          if ($name -ne 'Pikibun' -or $version -ne $env:FILE_VERSION) {
+            Write-Output "::error::The installer's product is '$name' $version, not 'Pikibun' $env:FILE_VERSION."
             exit 1
           }
       # As a user would, silently: installed for this user with its Start menu entry, then uninstalled without a trace.
