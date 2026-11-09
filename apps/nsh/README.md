@@ -50,7 +50,8 @@ needs a decision stand out:
   and `tests/nsh-theme.test.ts` fails when they differ from the stylesheet's; `src/theme.ts` builds the palettes from
   them, with the type sizes, weights, radii and control heights. `src/ui.tsx` names the web class each widget follows
   (buttons, badges, alerts, sections of rows, nav items, chips, pickers on `Menu`: a popup on the desktops and the web,
-  a sheet on phones); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
+  a sheet on phones; right-click menus on `ContextMenu` (`RowMenu`), which a finger held on the row opens as a sheet on
+  touch screens); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
   the two differ on purpose: the sidebar keeps a search box, tool rows
   name what they work on, approval cards say what they ask in words, and message actions open a sheet rather than
   appear on hover.

@@ -1,12 +1,14 @@
-import { computed, List, signal, Text, untracked, View } from "nsh";
+import { Clipboard, computed, List, signal, Text, untracked, View } from "nsh";
 import { Button as BaseButton, Input } from "nsh/base";
 import { canCreateSessions, nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord } from "../shared";
 import { pullRequestColor, pullRequestLabel, pullRequestTitle } from "../components/PullRequest";
+import { createSessionMenu, RenameSheet, type SessionMenu } from "../components/SessionMenu";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
+import type { Action } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
-import { Banner, Button, DropdownMenu, EmptyState, IconButton, IdentityBadge, Loading, StatusDot } from "../ui";
+import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, StatusDot, type MenuAction } from "../ui";
 
 type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; canCreate: boolean }
@@ -33,13 +35,16 @@ export function shortAge(value: string, now = Date.now()): string {
  * started follow it, one more step in. Archived ones only on request. Every workspace has its row, one without sessions
  * a row that starts one there; a workspace's row starts a session in it and opens its settings (`onNewIn`,
  * `onWorkspaceSettings`), and `onNewWorkspace` creates another. `selectedId` marks the open one. `compact` is the
- * desktop sidebar's density; the phone's list has bigger rows to tap.
+ * desktop sidebar's density; the phone's list has bigger rows to tap. A right click on a row (a finger held on it on
+ * touch screens) opens its menu: a workspace's options, or what can be done to a session (createSessionMenu), whose
+ * outcome shows under the search box.
  */
 export function SessionList(props: {
   selectedId?: string | null; onOpen: (id: string) => void; onNew: () => void; compact?: boolean;
   onNewIn?: (workspaceId: string) => void; onWorkspaceSettings?: (workspaceId: string) => void; onNewWorkspace?: () => void;
 }) {
   const data = useAppData();
+  const menu = createSessionMenu();
   const query = signal("");
   const showArchived = signal(false);
   /** Workspaces folded away, by ID. */
@@ -97,6 +102,9 @@ export function SessionList(props: {
             <If when={data.sessionsError()}>
               <Banner tone="danger" title="Could not load sessions" actions={<Button small variant="outline" label="Try again" onPress={data.refreshSessions} />}>{data.sessionsError()}</Banner>
             </If>
+            <If when={!menu.renaming() && (menu.action.error() || menu.action.notice())}>
+              <View testID="session-list-feedback" style={{ paddingHorizontal: 4 }}><Feedback error={menu.action.error()} notice={menu.action.notice()} /></View>
+            </If>
           </View>
         )}
         footer={() => (
@@ -142,7 +150,7 @@ export function SessionList(props: {
                 <If when={row().kind === "start" ? row() as Extract<Row, { kind: "start" }> : null}
                   else={
                     <WorkspaceRow row={row() as Extract<Row, { kind: "workspace" }>} collapsed={collapsed().includes((row() as Extract<Row, { kind: "workspace" }>).id)}
-                      onToggle={toggle} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} />
+                      onToggle={toggle} compact={props.compact} onNewIn={props.onNewIn} onSettings={props.onWorkspaceSettings} action={menu.action} />
                   }>
                   {start => (
                     <BaseButton testID={`workspace-start-${start().workspaceId}`} accessibilityLabel="Start a session" onPress={() => props.onNewIn?.(start().workspaceId)}
@@ -153,54 +161,63 @@ export function SessionList(props: {
                   )}
                 </If>
               }>
-              {item => <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId} onOpen={props.onOpen} compact={props.compact} />}
+              {item => <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId} onOpen={props.onOpen} compact={props.compact} menu={menu} />}
             </If>
           </View>
         )}
       </List>
+      <RenameSheet open={menu.renaming() !== null} title={menu.renaming()?.title ?? ""} busy={menu.action.busy()} error={menu.action.error()}
+        onClose={menu.closeRename} onSave={menu.rename} />
     </If>
   );
 }
 
 /**
  * A workspace's row (.workspace-row): its badge and name, pressing which folds its sessions away or back, then a new
- * session there and its options (a new session, the workspace's settings), as the web app's sidebar has them.
+ * session there and its options (a new session, folding it, its ID and its settings), as the web app's sidebar has
+ * them; a right click on the row opens the same options.
  */
 function WorkspaceRow(props: {
   row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; compact?: boolean;
-  onNewIn?: (workspaceId: string) => void; onSettings?: (workspaceId: string) => void;
+  onNewIn?: (workspaceId: string) => void; onSettings?: (workspaceId: string) => void; action: Action;
 }) {
-  const options = () => [
-    ...(props.row.canCreate && props.onNewIn ? [{ label: "New session", icon: "plus" as const, onSelect: () => props.onNewIn!(props.row.id) }] : []),
+  const options = (): (MenuAction | "separator")[] => [
+    ...(props.row.canCreate && props.onNewIn ? [{ label: "New session", icon: "plus" as const, testID: `workspace-menu-new-${props.row.id}`, onSelect: () => props.onNewIn!(props.row.id) }] : []),
+    { label: props.collapsed ? "Expand" : "Collapse", icon: props.collapsed ? "chevron-down" : "chevron-up", testID: `workspace-fold-${props.row.id}`, onSelect: () => props.onToggle(props.row.id) },
+    "separator",
+    { label: "Copy workspace ID", icon: "copy", testID: `workspace-copy-id-${props.row.id}`, onSelect: () => void props.action.run(() => Clipboard.writeText(props.row.id), "Workspace ID copied") },
     ...(props.onSettings ? [{ label: "Workspace settings", icon: "settings" as const, testID: `workspace-settings-${props.row.id}`, onSelect: () => props.onSettings!(props.row.id) }] : []),
   ];
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 8 }}>
-      <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={() => props.onToggle(props.row.id)}
-        style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingHorizontal: 8, paddingVertical: 6,
-          borderRadius: radius.medium }}
-        hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
-        <IdentityBadge name={props.row.title} id={props.row.id} />
-        <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.body, color: palette().text }}>{props.row.title}</Text>
-        <If when={props.collapsed}>
-          <Text style={{ fontSize: text.caption, color: palette().muted }}>{String(props.row.count)}</Text>
+    <RowMenu items={options} testID={`workspace-menu-${props.row.id}`}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 8 }}>
+        <BaseButton testID={`workspace-row-${props.row.id}`} accessibilityLabel={props.row.title} selected={!props.collapsed} onPress={() => props.onToggle(props.row.id)}
+          style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingHorizontal: 8, paddingVertical: 6,
+            borderRadius: radius.medium }}
+          hoverStyle={{ backgroundColor: palette().hover }} activeStyle={{ opacity: 0.7 }}>
+          <IdentityBadge name={props.row.title} id={props.row.id} />
+          <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.body, color: palette().text }}>{props.row.title}</Text>
+          <If when={props.collapsed}>
+            <Text style={{ fontSize: text.caption, color: palette().muted }}>{String(props.row.count)}</Text>
+          </If>
+        </BaseButton>
+        <If when={props.row.canCreate && props.onNewIn}>
+          <IconButton testID={`workspace-new-${props.row.id}`} icon="plus" label={`New session in ${props.row.title}`} size={28} onPress={() => props.onNewIn!(props.row.id)} />
         </If>
-      </BaseButton>
-      <If when={props.row.canCreate && props.onNewIn}>
-        <IconButton testID={`workspace-new-${props.row.id}`} icon="plus" label={`New session in ${props.row.title}`} size={28} onPress={() => props.onNewIn!(props.row.id)} />
-      </If>
-      <If when={options().length > 0}>
         <DropdownMenu label={`${props.row.title} options`} testID={`workspace-options-${props.row.id}`} items={options()} />
-      </If>
-    </View>
+      </View>
+    </RowMenu>
   );
 }
 
 /** Its status label's color: only while under way or needing attention (.session-status). */
 const statusColors: Partial<Record<Tone, Tone>> = { running: "info", info: "info", warning: "warning", danger: "danger" };
 
-/** A session's row (.nav-item.session-item): its status dot, title and what to know about it, and its age. */
-function SessionRow(props: { item: SessionRecord; depth: number; selected: boolean; onOpen: (id: string) => void; compact?: boolean }) {
+/**
+ * A session's row (.nav-item.session-item): its status dot, title and what to know about it, and its age; a right click
+ * on it opens what can be done to it (`menu`).
+ */
+function SessionRow(props: { item: SessionRecord; depth: number; selected: boolean; onOpen: (id: string) => void; compact?: boolean; menu: SessionMenu }) {
   const data = useAppData();
   const { user } = untracked(session);
   // The session on screen shows what its live view shows, not what the list last fetched.
@@ -216,51 +233,53 @@ function SessionRow(props: { item: SessionRecord; depth: number; selected: boole
   };
   const details = () => Boolean(status().label) || Boolean(props.item.pullRequest) || Boolean(props.item.tunnel) || Boolean(relation());
   return (
-    <BaseButton testID={`session-row-${props.item.id}`} selected={props.selected} accessibilityLabel={props.item.title} onPress={() => props.onOpen(props.item.id)}
-      style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8,
-        paddingLeft: 32 + props.depth * 12, borderRadius: radius.medium, backgroundColor: props.selected ? palette().selection : "transparent" }}
-      activeStyle={{ backgroundColor: palette().selection }} hoverStyle={{ backgroundColor: props.selected ? palette().selection : palette().hover }}>
-      <If when={status().icon === "clock"}
-        else={<StatusDot tone={status().tone} label={status().label ? undefined : props.item.status} />}>
-        <View testID={`session-scheduled-${props.item.id}`} accessibilityLabel={status().label}>
-          <Icon name="clock" size={11} color={status().tone === "info" || status().tone === "running" ? palette().tones.info.text : palette().faint} />
-        </View>
-      </If>
-      <View style={{ flex: 1, gap: 1 }}>
-        <Text style={{ numberOfLines: 1, fontSize: text.body, color: props.selected ? palette().text : palette().muted }}>
-          {`${props.depth > 0 ? "↳ " : ""}${props.item.title}`}
-        </Text>
-        <If when={details()}>
-          <Text style={{ numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>
-            <If when={status().label}>
-              <Text testID={`session-status-${props.item.id}`} style={{ color: statusColor() }}>{status().label}</Text>
-            </If>
-            <If when={props.item.tunnel}>
-              {tunnel => (
-                <>
-                  <If when={status().label}><Text>{" · "}</Text></If>
-                  <Text testID={`session-tunnel-${props.item.id}`} accessibilityLabel={`Online at ${tunnel().url.replace(/^https:\/\//, "")}`}
-                    style={{ color: palette().tones.success.text }}>Online</Text>
-                </>
-              )}
-            </If>
-            <If when={props.item.pullRequest}>
-              {pull => (
-                <>
-                  <If when={status().label || props.item.tunnel}><Text>{" · "}</Text></If>
-                  <Text testID={`session-pull-${props.item.id}`} accessibilityLabel={pullRequestTitle(pull())} style={{ color: pullColor() }}>
-                    {`${pullRequestLabel(pull())}${pull().state ? ` ${pullRequestStateLabels[pull().state!]}` : ""}`}
-                  </Text>
-                </>
-              )}
-            </If>
-            <If when={relation()}>
-              <Text>{`${status().label || props.item.pullRequest || props.item.tunnel ? " · " : ""}${relation()}`}</Text>
-            </If>
-          </Text>
+    <RowMenu items={() => props.menu.items(props.item)} testID={`session-menu-${props.item.id}`}>
+      <BaseButton testID={`session-row-${props.item.id}`} selected={props.selected} accessibilityLabel={props.item.title} onPress={() => props.onOpen(props.item.id)}
+        style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8,
+          paddingLeft: 32 + props.depth * 12, borderRadius: radius.medium, backgroundColor: props.selected ? palette().selection : "transparent" }}
+        activeStyle={{ backgroundColor: palette().selection }} hoverStyle={{ backgroundColor: props.selected ? palette().selection : palette().hover }}>
+        <If when={status().icon === "clock"}
+          else={<StatusDot tone={status().tone} label={status().label ? undefined : props.item.status} />}>
+          <View testID={`session-scheduled-${props.item.id}`} accessibilityLabel={status().label}>
+            <Icon name="clock" size={11} color={status().tone === "info" || status().tone === "running" ? palette().tones.info.text : palette().faint} />
+          </View>
         </If>
-      </View>
-      <Text style={{ fontSize: text.caption, color: palette().muted }}>{shortAge(props.item.createdAt)}</Text>
-    </BaseButton>
+        <View style={{ flex: 1, gap: 1 }}>
+          <Text style={{ numberOfLines: 1, fontSize: text.body, color: props.selected ? palette().text : palette().muted }}>
+            {`${props.depth > 0 ? "↳ " : ""}${props.item.title}`}
+          </Text>
+          <If when={details()}>
+            <Text style={{ numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>
+              <If when={status().label}>
+                <Text testID={`session-status-${props.item.id}`} style={{ color: statusColor() }}>{status().label}</Text>
+              </If>
+              <If when={props.item.tunnel}>
+                {tunnel => (
+                  <>
+                    <If when={status().label}><Text>{" · "}</Text></If>
+                    <Text testID={`session-tunnel-${props.item.id}`} accessibilityLabel={`Online at ${tunnel().url.replace(/^https:\/\//, "")}`}
+                      style={{ color: palette().tones.success.text }}>Online</Text>
+                  </>
+                )}
+              </If>
+              <If when={props.item.pullRequest}>
+                {pull => (
+                  <>
+                    <If when={status().label || props.item.tunnel}><Text>{" · "}</Text></If>
+                    <Text testID={`session-pull-${props.item.id}`} accessibilityLabel={pullRequestTitle(pull())} style={{ color: pullColor() }}>
+                      {`${pullRequestLabel(pull())}${pull().state ? ` ${pullRequestStateLabels[pull().state!]}` : ""}`}
+                    </Text>
+                  </>
+                )}
+              </If>
+              <If when={relation()}>
+                <Text>{`${status().label || props.item.pullRequest || props.item.tunnel ? " · " : ""}${relation()}`}</Text>
+              </If>
+            </Text>
+          </If>
+        </View>
+        <Text style={{ fontSize: text.caption, color: palette().muted }}>{shortAge(props.item.createdAt)}</Text>
+      </BaseButton>
+    </RowMenu>
   );
 }

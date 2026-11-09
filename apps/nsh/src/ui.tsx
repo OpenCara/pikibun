@@ -1,5 +1,5 @@
 import { Clipboard, Image, Scroll, signal, Text, View, windowSize, type JSX, type ViewStyle } from "nsh";
-import { AlertDialog, Button as BaseButton, Collapsible, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
+import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
 import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
 import { control, palette, radius, text, weight, type Tone } from "./theme";
@@ -485,34 +485,58 @@ export interface MenuAction {
   onSelect: () => void;
 }
 
+/** The popup (desktops, the web) or sheet (touch screens) of a menu of actions (.popover). */
+const menuPopupStyle = () => ({ minWidth: 200, maxWidth: 360, padding: 4, borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border,
+  backgroundColor: palette().surface, boxShadow: palette().shadow });
+
+/** A menu's actions (.menu-item), "separator" a hairline between them (.menu-separator). */
+function MenuActions(props: { items: (MenuAction | "separator")[] }) {
+  return (
+    <Each of={props.items} key="index">
+      {item => (
+        <If when={item() !== "separator" ? item() as MenuAction : null} else={<View style={{ height: 1, margin: 4, backgroundColor: palette().border }} />}>
+          {action => (
+            <MenuItem testID={action().testID} accessibilityLabel={action().label} disabled={action().disabled} onSelect={() => action().onSelect()}
+              style={{ flexDirection: "row", alignItems: action().hint ? "flex-start" : "center", gap: 8, minHeight: 32, paddingHorizontal: 8,
+                paddingVertical: action().hint ? 6 : 0, borderRadius: radius.small }}
+              hoverStyle={{ backgroundColor: palette().hoverStrong }} focusStyle={{ backgroundColor: palette().hoverStrong }} disabledStyle={{ opacity: 0.5 }}>
+              <If when={action().icon}>
+                {name => <Icon name={name()} size={14} color={action().destructive ? palette().tones.danger.text : palette().muted} style={{ marginTop: action().hint ? 3 : 0 }} />}
+              </If>
+              <View style={{ flex: 1, gap: 1 }}>
+                <Text style={{ fontSize: text.body, color: action().destructive ? palette().tones.danger.text : palette().text }}>{action().label}</Text>
+                <If when={action().hint}><Text style={{ fontSize: text.caption, lineHeight: 17, color: palette().muted }}>{action().hint}</Text></If>
+              </View>
+            </MenuItem>
+          )}
+        </If>
+      )}
+    </Each>
+  );
+}
+
 /** .popover of .menu-items for a small fixed set of actions (a row's kebab menu); "separator" draws a hairline. */
 export function DropdownMenu(props: { label: string; items: (MenuAction | "separator")[]; icon?: IconName; trigger?: JSX.Element; testID?: string; placement?: "top" | "bottom" }) {
   return (
     <Menu placement={props.placement ?? "bottom"} align="end" offset={4} backdropStyle={{ backgroundColor: "transparent" }}
       trigger={props.trigger ?? <IconButton testID={props.testID} icon={props.icon ?? "more"} label={props.label} size={control.xsmall} onPress={() => undefined} />}
-      popupStyle={{ minWidth: 200, maxWidth: 360, padding: 4, borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface,
-        boxShadow: palette().shadow }}>
-      <Each of={props.items} key="index">
-        {item => (
-          <If when={item() !== "separator" ? item() as MenuAction : null} else={<View style={{ height: 1, margin: 4, backgroundColor: palette().border }} />}>
-            {action => (
-              <MenuItem testID={action().testID} accessibilityLabel={action().label} disabled={action().disabled} onSelect={() => action().onSelect()}
-                style={{ flexDirection: "row", alignItems: action().hint ? "flex-start" : "center", gap: 8, minHeight: 32, paddingHorizontal: 8,
-                  paddingVertical: action().hint ? 6 : 0, borderRadius: radius.small }}
-                hoverStyle={{ backgroundColor: palette().hoverStrong }} focusStyle={{ backgroundColor: palette().hoverStrong }} disabledStyle={{ opacity: 0.5 }}>
-                <If when={action().icon}>
-                  {name => <Icon name={name()} size={14} color={action().destructive ? palette().tones.danger.text : palette().muted} style={{ marginTop: action().hint ? 3 : 0 }} />}
-                </If>
-                <View style={{ flex: 1, gap: 1 }}>
-                  <Text style={{ fontSize: text.body, color: action().destructive ? palette().tones.danger.text : palette().text }}>{action().label}</Text>
-                  <If when={action().hint}><Text style={{ fontSize: text.caption, lineHeight: 17, color: palette().muted }}>{action().hint}</Text></If>
-                </View>
-              </MenuItem>
-            )}
-          </If>
-        )}
-      </Each>
+      popupStyle={menuPopupStyle()}>
+      <MenuActions items={props.items} />
     </Menu>
+  );
+}
+
+/**
+ * The right-click menu of what it wraps (the web app's useContextMenu): the secondary button opens it where the pointer
+ * is on the desktops and the web; a finger held on it opens it as a sheet on touch screens. `items` are made each time it
+ * opens, so they say what can be done then; with none, nothing opens.
+ */
+export function RowMenu(props: { items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string }) {
+  return (
+    <ContextMenu testID={props.testID} trigger={props.children} disabled={!props.items().some(item => item !== "separator")} offset={2}
+      backdropStyle={{ backgroundColor: palette().backdrop }} popupStyle={menuPopupStyle()}>
+      <MenuActions items={props.items()} />
+    </ContextMenu>
   );
 }
 

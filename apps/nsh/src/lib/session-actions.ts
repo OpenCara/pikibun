@@ -35,6 +35,32 @@ export interface SessionActions {
   pack: () => void;
 }
 
+type Visibility = NonNullable<SessionRecord["visibility"]>;
+
+/**
+ * Asks before turning `current` workspace-visible or private (its header's menu, a list's right-click menu); resolves
+ * the visibility to set, or null when the person changed their mind.
+ */
+export async function confirmVisibilityChange(current: SessionRecord): Promise<Visibility | null> {
+  const next: Visibility = (current.visibility ?? "private") === "workspace" ? "private" : "workspace";
+  const confirmed = await confirm(next === "workspace" ? {
+    title: "Make session workspace-visible?", confirmLabel: "Make workspace-visible",
+    message: "All workspace members will be able to view existing and future prompts and output, including tool output, repository content shown in the transcript, and side asks, which may contain sensitive information. This grants viewing only, not direct GitHub access, permission to run tools, or ask/control permissions.",
+  } : {
+    title: "Make session private?", confirmLabel: "Make private",
+    message: "Workspace membership will no longer grant viewing access, except to the workspace's owner and admins, who manage every session. Existing explicit grants will remain in effect, and previously viewed or copied content cannot be recalled.",
+  });
+  return confirmed ? next : null;
+}
+
+export const visibilityNotice = (visibility: Visibility): string => (visibility === "workspace"
+  ? "Session is workspace-visible. Workspace members can view prompts and output." : "Session is private. Existing explicit grants still apply.");
+
+export const confirmArchive = (): Promise<boolean> => confirm({ title: "Archive session?", confirmLabel: "Archive",
+  message: "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. Pending approvals can't be decided while it's archived. You can unarchive it later." });
+
+export const unarchiveNotice = (current: SessionRecord): string => (current.packed ? "Session unarchived, its files unpacked" : "Session unarchived");
+
 /**
  * `manages`: its owner, or its workspace's owner or an admin, who rename, archive and unarchive it and change its
  * visibility. Backups stay the owner's alone, and need an idle session (`backupBlocked`).
@@ -55,18 +81,12 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
   async function changeVisibility() {
     const current = options.session();
     if (!current || !options.manages() || action.busy()) return;
-    const next = (current.visibility ?? "private") === "workspace" ? "private" : "workspace";
-    if (!await confirm(next === "workspace" ? {
-      title: "Make session workspace-visible?", confirmLabel: "Make workspace-visible",
-      message: "All workspace members will be able to view existing and future prompts and output, including tool output, repository content shown in the transcript, and side asks, which may contain sensitive information. This grants viewing only, not direct GitHub access, permission to run tools, or ask/control permissions.",
-    } : {
-      title: "Make session private?", confirmLabel: "Make private",
-      message: "Workspace membership will no longer grant viewing access, except to the workspace's owner and admins, who manage every session. Existing explicit grants will remain in effect, and previously viewed or copied content cannot be recalled.",
-    })) return;
+    const next = await confirmVisibilityChange(current);
+    if (!next) return;
     await action.run(async () => {
       await session().api(base(), { method: "PATCH", body: { visibility: next } });
       options.onChange();
-    }, next === "workspace" ? "Session is workspace-visible. Workspace members can view prompts and output." : "Session is private. Existing explicit grants still apply.");
+    }, visibilityNotice(next));
   }
   async function createBackup({ conversationOnly = false }: { conversationOnly?: boolean } = {}) {
     if (!options.session() || !isOwner() || options.backupBlocked() || backupsOff() || backupsPending() || action.busy() || (conversationOnly && conversationOnlyOff())) return;
@@ -102,8 +122,7 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
   async function archive() {
     const current = options.session();
     if (!current || !options.manages() || action.busy() || current.status === "archived") return;
-    if (!await confirm({ title: "Archive session?", confirmLabel: "Archive",
-      message: "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. Pending approvals can't be decided while it's archived. You can unarchive it later." })) return;
+    if (!await confirmArchive()) return;
     await action.run(async () => {
       await session().api(`${base()}/archive`, { method: "POST" });
       options.onChange();
@@ -115,7 +134,7 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
     void action.run(async () => {
       await session().api(`${base()}/unarchive`, { method: "POST" });
       options.onChange();
-    }, current.packed ? "Session unarchived, its files unpacked" : "Session unarchived");
+    }, unarchiveNotice(current));
   }
   async function pack() {
     const current = options.session();
