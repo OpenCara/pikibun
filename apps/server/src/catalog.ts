@@ -290,6 +290,35 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
     return c.json({ workspace }, 201);
   });
 
+  // Its owner or an admin renames a workspace. The audit records that it was renamed, never the names.
+  app.patch('/api/workspaces/:id', async c => {
+    const workspaceId = identifier(c.req.param('id'), 'workspaceId');
+    const actorId = c.get('auth').userId;
+    await requireMember(c.env, workspaceId, actorId, ['owner', 'admin']);
+    const body = await jsonObject(c);
+    onlyFields(body, ['name']);
+    const name = nameInput(body.name);
+    const result = await c.env.DB.batch<Omit<Workspace, 'personal'> & { personal: number }>([
+      // The authority is checked again in the write: a demotion racing the rename changes nothing.
+      c.env.DB.query<never>(`UPDATE workspaces SET name = ?
+        WHERE id = ? AND EXISTS (SELECT 1 FROM workspace_members actor
+          WHERE actor.workspace_id = workspaces.id AND actor.user_id = ? AND actor.role IN ('owner', 'admin'))`)
+        .bind(name, workspaceId, actorId),
+      auditAfterChange(c.env, actorId, 'workspace.renamed', workspaceId, {}),
+      // As the workspace list shows it, private or not: a private workspace's owner renames it as any owner does.
+      c.env.DB.query<Omit<Workspace, 'personal'> & { personal: number }>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
+          CASE WHEN p.workspace_id IS NULL THEN 0 ELSE 1 END AS personal
+        FROM workspaces w
+        INNER JOIN workspace_members member ON member.workspace_id = w.id AND member.user_id = ?
+        LEFT JOIN personal_workspaces p ON p.workspace_id = w.id AND p.user_id = member.user_id
+        WHERE w.id = ?`).bind(actorId, workspaceId),
+    ]);
+    const row = result[2].results[0];
+    if (result[0].changes !== 1 || !row) fail(403, 'forbidden', 'Workspace administrator access is required.');
+    const workspace: Workspace = { ...row, personal: Number(row.personal) === 1 };
+    return c.json({ workspace });
+  });
+
   app.get('/api/workspaces/:id/members', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;

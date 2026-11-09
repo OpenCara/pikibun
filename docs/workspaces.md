@@ -2,6 +2,8 @@
 
 Every account also has a [private workspace](#your-private-workspace) of its own, pinned at the top of the sidebar. Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Transcripts**, **Approvals**, **Sub-task sessions**, **Session database**, **Members** and, for owners and admins, **Data export**.
 
+Owners and admins rename a workspace with **General → Rename** (`PATCH /api/workspaces/:id` with `{"name": "…"}`); everyone in it sees the new name. The audit log records who renamed it, not the names.
+
 Owners and admins add people with **Members → Add member**, entering the person's **User ID** and a role; saving an existing member changes their role, which takes effect at once. Or they share an invite link instead (see [Invite links and pending members](#invite-links-and-pending-members)). Below the owner there are four tiers:
 
 - **Viewer**: follows workspace-visible sessions read-only and can't start sessions, restore a backup into a new one, or move one to another host. A session role can't give a viewer more than session viewer (read).
@@ -16,6 +18,7 @@ Owners and admins add people with **Members → Add member**, entering the perso
 | Send messages to any workspace-visible session | ✓ | ✓ | ✓ | | |
 | View, message and stop any session, private ones included | ✓ | ✓ | | | |
 | Rename, archive or unarchive any session, change its visibility and tool output, give it session roles, turn off its share link | ✓ | ✓ | | | |
+| Rename the workspace | ✓ | ✓ | | | |
 | Add and remove sources (repositories, documents), set repositories' push policy and Git LFS | ✓ | ✓ | | | |
 | Manage push identities | ✓ | ✓ | | | |
 | Set network access | ✓ | ✓ | | | |
@@ -29,7 +32,7 @@ Approving tool calls still takes an explicit grant from the session's owner, wha
 
 ## Your private workspace
 
-Every account has one workspace that is its alone, named **Private** and marked with a lock. It is pinned at the top of the sidebar, above the workspaces you create or join, and it is where **New session** starts until you choose another. Pikibun makes it the first time you open the app, for new accounts and existing ones alike.
+Every account has one workspace that is its alone, named **Private** at first (you can rename it under **General → Rename**) and marked with a lock. It is pinned at the top of the sidebar, above the workspaces you create or join, and it is where **New session** starts until you choose another. Pikibun makes it the first time you open the app, for new accounts and existing ones alike.
 
 - Nobody else can join it: it takes no members (**Add member** is refused) and has no invite link, and your hosts can't be shared into it. Its page under **Settings → Workspaces** has no **Members** section.
 - Your own hosts are connected to it, as to every workspace you belong to, so you can start a session there as soon as a host is paired.

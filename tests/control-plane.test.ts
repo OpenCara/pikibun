@@ -250,6 +250,51 @@ test('workspace names must not be blank', async t => {
   assert.equal((await alice.request('POST', '/api/workspaces', { name: '   ' })).status, 400);
 });
 
+test('workspace rename: its owner and admins rename it, everyone else is refused', async t => {
+  const f = await fixture(t);
+  const owner = await f.client('rename-owner');
+  const [admin, collaborator, member, viewer, outsider] = await Promise.all(['rename-admin', 'rename-collaborator', 'rename-member', 'rename-viewer', 'rename-outsider'].map(name => f.client(name)));
+  const workspace = (await (await owner.request('POST', '/api/workspaces', { name: 'Before' })).json() as { workspace: { id: string } }).workspace;
+  for (const [client, role] of [[admin, 'admin'], [collaborator, 'collaborator'], [member, 'member'], [viewer, 'viewer']] as const) {
+    assert.equal((await owner.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: client.user.id, role })).status, 200);
+  }
+  const path = `/api/workspaces/${workspace.id}`;
+  const name = () => (f.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspace.id) as { name: string }).name;
+
+  // The owner renames it; the name is trimmed, and the response is the workspace as its list shows it.
+  const renamed = await owner.request('PATCH', path, { name: '  Field studio  ' });
+  assert.equal(renamed.status, 200);
+  assert.deepEqual((await renamed.json() as { workspace: unknown }).workspace, { id: workspace.id, name: 'Field studio', ownerId: owner.user.id, role: 'owner', personal: false });
+  // An admin renames it too, and every member sees the new name.
+  const byAdmin = await admin.request('PATCH', path, { name: 'Studio' });
+  assert.equal(byAdmin.status, 200);
+  assert.equal((await byAdmin.json() as { workspace: { role: string } }).workspace.role, 'admin');
+  const listed = (await (await viewer.request('GET', '/api/workspaces')).json() as { workspaces: { id: string; name: string }[] }).workspaces;
+  assert.equal(listed.find(item => item.id === workspace.id)?.name, 'Studio');
+
+  // Collaborators, members and viewers are refused; someone outside the workspace doesn't learn it exists.
+  for (const client of [collaborator, member, viewer]) assert.equal((await client.request('PATCH', path, { name: 'Taken over' })).status, 403);
+  assert.equal((await outsider.request('PATCH', path, { name: 'Taken over' })).status, 404);
+  assert.equal((await owner.request('PATCH', '/api/workspaces/missing-workspace', { name: 'Nowhere' })).status, 404);
+  // A blank, missing, non-string or too-long name, or any other field, changes nothing.
+  for (const body of [{ name: '   ' }, {}, { name: 7 }, { name: 'x'.repeat(201) }, { name: 'Studio 2', ownerId: admin.user.id }]) {
+    assert.equal((await owner.request('PATCH', path, body)).status, 400);
+  }
+  assert.equal(name(), 'Studio');
+
+  // Each rename is audited, without the names.
+  const audited = f.sqlite.prepare("SELECT actor_id AS actorId, detail_json AS detail FROM audit WHERE workspace_id = ? AND action = 'workspace.renamed'").all(workspace.id) as { actorId: string; detail: string }[];
+  assert.deepEqual(audited.map(item => item.actorId).sort(), [owner.user.id, admin.user.id].sort());
+  assert.ok(audited.every(item => item.detail === '{}'));
+
+  // Its owner renames their private workspace too, which stays private; nobody else can, not even to learn it exists.
+  const own = (await (await owner.request('GET', '/api/workspaces')).json() as { workspaces: { id: string; personal: boolean }[] }).workspaces.find(item => item.personal)!;
+  const privately = await owner.request('PATCH', `/api/workspaces/${own.id}`, { name: 'Sketchbook' });
+  assert.equal(privately.status, 200);
+  assert.deepEqual((await privately.json() as { workspace: unknown }).workspace, { id: own.id, name: 'Sketchbook', ownerId: owner.user.id, role: 'owner', personal: true });
+  assert.equal((await admin.request('PATCH', `/api/workspaces/${own.id}`, { name: 'Taken over' })).status, 404);
+});
+
 test('AES-GCM vault binds ciphertext to the account and rejects tampering', async () => {
   const env = { VAULT_KEY: Buffer.alloc(32, 4).toString('base64url') } as Env;
   const ciphertext = await encryptToken(env, 'github:7', 'never-expose-this-access-token');
