@@ -297,6 +297,27 @@ export async function resetGitHubToken(env: Env, userId: string, token: string, 
   return true;
 }
 
+/**
+ * Revokes a GitHub sign-in token through Pikibun's OAuth app, once the owner disconnected GitHub and the vault no longer
+ * holds it, so no copy of it (a host's, for a push) keeps working. Only that token: the owner's other authorizations of
+ * the app stay. Best effort; false when GitHub could not be asked.
+ */
+export async function revokeGitHubToken(env: Env, token: string): Promise<boolean> {
+  const { GITHUB_CLIENT_ID: clientId, GITHUB_CLIENT_SECRET: clientSecret } = env;
+  if (!clientId || !clientSecret) return false;
+  try {
+    const revoked = await githubRequest(`https://api.github.com/applications/${encodeURIComponent(clientId)}/token`, {
+      method: 'DELETE', body: JSON.stringify({ access_token: token }),
+      headers: { Accept: 'application/vnd.github+json', Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`, 'Content-Type': 'application/json',
+        'User-Agent': 'pikibun', 'X-GitHub-Api-Version': '2022-11-28' },
+    });
+    // 404: GitHub no longer knows the token, as when a reset or revocation already ended it.
+    return revoked.status === 204 || revoked.status === 404;
+  } catch {
+    return false;
+  }
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
