@@ -111,12 +111,13 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
   let revoked = false;
   /**
    * The view held and its revision: streams send only what changed since it. A cached view is held from the start, so
-   * the first stream asks only for what changed since, but it is shown only once the session's metadata confirms access.
+   * the first stream asks only for what changed since, but it is shown only once the session's metadata says the view
+   * is the viewer's to read now (`viewable`), or a stream brings it up to date (which the server checks as it does).
    */
   const cached = dependencies.cache?.get(id);
   let current: SessionView | null = cached?.view ?? null;
   let revision: string | undefined = cached?.revision;
-  /** Whether a view was shown: the cached one waits for the metadata, which rechecks access. */
+  /** Whether a view was shown: the cached one waits for the metadata, which rechecks access to it. */
   let shown = false;
   /** Earlier entries read for a paged view, which streams never send again. */
   let earlier: EarlierEntries = new Map();
@@ -161,6 +162,20 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
     stream = null;
   }
 
+  /**
+   * The server refuses the view although the session is still the viewer's to read (its host's owner stopped sharing
+   * the host, say): the transcript goes, here and from the cache, and the session stays to say why.
+   */
+  function forgetView() {
+    dependencies.cache?.delete(id);
+    current = null;
+    revision = undefined;
+    earlier = new Map();
+    if (!shown) return;
+    shown = false;
+    handlers.view(null);
+  }
+
   function revoke() {
     // Do not keep a previously authorized transcript visible after access is revoked.
     revoked = true;
@@ -186,15 +201,22 @@ export function startLiveSession(id: string, handlers: LiveSessionHandlers, depe
       checkingAccess = false;
       if (!running()) return;
       handlers.session(metadata.session);
-      // Access is confirmed: a view this client showed before goes up at once, and the stream brings it up to date.
-      if (!shown && current) showView(current, revision);
+      // The server says whether it would serve the view now. A refused view goes; a kept one goes up at once once the
+      // server says it may, and the stream brings it up to date. A server that doesn't say leaves it to the stream.
+      if (metadata.session.viewable === false) forgetView();
+      else if (!shown && current && metadata.session.viewable === true) showView(current, revision);
       if (!withView) return;
       const snapshot = await dependencies.api<{ view: SessionView; revision?: string }>(`${base}/view`, { signal: controller.signal });
       if (running()) showView(snapshot.view, snapshot.revision);
     } catch (reason) {
       if (!running()) return;
       handlers.error(errorMessage(reason));
-      if (checkingAccess && reason instanceof ApiError && [401, 403, 404].includes(reason.status)) revoke();
+      if (reason instanceof ApiError && [401, 403, 404].includes(reason.status)) {
+        if (checkingAccess) revoke();
+        // The view itself was refused (403 connector_unavailable, say), not the session: only the transcript goes. A
+        // failure that may pass (an offline host) keeps it, and the cache.
+        else forgetView();
+      }
     } finally {
       loading = false;
       if (pending !== undefined && running()) {

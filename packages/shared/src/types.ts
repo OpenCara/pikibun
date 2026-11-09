@@ -176,6 +176,12 @@ export interface SessionRecord {
   // directly (hostEnvironment).
   hostUnsandboxed?: boolean;
   /**
+   * Present only on single-session reads: whether the viewer may read the session's view now, by the checks GET /view
+   * makes before asking the host. False when it is refused although the session itself is readable, e.g. after its
+   * host's owner stopped sharing the host with the workspace. Clients show a view they kept only when this is true.
+   */
+  viewable?: boolean;
+  /**
    * The session runs directly on its host's own environment, without the sandbox: chosen when its owner started it on
    * a host whose configuration accepts that (HostConfig.hostSessions), as the host's owner or a member they granted
    * sessions on the host (HostCommandGrant.hostSessions), and fixed for its life. Its commands run as the host's OS
