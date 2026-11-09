@@ -518,6 +518,11 @@
   .menu-text { display: grid; gap: 1px; min-width: 0; }
   .menu-item .menu-hint { color: var(--foreground-muted); font-size: var(--font-xs); line-height: 1.4; }
   .menu-separator { height: 1px; margin: 4px; background: var(--border); }
+  /* A right-click menu (useContextMenu) takes focus for its arrow keys; its items show it inside its scroll box. */
+  .popover.context-menu:focus { outline: none; }
+  .popover.context-menu .menu-item:focus-visible { outline-offset: -2px; }
+  /* The row a right-click menu is open on stays highlighted, as it would under the pointer. */
+  a.row[data-context-menu], button.row[data-context-menu] { background: var(--interaction); }
   .menu-label { padding: 6px var(--space-2) 4px; color: var(--foreground-muted); font-size: var(--font-xs); font-weight: var(--weight-medium); }
 
   dialog.sheet {
@@ -637,6 +642,9 @@
   .session-item .sub { color: var(--foreground-muted); font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .session-item[aria-current="page"] .title { color: var(--foreground); }
   .sidebar-more { padding-left: 32px; }
+  /* A sidebar row with its right-click menu open (useContextMenu). */
+  .nav-item[data-context-menu], .workspace-row[data-context-menu] > .nav-item { color: var(--foreground); background: var(--interaction); }
+  .workspace-row[data-context-menu] > .row-actions { opacity: 1; }
 
   .host-chip { display: flex; flex: 1 1 auto; min-width: 0; }
   .host-chip > .nav-item { min-width: 0; }

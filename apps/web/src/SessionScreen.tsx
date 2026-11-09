@@ -28,6 +28,7 @@ import { NavigationButton } from "./navigation";
 import { navigate } from "./router";
 import { enterSends } from "./touch";
 import { ApprovalCard, AutoApprovedMarks, SessionPanel, useSessionActions, widePanelTabs, type AuditEvent, type PanelTab } from "./session-panel";
+import { RenameSheet } from "./session-menu";
 import { splitToolCalls } from "../../../packages/client/src/transcript";
 import { COMPACTION_FAILED_TITLE, compactionFailureText } from "../../../packages/client/src/compaction";
 import {
@@ -394,27 +395,6 @@ function SessionPane({ id }: { id: string }) {
     {session && manages && <RenameSheet open={renaming} title={session.title} busy={actions.action.busy} onClose={() => setRenaming(false)}
       onSave={async title => { if (await actions.rename(title)) setRenaming(false); }} />}
   </div></PeopleProvider>;
-}
-
-function RenameSheet({ open, title, busy, onClose, onSave }: { open: boolean; title: string; busy: boolean; onClose: () => void; onSave: (title: string) => void }) {
-  const [value, setValue] = useState(title);
-  // Start from the current title each time the sheet opens.
-  useEffect(() => { if (open) setValue(title); }, [open, title]);
-  const next = value.trim();
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (next && !busy) onSave(next);
-  }
-  return <Sheet open={open} title="Rename session" onClose={onClose} footer={<>
-    <Button variant="ghost" onClick={onClose}>Cancel</Button>
-    <Button type="submit" form="rename-session-form" variant="default" disabled={busy || !next}>{busy ? "Saving..." : "Rename"}</Button>
-  </>}>
-    <form id="rename-session-form" className="stack" onSubmit={submit}>
-      <Field label="Title">
-        <input className="input" required autoFocus maxLength={200} value={value} onChange={event => setValue(event.target.value)} autoComplete="off" />
-      </Field>
-    </form>
-  </Sheet>;
 }
 
 function Conversation({ id, user, session, view, host, stale, refresh, loadOlder, openSession, pinned }: {

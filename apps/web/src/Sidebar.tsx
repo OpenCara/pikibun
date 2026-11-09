@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import type { SessionRecord, Workspace } from "../../../packages/shared/src/types";
 import { useApp } from "./app-context";
 import { useDesktop } from "./desktop";
@@ -10,7 +10,11 @@ import { href, type Route } from "./router";
 import { sessionStatus } from "../../../packages/client/src/session-status";
 import { nestSessions } from "../../../packages/client/src/session-tree";
 import { canCreateSessions } from "../../../packages/shared/src/policy";
-import { DropdownMenu, IdentityBadge, Loading, RelativeTime, StatusDot } from "./ui";
+import { copyWithNotice, useSessionMenu } from "./session-menu";
+import { DropdownMenu, IdentityBadge, Loading, RelativeTime, StatusDot, useContextMenu, useToast, type MenuEntry } from "./ui";
+
+/** Opens a right-click menu of `items` on the element that got the event (useContextMenu). */
+type OpenMenu = (event: MouseEvent<HTMLElement>, label: string, items: MenuEntry[]) => void;
 
 const SESSIONS_PER_WORKSPACE = 6;
 const COLLAPSED_KEY = "pikibun.collapsedWorkspaces";
@@ -19,25 +23,33 @@ function readCollapsed(): string[] {
   try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]") as string[]; } catch { return []; }
 }
 
-function WorkspaceGroup({ workspace, sessions, route, collapsed, toggle, onNavigate }: { workspace: Workspace; sessions: SessionRecord[]; route: Route; collapsed: boolean; toggle: () => void; onNavigate: () => void }) {
+function WorkspaceGroup({ workspace, sessions, route, collapsed, toggle, onNavigate, openMenu, sessionItems, notify }: {
+  workspace: Workspace; sessions: SessionRecord[]; route: Route; collapsed: boolean; toggle: () => void; onNavigate: () => void;
+  openMenu: OpenMenu; sessionItems: (session: SessionRecord) => MenuEntry[]; notify: (text: string) => void;
+}) {
   const { user, selectWorkspace, liveActivity } = useApp();
   const [expanded, setExpanded] = useState(false);
   // Sessions another session's agent started follow it, one step in.
   const nested = nestSessions(sessions);
   const visible = expanded ? nested : nested.slice(0, SESSIONS_PER_WORKSPACE);
   const newHref = href({ name: "new", workspaceId: workspace.id });
+  // The row's options menu and its right-click menu offer the same.
+  const workspaceItems: MenuEntry[] = [
+    ...(canCreateSessions(workspace.role) ? [{ label: "New session", icon: "plus" as const, onSelect: () => { selectWorkspace(workspace.id); window.location.hash = newHref; onNavigate(); } }] : []),
+    { label: collapsed ? "Expand" : "Collapse", icon: collapsed ? "chevron-down" : "chevron-up", onSelect: toggle },
+    "separator",
+    { label: "Copy workspace ID", icon: "copy", onSelect: () => copyWithNotice(workspace.id, "Workspace ID copied", notify) },
+    { label: "Workspace settings", icon: "settings", onSelect: () => { window.location.hash = href({ name: "settings", section: "workspaces", id: workspace.id }); onNavigate(); } },
+  ];
   return <div className="workspace-group">
-    <div className="workspace-row">
+    <div className="workspace-row" onContextMenu={event => openMenu(event, `${workspace.name} options`, workspaceItems)}>
       <button type="button" className="nav-item" onClick={toggle} aria-expanded={!collapsed} title={workspace.name}>
         <IdentityBadge name={workspace.name} id={workspace.id} />
         <span className="label">{workspace.name}</span>
       </button>
       <div className="row-actions">
         {canCreateSessions(workspace.role) && <a className="btn ghost xs icon-only" href={newHref} aria-label={`New session in ${workspace.name}`} title="New session" onClick={() => { selectWorkspace(workspace.id); onNavigate(); }}><Icon name="plus" size={14} /></a>}
-        <DropdownMenu label={`${workspace.name} options`} items={[
-          ...(canCreateSessions(workspace.role) ? [{ label: "New session", icon: "plus" as const, onSelect: () => { selectWorkspace(workspace.id); window.location.hash = newHref; onNavigate(); } }] : []),
-          { label: "Workspace settings", icon: "settings", onSelect: () => { window.location.hash = href({ name: "settings", section: "workspaces", id: workspace.id }); onNavigate(); } },
-        ]} />
+        <DropdownMenu label={`${workspace.name} options`} items={workspaceItems} />
       </div>
     </div>
     {!collapsed && <ul>
@@ -47,7 +59,8 @@ function WorkspaceGroup({ workspace, sessions, route, collapsed, toggle, onNavig
         // The session on screen shows what its live view shows, not what the list last fetched.
         const status = sessionStatus(session, liveActivity?.sessionId === session.id ? liveActivity.activity : undefined);
         return <li key={session.id} style={depth ? { marginLeft: depth * 12 } : undefined}>
-          <a className="nav-item session-item" href={href({ name: "session", sessionId: session.id })} aria-current={current ? "page" : undefined} onClick={() => { selectWorkspace(workspace.id); onNavigate(); }}>
+          <a className="nav-item session-item" href={href({ name: "session", sessionId: session.id })} aria-current={current ? "page" : undefined} onClick={() => { selectWorkspace(workspace.id); onNavigate(); }}
+            onContextMenu={event => openMenu(event, `${session.title} options`, sessionItems(session))}>
             <StatusDot tone={status.tone} icon={status.icon} label={status.label ? undefined : session.status} />
             <span className="label">
               <span className="title">{depth > 0 && <span className="muted" aria-label="Started by the session above">↳ </span>}{session.title}</span>
@@ -79,6 +92,10 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate: () =>
       return next;
     });
   }
+  // One right-click menu for the whole list, with one place for what its actions report.
+  const { show, toast } = useToast();
+  const contextMenu = useContextMenu();
+  const sessionMenu = useSessionMenu(show);
   const desktop = useDesktop();
   const update = desktop.view?.update;
   const openUpdate = desktop.bridge?.openUpdate;
@@ -101,7 +118,8 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate: () =>
           // Archived sessions live on the Sessions screen; the one being viewed stays listed so the sidebar keeps its place.
           sessions={sessions.filter(session => session.workspaceId === workspace.id
             && (session.status !== "archived" || (route.name === "session" && route.sessionId === session.id)))}
-          collapsed={collapsed.includes(workspace.id)} toggle={() => toggle(workspace.id)} />)}
+          collapsed={collapsed.includes(workspace.id)} toggle={() => toggle(workspace.id)}
+          openMenu={contextMenu.open} sessionItems={sessionMenu.items} notify={show} />)}
       {sessionsLoading && workspaces.length > 0 && <div style={{ padding: 8 }}><Loading>Loading sessions...</Loading></div>}
       {!workspacesLoading && workspaces.length > 0 && <button type="button" className="nav-item" style={{ marginTop: 12 }} onClick={() => setCreating(true)}><Icon name="plus" size={14} /><span className="label">New workspace</span></button>}
     </nav>
@@ -119,5 +137,8 @@ export function Sidebar({ route, onNavigate }: { route: Route; onNavigate: () =>
       <a className="btn ghost sm icon-only" href={href({ name: "settings", section: "profile" })} onClick={onNavigate} aria-label="Settings" title="Settings" aria-current={route.name === "settings" ? "page" : undefined}><Icon name="settings" /></a>
     </div>
     <NewWorkspaceSheet open={creating} onClose={() => { setCreating(false); onNavigate(); }} />
+    {contextMenu.menu}
+    {sessionMenu.element}
+    {toast}
   </aside>;
 }
