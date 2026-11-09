@@ -3,7 +3,7 @@ import test, { type TestContext } from "node:test";
 import { app } from "../apps/server/src/index.js";
 import { hashPassword, onceSucceeded, verifyPassword } from "../apps/server/src/authority/password-auth.js";
 import type { Env } from "../apps/server/src/types.js";
-import type { UserProfile } from "../packages/shared/src/types.js";
+import type { NativeSignIn, UserProfile } from "../packages/shared/src/types.js";
 import { testDatabase } from "./helpers/control-plane.js";
 
 const origin = "http://localhost:8787";
@@ -153,6 +153,49 @@ test("five failed sign-ins in a row are allowed, then the account pauses even fo
   assert.equal((await f.signIn("dave", password)).status, 200);
   assert.deepEqual({ ...f.sqlite.prepare("SELECT failed_attempts, locked_until FROM password_credentials WHERE user_id = 'password:dave'").get() },
     { failed_attempts: 0, locked_until: null });
+});
+
+test("a native app signs in with a username and password for a bearer token, listed as its device", async t => {
+  const f = await fixture(t);
+  const browserCookie = f.cookieOf(await f.signUp({ username: "nora", password }));
+  const nativeSignIn = (body: Record<string, unknown>) => f.request("POST", "/api/auth/native/password", { body });
+
+  const signedIn = await nativeSignIn({ username: "Nora", password, deviceName: "Nora's iPhone" });
+  assert.equal(signedIn.status, 200);
+  assert.equal(signedIn.headers.get("set-cookie"), null);
+  const answer = await signedIn.json() as NativeSignIn;
+  assert.equal(answer.user.id, "password:nora");
+  assert.equal(answer.user.passwordSignIn, true);
+  assert.ok(Date.parse(answer.expiresAt) > Date.now() + 29 * 24 * 3600_000);
+  const bearer = { Authorization: `Bearer ${answer.token}` };
+  assert.equal((await (await f.request("GET", "/api/me", { headers: bearer })).json() as { user: UserProfile }).user.id, "password:nora");
+  // A bearer changes things without a CSRF token, and is listed under Signed-in apps.
+  assert.equal((await f.request("PATCH", "/api/me", { headers: bearer, body: { displayName: "Nora N." } })).status, 200);
+  const devices = await (await f.request("GET", "/api/me/devices", { headers: { Cookie: browserCookie } })).json() as { devices: { name: string }[] };
+  assert.deepEqual(devices.devices.map(device => device.name), ["Nora's iPhone"]);
+  // The token is a bearer's only, never a cookie's.
+  assert.equal((await f.request("GET", "/api/me", { headers: { Cookie: `test-auth=${answer.token}` } })).status, 401);
+
+  // The same answers, and the same count of failures, as the browser's sign-in.
+  for (const body of [{ username: "nora", password: "not the password at all" }, { username: "nobody", password }, { username: "no body", password }]) {
+    const refused = await nativeSignIn(body);
+    assert.equal(refused.status, 401);
+    assert.deepEqual(await refused.json(), { error: "The username or password is incorrect.", code: "invalid_credentials" });
+  }
+  assert.equal(f.sqlite.prepare("SELECT failed_attempts FROM password_credentials WHERE user_id = 'password:nora'").get()!.failed_attempts, 1);
+  assert.equal(await errorCode(await nativeSignIn({ username: "nora", password, inviteToken: "x" })), "invalid_input");
+  assert.equal((await nativeSignIn({ username: "nora", password, deviceName: "\u0000" })).status, 400);
+  // An app with no name for its device leaves it out.
+  assert.equal((await nativeSignIn({ username: "nora", password })).status, 200);
+
+  // Changing the password from the browser signs the app out; so does turning PASSWORD_AUTH off, which hides the route.
+  const changed = await f.request("POST", "/api/me/password", { headers: await f.browser(browserCookie), body: { currentPassword: password, newPassword: "a brand new passphrase" } });
+  assert.equal(changed.status, 200);
+  assert.equal((await f.request("GET", "/api/me", { headers: bearer })).status, 401);
+  const again = await (await nativeSignIn({ username: "nora", password: "a brand new passphrase" })).json() as NativeSignIn;
+  f.env.PASSWORD_AUTH = "false";
+  assert.equal((await f.request("GET", "/api/me", { headers: { Authorization: `Bearer ${again.token}` } })).status, 401);
+  assert.equal((await nativeSignIn({ username: "nora", password: "a brand new passphrase" })).status, 404);
 });
 
 test("changing the password needs the current one and signs out every other browser", async t => {

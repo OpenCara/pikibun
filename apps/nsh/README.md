@@ -31,7 +31,9 @@ workspace and is remembered across GitHub's redirect, as the web app does. The p
 can't: the browser's own file chooser for any file, an image too large for a message drawn again smaller, the query
 GitHub's sign-in comes back with, and GitHub's authorization page for an invite's sign-in.
 
-Native builds sign in to a server you enter: GitHub in the app's own web view, or a test-mode server's token.
+Native builds sign in to a server you enter: GitHub in the app's own web view, a username and password where the
+server allows them (`POST /api/auth/native/password`, for a bearer token listed under Signed-in apps, as GitHub's), or
+a test-mode server's token. New password accounts are made on the web, whose sign-up starts a browser session.
 
 ## Design
 
