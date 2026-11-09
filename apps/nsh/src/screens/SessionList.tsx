@@ -75,9 +75,12 @@ export function SessionList(props: {
   // The pull-to-refresh spinner shows while the reload a pull started runs, and only then: background reloads
   // (polling, opening or leaving a session) keep the list where it is rather than pushing it down under a spinner.
   const refreshing = signal(false);
+  /** The latest pull: an earlier one's reloads finishing don't hide the spinner of a later one still loading. */
+  let pulls = 0;
   function pullToRefresh() {
+    const pull = ++pulls;
     refreshing.set(true);
-    void Promise.all([data.refreshSessions(), data.refreshWorkspaces()]).finally(() => refreshing.set(false));
+    void Promise.all([data.refreshSessions(), data.refreshWorkspaces()]).finally(() => { if (pull === pulls) refreshing.set(false); });
   }
   const inset = () => (props.compact ? 8 : 12);
 
