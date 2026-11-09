@@ -100,6 +100,17 @@ test('GitHub: draft: false marks the open draft ready for review, with the appro
   assert.deepEqual(await failure(openPullRequest(github, githubPin, input)), { status: 502, code: 'git_provider_unavailable' });
 });
 
+test('GitHub: a draft the repository refuses (422 with none open) says so, rather than that GitHub failed', async t => {
+  forge(t, call => {
+    if (call.method === 'POST' && call.url === 'https://api.github.com/repos/owner/repo/pulls') return Response.json({ message: 'Draft pull requests are not supported in this repository.' }, { status: 422 });
+    if (call.method === 'GET' && call.url.startsWith('https://api.github.com/repos/owner/repo/pulls?state=open')) return Response.json([]);
+    return undefined;
+  });
+  const input = { head: 'pikibun/session', base: 'main', title: 'T', body: '' };
+  assert.deepEqual(await failure(openPullRequest(github, githubPin, { ...input, draft: true })), { status: 422, code: 'draft_unsupported' });
+  assert.deepEqual(await failure(openPullRequest(github, githubPin, input)), { status: 502, code: 'git_provider_unavailable' }, 'without a draft, as before');
+});
+
 test('GitHub Enterprise marks drafts ready through its own GraphQL endpoint', async t => {
   const access: RepositoryAccess = { provider: 'github-enterprise', account: { ciphertext: 'c', userId: 'u1',
     credential: { id: 'a', provider: 'github-enterprise', host: 'git.corp.example', organization: '', username: '', token: 'ghe-token' } } };
@@ -147,6 +158,24 @@ test('GitLab marks drafts by title: Draft: to open one, removed (with the approv
   assert.deepEqual(await openPullRequest(access, pin, { head: 'pikibun/s', base: 'main', title: 'Fix the parser', body: 'Finished.', draft: false }),
     { url: 'https://gitlab.com/group/project/-/merge_requests/4', number: 4, created: false, draft: false });
   assert.deepEqual(calls.find(call => call.method === 'PUT')!.body, { title: 'Fix the parser', description: 'Finished.' });
+});
+
+test('a forge that still says draft after being made ready fails, rather than the session taking it for ready', async t => {
+  const access: RepositoryAccess = { provider: 'gitea', account: { ciphertext: 'c', userId: 'u1',
+    credential: { id: 'a', provider: 'gitea', host: 'git.acme.dev', organization: '', username: '', token: 't' } } };
+  const pin: ProviderSessionRepository = { bindingId: 'b5', provider: 'gitea', host: 'git.acme.dev', repositoryId: '42', fullName: 'acme/tools',
+    ref: 'main', commit: 'a'.repeat(40), path: 'git.acme.dev/acme/tools' };
+  // A Gitea whose work-in-progress prefix is its own ("[Do not merge]"): taking ours off leaves it a draft.
+  const item = { number: 5, html_url: 'https://git.acme.dev/acme/tools/pulls/5', title: '[Do not merge] T', draft: true };
+  const calls = forge(t, call => {
+    if (call.method === 'POST' && call.url === 'https://git.acme.dev/api/v1/repos/acme/tools/pulls') return Response.json({}, { status: 409 });
+    if (call.method === 'GET' && call.url === 'https://git.acme.dev/api/v1/repos/acme/tools/pulls/main/s') return Response.json(item);
+    if (call.method === 'PATCH' && call.url === 'https://git.acme.dev/api/v1/repos/acme/tools/pulls/5') return Response.json(item, { status: 201 });
+    return undefined;
+  });
+  assert.deepEqual(await failure(openPullRequest(access, pin, { head: 's', base: 'main', title: 'T', body: 'B', draft: false })),
+    { status: 409, code: 'pull_request_still_draft' });
+  assert.deepEqual(calls.find(call => call.method === 'PATCH')!.body, { title: 'T', body: 'B' });
 });
 
 test('Azure DevOps opens drafts with isDraft and makes them ready with a PATCH', async t => {

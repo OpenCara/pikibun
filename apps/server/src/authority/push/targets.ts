@@ -337,6 +337,16 @@ export async function openPullRequest(access: RepositoryAccess, pin: SessionRepo
   };
   // Only `draft: false` marks an open draft ready; `draft: true` never turns a ready one back into a draft.
   const ready = input.draft === false;
+  /**
+   * The forge's answer to marking it ready, checked: one that still says it is a draft (a Gitea whose work-in-progress
+   * prefixes were changed, say) fails, rather than the session taking it for ready. An empty answer (204) is taken at
+   * its word.
+   */
+  const leftDraft = (answer: unknown, isDraft: (item: Record<string, unknown>) => boolean): void => {
+    if (answer && typeof answer === 'object' && !Array.isArray(answer) && isDraft(answer as Record<string, unknown>)) {
+      fail(409, 'pull_request_still_draft', `${label(target.provider)} still marks the pull request as a draft; make it ready for review there.`);
+    }
+  };
   switch (target.provider) {
     case 'github':
     case 'github-enterprise': {
@@ -348,8 +358,15 @@ export async function openPullRequest(access: RepositoryAccess, pin: SessionRepo
         ...(input.draft ? { draft: true } : {}) }, [422]);
       if (made !== null) { const { node: _node, ...pull } = parse(made); return { ...pull, created: true }; }
       const owner = pin.fullName.split('/')[0]!;
-      const { node, ...open } = parse(await existing(`${target.base}/repos/${pin.fullName}/pulls?state=open&head=${encodeURIComponent(`${owner}:${input.head}`)}&base=${encodeURIComponent(input.base)}`,
-        body => array(target, body)[0]));
+      const found = await existing(`${target.base}/repos/${pin.fullName}/pulls?state=open&head=${encodeURIComponent(`${owner}:${input.head}`)}&base=${encodeURIComponent(input.base)}`,
+        body => array(target, body)[0] ?? null);
+      // GitHub answers 422 both for one already open and for a draft the repository can't have (drafts need a plan
+      // that has them, on private repositories): with none open, a draft that was asked for is the reason.
+      if (found === null) {
+        if (input.draft) fail(422, 'draft_unsupported', 'GitHub refused a draft pull request for this repository; open it without draft: true.');
+        unavailable(target.provider);
+      }
+      const { node, ...open } = parse(found);
       if (!ready || !open.draft) return { ...open, created: false };
       // REST can't take a pull request out of draft: GraphQL's markPullRequestReadyForReview does, by its node id.
       if (typeof node !== 'string' || !/^[A-Za-z0-9_=-]{1,200}$/.test(node)) unavailable(target.provider);
@@ -368,10 +385,11 @@ export async function openPullRequest(access: RepositoryAccess, pin: SessionRepo
     }
     case 'gitlab': {
       // GitLab marks drafts by title, and says so in `draft` (`work_in_progress` before 14).
+      const isDraft = (item: Record<string, unknown>) => item.draft === true || item.work_in_progress === true
+        || (typeof item.title === 'string' && draftPrefix.test(item.title));
       const parse = (value: unknown) => {
         const item = object(target, value);
-        return { url: webURL(target, item.web_url), number: positive(target, item.iid),
-          draft: item.draft === true || item.work_in_progress === true || (typeof item.title === 'string' && draftPrefix.test(item.title)) };
+        return { url: webURL(target, item.web_url), number: positive(target, item.iid), draft: isDraft(item) };
       };
       const made = await created(`${target.base}/projects/${id}/merge_requests`,
         { source_branch: input.head, target_branch: input.base, title: input.draft ? withDraftPrefix(input.title, 'Draft:') : input.title, description: input.body }, [409]);
@@ -379,22 +397,22 @@ export async function openPullRequest(access: RepositoryAccess, pin: SessionRepo
       const open = parse(await existing(`${target.base}/projects/${id}/merge_requests?state=opened&source_branch=${encodeURIComponent(input.head)}&target_branch=${encodeURIComponent(input.base)}`,
         body => array(target, body)[0]));
       if (!ready || !open.draft) return { ...open, created: false };
-      await changed(`${target.base}/projects/${id}/merge_requests/${open.number}`, 'PUT', { title: withoutDraftPrefix(input.title), description: input.body });
+      leftDraft(await changed(`${target.base}/projects/${id}/merge_requests/${open.number}`, 'PUT', { title: withoutDraftPrefix(input.title), description: input.body }), isDraft);
       return { ...open, created: false, draft: false };
     }
     case 'gitea': {
       // Gitea marks drafts by title (its work-in-progress prefixes); newer versions say so in `draft` too.
+      const isDraft = (item: Record<string, unknown>) => item.draft === true || (typeof item.title === 'string' && draftPrefix.test(item.title));
       const parse = (value: unknown) => {
         const item = object(target, value);
-        return { url: webURL(target, item.html_url), number: positive(target, item.number),
-          draft: item.draft === true || (typeof item.title === 'string' && draftPrefix.test(item.title)) };
+        return { url: webURL(target, item.html_url), number: positive(target, item.number), draft: isDraft(item) };
       };
       const made = await created(`${target.base}/repos/${pin.fullName}/pulls`, { head: input.head, base: input.base,
         title: input.draft ? withDraftPrefix(input.title, 'WIP:') : input.title, body: input.body }, [409, 422]);
       if (made !== null) return { ...parse(made), created: true };
       const open = parse(await existing(`${target.base}/repos/${pin.fullName}/pulls/${encodeURIComponent(input.base)}/${encodeURIComponent(input.head)}`, body => body));
       if (!ready || !open.draft) return { ...open, created: false };
-      await changed(`${target.base}/repos/${pin.fullName}/pulls/${open.number}`, 'PATCH', { title: withoutDraftPrefix(input.title), body: input.body });
+      leftDraft(await changed(`${target.base}/repos/${pin.fullName}/pulls/${open.number}`, 'PATCH', { title: withoutDraftPrefix(input.title), body: input.body }), isDraft);
       return { ...open, created: false, draft: false };
     }
     case 'bitbucket': {
@@ -408,7 +426,8 @@ export async function openPullRequest(access: RepositoryAccess, pin: SessionRepo
       const query = encodeURIComponent(`source.branch.name="${input.head}" AND destination.branch.name="${input.base}" AND state="OPEN"`);
       const open = parse(await existing(`${target.base}/repositories/${pin.fullName}/pullrequests?q=${query}`, body => array(target, object(target, body).values)[0]));
       if (!ready || !open.draft) return { ...open, created: false };
-      await changed(`${target.base}/repositories/${pin.fullName}/pullrequests/${open.number}`, 'PUT', { title: input.title, description: input.body, draft: false });
+      leftDraft(await changed(`${target.base}/repositories/${pin.fullName}/pullrequests/${open.number}`, 'PUT', { title: input.title, description: input.body, draft: false }),
+        item => item.draft === true);
       return { ...open, created: false, draft: false };
     }
     case 'azure-devops': {
@@ -428,7 +447,8 @@ export async function openPullRequest(access: RepositoryAccess, pin: SessionRepo
         `&searchCriteria.targetRefName=${encodeURIComponent(`refs/heads/${input.base}`)}&searchCriteria.status=active&api-version=7.1`,
         body => array(target, object(target, body).value)[0]));
       if (!ready || !open.draft) return { ...open, created: false };
-      await changed(`${base}/${open.number}?api-version=7.1`, 'PATCH', { title: input.title, description: input.body, isDraft: false });
+      leftDraft(await changed(`${base}/${open.number}?api-version=7.1`, 'PATCH', { title: input.title, description: input.body, isDraft: false }),
+        item => item.isDraft === true);
       return { ...open, created: false, draft: false };
     }
     case 'git': return noForge();

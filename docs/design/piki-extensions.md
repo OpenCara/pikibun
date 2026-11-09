@@ -483,7 +483,9 @@ fixes the review points it judges valid, then the merge.
     a `PATCH` of the title and body, then GraphQL's `markPullRequestReadyForReview` by its `node_id` (at
     `/api/graphql` on GitHub Enterprise), whose 200 with `errors` is a refusal; GitLab and Gitea mark drafts by title
     (`Draft:`, `WIP:`, taken off again with every such prefix, never down to nothing); Bitbucket `draft`; Azure DevOps
-    `isDraft`. The key is canonical after `base`, and both sides' validators take it, so approvals still compare equal;
+    `isDraft`. The forge's answer to making it ready is checked on each: one still saying draft (a Gitea with prefixes of
+    its own, say) fails as `pull_request_still_draft` rather than passing for ready. GitHub's 422 means both "already
+    open" and "no drafts here"; with none open and a draft asked for, it is `draft_unsupported`. The key is canonical after `base`, and both sides' validators take it, so approvals still compare equal;
     a control plane that predates it refuses the push (400), as for any key it doesn't know. The completion says
     `draft` only for a push that asked, since connectors parse it strictly, and the push summary then says
     `, a draft` or `, ready for review`, which the extension reads back.
@@ -492,7 +494,11 @@ fixes the review points it judges valid, then the merge.
     result where a step is due: the first change in a clone without a pull request (a file tool's path in a directory of
     the worktree holding `.git`, or a `git commit`, `merge`, `rebase` ... there), once per clone; a draft opened, once;
     a pull request made ready, with the time its window ends and the `github_read` and `github_merge` calls for it; a push
-    after that, plain `git push` or `git_push` without a pull request, which starts a new window; a merge. A change
+    after that, plain `git push` or `git_push` without a pull request, which starts a new window, but only one that moved
+    the pull request's own branch (named by the push that opened it; a `git push` naming no refspec pushes the upstream),
+    never one that answered up to date; a merge. The forges' tools count too: `gh pr create`/`ready`/`merge`, `glab mr
+    create`/`update --ready`/`merge`, `az repos pr create`/`update --draft false`/`--status completed`, but not a merge
+    they only queue (`gh --auto`, `az --auto-complete`, glab's "when pipeline succeeds"). A change
     after its merge is new work, with a new draft. Notes go on results the agent reads anyway, so nothing interrupts a
     message, and they never refuse or change what ran. The person's words come first: the prompt leaves the flow out
     where they ask for no pull request or no merge.
