@@ -272,6 +272,30 @@ test("the driver opens a served page, runs the actions, and leaves a screenshot 
   assert.match(reopened?.error ?? "", /ERR_CONNECTION_REFUSED.*only within the same call, started with serve/);
 });
 
+test("a Chromium that starts but never answers is reported with what it printed, not as a page with no title", { skip: !python && "python3 is not installed" }, async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-silent-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const driver = join(root, "pikibun-browser");
+  await writeFile(driver, BROWSER_DRIVER);
+  await chmod(driver, 0o700);
+  // Stuck at start, as one held up by a stalled call can be: it never says a word on the DevTools pipe.
+  const silent = join(root, "chromium");
+  await writeFile(silent, "#!/bin/sh\necho 'stuck before DevTools' >&2\nexec sleep 60\n");
+  await chmod(silent, 0o700);
+  const temporary = join(root, "tmp");
+  await mkdir(temporary);
+  const output = await new Promise<string>(resolve => {
+    const child = spawn(python, ["-I", driver, "--chrome", silent, "--time-limit", "8", JSON.stringify({ url: "about:blank" })],
+      { cwd: root, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root, TMPDIR: temporary } });
+    let text = "";
+    child.stdout.on("data", chunk => { text += chunk; });
+    child.on("close", () => resolve(text));
+  });
+  const report = parseBrowserReport(output);
+  assert.ok(report, output);
+  assert.match(report.error ?? "", /^Chromium did not answer within \d+ seconds of starting: stuck before DevTools/, output);
+});
+
 test("in the Linux sandbox, the driver runs the host's Chromium, given read-only, with the session's own files", { skip: linuxSandboxMissing() ?? ((!chromium && "no Chromium on this host (PIKIBUN_TEST_BROWSER names one)") || undefined) }, async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-browser-sandbox-")));
   t.after(() => rm(root, { recursive: true, force: true }));
