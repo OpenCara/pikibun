@@ -1,3 +1,4 @@
+// Deprecated, to be deleted: the Native Shell client (apps/nsh) replaces this one; new features go there (README.md).
 // First import: the stylesheet declares the cascade layer order before any screen CSS registers a layer.
 import "./styles.css";
 import { StrictMode, useEffect, useState, type MouseEvent } from "react";

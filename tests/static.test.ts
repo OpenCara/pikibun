@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStaticHandler, pageContentSecurityPolicy } from "../apps/server/src/static.ts";
+import { createStaticHandler, detectWebClient, pageContentSecurityPolicy } from "../apps/server/src/static.ts";
 
 // The NSH preview, built by `pnpm build:preview`: an inline loader and content-named files.
 const page = `<!doctype html>\n<html lang="en">\n<head>\n<script>const fetches = new Map();</script><script type="module">import { createPlayer } from "./nsh.89070fe10a.js";</script><script src="./x.js"></script>\n</head><body></body></html>`;
@@ -80,4 +80,16 @@ test("the production React/Electron client keeps its strict script policy and Vi
   }
   const asset = await serve(get('/index-ABCd1234.js'));
   assert.equal(asset.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+});
+
+test("a build is told apart by Native Shell's runtime: NSH has nsh.<hash>.wasm beside its page, React doesn't", async t => {
+  const nsh = await site(t);
+  assert.equal(detectWebClient(nsh), 'nsh');
+  const react = await mkdtemp(join(tmpdir(), "react-"));
+  t.after(() => rm(react, { recursive: true, force: true }));
+  await writeFile(join(react, "index.html"), '<div id="root"></div>');
+  assert.equal(detectWebClient(react), 'web', 'a page without the runtime is React, assets/ or not');
+  await writeFile(join(react, "nsh-math.c2b0234f5a.wasm"), new Uint8Array([0, 97, 115, 109]));
+  assert.equal(detectWebClient(react), 'web', "only Native Shell's own runtime counts, not its other modules");
+  assert.equal(detectWebClient(join(tmpdir(), "no-such-web-build")), 'nsh', 'nothing built yet: the client Pikibun builds');
 });

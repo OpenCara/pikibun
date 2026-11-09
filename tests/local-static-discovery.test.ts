@@ -10,7 +10,7 @@ import { loadLocalState } from "../apps/server/src/local/state.js";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 
-test("a packaged local server discovers React without a manifest or --static-dir, and still recognizes legacy NSH builds", async t => {
+test("a packaged local server discovers its build without --static-dir, React or NSH, and serves each with its own policy", async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-packaged-web-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const dist = join(root, "dist"), web = join(dist, "web");
@@ -45,9 +45,20 @@ test("a packaged local server discovers React without a manifest or --static-dir
     await server.close();
   }
 
+  // The NSH build the published CLI ships: its page, Native Shell's runtime and a web manifest.
   await rm(join(web, "assets"), { recursive: true });
   await writeFile(join(web, "manifest.webmanifest"), '{}');
-  assert.equal(defaultStaticDir(), web, "legacy NSH builds remain discoverable");
+  assert.equal(defaultStaticDir(), web, "NSH builds are discoverable");
+  await writeFile(join(web, "index.html"), '<!doctype html><html><head></head><body>Packaged NSH</body></html>');
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
+  const nsh = await startLocalServer({ stateDir, state });
+  try {
+    const page = await fetch(nsh.origin);
+    assert.match(await page.text(), /<base href="\/">[\s\S]*Packaged NSH/);
+    assert.match(page.headers.get("Content-Security-Policy")!, /'wasm-unsafe-eval'/);
+  } finally {
+    await nsh.close();
+  }
   await rm(join(web, "index.html"));
   assert.equal(defaultStaticDir(), undefined, "a manifest alone is not a client build");
 });

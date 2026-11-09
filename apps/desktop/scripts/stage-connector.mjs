@@ -1,6 +1,6 @@
 // Stages the connector host and the local server for packaging into dist/connector, which electron-builder copies to
 // Resources/connector: the app's build of both (dist/host, see build.mjs), the web app the local server serves (the
-// repository's dist/web, from `pnpm build`), plus their production dependencies, installed exactly as pinned by
+// repository's dist/web, from `pnpm build:web`: the deprecated React client, which `pnpm build` no longer builds), plus their production dependencies, installed exactly as pinned by
 // packages/cli/npm-shrinkwrap.json (the same tree `npx pikibun` installs). Needs the npm registry.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
@@ -15,7 +15,7 @@ const web = join(root, "..", "..", "dist", "web");
 for (const entry of ["desktop-host.mjs", "desktop-server.mjs"]) {
   if (!existsSync(join(host, entry))) throw new Error(`dist/host/${entry} is missing; run \`pnpm run build\` first.`);
 }
-if (!existsSync(join(web, "index.html"))) throw new Error("dist/web is missing: run `pnpm build` at the repository root first.");
+if (!existsSync(join(web, "index.html"))) throw new Error("dist/web is missing: run `pnpm build:web` at the repository root first.");
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, "dist"), { recursive: true });

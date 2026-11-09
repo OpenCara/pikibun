@@ -56,40 +56,27 @@ Each server release (`server-v*` tag) is published as `ghcr.io/opencara/pikibun`
 
 Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load balancer); the app serves plain HTTP. If the proxy sets `X-Forwarded-Proto`/`X-Forwarded-Host`, set `TRUST_PROXY=true`. The proxy must pass WebSocket upgrades on `/api/connectors/socket`, accept request bodies of 32 MiB for dump imports, and route `/.well-known/` to Pikibun if you use `OIDC_SIGNING_KEY`. The server gzips its responses and session event streams itself, and compresses the connector WebSocket for connectors that offer it, so the proxy needs no compression of its own.
 
-## Native Shell Preview
+## Choosing the web client
 
-The production client is the React web app used by Electron (`apps/web`, `dist/web`). The NSH client is experimental
-and built separately into `dist/preview`; `pnpm build` and the Docker image include both. One server can serve both
-without moving, copying or restoring any accounts, hosts or sessions. For pikibun.com, set in the server's `.env`:
+Servers serve the Native Shell client (`apps/nsh`, built by `pnpm build` into `dist/preview`), the only web client the
+Docker image and `pikibun serve` ship. The page gets the policy NSH's web runtime needs (`'wasm-unsafe-eval'`, inline
+and `blob:` scripts).
 
-```dotenv
-APP_ORIGIN=https://pikibun.com
-PREVIEW_ORIGIN=https://preview.pikibun.com
-TRUST_PROXY=true
-```
+> **Upgrading from an image that served the React client:** nothing to change. Both clients use the same API, so
+> switching moves, copies or restores no accounts, hosts or sessions. An `.env` that set `STATIC_DIR=dist/web` must drop
+> it: newer images no longer contain `dist/web`.
 
-Point DNS for `preview.pikibun.com` to the same ingress as `pikibun.com`, provision TLS for both, and proxy both hosts
-to the same Pikibun listener, preserving each host in `X-Forwarded-Host` and setting `X-Forwarded-Proto=https`. For
-example, with Caddy on the same computer:
+The React web client (`apps/web`) is **deprecated** and will be deleted. It is no longer built by `pnpm build`, the
+image or the release workflows; from a source checkout, `pnpm build:web` still builds it into `dist/web`, and
+`STATIC_DIR=dist/web` serves it with its strict script policy. `STATIC_CLIENT` (`web` or `nsh`) overrides which client
+the server takes `STATIC_DIR` for, which it otherwise tells from the build itself. Electron's local server serves the
+React build it bundles.
 
-```caddyfile
-pikibun.com, preview.pikibun.com {
-    reverse_proxy 127.0.0.1:8787
-}
-```
-
-Recreate the container after setting the variables. Only the exact `PREVIEW_ORIGIN` gets NSH; the primary origin
-keeps React and its strict script policy. Preview's API uses the same database and connector hub, but its sign-in
-cookies stay host-only, so sign in separately on each hostname. CSRF checks accept only the origin of the host being
-used, not requests from one client to the other. No cross-origin API access or shared-domain cookie is needed.
-
-Register `https://preview.pikibun.com/api/auth/github/callback` as an additional callback URL of the existing GitHub
-OAuth app before signing in there. Keep the production callback registered; do not enable wildcard callbacks. Other
-OAuth integrations used from preview need their preview callback registered as well.
-
-`PREVIEW_STATIC_DIR` overrides the preview build directory. Leave both preview settings unset to disable it. A
-standalone NSH development server may instead set `STATIC_CLIENT=nsh` and `STATIC_DIR=dist/preview`; neither changes
-the default React client for the production server or Electron's local server.
+A server can also serve the NSH client at a second hostname next to the React one, with `PREVIEW_ORIGIN` (an exact
+HTTPS origin) and optionally `PREVIEW_STATIC_DIR` (`dist/preview`). Route both hosts to the same listener with TLS,
+preserving each host in `X-Forwarded-Host`, and register the second origin's `/api/auth/github/callback` (and other
+OAuth callbacks) too. Its sign-in cookies stay host-only, so people sign in separately on each hostname. pikibun.com
+no longer does this: its deploy removes `PREVIEW_ORIGIN` and `PREVIEW_STATIC_DIR`.
 
 ## Sign-in and GitHub apps
 
@@ -110,10 +97,10 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `VAULT_KEY` | required | Base64url 32-byte key that encrypts stored tokens and secrets; keep it stable, since secrets stored with one key can't be read with another |
 | `HOST`, `PORT` | `0.0.0.0` (`127.0.0.1` with `LOCAL_MODE`), `8787` | Listening address |
 | `TRUST_PROXY` | `false` | Honor `X-Forwarded-Proto`/`X-Forwarded-Host` from a trusted proxy |
-| `STATIC_DIR` | `dist/web` | Production React/Electron web app |
-| `STATIC_CLIENT` | `web` | `nsh` only for a standalone NSH development/test server |
-| `PREVIEW_ORIGIN` | none | Exact HTTPS origin serving NSH with the same backend; register its OAuth callbacks too |
-| `PREVIEW_STATIC_DIR` | `dist/preview` | NSH preview build; requires `PREVIEW_ORIGIN` |
+| `STATIC_DIR` | `dist/preview` | The web client's build: `dist/preview` (Native Shell), or `dist/web` (the deprecated React client, built from source only) |
+| `STATIC_CLIENT` | what `STATIC_DIR` holds | `web` or `nsh`: which client `STATIC_DIR` is, when it can't be told from the build |
+| `PREVIEW_ORIGIN` | none | A second exact HTTPS origin serving NSH with the same backend; register its OAuth callbacks too |
+| `PREVIEW_STATIC_DIR` | `dist/preview` | That origin's NSH build; requires `PREVIEW_ORIGIN` |
 | `DATABASE_URL` | `sqlite:///data/pikibun.sqlite` | Control-plane database |
 | `DATABASE_WAIT_SECONDS` | `60` | How long start-up retries an unreachable database |
 | `STORAGE_URL` | none | Session backup storage; none means no backups |

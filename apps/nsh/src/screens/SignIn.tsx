@@ -181,7 +181,7 @@ function SignInForm(props: { inviteToken?: string }) {
               </View>
             }>
             <Input testID="server-input" value={server()} onChange={event => server.set(event.value)} autoCapitalize="none" autoCorrect={false} keyboardType="url"
-              placeholder="https://preview.pikibun.com" accessibilityLabel="Server address" style={inputStyle()} />
+              placeholder="https://pikibun.com" accessibilityLabel="Server address" style={inputStyle()} />
             <If when={"error" in parsed() ? (parsed() as { error: string }).error : null}>
               {error => <Small tone="danger">{error()}</Small>}
             </If>

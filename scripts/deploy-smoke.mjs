@@ -21,19 +21,19 @@ export async function checkDeployment(origin, client, expectedVersion) {
   const csp = page.headers.get('Content-Security-Policy') || '';
   let assets;
   if (client === 'web') {
-    assert.match(html, /id=["']root["']/, 'Production must serve React');
-    assert.match(csp, /(?:^|;\s*)script-src 'self';/, 'Production must retain its strict script policy');
+    assert.match(html, /id=["']root["']/, 'The web client must be React');
+    assert.match(csp, /(?:^|;\s*)script-src 'self';/, 'The React client must retain its strict script policy');
     assert.doesNotMatch(csp, /wasm-unsafe-eval/);
     assets = [...html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g)].map(match => match[1]);
     assert.ok(assets.some(asset => asset.endsWith('.js')), 'Production JavaScript is missing');
   } else {
     assert.equal(client, 'nsh');
-    assert.match(html, /<base href=["']\/["']>/, 'Preview must use the NSH web base');
+    assert.match(html, /<base href=["']\/["']>/, 'The NSH client must use its web base');
     assert.match(html, /id=["']app["']/);
-    assert.match(csp, /wasm-unsafe-eval/, 'Preview must have the NSH runtime policy');
+    assert.match(csp, /wasm-unsafe-eval/, 'The NSH client must have its runtime policy');
     assets = [...new Set(html.match(/(?:nsh|app|host)\.[0-9a-f]{10}\.(?:wasm|js)/g) || [])];
-    assert.ok(assets.some(asset => asset.endsWith('.wasm')), 'Preview WASM runtime is missing');
-    assert.ok(assets.some(asset => asset.endsWith('.js')), 'Preview JavaScript is missing');
+    assert.ok(assets.some(asset => asset.endsWith('.wasm')), 'The NSH WASM runtime is missing');
+    assert.ok(assets.some(asset => asset.endsWith('.js')), 'The NSH JavaScript is missing');
   }
   for (const asset of assets) {
     const response = await get(asset);
@@ -46,14 +46,14 @@ export async function checkDeployment(origin, client, expectedVersion) {
 }
 
 export async function main() {
-  const targets = [[process.env.DEPLOY_URL, 'web'], [process.env.DEPLOY_PREVIEW_URL, 'nsh']].filter(([url]) => url);
-  assert.ok(targets.length, 'Set DEPLOY_URL and/or DEPLOY_PREVIEW_URL');
+  const origin = process.env.DEPLOY_URL;
+  const client = process.env.DEPLOY_CLIENT || 'nsh';
+  assert.ok(origin, 'Set DEPLOY_URL');
+  assert.ok(client === 'web' || client === 'nsh', 'DEPLOY_CLIENT must be nsh or web');
   const expected = process.env.DEPLOY_IMAGE?.match(/:([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)(?:@sha256:[0-9a-f]{64})?$/)?.[1];
   for (let attempt = 1; attempt <= 30; attempt++) {
     try {
-      const health = [];
-      for (const [origin, client] of targets) health.push(await checkDeployment(origin, client, expected));
-      if (health.length === 2) assert.equal(health[0].version, health[1].version, 'Production and preview must run the same release');
+      await checkDeployment(origin, client, expected);
       return;
     } catch (error) {
       if (attempt === 30) throw error;

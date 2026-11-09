@@ -63,8 +63,8 @@ jobs:
       # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
       # lacks `lifecycle`, and the page's Content-Security-Policy applies), and only a browser shows it.
       - run: pnpm test:client-web
-      # The production React/Electron web client under its strict script policy.
-      - run: pnpm test:web
+      # The NSH web client into dist/preview. The deprecated React web client and Electron app (apps/web, apps/desktop)
+      # are no longer built or released here.
       - run: pnpm build
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build
@@ -83,8 +83,11 @@ jobs:
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"passwordAuth":true'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"githubSignup":"invite"'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"passwordSignup":"invite"'
+          # The image's only client, NSH, at the server's own origin with its runtime policy, and at a preview origin too.
           curl -fsS http://127.0.0.1:8787/ | grep -qi '<!doctype html'
-          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*script-src 'self';"
+          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
+          curl -fsS http://127.0.0.1:8787/ | grep -q '<base href="/">'
+          curl -fsSI http://127.0.0.1:8787/sw.js | grep -qi 'content-type: text/javascript'
           curl -fsSI -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: preview.pikibun.example' http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
           curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: preview.pikibun.example' http://127.0.0.1:8787/ | grep -q '<base href="/">'
           curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: pikibun.example' http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'

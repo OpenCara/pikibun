@@ -34,8 +34,8 @@ test("deployment checks verify both clients, their policies, startup assets and 
 });
 
 test("a healthy backend serving the wrong client cannot pass deployment checks", async t => {
-  await assert.rejects(checkDeployment(await fixture(t, "nsh"), "web", "0.26.0"), /Production must serve React/);
-  await assert.rejects(checkDeployment(await fixture(t, "web"), "nsh", "0.26.0"), /Preview must use the NSH/);
+  await assert.rejects(checkDeployment(await fixture(t, "nsh"), "web", "0.26.0"), /web client must be React/);
+  await assert.rejects(checkDeployment(await fixture(t, "web"), "nsh", "0.26.0"), /NSH client must use its web base/);
 });
 
 test("a missing startup asset cannot pass as the SPA fallback", async t => {

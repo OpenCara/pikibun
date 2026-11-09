@@ -25,50 +25,66 @@ else if (a.some(x => x.includes('.State.Health'))) console.log('healthy');
 else if (a.some(x => x.includes('.Config.Image'))) console.log('previous-image');
 else if (a[0] === 'inspect' || (a[0] === 'image' && a[1] === 'inspect')) console.log('sha256:test-image');
 `, { mode: 0o755 });
-  return { root, run: (preview?: string) => spawnSync("bash", [script, image, root, ...(preview === undefined ? [] : [preview])], {
+  return { root, run: (client?: string) => spawnSync("bash", [script, image, root, ...(client === undefined ? [] : [client])], {
     cwd: root, env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, DEPLOY_HEALTH_TIMEOUT: "1" }, encoding: "utf8", timeout: 10_000,
   }) };
 }
 
-test("Actions deployment records both the image and explicit preview origin without changing other settings", { skip: process.platform === "win32" }, async t => {
-  const f = await fixture(t, "APP_ORIGIN=https://pikibun.com\nSESSION_SECRET=keep-this-setting\n");
-  const result = f.run("https://preview.pikibun.com");
+test("Actions deployment serves NSH from the origin, removes the preview origin and keeps other settings", { skip: process.platform === "win32" }, async t => {
+  const f = await fixture(t, "APP_ORIGIN=https://pikibun.com\nPREVIEW_ORIGIN=https://preview.pikibun.com\nPREVIEW_STATIC_DIR=dist/preview\nSESSION_SECRET=keep-this-setting\n");
+  const result = f.run("nsh");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const env = await readFile(join(f.root, ".env"), "utf8");
-  assert.match(env, /^PREVIEW_ORIGIN=https:\/\/preview.pikibun.com$/m);
+  assert.match(env, /^STATIC_CLIENT=nsh$/m);
+  assert.match(env, /^STATIC_DIR=dist\/preview$/m);
+  assert.doesNotMatch(env, /^PREVIEW_/m);
   assert.match(env, /^PIKIBUN_IMAGE=ghcr.io\/opencara\/pikibun:0.26.0$/m);
+  assert.match(env, /^APP_ORIGIN=https:\/\/pikibun.com$/m);
   assert.match(env, /^SESSION_SECRET=keep-this-setting$/m);
 });
 
-test("deployments without preview configuration retain the server's existing preview origin", { skip: process.platform === "win32" }, async t => {
+test("deploying the React client again replaces the NSH settings", { skip: process.platform === "win32" }, async t => {
+  const f = await fixture(t, "STATIC_CLIENT=nsh\nSTATIC_DIR=dist/preview\n");
+  const result = f.run("web");
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const env = await readFile(join(f.root, ".env"), "utf8");
+  assert.match(env, /^STATIC_CLIENT=web$/m);
+  assert.match(env, /^STATIC_DIR=dist\/web$/m);
+  assert.equal(env.match(/^STATIC_CLIENT=/gm)?.length, 1);
+});
+
+test("deployments without a client retain the server's existing client settings", { skip: process.platform === "win32" }, async t => {
   const f = await fixture(t, "PREVIEW_ORIGIN=https://preview.example.com\n");
   const result = f.run();
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(await readFile(join(f.root, ".env"), "utf8"), /^PREVIEW_ORIGIN=https:\/\/preview.example.com$/m);
+  const env = await readFile(join(f.root, ".env"), "utf8");
+  assert.match(env, /^PREVIEW_ORIGIN=https:\/\/preview.example.com$/m);
+  assert.doesNotMatch(env, /^STATIC_/m);
 });
 
 test("updating an existing symlinked environment file preserves its link and does not duplicate settings", { skip: process.platform !== "linux" }, async t => {
-  const f = await fixture(t, "PIKIBUN_IMAGE=old-image\nPREVIEW_ORIGIN=https://old.example.com\n");
+  const f = await fixture(t, "PIKIBUN_IMAGE=old-image\nSTATIC_CLIENT=web\nPREVIEW_ORIGIN=https://old.example.com\n");
   const target = join(f.root, "private.env");
   await writeFile(target, await readFile(join(f.root, ".env")));
   await rm(join(f.root, ".env"));
   await symlink(target, join(f.root, ".env"));
-  const result = f.run("https://preview.pikibun.com");
+  const result = f.run("nsh");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.ok((await lstat(join(f.root, ".env"))).isSymbolicLink());
   const env = await readFile(target, "utf8");
-  assert.equal(env.match(/^PREVIEW_ORIGIN=/gm)?.length, 1);
-  assert.match(env, /^PREVIEW_ORIGIN=https:\/\/preview.pikibun.com$/m);
+  assert.equal(env.match(/^STATIC_CLIENT=/gm)?.length, 1);
+  assert.match(env, /^STATIC_CLIENT=nsh$/m);
+  assert.doesNotMatch(env, /^PREVIEW_ORIGIN=/m);
   assert.match(env, /^PIKIBUN_IMAGE=ghcr.io\/opencara\/pikibun:0.26.0$/m);
 });
 
-test("invalid preview origins fail before Docker or environment changes", { skip: process.platform === "win32" }, async t => {
+test("unknown clients fail before Docker or environment changes", { skip: process.platform === "win32" }, async t => {
   const original = "APP_ORIGIN=https://pikibun.com\n";
   const f = await fixture(t, original);
-  for (const origin of ["http://preview.example.com", "https://preview.example.com/", "https://preview.example.com\nOTHER_SETTING=value", "https://preview.example.com|anything"]) {
-    const result = f.run(origin);
+  for (const client of ["react", "https://preview.example.com", "nsh\nOTHER_SETTING=value", "nsh|anything"]) {
+    const result = f.run(client);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /exact HTTPS origin/);
+    assert.match(result.stderr, /CLIENT must be nsh or web/);
     assert.equal(await readFile(join(f.root, ".env"), "utf8"), original);
   }
   await assert.rejects(readFile(join(f.root, "docker.log")), { code: "ENOENT" });

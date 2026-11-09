@@ -1,3 +1,5 @@
+// Deprecated, to be deleted with apps/web: the Native Shell client's desktop builds (apps/nsh) replace this app; it gets
+// fixes, not new features (README.md).
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";

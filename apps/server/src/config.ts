@@ -4,7 +4,7 @@ import { ConnectorHubRegistry } from './connector-hub.js';
 import { openDatabase } from './db/index.js';
 import { openStorage } from './storage/index.js';
 import type { Env } from './types.js';
-import type { WebClient } from './static.js';
+import { detectWebClient, type WebClient } from './static.js';
 
 export interface ServerConfig {
   env: Env;
@@ -12,9 +12,9 @@ export interface ServerConfig {
   port: number;
   /** Honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a TLS-terminating proxy. */
   trustProxy: boolean;
-  /** The production React/Electron web client (`dist/web`). */
+  /** The web client's build: the Native Shell client (`dist/preview`) by default, or the deprecated React one (`dist/web`). */
   staticDir: string;
-  /** Standalone NSH development/test servers may opt in; production defaults to the React client. */
+  /** The client `staticDir` holds: `STATIC_CLIENT`, else what the build is (static.ts detectWebClient). */
   staticClient?: WebClient;
   /** Optional, exact origin serving the NSH preview, with the same API and separate host-only cookies. */
   preview?: { origin: string; staticDir: string };
@@ -86,7 +86,8 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
       if (env.LOCAL_OWNER_ID !== undefined && !/^github:[1-9][0-9]*$/.test(env.LOCAL_OWNER_ID)) throw new ConfigurationError('LOCAL_OWNER_ID must be a GitHub user ID such as github:12345.');
     }
   }
-  const staticClient = processEnv.STATIC_CLIENT || 'web';
+  const staticDir = resolve(processEnv.STATIC_DIR || 'dist/preview');
+  const staticClient = processEnv.STATIC_CLIENT || detectWebClient(staticDir);
   if (staticClient !== 'web' && staticClient !== 'nsh') throw new ConfigurationError('STATIC_CLIENT must be "web" or "nsh".');
   let preview: ServerConfig['preview'];
   if (processEnv.PREVIEW_ORIGIN) {
@@ -124,7 +125,7 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     env, port, databaseUrl, storageUrl,
     host: listenHost,
     trustProxy: trustProxyValue === 'true',
-    staticDir: resolve(processEnv.STATIC_DIR || 'dist/web'), staticClient,
+    staticDir, staticClient,
     ...(preview ? { preview } : {}),
   };
 }

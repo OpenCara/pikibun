@@ -24,7 +24,9 @@ test("preview configuration is explicit: an exact, distinct HTTPS origin, never 
     LOCAL_CLAIM_SECRET: "x".repeat(43), PREVIEW_ORIGIN: preview }), /PREVIEW_ORIGIN/);
   const config = await loadConfig({ ...environment, PREVIEW_ORIGIN: preview });
   try {
-    assert.equal(config.staticClient, "web");
+    // Unset, the server serves the NSH build (dist/preview), whether it's built yet or not.
+    assert.equal(config.staticDir, resolve("dist/preview"));
+    assert.equal(config.staticClient, "nsh");
     assert.deepEqual(config.preview, { origin: preview, staticDir: resolve("dist/preview") });
   } finally {
     await config.env.CONNECTOR_HUB!.close();

@@ -2,7 +2,7 @@ import { platform, signal, Storage, untracked, type Accessor } from "nsh";
 import { ApiError, createApi, errorMessage, type Api, type RequestOptions, type UserProfile } from "../shared";
 import { clearDrafts } from "./drafts";
 import { createPkce } from "./pkce";
-import { DEFAULT_ORIGIN, usesBrowserSession } from "./server";
+import { currentOrigin, DEFAULT_ORIGIN, usesBrowserSession } from "./server";
 
 /** Why the server refused a new account (its SIGNUP setting), by the code it returns to the app's callback. */
 const signInRefusals: Record<string, string> = {
@@ -166,7 +166,9 @@ export async function restore(): Promise<void> {
     return;
   }
   const [storedOrigin, token, expiresAt] = await Promise.all([Storage.getItem(ORIGIN_KEY), Storage.getItem(TOKEN_KEY), Storage.getItem(EXPIRES_KEY)]);
-  const origin = storedOrigin ?? DEFAULT_ORIGIN;
+  const origin = storedOrigin == null ? DEFAULT_ORIGIN : currentOrigin(storedOrigin);
+  // A server that moved keeps its sign-ins: they go to its new address, with the same token, from now on.
+  if (storedOrigin != null && origin !== storedOrigin) await Storage.setItem(ORIGIN_KEY, origin);
   if (!token) return setAuth({ status: "signedOut", origin });
   try {
     await establish(origin, token, expiresAt);

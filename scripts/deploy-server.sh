@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Runs on the deployment server, over Tailscale SSH from .github/workflows/deploy-server.yml:
-#   ssh user@host bash -s -- IMAGE DIR [PREVIEW_ORIGIN] < scripts/deploy-server.sh
+#   ssh user@host bash -s -- IMAGE DIR [CLIENT] < scripts/deploy-server.sh
 # DIR holds the server's docker-compose.yml (whose pikibun service has `image: ${PIKIBUN_IMAGE...}`) and its .env.
+# CLIENT, when given, is the web client the server's origin serves: nsh (the Native Shell build, dist/preview) or web
+# (the React build, dist/web). It is written to .env as STATIC_CLIENT and STATIC_DIR, and any separate preview origin
+# (PREVIEW_ORIGIN, PREVIEW_STATIC_DIR) is removed: the one origin serves the one client. Without it, .env keeps them.
 # Pulls IMAGE, records it as PIKIBUN_IMAGE in .env (so a later `docker compose up -d` keeps it), recreates the pikibun
 # service with it and waits for the container's health check. Migrations run when the new container starts, so a failed
 # deploy is not rolled back automatically: an older server may not read the migrated database.
@@ -9,14 +12,18 @@ set -euo pipefail
 
 image=${1:?image}
 dir=${2:?directory}
-preview_origin=${3:-}
+client=${3:-}
 timeout=${DEPLOY_HEALTH_TIMEOUT:-180}
 
-# Only an exact HTTPS hostname/port may be written to the environment file; never a path or shell/env syntax.
-if [ -n "$preview_origin" ] && ! [[ "$preview_origin" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]+)?$ ]]; then
-  echo "PREVIEW_ORIGIN must be an exact HTTPS origin without a path or trailing slash." >&2
-  exit 1
-fi
+case "$client" in
+  '') ;;
+  nsh) static_dir=dist/preview ;;
+  web) static_dir=dist/web ;;
+  *)
+    echo "CLIENT must be nsh or web." >&2
+    exit 1
+    ;;
+esac
 
 cd "$dir"
 [ -f .env ] || { echo "No .env in $(pwd): set up the server as docs/self-hosting.md's \"Docker\" says first." >&2; exit 1; }
@@ -41,9 +48,17 @@ set_env() {
     printf '\n%s=%s\n' "$key" "$value" >> .env
   fi
 }
+unset_env() {
+  sed -i --follow-symlinks "/^$1=/d" .env
+}
 set_env PIKIBUN_IMAGE "$image"
-# Unconfigured installations retain their existing preview setting; production Actions supplies this explicitly.
-if [ -n "$preview_origin" ]; then set_env PREVIEW_ORIGIN "$preview_origin"; fi
+# Unconfigured installations keep their existing client settings; production Actions supplies the client explicitly.
+if [ -n "$client" ]; then
+  set_env STATIC_CLIENT "$client"
+  set_env STATIC_DIR "$static_dir"
+  unset_env PREVIEW_ORIGIN
+  unset_env PREVIEW_STATIC_DIR
+fi
 
 # The compose file must take the image from PIKIBUN_IMAGE, or the service would keep running another one.
 if ! docker compose config --images | grep -qxF "$image"; then
