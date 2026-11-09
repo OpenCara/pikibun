@@ -34,7 +34,7 @@ A **GitHub account** can sign in with its username and a password too, once it s
 - Changing it with the current password signs out every other browser and app signed in as you. **Remove password** takes you back to GitHub only, and signs out the browsers and apps that signed in with the password.
 - Turning `PASSWORD_AUTH` off ends the sign-ins made with a password at once; your GitHub sign-ins go on, and **Settings → Password** still lets you remove the password you set. The operator's `--reset-password` works for your username as well.
 - A password account holds no GitHub token, so it can't bind or clone **github.com** repositories (not even ones a teammate bound: a session reads repositories with its owner's own access), push with its own GitHub account, or use the GitHub tools. It works with every other Git provider, GitHub Enterprise Server included, through personal access tokens under **Git accounts**. Its Git author email starts as `<username>@users.pikibun.invalid`; set your own under **Identity**.
-- The iPhone and iPad app still signs in with GitHub only; the Mac app shows the server's sign-in page, password included.
+- The iPhone and iPad app signs in with your username and password too, and is then listed under **Signed-in apps** as a GitHub sign-in is; the Mac app shows the server's sign-in page, password included. Create a new password account on the web first: the iPhone and iPad app only signs in to one.
 - Turning `PASSWORD_AUTH` off signs every password account out at once and refuses their sign-ins; turning it on again lets them back in.
 
 **Settings → Profile** holds:

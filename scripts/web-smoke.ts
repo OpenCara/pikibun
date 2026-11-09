@@ -265,8 +265,8 @@ try {
   }
 
   await page.goto(`${origin}/`);
-  // React's smoke made a workspace, so it starts a session; NSH's has none, so it welcomes as the web app's home does.
-  await page.waitForText(react ? "What should we work on?" : "Welcome to Pikibun");
+  // Everyone has a private workspace, pinned first, so both clients open on a new session there.
+  await page.waitForText("What should we work on?");
   console.log("✓ signed in with the browser's session, the session list shows");
 
   if (!react) {
@@ -344,15 +344,9 @@ try {
     await page.type("Password", "correct horse battery staple");
     await page.type("Confirm password", "correct horse battery staple");
     await page.click("Create account");
-    await page.waitForText("Welcome to Pikibun");
-    console.log("✓ a new account made with a password, signed in, is welcomed");
-
-    // Its first workspace, from the home.
-    await page.click("New workspace");
-    await page.type("The field studio", "Smoke workspace");
-    await page.click("Create workspace");
+    // A new account starts in its own private workspace, made for it, where a session needs no source.
     await page.waitForText("What should we work on?");
-    console.log("✓ the home makes a first workspace and starts a session there");
+    console.log("✓ a new account made with a password, signed in, starts a session in its private workspace");
 
     // A file attached through the browser's own file chooser (the page's host), as NSH's picker takes only photos; then
     // an image, which shows as a thumbnail (a blob: URL the page's policy allows).

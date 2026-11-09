@@ -5,7 +5,9 @@ import { bundledToolDefinitions } from '../../../packages/shared/src/tool-defini
 import { adminManagedRoles } from '../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { defaultWorkspaceExtensions, extensionPackageKey } from '../../../packages/shared/src/host-extensions.js';
-import { auditAfterChange, auditStatement, requireMember } from './authority/index.js';
+import {
+  auditAfterChange, auditStatement, personalWorkspaceName, personalWorkspaceSQL, requireMember, requireSharedWorkspace,
+} from './authority/index.js';
 import { modelDefinition } from './db.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
 import type { AgentRow, Env, ModelRow, WorkerEnv } from './types.js';
@@ -225,34 +227,66 @@ export async function migratedAgentVersion(env: Env, ownerId: string, source: Ag
   ], 1);
 }
 
+/** The statements that create a workspace owned by `ownerId`, in order, as New workspace does. */
+function newWorkspaceStatements(env: Env, workspace: { id: string; name: string; ownerId: string }, createdAt: string, detail: Record<string, unknown> = {}): Query<never>[] {
+  return [
+    env.DB.query<never>('INSERT INTO workspaces (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)')
+      .bind(workspace.id, workspace.name, workspace.ownerId, createdAt),
+    env.DB.query<never>("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)")
+      .bind(workspace.id, workspace.ownerId, createdAt),
+    auditStatement(env, workspace.ownerId, 'workspace.create', workspace.id, null, detail),
+    // Popular Pi extensions, turned off, for its owners and admins to turn on.
+    ...defaultWorkspaceExtensions.map((source, index) => env.DB.query<never>(`INSERT INTO workspace_extensions
+        (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, 0, 'approval', '{}', ?, ?)`)
+      .bind(workspace.id, extensionPackageKey(source), source, index + 1, workspace.ownerId, createdAt)),
+    // The creator's hosts are theirs wherever they work: connect them here, privately.
+    ...ownerHostStatements(env, workspace.ownerId, workspace.id),
+  ];
+}
+
+/**
+ * Every user has a private workspace of their own, made the first time they list their workspaces: existing accounts
+ * get theirs on their next visit, new ones on their first, whichever way they signed up. Two lists at once may both try;
+ * the user's single personal_workspaces row lets one win, and the other's whole batch rolls back.
+ */
+export async function ensurePersonalWorkspace(env: Env, userId: string): Promise<void> {
+  if (await env.DB.query('SELECT 1 AS found FROM personal_workspaces WHERE user_id = ?').bind(userId).first()) return;
+  const workspace = { id: id(), name: personalWorkspaceName, ownerId: userId };
+  const createdAt = now();
+  try {
+    await env.DB.batch([
+      ...newWorkspaceStatements(env, workspace, createdAt, { personal: true }),
+      env.DB.query<never>('INSERT INTO personal_workspaces (user_id, workspace_id, created_at) VALUES (?, ?, ?)')
+        .bind(userId, workspace.id, createdAt),
+    ]);
+  } catch (error) {
+    // A concurrent list made it first.
+    if (error instanceof ConstraintError && await env.DB.query('SELECT 1 AS found FROM personal_workspaces WHERE user_id = ?').bind(userId).first()) return;
+    throw error;
+  }
+}
+
 export function registerCatalog(app: Hono<WorkerEnv>): void {
+  // The caller's workspaces, their private one first (made here if they have none yet), then the others oldest first.
   app.get('/api/workspaces', async c => {
-    const result = await c.env.DB.query<Workspace>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role
+    const userId = c.get('auth').userId;
+    await ensurePersonalWorkspace(c.env, userId);
+    const rows = await c.env.DB.query<Omit<Workspace, 'personal'> & { personal: number }>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
+        CASE WHEN p.workspace_id IS NULL THEN 0 ELSE 1 END AS personal
       FROM workspaces w
       INNER JOIN workspace_members member ON member.workspace_id = w.id AND member.user_id = ?
-      ORDER BY w.created_at, w.id`).bind(c.get('auth').userId).all();
-    return c.json({ workspaces: result });
+      LEFT JOIN personal_workspaces p ON p.workspace_id = w.id AND p.user_id = member.user_id
+      ORDER BY CASE WHEN p.workspace_id IS NULL THEN 1 ELSE 0 END, w.created_at, w.id`).bind(userId).all();
+    const workspaces: Workspace[] = rows.map(row => ({ ...row, personal: Number(row.personal) === 1 }));
+    return c.json({ workspaces });
   });
 
   app.post('/api/workspaces', async c => {
     const body = await jsonObject(c);
     onlyFields(body, ['name']);
-    const workspace = { id: id(), name: nameInput(body.name), ownerId: c.get('auth').userId, role: 'owner' as const };
-    const createdAt = now();
-    await c.env.DB.batch([
-      c.env.DB.query('INSERT INTO workspaces (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)')
-        .bind(workspace.id, workspace.name, workspace.ownerId, createdAt),
-      c.env.DB.query<never>("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)")
-        .bind(workspace.id, workspace.ownerId, createdAt),
-      auditStatement(c.env, workspace.ownerId, 'workspace.create', workspace.id),
-      // Popular Pi extensions, turned off, for its owners and admins to turn on.
-      ...defaultWorkspaceExtensions.map((source, index) => c.env.DB.query<never>(`INSERT INTO workspace_extensions
-          (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
-          VALUES (?, ?, ?, ?, 0, 'approval', '{}', ?, ?)`)
-        .bind(workspace.id, extensionPackageKey(source), source, index + 1, workspace.ownerId, createdAt)),
-      // The creator's hosts are theirs wherever they work: connect them here, privately.
-      ...ownerHostStatements(c.env, workspace.ownerId, workspace.id),
-    ]);
+    const workspace = { id: id(), name: nameInput(body.name), ownerId: c.get('auth').userId, role: 'owner' as const, personal: false };
+    await c.env.DB.batch(newWorkspaceStatements(c.env, workspace, now()));
     return c.json({ workspace }, 201);
   });
 
@@ -264,20 +298,24 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
     const body = await jsonObject(c);
     onlyFields(body, ['name']);
     const name = nameInput(body.name);
-    const result = await c.env.DB.batch<Workspace>([
+    const result = await c.env.DB.batch<Omit<Workspace, 'personal'> & { personal: number }>([
       // The authority is checked again in the write: a demotion racing the rename changes nothing.
       c.env.DB.query<never>(`UPDATE workspaces SET name = ?
         WHERE id = ? AND EXISTS (SELECT 1 FROM workspace_members actor
           WHERE actor.workspace_id = workspaces.id AND actor.user_id = ? AND actor.role IN ('owner', 'admin'))`)
         .bind(name, workspaceId, actorId),
       auditAfterChange(c.env, actorId, 'workspace.renamed', workspaceId, {}),
-      c.env.DB.query<Workspace>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role
+      // As the workspace list shows it, private or not: a private workspace's owner renames it as any owner does.
+      c.env.DB.query<Omit<Workspace, 'personal'> & { personal: number }>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
+          CASE WHEN p.workspace_id IS NULL THEN 0 ELSE 1 END AS personal
         FROM workspaces w
         INNER JOIN workspace_members member ON member.workspace_id = w.id AND member.user_id = ?
+        LEFT JOIN personal_workspaces p ON p.workspace_id = w.id AND p.user_id = member.user_id
         WHERE w.id = ?`).bind(actorId, workspaceId),
     ]);
-    const workspace = result[2].results[0];
-    if (result[0].changes !== 1 || !workspace) fail(403, 'forbidden', 'Workspace administrator access is required.');
+    const row = result[2].results[0];
+    if (result[0].changes !== 1 || !row) fail(403, 'forbidden', 'Workspace administrator access is required.');
+    const workspace: Workspace = { ...row, personal: Number(row.personal) === 1 };
     return c.json({ workspace });
   });
 
@@ -298,6 +336,8 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
     const role = body.role;
     if (typeof role !== 'string' || !(assignableWorkspaceRoles as readonly string[]).includes(role)) fail(400, 'invalid_input', 'Invalid role.');
     const previous = await requireMemberManagement(c.env, workspaceId, actorId, targetId, role as AssignableWorkspaceRole);
+    // A private workspace is its owner's alone.
+    await requireSharedWorkspace(c.env, workspaceId);
     // Saving a member with the role they hold changes nothing, so it neither writes nor disturbs the workspace's sessions.
     if (previous === role) return c.json({ members: await membersStatement(c.env, workspaceId, actorId).all() });
     const user = await c.env.DB.query<{ id: string }>('SELECT id FROM users WHERE id = ?').bind(targetId).first();
@@ -310,7 +350,7 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
         INNER JOIN workspace_members actor ON actor.workspace_id = w.id AND actor.user_id = ?
         INNER JOIN users u ON u.id = ?
         LEFT JOIN workspace_members target ON target.workspace_id = w.id AND target.user_id = u.id
-        WHERE w.id = ? AND u.id <> w.owner_id AND (target.role IS NULL OR target.role <> 'owner')
+        WHERE w.id = ? AND u.id <> w.owner_id AND (target.role IS NULL OR target.role <> 'owner') AND NOT ${personalWorkspaceSQL('w.id')}
           AND ((actor.role = 'owner' AND actor.user_id = w.owner_id)
             OR (actor.role = 'admin' AND ? IN (${adminManagedRoles.map(item => `'${item}'`).join(', ')}) AND (target.role IS NULL OR target.role IN (${adminManagedRoles.map(item => `'${item}'`).join(', ')}))))
         ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = excluded.role

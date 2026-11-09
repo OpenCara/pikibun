@@ -58,7 +58,8 @@ export function AppProvider({ user, setUser, signOut, children }: { user: UserPr
     const timer = window.setInterval(() => { if (!document.hidden) refreshSessions(); }, working ? 10_000 : 30_000);
     return () => window.clearInterval(timer);
   }, [refreshSessions, working]);
-  const list = workspaces.data?.workspaces ?? [];
+  // The user's private workspace is pinned first (the server lists it first too), then the rest in the server's order.
+  const list = useMemo(() => [...(workspaces.data?.workspaces ?? [])].sort((a, b) => Number(Boolean(b.personal)) - Number(Boolean(a.personal))), [workspaces.data]);
   const current = list.find(workspace => workspace.id === workspaceId) ?? list[0] ?? null;
   const sorted = useMemo(() => [...(sessions.data?.sessions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [sessions.data]);
   const value: AppState = {

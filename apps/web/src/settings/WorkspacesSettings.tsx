@@ -12,7 +12,7 @@ import { href } from "../router";
 import { DocumentSources, useWorkspaceSources } from "../sources";
 import { ReadAsControl, WorkspaceConnections, connectionLabel, gitConnectionFor, useWorkspaceConnections } from "../workspace-connections";
 import type { WorkspaceConnection } from "../../../../packages/shared/src/workspace-connections";
-import { Alert, Button, CardBody, Combobox, CopyField, DropdownMenu, EmptyState, Feedback, Field, IdentityBadge, LinkButton, PageLoading, RelativeTime, ResourceState, Row, Section, Sheet, StatusBadge, StatusDot, confirmDialog, useAction, useResource } from "../ui";
+import { Alert, Button, CardBody, Combobox, CopyField, DropdownMenu, EmptyState, Feedback, Field, IdentityBadge, LinkButton, PageLoading, RelativeTime, ResourceState, Row, Section, Sheet, StatusBadge, StatusDot, WorkspaceBadge, confirmDialog, useAction, useResource } from "../ui";
 import type { WorkspaceInviteLink, WorkspaceJoinRequest } from "../../../../packages/shared/src/invites";
 import { memberPerson, userIdFromInput, username, usernameWithId, type WorkspaceMember } from "../../../../packages/client/src/usernames";
 import { NetworkAccess } from "./NetworkAccess";
@@ -57,7 +57,8 @@ export function WorkspacesSettings({ id }: { id?: string }) {
   </>;
   return <>
     <Section title="Workspaces" info="A shared home for your repositories, people, agents and sessions" action={<Button variant="outline" size="sm" icon="plus" onClick={() => setCreating(true)}>New workspace</Button>}>
-      {workspaces.map(workspace => <Row key={workspace.id} leading={<IdentityBadge name={workspace.name} id={workspace.id} />} title={workspace.name} hint={roleLabel[workspaceRole(workspace, user)]} href={href({ name: "settings", section: "workspaces", id: workspace.id })} chevron />)}
+      {workspaces.map(workspace => <Row key={workspace.id} leading={<WorkspaceBadge workspace={workspace} />} title={workspace.name}
+        hint={workspace.personal ? "Your private workspace, only for you" : roleLabel[workspaceRole(workspace, user)]} href={href({ name: "settings", section: "workspaces", id: workspace.id })} chevron />)}
     </Section>
     {sheet}
   </>;
@@ -89,11 +90,11 @@ function WorkspaceDetail({ user, workspace }: { user: UserProfile; workspace: Wo
     <NetworkAccess workspace={workspace} admin={admin} />
     <WorkspaceExtensions workspace={workspace} userId={user.id} />
     <TranscriptSettings workspace={workspace} admin={admin} />
-    <ApprovalSettings workspace={workspace} admin={admin} />
+    {!workspace.personal && <ApprovalSettings workspace={workspace} admin={admin} />}
     <ChildSessionSettings workspace={workspace} admin={admin} />
     <AttachmentSettings workspace={workspace} admin={admin} />
     <WorkspaceDatabaseSection workspace={workspace} owner={role === "owner"} />
-    <Members workspace={workspace} admin={admin} owner={role === "owner"} />
+    {!workspace.personal && <Members workspace={workspace} admin={admin} owner={role === "owner"} />}
     {admin && <DataExport workspace={workspace} />}
   </>;
 }
@@ -121,6 +122,8 @@ function General({ workspace, admin, role }: { workspace: Workspace; admin: bool
     <Row title="Name" trailing={<span className="inline"><span>{workspace.name}</span>
       {admin && <Button variant="outline" size="sm" icon="pencil" disabled={action.busy} onClick={() => setRenaming(true)}>Rename</Button>}</span>} />
     <Row title="Your role" trailing={<StatusBadge tone={admin ? "success" : "neutral"}>{roleLabel[role]}</StatusBadge>} />
+    {workspace.personal && <Row leading={<WorkspaceBadge workspace={workspace} />} title="Private workspace"
+      hint="Every account has one, pinned at the top of the sidebar. Nobody else can join it, and its sessions need no source: run an agent here on your own hosts, privately. Create a workspace to work with others" />}
     {!renaming && action.notice && <CardBody><Feedback notice={action.notice} /></CardBody>}
     <Sheet open={renaming} title="Rename workspace" onClose={() => { if (!action.busy) setRenaming(false); }} footer={<>
       <Button variant="ghost" disabled={action.busy} onClick={() => setRenaming(false)}>Cancel</Button>
@@ -152,7 +155,8 @@ function Setup({ user, workspace, admin, sourceCount }: { user: UserProfile; wor
   // Only show the checklist once every signal is known, so it never flashes in and out.
   if (sourceCount === null || !connectors.data || sessionsLoading) return null;
   const steps = [
-    { label: "Add a source", done: sourceCount > 0, hint: admin ? undefined : "An owner or admin does this", onClick: () => document.getElementById("workspace-repositories")?.scrollIntoView({ behavior: "smooth" }) },
+    // A private workspace's sessions need no source.
+    ...workspace.personal ? [] : [{ label: "Add a source", done: sourceCount > 0, hint: admin ? undefined : "An owner or admin does this", onClick: () => document.getElementById("workspace-repositories")?.scrollIntoView({ behavior: "smooth" }) }],
     { label: "Pair a host", done: connectors.data.connectors.some(connector => !connector.revokedAt && connector.online && (connector.ownerId === user.id || connector.workspaceIds.includes(workspace.id))), link: href({ name: "settings", section: "hosts" }) },
     { label: "Start a session", done: sessions.some(session => session.workspaceId === workspace.id), link: href({ name: "new", workspaceId: workspace.id }) },
   ];

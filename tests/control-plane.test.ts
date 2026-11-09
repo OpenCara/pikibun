@@ -264,7 +264,7 @@ test('workspace rename: its owner and admins rename it, everyone else is refused
   // The owner renames it; the name is trimmed, and the response is the workspace as its list shows it.
   const renamed = await owner.request('PATCH', path, { name: '  Field studio  ' });
   assert.equal(renamed.status, 200);
-  assert.deepEqual((await renamed.json() as { workspace: unknown }).workspace, { id: workspace.id, name: 'Field studio', ownerId: owner.user.id, role: 'owner' });
+  assert.deepEqual((await renamed.json() as { workspace: unknown }).workspace, { id: workspace.id, name: 'Field studio', ownerId: owner.user.id, role: 'owner', personal: false });
   // An admin renames it too, and every member sees the new name.
   const byAdmin = await admin.request('PATCH', path, { name: 'Studio' });
   assert.equal(byAdmin.status, 200);
@@ -286,6 +286,13 @@ test('workspace rename: its owner and admins rename it, everyone else is refused
   const audited = f.sqlite.prepare("SELECT actor_id AS actorId, detail_json AS detail FROM audit WHERE workspace_id = ? AND action = 'workspace.renamed'").all(workspace.id) as { actorId: string; detail: string }[];
   assert.deepEqual(audited.map(item => item.actorId).sort(), [owner.user.id, admin.user.id].sort());
   assert.ok(audited.every(item => item.detail === '{}'));
+
+  // Its owner renames their private workspace too, which stays private; nobody else can, not even to learn it exists.
+  const own = (await (await owner.request('GET', '/api/workspaces')).json() as { workspaces: { id: string; personal: boolean }[] }).workspaces.find(item => item.personal)!;
+  const privately = await owner.request('PATCH', `/api/workspaces/${own.id}`, { name: 'Sketchbook' });
+  assert.equal(privately.status, 200);
+  assert.deepEqual((await privately.json() as { workspace: unknown }).workspace, { id: own.id, name: 'Sketchbook', ownerId: owner.user.id, role: 'owner', personal: true });
+  assert.equal((await admin.request('PATCH', `/api/workspaces/${own.id}`, { name: 'Taken over' })).status, 404);
 });
 
 test('AES-GCM vault binds ciphertext to the account and rejects tampering', async () => {

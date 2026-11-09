@@ -40,8 +40,9 @@ export function HostAdminsSection({ connector, refresh }: { connector: Connector
   const action = useAction();
   const owner = connector.role === "owner";
   const admins = connector.admins ?? [];
-  // Candidates come from the workspaces the host is connected to, where the owner can see members.
-  const connected = workspaces.filter(workspace => (connector.connectedWorkspaceIds ?? connector.workspaceIds).includes(workspace.id));
+  // Candidates come from the workspaces the host is connected to, where the owner can see members (a private workspace
+  // has none but its owner).
+  const connected = workspaces.filter(workspace => !workspace.personal && (connector.connectedWorkspaceIds ?? connector.workspaceIds).includes(workspace.id));
   const [workspaceId, setWorkspaceId] = useState("");
   const source = connected.find(workspace => workspace.id === workspaceId) ?? connected[0];
   const members = useMembers(owner ? source?.id : undefined);
