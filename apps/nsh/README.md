@@ -130,14 +130,18 @@ React web client's address for it) makes this computer one of your hosts:
   computer: its page opens in the browser, a device code or API key is asked here, and the credential stays in Pi's
   configuration), **Prerequisites** with what to run for each missing one, and the host's recent activity.
 
-The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command (`npm install -g
-pikibun@latest`, which the page offers when it's missing or too old) as `pikibun host --stdio`
+The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command as `pikibun host --stdio`
 (`apps/runner/src/host-cli.ts` and `app-host.ts`), and talks to it with JSON lines
 on its stdin and stdout (`desktop-protocol.ts`), where pairing codes and API keys travel; never its command line.
+When the command is missing or too old, the page's **Install pikibun** or **Update pikibun** button runs npm, with the
+owner's Node.js, into a `cli` folder of the app's data directory (`npm install --prefix <data dir>/cli pikibun@latest`),
+not npm's global folder: nothing needs sudo or a PATH change, and the copy is the app's to update. npm's output goes to
+the host's activity, and the command to run in a terminal (`npm install -g pikibun@latest`) shows only when that fails.
 NSH starts a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,
-nvm's and npm's directories, so the owner's login shell starts it (`$SHELL -ilc 'exec pikibun host --stdio'`, as
-Terminal would; zsh, bash or sh, else the platform's), and on Windows `cmd /d /c pikibun host --stdio`, which finds
-npm's `pikibun.cmd`. `nsh.json` grants exactly those programs (`capabilities.process`), by name, since it is every
+nvm's and npm's directories, so the owner's login shell starts it (`$SHELL -ilc 'PATH=<data dir>/cli/node_modules/.bin:"$PATH"; export PATH; exec pikibun host --stdio'`,
+as Terminal would; zsh, bash or sh, else the platform's), and on Windows cmd (`cmd /d /c if exist
+cli\node_modules\.bin\pikibun.cmd (…) else pikibun host --stdio`, named from the data directory, its working
+directory). Either way the app's own copy wins, and a `pikibun` installed from a terminal runs where it has none. `nsh.json` grants exactly those programs (`capabilities.process`), by name, since it is every
 target's and an absolute path of one platform isn't one on another (NSH refuses to build or start with one), and the
 environment the connector needs. The host uses `pikibun connect`'s state directory, so a computer paired from a terminal carries over, and only
 one of them runs at a time. Hosting lasts while the app is open, and starts again at the next launch if it was running
