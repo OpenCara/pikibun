@@ -1,2 +1,2 @@
-# Shell scripts run in Linux (and in WSL2, from a Windows checkout of the desktop app): line feeds only.
+# Shell scripts run in Linux (and in WSL2, from a Windows checkout): line feeds only.
 *.sh text eol=lf

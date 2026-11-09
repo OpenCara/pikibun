@@ -1,7 +1,6 @@
-// The web app's theme tokens (apps/web/src/styles.css, @layer tokens), under the CSS custom properties' own names, so
-// the two clients look alike: theme.ts builds this app's palettes from them, and tests/nsh-theme.test.ts fails when a
-// value here differs from the stylesheet's. Change a color there, and here. A translucent `rgb(r g b / a%)` is written
-// as #rrggbbaa; the shadows are one layer (NSH draws a single box shadow), so they are this app's own.
+// The app's theme tokens, under the names the React web client's stylesheet gave its CSS custom properties: theme.ts
+// builds this app's palettes from them. Colors are #rrggbb, or #rrggbbaa when translucent; the shadows are one layer
+// (NSH draws a single box shadow).
 
 export type ThemeName = "light" | "dark" | "pikibun";
 

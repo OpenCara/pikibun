@@ -327,29 +327,6 @@ test("the Windows runner and helper are valid modules, and job limits are checke
   assert.throws(() => validWindowsLimits({ memoryBytes: 1 << 30, processes: 64, cpuPercent: 0 }), /CPU/);
 });
 
-test("the Windows sandbox's steps run on real Node: the CLI's own, never a desktop app's Electron executable", () => {
-  assert.equal(sandboxNodePath(), process.execPath, "the CLI runs on Node");
-  // In Electron, process.execPath is the app itself, which (its RunAsNode fuse off) would only open the app again.
-  const inElectron = (environment: Record<string, string>) => {
-    const script = `Object.defineProperty(process, "versions", { value: { ...process.versions, electron: "44.8.0" } });
-const { sandboxNodePath } = await import(${JSON.stringify(new URL("../apps/runner/src/platform.ts", import.meta.url).href)});
-const first = sandboxNodePath() ?? null;
-// Kept while the variable that found it stays (and the file is there); a changed variable is asked again.
-const again = sandboxNodePath() ?? null;
-process.env.PIKIBUN_SANDBOX_NODE = ${JSON.stringify(join(tmpdir(), "no-such-node.exe"))};
-process.stdout.write(JSON.stringify([first, again, sandboxNodePath() ?? null]));`;
-    const run = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, ...environment } });
-    assert.equal(run.status, 0, run.stderr);
-    return JSON.parse(run.stdout) as (string | null)[];
-  };
-  if (process.platform === "win32") {
-    // A launcher on PATH or named by the variable is resolved to node.exe itself, whose folder the container is granted.
-    const [found, kept, changed] = inElectron({ PIKIBUN_SANDBOX_NODE: process.execPath });
-    assert.equal(found?.toLowerCase(), process.execPath.toLowerCase());
-    assert.equal(kept, found);
-    assert.equal(changed, null, "a changed PIKIBUN_SANDBOX_NODE is looked at again");
-    assert.deepEqual(inElectron({ PIKIBUN_SANDBOX_NODE: join(tmpdir(), "no-such-node.exe") })[0], null);
-  } else {
-    assert.deepEqual(inElectron({}), [null, null, null], "only native Windows looks for Node beside an Electron app");
-  }
+test("the Windows sandbox's steps run on the connector's own Node", () => {
+  assert.equal(sandboxNodePath(), process.execPath);
 });

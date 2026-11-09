@@ -1,6 +1,5 @@
-// What a host's window in the desktop app and a server's Settings page list of its prerequisites (the connector's
-// HostInspection). Generic over the entries, so it needs nothing of the connector: the web app, the desktop app's
-// renderer and tests share it at runtime.
+// What the app's This Computer lists of a host's prerequisites (the connector's HostInspection). Generic over the
+// entries, so it needs nothing of the connector.
 
 export interface ListedPrerequisite<T> {
   entry: T;

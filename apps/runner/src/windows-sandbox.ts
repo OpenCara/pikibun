@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { egressPort, type HelperBackend, type HelperContext, type HelperLaunch, type HelperLayout } from "./helper-workspace.js";
 import { NODE_HELPER, NODE_HELPER_KINDS } from "./node-helper.js";
-import { gitForWindowsRoot, SANDBOX_NODE_HINT, SANDBOX_SHELL_HINT, sandboxNodePath, sandboxShellPath } from "./platform.js";
+import { gitForWindowsRoot, SANDBOX_SHELL_HINT, sandboxNodePath, sandboxShellPath } from "./platform.js";
 import { mxcEntry, mxcInstallHint, validWindowsLimits, type WindowsJobLimits } from "./sandbox-backend.js";
 import type { SandboxRequest } from "./sandbox.js";
 import { WindowsJob } from "./windows-job.js";
@@ -197,7 +197,6 @@ export class WindowsBackend implements HelperBackend {
     const bash = sandboxShellPath();
     if (!bash) throw new Error(`The Windows sandbox needs busybox-w32 as its shell (Git for Windows' bash can't start in the process container): ${SANDBOX_SHELL_HINT}`);
     const node = sandboxNodePath();
-    if (!node) throw new Error(`The Windows sandbox needs Node.js 24 or newer to run its steps: ${SANDBOX_NODE_HINT}`);
     this.#node = node;
     this.#runtime = options.runtime;
     this.#sdk = sdk;

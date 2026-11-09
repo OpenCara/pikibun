@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStaticHandler, detectWebClient, pageContentSecurityPolicy } from "../apps/server/src/static.ts";
+import { createStaticHandler, pageContentSecurityPolicy, webBuild } from "../apps/server/src/static.ts";
 
-// The NSH preview, built by `pnpm build:preview`: an inline loader and content-named files.
+// The NSH client, built by `pnpm build`: an inline loader and content-named files.
 const page = `<!doctype html>\n<html lang="en">\n<head>\n<script>const fetches = new Map();</script><script type="module">import { createPlayer } from "./nsh.89070fe10a.js";</script><script src="./x.js"></script>\n</head><body></body></html>`;
 
 async function site(t: test.TestContext) {
@@ -22,7 +22,7 @@ const get = (path: string) => new Request(`https://pikibun.example${path}`);
 const directive = (policy: string, name: string) => policy.split("; ").find(item => item.startsWith(`${name} `));
 
 test("the page's policy lets Native Shell's web runtime start, and no more", () => {
-  const policy = pageContentSecurityPolicy('nsh');
+  const policy = pageContentSecurityPolicy();
   // Its blob modules, the import map it inserts (no hash or nonce: they would turn 'unsafe-inline' off) and WebAssembly.
   assert.equal(directive(policy, "script-src"), "script-src 'self' blob: 'unsafe-inline' 'wasm-unsafe-eval'");
   assert.doesNotMatch(policy, /'unsafe-eval'|'sha256-|'nonce-|\*/, "no eval, no hashes or nonces, no wildcard");
@@ -33,13 +33,13 @@ test("the page's policy lets Native Shell's web runtime start, and no more", () 
 });
 
 test("serves the client at the root: files as they are, everything else as its page", async t => {
-  const serve = createStaticHandler(await site(t), 'nsh');
+  const serve = createStaticHandler(await site(t));
 
   const index = await serve(get("/"));
   assert.equal(index.status, 200);
   const html = await index.text();
   assert.match(html, /<head>\n<base href="\/">/, "relative URLs resolve from the root whatever the path");
-  assert.equal(index.headers.get("content-security-policy"), pageContentSecurityPolicy('nsh'));
+  assert.equal(index.headers.get("content-security-policy"), pageContentSecurityPolicy());
   assert.equal(index.headers.get("cache-control"), "no-cache");
 
   const wasm = await serve(get("/nsh.4bda023b65.wasm"));
@@ -56,7 +56,7 @@ test("serves the client at the root: files as they are, everything else as its p
 });
 
 test("answers HEAD without a body, and says so when the client isn't built", async t => {
-  const serve = createStaticHandler(await site(t), 'nsh');
+  const serve = createStaticHandler(await site(t));
   const head = await serve(new Request("https://pikibun.example/", { method: "HEAD" }));
   assert.equal(head.status, 200);
   assert.equal(await head.text(), "");
@@ -65,31 +65,14 @@ test("answers HEAD without a body, and says so when the client isn't built", asy
   assert.match(await missing.text(), /pnpm build/);
 });
 
-test("the production React/Electron client keeps its strict script policy and Vite's immutable assets", async t => {
-  const root = await site(t);
-  const html = '<!doctype html><html><head><script type="module" src="/index-ABCd1234.js"></script></head></html>';
-  await writeFile(join(root, 'index.html'), html);
-  await writeFile(join(root, 'index-ABCd1234.js'), 'export {};');
-  const serve = createStaticHandler(root);
-  for (const path of ['/', '/index.html', '/settings']) {
-    const response = await serve(get(path));
-    assert.equal(await response.text(), html, 'no Native Shell bootstrap or base is added');
-    const policy = response.headers.get('content-security-policy')!;
-    assert.equal(directive(policy, 'script-src'), "script-src 'self'");
-    assert.doesNotMatch(policy, /wasm-unsafe-eval|script-src[^;]*unsafe-inline/);
-  }
-  const asset = await serve(get('/index-ABCd1234.js'));
-  assert.equal(asset.headers.get('cache-control'), 'public, max-age=31536000, immutable');
-});
-
-test("a build is told apart by Native Shell's runtime: NSH has nsh.<hash>.wasm beside its page, React doesn't", async t => {
-  const nsh = await site(t);
-  assert.equal(detectWebClient(nsh), 'nsh');
-  const react = await mkdtemp(join(tmpdir(), "react-"));
-  t.after(() => rm(react, { recursive: true, force: true }));
-  await writeFile(join(react, "index.html"), '<div id="root"></div>');
-  assert.equal(detectWebClient(react), 'web', 'a page without the runtime is React, assets/ or not');
-  await writeFile(join(react, "nsh-math.c2b0234f5a.wasm"), new Uint8Array([0, 97, 115, 109]));
-  assert.equal(detectWebClient(react), 'web', "only Native Shell's own runtime counts, not its other modules");
-  assert.equal(detectWebClient(join(tmpdir(), "no-such-web-build")), 'nsh', 'nothing built yet: the client Pikibun builds');
+test("a build is Native Shell's when its runtime, nsh.<hash>.wasm, is beside its page", async t => {
+  assert.equal(webBuild(await site(t)), "nsh");
+  const other = await mkdtemp(join(tmpdir(), "react-"));
+  t.after(() => rm(other, { recursive: true, force: true }));
+  assert.equal(webBuild(other), "none", "nothing built yet");
+  await writeFile(join(other, "index.html"), '<div id="root"></div>');
+  assert.equal(webBuild(other), "other", "a page without the runtime, such as the removed React client's");
+  await writeFile(join(other, "nsh-math.c2b0234f5a.wasm"), new Uint8Array([0, 97, 115, 109]));
+  assert.equal(webBuild(other), "other", "only Native Shell's own runtime counts, not its other modules");
+  assert.equal(webBuild(join(tmpdir(), "no-such-web-build")), "none");
 });

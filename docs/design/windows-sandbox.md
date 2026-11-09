@@ -6,11 +6,10 @@ native Windows without a sandbox (`--unsafe-no-sandbox`); not yet run on either 
 decision is in [Choosing](#choosing-across-windows-linux-and-macos-from-the-requirements-alone). Native Windows is refused today
 (`apps/runner/src/connect-setup.ts`), and Windows hosts run the connector inside WSL2.
 
-The Windows desktop app offers both for each server's host: **WSL2** (the default; the app runs the connector inside a
-distribution) or **Native Windows**, which is this sandbox, through the desktop host's `experimentalSandbox` request,
-with the CLI's default limits, or unsandboxed with consent while its prerequisites are missing. See
-[the app's README](../../apps/desktop/README.md#windows). The Mac app likewise offers each host **macOS sandbox**
-(Seatbelt, through the same request) or **None** (unsandboxed with consent, the default).
+The app's This Computer (`pikibun host --stdio`) runs this sandbox on native Windows through the host's
+`experimentalSandbox` request, with the CLI's default limits, or unsandboxed with consent while its prerequisites are
+missing. On a Mac it offers **macOS sandbox** (Seatbelt, through the same request) or **None** (unsandboxed with
+consent, the default). The removed Electron app also offered WSL2 for each server's host.
 
 This note sets out what a native backend has to guarantee, the Windows primitives that can provide it, how three
 open-source sandboxes build on those primitives, and a recommended path. Sources read for it:
@@ -165,7 +164,8 @@ its window), so the host fell back to unsandboxed with consent. Steps now run on
 `platform.ts`): the CLI's own, or in the app `PIKIBUN_SANDBOX_NODE`, `node` on PATH or `%ProgramFiles%\nodejs\node.exe`,
 asked for its own `process.execPath` so launchers (Scoop, Volta and winget shims) resolve to the `node.exe` whose folder
 the container is granted. It is a prerequisite of the app's native sandbox, with a setup action (winget's
-`OpenJS.NodeJS.LTS`); the MXC SDK's install needs Node.js and npm anyway.
+`OpenJS.NodeJS.LTS`); the MXC SDK's install needs Node.js and npm anyway. With the Electron app removed, the connector
+always runs on Node.js (the CLI, or `pikibun host` for the app), so steps run on its own again and that lookup is gone.
 
 ## What the Linux sandbox guarantees today
 

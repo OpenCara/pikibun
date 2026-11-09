@@ -2,8 +2,8 @@ declare const __PIKIBUN_VERSION__: string | undefined;
 
 /**
  * The release this build is, as its build script stamps it: the `pikibun` package's version in the CLI's bundle
- * (packages/cli/scripts/build.mjs), which runs the connector and the local server, and `desktop <version>` in the
- * desktop app's (apps/desktop/scripts/build.mjs). Undefined in development and tests, which run the sources unbundled.
+ * (packages/cli/scripts/build.mjs), which runs the connector and the local server (the former Electron app's stamped
+ * `desktop <version>`). Undefined in development and tests, which run the sources unbundled.
  * The server image is told its version by PIKIBUN_VERSION instead (the Dockerfile), since it builds with plain esbuild.
  */
 export const buildVersion: string | undefined = typeof __PIKIBUN_VERSION__ === "string" ? __PIKIBUN_VERSION__ : undefined;

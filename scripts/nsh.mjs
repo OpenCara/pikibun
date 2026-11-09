@@ -3,7 +3,7 @@
  * Runs the Native Shell CLI the client (apps/nsh) is built with, at the version pinned here, in apps/nsh:
  *
  *   node scripts/nsh.mjs <nsh arguments...>      # e.g. check, test, run --target ios
- *   node scripts/nsh.mjs --build-web [out]       # the web app into dist/web (or out), as the server serves it
+ *   node scripts/nsh.mjs --build-web [out]       # the web app into dist/preview (or out), as the server serves it
  *
  * The CLI is `NSH_BIN` when set; otherwise the pinned release, downloaded once into .cache/nsh/<version> (Linux x86_64,
  * Apple-silicon macOS and x86_64 Windows, which NSH publishes) and checked against its SHA-256; otherwise `nsh` on PATH.
@@ -120,8 +120,8 @@ function run(bin, args) {
   return result.status ?? 1;
 }
 
-/** Packages the web app into `out` (dist/web by default): the static site the server and `pikibun serve` serve. */
-export async function buildWeb(out = path.join(repository, "dist", "web")) {
+/** Packages the web app into `out` (dist/preview by default): the static site the server and `pikibun serve` serve. */
+export async function buildWeb(out = path.join(repository, "dist", "preview")) {
   const bin = await nshBinary();
   const staging = path.join(repository, "dist", ".nsh-web");
   rmSync(staging, { recursive: true, force: true });
@@ -132,8 +132,7 @@ export async function buildWeb(out = path.join(repository, "dist", "web")) {
   if (!site || !existsSync(path.join(staging, site, "index.html"))) throw new Error(`nsh package wrote no site into ${staging}`);
   // Firefox and older Safari: the import map before the first module (longbridge/nsh#582).
   fixWebSite(path.join(staging, site));
-  // The service worker that shows the notifications the server pushes, and their icon (apps/nsh/web, as the deprecated
-  // React web app's public/ has them): notifications on this device work the same in both web clients.
+  // The service worker that shows the notifications the server pushes, and their icon (apps/nsh/web).
   for (const name of ["sw.js", "favicon.svg"]) cpSync(path.join(app, "web", name), path.join(staging, site, name));
   rmSync(out, { recursive: true, force: true });
   mkdirSync(path.dirname(out), { recursive: true });

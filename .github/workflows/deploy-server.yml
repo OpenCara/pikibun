@@ -123,6 +123,5 @@ jobs:
         if: steps.config.outputs.configured == 'true' && vars.DEPLOY_URL != ''
         env:
           DEPLOY_URL: ${{ vars.DEPLOY_URL }}
-          DEPLOY_CLIENT: nsh
           DEPLOY_IMAGE: ${{ steps.image.outputs.name }}
         run: node scripts/deploy-smoke.mjs

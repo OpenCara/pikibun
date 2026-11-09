@@ -1,6 +1,6 @@
 # Signing in and your profile
 
-Pikibun signs people in with GitHub, and asks GitHub for the `read:user user:email repo workflow` scopes. That token is kept encrypted on the server and used to read your repositories, open your pull requests and act on GitHub for your sessions; it reaches a host only when a push uses your own account. A browser sign-in (the Mac app's too) lasts 7 days, an iPhone or iPad app sign-in 30 days. Where the operator allows it, people can also sign in with a [username and password](#username-and-password).
+Pikibun signs people in with GitHub, and asks GitHub for the `read:user user:email repo workflow` scopes. That token is kept encrypted on the server and used to read your repositories, open your pull requests and act on GitHub for your sessions; it reaches a host only when a push uses your own account. A browser sign-in lasts 7 days, an app's sign-in 30 days. Where the operator allows it, people can also sign in with a [username and password](#username-and-password).
 
 ## Who can create an account
 
@@ -10,7 +10,7 @@ The first sign-in creates an account, as far as the operator's `SIGNUP` setting 
 - `invite`: only someone who opens a workspace's [invite link](workspaces.md#invite-links-and-pending-members) and signs in, or signs up, from it. The new account asks to join that workspace in the same step, so an owner or admin still accepts them before they see anything. A link turned off or replaced admits nobody new, and while 200 people wait to join a workspace its link creates no more accounts. Unset, `SIGNUP` means this for passwords, and the [Docker image](self-hosting.md#docker) sets it, for GitHub too.
 - `off`: nobody new, apart from the operator's own: the GitHub accounts `ADMIN_USER_IDS` lists, and password accounts made with `--create-admin` (see [Administration](self-hosting.md#administration)).
 
-Existing accounts sign in whatever `SIGNUP` says; it decides only who may be added. In every mode, `ADMIN_USER_IDS`'s GitHub accounts can sign up, so a server's administrators can always set it up. Someone signing up through an invite link where `SIGNUP=open` asks to join its workspace too. The iPhone, iPad and Mac apps can't open invite links, so where `SIGNUP=invite` a new person creates their account through the link in a browser first, then signs in on the app. A refused sign-in keeps nothing: no account, and not the token GitHub issued.
+Existing accounts sign in whatever `SIGNUP` says; it decides only who may be added. In every mode, `ADMIN_USER_IDS`'s GitHub accounts can sign up, so a server's administrators can always set it up. Someone signing up through an invite link where `SIGNUP=open` asks to join its workspace too. The apps can't open invite links, so where `SIGNUP=invite` a new person creates their account through the link in a browser first, then signs in on the app. A refused sign-in keeps nothing: no account, and not the token GitHub issued.
 
 ## Your username
 
@@ -34,7 +34,7 @@ A **GitHub account** can sign in with its username and a password too, once it s
 - Changing it with the current password signs out every other browser and app signed in as you. **Remove password** takes you back to GitHub only, and signs out the browsers and apps that signed in with the password.
 - Turning `PASSWORD_AUTH` off ends the sign-ins made with a password at once; your GitHub sign-ins go on, and **Settings → Password** still lets you remove the password you set. The operator's `--reset-password` works for your username as well.
 - A password account holds no GitHub token, so it can't bind or clone **github.com** repositories (not even ones a teammate bound: a session reads repositories with its owner's own access), push with its own GitHub account, or use the GitHub tools. It works with every other Git provider, GitHub Enterprise Server included, through personal access tokens under **Git accounts**. Its Git author email starts as `<username>@users.pikibun.invalid`; set your own under **Identity**.
-- The iPhone and iPad app signs in with your username and password too, and is then listed under **Signed-in apps** as a GitHub sign-in is; the Mac app shows the server's sign-in page, password included. Create a new password account on the web first: the iPhone and iPad app only signs in to one.
+- The apps sign in with your username and password too, and are then listed under **Signed-in apps** as a GitHub sign-in is. Create a new password account on the web first: the apps only sign in to one.
 - Turning `PASSWORD_AUTH` off signs every password account out at once and refuses their sign-ins; turning it on again lets them back in.
 
 **Settings → Profile** holds:
@@ -42,7 +42,7 @@ A **GitHub account** can sign in with its username and a password too, once it s
 - **Identity**: **Display name**, **Git author name** and **Git author email**. Commits in sessions you own use this identity; new sessions pick up saved changes.
 - **Environment**: up to 32 non-secret `APP_` variables (for example `APP_PROJECT=web`) sent to the host of every session you own. Values are at most 2,048 characters, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE_KEY` or `API_KEY` are refused: credentials belong in Git accounts or in Pi on the host.
 - **Git accounts**: your GitHub sign-in plus personal access tokens for other Git providers (see [Repositories and Git accounts](repositories.md)).
-- **Signed-in apps**: the iPhone and iPad apps signed in as you, each of which you can sign out. The Mac app signs in as a browser does, so it isn't listed here; **Sign out** in it ends its sign-in.
+- **Signed-in apps**: the apps signed in as you, each of which you can sign out.
 - **Account**: your **Username**, your **User ID** (owners add you to workspaces with it) and **Sign out**.
 
 **Settings → Password**, where the server takes passwords (or your account still has one), shows how you sign in (your username, GitHub, and whether you have a password) and sets, changes or removes your password, as above.

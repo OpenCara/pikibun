@@ -206,8 +206,9 @@ test("a relative state directory still names its database and backups correctly"
   t.after(() => process.chdir(previous));
   const state = await loadLocalState("server", { port: await freePort() });
   const web = join(parent, "web");
-  await mkdir(join(web, "assets"), { recursive: true });
+  await mkdir(web, { recursive: true });
   await writeFile(join(web, "index.html"), "<!doctype html>");
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
   const server = await startLocalServer({ stateDir: "server", state, staticDir: web });
   await server.close();
   assert.ok((await stat(join(parent, "server", "pikibun.sqlite"))).isFile());
@@ -219,7 +220,7 @@ test("pikibun serve's server pairs this computer as its owner's host once claime
   const state = await loadLocalState(stateDir, { port: await freePort() });
   const web = await directory(t);
   await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
-  await mkdir(join(web, "assets"));
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
   // Test mode lets the host offer the fixture model; everything else is the local server as `pikibun serve` runs it.
   const testMode = { TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: "t".repeat(43), TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString() };
   const hostOptions = {
@@ -292,7 +293,7 @@ test("shared, the same state serves others at its public origin: no claim link, 
   await loadLocalState(stateDir, { port });
   const web = await directory(t);
   await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
-  await mkdir(join(web, "assets"));
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
   await assert.rejects(startLocalServer({ stateDir, state: await loadLocalState(stateDir), staticDir: web, mode: "shared" }), /Set up sharing first/);
   const state = await loadLocalState(stateDir, { shared: sharedBase });
   const server = await startLocalServer({ stateDir, state, staticDir: web, mode: "shared" });
@@ -365,7 +366,7 @@ test("running for its owner alone after sharing pins its owner: the one recorded
   const stateDir = join(await directory(t), "server");
   const web = await directory(t);
   await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
-  await mkdir(join(web, "assets"));
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
   await loadLocalState(stateDir, { port: await freePort() });
   const shared = { ...sharedBase, admins: ["github:4242", "password:admin"] };
   const insert = (env: Env, id: number) => env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
@@ -398,7 +399,7 @@ test("this computer pairs again for a shared server's new owner, and keeps the p
   const state = await loadLocalState(stateDir, { port: await freePort() });
   const web = await directory(t);
   await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
-  await mkdir(join(web, "assets"));
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
   const testMode = { TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: "t".repeat(43), TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString() };
   const local = await startLocalServer({ stateDir, state, staticDir: web, extraEnv: testMode });
   t.after(() => local.close());
@@ -430,7 +431,7 @@ test("sharing a Pikibun its owner had claimed pins them before anyone else can s
   const stateDir = join(await directory(t), "server");
   const web = await directory(t);
   await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
-  await mkdir(join(web, "assets"));
+  await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
   await loadLocalState(stateDir, { port: await freePort() });
   const insert = (env: Env, id: number, at: string) => env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
     VALUES (?, ?, 'u', 'U', 'U', 'u@example.test', '{}', 'github', ?)`).bind(`github:${id}`, String(id), at).run();

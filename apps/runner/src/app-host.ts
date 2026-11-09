@@ -4,18 +4,16 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { createConnector, controlPlaneOrigin, type LocalConnector } from "./connector.js";
 import { assertConnectorPlatform, assertPrerequisites, defaultStateDir, hostIsolation, loadConnectorModels, npmPrerequisite, pythonVenvPrerequisite, savedPairing, unsandboxedWarning, type HostIsolation } from "./connect-setup.js";
-import { parentTransport, stdioTransport, type Transport } from "./desktop-transport.js";
+import { stdioTransport, type Transport } from "./desktop-transport.js";
 import { pairingCodePattern, pairingIdPattern, uploadRequestLimits, type HostError, type HostErrorCode, type HostEvent, type HostInspection, type HostRequest, type HostState, type StartRequest } from "./desktop-protocol.js";
 import { RunnerLeaseBusyError } from "./lease.js";
 import { ConnectorSetupError } from "./protocol.js";
 import { LoginError, LoginSession, loginProviders, piLogin, runLogin } from "./pi-login.js";
 import { DEFAULT_WINDOWS_LIMITS, windowsRuntimeDirectory, type SandboxBackendConfig } from "./sandbox-backend.js";
 
-// The connector, run by a Pikibun app instead of a terminal: requests arrive over the parent's IPC channel (Electron's
-// utilityProcess parentPort, or Node's fork channel) and status, logs and failures go back the same way. With --stdio
-// the channel is JSON lines on stdin and stdout instead: the Windows app runs this host inside WSL2 through wsl.exe, and
-// the Native Shell app runs it as `pikibun host --stdio` (host-cli.ts). Entry points: desktop-host.ts (Electron's
-// bundle) and the CLI's `host` command; both call runAppHost once.
+// The connector, run by a Pikibun app instead of a terminal: requests arrive as JSON lines on stdin, and status, logs
+// and failures go back as JSON lines on stdout. The Native Shell app runs it as `pikibun host --stdio` (host-cli.ts),
+// the CLI's `host` command, which calls runAppHost once.
 
 class HostFailure extends ConnectorSetupError {
   constructor(readonly code: HostErrorCode, message: string) { super(message); }
@@ -227,16 +225,17 @@ async function shutdown(): Promise<void> {
 }
 
 /**
- * Runs the host in this process until its app goes: `--stdio` for JSON lines on stdin and stdout, else the parent's IPC
- * channel; `--state-dir` for connector state other than the CLI's. Throws on unknown options, before anything starts.
+ * Runs the host in this process until its app goes: `--stdio` (required) for JSON lines on stdin and stdout;
+ * `--state-dir` for connector state other than the CLI's. Throws on unknown options, before anything starts.
  */
 export function runAppHost(args: string[]): void {
   if (transport) throw new Error("The host is already running in this process.");
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: { "state-dir": { type: "string" }, stdio: { type: "boolean" } } });
-  /** `~/` is this host's home: the Windows app names a state directory inside WSL2 without knowing where its home is. */
+  if (!values.stdio) throw new Error("The host speaks only over --stdio.");
+  /** `~/` is this host's home: an app can name a state directory without knowing where its home is. */
   const givenStateDir = values["state-dir"];
   stateDir = givenStateDir === undefined ? defaultStateDir() : givenStateDir.startsWith("~/") ? join(homedir(), givenStateDir.slice(2)) : givenStateDir;
-  transport = values.stdio ? stdioTransport<HostEvent>() : parentTransport<HostEvent>();
+  transport = stdioTransport<HostEvent>();
   transport.onMessage(value => {
     const request = hostRequestSchema.safeParse(value);
     if (request.success) { void handle(request.data); return; }

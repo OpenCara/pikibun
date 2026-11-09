@@ -1,4 +1,4 @@
-// The platform-neutral client and shared types the web and Expo apps use, unchanged: NSH's runtime has fetch, streams,
+// The platform-neutral client and shared types, unchanged: NSH's runtime has fetch, streams,
 // AbortController and TextDecoder, which is all they need.
 export * from "../../../packages/client/src/index";
 export type { ConnectorInfo } from "../../../packages/shared/src/connector";
@@ -13,4 +13,4 @@ export { canCreateSessions, managesSession } from "../../../packages/shared/src/
 export { nestSessions } from "../../../packages/client/src/session-tree";
 export { containsRedaction, redactSecrets, REDACTED } from "../../../packages/shared/src/redaction";
 export { browserUnavailableText } from "../../../packages/shared/src/browser";
-export { pullRequestStateLabels, pullRequestStateTones } from "../../../packages/shared/src/pull-requests";
+export { pullRequestLabel, pullRequestRepository, pullRequestStateLabels, pullRequestStateTones } from "../../../packages/shared/src/pull-requests";

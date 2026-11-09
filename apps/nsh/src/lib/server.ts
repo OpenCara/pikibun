@@ -17,7 +17,7 @@ const localHosts = ["localhost", "127.0.0.1"];
 
 /**
  * On the web the client is served by the Pikibun server and signs in with that host's browser
- * session, as the React web app does: same-origin cookies and a CSRF token. Native platforms keep a bearer token.
+ * session: same-origin cookies and a CSRF token. Native platforms keep a bearer token.
  */
 export const usesBrowserSession = platform.os === "web";
 

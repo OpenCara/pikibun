@@ -1,17 +1,14 @@
 import type { LocalModelSummary } from "../../../packages/shared/src/connector.js";
 
 /**
- * What a desktop app can do itself to provide something a host lacks, once its owner confirms in a native dialog. A
- * fixed list the app implements (apps/desktop/src/main/setup-actions.ts) and checks again: never a command the host
- * chose. Each runs where the owner sees it (an installer, a terminal window, Settings), never silently.
+ * What an app could do itself to provide something a host lacks, once its owner confirms: a fixed list, never a command
+ * the host chose. Each would run where the owner sees it (an installer, a terminal window, Settings), never silently.
  */
 export type SetupAction =
   /** macOS: Apple's installer for the Command Line Tools (`xcode-select --install`). */
   | { kind: "xcode-tools" }
   /** Windows: Git for Windows, with winget. */
   | { kind: "git-for-windows" }
-  /** Windows: Node.js LTS, with winget: the Windows sandbox's steps run on it (a desktop app's own Node can't run them). */
-  | { kind: "node-for-windows" }
   /** Windows: Microsoft's MXC SDK, with npm, into the directory the app's native hosts use. */
   | { kind: "mxc-sdk" }
   /** Windows: Settings › Windows Update. */
@@ -49,9 +46,9 @@ export interface Prerequisite {
   optional?: boolean;
 }
 
-// Messages between a desktop app and its connector host (desktop-host.ts), over the parent's IPC channel only. Pairing
-// codes travel here and nowhere else: never argv, environment, files or logs. Types and patterns only, so the app's
-// bundle imports nothing from the connector; the host validates every request against them.
+// Messages between the app and its connector host (`pikibun host --stdio`, app-host.ts), over the host's stdin and
+// stdout only. Pairing codes travel here and nowhere else: never argv, environment, files or logs. Types and patterns
+// only, so the app imports nothing from the connector; the host validates every request against them.
 
 export const pairingIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const pairingCodePattern = /^[A-Za-z0-9_-]{8,256}$/;

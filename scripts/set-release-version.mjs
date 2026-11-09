@@ -2,7 +2,6 @@
 //   node scripts/set-release-version.mjs <version> cli
 // Targets:
 //   cli      packages/cli/package.json and npm-shrinkwrap.json (prepublishOnly checks they agree)
-//   desktop  apps/desktop/package.json
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,9 +9,9 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const [version, ...targets] = process.argv.slice(2);
 if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/.test(version)) {
-  throw new Error("usage: set-release-version.mjs <version such as 1.2.3 or 1.2.3-beta.1> cli|desktop");
+  throw new Error("usage: set-release-version.mjs <version such as 1.2.3 or 1.2.3-beta.1> cli");
 }
-if (targets.length === 0) throw new Error("Name the target: cli or desktop.");
+if (targets.length === 0) throw new Error("Name the target: cli.");
 
 // Only the top-level version field changes; the manifest keeps its own formatting.
 function setManifestVersion(path) {
@@ -31,10 +30,7 @@ for (const target of targets) {
     shrinkwrap.packages[""].version = version;
     writeFileSync(shrinkwrapPath, JSON.stringify(shrinkwrap, null, 2) + "\n");
     console.log(`pikibun@${version}`);
-  } else if (target === "desktop") {
-    setManifestVersion(join(root, "apps", "desktop", "package.json"));
-    console.log(`Pikibun desktop ${version}`);
   } else {
-    throw new Error(`Unknown target ${target}: use cli or desktop.`);
+    throw new Error(`Unknown target ${target}: use cli.`);
   }
 }

@@ -56,23 +56,19 @@ Each server release (`server-v*` tag) is published as `ghcr.io/opencara/pikibun`
 
 Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load balancer); the app serves plain HTTP. If the proxy sets `X-Forwarded-Proto`/`X-Forwarded-Host`, set `TRUST_PROXY=true`. The proxy must pass WebSocket upgrades on `/api/connectors/socket`, accept request bodies of 32 MiB for dump imports, and route `/.well-known/` to Pikibun if you use `OIDC_SIGNING_KEY`. The server gzips its responses and session event streams itself, and compresses the connector WebSocket for connectors that offer it, so the proxy needs no compression of its own.
 
-## Choosing the web client
+## The web client
 
 Servers serve the Native Shell client (`apps/nsh`, built by `pnpm build` into `dist/preview`), the only web client the
 Docker image and `pikibun serve` ship. The page gets the policy NSH's web runtime needs (`'wasm-unsafe-eval'`, inline
 and `blob:` scripts).
 
-> **Upgrading from an image that served the React client:** nothing to change. Both clients use the same API, so
-> switching moves, copies or restores no accounts, hosts or sessions. An `.env` that set `STATIC_DIR=dist/web` must drop
-> it: newer images no longer contain `dist/web`.
+> **Upgrading from a server that served the React client:** the React web client is removed. Both clients use the same
+> API, so switching moves, copies or restores no accounts, hosts or sessions. Drop `STATIC_DIR=dist/web` and
+> `STATIC_CLIENT` from `.env`: the server refuses to start with `STATIC_CLIENT=web`, or with a `STATIC_DIR` (or
+> `PREVIEW_STATIC_DIR`) whose page isn't Native Shell's build (it has no `nsh.<hash>.wasm` beside it), and newer images
+> no longer contain `dist/web`.
 
-The React web client (`apps/web`) is **deprecated** and will be deleted. It is no longer built by `pnpm build`, the
-image or the release workflows; from a source checkout, `pnpm build:web` still builds it into `dist/web`, and
-`STATIC_DIR=dist/web` serves it with its strict script policy. `STATIC_CLIENT` (`web` or `nsh`) overrides which client
-the server takes `STATIC_DIR` for, which it otherwise tells from the build itself. Electron's local server serves the
-React build it bundles.
-
-A server can also serve the NSH client at a second hostname next to the React one, with `PREVIEW_ORIGIN` (an exact
+A server can also serve the NSH client at a second hostname, with `PREVIEW_ORIGIN` (an exact
 HTTPS origin) and optionally `PREVIEW_STATIC_DIR` (`dist/preview`). Route both hosts to the same listener with TLS,
 preserving each host in `X-Forwarded-Host`, and register the second origin's `/api/auth/github/callback` (and other
 OAuth callbacks) too. Its sign-in cookies stay host-only, so people sign in separately on each hostname. pikibun.com
@@ -97,8 +93,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `VAULT_KEY` | required | Base64url 32-byte key that encrypts stored tokens and secrets; keep it stable, since secrets stored with one key can't be read with another |
 | `HOST`, `PORT` | `0.0.0.0` (`127.0.0.1` with `LOCAL_MODE`), `8787` | Listening address |
 | `TRUST_PROXY` | `false` | Honor `X-Forwarded-Proto`/`X-Forwarded-Host` from a trusted proxy |
-| `STATIC_DIR` | `dist/preview` | The web client's build: `dist/preview` (Native Shell), or `dist/web` (the deprecated React client, built from source only) |
-| `STATIC_CLIENT` | what `STATIC_DIR` holds | `web` or `nsh`: which client `STATIC_DIR` is, when it can't be told from the build |
+| `STATIC_DIR` | `dist/preview` | The web client's build (Native Shell) |
 | `PREVIEW_ORIGIN` | none | A second exact HTTPS origin serving NSH with the same backend; register its OAuth callbacks too |
 | `PREVIEW_STATIC_DIR` | `dist/preview` | That origin's NSH build; requires `PREVIEW_ORIGIN` |
 | `DATABASE_URL` | `sqlite:///data/pikibun.sqlite` | Control-plane database |
