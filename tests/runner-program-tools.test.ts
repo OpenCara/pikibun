@@ -509,7 +509,9 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   await service.initialize();
   t.after(() => service.close());
   const id = "missing-programs-session";
-  const session = await service.provision(binding(id), await ticket(id, "create"));
+  // The agent has the defined tool, as a control plane that defines it lists it.
+  const bound = binding(id);
+  const session = await service.provision({ ...bound, agent: { ...bound.agent, tools: [...bound.agent.tools, "frob"] } }, await ticket(id, "create"));
   assert.deepEqual((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"),
     { source: "piki:frob", tools: ["frob"], reason: "programs", programs: ["frob-not-installed-anywhere"] });
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("missing programs admission") }, "write");
