@@ -2,10 +2,11 @@
 
 > **Deprecated, to be deleted.** The Native Shell client's desktop builds ([`apps/nsh`](../nsh/README.md), released
 > by `app-v` tags) replace this Electron app, and it is removed together with the React web client
-> ([`apps/web`](../web/README.md)) once they cover what only it does: running this computer's connector (**This
-> Mac**/**This Computer**) and a local Pikibun server. Until then it is still released (`desktop-v` tags) and fixed when
-> it breaks, but gets no new features. Its windows load https://pikibun.com, which now serves the NSH client, so its
-> **Settings → This Mac** section isn't there: use the app's own **This Mac** and **App Settings…** windows.
+> ([`apps/web`](../web/README.md)) once they cover what only it still does: hosts for several servers at once, WSL2 on
+> Windows, and running Pikibun itself on this computer. **It is no longer built or released**: the `desktop-v` release
+> workflow and the Windows smoke test are gone, so the last `desktop-v` release is the last one; build it by hand as
+> below if you must. Its windows load https://pikibun.com, which now serves the NSH client, so its **Settings → This
+> Mac** section isn't there: use the app's own **This Mac** and **App Settings…** windows.
 
 An Electron app with three jobs, each the full version of what the command line and the website do:
 
@@ -142,7 +143,7 @@ pnpm --filter @pikibun/desktop dist
 ```
 
 This builds the app, stages the connector and the local server into `dist/connector` (with the web app from the
-repository's `dist/web`: run `pnpm build` first) with its production dependencies installed by `npm ci`
+repository's `dist/web`: run `pnpm build:web` first) with its production dependencies installed by `npm ci`
 from `packages/cli/npm-shrinkwrap.json` (the registry must be reachable), and writes an arm64 DMG to
 `dist/release`. The connector is copied to `Pikibun.app/Contents/Resources/connector`, outside the asar.
 
@@ -173,18 +174,10 @@ blocks them elsewhere (right-click › Open, or `xattr -dr com.apple.quarantine 
    `APPLE_TEAM_ID`), then run `pnpm --filter @pikibun/desktop dist`. electron-builder signs the app and the connector's
    files, submits it to Apple's notary service and staples the ticket.
 
-The desktop release workflow (`.github/workflows/release-desktop.yml`, started by a `desktop-v1.2.3` tag) does all of
-this without editing `electron-builder.yml`: once `MAC_CERTIFICATE_P12` and the notarization key are configured (the
-[`docs/development.md`](../../docs/development.md), "Releasing", lists them), it overrides the identity, hardened runtime and notarization on the command
-line. It then attaches the DMG to the tag's GitHub release, and without those secrets it releases the ad-hoc
-signed build. A Windows job builds the x64 installer from the same tag and attaches it to the same release: signed when
-`WIN_CERTIFICATE_P12` (a base64 code-signing .p12) and `WIN_CERTIFICATE_PASSWORD` are set in the `release`
-environment, otherwise unsigned, so SmartScreen asks before its first launch (**More info → Run anyway**). The Linux
-build will join as one more job.
-
-`.github/workflows/desktop-windows.yml` builds the unpacked Windows app on every change to the app or its connector
-host in a pull request or on main, launches it once with `PIKIBUN_DESKTOP_SMOKE`, and uploads its windows' screenshots
-(`desktop-windows-smoke`).
+The desktop release workflow (`release-desktop.yml`, started by `desktop-v1.2.3` tags) and the Windows smoke test
+(`desktop-windows.yml`) were removed with the app's deprecation; Git history has them. On Windows,
+`pnpm --filter @pikibun/desktop dist:win` signs when `CSC_LINK` and `CSC_KEY_PASSWORD` name a code-signing .p12, as on
+macOS; unsigned, SmartScreen asks before its first launch (**More info → Run anyway**).
 
 Check the result with `codesign --verify --deep --strict --verbose=2 dist/release/mac-arm64/Pikibun.app` and
 `spctl --assess --type execute --verbose dist/release/mac-arm64/Pikibun.app`.

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Builds the production React/Electron web client, the NSH preview and the bundled server, then runs as a non-root user with /data for
+# Builds the web client (Native Shell, apps/nsh) and the bundled server, then runs as a non-root user with /data for
 # the SQLite database (override with DATABASE_URL). Session backups are off unless STORAGE_URL names
 # a store, such as file:///data/backups in the same volume.
 
@@ -26,11 +26,11 @@ RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+
 COPY scripts/nsh.mjs scripts/nsh-web-fixes.mjs scripts/
 # Cache the verified SDK independently of client sources; frontend edits should not redownload a large release.
 RUN node --input-type=module -e "import { nshBinary } from './scripts/nsh.mjs'; await nshBinary();"
-COPY apps/web apps/web
 COPY apps/nsh apps/nsh
 COPY packages/shared packages/shared
 COPY packages/client packages/client
-RUN pnpm build
+# The deprecated React client (apps/web) is no longer built into the image.
+RUN pnpm build:preview
 
 FROM base AS build
 # Only the server and connector manifests: pnpm installs just the workspaces present.
@@ -42,7 +42,6 @@ COPY packages/shared packages/shared
 COPY packages/client packages/client
 COPY tsconfig.json ./
 RUN pnpm build:server
-COPY --from=web /app/dist/web dist/web
 COPY --from=web /app/dist/preview dist/preview
 
 FROM base AS runtime

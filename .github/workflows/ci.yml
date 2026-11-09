@@ -63,8 +63,8 @@ jobs:
       # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
       # lacks `lifecycle`, and the page's Content-Security-Policy applies), and only a browser shows it.
       - run: pnpm test:client-web
-      # The production React/Electron web client under its strict script policy.
-      - run: pnpm test:web
+      # The NSH web client into dist/preview. The deprecated React web client and Electron app (apps/web, apps/desktop)
+      # are no longer built or released here.
       - run: pnpm build
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build
@@ -83,17 +83,13 @@ jobs:
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"passwordAuth":true'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"githubSignup":"invite"'
           curl -fsS http://127.0.0.1:8787/api/health | grep -q '"passwordSignup":"invite"'
+          # The image's only client, NSH, at the server's own origin with its runtime policy, and at a preview origin too.
           curl -fsS http://127.0.0.1:8787/ | grep -qi '<!doctype html'
-          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*script-src 'self';"
+          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
+          curl -fsS http://127.0.0.1:8787/ | grep -q '<base href="/">'
+          curl -fsSI http://127.0.0.1:8787/sw.js | grep -qi 'content-type: text/javascript'
           curl -fsSI -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: preview.pikibun.example' http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
           curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: preview.pikibun.example' http://127.0.0.1:8787/ | grep -q '<base href="/">'
           curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: pikibun.example' http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
           curl -fsS -H 'X-Forwarded-Proto: https' http://127.0.0.1:8787/ | grep -qi '<!doctype html'
-          docker rm -f pikibun
-          # As pikibun.com runs it (deploy-server.yml): the NSH client at the server's own origin.
-          docker run -d --name pikibun -p 8787:8787 -e APP_ORIGIN=http://127.0.0.1:8787 -e STATIC_CLIENT=nsh -e STATIC_DIR=dist/preview \
-            -e SESSION_SECRET=ci-session-secret-ci-session-secret-ci -e VAULT_KEY=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=') pikibun:ci
-          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/api/health && break; sleep 1; done
-          curl -fsSI http://127.0.0.1:8787/ | grep -qi "content-security-policy:.*'wasm-unsafe-eval'"
-          curl -fsS http://127.0.0.1:8787/ | grep -q '<base href="/">'
           docker rm -f pikibun

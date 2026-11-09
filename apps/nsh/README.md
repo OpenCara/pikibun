@@ -1,9 +1,9 @@
 # Pikibun's Native Shell Preview
 
 An experimental client written in TSX on [Native Shell](https://nsh.dev) (NSH, pinned in `scripts/nsh.mjs`) for the
-web, iOS, Android, macOS, Windows and Linux. Its web build is the client `pikibun.com` serves (`STATIC_CLIENT=nsh`, set
-by the deploy workflow); other servers serve the React web client unless they choose it too. Both use the same
-backend, `@pikibun/client` and `packages/shared`. See [choosing the web client](../../docs/self-hosting.md#choosing-the-web-client).
+web, iOS, Android, macOS, Windows and Linux. Its web build is every server's client: the one pikibun.com serves and the
+only one the Docker image and `pikibun serve` ship. It and the deprecated React web client use the same backend,
+`@pikibun/client` and `packages/shared`. See [choosing the web client](../../docs/self-hosting.md#choosing-the-web-client).
 
 What NSH can't do yet isn't in the client: push notifications (longbridge/nsh#1058), Keychain and Keystore storage
 (longbridge/nsh#1061), a system sign-in session and deep links (longbridge/nsh#1065), a chooser of any file outside

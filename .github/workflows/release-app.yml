@@ -1,7 +1,7 @@
 name: Release app
 # Pushing an app-v1.2.3 tag (app-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then packages the client
 # (apps/nsh) with Native Shell for every platform and attaches the packages to a preview GitHub release. These are
-# always prereleases, never latest; the production Electron app uses desktop-v tags:
+# always prereleases, never latest (the deprecated Electron app's last desktop-v release stays latest):
 #   Windows   Pikibun-<version>-windows-x64-setup.exe (Inno Setup, apps/nsh/windows/installer.iss) and a portable .zip
 #   macOS     Pikibun-<version>-macos-arm64.zip, the .app
 #   Linux     Pikibun-<version>-linux-x86_64.tar.gz

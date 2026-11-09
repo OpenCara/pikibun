@@ -4,9 +4,9 @@ name: Deploy server
 # workflow) deploys any published version, to redeploy or go back to one.
 #
 # On the server, scripts/deploy-server.sh pulls the image by digest, records it as PIKIBUN_IMAGE in the deploy
-# directory's .env, sets the web client the production origin serves (the Native Shell client, nsh, unless DEPLOY_CLIENT
-# says web; any separate preview origin is removed), recreates the pikibun service with `docker compose up -d` and waits
-# for its health check.
+# directory's .env, sets the web client the production origin serves (the Native Shell client, nsh, the only one images
+# carry now; any separate preview origin is removed), recreates the pikibun service with `docker compose up -d` and
+# waits for its health check.
 #
 # The server is reached only on the tailnet (its OpenSSH is off; tailscaled serves SSH), so the job first joins the
 # tailnet as an ephemeral node tagged TS_TAGS, through a Tailscale OAuth client, and the tailnet policy's ssh rules let
@@ -14,8 +14,8 @@ name: Deploy server
 #
 # Configuration, in the `production` environment (docs/development.md, "Releasing"): the variables DEPLOY_HOST (the
 # server's tailnet name, nerd.tail7e2cef.ts.net), DEPLOY_USER, optionally DEPLOY_PORT (22), DEPLOY_PATH (pikibun, from
-# the user's home), DEPLOY_URL (the production origin), DEPLOY_CLIENT (nsh, or web for the React client) and TS_TAGS
-# (tag:ci, the OAuth client's tags), and the secrets TS_OAUTH_CLIENT_ID and TS_OAUTH_SECRET (a Tailscale OAuth client with the auth_keys
+# the user's home), DEPLOY_URL (the production origin) and TS_TAGS (tag:ci, the OAuth
+# client's tags), and the secrets TS_OAUTH_CLIENT_ID and TS_OAUTH_SECRET (a Tailscale OAuth client with the auth_keys
 # write scope and TS_TAGS) and DEPLOY_SSH_KNOWN_HOSTS (the server's Tailscale SSH host keys: ssh-keyscan -p PORT HOST
 # from a tailnet device, checked against the server's own). Without any of them nothing is deployed; with only some of
 # them the job fails.
@@ -109,7 +109,7 @@ jobs:
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'pikibun' }}
-          DEPLOY_CLIENT: ${{ vars.DEPLOY_CLIENT || 'nsh' }}
+          DEPLOY_CLIENT: nsh
           DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
         run: |
           known_hosts="$RUNNER_TEMP/deploy_known_hosts"
@@ -123,6 +123,6 @@ jobs:
         if: steps.config.outputs.configured == 'true' && vars.DEPLOY_URL != ''
         env:
           DEPLOY_URL: ${{ vars.DEPLOY_URL }}
-          DEPLOY_CLIENT: ${{ vars.DEPLOY_CLIENT || 'nsh' }}
+          DEPLOY_CLIENT: nsh
           DEPLOY_IMAGE: ${{ steps.image.outputs.name }}
         run: node scripts/deploy-smoke.mjs

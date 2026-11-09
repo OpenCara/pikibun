@@ -58,20 +58,19 @@ Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load
 
 ## Choosing the web client
 
-`pnpm build` and the Docker image include two web clients: the React web app (`apps/web`, `dist/web`), which servers
-serve by default, and the Native Shell client (`apps/nsh`, `dist/preview`). The React client is **deprecated**: it will
-be deleted and NSH will be the only client. Set `STATIC_CLIENT=nsh` to switch before then. Both use the same API, so switching
-between them moves, copies or restores no accounts, hosts or sessions. pikibun.com serves the Native Shell client; its
-deploy workflow (`deploy-server.yml`) writes this to the server's `.env`:
+Servers serve the Native Shell client (`apps/nsh`, built by `pnpm build` into `dist/preview`), the only web client the
+Docker image and `pikibun serve` ship. The page gets the policy NSH's web runtime needs (`'wasm-unsafe-eval'`, inline
+and `blob:` scripts).
 
-```dotenv
-STATIC_CLIENT=nsh
-STATIC_DIR=dist/preview
-```
+> **Upgrading from an image that served the React client:** nothing to change. Both clients use the same API, so
+> switching moves, copies or restores no accounts, hosts or sessions. An `.env` that set `STATIC_DIR=dist/web` must drop
+> it: newer images no longer contain `dist/web`.
 
-Recreate the container after changing them. With `STATIC_CLIENT=nsh` the page gets the policy NSH's web runtime needs
-(`'wasm-unsafe-eval'`, inline and `blob:` scripts); the React client keeps a strict script policy. Electron's local
-server always serves React.
+The React web client (`apps/web`) is **deprecated** and will be deleted. It is no longer built by `pnpm build`, the
+image or the release workflows; from a source checkout, `pnpm build:web` still builds it into `dist/web`, and
+`STATIC_DIR=dist/web` serves it with its strict script policy. `STATIC_CLIENT` (`web` or `nsh`) overrides which client
+the server takes `STATIC_DIR` for, which it otherwise tells from the build itself. Electron's local server serves the
+React build it bundles.
 
 A server can also serve the NSH client at a second hostname next to the React one, with `PREVIEW_ORIGIN` (an exact
 HTTPS origin) and optionally `PREVIEW_STATIC_DIR` (`dist/preview`). Route both hosts to the same listener with TLS,
@@ -98,8 +97,8 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `VAULT_KEY` | required | Base64url 32-byte key that encrypts stored tokens and secrets; keep it stable, since secrets stored with one key can't be read with another |
 | `HOST`, `PORT` | `0.0.0.0` (`127.0.0.1` with `LOCAL_MODE`), `8787` | Listening address |
 | `TRUST_PROXY` | `false` | Honor `X-Forwarded-Proto`/`X-Forwarded-Host` from a trusted proxy |
-| `STATIC_DIR` | `dist/web` | The web client's build: `dist/web` (React) or `dist/preview` (Native Shell) |
-| `STATIC_CLIENT` | `web` | Which client `STATIC_DIR` holds: `web` or `nsh` (as pikibun.com) |
+| `STATIC_DIR` | `dist/preview` | The web client's build: `dist/preview` (Native Shell), or `dist/web` (the deprecated React client, built from source only) |
+| `STATIC_CLIENT` | what `STATIC_DIR` holds | `web` or `nsh`: which client `STATIC_DIR` is, when it can't be told from the build |
 | `PREVIEW_ORIGIN` | none | A second exact HTTPS origin serving NSH with the same backend; register its OAuth callbacks too |
 | `PREVIEW_STATIC_DIR` | `dist/preview` | That origin's NSH build; requires `PREVIEW_ORIGIN` |
 | `DATABASE_URL` | `sqlite:///data/pikibun.sqlite` | Control-plane database |

@@ -1,4 +1,4 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, readdirSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
@@ -30,6 +30,20 @@ const contentTypes: Record<string, string> = {
 /** Native Shell and Vite both name their bundled assets by their content. */
 const hashedName = /(?:\.[0-9a-f]{10}|-[A-Za-z0-9_-]{8,})\.[a-z0-9]+$/;
 export type WebClient = 'web' | 'nsh';
+
+/** Native Shell's web runtime, at the top of every NSH web build (nsh.<hash>.wasm); a React build has none. */
+const nshRuntime = /^nsh\.[0-9a-f]{10}\.wasm$/;
+
+/**
+ * Which client a build directory holds: `web` for a React build, `nsh` for a Native Shell one, or for a directory that
+ * isn't there (nothing is served from it, and NSH is the client Pikibun builds).
+ */
+export function detectWebClient(root: string): WebClient {
+  let names: string[];
+  try { names = readdirSync(root); } catch { return 'nsh'; }
+  if (names.some(name => nshRuntime.test(name))) return 'nsh';
+  return names.includes('index.html') ? 'web' : 'nsh';
+}
 
 /**
  * The page's policy, as Native Shell 0.4's web runtime needs it to start:

@@ -4,7 +4,7 @@
 
 Run [Pi](https://github.com/earendil-works/pi) coding agents on your own machines and work on them together with your team. Pikibun is a self-hosted control plane: a web app (with iPhone, iPad, Mac and Windows apps), a Node.js server, and the `pikibun` connector that each host runs to offer its local Pi to a workspace.
 
-`pikibun.com` serves the Native Shell client (`apps/nsh`), which is Pikibun's client on every platform from now on. The React web client (`apps/web`) and the Electron desktop app (`apps/desktop`) are **deprecated** and will be deleted once the NSH client covers what still depends on them; until then the React client is still built into the same image, for servers that keep it (the default) and for the Electron app's local server. Both clients use the same backend. See [choosing the web client](docs/self-hosting.md#choosing-the-web-client).
+`pikibun.com` serves the Native Shell client (`apps/nsh`), which is Pikibun's client on every platform from now on. The React web client (`apps/web`) and the Electron desktop app (`apps/desktop`) are **deprecated**, no longer built or released, and will be deleted: the Docker image and `pikibun serve` ship the NSH client. Both clients use the same backend. See [choosing the web client](docs/self-hosting.md#choosing-the-web-client).
 
 Two things set it apart:
 
