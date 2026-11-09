@@ -94,15 +94,16 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
   }
   let preview: ServerConfig['preview'];
   if (processEnv.PREVIEW_ORIGIN) {
+    const previewDir = resolve(processEnv.PREVIEW_STATIC_DIR || 'dist/preview');
     try {
       const origin = new URL(processEnv.PREVIEW_ORIGIN);
       if (origin.origin !== processEnv.PREVIEW_ORIGIN || origin.protocol !== 'https:' || origin.origin === env.APP_ORIGIN || env.LOCAL_MODE === 'true') throw new Error();
-      preview = { origin: origin.origin, staticDir: resolve(processEnv.PREVIEW_STATIC_DIR || 'dist/preview') };
+      preview = { origin: origin.origin, staticDir: previewDir };
     } catch {
       throw new ConfigurationError('PREVIEW_ORIGIN must be a distinct https origin (no path or trailing slash), on a shared server.');
     }
-    if (webBuild(preview.staticDir) === 'other') {
-      throw new ConfigurationError(`PREVIEW_STATIC_DIR (${preview.staticDir}) holds a web page that isn't the Native Shell client. Point it at the NSH build (dist/preview).`);
+    if (webBuild(previewDir) === 'other') {
+      throw new ConfigurationError(`PREVIEW_STATIC_DIR (${previewDir}) holds a web page that isn't the Native Shell client. Point it at the NSH build (dist/preview).`);
     }
   } else if (processEnv.PREVIEW_STATIC_DIR) {
     throw new ConfigurationError('PREVIEW_STATIC_DIR requires PREVIEW_ORIGIN.');
