@@ -1,4 +1,4 @@
-import { effect, safeArea, Scroll, signal, Text, View } from "nsh";
+import { effect, List, safeArea, signal, Text, View } from "nsh";
 import type { SharedSession as SharedRecord, SharedSessionView } from "../../../../packages/shared/src/sharing";
 import { ApiError, createApi, errorMessage } from "../shared";
 import { timestamp } from "../lib/format";
@@ -109,16 +109,19 @@ export function SharedSession(props: { token: string; /** The server: the page's
             <Banner tone="warning" title="Can't refresh right now">{`${error()} This page keeps trying and shows the last view it received.`}</Banner>
           </View>
         </If>
-        <Scroll testID="shared-transcript" style={{ flex: 1 }} contentStyle={{ width: "100%", maxWidth: layout.chat, alignSelf: "center", paddingHorizontal: 16, paddingVertical: 24 }}>
-          <If when={view()}
-            else={<If when={error()} else={<Loading />}><EmptyState title="The conversation isn't available right now">The session's host may be offline. This page keeps trying.</EmptyState></If>}>
-            <If when={entries().length} else={<EmptyState title="The conversation begins here">Messages and tool results appear here as the work goes on</EmptyState>}>
-              <Each of={entries()} key={entry => entry.id}>
-                {entry => <TranscriptEntry entry={entry()} userId="" expanded={id => expanded().has(id)} toggle={toggle} />}
-              </Each>
-            </If>
-          </If>
-        </Scroll>
+        <If when={view()}
+          else={<View style={{ flex: 1 }}><If when={error()} else={<Loading />}><EmptyState title="The conversation isn't available right now">The session's host may be offline. This page keeps trying.</EmptyState></If></View>}>
+          {/* Follows new entries as the work goes on, unless the reader has scrolled up, as the session's own view does. */}
+          <List each={entries()} keyExtractor={entry => entry.id} testID="shared-transcript" style={{ flex: 1 }} accessibilityLabel="Shared session history"
+            contentStyle={{ paddingHorizontal: 16, paddingVertical: 24 }} maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 80 }}
+            empty={() => <EmptyState title="The conversation begins here">Messages and tool results appear here as the work goes on</EmptyState>}>
+            {entry => (
+              <View style={{ width: "100%", maxWidth: layout.chat, alignSelf: "center" }}>
+                <TranscriptEntry entry={entry()} userId="" shared expanded={id => expanded().has(id)} toggle={toggle} />
+              </View>
+            )}
+          </List>
+        </If>
         <View style={{ borderTopWidth: 1, borderColor: palette().border, paddingVertical: 10, paddingHorizontal: 16, paddingBottom: Math.max(10, safeArea().bottom) }}>
           <Text style={{ width: "100%", maxWidth: layout.chat, alignSelf: "center", fontSize: text.caption, color: palette().muted }}>
             {`${view()?.busy ? "Working… · " : view() ? "Idle · " : ""}Read-only, shared by link · Started ${record() ? timestamp(record()!.createdAt) : ""}`}

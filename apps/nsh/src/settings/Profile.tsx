@@ -11,6 +11,7 @@ import { Button, CardBody, confirm, CopyButton, Feedback, IconButton, ResourceSt
 import { ConnectedAccountsSection } from "./accounts";
 import { OwnJoinRequests } from "./join-requests";
 import { SectionPage, SettingsActions, type SectionProps } from "./parts";
+import { serverVersion } from "./index";
 
 export const APP_VERSION = "0.1.0";
 
@@ -120,6 +121,7 @@ export function Profile(_props: SectionProps) {
       <Section title="This app">
         <Row title="Version" trailing={`Pikibun ${APP_VERSION}`} />
         <Row title="Platform" trailing={`${platform.os} ${platform.version} · ${platform.desktop ? "desktop" : platform.idiom}`} />
+        <If when={serverVersion()}>{version => <Row title="Server" trailing={`Pikibun server ${version()}`} />}</If>
       </Section>
     </SectionPage>
   );

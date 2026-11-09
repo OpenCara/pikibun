@@ -1,5 +1,6 @@
 import { computed, Scroll, signal, Text, untracked, View } from "nsh";
-import { nestSessions, sessionStatus, type SessionRecord } from "../shared";
+import { nestSessions, pullRequestStateLabels, sessionStatus, type SessionRecord } from "../shared";
+import { pullRequestLabel } from "../components/PullRequest";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { relativeTime } from "../lib/format";
@@ -41,7 +42,8 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
         <InfoTip label="Who can see a session">
           <View style={{ gap: 8 }}>
             <Note>Private sessions are visible to their owner, the workspace's owner and admins, and people with an explicit grant. Workspace-visible sessions can be viewed by every workspace member.</Note>
-            <Note>Viewing never allows asking, writing, approving or managing; those need separate grants. Opening a session keeps its original owner identity and history.</Note>
+            <Note>Viewing never allows asking, writing, approving or managing; those need separate grants. The workspace's owner and admins manage every session in it, but approve only with a grant. Opening a session keeps its original owner identity and history.</Note>
+            <Note>Only the owner, or the workspace's owner or an admin, can change visibility, which is separate from sharing a host.</Note>
           </View>
         </InfoTip>
         <View style={{ flex: 1 }} />
@@ -76,7 +78,8 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
                               <Row testID={`sessions-row-${record().id}`} chevron onPress={() => props.onOpen(record().id)}
                                 leading={<StatusDot tone={status().tone} label={status().label ?? record().status} />}
                                 title={`${item().depth > 0 ? `${"  ".repeat(item().depth - 1)}↳ ` : ""}${record().title}`}
-                                hint={`${status().label ? `${status().label} · ` : ""}${record().pullRequest?.number !== undefined ? `PR #${record().pullRequest!.number} · ` : ""}${owner() ? "Yours" : viewerOnly() ? "Viewer" : "Shared"} · ${record().visibility === "workspace" ? "Workspace-visible" : "Private"} · ${relativeTime(record().createdAt)}`} />
+                                hint={`${status().label ? `${status().label} · ` : ""}${record().tunnel ? "Online · " : ""}${record().pullRequest
+                                  ? `${pullRequestLabel(record().pullRequest!)}${record().pullRequest!.state ? ` ${pullRequestStateLabels[record().pullRequest!.state!]}` : ""} · ` : ""}${owner() ? "Yours" : viewerOnly() ? "Viewer" : "Shared"} · ${record().visibility === "workspace" ? "Workspace-visible" : "Private"} · ${relativeTime(record().createdAt)}`} />
                             );
                           }}
                         </Each>

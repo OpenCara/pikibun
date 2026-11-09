@@ -3,6 +3,7 @@ import { createNavStack, NavPage, NavStack } from "nsh/base";
 import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
 import { auth, restore, session } from "./lib/auth";
+import { createNotificationDelivery } from "./lib/notifications";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
 import { usesBrowserSession } from "./lib/server";
 import { takeRememberedInvite, takeReturn } from "./lib/sign-in-memory";
@@ -74,6 +75,8 @@ export function Root() {
 /** Everything behind sign-in. Created per sign-in, so lists never carry over to another account. */
 function Shell() {
   const data = createAppData();
+  // Where notifications are on for this browser: shown while the app is open, and pushes kept on this sign-in.
+  createNotificationDelivery(untracked(session).user.id);
   const nav = createNavStack<Route>([{ name: "sessions" }]);
   // A size of zero is no layout to follow (a minimized window; NSH 0.4's headless engine also reports 0×0 after an
   // appearance change): the last real width stands.

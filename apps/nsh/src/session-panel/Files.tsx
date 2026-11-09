@@ -163,17 +163,25 @@ export function CodeView(props: { text: string }) {
   );
 }
 
-/** An image fit to the panel; pressing it switches to its actual size and back. */
+/**
+ * An image fit to the panel; pressing it switches to its actual size and back. Its size in pixels shows below it, and
+ * one that can't be decoded says so.
+ */
 export function ImageView(props: { src: string; path: string }) {
   const actual = signal(false);
+  const size = signal<{ width: number; height: number } | null>(null);
+  const failed = signal(false);
   return (
-    <View style={{ gap: 6 }}>
-      <View onPress={() => actual.update(value => !value)} accessibilityLabel={actual() ? "Fit image to panel" : "Show image at actual size"}
-        style={{ borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, overflow: "hidden", backgroundColor: palette().surfaceRaised }}>
-        <Image src={props.src} accessibilityLabel={props.path} style={actual() ? {} : { width: "100%", aspectRatio: 16 / 10, objectFit: "contain" }} />
+    <If when={!failed()} else={<EmptyState title="Can't show this image">This image couldn't be decoded.</EmptyState>}>
+      <View style={{ gap: 6 }}>
+        <View onPress={() => actual.update(value => !value)} accessibilityLabel={actual() ? "Fit image to panel" : "Show image at actual size"}
+          style={{ borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border, overflow: "hidden", backgroundColor: palette().surfaceRaised }}>
+          <Image src={props.src} accessibilityLabel={props.path} onLoad={event => size.set(event.size)} onError={() => failed.set(true)}
+            style={actual() && size() ? { width: size()!.width, height: size()!.height } : { width: "100%", aspectRatio: size() ? size()!.width / Math.max(1, size()!.height) : 16 / 10, objectFit: "contain" }} />
+        </View>
+        <Small>{`${size() ? `${size()!.width} × ${size()!.height} px · ` : ""}${actual() ? "actual size · press to fit" : "fit to panel · press for actual size"}`}</Small>
       </View>
-      <Small>{actual() ? "Actual size · press to fit" : "Fit to panel · press for actual size"}</Small>
-    </View>
+    </If>
   );
 }
 

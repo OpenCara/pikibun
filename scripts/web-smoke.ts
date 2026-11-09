@@ -354,6 +354,16 @@ try {
       await new Promise(done => setTimeout(done, 200));
     }
     console.log("✓ a file and an image picked in the browser's own chooser are attached to the first message");
+
+    // Notifications on this device: this browser can take pushes, through the service worker the build ships.
+    await page.evaluate("location.hash = '#/settings/notifications'");
+    await page.waitForText("This browser shows notifications even when no Pikibun tab is open.");
+    const worker = await page.evaluate<{ status: number; type: string; text: string }>(
+      "fetch('/sw.js').then(async response => ({ status: response.status, type: response.headers.get('content-type') ?? '', text: await response.text() }))");
+    if (worker.status !== 200 || !worker.type.includes("javascript") || !worker.text.includes("pikibun-open")) {
+      throw new Error(`The service worker isn't served: ${worker.status} ${worker.type}`);
+    }
+    console.log("✓ notifications on this device can be turned on, and the service worker that shows pushes is served");
   }
 
   if (page.problems.length) throw new Error(`The page reported problems:\n${page.problems.join("\n")}`);

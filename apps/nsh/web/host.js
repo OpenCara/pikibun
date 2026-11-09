@@ -47,7 +47,94 @@ const functions = new Map([
   }],
   ["page.pickFiles", args => pickFiles(args)],
   ["page.encodeImage", args => encodeImage(args)],
+  // Notifications on this device (docs/notifications.md), as the web app's notifications.ts shows them.
+  ["page.notifications.support", args => notificationSupport(args?.webPushKey)],
+  ["page.notifications.permit", () => notificationPermission()],
+  ["page.notifications.subscribe", args => subscribePush(args?.webPushKey)],
+  ["page.notifications.unsubscribe", () => unsubscribePush()],
+  ["page.notifications.show", args => showNotification(args)],
 ]);
+
+/**
+ * How this browser shows notifications: `push` (the service worker shows what the server pushes, even with no tab open),
+ * `page` (while a tab is open), or `unsupported` with why; and whether the person allowed them.
+ */
+function notificationSupport(webPushKey) {
+  if (!page || typeof Notification === "undefined") return { kind: "unsupported", reason: "This browser can't show notifications.", permission: "denied" };
+  const push = typeof webPushKey === "string" && webPushKey && isSecureContext && "serviceWorker" in navigator && "PushManager" in window;
+  return { kind: push ? "push" : "page", permission: Notification.permission };
+}
+
+/** Asks the person to allow notifications where they haven't decided yet; answers what they chose. */
+async function notificationPermission() {
+  if (!page || typeof Notification === "undefined") return "denied";
+  return Notification.permission === "default" ? Notification.requestPermission() : Notification.permission;
+}
+
+function keyBytes(base64url) {
+  const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(base64 + "=".repeat((4 - base64.length % 4) % 4));
+  return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+/** A short name for this device, so the device list tells browsers apart. */
+function deviceName() {
+  const agent = navigator.userAgent;
+  const browser = /Edg\//.test(agent) ? "Edge" : /Firefox\//.test(agent) ? "Firefox" : /Chrome\//.test(agent) ? "Chrome" : /Safari\//.test(agent) ? "Safari" : "Browser";
+  const system = /iPhone|iPad/.test(agent) ? "iOS" : /Android/.test(agent) ? "Android" : /Mac OS X/.test(agent) ? "macOS" : /Windows/.test(agent) ? "Windows"
+    : /Linux/.test(agent) ? "Linux" : "";
+  return system ? `${browser} on ${system}` : browser;
+}
+
+/**
+ * This browser's push subscription for the server's key (one made for another key is replaced), through the service
+ * worker the server serves at /sw.js; the app registers it as this person's device. Answers its endpoint and keys, and
+ * this device's name, or with `name` only where no push subscription can be made.
+ */
+async function subscribePush(webPushKey) {
+  if (!page) throw new Error("Notifications need a browser.");
+  if (typeof webPushKey !== "string" || !("serviceWorker" in navigator)) return { name: deviceName() };
+  const registration = await navigator.serviceWorker.register("/sw.js");
+  await navigator.serviceWorker.ready;
+  const key = keyBytes(webPushKey);
+  let subscription = await registration.pushManager.getSubscription();
+  const current = subscription?.options.applicationServerKey;
+  const same = current && new Uint8Array(current).length === key.length && new Uint8Array(current).every((byte, index) => byte === key[index]);
+  if (subscription && !same) {
+    await subscription.unsubscribe();
+    subscription = null;
+  }
+  subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  const { endpoint, keys } = subscription.toJSON();
+  return { endpoint, keys: { p256dh: keys?.p256dh, auth: keys?.auth }, name: deviceName() };
+}
+
+/** The browser's push subscription goes, whatever the server said; nothing is pushed to it after. */
+async function unsubscribePush() {
+  if (!page || !("serviceWorker" in navigator)) return null;
+  const registration = await navigator.serviceWorker.getRegistration("/sw.js").catch(() => undefined);
+  await (await registration?.pushManager?.getSubscription().catch(() => null))?.unsubscribe().catch(() => false);
+  return null;
+}
+
+/**
+ * A notification the app received while its tab is open (no push here), unless the person is looking at that very
+ * session; clicking it opens the session in this tab. Tabs that each show it replace one another's: one, by its id.
+ */
+function showNotification(args) {
+  if (!page || typeof Notification === "undefined" || Notification.permission !== "granted") return false;
+  const { id, title, body, path, sessionId } = args ?? {};
+  if (typeof title !== "string" || typeof body !== "string" || typeof path !== "string" || !path.startsWith("/#/")) return false;
+  const watching = Boolean(sessionId) && document.visibilityState === "visible" && document.hasFocus() && location.hash === path.slice(1);
+  if (watching) return false;
+  const shown = new Notification(title, { body, tag: typeof id === "string" ? id : undefined, icon: "/favicon.svg" });
+  shown.onclick = () => {
+    window.focus();
+    location.hash = path.slice(1);
+    shown.close();
+  };
+  return true;
+}
 
 /** Bytes as base64, a block at a time so no call gets too many arguments. */
 function base64(bytes) {
@@ -164,6 +251,13 @@ export async function createHost(player) {
       if (traversed) return;
       player.hostEvent("page.route", route());
     });
+    // A notification the service worker showed was clicked with this tab open: it opens the session here.
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", event => {
+        const data = event.data;
+        if (data?.type === "pikibun-open" && typeof data.path === "string" && data.path.startsWith("/#/")) location.hash = data.path.slice(1);
+      });
+    }
   }
   return {
     call(name, args) {
