@@ -1,0 +1,16 @@
+{
+  "name": "Pikibun session load benchmark",
+  "id": "com.pikibun.app.perf",
+  "version": "0.1.0",
+  "build": 1,
+  "capabilities": {
+    "network": { "hosts": ["*"] },
+    "webview": { "hosts": ["*"] },
+    "clipboard": true,
+    "picker": true,
+    "openUrl": true,
+    "statusBar": true,
+    "fs": { "read": ["${homeDir}"] },
+    "host": ["page.*"]
+  }
+}
