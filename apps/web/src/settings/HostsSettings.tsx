@@ -249,7 +249,8 @@ function HostSections({ connector, refresh }: { connector: ConnectorInfo; refres
         })}
         {!connector.revokedAt && (available.length
           ? <ShareRow connector={connector} available={available} busy={shareAction.busy} run={shareAction.run} refresh={refresh} />
-          : !workspaces.length && <Row title="Share with workspace" hint="Create or join a workspace and configure its repositories before sharing" href={workspacesHref()} chevron />)}
+          // A private workspace has nobody to share with: without another workspace, point to making one.
+          : !workspaces.some(workspace => !workspace.personal) && <Row title="Share with workspace" hint="Create or join a workspace and configure its repositories before sharing" href={workspacesHref()} chevron />)}
       </div>
       <Feedback error={shareAction.error} notice={shareAction.notice} />
     </Section>

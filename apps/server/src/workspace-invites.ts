@@ -192,6 +192,8 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     const role = body.role;
     if (typeof role !== 'string' || !(assignableWorkspaceRoles as readonly string[]).includes(role)) fail(400, 'invalid_input', 'Invalid role.');
     const actor = await requireManager(c.env, workspaceId, actorId);
+    // Nobody joins a private workspace.
+    await requireSharedWorkspace(c.env, workspaceId);
     if (actor.role !== 'owner' && !adminManagedRoles.includes(role as AssignableWorkspaceRole)) {
       fail(403, 'forbidden', 'Only the workspace owner can make someone an administrator.');
     }

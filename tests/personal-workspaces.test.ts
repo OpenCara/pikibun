@@ -100,6 +100,10 @@ test('a private workspace takes no members and no invite link', async t => {
   await denied(await alice.request('PUT', `${path}/invite-link`), 409, 'personal_workspace');
   assert.equal((await json<{ link: null }>(await alice.request('GET', `${path}/invite-link`))).link, null);
   assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_invite_links').get() as { n: number }).n, 0);
+  // Nor is a request to join it accepted, even one put there by hand.
+  f.sqlite.prepare("INSERT INTO workspace_join_requests (workspace_id, user_id, created_at) VALUES (?, ?, '2026-01-01')").run(own!.id, bob.user.id);
+  await denied(await alice.request('POST', `${path}/join-requests/${encodeURIComponent(bob.user.id)}/accept`, { role: 'member' }), 409, 'personal_workspace');
+  assert.ok(!(await list(bob)).some(item => item.id === own!.id));
 
   // Any other workspace still takes members as before.
   const team = (await json<{ workspace: Workspace }>(await alice.request('POST', '/api/workspaces', { name: 'Team' }), 201)).workspace;
