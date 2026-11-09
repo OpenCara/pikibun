@@ -3,7 +3,7 @@ import { AlertDialog, Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
   initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, preparingRepositories,
-  REDACTED, redactSecrets, resendText, rewindable, segment, username, type ApprovalRecord, type ChatSelection, type ConnectorInfo, type EntryView,
+  REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ApprovalRecord, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
 } from "../shared";
 import { ApprovalCard } from "../components/ApprovalCard";
@@ -449,6 +449,8 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const permissions = () => current().permissions ?? [];
   const canWrite = () => permissions().includes("write");
   const canAsk = () => permissions().includes("ask");
+  // Collaborators see the transcript's images; everyone else the lines that stand for them.
+  const imagesOf = () => (seesEntryImages(current()) ? current().id : undefined);
   // Images go with the message where its host takes them; files are uploaded into the session's worktree first, within
   // its workspace's limit. A new session's first message that couldn't be sent hands its attachments over to here.
   const fileOptions = createFileOptions(() => current().workspaceId, props.host, canWrite);
@@ -677,7 +679,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
         footer={() => <View style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}>{props.pinned}</View>}>
         {entry => (
           <View style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}>
-            <TranscriptEntry entry={entry()} userId={user.id} expanded={id => expanded().has(id)} onActions={entry => void showActions(entry)}
+            <TranscriptEntry entry={entry()} userId={user.id} imagesOf={imagesOf()} expanded={id => expanded().has(id)} onActions={entry => void showActions(entry)}
               toggle={id => expanded.update(set => { const next = new Set(set); if (!next.delete(id)) next.add(id); return next; })} />
           </View>
         )}

@@ -18,6 +18,8 @@ import { useConnections } from "./hosts";
 import { Icon, type IconName } from "./icons";
 import { activeStatuses, startLiveSession, type StreamStatus } from "./live-session";
 import { Markdown } from "./markdown";
+import { EntryImages } from "./entry-images";
+import { seesEntryImages, shownImages, textBesideImages } from "../../../packages/client/src/entry-images";
 import { PeopleProvider, Username, useWorkspacePeople } from "./people";
 import { PullRequestLink } from "./pull-request";
 import { RepositoryPreparationCard } from "./repository-preparation";
@@ -96,10 +98,11 @@ function modelFailure({ provider, modelId, status }: NonNullable<EntryView["erro
  * One collapsed row for tool calls, tool results and system entries; expanding it shows the raw text. The label stays on
  * one line; badges that don't fit beside it wrap onto the lines below (session.css).
  */
-function ToolDetails({ role, icon, label, text, badges, trimmed }: { role?: string; icon: IconName; label: ReactNode; text: string; badges?: ReactNode; trimmed?: EntryView["trimmed"] }) {
+function ToolDetails({ role, icon, label, text, badges, trimmed, images }: { role?: string; icon: IconName; label: ReactNode; text: string; badges?: ReactNode; trimmed?: EntryView["trimmed"]; images?: ReactNode }) {
   return <details className="entry-tool" data-role={role}>
     <summary><Icon name={icon} size={14} /><span className="entry-tool-label"><span className="truncate">{label}</span>{badges}</span><Icon name="chevron-right" size={14} /></summary>
-    <pre>{text}</pre>
+    {(text || !images) && <pre>{text}</pre>}
+    {images}
     {trimmed && <BriefNote trimmed={trimmed} />}
   </details>;
 }
@@ -147,9 +150,16 @@ function MessageActions({ entry, actions }: { entry: EntryView; actions?: Messag
   </span>;
 }
 
-/** User messages are plain-text bubbles; assistant text is markdown; tool calls, results and system entries collapse to one row. */
-function TranscriptEntry({ entry, userId, actions }: { entry: EntryView; userId: string; actions?: MessageActionHandlers }) {
+/**
+ * User messages are plain-text bubbles; assistant text is markdown; tool calls, results and system entries collapse to one row.
+ * `imagesOf`: the session whose transcript images this person sees (seesEntryImages), shown as thumbnails in place of
+ * their `[image <type>]` lines; without it, the lines stay.
+ */
+function TranscriptEntry({ entry, userId, actions, imagesOf }: { entry: EntryView; userId: string; actions?: MessageActionHandlers; imagesOf?: string }) {
   const actor = entry.actorId && <Username id={entry.actorId} you />;
+  const images = shownImages(entry, imagesOf !== undefined);
+  const text = images.length ? textBesideImages(entry.text) : entry.text;
+  const thumbnails = images.length > 0 && imagesOf !== undefined && <EntryImages sessionId={imagesOf} entryId={entry.id} images={images} />;
   const { prose, calls } = entry.role === "assistant" ? splitToolCalls(entry.text) : { prose: entry.text, calls: [] };
   const toolLabel = calls.length > 0 && `Tool · ${calls[0].name}`;
   if (entry.kind === "workspace.run-stopped") return <div className="entry-stopped" role="note"><span>Stopped{actor && <> by {actor}</>}</span></div>;
@@ -160,8 +170,8 @@ function TranscriptEntry({ entry, userId, actions }: { entry: EntryView; userId:
     // A tool call row would show the model's time, not the tool's, so only results carry a duration.
     const took = entry.role === "toolResult" && entry.durationMs !== undefined
       && <> · <span title="How long the tool ran">{formatDuration(entry.durationMs)}</span></>;
-    return <ToolDetails role={entry.role} icon={toolLabel ? "tool" : "terminal"} label={<>{label}{took}{actor && <> · {actor}</>}{briefLine(entry)}</>} text={entry.text}
-      badges={<AutoApprovedMarks calls={entry.autoApproved} />} trimmed={entry.trimmed} />;
+    return <ToolDetails role={entry.role} icon={toolLabel ? "tool" : "terminal"} label={<>{label}{took}{actor && <> · {actor}</>}{briefLine(entry)}</>} text={text}
+      badges={<AutoApprovedMarks calls={entry.autoApproved} />} trimmed={entry.trimmed} images={thumbnails} />;
   }
   if (entry.error) {
     return <div className="entry-error" title={entry.kind}>
@@ -173,7 +183,8 @@ function TranscriptEntry({ entry, userId, actions }: { entry: EntryView; userId:
   }
   if (entry.role === "user") {
     return <div className="entry-user" title={entry.kind}>
-      <div className="entry-bubble">{entry.text}</div>
+      {(text || !thumbnails) && <div className="entry-bubble">{text}</div>}
+      {thumbnails}
       <div className="entry-footer">
         {actor && entry.actorId !== userId && <span className="entry-actor">by {actor}</span>}
         <MessageActions entry={entry} actions={actions} />
@@ -467,6 +478,8 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
   const archived = session.status === "archived";
   const frozen = session.frozen === true;
   const permitted = !archived && !frozen && (actualMode === "write" ? canWrite : canAsk);
+  // Collaborators see the transcript's images; everyone else the lines that stand for them.
+  const imagesOf = seesEntryImages(session) ? session.id : undefined;
   const unsandboxed = Boolean(session.hostUnsandboxed || host?.capabilities.unsandboxed);
   const queue = view.queue ?? [];
   const activeQueue = queue.filter(item => activeStatuses.includes(item.status));
@@ -723,7 +736,7 @@ function Conversation({ id, user, session, view, host, stale, refresh, loadOlder
               {loadingOlder ? "Loading earlier messages..." : `Show earlier messages (${olderCount})`}
             </Button>
           </div>}
-          {entries.length ? entries.map(entry => <TranscriptEntry entry={entry} userId={user.id} actions={messageActions} key={entry.id} />)
+          {entries.length ? entries.map(entry => <TranscriptEntry entry={entry} userId={user.id} actions={messageActions} imagesOf={imagesOf} key={entry.id} />)
             : <EmptyState title={actualMode === "ask" ? "A question on the side" : "The conversation begins here"}>{actualMode === "ask" ? "Ask about the work without changing it" : "Committed messages and tool results will appear here"}</EmptyState>}
         </div>
       </div>

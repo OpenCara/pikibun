@@ -164,6 +164,42 @@ test("pasted images reach the model after the message's text, prepared to fit, a
   assert.equal(alone.entries.findLast(entry => entry.role === "user")!.text, "[image image/png]");
 });
 
+test("collaborators' clients read the transcript's images as thumbnails or as the model got them", hostMode, async t => {
+  const session = await service(t, true);
+  const small = png(3, 2);
+  const wide = png(2400, 300);
+  await send(session, { content: "Look", images: [{ mimeType: "image/png", data: base64(small) }, { mimeType: "image/png", data: base64(wide) }] });
+  const view = await settle(session);
+  const message = view.entries.findLast(entry => entry.role === "user")!;
+  // The entry lists its images in the order of their lines; their data stays on the host until asked for.
+  assert.equal(message.text, "Look\n[image image/png]\n[image image/png]");
+  assert.deepEqual(message.images, [{ mimeType: "image/png" }, { mimeType: "image/png" }]);
+  assert.equal(view.entries.findLast(entry => entry.role === "assistant")!.images, undefined);
+  const ask = async (input: unknown) => (await session.entryImage(await ticket("images", "submit"), input)).image;
+
+  // An image within a thumbnail's limits comes back as it is, whole or as its thumbnail.
+  assert.deepEqual(await ask({ entryId: message.id, index: 0, size: "thumbnail" }), { mimeType: "image/png", data: base64(small) });
+  assert.deepEqual(await ask({ entryId: message.id, index: 0, size: "full" }), { mimeType: "image/png", data: base64(small) });
+  // A larger one: whole, as the model got it (fitted to 1568 pixels); its thumbnail within 480 and 64 KiB.
+  const whole = await ask({ entryId: message.id, index: 1, size: "full" });
+  assert.equal(Buffer.from(whole.data, "base64").readUInt32BE(16), 1568);
+  const thumbnail = await ask({ entryId: message.id, index: 1, size: "thumbnail" });
+  const bytes = Buffer.from(thumbnail.data, "base64");
+  assert.ok(thumbnail.data.length <= 64 * 1024);
+  if (thumbnail.mimeType === "image/png") assert.deepEqual([bytes.readUInt32BE(16), bytes.readUInt32BE(20)], [480, 60]);
+  else assert.equal(thumbnail.mimeType, "image/jpeg");
+  // Asked again, it comes from what the host kept.
+  assert.deepEqual(await ask({ entryId: message.id, index: 1, size: "thumbnail" }), thumbnail);
+
+  await assert.rejects(ask({ entryId: message.id, index: 2, size: "thumbnail" }), refused(404, /not in the transcript/));
+  await assert.rejects(ask({ entryId: "0:99999", index: 0, size: "thumbnail" }), refused(404, /not in the transcript/));
+  await assert.rejects(ask({ entryId: `9${message.id}`, index: 0, size: "thumbnail" }), refused(404, /not in the transcript/));
+  for (const input of [{ entryId: message.id, index: 0 }, { entryId: message.id, index: -1, size: "full" }, { entryId: "stopped:1", index: 0, size: "full" },
+    { entryId: message.id, index: 0, size: "full", path: "x" }, null]) {
+    await assert.rejects(ask(input), refused(400, /Invalid image request/));
+  }
+});
+
 test("pasted images the host can't read or take are refused before anything is queued, and a request ID binds its images", hostMode, async t => {
   const session = await service(t, true);
   const image = { mimeType: "image/png" as const, data: base64(png(3, 2)) };

@@ -3662,6 +3662,47 @@ test('the Files tab reads the session worktree through its host, for collaborato
   assert.equal(requests.length, before + 1);
 });
 
+test('transcript images come from the session host, as thumbnails or whole, for collaborators only', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  const image = (query: string, client = s.creator) => client.request('GET', `/api/sessions/${s.session.id}/images?${query}`);
+  const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+  const requests = rpcHub(f, s.connector, envelope => {
+    const { entryId, size } = JSON.parse(envelope.request.body) as { entryId: string; size: string };
+    if (entryId === '0:9') return Response.json({ image: { mimeType: 'image/png', data: 'A'.repeat(64 * 1024 + 4) } });
+    if (entryId === '0:8') return Response.json({ image: { mimeType: 'image/svg+xml', data: png } });
+    return Response.json({ image: { mimeType: 'image/png', data: png, ...(size === 'full' ? { extra: 1 } : {}) } });
+  });
+
+  assert.deepEqual(await json(await image('entry=0:3&index=1&size=thumbnail')), { image: { mimeType: 'image/png', data: png } });
+  const request = requests.at(-1)!.request;
+  assert.equal(request.method, 'POST');
+  assert.equal(request.path, `/v1/sessions/${s.session.id}/image`);
+  assert.equal(request.ticket.action, 'image');
+  assert.deepEqual(JSON.parse(request.body), { entryId: '0:3', index: 1, size: 'thumbnail' });
+  // A thumbnail is what's asked for unless the whole image is; unknown keys are dropped.
+  await json(await image('entry=0:3&index=0'));
+  assert.equal(JSON.parse(requests.at(-1)!.request.body).size, 'thumbnail');
+  assert.deepEqual(await json(await image('entry=0:3&index=0&size=full')), { image: { mimeType: 'image/png', data: png } });
+
+  // Only well-formed requests reach the host, and its answer is held to the limits and image types.
+  const before = requests.length;
+  for (const query of ['entry=stopped:1&index=0', 'entry=0:3&index=-1', 'entry=0:3&index=64', 'entry=0:3&index=x', 'entry=0:3&index=0&size=huge', 'index=0']) {
+    await denied(await image(query), 400, 'invalid_image');
+  }
+  assert.equal(requests.length, before);
+  await denied(await image('entry=0:9&index=0'), 502, 'invalid_runner_response');
+  await denied(await image('entry=0:8&index=0'), 502, 'invalid_runner_response');
+
+  // Like the Files tab: workspace members and session viewers follow the conversation, with its image lines only.
+  await denied(await image('entry=0:3&index=0', s.host), 403, 'forbidden');
+  await json(await s.creator.request('PATCH', `/api/sessions/${s.session.id}`, { visibility: 'private' }));
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'viewer' }));
+  await denied(await image('entry=0:3&index=0', s.host), 403, 'forbidden');
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.host.user.id, role: 'collaborator' }));
+  await json(await image('entry=0:3&index=0', s.host));
+  assert.equal(requests.at(-1)!.request.ticket.actorId, s.host.user.id);
+});
+
 test('files attached to messages go to the session host in chunks, within the workspace limit its admins set', async t => {
   const f = await fixture(t); const s = await sharedSession(f);
   const upload = (chunk: Record<string, unknown>, client = s.creator) => client.request('POST', `/api/sessions/${s.session.id}/uploads`, chunk);

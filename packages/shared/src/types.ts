@@ -263,7 +263,7 @@ export interface RunnerBinding {
   model: ModelDefinition;
 }
 export type RunnerAction = "create" | "view" | "events" | "submit" | "ask" | "operations" | "approve" | "backup" | "restart" | "restore" | "stop" | "files"
-  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel";
+  | "revert" | "fork" | "pack" | "unpack" | "withdraw" | "upload" | "tunnel" | "image";
 
 /** How far the session file browser reads: entries listed per directory, and bytes of a file previewed. */
 export const fileBrowserLimits = { entries: 1000, textBytes: 256 * 1024, imageBytes: 2 * 1024 * 1024 } as const;
@@ -783,6 +783,12 @@ export interface EntryView {
   durationMs?: number;
   /** This entry's tool calls whose commands ran under auto-approve, in call order; absent from older runners. */
   autoApproved?: AutoApprovedCall[];
+  /**
+   * The images this entry gave the model, in the order of the `[image <type>]` lines that stand for them in `text`; absent
+   * from entries without images and from older runners. Their data stays on the host: collaborators' clients read each
+   * from `GET /api/sessions/:id/images` (entry-images.ts).
+   */
+  images?: { mimeType: string }[];
   /**
    * The session shows brief tool output (`SessionRecord.toolOutput`) and `text` is shortened: a tool result's first
    * line, or tool calls cut to their first characters. The whole text's lines and characters (code points); the host

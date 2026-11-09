@@ -48,7 +48,7 @@ function cut(text: string, limit: number): string {
 
 /**
  * The entry as a session with brief tool output shows it, or the entry itself when that shows it whole. A tool result
- * keeps its first non-blank line; an assistant message keeps its prose and each tool call's name and the start of its
+ * keeps its first non-blank line, and none of its images; an assistant message keeps its prose and each tool call's name and the start of its
  * arguments, still as a call line. Apply it after redaction, so a cut never splits a secret the redaction would hide.
  */
 export function briefEntry(entry: EntryView): EntryView {
@@ -57,7 +57,9 @@ export function briefEntry(entry: EntryView): EntryView {
     const lines = text.split("\n");
     const first = cut((lines.find(line => line.trim()) ?? "").trimEnd(), briefChars);
     if (first === text) return entry;
-    return { ...entry, text: first, trimmed: { lines: lines.length, chars: characters(text) } };
+    // Its images go with the lines that stood for them.
+    const { images: _images, ...rest } = entry;
+    return { ...rest, text: first, trimmed: { lines: lines.length, chars: characters(text) } };
   }
   if (entry.role !== "assistant") return entry;
   let changed = false;

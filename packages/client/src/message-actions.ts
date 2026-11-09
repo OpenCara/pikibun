@@ -1,5 +1,6 @@
 import type { EntryView, SessionView } from "../../shared/src/types";
 import { splitToolCalls } from "../../shared/src/transcript";
+import { withoutImageLines } from "../../shared/src/entry-images";
 
 /**
  * What a shared-conversation entry offers besides copying it: going back to it (POST /api/sessions/:id/revert) and
@@ -25,12 +26,10 @@ export function rewindable(view: Pick<SessionView, "rewindable">): boolean {
   return view.rewindable === true;
 }
 
-/** A line the runner writes in place of an image it gave the model (`entryView`): the image itself stays on the host. */
-const IMAGE_LINE = /^\[image [^\s\]]+\]$/;
-
 /** The text of a user message to send again once the conversation went back before it: without its images' lines. */
 export function resendText(entry: EntryView): string {
-  return entry.text.split("\n").filter(line => !IMAGE_LINE.test(line)).join("\n").trim();
+  // The lines the runner writes in place of the images it gave the model (`entryView`): the images stay on the host.
+  return withoutImageLines(entry.text).trim();
 }
 
 /**
