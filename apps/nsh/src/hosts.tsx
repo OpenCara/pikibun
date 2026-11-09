@@ -28,26 +28,42 @@ export function ConnectionStatus(props: { connector: ConnectorInfo }) {
 
 /** What a host can do, and an alert when it runs without the sandbox. */
 export function HostCapabilities(props: { connector: ConnectorInfo }) {
+  return (
+    <View style={{ gap: 8 }}>
+      <UnsandboxedHost connector={props.connector} />
+      <CollapsibleRow plain title="Host details" hint={props.connector.capabilities.platform || "Unknown platform"}>
+        <HostDetails connector={props.connector} />
+      </CollapsibleRow>
+    </View>
+  );
+}
+
+/** The alert for a host that runs agent work without the sandbox; nothing otherwise. */
+export function UnsandboxedHost(props: { connector: ConnectorInfo }) {
+  return (
+    <If when={props.connector.capabilities.unsandboxed}>
+      <Banner tone="danger" title="Unsandboxed host">Agent work runs directly on the owner's machine without isolation: approved commands and commits run as their user, with access to their files, credentials and network, and no resource limits. File tools are confined to the session folder by path checks only.</Banner>
+    </If>
+  );
+}
+
+/** What a host can do, note by note: its platform, sandbox, credentials, cache, limits and moves. */
+export function HostDetails(props: { connector: ConnectorInfo }) {
   const capabilities = () => props.connector.capabilities;
   const config = () => props.connector.config;
   return (
-    <View style={{ gap: 8 }}>
-      <If when={capabilities().unsandboxed}>
-        <Banner tone="danger" title="Unsandboxed host">Agent work runs directly on the owner's machine without isolation: approved commands and commits run as their user, with access to their files, credentials and network, and no resource limits. File tools are confined to the session folder by path checks only.</Banner>
+    <>
+      <Note>{`Platform: ${capabilities().platform || "Unknown"}.${!props.connector.online ? " Offline: it must reconnect before work can run." : ""}`}</Note>
+      <Note>{`Sandbox: ${capabilities().unsandboxed ? "disabled by the host owner." : !capabilities().sandbox ? "unverified (not necessarily unavailable); the runner checks isolation when preparing each session." : "reported by the host; not a security attestation."} Production shell limits: ${capabilities().productionShell ? "reported; still verified per session." : "not confirmed."}`}</Note>
+      <If when={config()?.gitCredentials || capabilities().gitCredentials}><Note>Git credentials: offered by the host owner for pushes in their own sessions, where a workspace's push access uses the host's Git credentials.</Note></If>
+      <If when={capabilities().repositoryCache}><Note>Repository cache: this host fetches repositories into its own cache with the host owner's Git credentials, after Pikibun confirms that the session's owner can read them with their own account.</Note></If>
+      <If when={config()?.hostSessions && capabilities().hostConfig && !capabilities().unsandboxed}><Note>Sessions on the host: its owner may start sessions that run directly on it, without the sandbox.</Note></If>
+      <If when={config() && capabilities().hostConfig}>
+        <Note>{`Commands: stopped after ${config()?.commandTimeoutSeconds} seconds${config()?.gpu && capabilities().gpu ? `, with the host's GPU (${capabilities().gpu === "dxg" ? "WSL /dev/dxg" : "render nodes"})` : ""}.`}</Note>
       </If>
-      <CollapsibleRow plain title="Host details" hint={capabilities().platform || "Unknown platform"}>
-        <Note>{`Platform: ${capabilities().platform || "Unknown"}.${!props.connector.online ? " Offline: it must reconnect before work can run." : ""}`}</Note>
-        <Note>{`Sandbox: ${capabilities().unsandboxed ? "disabled by the host owner." : !capabilities().sandbox ? "unverified (not necessarily unavailable); the runner checks isolation when preparing each session." : "reported by the host; not a security attestation."} Production shell limits: ${capabilities().productionShell ? "reported; still verified per session." : "not confirmed."}`}</Note>
-        <If when={config()?.gitCredentials || capabilities().gitCredentials}><Note>Git credentials: offered by the host owner for pushes in their own sessions, where a workspace's push access uses the host's Git credentials.</Note></If>
-        <If when={capabilities().repositoryCache}><Note>Repository cache: this host fetches repositories into its own cache with the host owner's Git credentials, after Pikibun confirms that the session's owner can read them with their own account.</Note></If>
-        <If when={config()?.hostSessions && capabilities().hostConfig && !capabilities().unsandboxed}><Note>Sessions on the host: its owner may start sessions that run directly on it, without the sandbox.</Note></If>
-        <If when={config() && capabilities().hostConfig}>
-          <Note>{`Commands: stopped after ${config()?.commandTimeoutSeconds} seconds${config()?.gpu && capabilities().gpu ? `, with the host's GPU (${capabilities().gpu === "dxg" ? "WSL /dev/dxg" : "render nodes"})` : ""}.`}</Note>
-        </If>
-        <If when={capabilities().hostMigration}><Note>Moves: this host accepts sessions moved to it from another connected host.</Note></If>
-        <Note>The runner verifies prerequisites for every session and stops work that fails. Production shell needs verified CPU, memory, process and storage limits. Without them, only the host's owner can let a command run unlimited, in their own sessions and still inside the sandbox.</Note>
-        <Note>Native Windows is unsupported: use Linux or WSL2 with Pi configured there, or macOS without isolation.</Note>
-      </CollapsibleRow>
-    </View>
+      <If when={capabilities().hostMigration}><Note>Moves: this host accepts sessions moved to it from another connected host.</Note></If>
+      <Note>The runner verifies prerequisites for every session and stops work that fails. Production shell needs verified CPU, memory, process and storage limits. Without them, only the host's owner can let a command run unlimited, in their own sessions and still inside the sandbox.</Note>
+      <Note>Native Windows is unsupported: use Linux or WSL2 with Pi configured there, or macOS without isolation.</Note>
+    </>
   );
 }

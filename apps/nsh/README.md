@@ -42,7 +42,9 @@ needs a decision stand out:
 
 - **Layout**: wider windows have a sidebar (a new session, every session by workspace, the signed-in person and
   settings) beside the open session; with none open, the home asks "What should we work on?" with the chat box that
-  starts one. Phones stack the session list, then the session.
+  starts one: in the box what the first message runs with (model, reasoning, access), under it one quiet row of where
+  the session lives (workspace, host, sandbox, visibility), and alerts only when something needs a decision. Phones
+  stack the session list, then the session.
 - **Session**: a header with where the session lives and runs and its connection; the transcript in one readable column,
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
   pending approvals docked above the chat box; the chat box's pickers (shared or side ask, model, reasoning, access)
