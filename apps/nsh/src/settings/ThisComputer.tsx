@@ -233,13 +233,15 @@ function ModelsSection(props: { host: ThisComputerHost }) {
               disabled={action.busy()} onChange={on => toggle(modelKey(model()), on)} />}
           </Each>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            <Button small variant="outline" testID="this-computer-models-save" label="Offer checked models" disabled={!draft()} onPress={() => void action.run(async () => {
-              host.setModels(available().filter(model => chosen().has(modelKey(model))).map(model => ({ provider: model.provider, modelId: model.modelId })));
+            <Button small variant="outline" testID="this-computer-models-save" label="Offer checked models" disabled={!draft() || chosen().size === 0} onPress={() => void action.run(async () => {
+              const outcome = host.setModels(available().filter(model => chosen().has(modelKey(model))).map(model => ({ provider: model.provider, modelId: model.modelId })));
+              if (!outcome.ok) throw new Error(outcome.error);
               draft.set(null);
             }, "Saved: the host offers these from its next start.")} />
             <If when={host.models()}>
               <Button small variant="ghost" label="Let Pi choose" onPress={() => void action.run(async () => { host.setModels(null); draft.set(null); })} />
             </If>
+            <If when={draft() && chosen().size === 0}><Small>Check at least one model, or let Pi choose.</Small></If>
           </View>
           <Feedback error={action.error()} notice={action.notice()} />
         </CardBody>

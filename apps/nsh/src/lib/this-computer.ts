@@ -269,6 +269,10 @@ export class ThisComputerHost {
   readonly models = signal<ModelChoice[] | null>(null);
   private resume: Saved["resume"];
   private loaded?: Promise<void>;
+  /** The server the page or the host last named: refreshes of their own keep its loopback allowance. */
+  private server?: string;
+  /** Whether `error` is an inspection's, which the next good one clears; a failure's stays until the next start. */
+  private inspectError = false;
   private readonly channel = new HostChannel({
     onEvent: event => this.handleEvent(event),
     onOutput: line => this.log("info", line),
@@ -283,14 +287,15 @@ export class ThisComputerHost {
       if (!raw) return;
       const saved = JSON.parse(raw) as Saved;
       if (saved.sandbox === "seatbelt") this.sandbox.set("seatbelt");
-      if (Array.isArray(saved.models)) this.models.set(saved.models.filter(model => typeof model?.provider === "string" && typeof model?.modelId === "string"));
+      const models = Array.isArray(saved.models) ? saved.models.filter(model => typeof model?.provider === "string" && typeof model?.modelId === "string") : [];
+      if (models.length) this.models.set(models);
       if (saved.resume && typeof saved.resume.server === "string") this.resume = { server: saved.resume.server, unsandboxedConsent: saved.resume.unsandboxedConsent === true };
     }).catch(() => undefined);
     return this.loaded;
   }
 
   private save(): void {
-    const saved: Saved = { ...(untracked(this.sandbox) === "seatbelt" ? { sandbox: "seatbelt" as const } : {}), ...(untracked(this.models) ? { models: untracked(this.models)! } : {}),
+    const saved: Saved = { ...(untracked(this.sandbox) === "seatbelt" ? { sandbox: "seatbelt" as const } : {}), ...(untracked(this.models)?.length ? { models: untracked(this.models)! } : {}),
       ...(this.resume ? { resume: this.resume } : {}) };
     Storage.setItem(SAVED_KEY, JSON.stringify(saved)).catch(() => undefined);
   }
@@ -315,14 +320,16 @@ export class ThisComputerHost {
       this.running.set({ server: event.server, unsandboxed: event.unsandboxed === true,
         ...(event.sandbox === "bubblewrap" || event.sandbox === "seatbelt" || event.sandbox === "windows" ? { sandbox: event.sandbox } : {}) });
     }
+    if (event.server !== undefined) this.server = event.server;
     if (event.state === "connected") this.error.set("");
     // A first connection may have just saved a pairing: show it.
-    if (event.state === "connected" && previous !== "connected") void this.refresh();
+    if (event.state === "connected" && previous !== "connected") void this.refresh(event.server);
   }
 
   /** A started host failed or stopped by itself: the next launch must not resume it. */
   private fail(message: string): void {
     if (this.resume) this.setResume(undefined);
+    this.inspectError = false;
     this.error.set(message);
     this.log("error", message);
   }
@@ -339,15 +346,22 @@ export class ThisComputerHost {
     return platform.os === "windows" || (platform.os === "macos" && untracked(this.sandbox) === "seatbelt") ? { experimentalSandbox: true } : {};
   }
 
-  /** Looks at what this computer would run, without starting anything. */
+  /**
+   * Looks at what this computer would run, without starting anything. `server`, else the one last named, decides
+   * whether a pairing with plain HTTP on loopback (a development server) reads as one.
+   */
   async refresh(server?: string): Promise<HostInspection | undefined> {
+    if (server) this.server = server;
+    const origin = server ?? this.server;
     this.inspecting.set(true);
     try {
-      const result = await this.channel.request({ type: "inspect", ...this.isolation(), ...(server && isLoopbackHttp(server) ? { allowInsecureLoopback: true } : {}) });
+      const result = await this.channel.request({ type: "inspect", ...this.isolation(), ...(origin && isLoopbackHttp(origin) ? { allowInsecureLoopback: true } : {}) });
       const problem = this.channel.launchFailure;
       this.problem.set(!result.ok && problem ? problem : null);
-      if (result.ok && result.inspection) this.inspection.set(result.inspection);
-      else if (!result.ok && !problem) this.error.set(result.error.message);
+      if (result.ok && result.inspection) {
+        this.inspection.set(result.inspection);
+        if (this.inspectError) { this.inspectError = false; this.error.set(""); }
+      } else if (!result.ok && !problem) { this.inspectError = true; this.error.set(result.error.message); }
       if (result.ok && untracked(this.providers) === null && untracked(this.signIn)?.state !== "running") void this.loadProviders();
       return result.ok ? result.inspection : undefined;
     } finally {
@@ -362,10 +376,15 @@ export class ThisComputerHost {
    */
   async start(server: string, pairing?: { create: () => Promise<{ id: string; code: string }>; replace: boolean }, resume?: { unsandboxedConsent: boolean }): Promise<Outcome> {
     if (untracked(this.state) !== "stopped") return { ok: false, error: "The host is already running." };
+    this.inspectError = false;
     const inspection = await this.refresh(server);
     if (!inspection) return this.refuse(untracked(this.problem) ? "" : untracked(this.error) || `${computerTitle} could not be inspected.`);
+    const offered = this.offeredModels(inspection);
     const failure = inspection.unsupported ?? inspection.prerequisitesError
-      ?? (!pairing && inspection.pairedServer !== server ? `${computerTitle} is not paired with ${server} yet.` : undefined);
+      ?? (!pairing && inspection.pairedServer !== server ? `${computerTitle} is not paired with ${server} yet.` : undefined)
+      // Checked here, before a pairing is made: the host would refuse to start without a model to offer.
+      ?? (!inspection.models.length ? `${inspection.modelsError ?? "Pi has no models to offer on this computer."} Sign Pi in to a provider below first.`
+        : !offered.length ? "None of the models chosen to offer is configured in Pi any more. Check some under Models offered, or let Pi choose." : undefined);
     if (failure) return this.refuse(failure);
     let unsandboxedConsent = false;
     if (inspection.mode === "unsandboxed") {
@@ -385,7 +404,7 @@ export class ThisComputerHost {
       type: "start", server,
       ...(made && pairing ? { pairing: { id: made.id, code: made.code }, replacePairing: pairing.replace } : {}),
       ...(unsandboxedConsent ? { unsandboxedConsent: true } : {}),
-      ...(models?.length ? { models: models.map(model => ({ ...model })) } : {}),
+      ...(models ? { models: offered.map(model => ({ ...model })) } : {}),
       ...this.isolation(), ...(isLoopbackHttp(server) ? { allowInsecureLoopback: true } : {}),
     });
     if (!result.ok) return this.refuse(result.error.message);
@@ -433,11 +452,23 @@ export class ThisComputerHost {
     return { ok: true };
   }
 
-  /** The models to offer from the next start; null leaves the choice to Pi. */
-  setModels(models: ModelChoice[] | null): void {
+  /**
+   * The models to offer from the next start; null leaves the choice to Pi. An empty list is refused: the host offers
+   * Pi's whole set without one, the opposite of what it would say.
+   */
+  setModels(models: ModelChoice[] | null): Outcome {
+    if (models && !models.length) return { ok: false, error: "Check at least one model, or let Pi choose." };
     this.models.set(models);
     this.save();
     if (untracked(this.state) !== "stopped") this.log("info", "The model choice applies from the host's next start.");
+    return { ok: true };
+  }
+
+  /** What a start would offer: the chosen models Pi still has, or, with no choice, Pi's own. */
+  private offeredModels(inspection: HostInspection): ModelChoice[] {
+    const chosen = untracked(this.models);
+    const available = inspection.models.map(model => ({ provider: model.provider, modelId: model.modelId }));
+    return chosen ? chosen.filter(model => available.some(entry => entry.provider === model.provider && entry.modelId === model.modelId)) : available;
   }
 
   /** Lists Pi's providers this host can sign in to. */

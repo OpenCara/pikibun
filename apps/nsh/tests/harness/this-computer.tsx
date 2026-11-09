@@ -4,18 +4,22 @@ import { setHostLauncher, thisComputer, type HostLink } from "../../src/lib/this
 import { ThisComputerPanel } from "../../src/settings/ThisComputer";
 
 // Settings › This Mac against a stand-in for `pikibun host --stdio`: it answers the desktop host's protocol as the real
-// one does, for a Mac without a sandbox whose Pi isn't signed in to anything yet. `host.params.command` says how the
-// command fares: "ok", "missing" (not installed) or "outdated" (a CLI without `host`). What the app sent is listed under
-// the panel, codes left out, for the tests to read.
+// one does, for a Mac without a sandbox. `host.params`: `command`, how the command fares ("ok", "missing": not
+// installed, "outdated": a CLI without `host`); `paired`, the server it is paired with; `piSignedIn` (true), whether Pi
+// has a provider yet; `server`, the one the page is signed in to. What the app sent is listed under the panel, secrets
+// left out, for the tests to read.
 
-const SERVER = "https://pikibun.test";
-const command = String((embedder.params as { command?: unknown }).command ?? "ok");
+const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown };
+const SERVER = typeof params.server === "string" ? params.server : "https://pikibun.test";
+const command = String(params.command ?? "ok");
 const sent = signal<string[]>([]);
-let paired: string | undefined = (embedder.params as { paired?: unknown }).paired as string | undefined;
-let signedIn = false;
+let paired: string | undefined = typeof params.paired === "string" ? params.paired : undefined;
+let signedIn = params.piSignedIn !== false;
+/** As the real host: a pairing with plain HTTP reads only where loopback is allowed (connector.ts, controlPlaneOrigin). */
+const loopback = (origin: string) => origin.startsWith("http://");
 
 const model = { provider: "anthropic", modelId: "claude-sonnet", name: "Claude Sonnet" };
-const inspection = (): HostInspection => ({
+const inspection = (allowLoopback: boolean): HostInspection => ({
   platform: "darwin", stateDir: "/Users/ada/.local/share/pikibun/connector", mode: "unsandboxed",
   unsandboxedWarning: "WARNING: --unsafe-no-sandbox runs agent work directly on this machine.",
   prerequisites: [
@@ -24,7 +28,8 @@ const inspection = (): HostInspection => ({
   ],
   models: signedIn ? [model, { provider: "anthropic", modelId: "claude-opus", name: "Claude Opus" }] : [],
   ...(signedIn ? {} : { modelsError: "Pi has no models with configured authentication." }),
-  ...(paired ? { pairedServer: paired } : {}),
+  ...(paired && (!loopback(paired) || allowLoopback) ? { pairedServer: paired } : {}),
+  ...(paired && loopback(paired) && !allowLoopback ? { pairingError: "This computer's saved pairing could not be read." } : {}),
 });
 const providers = (): LoginProvider[] => [{ id: "anthropic", name: "Anthropic", signedIn, methods: [{ type: "api_key", name: "Anthropic API key" }] }];
 
@@ -51,7 +56,7 @@ function fakeHost(): HostLink {
       if (typeof shown.value === "string") shown.value = `<${shown.value.length} characters>`;
       sent.update(list => [...list, JSON.stringify(shown)]);
       const reply = (extra: object = {}) => emit({ type: "result", id: request.id, ok: true, ...extra });
-      if (request.type === "inspect") reply({ inspection: inspection() });
+      if (request.type === "inspect") reply({ inspection: inspection(request.allowInsecureLoopback === true) });
       else if (request.type === "providers") reply({ providers: providers() });
       else if (request.type === "start") {
         if (request.pairing) paired = String(request.server);

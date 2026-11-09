@@ -87,7 +87,7 @@ describe("This Mac", () => {
   });
 
   test("signs Pi in to a provider with an API key, then offers only the checked models from the next start", async () => {
-    const { app, sent, showsText } = await openPanel({ paired: SERVER });
+    const { app, sent, showsText } = await openPanel({ paired: SERVER, piSignedIn: false });
     await app.waitFor("id:this-computer-start");
     await app.waitUntil(() => showsText("Pi has no models with configured authentication."));
     await app.waitFor("id:this-computer-sign-in-start");
@@ -107,6 +107,45 @@ describe("This Mac", () => {
     await app.press("id:this-computer-start");
     await app.waitFor("id:this-computer-stop");
     expect(sent()).toContain(JSON.stringify({ type: "start", server: SERVER, unsandboxedConsent: true, models: [{ provider: "anthropic", modelId: "claude-sonnet" }] }));
+  });
+
+  test("with no model in Pi yet, pairing is refused before a code is made, pointing at the sign-in", async () => {
+    const { app, sent, showsText } = await openPanel({ piSignedIn: false });
+    await app.waitFor("id:this-computer-pair-button");
+    await app.press("id:this-computer-pair-button");
+    await app.waitUntil(() => showsText("Sign Pi in to a provider below first."));
+    expect(sent()).not.toContain("pairing My Mac");
+    expect(sent().some(line => line.startsWith("{\"type\":\"start\""))).toBe(false);
+    expect(app.dialogs().length).toBe(0);
+  });
+
+  test("unchecking every model isn't saved as a choice: the host would offer them all", async () => {
+    const { app, showsText } = await openPanel({ paired: SERVER });
+    await app.waitFor("id:this-computer-model-anthropic/claude-opus");
+    await app.press("id:this-computer-model-anthropic/claude-sonnet");
+    await app.press("id:this-computer-model-anthropic/claude-opus");
+    await app.waitUntil(() => showsText("Check at least one model, or let Pi choose."));
+    // Its button is disabled: pressing it is refused.
+    let refused = "";
+    try { await app.press("id:this-computer-models-save"); } catch (error) { refused = String(error); }
+    expect(refused.includes("is disabled")).toBe(true);
+    expect(showsText("Saved: the host offers these from its next start.")).toBe(false);
+    expect(showsText("Pi chooses: its enabledModels setting")).toBe(true);
+  });
+
+  test("a development server on plain HTTP stays paired after its host connects and stops", async () => {
+    const local = "http://localhost:8787";
+    const { app, sent, showsText } = await openPanel({ server: local });
+    await app.waitFor("id:this-computer-pair-button");
+    app.onDialog(() => "Run unsandboxed");
+    await app.press("id:this-computer-pair-button");
+    await app.waitFor("id:this-computer-stop");
+    // The refresh after it connected kept the loopback allowance, so the pairing reads as this server's.
+    await app.waitUntil(() => sent().filter(line => line === JSON.stringify({ type: "inspect", allowInsecureLoopback: true })).length >= 3);
+    await app.press("id:this-computer-stop");
+    await app.waitFor("id:this-computer-start");
+    expect(app.shows("id:this-computer-pair-button")).toBe(false);
+    expect(showsText("paired elsewhere")).toBe(false);
   });
 
   test("macOS's own sandbox is asked for once chosen", async () => {
