@@ -2585,8 +2585,9 @@ test('its owner forks a session from a message into a new one on the same host a
   f.sqlite.prepare('UPDATE connectors SET models_json = ? WHERE id = ?').run(JSON.stringify([...advertised, { ...advertised[0]!, modelId: 'second' }]), s.connector.connectorId);
   let agent: SessionView['agent'] = { provider: s.model.provider, modelId: 'second', thinkingLevel: 'high' };
   let forkAnswer: () => Response = () => Response.json({ conversationId: '1', entries: 4 });
+  let memberForks = false;
   const requests = rpcHub(f, s.connector, envelope => envelope.request.ticket.action === 'fork' ? forkAnswer()
-    : envelope.request.ticket.action === 'view' ? Response.json({ view: { ...s.view, ...(agent ? { agent } : {}) } })
+    : envelope.request.ticket.action === 'view' ? Response.json({ view: { ...s.view, ...(agent ? { agent } : {}), ...(memberForks ? { memberForks: true } : {}) } })
     : Response.json({ session: {} }, { status: 201 }));
   const { session } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '1:12' }), 201);
   assert.notEqual(session.id, s.session.id);
@@ -2626,10 +2627,30 @@ test('its owner forks a session from a message into a new one on the same host a
   const { session: titled } = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/fork`, { entryId: '1:12', title: 'Try another way' }), 201);
   assert.equal(titled.title, 'Try another way');
   for (const body of [{}, { entryId: '1:12', visibility: 'private' }, { entryId: 'x' }]) await denied(await s.owner.request('POST', `${path}/fork`, body), 400, 'invalid_input');
-  // Only its owner: a reader can't, and nor could someone who could write to it.
+  // A reader can't.
   await denied(await s.member.request('POST', `${path}/fork`, { entryId: '1:12' }), 403, 'forbidden');
-  await json(await s.owner.request('POST', `${path}/grants`, { userId: s.member.user.id, permissions: ['read', 'ask', 'write', 'approve', 'manage'] }));
-  await denied(await s.member.request('POST', `${path}/fork`, { entryId: '1:12' }), 403, 'owner_required');
+  await json(await s.owner.request('POST', `${path}/grants`, { userId: s.member.user.id, permissions: ['read', 'ask', 'write'] }));
+  // Someone who can write to it can, into a session of their own, once its host forks for them: an older one doesn't.
+  const sessions = () => (f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }).n;
+  const count = sessions();
+  await denied(await s.member.request('POST', `${path}/fork`, { entryId: '1:12' }), 409, 'connector_update_required');
+  memberForks = true;
+  // Only on a host they may start sessions on: the owner's own host isn't shared with the workspace yet.
+  await denied(await s.member.request('POST', `${path}/fork`, { entryId: '1:12' }), 404, 'not_found');
+  assert.equal(sessions(), count, 'a refused fork starts no session');
+  await json(await s.owner.request('PUT', `/api/connectors/${s.connector.connectorId}/shares/${s.team.id}`));
+  const { session: theirs } = await json<{ session: SessionRecord }>(await s.member.request('POST', `${path}/fork`, { entryId: '1:12' }), 201);
+  assert.deepEqual([theirs.title, theirs.visibility, theirs.status, theirs.connectorId, theirs.ownerId],
+    [`Fork: ${s.session.title}`, s.session.visibility, 'ready', s.session.connectorId, s.member.user.id]);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body), { sourceSessionId: s.session.id, entryId: '1:12' });
+  assert.equal(requests.at(-1)!.request.ticket.actorId, s.member.user.id);
+  assert.equal(model(theirs.id), 'second-model', 'the model the conversation uses now, which they may use too');
+  assert.deepEqual(f.sqlite.prepare("SELECT actor_id, detail_json FROM audit WHERE session_id = ? AND action = 'session.forked'").all(theirs.id).map(row => ({ ...row })),
+    [{ actor_id: s.member.user.id, detail_json: JSON.stringify({ sourceSessionId: s.session.id, entryId: '1:12', sourceOwnerId: s.owner.user.id }) }]);
+  // Write permission it is: without it, no longer.
+  await json(await s.owner.request('POST', `${path}/grants`, { userId: s.member.user.id, permissions: ['read', 'ask'] }));
+  await denied(await s.member.request('POST', `${path}/fork`, { entryId: '1:12' }), 403, 'forbidden');
+  memberForks = false;
 
   // The host refuses: the new session is archived rather than left empty.
   const before = requests.length;

@@ -18,13 +18,13 @@ import { sha256 } from "../packages/shared/src/crypto.js";
 const ALICE = "test:alice";
 const BOB = "test:bob";
 
-function binding(id: string, ownerId = ALICE, modelId = "faux-1"): RunnerBinding {
+function binding(id: string, ownerId = ALICE, modelId = "faux-1", workspaceId = "workspace"): RunnerBinding {
   const createdAt = "2026-01-01T00:00:00Z";
   return {
-    session: { id, workspaceId: "workspace", ownerId, agentVersionId: "version-1", title: "Rewind", policyVersion: 1, status: "ready", createdAt, repositories: [], repositoryMode: "clone" },
+    session: { id, workspaceId, ownerId, agentVersionId: "version-1", title: "Rewind", policyVersion: 1, status: "ready", createdAt, repositories: [], repositoryMode: "clone" },
     owner: { id: ownerId, githubId: null, githubLogin: ownerId.slice(5), displayName: ownerId.slice(5), gitName: "Owner", gitEmail: "owner@example.test", env: {}, githubConnected: false },
-    agent: { id: "version-1", agentId: "agent", authorId: ownerId, workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["identity"], modelId: "model-1", createdAt },
-    model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId },
+    agent: { id: "version-1", agentId: "agent", authorId: ownerId, workspaceId, version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["identity"], modelId: "model-1", createdAt },
+    model: { id: "model-1", workspaceId, name: "Model", provider: "faux", modelId },
   };
 }
 
@@ -58,10 +58,12 @@ async function fixture(t: TestContext) {
   const models = createModels();
   models.setProvider(faux.provider);
   const backups = new Map<string, Uint8Array>();
+  // Who the control plane admits to which session: everyone, unless `refuse` says otherwise.
+  let refuse: (input: AuthorizationRequest) => boolean = () => false;
   const config = {
     readBackup: async (descriptor: { backupId: string }) => backups.get(descriptor.backupId)!,
     dataDir: directory, sharedSecret: "runner-rewind-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
-    authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
+    authorize: async (input: AuthorizationRequest) => ({ allowed: !refuse(input), ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async (model: RunnerBinding["model"]) => ({ models, provider: model.provider, modelId: model.modelId }),
   };
   let service = new RunnerService(config);
@@ -70,9 +72,10 @@ async function fixture(t: TestContext) {
   return {
     get service() { return service; },
     backups,
+    refuse(rule: (input: AuthorizationRequest) => boolean) { refuse = rule; },
     hold() { release = Promise.withResolvers<void>(); return () => release.resolve(); },
-    async provision(id: string, ownerId = ALICE, modelId?: string) {
-      const input = binding(id, ownerId, modelId);
+    async provision(id: string, ownerId = ALICE, modelId?: string, workspaceId?: string) {
+      const input = binding(id, ownerId, modelId, workspaceId);
       const now = Math.floor(Date.now() / 1000);
       return service.provision(input, { aud: "runner", sessionId: id, actorId: ownerId, ownerId, action: "create", policyVersion: 1, iat: now, exp: now + 60, jti: randomUUID(), bodyHash: await sha256("") });
     },
@@ -137,6 +140,7 @@ test("going back to a message keeps the shared conversation up to it, for the mo
   let view = await send(session, "three");
   assert.deepEqual(lines(view), ["user: one", "assistant: saw one", "user: two", "assistant: saw one|two", "user: three", "assistant: saw one|two|three"]);
   assert.equal(view.rewindable, true);
+  assert.equal(view.memberForks, true, "anyone who may write to it forks it");
   const original = view.conversations.find(conversation => conversation.mode === "write")!.id;
 
   // Before a user message: it and everything after it leave the conversation, which the next message continues.
@@ -201,7 +205,7 @@ test("going back is refused inside a turn, for a message no longer shown, and wh
   await idle(session);
 });
 
-test("a fork starts a new session with the shared conversation up to a message, on the same host, for its owner only", async t => {
+test("a fork starts a new session with the shared conversation up to a message, on the same host, of the person forking", async t => {
   const runner = await fixture(t);
   const source = await runner.provision("fork-source");
   await send(source, "one");
@@ -232,11 +236,27 @@ test("a fork starts a new session with the shared conversation up to a message, 
   await assert.rejects(runner.service.fork(target, await ticket(target, "fork"), { sourceSessionId: "fork-target", entryId }), refused(400, /into itself/));
   await assert.rejects(runner.service.fork(target, await ticket(target, "fork"), { sourceSessionId: "fork-source" }), refused(400, /Invalid fork request/));
 
-  // Someone else's session isn't theirs to fork, and a fork lands only in the forking owner's own session.
-  const bobs = await runner.provision("fork-bob", BOB);
-  await assert.rejects(runner.service.fork(bobs, await ticket(bobs, "fork"), input), refused(403, /owner/));
+  // A fork lands only in the forking person's own session.
   const other = await runner.provision("fork-other");
   await assert.rejects(runner.service.fork(other, await ticket(other, "fork", BOB), input), refused(403, /owner/));
+
+  // Someone who may write to another's session forks it into their own, as the control plane admits them.
+  const bobs = await runner.provision("fork-bob", BOB);
+  const asked: AuthorizationRequest[] = [];
+  runner.refuse(request => { asked.push(request); return false; });
+  const bobResult = await runner.service.fork(bobs, await ticket(bobs, "fork"), input);
+  assert.equal(bobResult.entries, result.entries);
+  assert.ok(asked.some(request => request.sessionId === "fork-source" && request.actorId === BOB && request.permission === "write"), JSON.stringify(asked));
+  assert.deepEqual(lines(await bobs.view()), lines(await target.view()).slice(0, -2), "what Alice's fork had before its own message");
+  // One it no longer admits to the source, such as a reader, doesn't.
+  runner.refuse(request => request.sessionId === "fork-source" && request.actorId === BOB);
+  const bobsAgain = await runner.provision("fork-bob-again", BOB);
+  await assert.rejects(runner.service.fork(bobsAgain, await ticket(bobsAgain, "fork"), input), refused(403, /Authorization/));
+  runner.refuse(() => false);
+
+  // Only within the session's workspace.
+  const elsewhere = await runner.provision("fork-elsewhere", BOB, undefined, "another-workspace");
+  await assert.rejects(runner.service.fork(elsewhere, await ticket(elsewhere, "fork"), input), refused(403, /same workspace/));
 });
 
 test("a backup of a session that went back keeps the conversation it went back from, and a restore takes exactly one as current", async t => {

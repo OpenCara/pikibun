@@ -332,25 +332,18 @@ function messageEntry(input: Record<string, unknown>): string {
 }
 
 /**
- * Starts a new session from `source`'s shared conversation up to `entryId`, as its owner: on the same host and model,
- * with the same visibility, starting empty like any session (its agent clones the workspace's repositories again). The
- * host copies the conversation from one session to the other itself, so it never crosses the control plane. A fork
- * that doesn't complete leaves its new session archived.
+ * The model a fork of `source` starts on: the one its host reports for the shared conversation now (`agent`), which
+ * messages may have changed, while the person forking may still start a session on it (the host offers it and nobody
+ * disabled it); else the model the session started on. On the current model, the host carries the reasoning level over too.
  */
-/**
- * The model a fork of `source` starts on: the one its host reports for the shared conversation now, which messages may
- * have changed, while its owner may still start a session on it (the host offers it and nobody disabled it); else the
- * model the session started on. On the current model, the host carries the reasoning level over too.
- */
-async function forkModel(c: AppContext, source: SessionRow): Promise<string> {
-  const { agent } = (await sessionView(c, source, { latest: true })).view;
+async function forkModel(c: AppContext, source: SessionRow, agent: SessionView['agent'], actorId: string): Promise<string> {
   if (agent) {
     const rows = await c.env.DB.query<{ id: string }>('SELECT id FROM models WHERE workspace_id = ? AND connector_id = ? AND provider = ? AND model_id = ?')
       .bind(source.workspace_id, source.connector_id ?? null, agent.provider, agent.modelId).all();
     for (const row of rows) {
       // The same rule a new session's model meets: a host that stopped offering it keeps its row, and so does one
       // whose owner or admins disabled it.
-      try { return (await requireModel(c.env, row.id, source.owner_id)).id; }
+      try { return (await requireModel(c.env, row.id, actorId)).id; }
       catch (error) { if (!(error instanceof HTTPException)) throw error; }
     }
   }
@@ -359,12 +352,25 @@ async function forkModel(c: AppContext, source: SessionRow): Promise<string> {
   return own.model_id;
 }
 
+/**
+ * Starts a new session of the request's user from `source`'s shared conversation up to `entryId`: its owner, or anyone
+ * who may write to it (the route checks that), as they already drive its agent, which sees all of it. The fork is the
+ * forking user's own session, on the same host and model, with the same visibility (a private session's fork stays
+ * private; a workspace one was readable there already), starting empty like any session (its agent clones the
+ * workspace's repositories again); creating it checks, as for any new session, that they may start one on that host and
+ * model. The host copies the conversation from one session to the other itself, so it never crosses the control plane.
+ * A fork that doesn't complete leaves its new session archived.
+ */
 export async function forkSession(c: AppContext, source: SessionRow, entryId: string, title?: string): Promise<{ row: SessionRow }> {
   const actorId = c.get('auth').userId;
-  if (source.owner_id !== actorId) fail(403, 'owner_required', 'Only the session owner can fork it.');
   requireUnfrozen(source);
   if (!source.connector_id) fail(409, 'connector_required', 'Only a session on a connected host can be forked.');
-  const modelId = await forkModel(c, source);
+  const { agent, memberForks } = (await sessionView(c, source, { latest: true })).view;
+  // An older host forks only for the session's owner: say so rather than leave an archived, empty session behind.
+  if (source.owner_id !== actorId && memberForks !== true) {
+    fail(409, 'connector_update_required', 'Only the session owner can fork it on this host until its connector is updated (npx pikibun@latest connect).');
+  }
+  const modelId = await forkModel(c, source, agent, actorId);
   const { row } = await createSession(c, {
     workspaceId: source.workspace_id, title: title ?? `Fork: ${source.title}`.slice(0, 200), visibility: source.visibility ?? 'private',
     modelId, trustedConnectorId: source.connector_id, ...(source.host_environment ? { hostEnvironment: true } : {}),
@@ -377,7 +383,8 @@ export async function forkSession(c: AppContext, source: SessionRow, entryId: st
     await archiveSession(c, row.id, { forkFailed: true }).catch(() => {});
     throw error;
   }
-  await auditStatement(c.env, actorId, 'session.forked', row.workspace_id, row.id, { sourceSessionId: source.id, entryId }).run();
+  await auditStatement(c.env, actorId, 'session.forked', row.workspace_id, row.id, { sourceSessionId: source.id, entryId,
+    ...(source.owner_id !== actorId ? { sourceOwnerId: source.owner_id } : {}) }).run();
   return { row };
 }
 
@@ -906,9 +913,10 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
     return c.json({ conversationId: result.conversationId });
   });
 
-  // Its owner starts a new session from the shared conversation up to one of its messages (forkSession).
+  // Anyone who can write to the session starts a new session of their own from the shared conversation up to one of
+  // its messages (forkSession).
   app.post('/api/sessions/:id/fork', async c => {
-    const { row } = await requireSession(c, identifier(c.req.param('id')), 'manage');
+    const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
     const input = await jsonObject(c, 4096);
     if (Object.keys(input).some(key => key !== 'entryId' && key !== 'title')) fail(400, 'invalid_input', 'A fork accepts only entryId and title.');
     const title = input.title === undefined ? undefined : text(input.title, 'title', 200);

@@ -3345,13 +3345,13 @@ export class RunnerSession {
 
   /**
    * The shared conversation's entries up to one of its messages (see `cutPoint`), as the model sees them, for a session
-   * forked from it (see `seed`). Its owner reads them on this host: they never leave it.
+   * forked from it (see `seed`). Anyone who may write to this session forks it: they already drive its agent, which sees
+   * all of this. The entries go to their new session on this host: they never leave it.
    */
   async forkEntries(actorId: string, entryId: string): Promise<ForkedConversation> {
     return this.exclusive(async () => {
       if (this.closing) throw new RunnerError(503, "Session is closing");
-      if (actorId !== this.binding.owner.id) throw new RunnerError(403, "Only the session's owner can fork it");
-      await this.authorize(actorId, "manage");
+      await this.authorize(actorId, "write");
       const shared = this.#shared;
       const { at, last } = await this.cutPoint(shared, entryId);
       // The latest reply while the agent still works may be followed at once by more of its turn.
@@ -3478,6 +3478,7 @@ export class RunnerSession {
       stoppable: true,
       withdrawable: true,
       rewindable: true,
+      memberForks: true,
       ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
       ...(access ? { access } : {}),
       ...(repositories ? { repositories } : {}),

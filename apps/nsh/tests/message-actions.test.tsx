@@ -59,12 +59,37 @@ describe("a message's actions", () => {
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/fork`)).toEqual({ entryId: "0:2" });
   });
 
-  test("offer a collaborator who drives the work going back, but not forking", async () => {
+  test("offer a collaborator who drives the work going back, and forking where the host allows it", async () => {
     const app = await desktop({ [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, ownerId: "u2", permissions: ["read", "ask", "write"], viewable: true } } } });
     await app.press("id:session-row-s1");
     await app.waitFor("id:message-revert-0-1");
     expect(app.shows("id:message-copy-0-1")).toBe(true);
+    // An older host forks only for the session's owner.
     expect(app.shows("id:message-fork-0-1")).toBe(false);
     expect(app.shows("id:message-fork-0-2")).toBe(false);
+  });
+
+  test("fork a collaborator's own session from a reply, on a host that allows it", async () => {
+    const app = await desktop({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...idle, memberForks: true }, revision: "r1" } },
+      [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, ownerId: "u2", permissions: ["read", "ask", "write"], viewable: true } } },
+      [`POST ${ORIGIN}/api/sessions/s1/fork`]: { body: { session: { ...sessionRecord, id: "s3", title: "Fork: Fix the flaky login test" } } },
+    });
+    app.onDialog(dialog => (dialog.title === "Fork a new session from here?" ? "Fork session" : null));
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:message-fork-0-2");
+    await app.press("id:message-fork-0-2");
+    await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/fork`) !== undefined);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/fork`)).toEqual({ entryId: "0:2" });
+  });
+
+  test("offer a reader neither going back nor forking", async () => {
+    const app = await desktop({
+      [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...idle, memberForks: true }, revision: "r1" } },
+      [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, ownerId: "u2", permissions: ["read", "ask"], viewable: true } } },
+    });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:message-copy-0-2");
+    for (const id of ["message-revert-0-1", "message-fork-0-1", "message-fork-0-2"]) expect(app.shows(`id:${id}`)).toBe(false);
   });
 });
