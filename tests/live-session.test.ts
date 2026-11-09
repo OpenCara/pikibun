@@ -2,9 +2,11 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { SessionRecord, SessionView } from "../packages/shared/src/types.js";
 import { ApiError } from "../packages/client/src/api.js";
-import { liveTiming, startLiveSession, type EventStream, type StreamStatus } from "../packages/client/src/live-session.js";
+import { createViewCache, liveTiming, startLiveSession, type EventStream, type StreamStatus, type ViewCache } from "../packages/client/src/live-session.js";
 
 const record = { id: "s1" } as SessionRecord;
+/** The metadata of a server that says the viewer may read the view now. */
+const viewable = { ...record, viewable: true } as SessionRecord;
 const idleView = { sessionId: "s1", busy: false, queue: [] } as unknown as SessionView;
 const activeView = { sessionId: "s1", busy: false, queue: [{ submissionId: "q1", actorId: "u1", mode: "write", status: "running" }] } as unknown as SessionView;
 const offline = new ApiError(503, "connector_offline", "The connector is offline or has reconnected.");
@@ -25,11 +27,13 @@ interface Backend {
   stream: SessionView[] | "hold";
   /** Answers reads of earlier entries (`/entries?...`). */
   entries?: (path: string) => unknown;
+  /** The session's metadata waits for this, as a slow network would. */
+  metadataGate?: Promise<void>;
 }
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 
-async function liveSession(t: TestContext, backend: Backend) {
+async function liveSession(t: TestContext, backend: Backend, cache?: ViewCache) {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   let now = 0;
   let hidden = false;
@@ -50,6 +54,7 @@ async function liveSession(t: TestContext, backend: Backend) {
         if (page instanceof ApiError) throw page;
         return page as T;
       }
+      if (!path.endsWith("/view")) await backend.metadataGate;
       const answer = path.endsWith("/view") ? backend.view : backend.session;
       if (answer instanceof ApiError) throw answer;
       return (path.endsWith("/view") ? { view: answer } : { session: answer }) as T;
@@ -67,6 +72,7 @@ async function liveSession(t: TestContext, backend: Backend) {
     },
     hidden: () => hidden,
     onVisibilityChange(listener) { visibility.add(listener); return () => visibility.delete(listener); },
+    cache,
   });
   t.after(() => live.stop());
   await flush();
@@ -106,7 +112,16 @@ test("a hidden page makes no requests until it is visible again", async t => {
   assert.deepEqual(resumed, ["/api/sessions/s1", "/api/sessions/s1/events?since="]);
 });
 
-test("idle sessions reopen slowly, running ones quickly, and snapshots render without refetching the view", async t => {
+test("opening a session asks for its metadata and its stream at once, and the stream's snapshot is the view", async t => {
+  const live = await liveSession(t, { session: record, view: idleView, stream: [idleView] });
+  // No GET /view between them: it used to cost a whole round trip, and the host's, before anything showed.
+  assert.deepEqual(live.requests.map(request => `${request.at} ${request.path}`), ["0 /api/sessions/s1", "0 /api/sessions/s1/events?since="]);
+  assert.deepEqual(live.state.session, record);
+  assert.deepEqual(live.state.view, idleView);
+  assert.equal(live.state.status, "online");
+});
+
+test("idle sessions reopen slowly, running ones quickly, and snapshots render without fetching the view", async t => {
   const backend: Backend = { session: record, view: idleView, stream: [idleView] };
   const live = await liveSession(t, backend);
   assert.equal(live.state.status, "online");
@@ -126,8 +141,8 @@ test("idle sessions reopen slowly, running ones quickly, and snapshots render wi
   await live.advance(liveTiming.activeReopenMs);
   assert.equal(live.opens().at(-1), lastOpen + liveTiming.activeReopenMs);
 
-  // Only the initial load fetched /view; every later snapshot came from the stream.
-  assert.equal(live.requests.filter(request => request.path.endsWith("/view")).length, 1);
+  // Every view came from the stream.
+  assert.equal(live.requests.filter(request => request.path.endsWith("/view")).length, 0);
 });
 
 test("a refresh while a stream is open looks again as soon as that stream ends", async t => {
@@ -222,6 +237,7 @@ test("a paged view reads earlier entries a page at a time, once per conversation
   const backend: Backend = { session: record, view: paged(5, 7, 4), stream: "hold",
     entries: path => pages[decodeURIComponent(/before=([^&]+)/.exec(path)![1]!)] ?? new ApiError(409, "entries_changed", "The transcript changed.") };
   const live = await liveSession(t, backend);
+  live.streams.at(-1)!.emit("view", JSON.stringify({ view: paged(5, 7, 4) }));
   const ids = () => live.state.view!.entries.map(item => item.id);
   const reads = () => live.requests.filter(request => request.path.includes("/entries?")).map(request => request.path);
   assert.deepEqual(ids(), ["0:5", "0:6", "0:7"]);
@@ -249,4 +265,107 @@ test("a paged view reads earlier entries a page at a time, once per conversation
   await live.live.loadOlder("0");
   assert.equal(live.state.error, "The transcript changed.");
   assert.deepEqual(ids(), ["0:20", "0:21"]);
+});
+
+test("a session opened again shows its cached view once its metadata says it is viewable, and its stream asks only for changes", async t => {
+  const first = "a".repeat(32);
+  const second = "b".repeat(32);
+  const cached = { ...idleView, entries: [{ id: "0:1", kind: "message", role: "user", text: "hello" }], approvals: [], conversations: [] } as unknown as SessionView;
+  const cache = createViewCache();
+  cache.set("s1", { view: cached, revision: first });
+  const gate = Promise.withResolvers<void>();
+  const live = await liveSession(t, { session: viewable, view: idleView, stream: "hold", metadataGate: gate.promise }, cache);
+  assert.equal(live.requests.at(-1)!.path, `/api/sessions/s1/events?since=${first}`);
+  // Nothing from the cache shows before access is checked again.
+  assert.equal(live.state.view, undefined);
+  gate.resolve();
+  await flush();
+  assert.deepEqual(live.state.view, cached);
+  assert.equal(live.state.status, undefined, "Still connecting: the stream hasn't answered");
+  // The stream brings it up to date with a patch on the cached view.
+  const reply = { id: "0:2", kind: "message", role: "assistant", text: "hi" };
+  live.streams.at(-1)!.emit("patch", JSON.stringify({ patch: { base: first, revision: second, view: { sessionId: "s1", busy: false },
+    lists: { entries: [1, reply], approvals: [], conversations: [], queue: [] } } }));
+  const updated = live.state.view as SessionView | null | undefined;
+  assert.deepEqual(updated?.entries.map(entry => entry.id), ["0:1", "0:2"]);
+  assert.equal(live.state.status as StreamStatus | undefined, "online");
+  assert.deepEqual(cache.get("s1")?.revision, second, "The cache keeps the latest view");
+});
+
+test("a cached view never shows on metadata alone: the server must say the view is viewable", async t => {
+  // A server that predates `viewable` leaves the cached view to the stream, which the server checks as it does /view.
+  const cache = createViewCache();
+  cache.set("s1", { view: activeView, revision: "a".repeat(32) });
+  const live = await liveSession(t, { session: record, view: idleView, stream: "hold" }, cache);
+  assert.deepEqual(live.state.session, record);
+  assert.equal(live.state.view, undefined);
+  live.streams.at(-1)!.emit("view", JSON.stringify({ view: idleView, revision: "b".repeat(32) }));
+  assert.deepEqual(live.state.view, idleView);
+});
+
+test("a view refused though its session is readable (its host no longer shared) never shows from the cache, and is forgotten", async t => {
+  const unshared = new ApiError(403, "connector_unavailable", "The connector or its workspace sharing is no longer authorized.");
+  const cache = createViewCache();
+  cache.set("s1", { view: idleView, revision: "a".repeat(32) });
+  // The stream is refused too: it ends without a snapshot, and /view says why.
+  const live = await liveSession(t, { session: { ...record, viewable: false }, view: unshared, stream: [] }, cache);
+  await live.advance(liveTiming.firstBackoffMs);
+  assert.equal(live.state.view, undefined, "The cached view never showed");
+  assert.equal(cache.get("s1"), undefined);
+  // The session stays, to say why its conversation is unavailable.
+  assert.deepEqual(live.state.session, { ...record, viewable: false });
+  assert.equal(live.state.error, unshared.message);
+});
+
+test("a /view refusal after the metadata passed drops the shown view and the cache; an offline host keeps them", async t => {
+  const cache = createViewCache();
+  const backend: Backend = { session: record, view: idleView, stream: [idleView] };
+  const live = await liveSession(t, backend, cache);
+  assert.deepEqual(live.state.view, idleView);
+  // An offline host: streams end empty and /view fails, which may pass.
+  backend.stream = [];
+  backend.view = offline;
+  await live.advance(liveTiming.idleReopenMs);
+  assert.equal(live.state.error, offline.message);
+  assert.deepEqual(live.state.view, idleView);
+  assert.ok(cache.get("s1"));
+  // The host's owner stops sharing it: the metadata still passes, the view is refused.
+  backend.view = new ApiError(403, "connector_unavailable", "The connector or its workspace sharing is no longer authorized.");
+  await live.advance(liveTiming.maxBackoffMs);
+  assert.equal(live.state.view, null);
+  assert.equal(cache.get("s1"), undefined);
+  assert.deepEqual(live.state.session, record);
+});
+
+test("the access check every 30 s drops a shown view the server says is no longer viewable", async t => {
+  const cache = createViewCache();
+  const backend: Backend = { session: viewable, view: idleView, stream: "hold" };
+  const live = await liveSession(t, backend, cache);
+  live.streams.at(-1)!.emit("view", JSON.stringify({ view: idleView }));
+  assert.deepEqual(live.state.view, idleView);
+  backend.session = { ...record, viewable: false };
+  await live.advance(liveTiming.accessCheckMs);
+  assert.equal(live.state.view, null);
+  assert.equal(cache.get("s1"), undefined);
+});
+
+test("a cached view never shows once access is gone, and is forgotten", async t => {
+  const cache = createViewCache();
+  cache.set("s1", { view: idleView, revision: "a".repeat(32) });
+  const live = await liveSession(t, { session: new ApiError(403, "forbidden", "You no longer have access to this session."), view: idleView, stream: [] }, cache);
+  await live.advance(liveTiming.firstBackoffMs);
+  assert.equal(live.state.view, null);
+  assert.equal(live.state.status, "offline");
+  assert.equal(cache.get("s1"), undefined);
+});
+
+test("the view cache keeps the sessions shown most recently", () => {
+  const cache = createViewCache(2);
+  for (const id of ["s1", "s2"]) cache.set(id, { view: idleView });
+  cache.get("s1");
+  cache.set("s3", { view: idleView });
+  assert.equal(cache.get("s2"), undefined, "The least recently used goes");
+  assert.ok(cache.get("s1") && cache.get("s3"));
+  cache.clear();
+  assert.equal(cache.get("s1"), undefined);
 });

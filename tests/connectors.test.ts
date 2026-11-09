@@ -2056,8 +2056,12 @@ test('owner runs a session on an unshared host and the default session is listed
   assert.equal(session.visibility, 'workspace');
   // The owner runs shell commands on their own host, so the session clones.
   assert.equal(session.cloneUnavailable, undefined);
+  // The member reads its view: the host is its owner's own.
+  const { viewable, ...record } = session;
+  assert.equal(viewable, true);
   const listed = await json<{ sessions: SessionRecord[] }>(await s.member.request('GET', '/api/sessions'));
-  assert.deepEqual(listed.sessions, [session]);
+  // Lists carry what single reads do, but `viewable`.
+  assert.deepEqual(listed.sessions, [record]);
   const requests = rpcHub(f, s.connector, envelope => {
     assert.equal(envelope.request.ticket.action, 'view');
     assert.equal(envelope.request.ticket.actorId, s.member.user.id);
@@ -2742,6 +2746,9 @@ test('opt-in sharing admits a teammate runtime; unshare blocks foreign sessions 
   });
   await json(await s.member.request('GET', `/api/sessions/${foreign.id}/view`));
   await json(await s.member.request('GET', `/api/sessions/${s.session.id}/view`));
+  // The metadata says whether the view would be served, so clients show a view they kept only then.
+  const viewable = async (id: string) => (await json<{ session: SessionRecord }>(await s.member.request('GET', `/api/sessions/${id}`))).session.viewable;
+  assert.equal(await viewable(foreign.id), true);
   assert.equal((await s.owner.request('DELETE', sharePath)).status, 204);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_shares').get()!.n, 0);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_workspaces WHERE connector_id = ? AND workspace_id = ?').get(s.connector.connectorId, s.team.id)!.n, 1);
@@ -2751,6 +2758,9 @@ test('opt-in sharing admits a teammate runtime; unshare blocks foreign sessions 
   assert.deepEqual((await json<{ models: ModelDefinition[] }>(await s.owner.request('GET', `/api/workspaces/${s.team.id}/models`))).models, [s.model]);
   const beforeDenied = requests.length;
   await denied(await s.member.request('GET', `/api/sessions/${foreign.id}/view`), 403, 'connector_unavailable');
+  // The member still reads their session's metadata, which now says its view is refused.
+  assert.equal(await viewable(foreign.id), false);
+  assert.equal(await viewable(s.session.id), true);
   await denied(await self(f, s.connector, 'authorize', authorization(foreign)), 403, 'connector_unavailable');
   await denied(await s.member.request('POST', '/api/sessions', input), 404, 'not_found');
   assert.equal(requests.length, beforeDenied);

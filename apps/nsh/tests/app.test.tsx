@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { approval, ORIGIN, server, signedIn, TOKEN, user } from "./fixtures";
+import { approval, ORIGIN, server, sessionRecord, signedIn, TOKEN, user, view } from "./fixtures";
 
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
@@ -138,6 +138,66 @@ describe("signing out", () => {
     expect(app.texts().join(" ")).toContain("the server could not revoke the sign-in (it didn't answer)");
     expect(app.storage()["pikibun.token"]).toBeUndefined();
   }, 30_000);
+
+  test("a session opened again shows its transcript before its host answers, and never to the next account", async () => {
+    // Once `slow`, the session's view takes 10 s to come, as from a host far away.
+    let slow = false;
+    const later = (response: Record<string, unknown>) => () => (slow ? { ...response, delay: 10_000 } : response);
+    const app = await open("../App.tsx", {
+      network: {
+        ...accounts,
+        [`GET ${ORIGIN}/api/sessions/s1/view`]: later({ body: { view, revision: "r1" } }),
+        [`GET ${ORIGIN}/api/sessions/s1/events*`]: later({ status: 200, headers: { "content-type": "text/event-stream" }, body: "" }),
+      },
+      storage: signedIn,
+    });
+    app.onDialog(() => "Sign out");
+    await app.press("id:session-row-s1");
+    await app.waitFor("text:Why does the login test fail on CI?");
+    await app.back();
+    slow = true;
+    // Opened again: the transcript is up as soon as its access is confirmed, long before the host answers.
+    await app.press("id:session-row-s1");
+    await app.waitFor("text:Why does the login test fail on CI?", { timeout: 2_000 });
+    await app.back();
+    await app.press("id:open-settings");
+    await app.press("id:settings-section-profile");
+    await app.press("id:sign-out");
+    await app.waitFor("id:developer-toggle");
+    await app.press("id:developer-toggle");
+    await app.type("id:developer-token", OTHER_TOKEN);
+    await app.press("id:developer-sign-in");
+    await app.press("id:session-row-s1");
+    await app.waitFor("text:Loading…");
+    await app.wait(1_000);
+    // The next account waits for its own view: the one kept for the last account went with its sign-out.
+    expect(app.texts().join(" ")).not.toContain("Why does the login test fail on CI?");
+  });
+
+  test("a session whose host stopped being shared never shows its kept transcript again, though its metadata still reads", async () => {
+    let unshared = false;
+    const refusal = { status: 403, body: { error: { code: "connector_unavailable", message: "The connector or its workspace sharing is no longer authorized." } } };
+    const app = await open("../App.tsx", {
+      network: server({
+        [`GET ${ORIGIN}/api/sessions/s1`]: () => ({ body: { session: { ...sessionRecord, viewable: !unshared } } }),
+        [`GET ${ORIGIN}/api/sessions/s1/view`]: () => (unshared ? refusal : { body: { view, revision: "r1" } }),
+        [`GET ${ORIGIN}/api/sessions/s1/events*`]: () => (unshared ? refusal : { status: 200, headers: { "content-type": "text/event-stream" }, body: "" }),
+      }),
+      storage: signedIn,
+    });
+    await app.press("id:session-row-s1");
+    await app.waitFor("text:Why does the login test fail on CI?");
+    await app.back();
+    unshared = true;
+    await app.press("id:session-row-s1");
+    await app.waitFor("text:The connector or its workspace sharing is no longer authorized.");
+    expect(app.texts().join(" ")).not.toContain("Why does the login test fail on CI?");
+    // Nor the next time: the refusal took it out of the cache.
+    await app.back();
+    await app.press("id:session-row-s1");
+    await app.waitFor("text:The connector or its workspace sharing is no longer authorized.");
+    expect(app.texts().join(" ")).not.toContain("Why does the login test fail on CI?");
+  });
 });
 
 describe("on a phone", () => {

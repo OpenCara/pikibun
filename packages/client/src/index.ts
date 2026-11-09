@@ -5,8 +5,8 @@ export {
   selectModel, type ChatPreference, type ChatSelection,
 } from "./chat-options";
 export {
-  activeStatuses, liveTiming, startLiveSession, type EventStream, type LiveSession, type LiveSessionDependencies, type LiveSessionHandlers,
-  type StreamStatus,
+  activeStatuses, createViewCache, liveTiming, startLiveSession, type CachedView, type EventStream, type LiveSession, type LiveSessionDependencies,
+  type LiveSessionHandlers, type StreamStatus, type ViewCache,
 } from "./live-session";
 export { COMPACTION_FAILED_TITLE, compactionFailureText } from "./compaction";
 export { copyText, messageCut, resendText, restoredDraft, rewindable, type MessageCut } from "./message-actions";
