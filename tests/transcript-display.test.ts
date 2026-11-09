@@ -31,6 +31,19 @@ test("brief tool output keeps a tool result's first line and says how long the w
     const other = entry("0:5", "0", { role, text: "a\n".repeat(500) });
     assert.equal(briefEntry(other), other);
   }
+  // A tool result's images go with the lines that stood for them; a message's stay.
+  const screenshot = entry("0:6", "0", { role: "toolResult", text: "{\"path\":\"shot.png\"}\n[image image/png]", images: [{ mimeType: "image/png" }] });
+  assert.deepEqual(briefEntry(screenshot), { id: "0:6", kind: "message", role: "toolResult", conversationId: "0", text: "{\"path\":\"shot.png\"}", trimmed: { lines: 2, chars: screenshot.text.length } });
+  // A screenshot alone: its line is its first, and it shows that line, not the image.
+  const alone = entry("0:8", "0", { role: "toolResult", text: "[image image/png]", images: [{ mimeType: "image/png" }] });
+  assert.deepEqual(briefEntry(alone), { id: "0:8", kind: "message", role: "toolResult", conversationId: "0", text: "[image image/png]" });
+  const pasted = entry("0:7", "0", { role: "user", text: "Look\n[image image/png]", images: [{ mimeType: "image/png" }] });
+  assert.equal(briefEntry(pasted), pasted);
+});
+
+test("share links show the lines that stand for images, never the images' list", () => {
+  const pasted = entry("0:1", "0", { role: "user", text: "Look\n[image image/png]", images: [{ mimeType: "image/png" }] });
+  assert.deepEqual(sharedView(view([pasted])).entries, [{ id: "0:1", kind: "message", role: "user", text: "Look\n[image image/png]" }]);
 });
 
 test("characters count code points, and a lone surrogate as one", () => {

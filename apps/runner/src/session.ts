@@ -58,14 +58,15 @@ import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { reportedBranches } from "./clone-branches.js";
 import { answered, ApprovalWaits } from "./session/approval-waits.js";
-import { endView, entryView, refusedView } from "./session/entries.js";
+import { endView, entryImages, entryView, refusedView } from "./session/entries.js";
+import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
 import { MessageInputs, prepareMessageImages, type InputImage } from "./session/inputs.js";
 import { refused, SessionMirrors } from "./session/mirrors.js";
 import { SessionUploads } from "./session/uploads.js";
 import {
   hostGitLfs, Sandbox, SandboxProcessError, type CloneBackup, type MirrorMount, type SandboxAuthorize, type SnapshotFile,
 } from "./sandbox.js";
-import { prepareImage } from "./images.js";
+import { prepareImage, thumbnailImage } from "./images.js";
 import { performClonePush, PushError, pushSummary, type PushResult } from "./push.js";
 import { HostCredentialError } from "./git-credentials.js";
 import type { GitRemote } from "./git-remote.js";
@@ -3589,6 +3590,37 @@ export class RunnerSession {
         return { bytes: packBytes(this.binding, { files, ...(clones.length ? { clones } : {}) }), files: files.length, clones: clones.length };
       } catch (error) { throw packRefusal(error); }
     });
+  }
+
+  /**
+   * One image of the transcript as people's clients show it (see entry-images.ts): a thumbnail, or the image as the model
+   * got it. Only an entry the view shows has its images read, and only by people who could already have the agent read
+   * the files they came from (`write`), as the file browser takes. Not exclusive with runs: it reads the committed
+   * transcript.
+   */
+  async entryImage(ticket: RunnerTicket, input: unknown): Promise<{ image: EntryImage }> {
+    this.assertTicket(ticket);
+    const request = entryImageRequest(input);
+    if (!request) throw new RunnerError(400, "Invalid image request");
+    await this.authorize(ticket.actorId, "write", ticket.policyVersion);
+    const { conversationId, entryId } = entryIdParts(request.entryId)!;
+    const state = await this.metadata();
+    // A conversation someone went back from is out of the view, and so are its images.
+    const branch = state.branches.find(item => item.id === conversationId && !item.superseded);
+    const conversation = branch && await this.harness.conversation(branch.id as ConversationId, context);
+    const entry = conversation && (await conversation.context(context)).entries.find(item => Number(item.id) === entryId);
+    const image = entry && entryImages(entry)[request.index];
+    if (!image) throw new RunnerError(404, "That image is not in the transcript");
+    if (request.size === "full") {
+      const whole = checkEntryImage(image, "full");
+      if (!whole) throw new RunnerError(422, "That image can't be shown");
+      return { image: whole };
+    }
+    const thumbnail = await thumbnailImage(image.data, image.mimeType);
+    if (thumbnail === "busy") throw new RunnerError(429, "Too many images are being prepared; try again shortly");
+    const checked = thumbnail && checkEntryImage(thumbnail, "thumbnail");
+    if (!checked) throw new RunnerError(422, "That image can't be shown");
+    return { image: checked };
   }
 
   /**

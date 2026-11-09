@@ -12,6 +12,7 @@ import type { AuthorizationRequest, RunnerBinding, RunnerTicket, SubmitInput } f
 import { RunnerService } from "../apps/runner/src/server.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
+import { inTurn } from "../apps/runner/src/images.js";
 
 const SECRET = "runner-images-test-secret-not-a-production-secret";
 const hostMode = { skip: !["linux", "darwin"].includes(process.platform) || spawnSync("git", ["--version"]).status !== 0 };
@@ -162,6 +163,60 @@ test("pasted images reach the model after the message's text, prepared to fit, a
   const alone = await settle(session);
   assert.deepEqual(alone.entries.findLast(entry => entry.role === "assistant")!.text.split("\n"), ["Deterministic test provider saw:", `image image/png sha256:${digest(small)}`]);
   assert.equal(alone.entries.findLast(entry => entry.role === "user")!.text, "[image image/png]");
+});
+
+test("collaborators' clients read the transcript's images as thumbnails or as the model got them", hostMode, async t => {
+  const session = await service(t, true);
+  const small = png(3, 2);
+  const wide = png(2400, 300);
+  await send(session, { content: "Look", images: [{ mimeType: "image/png", data: base64(small) }, { mimeType: "image/png", data: base64(wide) }] });
+  const view = await settle(session);
+  const message = view.entries.findLast(entry => entry.role === "user")!;
+  // The entry lists its images in the order of their lines; their data stays on the host until asked for.
+  assert.equal(message.text, "Look\n[image image/png]\n[image image/png]");
+  assert.deepEqual(message.images, [{ mimeType: "image/png" }, { mimeType: "image/png" }]);
+  assert.equal(view.entries.findLast(entry => entry.role === "assistant")!.images, undefined);
+  const ask = async (input: unknown) => (await session.entryImage(await ticket("images", "submit"), input)).image;
+
+  // An image within a thumbnail's limits comes back as it is, whole or as its thumbnail.
+  assert.deepEqual(await ask({ entryId: message.id, index: 0, size: "thumbnail" }), { mimeType: "image/png", data: base64(small) });
+  assert.deepEqual(await ask({ entryId: message.id, index: 0, size: "full" }), { mimeType: "image/png", data: base64(small) });
+  // A larger one: whole, as the model got it (fitted to 1568 pixels); its thumbnail within 480 and 64 KiB.
+  const whole = await ask({ entryId: message.id, index: 1, size: "full" });
+  assert.equal(Buffer.from(whole.data, "base64").readUInt32BE(16), 1568);
+  const thumbnail = await ask({ entryId: message.id, index: 1, size: "thumbnail" });
+  const bytes = Buffer.from(thumbnail.data, "base64");
+  assert.ok(thumbnail.data.length <= 64 * 1024);
+  if (thumbnail.mimeType === "image/png") assert.deepEqual([bytes.readUInt32BE(16), bytes.readUInt32BE(20)], [480, 60]);
+  else assert.equal(thumbnail.mimeType, "image/jpeg");
+  // Asked again, it comes from what the host kept.
+  assert.deepEqual(await ask({ entryId: message.id, index: 1, size: "thumbnail" }), thumbnail);
+
+  await assert.rejects(ask({ entryId: message.id, index: 2, size: "thumbnail" }), refused(404, /not in the transcript/));
+  await assert.rejects(ask({ entryId: "0:99999", index: 0, size: "thumbnail" }), refused(404, /not in the transcript/));
+  await assert.rejects(ask({ entryId: `9${message.id}`, index: 0, size: "thumbnail" }), refused(404, /not in the transcript/));
+  for (const input of [{ entryId: message.id, index: 0 }, { entryId: message.id, index: -1, size: "full" }, { entryId: "stopped:1", index: 0, size: "full" },
+    { entryId: message.id, index: 0, size: "full", path: "x" }, null]) {
+    await assert.rejects(ask(input), refused(400, /Invalid image request/));
+  }
+});
+
+test("one image is prepared at a time; the model's go ahead of waiting thumbnails, and each waits in a line of its own", async () => {
+  const ran: string[] = [];
+  const held = Promise.withResolvers<void>();
+  const work = (name: string, wait?: Promise<void>) => async () => { ran.push(`start ${name}`); await wait; ran.push(`end ${name}`); return name; };
+  const first = inTurn("thumbnail", work("thumbnail 0", held.promise));
+  const thumbnails = Array.from({ length: 32 }, (_, index) => inTurn("thumbnail", work(`thumbnail ${index + 1}`)));
+  // The thumbnails' line is full: one more is refused, and the model's line is still open.
+  assert.equal(typeof await inTurn("thumbnail", work("refused")), "symbol");
+  const model = inTurn("model", work("model"));
+  await delay(10);
+  assert.deepEqual(ran, ["start thumbnail 0"], "nothing starts while an image is prepared");
+  held.resolve();
+  assert.deepEqual(await Promise.all([first, model, ...thumbnails]), ["thumbnail 0", "model", ...Array.from({ length: 32 }, (_, index) => `thumbnail ${index + 1}`)]);
+  // Each ran alone, the model's right after the thumbnail under way, before the thumbnails that waited longer.
+  assert.deepEqual(ran.slice(0, 4), ["start thumbnail 0", "end thumbnail 0", "start model", "end model"]);
+  assert.ok(ran.every((line, index) => line.startsWith(index % 2 ? "end" : "start")));
 });
 
 test("pasted images the host can't read or take are refused before anything is queued, and a request ID binds its images", hostMode, async t => {

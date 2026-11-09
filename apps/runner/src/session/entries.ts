@@ -1,4 +1,5 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
+import { entryImageLimits } from "../../../../packages/shared/src/entry-images.js";
 import type { SessionView } from "../../../../packages/shared/src/types.js";
 import type { autoApprovedCalls } from "../approval-view.js";
 import type { Run } from "../session.js";
@@ -23,6 +24,8 @@ export function entryView(entry: EntryRecord, branch: number, actorId?: string, 
     // Image data stays on the host; the transcript only notes that the model saw one.
     return (message.content ?? []).flatMap(block => block.type === "text" ? [block.text] : block.type === "toolCall" ? [`${block.name}(${JSON.stringify(block.arguments)})`] : block.type === "image" ? [`[image ${block.mimeType}]`] : []);
   }).join("\n");
+  // Their types, in that order, so a collaborator's client can ask for each (RunnerSession.entryImage).
+  const images = entryImages(entry).slice(0, entryImageLimits.images).map(image => ({ mimeType: image.mimeType }));
   const failed = messages.find(message => message.role === "assistant" && message.stopReason === "error");
   // Provider error text can carry account or endpoint details; only the HTTP status leaves the host.
   const status = failed?.role === "assistant" ? Number(/^(\d{3})\b/.exec(failed.errorMessage ?? "")?.[1]) : NaN;
@@ -33,7 +36,14 @@ export function entryView(entry: EntryRecord, branch: number, actorId?: string, 
   const durations = messages.flatMap(message => (message.role === "assistant" || message.role === "toolResult") && message.durationMs !== undefined ? [message.durationMs] : []);
   const durationMs = durations.length ? durations.reduce((total, value) => total + value, 0) : undefined;
   return { id: `${branch}:${entry.id}`, kind: entry.kind, role: messages[0]?.role ?? "system", text, ...(actorId ? { actorId } : {}), conversationId: String(branch),
-    ...(error ? { error } : {}), ...(durationMs !== undefined ? { durationMs } : {}), ...(marks.length ? { autoApproved: marks } : {}) };
+    ...(error ? { error } : {}), ...(durationMs !== undefined ? { durationMs } : {}), ...(marks.length ? { autoApproved: marks } : {}),
+    ...(images.length ? { images } : {}) };
+}
+
+/** The images an entry gave the model, as Pi keeps them (base64), in the order its view lists them. */
+export function entryImages(entry: EntryRecord): { mimeType: string; data: string }[] {
+  return (entry.model ?? []).flatMap(message => typeof message.content === "string" ? []
+    : (message.content ?? []).flatMap(block => block.type === "image" ? [{ mimeType: block.mimeType, data: block.data }] : []));
 }
 
 /** What follows a run's entries: its failed model turn, who stopped it, or that its host's crashes ended it. */
