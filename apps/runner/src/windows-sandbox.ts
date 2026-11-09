@@ -196,7 +196,8 @@ export class WindowsBackend implements HelperBackend {
     if (!gitRoot) throw new Error("The Windows sandbox needs Git for Windows: install it from https://git-scm.com/download/win");
     const bash = sandboxShellPath();
     if (!bash) throw new Error(`The Windows sandbox needs busybox-w32 as its shell (Git for Windows' bash can't start in the process container): ${SANDBOX_SHELL_HINT}`);
-    this.#node = sandboxNodePath();
+    const node = sandboxNodePath();
+    this.#node = node;
     this.#runtime = options.runtime;
     this.#sdk = sdk;
     this.#limits = validWindowsLimits(options.limits);
