@@ -28,6 +28,7 @@ import { NavigationButton } from "./navigation";
 import { navigate } from "./router";
 import { enterSends } from "./touch";
 import { ApprovalCard, AutoApprovedMarks, SessionPanel, useSessionActions, widePanelTabs, type AuditEvent, type PanelTab } from "./session-panel";
+import { RenameSheet } from "./session-menu";
 import { splitToolCalls } from "../../../packages/client/src/transcript";
 import { COMPACTION_FAILED_TITLE, compactionFailureText } from "../../../packages/client/src/compaction";
 import {
@@ -218,6 +219,8 @@ function SessionPane({ id }: { id: string }) {
   const browserWarning = !archived && !frozen ? view?.extensions?.unavailable?.find(item => item.source === "piki:browser" && ["missing", "failed", "downloading"].includes(item.reason)) : undefined;
   const [dismissedBrowser, setDismissedBrowser] = useState<string>();
   const [renaming, setRenaming] = useState(false);
+  // A failed save shows in the rename sheet, over the page's own alerts; only one tried in this opening of it.
+  const [renameTried, setRenameTried] = useState(false);
   const hosts = useConnections(session?.connectorId ? `/api/workspaces/${segment(session.workspaceId)}/connectors` : null);
   const host = hosts.data?.connectors.find(item => item.id === session?.connectorId);
   const hostOnline = host?.online;
@@ -258,7 +261,7 @@ function SessionPane({ id }: { id: string }) {
 
   const menu: (MenuItem | "separator")[] = [{ label: "Copy session ID", icon: "copy", onSelect: () => void navigator.clipboard.writeText(id) }];
   if (session && manages && !archived) {
-    menu.push({ label: "Rename", icon: "pencil", disabled: actions.action.busy, onSelect: () => setRenaming(true) });
+    menu.push({ label: "Rename", icon: "pencil", disabled: actions.action.busy, onSelect: () => { setRenameTried(false); setRenaming(true); } });
     menu.push({ label: visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: visibility === "workspace" ? "lock" : "globe", disabled: actions.action.busy, onSelect: actions.changeVisibility });
     // Backups hold the owner's work and personal environment, so they stay the owner's.
     if (isOwner && !frozen) {
@@ -391,30 +394,9 @@ function SessionPane({ id }: { id: string }) {
       <button type="button" className="session-scrim" aria-label="Close session panel" onClick={() => setPanelOpen(false)} />
       <SessionPanel session={session} view={view} user={user} workspaceRole={workspaceRole} hosts={hosts} tab={tab} setTab={setTab} onClose={() => setPanelOpen(false)} refresh={live.refresh} audit={audit} actions={actions} openSession={openSession} />
     </>}
-    {session && manages && <RenameSheet open={renaming} title={session.title} busy={actions.action.busy} onClose={() => setRenaming(false)}
-      onSave={async title => { if (await actions.rename(title)) setRenaming(false); }} />}
+    {session && manages && <RenameSheet open={renaming} title={session.title} busy={actions.action.busy} error={renameTried ? actions.action.error : undefined}
+      onClose={() => setRenaming(false)} onSave={async title => { setRenameTried(true); if (await actions.rename(title)) setRenaming(false); }} />}
   </div></PeopleProvider>;
-}
-
-function RenameSheet({ open, title, busy, onClose, onSave }: { open: boolean; title: string; busy: boolean; onClose: () => void; onSave: (title: string) => void }) {
-  const [value, setValue] = useState(title);
-  // Start from the current title each time the sheet opens.
-  useEffect(() => { if (open) setValue(title); }, [open, title]);
-  const next = value.trim();
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (next && !busy) onSave(next);
-  }
-  return <Sheet open={open} title="Rename session" onClose={onClose} footer={<>
-    <Button variant="ghost" onClick={onClose}>Cancel</Button>
-    <Button type="submit" form="rename-session-form" variant="default" disabled={busy || !next}>{busy ? "Saving..." : "Rename"}</Button>
-  </>}>
-    <form id="rename-session-form" className="stack" onSubmit={submit}>
-      <Field label="Title">
-        <input className="input" required autoFocus maxLength={200} value={value} onChange={event => setValue(event.target.value)} autoComplete="off" />
-      </Field>
-    </form>
-  </Sheet>;
 }
 
 function Conversation({ id, user, session, view, host, stale, refresh, loadOlder, openSession, pinned }: {

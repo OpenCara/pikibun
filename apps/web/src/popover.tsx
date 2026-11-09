@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEventHandler, type MouseEventHandler, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 const GAP = 4;
@@ -35,11 +35,21 @@ export function placePopover(anchor: DOMRect, size: { width: number; height: num
 }
 
 /**
+ * What a popover sits against: an element, or a point in the viewport, such as where a context menu was opened. A point
+ * keeps its place as the page scrolls, so its owner should keep the same object for as long as the popover is open.
+ */
+export type PopoverAnchor = RefObject<HTMLElement | null> | { x: number; y: number };
+
+function anchorRect(anchor: PopoverAnchor): DOMRect | undefined {
+  return "current" in anchor ? anchor.current?.getBoundingClientRect() : new DOMRect(anchor.x, anchor.y, 0, 0);
+}
+
+/**
  * Popover content rendered into `document.body`, positioned against `anchor`, so no `overflow`
  * on a card, sheet, panel or scroll pane can clip it. Repositions on scroll and resize.
  */
-export function Popover({ anchor, side = "below", align = "start", className = "", role, id, label, style, children }: {
-  anchor: RefObject<HTMLElement | null>;
+export function Popover({ anchor, side = "below", align = "start", className = "", role, id, label, style, tabIndex, onKeyDown, onContextMenu, children }: {
+  anchor: PopoverAnchor;
   side?: "below" | "above";
   align?: "start" | "end";
   className?: string;
@@ -47,14 +57,16 @@ export function Popover({ anchor, side = "below", align = "start", className = "
   id?: string;
   label?: string;
   style?: CSSProperties;
+  tabIndex?: number;
+  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  onContextMenu?: MouseEventHandler<HTMLDivElement>;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<PopoverPlacement | null>(null);
   useLayoutEffect(() => {
     const element = ref.current;
-    const target = anchor.current;
-    if (!element || !target) return;
+    if (!element || !anchorRect(anchor)) return;
     let size = { width: 0, height: 0 };
     const measure = () => {
       // The natural size with no height cap. Restore the rendered cap afterwards: React only rewrites styles that change.
@@ -65,7 +77,10 @@ export function Popover({ anchor, side = "below", align = "start", className = "
       size = { width, height };
     };
     // Scrolling moves the anchor but never resizes the content; re-measuring there would reset a scrolled list.
-    const place = () => setPlacement(placePopover(target.getBoundingClientRect(), size, side, align));
+    const place = () => {
+      const rect = anchorRect(anchor);
+      if (rect) setPlacement(placePopover(rect, size, side, align));
+    };
     const resize = () => { measure(); place(); };
     resize();
     window.addEventListener("resize", resize);
@@ -77,9 +92,10 @@ export function Popover({ anchor, side = "below", align = "start", className = "
     // Unplaced for one layout pass that is never painted; transparent rather than hidden so autoFocus content gets focus.
     : { position: "fixed", top: 0, left: 0, opacity: 0, pointerEvents: "none" };
   // A modal <dialog> makes the rest of the document inert, so a popover opened from a sheet must live inside it.
-  const host = anchor.current?.closest("dialog[open]") ?? document.body;
+  const host = ("current" in anchor ? anchor.current?.closest("dialog[open]") : null) ?? document.body;
   return createPortal(
-    <div ref={ref} className={`popover portal ${placement?.side ?? side} ${className}`.trim()} role={role} id={id} aria-label={label} style={{ ...positioned, ...style }}>{children}</div>,
+    <div ref={ref} className={`popover portal ${placement?.side ?? side} ${className}`.trim()} role={role} id={id} aria-label={label} style={{ ...positioned, ...style }}
+      tabIndex={tabIndex} onKeyDown={onKeyDown} onContextMenu={onContextMenu}>{children}</div>,
     host,
   );
 }
