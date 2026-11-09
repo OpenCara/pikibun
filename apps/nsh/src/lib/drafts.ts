@@ -11,6 +11,12 @@ const listeners = new Map<string, Set<(sent: string) => void>>();
 /** Chat boxes open on a session, handed text that comes back to them (see restoreDraft). */
 const restorers = new Map<string, Set<(merge: (current: string) => string) => void>>();
 
+/** What else goes with the drafts (a chat box's kept attachments, say), registered by the modules that keep it. */
+const clearers = new Set<() => void>();
+export function onClearDrafts(clear: () => void) {
+  clearers.add(clear);
+}
+
 /**
  * Forgets every draft and every chat box's hooks: they belong to the account that typed them, so they go when it signs
  * out, its sign-in ends, or another account signs in (auth.ts), and the next person never sees them.
@@ -19,7 +25,11 @@ export function clearDrafts() {
   drafts.clear();
   listeners.clear();
   restorers.clear();
+  for (const clear of clearers) clear();
 }
+
+/** The draft of the new-session screen in a workspace: its unsent first message, kept as a session's chat box's is. */
+export const newSessionDraftId = (workspaceId: string) => `new:${workspaceId}`;
 
 export function saveDraft(sessionId: string, text: string) {
   if (text) drafts.set(sessionId, text);

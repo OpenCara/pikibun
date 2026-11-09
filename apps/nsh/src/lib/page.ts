@@ -52,6 +52,9 @@ export function routeHash(route: PageRoute): string {
 /** On the web, the page's host (web/host.js) tells the address and follows the app. */
 const hasPage = () => platform.os === "web" && host.available();
 
+/** Whether the app runs in a browser's page, whose host does what NSH's web runtime can't (pick any file, draw an image). */
+export const pageAvailable = hasPage;
+
 /** The route the page was opened at, or the user went to by editing the address or following a link. */
 export const pageRoute = signal<PageRoute>({ name: "home" });
 
@@ -76,4 +79,48 @@ export function openServerPage(path: string): boolean {
   if (!hasPage()) return false;
   host.call("page.open", { path }).catch(() => undefined);
   return true;
+}
+
+/**
+ * The page's query (`?error=…`), where the server's GitHub sign-in sends the browser back when it refused. Empty where
+ * there is no page.
+ */
+export async function pageQuery(): Promise<URLSearchParams> {
+  if (!hasPage()) return new URLSearchParams();
+  try {
+    return new URLSearchParams((await host.call<string>("page.query")) ?? "");
+  } catch {
+    return new URLSearchParams();
+  }
+}
+
+/** Goes to GitHub's authorization page the server answered with, in place of the app. False where there is no page. */
+export function authorizeInPage(url: string): boolean {
+  if (!hasPage()) return false;
+  host.call("page.authorize", { url }).catch(() => undefined);
+  return true;
+}
+
+/** A file picked in the page: its bytes (base64), or none when it was larger than the pick allowed. */
+export interface PageFile {
+  name: string;
+  type: string;
+  size: number;
+  data?: string;
+}
+
+/** The browser's own file chooser (web only): the files the person picked, `[]` when they cancelled. */
+export async function pickFilesInPage(options: { accept?: string; maxBytes: number }): Promise<PageFile[]> {
+  // The person takes their time choosing: no time limit.
+  return (await host.call<PageFile[]>("page.pickFiles", { multiple: true, ...options }, { timeout: 0 })) ?? [];
+}
+
+/**
+ * An image drawn again in the page (web only), within `maxEdge` pixels and `budget` characters of base64, as the web
+ * app's chat box does: PNG where it fits, else JPEG compressed a little more each time.
+ */
+export async function encodeImageInPage(options: { data: string; maxEdge: number; budget: number }): Promise<{ mimeType: "image/png" | "image/jpeg"; data: string }> {
+  const result = await host.call<{ mimeType: "image/png" | "image/jpeg"; data: string }>("page.encodeImage", options, { timeout: 60_000 });
+  if (!result || typeof result.data !== "string") throw new Error("An attached image is too large to send, even scaled down.");
+  return result;
 }

@@ -35,7 +35,102 @@ const functions = new Map([
     if (page) location.assign(path);
     return null;
   }],
+  // The query the server's GitHub sign-in comes back with when it refused (`?error=…`).
+  ["page.query", () => (page ? location.search : "")],
+  // GitHub's authorization page, which a sign-in from an invite link is sent to (the server answers with its address);
+  // nowhere else.
+  ["page.authorize", args => {
+    const url = args?.url;
+    if (typeof url !== "string" || !url.startsWith("https://github.com/login/oauth/authorize?")) throw new Error("Only GitHub's authorization page opens.");
+    if (page) location.assign(url);
+    return null;
+  }],
+  ["page.pickFiles", args => pickFiles(args)],
+  ["page.encodeImage", args => encodeImage(args)],
 ]);
+
+/** Bytes as base64, a block at a time so no call gets too many arguments. */
+function base64(bytes) {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
+
+/**
+ * The browser's own file chooser (NSH's picker takes photos only): the files picked, each with its bytes as base64, or
+ * without them when it is larger than `maxBytes`; `[]` when the person cancels. `accept` narrows what it offers.
+ */
+function pickFiles(args) {
+  if (!page || typeof document === "undefined") return [];
+  const maxBytes = typeof args?.maxBytes === "number" ? args.maxBytes : Infinity;
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = args?.multiple !== false;
+    if (typeof args?.accept === "string") input.accept = args.accept;
+    input.style.display = "none";
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      Promise.all(Array.from(input.files ?? []).map(async file => ({
+        name: file.name, type: file.type, size: file.size,
+        ...(file.size <= maxBytes ? { data: base64(new Uint8Array(await file.arrayBuffer())) } : {}),
+      }))).then(resolve, reject);
+    };
+    input.addEventListener("change", finish);
+    input.addEventListener("cancel", finish);
+    document.body.append(input);
+    input.click();
+  });
+}
+
+/**
+ * An image drawn again, as the web app's chat box does (attachments.tsx): within `maxEdge` pixels and `budget`
+ * characters of base64, a PNG (a screenshot, usually) staying lossless if it fits, JPEG otherwise, a little more
+ * compressed and smaller each time.
+ */
+async function encodeImage(args) {
+  if (!page || typeof document === "undefined") throw new Error("Images can't be drawn here.");
+  const { data, maxEdge, budget } = args ?? {};
+  if (typeof data !== "string" || typeof maxEdge !== "number" || typeof budget !== "number") throw new Error("Invalid image.");
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  const png = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  let bitmap;
+  try { bitmap = await createImageBitmap(new Blob([bytes])); }
+  catch { throw new Error("An attached image can't be read. Attach a PNG or JPEG."); }
+  try {
+    let scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    for (let attempt = 0; attempt < 6; attempt++, scale *= 0.75) {
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      const attempts = [...(png ? [{ mimeType: "image/png" }] : []),
+        { mimeType: "image/jpeg", quality: 0.85 }, { mimeType: "image/jpeg", quality: 0.7 }, { mimeType: "image/jpeg", quality: 0.55 }];
+      for (const { mimeType, quality } of attempts) {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) continue;
+        // JPEG has no transparency: transparent pixels become white, as on a page, rather than black.
+        if (mimeType === "image/jpeg") {
+          context.fillStyle = "#fff";
+          context.fillRect(0, 0, width, height);
+        }
+        context.imageSmoothingQuality = "high";
+        context.drawImage(bitmap, 0, 0, width, height);
+        const blob = await new Promise(done => canvas.toBlob(done, mimeType, quality));
+        if (blob && Math.ceil(blob.size / 3) * 4 <= budget) return { mimeType, data: base64(new Uint8Array(await blob.arrayBuffer())) };
+      }
+    }
+  } finally {
+    bitmap.close();
+  }
+  throw new Error("An attached image is too large to send, even scaled down.");
+}
 
 export async function createHost(player) {
   if (page && typeof addEventListener === "function") {

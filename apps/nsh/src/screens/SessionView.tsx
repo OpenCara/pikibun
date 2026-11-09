@@ -9,8 +9,12 @@ import {
 import { ApprovalCard } from "../components/ApprovalCard";
 import { ChatOptionsBar, confirmAutoApprove } from "../components/ChatOptionsBar";
 import { Composer } from "../components/Composer";
+import { PullRequestLink } from "../components/PullRequest";
 import { RepositoryPreparationCard } from "../components/RepositoryPreparation";
 import { TranscriptEntry } from "../components/TranscriptEntry";
+import { createAttachments, createFileOptions, encodeImages, imageBlobs, imagesUnavailable, restoreImages, withFilesNote } from "../lib/attachments";
+import type { ChatImage } from "../../../../packages/shared/src/chat-images";
+import type { WithdrawResult } from "../../../../packages/shared/src/types";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
 import { createDraft, forgetSentDraft, restoreDraft, saveDraft } from "../lib/drafts";
@@ -70,9 +74,16 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     const current = live.session();
     return Boolean(current && managesSession(user.id, current.ownerId, workspace()?.role));
   };
-  // Renaming, visibility, backups and archiving: the header's menu and the panel share them, as on the web.
-  const actions = createSessionActions({ session: live.session, manages, backupBlocked: () => !live.view() || live.view()!.busy,
+  // Renaming, visibility, backups and archiving: the header's menu and the panel share them, as on the web. Backups need
+  // an idle session whose live state is confirmed.
+  const backupBlocked = () => {
+    const current = live.view();
+    return readOnly() || !current || Boolean(live.error()) || current.busy || (current.queue ?? []).some(item => activeStatuses.includes(item.status));
+  };
+  const actions = createSessionActions({ session: live.session, manages, backupBlocked,
     onChange: () => { live.refresh(); data.refreshSessions(); } });
+  // The list refreshes on its own, so a pull request opened while the session is on screen shows up without a reload.
+  const pullRequest = () => data.sessions().find(item => item.id === props.id)?.pullRequest ?? live.session()?.pullRequest;
   const renaming = signal(false);
   const renameTo = signal("");
   const menu = (): (MenuAction | "separator")[] => {
@@ -83,10 +94,11 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       items.push({ label: current.visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: current.visibility === "workspace" ? "lock" : "globe",
         disabled: actions.action.busy(), onSelect: actions.changeVisibility });
       if (isOwner() && !current.frozen) {
-        items.push({ label: "Create backup", icon: "archive", disabled: actions.backupsOff() || actions.backupsPending() || !live.view() || live.view()!.busy || actions.action.busy(),
-          hint: actions.backupsOff() ? "Backups are off" : live.view()?.busy ? "Session busy" : undefined, onSelect: () => actions.createBackup() });
+        items.push({ label: "Create backup", icon: "archive", disabled: actions.backupsOff() || actions.backupsPending() || backupBlocked() || actions.action.busy(),
+          hint: actions.backupsOff() ? "Backups are off" : backupBlocked() ? "Session busy" : undefined, onSelect: () => actions.createBackup() });
         items.push({ label: "Back up conversation only", icon: "archive",
-          disabled: actions.backupsOff() || actions.backupsPending() || !live.view() || live.view()!.busy || actions.conversationOnlyOff() || actions.action.busy(),
+          disabled: actions.backupsOff() || actions.backupsPending() || backupBlocked() || actions.conversationOnlyOff() || actions.action.busy(),
+          hint: actions.backupsOff() ? "Backups are off" : backupBlocked() ? "Session busy" : actions.conversationOnlyOff() ? "Update the host's connector" : undefined,
           onSelect: () => actions.createBackup({ conversationOnly: true }) });
       }
       items.push({ label: "Archive", icon: "archive", testID: "session-archive", disabled: actions.action.busy(), onSelect: actions.archive });
@@ -137,12 +149,22 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   }
 
   function unarchive() {
+    const packed = Boolean(live.session()?.packed);
     void action.run(async () => {
       await session().api(`/api/sessions/${segment(props.id)}/unarchive`, { method: "POST" });
       live.refresh();
       data.refreshSessions();
-    }, "Session unarchived");
+    }, packed ? "Session unarchived, its files unpacked" : "Session unarchived");
   }
+  /** What the Archived notice says: whether, and by whom, the session can be unarchived. */
+  const archivedText = () => {
+    const current = live.session();
+    if (current?.packed) {
+      return isOwner() ? "This session is read-only. Its files are packed on its host. Unarchiving unpacks them and clones its repositories again, so its host must be online."
+        : "This session is read-only. Its files are packed on its host, so only its owner can unarchive it.";
+    }
+    return `This session is read-only. ${manages() ? "Unarchive it to continue the work." : "Only its owner, or the workspace's owner or an admin, can unarchive it."}`;
+  };
 
   const copyId = () => void action.run(() => Clipboard.writeText(props.id), "Session ID copied");
 
@@ -165,6 +187,9 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       <If when={!props.page}>
         <View style={{ paddingRight: 6 }}><Badge testID="session-connection" tone={badge().tone} dot={badge().dot}>{badge().text}</Badge></View>
       </If>
+      <If when={live.session() ? pullRequest() : undefined}>
+        {pull => <View style={{ paddingRight: 4 }}><PullRequestLink pull={pull()} compact={props.page} /></View>}
+      </If>
       <IconButton testID="session-approvals" icon="shield-check" label={pending().length ? `Approvals, ${pending().length} pending` : "Approvals"} badge={pending().length}
         tone={pending().length ? "warning" : undefined} onPress={() => approvalsOpen.set(true)} disabled={!live.view()} />
       <DropdownMenu label="Session actions" testID="session-actions" items={menu()} />
@@ -175,7 +200,10 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   const subtitle = () => {
     const current = live.session();
     const parts = [workspace()?.name, host() ? `${host()!.name}${host()!.online ? "" : " (offline)"}` : undefined];
-    if (current) parts.push(current.visibility === "workspace" ? "Workspace-visible" : "Private", ...(current.linkShared ? ["Link shared"] : []));
+    if (current) {
+      parts.push(current.visibility === "workspace" ? "Workspace-visible" : "Private", ...(current.linkShared ? ["Link shared"] : []),
+        ...(current.packed ? ["Files packed"] : []));
+    }
     return parts.filter(Boolean).join(" · ");
   };
 
@@ -275,11 +303,19 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             <Text style={{ flex: 1, numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>{subtitle()}</Text>
           </View>
         </If>
-        <If when={archived() || (live.error() && !startFailed()) || action.error() || action.notice()}>
+        <If when={archived() || live.session()?.frozen || live.session()?.cloneUnavailable || (live.error() && !startFailed()) || action.error() || action.notice()}>
           <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
+            <If when={live.session()?.frozen && !archived()}>
+              <Banner testID="session-frozen" title="Read-only">
+                This session pinned its repositories when it started, which sessions no longer do. Its conversation, approvals and backups stay viewable, but it no longer runs. Start a new session to continue the work.
+              </Banner>
+            </If>
+            <If when={!live.session()?.frozen ? live.session()?.cloneUnavailable : undefined}>
+              {reason => <Banner testID="session-clone-unavailable" tone="warning" title="Can't clone repositories">{reason()}</Banner>}
+            </If>
             <If when={archived()}>
-              <Banner title="Archived" actions={<If when={manages()}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
-                {`This session is read-only. ${manages() ? "Unarchive it to continue the work." : "Only its owner, or the workspace's owner or an admin, can unarchive it."}`}
+              <Banner title="Archived" actions={<If when={manages() && (!live.session()?.packed || isOwner())}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
+                {archivedText()}
               </Banner>
             </If>
             <If when={live.error() && !startFailed()}>
@@ -401,7 +437,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const content = createDraft(props.id);
   const conversationId = signal("");
   const queueOpen = signal(false);
-  let request: { key: string; id: string } | null = null;
+  let request: { key: string; id: string; images?: ChatImage[] } | null = null;
   // Set while the owner decides on Auto-approve, so a second tap can't send the message twice.
   let confirming = false;
   const submission = createAction();
@@ -413,6 +449,12 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const permissions = () => current().permissions ?? [];
   const canWrite = () => permissions().includes("write");
   const canAsk = () => permissions().includes("ask");
+  // Images go with the message where its host takes them; files are uploaded into the session's worktree first, within
+  // its workspace's limit. A new session's first message that couldn't be sent hands its attachments over to here.
+  const fileOptions = createFileOptions(() => current().workspaceId, props.host, canWrite);
+  const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(props.host()), fileOptions, sessionId: props.id });
+  const withdrawing = createAction();
+  const withdrawNotice = signal("");
   const actualMode = () => (mode() === "ask" && !canAsk() ? "write" : mode());
   const readOnly = () => current().status === "archived" || current().frozen === true;
   const permitted = () => !readOnly() && (actualMode() === "write" ? canWrite() : canAsk());
@@ -423,6 +465,13 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   // Stopping takes the running message and everything queued; hosts that predate it don't offer it.
   const canStop = () => Boolean(view().stoppable) && current().status !== "archived" && canWrite() && activeQueue().length > 0;
   const stopPending = () => queue().some(item => item.status === "stopping");
+  // Messages of yours still waiting in the queue can be taken back to edit, on a host that offers it: ↑ in an empty chat
+  // box takes the latest, and the queue's details list each.
+  const editable = computed(() => (view().withdrawable && !readOnly()
+    ? activeQueue().filter(item => item.actorId === user.id && item.status === "queued" && (item.mode === "ask" ? canAsk() : canWrite())) : []));
+  // A message comes back with its images, and the host keeps none of them: it is taken back only into a chat box
+  // without images, so none can be dropped for want of room.
+  const editBlocked = () => attachments.images().length > 0;
   const sideConversations = computed(() => view().conversations.filter(item => item.mode === "ask" && (!item.actorId || item.actorId === user.id)));
   const shownConversation = (conversation: { id: string; mode?: string; actorId?: string } | undefined) => (actualMode() === "ask"
     ? conversation?.mode === "ask" && (!conversation.actorId || conversation.actorId === user.id) && (!conversationId() || conversation.id === conversationId())
@@ -452,7 +501,9 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
 
   async function submit() {
     const text = content();
-    if (!permitted() || !text.trim() || submission.busy() || confirming) return;
+    const pasted = untracked(attachments.images);
+    const attached = untracked(attachments.files);
+    if (!permitted() || (!text.trim() && !pasted.length && !attached.length) || submission.busy() || confirming) return;
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
     const options = chatOptionsBody(host, selection(), kind);
@@ -464,23 +515,60 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
       if (!confirmed) { selection.update(value => ({ ...value, access: "approval" })); return; }
     }
     receipt.set(null);
+    withdrawNotice.set("");
     const sent = text;
-    // Changing the options is a different request, so it needs a new idempotency key.
-    const key = `${kind}:${JSON.stringify(options ?? null)}:${sent}`;
+    // Changing the options or the attachments is a different request, so it needs a new idempotency key.
+    const key = `${kind}:${JSON.stringify(options ?? null)}:${[...pasted, ...attached].map(item => item.id).join(",")}:${sent}`;
     // Retry the same failed submission with the same idempotency key, not a duplicate turn.
     if (request?.key !== key) request = { key, id: randomId() };
-    const requestId = request.id;
+    const pending = request;
     void submission.run(async () => {
       if (unavailable) throw new Error(unavailable);
-      const result = await session().api<SubmitResult>(`/api/sessions/${segment(props.id)}/${kind}`, { method: "POST", body: { content: sent, requestId, ...(options ? { options } : {}) } });
+      // Encoded once per request, so a retry sends the same bytes under the same key.
+      const images = pending.images ??= await encodeImages(pasted);
+      // Files go into the worktree first, each once even when sending is tried again, and the message says where.
+      const note = await attachments.upload(props.id, attached);
+      const result = await session().api<SubmitResult>(`/api/sessions/${segment(props.id)}/${kind}`, { method: "POST",
+        body: { content: withFilesNote(sent, note), requestId: pending.id, ...(options ? { options } : {}), ...(images.length ? { images } : {}) } });
       receipt.set(result);
       if (options) data.rememberChat(host, selection(), view().agent);
       if (kind === "ask") conversationId.set(result.conversationId);
       forgetSentDraft(props.id, sent);
+      attachments.sent(pasted, attached);
       request = null;
       props.live.refresh();
       list()?.scrollToEnd({ animated: true });
     });
+  }
+
+  /**
+   * Takes a queued message of yours back into the chat box, with its images and mode, to edit and send again: it leaves
+   * the queue, and the edited message queues behind what is there now. Text typed meanwhile stays, above it.
+   */
+  function edit(submissionId: string) {
+    if (withdrawing.busy() || submission.busy() || editBlocked()) return;
+    withdrawNotice.set("");
+    void withdrawing.run(async () => {
+      const result = await session().api<WithdrawResult>(`/api/sessions/${segment(props.id)}/withdraw`, { method: "POST", body: { submissionId } });
+      // Through the session's draft and images, not this box's state: a box that closed meanwhile still gets it.
+      restoreDraft(props.id, result.content);
+      restoreImages(props.id, imageBlobs(result.images ?? []));
+      if (result.imagesLost) withdrawNotice.set("Its images were no longer on the host: attach them again before sending.");
+      mode.set(result.mode);
+      props.live.refresh();
+    });
+  }
+  const recall = () => {
+    const latest = untracked(editable).at(-1);
+    if (latest) edit(latest.submissionId);
+  };
+
+  // Shown while the reader has scrolled up from the latest entry: a button back down to it. Near the top of a transcript
+  // that has earlier entries, the next page is read before the reader gets there (onLoadMoreAtStart).
+  const scrolledUp = signal(false);
+  function jumpToLatest() {
+    scrolledUp.set(false);
+    list()?.scrollToEnd({ animated: true });
   }
 
   function stop() {
@@ -563,9 +651,17 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
 
   return (
     <>
+      <View style={{ flex: 1 }}>
       <List each={entries()} keyExtractor={entry => entry.id} ref={list} style={{ flex: 1 }} contentStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 }}
         maintainVisibleContentPosition={{ autoscrollToBottomThreshold: 80 }} testID="transcript"
         accessibilityLabel={actualMode() === "ask" ? "Side ask history" : "Shared session history"}
+        scrollEventThrottle={100}
+        onScroll={event => {
+          // A little further up than following stops, so the button doesn't flicker in and out at the bottom.
+          const up = event.contentSize.height - event.offset.y - event.size.height > 240;
+          if (up !== untracked(scrolledUp)) scrolledUp.set(up);
+        }}
+        onLoadMoreAtStart={() => { if (olderCount() > 0) loadEarlier(); }}
         header={() => (
           <If when={olderCount() > 0}>
             <View style={{ alignItems: "center", paddingBottom: 16 }}>
@@ -586,6 +682,17 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           </View>
         )}
       </List>
+      <If when={scrolledUp()}>
+        <View style={{ position: "absolute", bottom: 12, left: 0, right: 0, alignItems: "center" }}>
+          <BaseButton testID="jump-to-latest" accessibilityLabel="Jump to the latest message" onPress={jumpToLatest}
+            style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: palette().borderStrong,
+              backgroundColor: palette().surfaceRaised }}
+            hoverStyle={{ backgroundColor: palette().hoverStrong }} activeStyle={{ opacity: 0.8 }}>
+            <Icon name="arrow-down" size={16} color={palette().text} />
+          </BaseButton>
+        </View>
+      </If>
+      </View>
       {props.dock}
       <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: bottomInset(), backgroundColor: palette().background }}>
         <View style={{ gap: 6, width: "100%", maxWidth: 800, alignSelf: "center" }}>
@@ -607,17 +714,32 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                 {last => <Small>{`Last receipt ${last().submissionId} · ${last().status}${last().queuePosition !== undefined ? ` · queue position ${last().queuePosition}` : ""}`}</Small>}
               </If>
               <Each of={activeQueue()} key={item => item.submissionId}>
-                {(item, index) => <Small>{`${index() + 1}. ${item().mode === "ask" ? "Read-only side ask" : "Shared submission"} · ${item().status} · by ${name(item().actorId, true)}`}</Small>}
+                {(item, index) => (
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                    <View style={{ flex: 1, minWidth: 200 }}>
+                      <Small>{`${index() + 1}. ${item().mode === "ask" ? "Read-only side ask" : "Shared submission"} · ${item().status} · by ${name(item().actorId, true)} · receipt ${item().submissionId}`}</Small>
+                    </View>
+                    <If when={editable().some(candidate => candidate.submissionId === item().submissionId)}>
+                      <Button testID="queue-edit" small variant="outline" icon="pencil" label="Edit" disabled={withdrawing.busy() || submission.busy() || editBlocked()}
+                        onPress={() => edit(item().submissionId)} />
+                    </If>
+                  </View>
+                )}
               </Each>
+              <If when={editable().length > 0 && editBlocked()}>
+                <Small>Remove the images from your chat box to edit a queued message there.</Small>
+              </If>
               <Each of={recentSubmissions()} key={item => item.submissionId}>
-                {item => <Small>{`${item().status} · ${item().mode === "ask" ? "Side ask" : "Shared submission"} · by ${name(item().actorId, true)}`}</Small>}
+                {item => <Small>{`${item().status} · ${item().mode === "ask" ? "Side ask" : "Shared submission"} · by ${name(item().actorId, true)} · receipt ${item().submissionId}`}</Small>}
               </Each>
               <View style={{ flexDirection: "row" }}><Button small icon="refresh" label="Refresh queue" onPress={props.live.refresh} /></View>
             </View>
           </If>
           <Composer value={content()} onChange={value => content.set(value)} onSubmit={() => void submit()} busy={submission.busy()} disabled={!permitted()}
-            onStop={canStop() ? stop : undefined} stopping={stopping.busy()}
-            placeholder={!permitted() ? "Read-only" : actualMode() === "ask" ? "Ask a side question without changing anything" : "Message the agent"}
+            onStop={canStop() ? stop : undefined} stopping={stopping.busy()} attachments={attachments}
+            onRecall={permitted() && editable().length > 0 && !editBlocked() ? recall : undefined}
+            placeholder={!permitted() ? "Read-only" : editable().length && !editBlocked() ? (platform.desktop ? "Press ↑ to edit your queued message" : "Edit your queued message from the queue above")
+              : actualMode() === "ask" ? "Ask a side question without changing anything" : "Message the agent"}
             sendLabel={actualMode() === "ask" ? "Send side ask" : "Submit to session"}
             hint={hint()}
             tools={
@@ -644,7 +766,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
           <If when={draftHasSecret()}>
             <Small testID="draft-secret" tone="warning">{`This message looks like it holds a secret. Everyone, you included, sees it as ${REDACTED} in the transcript, but the agent and its host receive it as typed.`}</Small>
           </If>
-          <Feedback error={submission.error() || stopping.error() || rewinding.error()} notice={rewinding.notice()} />
+          <Feedback error={submission.error() || stopping.error() || withdrawing.error() || rewinding.error()} notice={withdrawNotice() || rewinding.notice()} />
         </View>
       </View>
     </>
