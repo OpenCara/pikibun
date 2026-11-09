@@ -1,4 +1,11 @@
-# Pikibun for the desktop
+# Pikibun for the desktop (deprecated)
+
+> **Deprecated, to be deleted.** The Native Shell client's desktop builds ([`apps/nsh`](../nsh/README.md), released
+> by `app-v` tags) replace this Electron app, and it is removed together with the React web client
+> ([`apps/web`](../web/README.md)) once they cover what only it does: running this computer's connector (**This
+> Mac**/**This Computer**) and a local Pikibun server. Until then it is still released (`desktop-v` tags) and fixed when
+> it breaks, but gets no new features. Its windows load https://pikibun.com, which now serves the NSH client, so its
+> **Settings → This Mac** section isn't there: use the app's own **This Mac** and **App Settings…** windows.
 
 An Electron app with three jobs, each the full version of what the command line and the website do:
 

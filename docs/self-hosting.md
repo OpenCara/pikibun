@@ -59,7 +59,8 @@ Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load
 ## Choosing the web client
 
 `pnpm build` and the Docker image include two web clients: the React web app (`apps/web`, `dist/web`), which servers
-serve by default, and the Native Shell client (`apps/nsh`, `dist/preview`). Both use the same API, so switching
+serve by default, and the Native Shell client (`apps/nsh`, `dist/preview`). The React client is **deprecated**: it will
+be deleted and NSH will be the only client. Set `STATIC_CLIENT=nsh` to switch before then. Both use the same API, so switching
 between them moves, copies or restores no accounts, hosts or sessions. pikibun.com serves the Native Shell client; its
 deploy workflow (`deploy-server.yml`) writes this to the server's `.env`:
 

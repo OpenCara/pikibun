@@ -1,4 +1,6 @@
 name: Release desktop
+# Deprecated, with the Electron app it releases (apps/desktop/README.md): deleted once the Native Shell client
+# (apps/nsh, release-app.yml) replaces it.
 # Pushing a desktop-v1.2.3 tag (desktop-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then builds the
 # desktop app (apps/desktop) at the tag's version and attaches it to the tag's GitHub release, which is marked latest
 # unless it is a prerelease. Every platform is built from the same tag: macOS (arm64 DMG) and Windows (x64 NSIS
