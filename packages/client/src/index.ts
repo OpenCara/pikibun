@@ -1,7 +1,7 @@
 export { ApiError, createApi, errorMessage, segment, type Api, type ApiOptions, type RequestOptions } from "./api";
 export {
   accessHint, accessLabels, accessUnavailable, AUTO_APPROVE_CONFIRMED_KEY, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, clampLevel, CONNECTOR_UPDATE_HINT,
-  effectiveLevel, findModel, initialSelection, levelLabels, memberAutoApproveHint, memberAutoApproveWarning, modelKey, modelUnavailable, mustConfirmAutoApprove,
+  defaultAccess, effectiveLevel, findModel, initialSelection, levelLabels, memberAutoApproveHint, memberAutoApproveWarning, modelKey, modelUnavailable, mustConfirmAutoApprove,
   offeredLevels, offersMemberAutoApprove, parseChatPreference, preferredSelection, selectModel, type ChatPreference, type ChatSelection,
 } from "./chat-options";
 export {

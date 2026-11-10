@@ -136,13 +136,32 @@ export function preferredSelection(
   return { model: { provider: model.provider, modelId: model.modelId }, thinkingLevel, access: "auto" };
 }
 
-export function initialSelection(view: SessionView, owner: boolean): ChatSelection {
+export interface AccessContext {
+  /** The session's commands run in the host's sandbox (not an unsandboxed host, nor a session run directly on it). */
+  sandboxed?: boolean;
+  /** The viewer, who doesn't own the session, may auto-approve their own messages there (offersMemberAutoApprove). */
+  memberAutoApprove?: boolean;
+}
+
+/**
+ * The access a session's chat box starts on. A sandboxed session starts on Auto-approve for anyone who may use it there, its
+ * owner or a member offered it, whoever started the session (a person, another member or an agent) and whatever its last
+ * message used, except a Read-only one, which stays Read-only. Elsewhere it starts on Auto-approve for the owner before the
+ * first message, then keeps the last message's access.
+ */
+export function defaultAccess(view: Pick<SessionView, "access" | "entries">, owner: boolean, context: AccessContext = {}): AccessMode {
+  const mayAuto = owner || context.memberAutoApprove === true;
+  if (context.sandboxed && mayAuto && view.access !== "read") return "auto";
   const fresh = !view.entries?.some(entry => entry.role === "user");
   const access = view.access ?? (owner && fresh ? "auto" : "approval");
+  return access === "auto" && !mayAuto ? "approval" : access;
+}
+
+export function initialSelection(view: SessionView, owner: boolean, context: AccessContext = {}): ChatSelection {
   return {
     model: view.agent && { provider: view.agent.provider, modelId: view.agent.modelId },
     thinkingLevel: view.agent?.thinkingLevel,
-    access: access === "auto" && !owner ? "approval" : access,
+    access: defaultAccess(view, owner, context),
   };
 }
 
