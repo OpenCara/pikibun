@@ -123,6 +123,12 @@ type InfoViewer = { userId: string; role?: 'owner' | 'admin'; workspaceId?: stri
 export function hostSessionsSupported(capabilities: ConnectorCapabilities, granted = false): boolean {
   return capabilities.hostConfig === true && capabilities.unsandboxed !== true && (!granted || capabilities.hostSessionGrants === true);
 }
+
+// Whether a host's configuration must accept sessions on the host before this one starts there: always for a member
+// the owner granted them, never for the host's owner, once its connector runs the owner's without that consent.
+export function hostSessionsNeedConsent(capabilities: ConnectorCapabilities, granted: boolean): boolean {
+  return granted || capabilities.ownerHostSessions !== true;
+}
 async function connectorInfo(env: Env, row: ConnectorInfoRow, viewer?: InfoViewer): Promise<ConnectorInfo> {
   const ownerName = row.owner_name ?? (await env.DB.query<{ display_name: string }>('SELECT display_name FROM users WHERE id = ?')
     .bind(row.owner_id).first())?.display_name ?? '';
@@ -155,8 +161,8 @@ async function connectorInfo(env: Env, row: ConnectorInfoRow, viewer?: InfoViewe
   const { models, disabledModels } = hostModelSettings(JSON.parse(row.models_json), disabled);
   const capabilities = parseCapabilities(row.capabilities_json);
   const hostCommandAccess = authority?.level;
-  const hostSessions = (owner || authority?.sessions === true) && !row.revoked_at && config?.hostSessions === true
-    && hostSessionsSupported(capabilities, !owner);
+  const hostSessions = (owner || authority?.sessions === true) && !row.revoked_at
+    && (config?.hostSessions === true || !hostSessionsNeedConsent(capabilities, !owner)) && hostSessionsSupported(capabilities, !owner);
   return { id: row.id, ownerId: row.owner_id, ownerName, name: row.name,
     createdAt: row.created_at, revokedAt: row.revoked_at, online, models, ...(row.connector_version ? { version: row.connector_version } : {}),
     workspaceIds: workspaceIds.filter(visible), connectedWorkspaceIds: connectedWorkspaceIds.filter(visible), capabilities,

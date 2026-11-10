@@ -1693,11 +1693,11 @@ export class RunnerSession {
 
   private async requireHostEnvironment(automatic = false): Promise<void> {
     if (!this.#hostSession) return;
+    if (this.binding.session.connectorOwnerId === this.binding.owner.id) return;
     if (!(await this.hostConfig()).hostSessions) {
-      throw new RunnerError(403, "This host no longer runs sessions directly on it: its owner turned that off in Pikibun (Settings → Hosts → the host → Configuration). "
+      throw new RunnerError(403, "This host no longer runs members' sessions directly on it: its owner turned that off in Pikibun (Settings → Hosts → the host → Configuration). "
         + "Nothing ran. Start a new session to work in the sandbox.");
     }
-    if (this.binding.session.connectorOwnerId === this.binding.owner.id) return;
     const result = await this.authorize(this.binding.owner.id, "write", undefined, true, true);
     if (result.hostSessions !== true) {
       throw new RunnerError(403, "The session's owner may no longer run sessions directly on this host: the grant that let them has ended. "
