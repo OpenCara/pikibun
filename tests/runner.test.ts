@@ -753,6 +753,53 @@ test("a member the host's owner granted sessions on the host runs one there only
   assert.ok(!view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("never-ran\n")));
 });
 
+test("a workspace collaborator's own Auto-approve runs their sandboxed commands at once, only while the control plane says their role allows it", { skip: process.platform !== "linux" }, async t => {
+  const { service, grants } = await fixture(t);
+  const connectorId = "member-auto-connector";
+  // What the control plane reports of bob's workspace role; asked only by name, and only by this host.
+  let allowed = true;
+  const asked: AuthorizationRequest[] = [];
+  const authorize = async (input: AuthorizationRequest) => {
+    if (input.memberAutoApprove) asked.push(input);
+    const permitted = grants[input.actorId]?.includes(input.permission) ?? false;
+    return { allowed: permitted, ownerId: input.ownerId, policyVersion: 1,
+      ...(permitted && input.memberAutoApprove && input.actorId === "test:bob" && allowed ? { memberAutoApprove: true as const } : {}) };
+  };
+  const runner = new RunnerService({ ...service.config, connectorId, authorize });
+  await runner.initialize();
+  t.after(() => runner.close());
+  const id = "member-auto";
+  const value = binding(id);
+  value.session.connectorId = value.model.connectorId = connectorId;
+  value.session.connectorOwnerId = value.model.connectorOwnerId = "test:alice";
+  const session = await runner.provision(value, { ...await ticket(id, "create"), connectorId });
+  assert.ok(!(session.sandbox instanceof HostWorkspace), "it runs in the sandbox");
+  const submit = async (requestId: string, command: string, options?: { access: "auto" | "approval"; autoMerge?: boolean }) => session.submit(
+    { ...await ticket(id, "submit", "test:bob"), connectorId },
+    { content: `TEST_BASH ${command}`, requestId, admissionId: await sha256(`member auto ${requestId}`), ...(options ? { options } : {}) }, "write");
+
+  // Their Auto-approve runs their command at once, as the session's owner, without a card.
+  await submit("auto", "echo member-auto-marker", { access: "auto" });
+  await idle(session);
+  const view = await session.view();
+  assert.deepEqual(autoApproved(view), [{ tool: "node", status: "executed" }]);
+  assert.ok(toolOutput(view, /member-auto-marker/));
+  assert.ok(asked.length > 0 && asked.every(input => input.actorId === "test:bob"), "only another member's message asks");
+  // It never merges without asking: that is the owner's Auto-approve alone.
+  await assert.rejects(submit("merge", "echo never", { access: "auto", autoMerge: true }), rejectedWith(422, /owner's Auto-approve merges/));
+
+  // Asking before acting, their command waits for a person.
+  await submit("asking", "echo member-asking", { access: "approval" });
+  const [card] = await operationRequests(session);
+  assert.equal(card!.requestedBy, "test:bob");
+  await session.decide({ ...await ticket(id, "approve"), connectorId }, card!.id, { decision: "deny", operation: card!.operation });
+  await idle(session);
+
+  // Once the control plane no longer says their role allows it, their Auto-approve is refused.
+  allowed = false;
+  await assert.rejects(submit("demoted", "echo never", { access: "auto" }), rejectedWith(403, /can auto-approve/));
+});
+
 test("shell commands may reserve address space they never touch, as gh and node do when they start", { skip: process.platform !== "linux" }, async t => {
   const { service } = await fixture(t);
   const session = await service.provision(binding("reserve-session"), await ticket("reserve-session", "create"));

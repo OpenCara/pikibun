@@ -42,7 +42,7 @@ sequenceDiagram
 
 The API takes a tier (`POST /api/sessions/:id/grants` with `{ userId, role }`) or, as before, an explicit permission list (`{ userId, permissions }`). A grant that matches no tier, such as one made before tiers existed, shows as **Custom** until someone chooses a tier for it.
 
-Only the session's owner can restart it, create its share link, back it up, restore, move or export it, use **Auto-approve**, schedule prompts, and decide permission requests. Its owner and the workspace's owner and admins rename, archive and unarchive it, change its visibility and tool output, and turn off its share link (see [Managing every session](workspaces.md#managing-every-session)).
+Only the session's owner can restart it, create its share link, back it up, restore, move or export it, use **Auto-approve** for everything it covers, schedule prompts, and decide permission requests. A workspace owner, admin or collaborator who can send messages to it can use **Auto-approve** for their own sandboxed commands (see [Auto-approve in someone else's session](approvals.md#auto-approve-in-someone-elses-session)). Its owner and the workspace's owner and admins rename, archive and unarchive it, change its visibility and tool output, and turn off its share link (see [Managing every session](workspaces.md#managing-every-session)).
 
 ## Share links
 

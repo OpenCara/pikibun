@@ -9,7 +9,8 @@ type Manifest = { models: LocalModelSummary[]; capabilities: ConnectorCapabiliti
  * commands of members granted host commands without the resource limits the host lacks (`unboundedShellGrants`), that
  * let their owner decide host commands without approve permission on the session (`hostOwnerDecides`), that run GitHub
  * effects under Auto-approve (`automaticGitHub`), that run the requests of members a session's owner auto-approves
- * without asking (`requesterAutoApprove`), that browse a session's worktree for the session panel
+ * without asking (`requesterAutoApprove`), that take Auto-approve messages from members whose workspace role allows it
+ * and run their sandboxed commands without asking (`memberAutoApprove`), that browse a session's worktree for the session panel
  * (`fileBrowser`), that take files attached to messages (`fileUploads`), also from the desktop app beside them
  * (`directUploads`), that carried the retired web tools (`web`), that run extensions (`extensions`) and the Pi built-in ones
  * their configuration turns on (`builtinExtensions`), that run the extensions their owner requires of every session and
@@ -20,8 +21,8 @@ type Manifest = { models: LocalModelSummary[]; capabilities: ConnectorCapabiliti
 export function withHostToolCapabilities(input: Record<string, unknown>, parse: (input: Record<string, unknown>) => Manifest): Manifest {
   const value = input.capabilities;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return parse(input);
-  const { hostCommands, hostGrants, hostSessionGrants, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, fileBrowser, fileUploads, directUploads, web, extensions, builtinExtensions, requiredExtensions, gitRepin, ...rest } = value as Record<string, unknown>;
-  if ([hostCommands, hostGrants, hostSessionGrants, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, fileBrowser, fileUploads, directUploads, web, extensions, builtinExtensions, requiredExtensions, gitRepin].some(flag => flag !== undefined && typeof flag !== 'boolean')
+  const { hostCommands, hostGrants, hostSessionGrants, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, memberAutoApprove, fileBrowser, fileUploads, directUploads, web, extensions, builtinExtensions, requiredExtensions, gitRepin, ...rest } = value as Record<string, unknown>;
+  if ([hostCommands, hostGrants, hostSessionGrants, unboundedShellGrants, hostOwnerDecides, automaticGitHub, requesterAutoApprove, memberAutoApprove, fileBrowser, fileUploads, directUploads, web, extensions, builtinExtensions, requiredExtensions, gitRepin].some(flag => flag !== undefined && typeof flag !== 'boolean')
     || (hostGrants && !hostCommands) || (hostSessionGrants && !hostGrants) || (unboundedShellGrants && !hostGrants) || (hostOwnerDecides && !hostCommands) || (directUploads && !fileUploads)
     || (requiredExtensions && !extensions)) {
     fail(400, 'invalid_manifest', 'Invalid capabilities.');
@@ -29,7 +30,8 @@ export function withHostToolCapabilities(input: Record<string, unknown>, parse: 
   const manifest = parse({ ...input, capabilities: rest });
   return { ...manifest, capabilities: { ...manifest.capabilities, ...(hostCommands ? { hostCommands: true } : {}), ...(hostGrants ? { hostGrants: true } : {}),
     ...(hostSessionGrants ? { hostSessionGrants: true } : {}), ...(unboundedShellGrants ? { unboundedShellGrants: true } : {}),
-    ...(hostOwnerDecides ? { hostOwnerDecides: true } : {}), ...(automaticGitHub ? { automaticGitHub: true } : {}), ...(requesterAutoApprove ? { requesterAutoApprove: true } : {}), ...(fileBrowser ? { fileBrowser: true } : {}),
+    ...(hostOwnerDecides ? { hostOwnerDecides: true } : {}), ...(automaticGitHub ? { automaticGitHub: true } : {}), ...(requesterAutoApprove ? { requesterAutoApprove: true } : {}),
+    ...(memberAutoApprove ? { memberAutoApprove: true } : {}), ...(fileBrowser ? { fileBrowser: true } : {}),
     ...(fileUploads ? { fileUploads: true } : {}), ...(directUploads ? { directUploads: true } : {}), ...(web ? { web: true } : {}), ...(extensions ? { extensions: true } : {}),
     ...(builtinExtensions ? { builtinExtensions: true } : {}), ...(requiredExtensions ? { requiredExtensions: true } : {}) } };
 }

@@ -6,7 +6,7 @@ import { fail, identifier, now, text, userIdentifier } from '../http.js';
 import { parseOperation } from './operations.js';
 import { hostCommandSession } from './host-access.js';
 import { everAutoApproved } from './requester-auto-approve.js';
-import { requesterAutoApproves } from '../../../../packages/shared/src/host-operations.js';
+import { memberAutoApproves, requesterAutoApproves } from '../../../../packages/shared/src/host-operations.js';
 
 type ReviewRow = {
   session_id: string; approval_id: string; requested_by: string; operation_json: string;
@@ -152,7 +152,9 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       ...(raw.decidedBy === undefined ? {} : { decidedBy: userIdentifier(raw.decidedBy, 'decidedBy') }),
       ...(raw.result === undefined ? {} : { result: text(raw.result, 'result', 8192, 0) }) };
     // Only the owner's own operations may auto-approve, and those of a member whose requests the owner chose to
-    // auto-approve, as far as requesterAutoApproves goes (checked below against that choice). GitHub comments, issues and
+    // auto-approve, as far as requesterAutoApproves goes (checked below against that choice), or a member's sandboxed
+    // command from their own Auto-approve message, as far as memberAutoApproves goes (checked below against that
+    // message's admission). GitHub comments, issues and
     // merges only from the owner's Auto-approve message (merges only when its admission is marked `auto_merge`), or a
     // comment or issue from such a member's message, checked below with the message's admission. A host command runs
     // automatically only where the control plane told the host its owner may (see hostCommandAuthority); a grant or
@@ -202,7 +204,9 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
     for (const admission of result) admissions.set(admission.id, admission);
   }
   // Another member's automatic operations need their own message's admission, and the owner to have chosen to
-  // auto-approve their requests; or, for an extension's tool call, the workspace to run that extension's tools
+  // auto-approve their requests; or, for a sandboxed command (memberAutoApproves), that message to have been sent with
+  // Auto-approve, which the control plane takes only from a member whose workspace role allows it (mayAutoApprove, as
+  // the role was then: the records it left are not judged by today's); or, for an extension's tool call, the workspace to run that extension's tools
   // automatically where its host's owner allows it, as it does when the call is first reviewed (a setting can change
   // later, so the records it left are not judged by today's).
   const members = normalized.filter(item => item.approval.automatic && item.approval.requestedBy !== row.owner_id);
@@ -217,7 +221,8 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
     const reviewed = stored.get(approval.id)?.admission_id ?? admissionId;
     const admission = reviewed ? admissions.get(reviewed) : undefined;
     const operation = approval.operation;
-    if ((operation.kind !== 'extension.tool' && !chosen.has(approval.requestedBy))
+    const ownAuto = admission?.access === 'auto' && memberAutoApproves(operation, hostCommandSession(row), approval.unbounded === true);
+    if ((operation.kind !== 'extension.tool' && !chosen.has(approval.requestedBy) && !ownAuto)
       || !admission || admission.actor_id !== approval.requestedBy || admission.mode !== 'write' || admission.session_id !== row.id) {
       fail(502, 'invalid_runner_response', 'The runtime returned an invalid automatic approval.');
     }
