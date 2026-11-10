@@ -70,6 +70,21 @@ export function hostAllowed(policy: NetworkPolicy, host: string): boolean {
   }
 }
 
+/**
+ * Whether the policy names `host` itself, rather than letting it through as any host: an allowlist's domains and
+ * package registries, and in open mode the package registries alone, fixed names whose DNS no session controls. The
+ * egress proxy tunnels to a local proxy's fake-IP addresses (198.18.0.0/15) only for these: such a proxy resolves the
+ * name again on its own side, where the proxy can't check the address, so an arbitrary name could lead it into the
+ * host's networks.
+ */
+export function hostNamed(policy: NetworkPolicy, host: string): boolean {
+  switch (policy.mode) {
+    case "off": return false;
+    case "open": return packageRegistryDomains.includes(host);
+    case "allowlist": return hostAllowed(policy, host);
+  }
+}
+
 /** A workspace repository the egress proxy relays for Git reads, with the session owner's own credential. */
 export interface EgressRepository {
   bindingId: string; provider: GitProvider; host: string; fullName: string;
