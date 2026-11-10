@@ -630,7 +630,7 @@ test("a member granted host commands runs commands in the sandbox without the li
   assert.equal(refusals(view), refusals(before) + 1);
 });
 
-test("a session its host's owner started on the host runs there while the host accepts that, and only host command authority decides it", { skip: process.platform !== "linux" }, async t => {
+test("a session its host's owner started on the host runs there whatever the host accepts from members, and only host command authority decides it", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   grants["test:carol"] = ["read", "ask", "write", "approve"];
   const connectorId = "host-sessions-connector";
@@ -659,11 +659,13 @@ test("a session its host's owner started on the host runs there while the host a
   assert.ok(ran.result?.includes(join(service.config.dataDir, "sessions", "host-own")), `it ran in the session's own worktree on the host: ${ran.result}`);
   await idle(session);
   accepted = false;
-  await session.submit({ ...await ticket("host-own", "submit"), connectorId }, { content: "TEST_BASH echo never-ran", requestId: "host-own-off", admissionId }, "write");
+  await session.submit({ ...await ticket("host-own", "submit"), connectorId }, { content: "TEST_BASH echo still-runs", requestId: "host-own-off", admissionId }, "write");
+  const [later] = await operationRequests(session);
+  await session.decide({ ...await ticket("host-own", "approve"), connectorId }, later!.id, { decision: "approve", operation: later!.operation });
+  const still = await settledCard(session, later!.id);
+  assert.equal(still.status, "executed", "the host's own owner needs no consent of the host's configuration");
+  assert.match(still.result ?? "", /still-runs/);
   await idle(session);
-  const view = await session.view();
-  assert.equal(view.approvals.filter(approval => approval.status === "pending").length, 0);
-  assert.ok(view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("no longer runs sessions directly on it")));
 });
 
 test("a member the host's owner granted sessions on the host runs one there only while their grant includes it, and without approval only with automatic host commands", { skip: process.platform !== "linux" }, async t => {
@@ -678,7 +680,8 @@ test("a member the host's owner granted sessions on the host runs one there only
       ...(allowed && input.host && input.actorId === "test:alice" && grant.hostCommands ? { hostCommands: grant.hostCommands } : {}),
       ...(allowed && input.host && input.hostSessions && input.actorId === "test:alice" && grant.hostSessions ? { hostSessions: true as const } : {}) };
   };
-  const runner = new RunnerService({ ...service.config, connectorId, allowTestShell: false, authorize, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: true }) });
+  let accepted = true;
+  const runner = new RunnerService({ ...service.config, connectorId, allowTestShell: false, authorize, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: accepted }) });
   await runner.initialize();
   t.after(() => runner.close());
   const admissionId = await sha256("member host session write admission");
@@ -703,6 +706,12 @@ test("a member the host's owner granted sessions on the host runs one there only
   await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo member-automatic", requestId: "automatic", admissionId, options: { access: "auto" } }, "write");
   await idle(session);
   assert.deepEqual(autoApproved(await session.view()), [{ tool: "node", status: "executed" }]);
+
+  accepted = false;
+  await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo never-ran", requestId: "refused", admissionId, options: { access: "auto" } }, "write");
+  await idle(session);
+  assert.ok((await session.view()).entries.some(entry => entry.role === "toolResult" && entry.text.includes("no longer runs members' sessions directly on it")));
+  accepted = true;
 
   delete grant.hostSessions;
   await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo never-ran", requestId: "ended", admissionId, options: { access: "auto" } }, "write");

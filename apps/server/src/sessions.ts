@@ -23,7 +23,7 @@ import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
 import { fail, id, identifier, jsonObject, now, randomToken, testMode, text, userIdentifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { connectorUtf8Bytes } from './connector-transport.js';
-import { hostSessionsSupported } from './connectors.js';
+import { hostSessionsNeedConsent, hostSessionsSupported } from './connectors.js';
 import { connectorHostConfig } from './host-config.js';
 import { chatAgentVersion, requireModel } from './catalog.js';
 import { isLinkShared } from './session-links.js';
@@ -167,8 +167,9 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   }
   if (input.hostEnvironment !== undefined && typeof input.hostEnvironment !== 'boolean') fail(400, 'invalid_input', 'hostEnvironment must be true or false.');
   const onHost = input.hostEnvironment === true;
+  const granted = session.connector_owner_id !== ownerId;
+  const needsConsent = onHost && hostSessionsNeedConsent(capabilities, granted);
   if (onHost) {
-    const granted = session.connector_owner_id !== ownerId;
     if (!session.connector_id || (granted && (await hostAuthority(c.env, session, ownerId))?.sessions !== true)) {
       fail(403, 'host_owner_required', 'Only a host\'s owner, or a member they granted sessions on the host, starts sessions that run directly on it.');
     }
@@ -176,7 +177,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     if (!hostSessionsSupported(capabilities, granted)) {
       fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to run sessions directly on it.');
     }
-    if (!(await connectorHostConfig(c.env, session.connector_id)).hostSessions) {
+    if (needsConsent && !(await connectorHostConfig(c.env, session.connector_id)).hostSessions) {
       fail(409, 'host_sessions_off', 'This host doesn\'t accept sessions that run directly on it. Turn that on under Settings → Hosts → the host → Configuration.');
     }
   }
@@ -227,7 +228,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       JSON.stringify(resolved.credentials), ownerId, resolved.credentials.length,
       row.connector_id ?? null, model.id, row.connector_id ?? null, row.connector_owner_id ?? null, workspaceId, ownerId,
       testMode(c.env) ? 1 : 0, gitPush,
-      onHost ? 1 : 0, row.connector_id ?? null).first();
+      needsConsent ? 1 : 0, row.connector_id ?? null).first();
   if (!inserted) fail(409, 'session_configuration_changed', 'Workspace repositories, Git account access, membership, or connector authority changed. Try again.');
   link.inserted?.(row.id);
   if (link.parentSessionId) {
