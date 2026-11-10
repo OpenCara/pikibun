@@ -17,7 +17,6 @@ export const APP_VERSION = "0.1.0";
 
 type EnvRow = { id: string; key: string; value: string };
 
-/** Profile section listing the Pikibun apps signed in as you, each revocable on its own. */
 function SignedInAppsSection() {
   const devices = createResource<{ devices: SignedInDevice[] }>(() => "/api/me/devices");
   const action = createAction();
@@ -48,7 +47,6 @@ function SignedInAppsSection() {
   );
 }
 
-/** The signed-in person: identity, environment, connected accounts, password, signed-in apps, join requests, account. */
 export function Profile(_props: SectionProps) {
   const user = () => session().user;
   const displayName = signal(user().displayName);

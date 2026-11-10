@@ -10,15 +10,12 @@ import type { ObjectMetadata, ObjectStorage, StoredObject } from "../../apps/ser
 import type { AgentVersion, AnyToolName } from "../../packages/shared/src/types.js";
 
 export interface TestDatabase {
-  /** The provider handed to `Env.DB`; every `query()` call is observed. */
   db: Database;
-  /** Raw synchronous handle for seeding rows and inspecting state. */
   sqlite: DatabaseSync;
   queryCount(): number;
   setBeforeQuery(hook?: (sql: string) => void): void;
 }
 
-/** A migrated in-memory sqlite provider with query observation for budget and race tests. */
 export async function testDatabase(): Promise<TestDatabase> {
   const inner = await openDatabase("sqlite::memory:");
   await inner.migrate();
@@ -40,13 +37,11 @@ export async function testDatabase(): Promise<TestDatabase> {
 }
 
 export interface MemoryStorage extends ObjectStorage {
-  /** Raw bodies by key; tests seed and corrupt objects here. */
   objects: Map<string, Uint8Array>;
   metadata: Map<string, ObjectMetadata>;
   reads: string[];
 }
 
-/** In-memory `ObjectStorage`; `reads` records every `get` key for tests that bound storage traffic. */
 export function memoryStorage(): MemoryStorage {
   const objects = new Map<string, Uint8Array>();
   const metadata = new Map<string, ObjectMetadata>();
@@ -69,9 +64,7 @@ export function memoryStorage(): MemoryStorage {
 }
 
 export interface FakeHubOptions {
-  /** Answers relayed RPCs; defaults to a 503 relay error like an offline host. */
   rpc?(connectorId: string, envelope: ConnectorRelayEnvelope): Response | Promise<Response>;
-  /** Reported by `status`; defaults to online. */
   online?: boolean;
 }
 
@@ -80,7 +73,6 @@ export interface FakeHub extends ConnectorHub {
   statusChecks: string[];
 }
 
-/** A `ConnectorHub` double for route tests: no sockets, scripted RPC replies, recorded revocations. */
 export function fakeHub(options: FakeHubOptions = {}): FakeHub {
   const revoked: string[] = [];
   const statusChecks: string[] = [];
@@ -104,16 +96,11 @@ export interface SeededAgent {
   authorId: string;
   modelId: string;
   tools: readonly AnyToolName[];
-  /** Set for a version published to that workspace. */
   workspaceId?: string | null;
   instructions?: string;
   name?: string;
 }
 
-/**
- * An agent version saved before agents were removed. Sessions started from one keep its tools and instructions and
- * still run; sessions started now get a chat agent with every tool their host carries.
- */
 export function seedAgentVersion(sqlite: DatabaseSync, input: SeededAgent): AgentVersion {
   const agent: AgentVersion = { id: randomUUID(), agentId: randomUUID(), authorId: input.authorId, workspaceId: input.workspaceId ?? null,
     version: 1, name: input.name ?? "Saved agent", description: "", instructions: input.instructions ?? "", tools: [...input.tools],
@@ -126,10 +113,6 @@ export function seedAgentVersion(sqlite: DatabaseSync, input: SeededAgent): Agen
   return agent;
 }
 
-/**
- * A session started from a saved agent before agents were removed: a copy of the session `sessionId` (owner, host,
- * repositories, visibility and status) that runs `agent`, which must be on the same model. Returns the copy's id.
- */
 export function seedSavedAgentSession(sqlite: DatabaseSync, sessionId: string, agent: AgentVersion, id: string = randomUUID()): string {
   const copied = sqlite.prepare(`INSERT INTO sessions
       (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, connector_id, connector_owner_id,

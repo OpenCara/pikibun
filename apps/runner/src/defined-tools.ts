@@ -2,40 +2,23 @@ import { existsSync } from "node:fs";
 import { bundledToolDefinitions, type BrokeredParameter, type BrokeredToolDefinition, type ProgramGrammar, type ProgramToolDefinition, type ToolDefinition } from "../../../packages/shared/src/tool-definitions.js";
 import { programArguments, programShellCommand, workDirectory } from "./program-command.js";
 
-/*
- * The engine that runs tools defined as data (packages/shared/src/tool-definitions.ts, docs/design/tool-definitions.md):
- * a program tool's call becomes one program and its quoted arguments, refused first where its definition's grammar finds
- * a command it refuses; a brokered tool's arguments are checked against its parameters before the call goes to the
- * control plane. Nothing in a definition runs as code here: its grammar is interpreted, its values are checked words.
- */
-
-/** How deep launchers and runners are followed (npx corepack pnpm dlx npm publish). */
 const MAX_DEPTH = 4;
 
-/**
- * The program tools defined as data this connector knows: those it bundles, and every one it has read from the control
- * plane since it started. A program operation names one of them or one of Pikibun's own (validateOperation). A session
- * reads the definitions as it opens, before any decision of its own can come back, so its operations' tools are here.
- */
 const knownProgramTools = new Set<string>(bundledToolDefinitions.filter(item => item.kind === "program").map(item => item.name));
 
-/** Notes `definitions` as known (knownProgramTools). */
 export function rememberToolDefinitions(definitions: readonly ToolDefinition[]): void {
   for (const definition of definitions) if (definition.kind === "program") knownProgramTools.add(definition.name);
 }
 
-/** Whether `name` is a program tool defined as data this connector knows. */
 export function knownDefinedProgramTool(name: string): boolean {
   return knownProgramTools.has(name);
 }
 
-/** A package's name without the version a launcher may give it: pnpm@9 is pnpm, @scope/tool@1 is @scope/tool. */
 function packageName(spec: string): string {
   const at = spec.indexOf("@", 1);
   return at === -1 ? spec : spec.slice(0, at);
 }
 
-/** The command's positional arguments, each with where it is, past options and the values of `valued`; at `--`, as `doubleDash` says. */
 function positionals(args: readonly string[], valued: ReadonlySet<string>, doubleDash: "stop" | "skip"): { arg: string; index: number }[] {
   const found: { arg: string; index: number }[] = [];
   for (let index = 0; index < args.length; index++) {
@@ -47,7 +30,6 @@ function positionals(args: readonly string[], valued: ReadonlySet<string>, doubl
   return found;
 }
 
-/** The first argument from `from` past options, their values and any `--`: what a launcher or runner runs. */
 function launched(args: readonly string[], from: number, valued: ReadonlySet<string>): { name: string; index: number } | undefined {
   for (let index = from; index < args.length; index++) {
     const arg = args[index]!;
@@ -58,11 +40,6 @@ function launched(args: readonly string[], from: number, valued: ReadonlySet<str
   return undefined;
 }
 
-/**
- * The command `program args` would run that `definition` refuses, named as its rule names it, if any: found in the
- * program's grammar, and followed through what it launches by name, within the definition's own programs' grammars.
- * Only the plain forms: the call's approval is what stands for the rest, as for a script that publishes.
- */
 export function refusedCommand(definition: Pick<ProgramToolDefinition, "grammar">, program: string, args: readonly string[], depth = 0): string | undefined {
   if (depth > MAX_DEPTH) return undefined;
   const grammar: ProgramGrammar | undefined = Object.hasOwn(definition.grammar, program) ? definition.grammar[program] : undefined;
@@ -103,12 +80,10 @@ export function refusedCommand(definition: Pick<ProgramToolDefinition, "grammar"
 export interface ProgramRequest {
   tool: string;
   program: string;
-  /** The worktree directory it runs in, relative and without `..`: "." for the worktree itself. */
   directory: string;
   args: string[];
 }
 
-/** A program tool's call as it runs, or an error saying what it refused. */
 export function programRequest(definition: ProgramToolDefinition, input: { program: unknown; args?: unknown; directory?: unknown }): ProgramRequest {
   if (typeof input.program !== "string" || !definition.programs.includes(input.program)) throw new Error(`program is one of ${definition.programs.join(", ")}`);
   const args = programArguments(input.args ?? [], definition.example);
@@ -117,17 +92,11 @@ export function programRequest(definition: ProgramToolDefinition, input: { progr
   return { tool: definition.name, program: input.program, directory: workDirectory(input.directory), args };
 }
 
-/** What the host provides a program tool: the connector's own Node.js, and which directories exist (its system defaults). */
 export interface ProgramHost {
   nodeBin?: string;
   exists?: (path: string) => boolean;
 }
 
-/**
- * The shell command that runs `request`, as its card shows it: the definition's fixed environment, its system defaults
- * where the host has them (`NAME="${NAME:-value}"`, so the session's own setting wins), its directories after PATH and
- * its toolchain before it.
- */
 export function programCommand(definition: ProgramToolDefinition, request: ProgramRequest, host: ProgramHost = {}): string {
   const exists = host.exists ?? existsSync;
   const prefix = [
@@ -138,7 +107,6 @@ export function programCommand(definition: ProgramToolDefinition, request: Progr
     ...(prefix ? { prefix } : {}), program: request.program, args: request.args });
 }
 
-/** A brokered parameter's value as the call passes it on, or an error saying why not. */
 function brokeredValue(name: string, parameter: BrokeredParameter, value: unknown): unknown {
   const invalid = () => new Error(parameter.invalid ?? `${name} is not a valid ${parameter.type}`);
   if (parameter.type === "boolean") { if (typeof value !== "boolean") throw invalid(); return value; }
@@ -154,7 +122,6 @@ function brokeredValue(name: string, parameter: BrokeredParameter, value: unknow
   return parameter.line ? value.trim() : value;
 }
 
-/** A brokered call's arguments, checked against its definition's parameters: those it names, each as it says. */
 export function brokeredArguments(definition: BrokeredToolDefinition, args: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const name of Object.keys(args)) if (!Object.hasOwn(definition.parameters, name)) throw new Error(`${definition.name} takes no ${name.slice(0, 64)}`);
@@ -168,12 +135,10 @@ export function brokeredArguments(definition: BrokeredToolDefinition, args: Reco
   return result;
 }
 
-/** What a brokered call's permission card shows, as the control plane checks a one-call permission: the target's parameters given, joined by ": ". */
 export function brokeredTarget(definition: BrokeredToolDefinition, args: Record<string, unknown>): string {
   return definition.target.filter(name => args[name] !== undefined).map(name => String(args[name])).join(": ").slice(0, 8192);
 }
 
-/** The program tools' shared paragraph of the agent's instructions, for those of `definitions` that take a share of it. */
 export function programToolsInstructions(definitions: readonly ToolDefinition[]): string | undefined {
   const shared = definitions.filter((item): item is ProgramToolDefinition & { summary: NonNullable<ProgramToolDefinition["summary"]> } => item.kind === "program" && !!item.summary);
   if (!shared.length) return undefined;

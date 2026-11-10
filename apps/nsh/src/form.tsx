@@ -4,11 +4,8 @@ import { Icon } from "./icons";
 import { control, monospace, palette, radius, text, weight } from "./theme";
 import { Picker, type Option } from "./ui";
 
-// The web app's form controls (styles.css: .input, .textarea, .select, .field, .check-row) on NSH's primitives.
-
 type KeyboardType = "default" | "email-address" | "numeric" | "url" | "number-pad" | "decimal-pad" | "phone-pad";
 
-/** .input / .textarea: one line, or several with `multiline`. */
 export function TextField(props: {
   value: string; onChange: (value: string) => void; placeholder?: string; accessibilityLabel?: string; testID?: string; disabled?: boolean;
   masked?: boolean; multiline?: boolean; minHeight?: number; monospace?: boolean; compact?: boolean; keyboardType?: KeyboardType;
@@ -31,7 +28,6 @@ export function TextField(props: {
   );
 }
 
-/** .field: a medium label over its control, a muted hint and an error under it. */
 export function Field(props: { label: string; hint?: string; error?: string; children?: JSX.Element; testID?: string }) {
   return (
     <View testID={props.testID} style={{ gap: 6 }}>
@@ -47,7 +43,6 @@ export function Field(props: { label: string; hint?: string; error?: string; chi
   );
 }
 
-/** The look of a .select: the chosen option's label and a chevron, in an input's frame. */
 function SelectTrigger(props: { label: string; placeholder: boolean; compact?: boolean; disabled?: boolean; testID?: string; accessibilityLabel: string }) {
   return (
     <BaseButton testID={props.testID} accessibilityLabel={props.accessibilityLabel} disabled={props.disabled}
@@ -60,7 +55,6 @@ function SelectTrigger(props: { label: string; placeholder: boolean; compact?: b
   );
 }
 
-/** .select: one of a few options, picked from a menu at the field. */
 export function Select<T>(props: {
   value: T | undefined; options: Option<T>[]; onChange: (value: T) => void; label: string; placeholder?: string; disabled?: boolean; testID?: string; compact?: boolean;
 }) {
@@ -76,7 +70,6 @@ export function Select<T>(props: {
   );
 }
 
-/** The box of a .checkbox, filled with the accent and checked when on. */
 function CheckMark(props: { checked: boolean; round?: boolean }) {
   return (
     <View style={{ width: 16, height: 16, marginTop: 2, borderRadius: props.round ? 8 : radius.xsmall, borderWidth: props.checked ? 0 : 1, borderColor: palette().borderStrong,
@@ -90,7 +83,6 @@ function CheckMark(props: { checked: boolean; round?: boolean }) {
   );
 }
 
-/** What a check row says: its label and, muted under it, its hint. */
 function CheckLabel(props: { label: string; hint?: string }) {
   return (
     <View style={{ flex: 1, gap: 2 }}>
@@ -100,7 +92,6 @@ function CheckLabel(props: { label: string; hint?: string }) {
   );
 }
 
-/** .check-row with a .checkbox: a box and what it turns on. */
 export function Checkbox(props: { checked: boolean; onChange: (checked: boolean) => void; label: string; hint?: string; disabled?: boolean; testID?: string }) {
   return (
     <BaseCheckbox testID={props.testID} checked={props.checked} disabled={props.disabled} accessibilityLabel={props.label} onChange={event => props.onChange(event.checked)}
@@ -111,7 +102,6 @@ export function Checkbox(props: { checked: boolean; onChange: (checked: boolean)
   );
 }
 
-/** A .checkbox on its own, at the end of a row whose title says what it turns on. */
 export function CheckControl(props: { checked: boolean; onChange: (checked: boolean) => void; label: string; disabled?: boolean; testID?: string }) {
   return (
     <BaseCheckbox testID={props.testID} checked={props.checked} disabled={props.disabled} accessibilityLabel={props.label} hitSlop={10}
@@ -119,7 +109,6 @@ export function CheckControl(props: { checked: boolean; onChange: (checked: bool
   );
 }
 
-/** .check-row with a .radio: one of a group's choices. */
 export function RadioRow(props: { checked: boolean; onSelect: () => void; label: string; hint?: string; disabled?: boolean; testID?: string }) {
   return (
     <BaseRadio testID={props.testID} checked={props.checked} disabled={props.disabled} accessibilityLabel={props.label} onChange={event => { if (event.checked) props.onSelect(); }}
@@ -130,7 +119,6 @@ export function RadioRow(props: { checked: boolean; onSelect: () => void; label:
   );
 }
 
-/** A group of radio rows, one chosen. */
 export function RadioGroup<T>(props: { value: T; options: (Option<T> & { disabled?: boolean })[]; onChange: (value: T) => void; disabled?: boolean; testID?: string }) {
   return (
     <View testID={props.testID} role="radiogroup" style={{ gap: 10 }}>

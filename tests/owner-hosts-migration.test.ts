@@ -52,7 +52,6 @@ test('hosts paired into one workspace are connected, privately, to every workspa
     connector_id: 'active', connector_owner_id: 'host', available: 1,
   });
   assert.equal(models[1].id, 'paired-model');
-  // Nothing is shared by connecting a host for its owner's own use.
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM connector_shares').get()!.n, 0);
   assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(), []);
   sqlite.close();

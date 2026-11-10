@@ -1,28 +1,15 @@
 import type { ScheduleToolRequest } from "./types.js";
 
-/**
- * Cron schedules for scheduled prompts: the standard five fields (minute hour day-of-month month day-of-week), read in
- * an IANA time zone. Each field takes `*`, numbers, ranges (`1-5`), steps (`*\/15`, `0-30/10`, `5/20`) and lists of them;
- * months and weekdays also take names (`jan`, `mon`). Day of week 0 and 7 are both Sunday. As in cron, when both day
- * fields are restricted, a day matching either runs. `@hourly`, `@daily`, `@weekly`, `@monthly` and `@yearly` stand for
- * their usual expressions.
- *
- * A local time that a daylight-saving change skips doesn't run that day; a repeated one runs once.
- */
-
 export interface CronSchedule {
   minutes: ReadonlySet<number>;
   hours: ReadonlySet<number>;
   days: ReadonlySet<number>;
   months: ReadonlySet<number>;
   weekdays: ReadonlySet<number>;
-  /** The day of month field is `*` (or `?`): only weekdays restrict the day. */
   anyDay: boolean;
-  /** The day of week field is `*` (or `?`): only days of month restrict the day. */
   anyWeekday: boolean;
 }
 
-/** Runs are this many minutes apart at least: the minute field may not list values closer than this. */
 export const MIN_CRON_INTERVAL_MINUTES = 5;
 
 const macros: Record<string, string> = {
@@ -75,7 +62,6 @@ function parseField(field: string, min: number, max: number, label: string, name
         if (low > high) throw new CronError(`"${range}" runs backwards.`);
       } else {
         low = fieldValue(range, min, max, names, nameBase);
-        // `5/20` means from 5 to the end, every 20.
         high = stepText === undefined ? low : max;
       }
       for (let value = low; value <= high; value += step) values.add(value);
@@ -87,7 +73,6 @@ function parseField(field: string, min: number, max: number, label: string, name
   return { values, any: false };
 }
 
-/** Parses a cron expression, or throws a CronError that says what is wrong with it. */
 export function parseCron(expression: string): CronSchedule {
   const trimmed = expression.trim().replace(/\s+/g, " ");
   const source = macros[trimmed.toLowerCase()] ?? trimmed;
@@ -123,20 +108,17 @@ function formatter(timeZone: string): Intl.DateTimeFormat {
   return format;
 }
 
-/** Whether the runtime knows this IANA time zone ("UTC", "Europe/Berlin", ...). */
 export function isTimeZone(value: unknown): value is string {
   if (typeof value !== "string" || !value || value.length > 64) return false;
   try { formatter(value); return true; } catch { return false; }
 }
 
-/** The local wall-clock time in `timeZone` at instant `at`, as milliseconds of a UTC date with the same fields. */
 function wallClock(at: number, timeZone: string): number {
   const parts: Record<string, number> = {};
   for (const part of formatter(timeZone).formatToParts(new Date(at))) if (part.type !== "literal") parts[part.type] = Number(part.value);
   return Date.UTC(parts.year!, parts.month! - 1, parts.day!, parts.hour!, parts.minute!, parts.second!);
 }
 
-/** The instant whose local time in `timeZone` is `wall`, or null when a daylight-saving change skips it. */
 function instantOf(wall: number, timeZone: string): number | null {
   let guess = wall - (wallClock(wall, timeZone) - wall);
   guess = wall - (wallClock(guess, timeZone) - guess);
@@ -156,13 +138,8 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-/**
- * The first time after `after` (milliseconds) that the schedule runs in `timeZone`, or null when it never runs within
- * the next five years (such as the 31st of February).
- */
 export function nextCronTime(schedule: CronSchedule | string, timeZone: string, after: number): number | null {
   const cron = typeof schedule === "string" ? parseCron(schedule) : schedule;
-  // The next whole minute, in local wall-clock time.
   let wall = Math.floor(wallClock(after, timeZone) / MINUTE) * MINUTE + MINUTE;
   const limit = wall + 5 * 366 * DAY;
   while (wall < limit) {
@@ -188,14 +165,8 @@ export function nextCronTime(schedule: CronSchedule | string, timeZone: string, 
   return null;
 }
 
-/** The longest target a schedule tool call shows on its permission card. */
 const SCHEDULE_TARGET_LIMIT = 4000;
 
-/**
- * What a schedule tool call does, as its permission card shows the session owner, and as the control plane checks a
- * one-call permission against: the runner and the control plane both build it from the call's own fields, so a grant
- * covers only the change the owner saw.
- */
 export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" | "scheduleId" | "name" | "cron" | "timeZone" | "content" | "access" | "runIn" | "enabled">): string {
   const parts: string[] = [request.action];
   if (request.scheduleId !== undefined) parts.push(request.scheduleId);

@@ -17,7 +17,6 @@ async function fixture(t: TestContext) {
   const env: Env = { DB: db, APP_ORIGIN: origin, TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: testSecret,
     TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600000).toISOString(), RUNNER_SHARED_SECRET: "r".repeat(43),
     VAULT_KEY: Buffer.alloc(32, 7).toString("base64url"), GITHUB_CLIENT_ID: "native-client", GITHUB_CLIENT_SECRET: "native-secret" };
-  // GitHub's token exchange, user and verified email for the user signing in.
   const github: string[] = [];
   let denyExchange = false;
   t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -35,7 +34,6 @@ async function fixture(t: TestContext) {
   const request = (method: string, path: string, init: { headers?: Record<string, string>; body?: unknown } = {}) =>
     app.request(path, { method, headers: { ...(init.body === undefined ? {} : { "Content-Type": "application/json" }), ...init.headers },
       body: init.body === undefined ? undefined : JSON.stringify(init.body) }, env);
-  /** Runs the app's sign-in through GitHub and returns where the server sends the authentication browser back to. */
   async function signInThroughGitHub(challenge: string, query = "code=github-code", startQuery = "") {
     const start = await request("GET", `/api/auth/native/start?challenge=${challenge}&state=${appState}${startQuery}`);
     assert.equal(start.status, 302);
@@ -45,7 +43,6 @@ async function fixture(t: TestContext) {
     const cookie = start.headers.get("set-cookie")!.split(";")[0]!;
     const callback = await request("GET", `/api/auth/github/callback?${query}&state=${state}`, { headers: { Cookie: cookie } });
     assert.equal(callback.status, 302);
-    // The authentication browser gets no Pikibun session cookie of its own.
     assert.ok(!(callback.headers.get("set-cookie") ?? "").includes("test-auth="));
     return new URL(callback.headers.get("location")!);
   }
@@ -60,7 +57,6 @@ test("a native app signs in through GitHub with PKCE and gets a bearer session t
   assert.equal(callback.searchParams.get("state"), appState);
   const code = callback.searchParams.get("code")!;
 
-  // Only the verifier behind the challenge redeems the code, and a code works once even when that attempt fails.
   const wrong = await f.request("POST", "/api/auth/native/token", { body: { code, verifier: "w".repeat(43) } });
   assert.equal(wrong.status, 400);
   assert.equal((await wrong.json() as { code: string }).code, "invalid_grant");
@@ -74,21 +70,16 @@ test("a native app signs in through GitHub with PKCE and gets a bearer session t
   assert.ok(Date.parse(signIn.expiresAt) > Date.now() + 29 * 24 * 3600_000);
   const bearer = { Authorization: `Bearer ${signIn.token}` };
   assert.equal((await f.request("GET", "/api/me", { headers: bearer })).status, 200);
-  // The scheme is case-insensitive and may be followed by several spaces.
   assert.equal((await f.request("GET", "/api/me", { headers: { Authorization: `bearer  ${signIn.token}` } })).status, 200);
-  // An app that has no device name may send null for it.
   const unnamed = await f.signInThroughGitHub(challenge);
   assert.equal((await f.request("POST", "/api/auth/native/token", { body: { code: unnamed.searchParams.get("code"), verifier, deviceName: null } })).status, 200);
-  // Changes need no CSRF token: a bearer token is never sent by a browser on its own.
   const created = await f.request("POST", "/api/workspaces", { headers: bearer, body: { name: "From the phone" } });
   assert.equal(created.status, 201);
 
-  // The token is a bearer credential only, never a cookie, and a browser cookie is never a bearer token.
   assert.equal((await f.request("GET", "/api/me", { headers: { Cookie: `test-auth=${signIn.token}` } })).status, 401);
   const browser = await f.request("POST", "/api/auth/test", { headers: { Authorization: `Bearer ${testSecret}` }, body: { id: "web" } });
   const cookieToken = browser.headers.get("set-cookie")!.split(";")[0]!.split("=")[1]!;
   assert.equal((await f.request("GET", "/api/me", { headers: { Authorization: `Bearer ${cookieToken}` } })).status, 401);
-  // A proxy's Basic credentials leave the browser's cookie in charge.
   assert.equal((await f.request("GET", "/api/me", { headers: { Cookie: `test-auth=${cookieToken}`, Authorization: "Basic dXNlcjpwYXNz" } })).status, 200);
   assert.equal((await f.request("GET", "/api/me", { headers: { Authorization: "Bearer not-a-token" } })).status, 401);
 });
@@ -122,17 +113,14 @@ test("an app signing in through its own web view gets the code back on this serv
   assert.equal(`${callback.origin}${callback.pathname}`, `${origin}/api/auth/native/done`);
   assert.equal(callback.searchParams.get("state"), appState);
   const code = callback.searchParams.get("code")!;
-  // The page shows nothing of its address, and is not kept.
   const page = await f.request("GET", `${callback.pathname}${callback.search}`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-type") ?? "", /^text\/html/);
   assert.match(page.headers.get("cache-control") ?? "", /no-store/);
   assert.ok(!(await page.text()).includes(code));
-  // The code is redeemed as before: only with the verifier.
   assert.equal((await f.request("POST", "/api/auth/native/token", { body: { code, verifier: "w".repeat(43) } })).status, 400);
   const fresh = await f.signInThroughGitHub(challenge, "code=github-code", "&callback=page");
   assert.equal((await f.request("POST", "/api/auth/native/token", { body: { code: fresh.searchParams.get("code"), verifier } })).status, 200);
-  // A failure comes back there too.
   const denied = await f.signInThroughGitHub(challenge, "error=access_denied", "&callback=page");
   assert.equal(denied.pathname, "/api/auth/native/done");
   assert.equal(denied.searchParams.get("error"), "oauth_denied");
@@ -165,7 +153,6 @@ test("signed-in apps are listed for their user and revoked one by one, and signi
   assert.deepEqual(listed.map(device => [device.name, device.current]).sort(), [["Alice's iPad", false], ["Alice's iPhone", true]]);
   assert.ok(!JSON.stringify(listed).includes(phone));
   const ipad = listed.find(device => device.name === "Alice's iPad")!;
-  // Another user cannot revoke Alice's apps.
   assert.equal((await f.request("DELETE", `/api/me/devices/${ipad.id}`, { headers: { Authorization: `Bearer ${other}` } })).status, 404);
   assert.equal((await f.request("DELETE", `/api/me/devices/${ipad.id}`, { headers: { Authorization: `Bearer ${phone}` } })).status, 200);
   assert.equal((await f.request("GET", "/api/me", { headers: { Authorization: `Bearer ${tablet}` } })).status, 401);

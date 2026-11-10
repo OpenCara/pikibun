@@ -31,7 +31,6 @@ const manifest = {
   models: [{ provider: 'local-native', modelId: 'local/model-v1', name: 'Local model' }],
   capabilities: { platform: 'linux', sandbox: true, productionShell: false, plainGit: true },
 };
-// A small, valid gzip of an empty tar, not a multi-megabyte archive fixture.
 const archiveBytes = new Uint8Array(gzipSync(Buffer.alloc(1024)));
 const token = () => Buffer.from(randomBytes(32)).toString('base64url');
 type ApiRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<Response>;
@@ -83,7 +82,6 @@ async function fixture(t: TestContext): Promise<Fixture> {
     const githubToken = `github-secret-for-${name}`;
     if (production) {
       const githubId = String(nextGithubId++); const userId = `github:${githubId}`;
-      // Keep the login-issued cookie/CSRF, but use the production identity namespace and vault path.
       sqlite.exec('BEGIN; PRAGMA defer_foreign_keys = ON');
       try {
         sqlite.prepare("UPDATE users SET id = ?, auth_kind = 'github', github_id = ? WHERE id = ?").run(userId, githubId, user.id);
@@ -128,7 +126,6 @@ async function connect(f: Fixture, host: Client, claim: object = manifest): Prom
   const { credentials } = await json<{ credentials: ConnectorCredentials }>(await f.request('POST',
     `/api/connectors/pairings/${pending.id}/claim`, { code: pending.code, ...claim }), 201);
   const connectionToken = token();
-  // Only the WebSocket generation is seeded; pairing, sharing and catalog import use real routes.
   f.sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   return { ...credentials, connectionToken };
 }
@@ -147,7 +144,6 @@ function github(t: TestContext) {
   const calls: { url: string; authorization: string | null; accept: string | null; redirect: RequestRedirect | undefined }[] = [];
   const unexpected: string[] = [];
   const state = {
-    // The sha media type answer for one exact commit id.
     pinned: async (url: string): Promise<Response> => new Response(url.slice(-40), { headers: { 'Content-Type': 'application/vnd.github.sha' } }),
     commit: commitA,
     ref: repositoryInput.ref,
@@ -157,9 +153,7 @@ function github(t: TestContext) {
     redirect: (): Response => new Response(null, { status: 302,
       headers: { Location: `https://codeload.github.com/${metadata.full_name}/legacy.tar.gz/${state.commit}` } }),
     archive: async (): Promise<Response> => new Response(archiveBytes, { headers: { 'Content-Type': 'application/gzip' } }),
-    // Git smart HTTP on github.com itself, which the egress relay reads with the session owner's credential.
     git: async (url: string, _init?: RequestInit): Promise<Response> => new Response(`unexpected ${url}`, { status: 500 }),
-    // Git LFS object storage on other origins, where the provider's download actions point.
     media: async (url: string, _init?: RequestInit): Promise<Response> => new Response(`unexpected ${url}`, { status: 500 }),
   };
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -197,7 +191,6 @@ async function connectedSetup(t: TestContext) {
   await member(admin, team.id, host); await member(admin, team.id, owner);
   const repository = await bindRepository(admin, team.id);
   const connector = await connect(f, host);
-  // This fixture intentionally runs another member's session on the host.
   await json(await host.request('PUT', `/api/connectors/${connector.connectorId}/shares/${team.id}`));
   const { models } = await json<{ models: ModelDefinition[] }>(await owner.request('GET', `/api/workspaces/${team.id}/models`));
   assert.equal(models.length, 1);
@@ -217,7 +210,6 @@ function authorizeCache(f: Fixture, session: SessionRecord, pin: SessionReposito
     body, connector ? { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken } : { Authorization: `Bearer ${internalSecret}` });
 }
 
-// Existing legacy rows must remain downloadable, but new production sessions cannot create them.
 async function legacySetup(t: TestContext) {
   const f = await fixture(t); const remote = github(t); const owner = await f.client('legacy-owner');
   const team = await workspace(owner); const repository = await bindRepository(owner, team.id);
@@ -275,16 +267,13 @@ test('a workspace\'s first GitHub repository adds piki:gh to its extensions, onc
   const bind = async () => json<{ repository: WorkspaceRepository; extensions?: string[] }>(await owner.request('POST', path, repositoryInput), 201);
   const first = await bind();
   assert.deepEqual(first.extensions, ['piki:gh']);
-  // After the extensions every workspace starts with, turned off.
   assert.deepEqual(await extensions(), [...defaultWorkspaceExtensions.map(source => ({ source, enabled: false, tools: 'approval', settings: {} })),
     { source: 'piki:gh', enabled: true, tools: 'approval', settings: {} }]);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.extension.updated'").get()!.n, 1);
-  // Turned off, it stays off when the repository is bound again.
   await json(await owner.request('PUT', `/api/workspaces/${team.id}/extensions`, { source: 'piki:gh', enabled: false }));
   assert.equal((await owner.request('DELETE', `${path}/${first.repository.id}`)).status, 204);
   assert.equal((await bind()).extensions, undefined);
   assert.deepEqual((await extensions()).filter(item => item.source.startsWith('piki:')).map(item => [item.source, item.enabled]), [['piki:gh', false]]);
-  // Removed, a later first GitHub repository brings it back.
   await json(await owner.request('DELETE', `/api/workspaces/${team.id}/extensions?source=piki:gh`));
   const again = (await json<{ repositories: WorkspaceRepository[] }>(await owner.request('GET', path))).repositories[0]!;
   assert.equal((await owner.request('DELETE', `${path}/${again.id}`)).status, 204);
@@ -484,7 +473,6 @@ test('real users pair a host without any workspace, but still need configured wo
   const s = await connectedSetup(t); const empty = await workspace(s.owner);
   const health = await json<{ testMode: boolean }>(await s.f.request('GET', '/api/health'));
   assert.equal(health.testMode, true);
-  // A workspace named by an older page is ignored: the pairing binds none, even an unconfigured one.
   const ignored = (await json<{ pairing: ConnectorPairing }>(await s.owner.request('POST', '/api/connectors/pairings', { name: 'Empty workspace', workspaceId: empty.id }), 201)).pairing;
   assert.equal(s.f.sqlite.prepare('SELECT workspace_id FROM connector_pairings WHERE id = ?').get(ignored.id)!.workspace_id, null);
   const hostEmpty = await workspace(s.host);
@@ -538,7 +526,6 @@ test('a claim connects the host privately to every workspace of its owner, and w
   }
   assert.equal((await json<{ models: ModelDefinition[] }>(await host.request('GET', `/api/workspaces/${team.id}/models`))).models.length, 1);
   assert.deepEqual((await json<{ models: ModelDefinition[] }>(await admin.request('GET', `/api/workspaces/${team.id}/models`))).models, []);
-  // A workspace the owner creates, or joins, afterwards gets their host too: privately, with its models.
   const created = await workspace(host);
   const joined = await workspace(admin);
   await member(admin, joined.id, host);
@@ -548,7 +535,6 @@ test('a claim connects the host privately to every workspace of its owner, and w
   }
   assert.deepEqual((await json<{ models: ModelDefinition[] }>(await admin.request('GET', `/api/workspaces/${joined.id}/models`))).models, []);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_shares').get()!.n, 0);
-  // Leaving a workspace takes the owner's hosts with them, and a host paired afterwards isn't connected there.
   assert.equal((await admin.request('DELETE', `/api/workspaces/${team.id}/members/${host.user.id}`)).status, 204);
   assert.deepEqual(associated(), [own.id, created.id, joined.id].sort());
   const later = await connect(f, host);
@@ -564,7 +550,6 @@ test('anyone pairs without a workspace, and only enabled test mode lets a synthe
   await json(await f.request('POST', `/api/connectors/pairings/${pending.id}/claim`, { code: pending.code, ...manifest }), 201);
   f.env.TEST_AUTH_ENABLED = 'false';
   f.env.APP_ORIGIN = 'https://workspace.example.test';
-  // HTTPS avoids testing the independent loopback transport exemption instead of the fixture gate.
   const response = await app.request(`https://workspace.example.test/api/connectors/pairings/${other.id}/claim`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: other.code, ...manifest }),
   }, f.env);
@@ -610,7 +595,6 @@ test('legacy sharing rechecks test-mode expiry before sharing an unconfigured wo
   });
   await denied(await owner.request('PUT', `/api/connectors/${connector.connectorId}/shares/${target.id}`), 409, 'share_unavailable');
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_shares WHERE workspace_id = ?').get(target.id)!.n, 0);
-  // The owner's own workspace has their host privately, as it has since the claim; only the share is refused.
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_workspaces WHERE workspace_id = ?').get(target.id)!.n, 1);
 });
 
@@ -697,7 +681,6 @@ test('picker and bindings accept underscore and Unicode refs with hash character
   }
 });
 
-// Token providers, exercised through Gitea's real adapter HTTP calls (fetch is mocked).
 const giteaHost = 'git.acme.dev';
 const giteaApi = `https://${giteaHost}/api/v1`;
 const giteaMetadata = { id: 42, full_name: 'acme/tools', default_branch: 'main', private: true };
@@ -719,7 +702,6 @@ function gitea(t: TestContext) {
     resolve: async (): Promise<Response> => Response.json([{ sha: commitA }]),
     pinned: async (): Promise<Response> => Response.json([{ sha: commitA }]),
     archive: async (): Promise<Response> => new Response(archiveBytes, { headers: { 'Content-Type': 'application/gzip' } }),
-    // Git smart HTTP on github.com itself, which the egress relay reads with the session owner's credential.
     git: async (url: string, _init?: RequestInit): Promise<Response> => new Response(`unexpected ${url}`, { status: 500 }),
   };
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -823,7 +805,6 @@ test('disconnecting GitHub deletes the sign-in token, revokes it with GitHub and
   });
   const tokens = () => f.sqlite.prepare('SELECT user_id FROM github_tokens ORDER BY user_id').all().map(row => row.user_id);
   await denied(await alice.request('DELETE', '/api/git/accounts/github', undefined, { 'X-CSRF-Token': '' }), 403, 'invalid_csrf');
-  // A failed audit write keeps the token in the vault, unrevoked, to disconnect again.
   f.sqlite.exec("CREATE TRIGGER audit_down BEFORE INSERT ON audit WHEN NEW.action = 'git.account.removed' BEGIN SELECT RAISE(ABORT, 'audit down'); END");
   assert.ok((await alice.request('DELETE', '/api/git/accounts/github')).status >= 500);
   assert.deepEqual(tokens(), [alice.user.id, bob.user.id].sort());
@@ -833,7 +814,6 @@ test('disconnecting GitHub deletes the sign-in token, revokes it with GitHub and
   assert.deepEqual(tokens(), [bob.user.id]);
   assert.deepEqual(calls, [{ url: 'https://api.github.com/applications/Iv1.client/token', method: 'DELETE',
     authorization: `Basic ${Buffer.from('Iv1.client:client-secret').toString('base64')}`, body: { access_token: alice.githubToken } }]);
-  // Still signed in, now without GitHub: the profile says so and the sign-in account is no longer listed.
   const { user } = await json<{ user: { githubConnected: boolean } }>(await alice.request('GET', '/api/me'));
   assert.equal(user.githubConnected, false);
   assert.deepEqual((await json<{ accounts: GitAccount[] }>(await alice.request('GET', '/api/git/accounts'))).accounts, []);
@@ -844,7 +824,6 @@ test('disconnecting GitHub deletes the sign-in token, revokes it with GitHub and
     [[alice.user.id, { accountId: 'github', provider: 'github', host: 'github.com', organization: '' }]]);
   assert.ok(!JSON.stringify(audit).includes(alice.githubToken));
 
-  // GitHub out of reach: the token still leaves the vault.
   calls.length = 0;
   t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('fetch failed'); });
   assert.equal((await bob.request('DELETE', '/api/git/accounts/github')).status, 204);
@@ -895,7 +874,6 @@ test('token-provider bindings use each actor\'s own account, and sessions borrow
     assert.ok(!JSON.stringify(s.provisions).includes(secret));
     assert.ok(!JSON.stringify(session).includes(secret));
   }
-  // The same repository cannot be bound twice, even by a differently cased name.
   await denied(await s.admin.request('POST', `/api/workspaces/${s.team.id}/repositories`, { ...giteaInput, fullName: 'Acme/Tools' }), 409, 'repository_identity_changed');
   await denied(await s.admin.request('POST', `/api/workspaces/${s.team.id}/repositories`, giteaInput), 409, 'repository_binding_conflict');
 });
@@ -909,7 +887,6 @@ test('binding without a token account fails with git_account_required; GitHub si
 
 test('a session gets git_push only from a connector that claims gitPush, checked again inside the session insert', async t => {
   const s = await providerSetup(t);
-  // Without the capability the session's agent simply has no git_push.
   assert.equal((await s.start()).status, 'ready');
   assert.equal(s.provisions.length, 1);
   assert.ok(!(JSON.parse(s.provisions[0].request.body) as RunnerBinding).agent.tools.includes('git_push'));
@@ -958,7 +935,6 @@ test('workspace network policies: members read, administrators write, invalid do
   await denied(await owner.request('PUT', path, { ...allowlist, mode: 'everything' }), 400, 'invalid_network_policy');
   assert.deepEqual((await json<PolicyResponse>(await owner.request('PUT', path, allowlist))).policy, allowlist);
   assert.deepEqual((await json<PolicyResponse>(await reader.request('GET', path))).policy, allowlist);
-  // An older client still names the retired web search setting, which is dropped.
   assert.deepEqual((await json<PolicyResponse>(await owner.request('PUT', path, { ...allowlist, domains: ['docs.example.com'], webSearch: true }))).policy,
     { ...allowlist, domains: ['docs.example.com'] });
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.network_policy.updated'").get()!.n, 2);
@@ -968,12 +944,10 @@ test('workspace network policies: members read, administrators write, invalid do
 
 const gitServerHost = 'git.example.com';
 const gitServerRemote = `https://${gitServerHost}/team/app.git`;
-/** A pkt-line advertisement of `main` at commitA, as git http-backend sends it. */
 function gitServerAdvertisement(service: string): string {
   const pkt = (line: string) => `${(line.length + 4).toString(16).padStart(4, '0')}${line}`;
   return `${pkt(`# service=${service}\n`)}0000${pkt(`${commitA} HEAD\0symref=HEAD:refs/heads/main\n`)}${pkt(`${commitA} refs/heads/main\n`)}0000`;
 }
-/** A plain Git server with one private repository, team/app.git, readable with `dev` and its password. */
 function gitServer(t: TestContext) {
   const calls: { url: string; authorization: string | null; redirect: RequestRedirect | undefined }[] = [];
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -996,13 +970,11 @@ test('a plain Git server account takes a user name, looks repositories up by pat
     [{ provider: 'git', host: 'github.com', token: 'server-password', username: 'dev' }, 'invalid_git_host'],
     [{ provider: 'git', host: gitServerHost, organization: 'x', token: 'server-password', username: 'dev' }, 'invalid_git_organization'],
   ] as const) await denied(await alice.request('POST', '/api/git/accounts', input), 400, code);
-  // Nothing on the server answers for an account: connecting it fetches nothing.
   const account = (await json<{ account: GitAccount }>(await alice.request('POST', '/api/git/accounts',
     { provider: 'git', host: `https://${gitServerHost.toUpperCase()}/`, username: 'dev', token: 'server-password' }), 201)).account;
   assert.deepEqual({ ...account, id: '', createdAt: '' }, { id: '', provider: 'git', host: gitServerHost, organization: '', login: 'dev', createdAt: '' });
   assert.equal(calls.length, 0);
   const picker = `/api/git/accounts/${account.id}/repositories`;
-  // Without a path it lists nothing; with one, it reads that repository with the account.
   assert.deepEqual(await json(await alice.request('GET', picker)), { repositories: [], truncated: false });
   const found = await json<ProviderRepositoryList>(await alice.request('GET', `${picker}?path=${encodeURIComponent(gitServerRemote)}`));
   assert.equal(found.repositories.length, 1);
@@ -1017,7 +989,6 @@ test('a plain Git server account takes a user name, looks repositories up by pat
   const bound = await bindRepository(alice, team.id, { provider: 'git', host: gitServerHost, repositoryId: repository.id, fullName: repository.fullName } as never);
   assert.deepEqual({ ...bound, id: '', workspaceId: '', createdAt: '' }, { id: '', workspaceId: '', provider: 'git', host: gitServerHost,
     repositoryId: repository.id, fullName: 'team/app.git', ref: 'main', private: true, createdAt: '', forbidDefaultBranchPush: false, lfs: false, readAs: 'members' });
-  // A path the server doesn't know under that identity is refused, as a rename would be.
   await denied(await alice.request('POST', `/api/workspaces/${team.id}/repositories`,
     { provider: 'git', host: gitServerHost, repositoryId: 'f'.repeat(40), fullName: 'team/app.git' }), 409, 'repository_identity_changed');
 });
@@ -1025,7 +996,6 @@ test('a plain Git server account takes a user name, looks repositories up by pat
 test('a repository set to read as the workspace is relayed with the workspace\'s connection, which never reaches a host or pushes', async t => {
   const { f, admin, owner, team, connector, start } = await connectedSetup(t);
   const session = await start();
-  // The plain Git server answers this test's requests; the GitHub fixture keeps answering its own.
   const calls = gitServer(t);
   const path = `/api/workspaces/${team.id}/connections`;
   await denied(await owner.request('POST', path, { family: 'git', provider: 'git', host: gitServerHost, username: 'dev', token: 'server-password' }), 403, 'forbidden');
@@ -1033,7 +1003,6 @@ test('a repository set to read as the workspace is relayed with the workspace\'s
   const { connection } = await json<{ connection: { id: string; name: string } }>(await admin.request('POST', path,
     { family: 'git', provider: 'git', host: gitServerHost, username: 'dev', token: 'server-password' }), 201);
   assert.equal(connection.name, 'dev');
-  // The admin has no account on the server: the connection looks the repository up and checks the binding.
   const picker = await json<ProviderRepositoryList>(await admin.request('GET', `${path}/${connection.id}/repositories?path=${encodeURIComponent(gitServerRemote)}`));
   const found = picker.repositories[0]!;
   await denied(await admin.request('POST', `/api/workspaces/${team.id}/repositories`,
@@ -1044,23 +1013,19 @@ test('a repository set to read as the workspace is relayed with the workspace\'s
   const headers = { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken };
   const relay = (service: string) => app.request(`${origin}/api/connectors/self/git/relay/${bound.id}/${service}?sessionId=${session.id}`,
     { method: 'POST', headers: { ...headers, 'Git-Protocol': 'version=2' }, body: '' }, f.env);
-  // The session's owner has no account on the server either: reads use the workspace's connection.
   const before = calls.length;
   const refs = await relay('info-refs');
   assert.equal(refs.status, 200);
   assert.ok((await refs.text()).includes('refs/heads/main'));
   const basic = `Basic ${Buffer.from('dev:server-password').toString('base64')}`;
   assert.ok(calls.slice(before).length > 0 && calls.slice(before).every(call => call.authorization === basic || call.authorization === null));
-  // Pushes stay the owner's: without their own account there is none.
   await denied(await relay('receive-refs'), 409, 'git_account_required');
 
-  // A direct grant never hands the connection over, whoever's host it is (gitDirect refuses before it asks): the read is relayed.
   const direct = await json<{ direct: boolean; reason?: string }>(await f.request('POST', '/api/connectors/self/git/direct',
     { sessionId: session.id, bindingId: bound.id, access: 'read' }, headers));
   assert.equal(direct.direct, false);
   assert.match(direct.reason ?? '', /workspace's connection/);
 
-  // A switch while a read is in flight ends it before anything is fetched upstream with the identity it no longer uses.
   const inner = globalThis.fetch;
   let flipped = false;
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1074,7 +1039,6 @@ test('a repository set to read as the workspace is relayed with the workspace\'s
   assert.ok(flipped);
   f.sqlite.prepare("UPDATE source_read_settings SET read_as = 'workspace' WHERE source_id = ?").run(bound.id);
 
-  // At the cap, reconnecting an existing connection still replaces it; only a new one is refused.
   const timestamp = new Date().toISOString();
   for (let index = 0; index < 19; index++) {
     f.sqlite.prepare(`INSERT INTO workspace_connections (id,workspace_id,family,provider,host,organization,username,name,ciphertext,created_by,created_at,updated_at)
@@ -1086,7 +1050,6 @@ test('a repository set to read as the workspace is relayed with the workspace\'s
   await denied(await admin.request('POST', path, { family: 'git', provider: 'git', host: 'other.example.com', username: 'dev', token: 'x' }), 409, 'workspace_connection_limit');
   f.sqlite.prepare("DELETE FROM workspace_connections WHERE id LIKE 'filler-%'").run();
 
-  // Switched back to members' accounts, the owner's own account is required again: no fallback.
   await json(await admin.request('PUT', `/api/workspaces/${team.id}/sources/${bound.id}/read-as`, { readAs: 'members' }));
   await denied(await relay('info-refs'), 409, 'git_account_required');
   await denied(await admin.request('DELETE', `${path}/missing`), 404, 'not_found');
@@ -1102,7 +1065,6 @@ test('egress grants name plain Git server repositories only to connectors that a
   const headers = { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken };
   const grant = async () => (await json<{ repositories: { bindingId: string; provider: string }[] }>(
     await f.request('POST', '/api/connectors/self/network', { sessionId: session.id }, headers))).repositories.map(item => item.bindingId).sort();
-  // An older connector would refuse the whole grant over a provider it doesn't know.
   assert.deepEqual(await grant(), [repository.id]);
   const capabilities = JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(connector.connectorId)!.capabilities_json));
   f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify({ ...capabilities, gitServers: true }), connector.connectorId);
@@ -1117,7 +1079,6 @@ test('egress grants and the Git relay serve only the connector running the sessi
   const grant = await json<{ policy: { mode: string }; repositories: { bindingId: string; fullName: string }[] }>(
     await f.request('POST', '/api/connectors/self/network', { sessionId: session.id }, headers));
   assert.equal(grant.policy.mode, 'off');
-  // Never the web search setting, which older connectors' policy parsing would refuse.
   assert.deepEqual(Object.keys(grant.policy).sort(), ['domains', 'mode', 'packageRegistries']);
   assert.deepEqual(grant.repositories.map(item => [item.bindingId, item.fullName]), [[repository.id, metadata.full_name]]);
   await denied(await f.request('POST', '/api/internal/network', { sessionId: session.id }, { Authorization: `Bearer ${internalSecret}` }), 403, 'connector_scope_required');
@@ -1148,9 +1109,7 @@ test('egress grants and the Git relay serve only the connector running the sessi
     [`https://github.com/${metadata.full_name}.git/git-upload-pack`, basic, '0000'],
   ]);
   assert.equal(seen[0]!.protocol, 'version=2');
-  // Every relayed request re-verifies the bound repository's identity, the fetch as much as the advertisement.
   assert.equal(verified() - before, 2);
-  // Only Git's own services are relayed, and only for this connector's sessions and this workspace's repositories.
   assert.equal((await relay('send-pack')).status, 404);
   await denied(await relay('upload-pack', { body: '0000', headers: { 'Content-Type': 'text/plain' } }), 415, 'unsupported_media_type');
   await denied(await relay('info-refs', {}, session.id, 'missing-binding'), 404, 'repository_not_bound');
@@ -1158,10 +1117,8 @@ test('egress grants and the Git relay serve only the connector running the sessi
     method: 'POST', headers: { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': token() } }, f.env), 401, 'stale_connection');
   await denied(await app.request(`${origin}/api/internal/git/relay/${repository.id}/info-refs?sessionId=${session.id}`, {
     method: 'POST', headers: { Authorization: `Bearer ${internalSecret}` } }, f.env), 403, 'connector_scope_required');
-  // GitHub refusing the owner's account comes back as a fixed reason.
   remote.state.git = async () => new Response('denied', { status: 403 });
   await denied(await relay('info-refs'), 403, 'repository_unavailable');
-  // An archived session has no relay.
   f.sqlite.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run(session.id);
   await denied(await relay('info-refs'), 403, 'repository_authority_changed');
   await denied(await f.request('POST', '/api/connectors/self/network', { sessionId: session.id }, headers), 403, 'session_archived');
@@ -1176,7 +1133,6 @@ test('Git LFS is a per-repository switch: off by default, admin-managed, audited
   await denied(await admin.request('PUT', path, { enabled: 'yes' }), 400, 'invalid_lfs_setting');
   await denied(await admin.request('PUT', path, { enabled: true, ref: 'main' }), 400, 'invalid_lfs_setting');
   await denied(await admin.request('PUT', `/api/workspaces/${team.id}/repositories/missing-binding/lfs`, { enabled: true }), 404, 'not_found');
-  // A binding of another workspace is not found through this one.
   const other = await workspace(admin);
   await denied(await admin.request('PUT', `/api/workspaces/${other.id}/repositories/${repository.id}/lfs`, { enabled: true }), 404, 'not_found');
 
@@ -1188,14 +1144,12 @@ test('Git LFS is a per-repository switch: off by default, admin-managed, audited
   const grant = async () => (await json<{ repositories: { bindingId: string; lfs?: boolean }[] }>(
     await f.request('POST', '/api/connectors/self/network', { sessionId: session.id }, headers))).repositories;
   assert.deepEqual((await grant()).map(item => [item.bindingId, item.lfs]), [[repository.id, true]]);
-  // The push policy and the LFS switch live side by side without touching each other.
   await json(await admin.request('PUT', `/api/workspaces/${team.id}/repositories/${repository.id}/push-policy`, { forbidDefaultBranch: true }));
   assert.deepEqual([(await listed()).lfs, (await listed()).forbidDefaultBranchPush], [true, true]);
   assert.equal((await json<{ repository: WorkspaceRepository }>(await admin.request('PUT', path, { enabled: false }))).repository.lfs, false);
   assert.deepEqual((await grant()).map(item => [item.bindingId, item.lfs]), [[repository.id, false]]);
   assert.equal((await listed()).forbidDefaultBranchPush, true);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'repository.lfs.updated'").get()!.n, 2);
-  // The setting goes with its binding.
   assert.equal((await admin.request('DELETE', `/api/workspaces/${team.id}/repositories/${repository.id}`)).status, 204);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM repository_lfs_settings').get()!.n, 0);
 });
@@ -1222,7 +1176,6 @@ test('Git LFS downloads are relayed with the owner credential only while LFS is 
       batches.push(body);
       return new Response(JSON.stringify({ transfer: 'basic', objects: body.objects.map(object => object.oid === absent
         ? { oid: object.oid, size: object.size, error: { code: 404, message: 'Object does not exist' } }
-        // The provider reports the stored object's real size, whatever the request says.
         : object.oid === local
           ? { oid: object.oid, size, actions: { download: { href: `https://github.com/${metadata.full_name}.git/info/lfs/objects/${object.oid}` } } }
           : { oid: object.oid, size, actions: { download: { href: `https://lfs-media.githubusercontent.com/${object.oid}?sig=1`, header: { 'X-Lfs-Signature': 'signed' }, expires_in: 3600 } } }) }),
@@ -1237,7 +1190,6 @@ test('Git LFS downloads are relayed with the owner credential only while LFS is 
   };
   remote.state.media = async (url, init) => { recordMedia(url, init); return new Response(content, { headers: { 'Content-Length': String(size) } }); };
 
-  // Off by default: refused before anything reaches the provider.
   await denied(await relay('lfs-batch', { objects: [{ oid, size }] }), 403, 'lfs_disabled');
   await denied(await relay('lfs-object', { oid, size }), 403, 'lfs_disabled');
   assert.equal(batches.length, 0);
@@ -1254,7 +1206,6 @@ test('Git LFS downloads are relayed with the owner credential only while LFS is 
   assert.equal(verified() - before, 1, 'a batch verifies the bound repository, as every Git read does');
   assert.deepEqual(batches[0], { operation: 'download', transfers: ['basic'], objects: [{ oid, size }, { oid: absent, size: 1 }, { oid: local, size }],
     ref: { name: 'refs/heads/main' }, hash_algo: 'sha256' });
-  // Where and how objects are stored never reaches the host.
   assert.doesNotMatch(JSON.stringify(result), /lfs-media|signed|href|header/);
 
   const object = await relay('lfs-object', { oid, size });
@@ -1262,9 +1213,7 @@ test('Git LFS downloads are relayed with the owner credential only while LFS is 
   assert.equal(object.headers.get('content-type'), 'application/octet-stream');
   assert.equal(await object.text(), content);
   assert.equal(verified() - before, 2, 'a download verifies the bound repository too');
-  // The action's own headers go to its storage; the owner's credential never leaves the provider's origin.
   assert.deepEqual(media, [{ url: `https://lfs-media.githubusercontent.com/${oid}?sig=1`, signature: 'signed', authorization: null }]);
-  // On the provider's own origin, an action without headers is downloaded with the owner's credential (the mock checks it).
   assert.equal(await (await relay('lfs-object', { oid: local, size })).text(), content);
   await denied(await relay('lfs-object', { oid: absent, size: 1 }), 404, 'lfs_object_unavailable');
   await denied(await relay('lfs-object', { oid, size: size + 1 }), 422, 'lfs_object_unavailable');
@@ -1272,7 +1221,6 @@ test('Git LFS downloads are relayed with the owner credential only while LFS is 
   await denied(await relay('lfs-batch', { objects: [] }), 400, 'invalid_lfs_request');
   await denied(await relay('lfs-batch', { objects: [{ oid, size }] }, 'text/plain'), 415, 'unsupported_media_type');
 
-  // A redirect to another origin drops the action's headers; one to an address that isn't a public name is never followed.
   media.length = 0;
   remote.state.media = async (url, init) => {
     recordMedia(url, init);
@@ -1285,14 +1233,11 @@ test('Git LFS downloads are relayed with the owner credential only while LFS is 
     [[`https://lfs-media.githubusercontent.com/${oid}?sig=1`, 'signed', null], [`https://objects.githubusercontent.com/${oid}`, null, null]]);
   remote.state.media = async () => new Response(null, { status: 302, headers: { Location: 'https://169.254.169.254/latest/meta-data' } });
   await denied(await relay('lfs-object', { oid, size }), 502, 'lfs_unavailable');
-  // More bytes than the pointer says are never passed on whole.
   remote.state.media = async () => new Response(`${content} and more`);
   const long = await relay('lfs-object', { oid, size });
   if (long.status === 200) await assert.rejects(long.text());
   else assert.equal(long.status, 502);
 
-  // A repository that took the binding's name after a rename or transfer serves nothing, even to a download asked for
-  // directly, without a batch first.
   batches.length = 0;
   media.length = 0;
   remote.state.metadata = async () => Response.json({ ...metadata, id: metadata.id + 1 });
@@ -1301,7 +1246,6 @@ test('Git LFS downloads are relayed with the owner credential only while LFS is 
   assert.deepEqual([batches.length, media.length], [0, 0]);
   remote.state.metadata = async () => Response.json(metadata);
 
-  // Turned off, the next request is refused, whatever the host's grant still says.
   await setLfs(false);
   await denied(await relay('lfs-batch', { objects: [{ oid, size }] }), 403, 'lfs_disabled');
   await denied(await relay('lfs-object', { oid, size }), 403, 'lfs_disabled');
@@ -1327,15 +1271,12 @@ test('every session clones: older connectors are refused, and a session whose ag
       workspaceId: team.id, modelId: model.id, title: 'Clone', ...(actor !== admin ? { trustedConnectorId: connector.connectorId } : {}),
     });
   };
-  // The host's owner can always run their own shell commands.
   const ownHost = await host({}, false);
   const { session: own } = await json<{ session: SessionRecord }>(await start(admin, ownHost), 201);
   assert.equal(own.repositoryMode, 'clone');
   assert.deepEqual(own.repositories, []);
   assert.equal(own.cloneUnavailable, undefined);
   assert.deepEqual(remote.calls, [], 'nothing is resolved with the owner\'s account at creation');
-  // Another member's session needs the host's resource limits to run shell commands, or a host command grant there;
-  // without either it starts empty, and says so.
   const unlimited = await host({}, true);
   const { session: empty } = await json<{ session: SessionRecord }>(await start(member_, unlimited), 201);
   assert.equal(empty.repositoryMode, 'clone');
@@ -1343,12 +1284,9 @@ test('every session clones: older connectors are refused, and a session whose ag
   assert.match((await json<{ session: SessionRecord }>(await member_.request('GET', `/api/sessions/${empty.id}`))).session.cloneUnavailable ?? '', /only for its owner/);
   const { session: limited } = await json<{ session: SessionRecord }>(await start(member_, await host({ productionShell: true }, true)), 201);
   assert.equal(limited.cloneUnavailable, undefined);
-  // A host without the sandbox runs everyone's commands, as its owner accepted.
   const { session: unsandboxed } = await json<{ session: SessionRecord }>(await start(member_, await host({ sandbox: false, unsandboxed: true }, true)), 201);
   assert.equal(unsandboxed.cloneUnavailable, undefined);
-  // A connector from before sessions cloned can't run one.
   await denied(await start(admin, await host({ plainGit: undefined }, false)), 409, 'connector_update_required');
-  // A session started from a saved agent without git or bash, before agents were removed, works in an empty worktree too.
   const { models } = await json<{ models: ModelDefinition[] }>(await admin.request('GET', `/api/workspaces/${team.id}/models`));
   const model = models.find(item => item.connectorId === ownHost.connectorId)!;
   const filesOnlyId = seedSavedAgentSession(f.sqlite, own.id, seedAgentVersion(f.sqlite, { authorId: admin.user.id, modelId: model.id, tools: ['read_file'] }));
@@ -1379,20 +1317,17 @@ test('a member granted host commands clones on a host without resource limits, o
     }), 201);
     return session;
   };
-  // Neither host has resource limits; the member holds a host command grant on both.
   const current = await host({ unboundedShellGrants: true });
   const older = await host({});
   const session = await start(current);
   assert.equal(session.cloneUnavailable, undefined);
   assert.match((await start(older)).cloneUnavailable ?? '', /only for its owner and for members they granted host commands/);
-  // The grant is checked on each read: once it ends, the session says why it can't clone.
   assert.equal((await admin.request('DELETE', `/api/connectors/${current.connectorId}/host-grants/${team.id}?userId=${member_.user.id}`)).status, 204);
   assert.match((await json<{ session: SessionRecord }>(await member_.request('GET', `/api/sessions/${session.id}`))).session.cloneUnavailable ?? '', /only for its owner/);
 });
 
 test('a session that pinned its repositories is read-only: it shows, and nothing runs or is approved in it', async t => {
   const s = await connectedSetup(t); const source = await s.start();
-  // Sessions no longer pin, so a pinned one is written as it was before.
   const columns = (s.f.sqlite.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]).map(column => column.name);
   const pins: SessionRepository[] = [{ bindingId: s.repository.id, repositoryId: metadata.id, fullName: metadata.full_name, ref: 'main', commit: commitA, path: metadata.full_name }];
   s.f.sqlite.prepare(`INSERT INTO sessions (${columns.join(',')}) SELECT ${columns.map(column =>
@@ -1406,7 +1341,6 @@ test('a session that pinned its repositories is read-only: it shows, and nothing
   await denied(await s.owner.request('POST', '/api/sessions/pinned-session/submit', { content: 'hello', requestId: 'frozen' }), 409, 'session_frozen');
   await denied(await s.owner.request('POST', '/api/sessions/pinned-session/approvals/approval', { decision: 'approve' }), 409, 'session_frozen');
   assert.equal(s.f.sqlite.prepare("SELECT COUNT(*) AS n FROM run_admissions WHERE session_id = 'pinned-session'").get()!.n, 0);
-  // It still opens to show its history, and can be stopped.
   for (const action of ['stop', 'restart']) {
     const response = await s.owner.request('POST', `/api/sessions/pinned-session/${action}`, {});
     assert.notEqual((await response.json() as { code?: string }).code, 'session_frozen', action);

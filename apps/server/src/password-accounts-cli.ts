@@ -4,25 +4,10 @@ import { ConstraintError, type Database } from './db/types.js';
 import { now } from './http.js';
 import type { Env } from './types.js';
 
-/**
- * The operator's password accounts, from the server's command line, whose shell access is the authority:
- *
- * - `--create-admin USERNAME` creates `password:USERNAME`, which ADMIN_USER_IDS must list already. Nobody can sign up
- *   as a listed account in the app, so this is how a server's first administrator exists without a race to claim it,
- *   and the role still comes only from ADMIN_USER_IDS.
- * - `--reset-password USERNAME` sets a new password for any account with that username and a password (a password
- *   account, or a GitHub account that set one), clears its failed sign-ins and signs it out everywhere: the way back in
- *   for someone who forgot theirs. (A GitHub account can also replace a forgotten one itself, after a fresh GitHub sign-in.)
- *
- * The password is typed at a hidden prompt on a terminal, or read from the first line of standard input when it is a
- * pipe; never from argv, where other users of the machine could read it.
- */
-
 export interface PasswordCommand { kind: 'create-admin' | 'reset-password'; username: string }
 
 export class PasswordCommandError extends Error {}
 
-/** The password command in `argv`, or null when there is none; more than one, or one without a username, is an error. */
 export function passwordCommand(argv: readonly string[]): PasswordCommand | null {
   const found: { kind: PasswordCommand['kind']; username: string | undefined }[] = [];
   argv.forEach((argument, index) => {
@@ -40,7 +25,6 @@ export function passwordCommand(argv: readonly string[]): PasswordCommand | null
   return { kind: command!.kind, username: command!.username };
 }
 
-/** The message of a validation failure the HTTP routes share, for the terminal. */
 async function plain<T>(work: () => T | Promise<T>): Promise<T> {
   try {
     return await work();
@@ -51,7 +35,6 @@ async function plain<T>(work: () => T | Promise<T>): Promise<T> {
   }
 }
 
-/** Runs `command` against `db` with the server's settings in `settings`; returns what to tell the operator. */
 export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessEnv, command: PasswordCommand, readPassword: () => Promise<string>): Promise<string> {
   const name = await plain(() => passwordUsername(command.username));
   const userId = `password:${name}`;
@@ -59,7 +42,6 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
     if (settings.PASSWORD_AUTH !== 'true' || settings.LOCAL_MODE === 'true') {
       throw new PasswordCommandError('password accounts are off: set PASSWORD_AUTH=true (not on a LOCAL_MODE server) first');
     }
-    // Read like the server reads it, so the account is an administrator once the server starts.
     if (!instanceAdmins({ ADMIN_USER_IDS: settings.ADMIN_USER_IDS } as Env).has(userId)) {
       throw new PasswordCommandError(`list ${userId} in ADMIN_USER_IDS first: this command creates administrators only, and nobody can sign up as an account it lists`);
     }
@@ -77,7 +59,6 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
     }
     return `pikibun: created ${userId}, an administrator while ADMIN_USER_IDS lists it; sign in with the username ${name}`;
   }
-  // By username: a password account's is the name in its ID, and a GitHub account that set a password has its own.
   const account = await db.query<{ id: string; auth_kind: string }>(`SELECT u.id, u.auth_kind FROM users u JOIN password_credentials p ON p.user_id = u.id ${USERNAME_MATCH}`)
     .bind(...usernameMatch(name)).first();
   if (!account || (account.auth_kind !== 'password' && account.auth_kind !== 'github')) {
@@ -87,14 +68,12 @@ export async function runPasswordCommand(db: Database, settings: NodeJS.ProcessE
   const hash = await hashPassword(password);
   await db.batch([
     db.query('UPDATE password_credentials SET password_hash = ?, failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?').bind(hash, now(), account.id),
-    // Whoever was signed in as it, with the old password, is signed out.
     db.query('DELETE FROM auth_sessions WHERE user_id = ?').bind(account.id),
     auditStatement({ DB: db } as Env, null, 'account.password.reset_by_operator', null, null, { userId: account.id }),
   ]);
   return `pikibun: set a new password for ${account.id} and signed it out everywhere`;
 }
 
-/** A line typed on the terminal without echo; any characters, up to 1,024. */
 function hiddenLine(label: string): Promise<string> {
   const stdin = process.stdin;
   return new Promise((resolve, reject) => {
@@ -122,7 +101,6 @@ function hiddenLine(label: string): Promise<string> {
   });
 }
 
-/** The new password: typed twice at a hidden prompt on a terminal, or the first line of a pipe on standard input. */
 export async function readNewPassword(): Promise<string> {
   if (process.stdin.isTTY) {
     const first = await hiddenLine('New password (hidden): ');

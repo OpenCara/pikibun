@@ -1,6 +1,7 @@
 import { Text } from "nsh";
 import {
-  accessLabels, autoApproveMerges, autoApproveWarning, CONNECTOR_UPDATE_HINT, effectiveLevel, findModel, levelLabels, modelKey, offeredLevels, selectModel,
+  accessHint, accessLabels, autoApproveMerges, autoApproveWarning, CONNECTOR_UPDATE_HINT, effectiveLevel, findModel, levelLabels, memberAutoApproveWarning, modelKey,
+  offeredLevels, selectModel,
   type AccessMode, type ChatSelection, type ConnectorInfo, type ThinkingLevel,
 } from "../shared";
 import type { AppData } from "../lib/app-data";
@@ -10,26 +11,21 @@ import { Chip, confirm, Picker } from "../ui";
 
 const accessIcons: Record<AccessMode, IconName> = { read: "eye", approval: "shield-check", auto: "zap" };
 
-/**
- * Asks the session owner to confirm Auto-approve, with what it does on a host. A confirmed warning that names merges is
- * remembered on this device, so messages that go with Auto-approve by default don't ask again.
- */
 export function confirmAutoApprove(data: AppData) {
-  return async (host: ConnectorInfo, unsandboxed: boolean) => {
-    const confirmed = await confirm({ title: "Auto-approve commands?", message: autoApproveWarning(host, unsandboxed), confirmLabel: "Enable auto-approve", destructive: true });
-    if (confirmed && autoApproveMerges(host)) data.rememberAutoApproveConfirmed();
+  return async (host: ConnectorInfo, unsandboxed: boolean, owner = true) => {
+    const confirmed = await confirm({ title: "Auto-approve commands?", message: owner ? autoApproveWarning(host, unsandboxed) : memberAutoApproveWarning(host),
+      confirmLabel: "Enable auto-approve", destructive: true });
+    if (confirmed && owner && autoApproveMerges(host)) data.rememberAutoApproveConfirmed();
     return confirmed;
   };
 }
 
-/** Model, reasoning and access pickers for a chat box. Renders nothing until the host is known. */
 export function ChatOptionsBar(props: {
   host: ConnectorInfo | undefined;
   value: ChatSelection;
   onChange: (value: ChatSelection) => void;
-  /** Session owner: may choose auto-approve. */
   owner: boolean;
-  /** Access applies to the shared conversation only, not side asks. */
+  memberAutoApprove?: boolean;
   showAccess: boolean;
   unsandboxed: boolean;
   data: AppData;
@@ -39,10 +35,10 @@ export function ChatOptionsBar(props: {
   const level = () => effectiveLevel(model(), props.value.thinkingLevel);
   const ask = confirmAutoApprove(props.data);
   async function selectAccess(access: AccessMode) {
-    if (access === "auto" && props.value.access !== "auto" && props.host && !await ask(props.host, props.unsandboxed)) return;
+    if (access === "auto" && props.value.access !== "auto" && props.host && !await ask(props.host, props.unsandboxed, props.owner)) return;
     props.onChange({ ...props.value, access });
   }
-  const modes = (): AccessMode[] => (props.owner ? ["read", "approval", "auto"] : ["read", "approval"]);
+  const modes = (): AccessMode[] => (props.owner || props.memberAutoApprove ? ["read", "approval", "auto"] : ["read", "approval"]);
   return (
     <If when={props.host}>
       {host => (
@@ -65,7 +61,7 @@ export function ChatOptionsBar(props: {
           <If when={props.showAccess}>
             <Picker<AccessMode> title="Access" value={props.value.access}
               trigger={<Chip testID="chat-access" icon={accessIcons[props.value.access]} tone={props.value.access === "auto" ? "warning" : undefined} label={accessLabels[props.value.access].label} />}
-              options={modes().map(mode => ({ value: mode, label: accessLabels[mode].label, hint: accessLabels[mode].hint, destructive: mode === "auto", icon: accessIcons[mode] }))}
+              options={modes().map(mode => ({ value: mode, label: accessLabels[mode].label, hint: accessHint(mode, props.owner), destructive: mode === "auto", icon: accessIcons[mode] }))}
               onSelect={access => void selectAccess(access)} />
           </If>
         </If>

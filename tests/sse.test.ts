@@ -14,7 +14,6 @@ test("events parse the same wherever the network splits them, including a CRLF a
   const stream = ': keep-alive\r\nevent: view\r\ndata: {"a":1}\r\n\r\nevent: view\ndata: line one\ndata:line two\n\ndata: plain\r\rid: 7\nretry: 10\n\n';
   const expected: [string, string][] = [["view", '{"a":1}'], ["view", "line one\nline two"], ["message", "plain"]];
   assert.deepEqual(parse([stream]), expected);
-  // Every split point, so CR, LF and field boundaries each land at a chunk edge.
   for (let cut = 1; cut < stream.length; cut++) assert.deepEqual(parse([stream.slice(0, cut), stream.slice(cut)]), expected, `split at ${cut}`);
   assert.deepEqual(parse([...stream]), expected);
 });
@@ -25,7 +24,6 @@ test("a whole session view, one line of megabytes in many chunks, arrives whole"
   const chunks = Array.from({ length: Math.ceil(stream.length / 16384) }, (_, index) => stream.slice(index * 16384, (index + 1) * 16384));
   const started = performance.now();
   assert.deepEqual(parse(chunks), [["view", data], ["ping", "{}"]]);
-  // Linear in the line's size: each chunk is searched once, and the line joined once.
   assert.ok(performance.now() - started < 1000, `${Math.round(performance.now() - started)} ms`);
 });
 
@@ -33,7 +31,6 @@ test("an event cut off by the end of the stream is never dispatched, and a blank
   assert.deepEqual(parse(["event: view\n\n", "event: view\ndata: partial"]), []);
 });
 
-/** A fetch answering with `chunks` as a streamed body; `gate` holds the body back until it resolves, `open` never ends it. */
 function streamingFetch(chunks: Uint8Array[], options: { status?: number; gate?: Promise<void>; open?: boolean; cancelled?: () => void } = {}) {
   const requests: { url: string; init: RequestInit }[] = [];
   const fetch = async (url: string, init: RequestInit) => {
@@ -51,7 +48,6 @@ function streamingFetch(chunks: Uint8Array[], options: { status?: number; gate?:
   return { fetch, requests };
 }
 
-/** Records every event of `stream` and settles once it reports its end. */
 function record(stream: EventStream) {
   const received: string[] = [];
   const ended = Promise.withResolvers<void>();
@@ -61,7 +57,6 @@ function record(stream: EventStream) {
 }
 
 test("a fetch event stream delivers each event, then reports the end of the stream as an error, like EventSource", async () => {
-  // A two-byte character split across two network chunks.
   const bytes = new TextEncoder().encode('event: view\ndata: {"t":"é"}\n\n');
   const split = bytes.indexOf(0xc3) + 1;
   const { fetch, requests } = streamingFetch([bytes.slice(0, split), bytes.slice(split)]);
@@ -90,7 +85,6 @@ test("a closed stream stops reading and reports nothing more", async () => {
   stream.close();
   gate.resolve();
   await cancelled.promise;
-  // Let the reader finish after its cancellation; the end of the stream must stay silent.
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(received, []);
 });

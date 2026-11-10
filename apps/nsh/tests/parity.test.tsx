@@ -2,16 +2,12 @@ import { describe, expect, open, test } from "nsh/test";
 import { homedir } from "os";
 import { host, ORIGIN, server, sessionRecord, signedIn, view, workspace } from "./fixtures";
 
-// What the React web client does that this client once lacked: attachments, editing queued messages, the pull request
-// link and read-only notices, sessions on the host, every workspace in the sidebar, and the web's sign-in.
-
 type Recorded = { requests(): { method: string; url: string; body?: string | null }[] };
 const bodyOf = (app: Recorded, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url.endsWith(url));
   return request?.body ? JSON.parse(request.body) : undefined;
 };
 
-/** A 1×1 PNG. */
 const PNG = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
   0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
@@ -19,7 +15,6 @@ const PNG = new Uint8Array([
 ]);
 const base64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 
-/** The host, able to take images and files with a message, and sessions on it. */
 const capableHost = { ...host, hostSessions: true, capabilities: { ...host.capabilities, chatImages: true, fileUploads: true } };
 
 describe("a session's view", () => {
@@ -101,7 +96,6 @@ describe("a new session", () => {
     await app.waitFor("id:new-on-host");
     const polls = () => app.requests().filter(request => request.url === `${ORIGIN}/api/workspaces/w1/connectors`).length;
     const before = polls();
-    // The listing is fetched again every 10 seconds, with new objects for the same host.
     await app.clock!.runFor(25_000);
     expect(polls()).toBeGreaterThan(before);
     expect(app.shows("id:new-on-host")).toBe(true);
@@ -158,7 +152,6 @@ describe("the sidebar", () => {
     await app.press("id:workspace-start-w2");
     await app.waitFor("id:new-add-source");
     expect(app.shows("text:Difference Engine")).toBe(true);
-    // The notice's words follow its reason, which changed as the listings came in.
     expect(app.texts().join(" ")).toContain("Sessions need at least one source");
     expect(app.texts().join(" ")).not.toContain("Pair your own Pi");
     await app.press("id:workspace-options-w1");
@@ -178,7 +171,6 @@ describe("the sidebar", () => {
   });
 });
 
-/** The sign-in screen as a browser's page shows it, with what the page's host answers. */
 const signInPage = (options: { invite?: string; query?: string } = {}) => open("./harness/sign-in.tsx", {
   platform: "web",
   host: {
@@ -209,7 +201,6 @@ describe("a file attached to a message", () => {
     }) });
     await app.press("id:session-row-s1");
     await app.waitFor("id:composer-input");
-    // A file pasted into the chat box (a browser's page picks any file too; pnpm test:client-web covers its chooser).
     await app.paste("id:composer-input", { files: ["tests/assets/notes.txt"] });
     await app.waitFor("id:attachment-file");
     expect(app.shows("text:notes.txt")).toBe(true);
@@ -221,7 +212,6 @@ describe("a file attached to a message", () => {
 });
 
 describe("local files a desktop hands over", () => {
-  // The harness puts the files in a folder of its own under the home folder, which the app may read (nsh.json).
   const staged = async () => {
     const folder = `${homedir()}/.cache/pikibun-nsh-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     const app = await open("./harness/attach.tsx", { platform: "macos", width: 800, height: 600, host: { params: { folder } } });
@@ -231,7 +221,6 @@ describe("local files a desktop hands over", () => {
 
   test("dropped on the chat box, an image goes with the message and any other file into the worktree", async () => {
     const { app, url } = await staged();
-    // Its attach button picks photos, as NSH does natively, and says other files are dropped or pasted.
     expect(app.shows("label:Attach images (drop or paste other files)")).toBe(true);
     await app.dropFiles("id:composer", [url("notes.txt"), url("dot.png")]);
     await app.waitFor("id:attachment-file");

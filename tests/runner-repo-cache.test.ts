@@ -52,12 +52,10 @@ async function fixture(t: TestContext, options: { protocolV2?: boolean } = {}) {
   return { root, upstream, work, commits, feature, cacheRoot, open, target, keeps, url: server.url("upstream.git") };
 }
 
-/** What a pack download that broke off leaves in a mirror. */
 async function temporary(directory: string): Promise<string[]> {
   return (await readdir(join(directory, "objects", "pack"))).filter(name => name.startsWith("tmp_") || name.startsWith(".tmp-"));
 }
 
-/** Whether a Git request body asks for a pack (a v2 fetch command, or v0's wants), unlike a ref listing. */
 async function wantsPack(init: RequestInit | undefined): Promise<{ wants: boolean; init: RequestInit | undefined }> {
   if (!init?.body) return { wants: false, init };
   const body = new Uint8Array(await new Response(init.body as BodyInit).arrayBuffer());
@@ -85,7 +83,6 @@ for (const protocolV2 of [true, false]) {
     assert.equal(events.at(-1)?.phase, "done");
     assert.ok(events.some(event => event.phase === "receiving" && event.bytes > 0), "pack bytes must be reported");
     assert.ok(events.some(event => event.phase === "verifying"));
-    // Progress carries numbers only.
     for (const event of events) assert.deepEqual(Object.keys(event).sort(), ["bytes", "done", "path", "percent", "phase", "total"]);
   });
 
@@ -113,7 +110,6 @@ test("a clone borrowing the mirror through alternates sees history without any r
   await writeFile(join(session, ".git", "objects", "info", "alternates"), `${join(directory, "objects")}\n`);
   assert.equal(git(session, ["show", `${f.commits[2]}:one.txt`]), "1");
   assert.equal(git(session, ["log", "--format=%s", f.commits[2]!]).split("\n").length, 3);
-  // The session repository stores no copy of the mirror's objects.
   assert.deepEqual((await readdir(join(session, ".git", "objects", "pack"))), []);
 });
 
@@ -138,7 +134,6 @@ test("cache directories are private and named only from validated repository fie
   assert.throws(() => mirrorPath({ ...repository, provider: "gitlab", host: "../evil" }));
   await rm(f.cacheRoot, { recursive: true, force: true });
   await mkdir(f.cacheRoot);
-  // Explicitly, since the umask decides mkdir's mode.
   await chmod(f.cacheRoot, 0o755);
   await assert.rejects(cache.refresh(f.target("s1")), /private directory/);
 });
@@ -170,17 +165,14 @@ test("a ref listing or fetch that breaks off is tried again, and what a broken-o
   const f = await fixture(t);
   const cache = new RepositoryCache({ root: f.cacheRoot, progressIntervalMs: 0, retryDelaysMs: [0, 0] });
   const directory = await cache.prepare(repository, "test:alice");
-  // Left by a fetch that broke off in a runner that died.
   await mkdir(join(directory, "objects", "pack"), { recursive: true });
   await writeFile(join(directory, "objects", "pack", "tmp_pack_left"), "partial");
   let listings = 0, packs = 0;
   const flaky: typeof fetch = async (input, init) => {
-    // The remote is busy once...
     if (String(input).includes("/info/refs") && listings++ === 0) return new Response("busy", { status: 503 });
     const request = await wantsPack(init);
     const response = await fetch(input, request.init);
     if (!request.wants || packs++ > 0) return response;
-    // ...and the first pack breaks off halfway, the way fetch reports a dropped connection.
     const first = (await response.body!.getReader().read()).value!;
     let sent = false;
     return new Response(new ReadableStream<Uint8Array>({
@@ -195,12 +187,10 @@ test("a ref listing or fetch that breaks off is tried again, and what a broken-o
   assert.equal(packs, 2, "the fetch that broke off was tried again");
   for (const id of [...f.commits, f.feature]) assert.ok(has(directory, id));
   assert.deepEqual(await temporary(directory), []);
-  // A refusal is final: one attempt.
   let refused = 0;
   const refusing: typeof fetch = async () => { refused++; return new Response(null, { status: 403 }); };
   await assert.rejects(cache.refresh({ ...f.target("s2"), remote: new GitRemote({ url: f.url, authorization: AUTH, fetch: refusing }) }), /403/);
   assert.equal(refused, 1);
-  // So is anything unforeseen: only what GitRemote calls retryable is tried again.
   let unforeseen = 0;
   const broken = { listRefs: async () => { unforeseen++; throw new TypeError("listRefs is not a function"); } } as unknown as GitRemote;
   await assert.rejects(cache.refresh({ ...f.target("s3"), remote: broken }), /not a function/);
@@ -211,13 +201,11 @@ test("a refresh given the owner's ref listing mirrors only those tips, fetching 
   const f = await fixture(t);
   const cache = f.open();
   const directory = cache.mirrorDirectory(repository, "test:alice");
-  // As the relay listed it a moment before: main one commit behind, and neither the feature branch nor the tag.
   assert.equal((await cache.refresh({ ...f.target("s1"), refs: new Map([["refs/heads/main", f.commits[1]!]]) })).fetched, true);
   assert.equal(git(f.root, [`--git-dir=${directory}`, "for-each-ref", "--format=%(refname) %(objectname)", "refs/upstream/"]), `refs/upstream/heads/main ${f.commits[1]}`);
   assert.ok(has(directory, f.commits[0]!));
   assert.equal(has(directory, f.commits[2]!), false);
   assert.equal(has(directory, f.feature), false);
-  // A listing naming what the remote doesn't hold gets nothing from it; one naming other refs is refused.
   await assert.rejects(cache.refresh({ ...f.target("s2"), refs: new Map([["refs/heads/main", "b".repeat(40)]]) }));
   await assert.rejects(cache.refresh({ ...f.target("s3"), refs: new Map([["refs/pull/1/head", f.commits[2]!]]) }), /Invalid ref listing/);
   assert.equal(git(f.root, [`--git-dir=${directory}`, "rev-parse", "refs/upstream/heads/main"]), f.commits[1]);
@@ -236,7 +224,6 @@ test("a mirror's first fill is waited for; a filled mirror is answered after the
     if (hold && String(input).endsWith("/git-upload-pack")) await hold;
     return fetch(input, init);
   }) as typeof fetch }) });
-  // The first fill is waited for, however long it takes.
   held();
   let answered = false;
   const first = cache.ready(slow("s1"), { wait: 10 }).then(result => { answered = true; return result; });
@@ -245,7 +232,6 @@ test("a mirror's first fill is waited for; a filled mirror is answered after the
   release();
   assert.deepEqual(await first, { directory, fresh: true });
   assert.equal(await cache.filled(repository, "test:alice"), true);
-  // A filled one is answered as it is once the wait is over; its refresh goes on.
   const next = await commit(f.work, "four.txt", "4\n");
   git(f.work, ["push", "-q", f.upstream, "main"]);
   held();
@@ -254,12 +240,10 @@ test("a mirror's first fill is waited for; a filled mirror is answered after the
   assert.ok(Date.now() - started < 2_000);
   assert.equal(has(directory, next), false);
   release();
-  // The next refresh waits for that one, which fetched the new commit.
   assert.equal((await cache.refresh(f.target("s3"))).fetched, false);
   assert.equal(has(directory, next), true);
   hold = undefined;
   assert.deepEqual(await cache.ready(f.target("s4"), { wait: 5_000 }), { directory, fresh: true });
-  // A filled mirror whose refresh fails is answered as it is; one never filled fails with it.
   assert.deepEqual(await cache.ready(f.target("s5", "test:alice", "Basic d3Jvbmc="), { wait: 5_000 }), { directory, fresh: false });
   await assert.rejects(f.open("owner").ready(f.target("s6", "test:bob", "Basic d3Jvbmc=")), /401/);
 });
@@ -322,7 +306,6 @@ test("a live holder's lock is waited for, and a lock without a pid is replaced o
   const directory = cache.mirrorDirectory(repository, "test:alice");
   await mkdir(join(directory, ".."), { recursive: true, mode: 0o700 });
   const lock = `${directory}.pikibun.lock`;
-  // The test runner's parent process is alive and is not this process.
   await writeFile(lock, `${process.ppid}\n`, { mode: 0o600 });
   let finished = false;
   const pending = cache.refresh(f.target("s1")).finally(() => { finished = true; });
@@ -354,7 +337,6 @@ test("a corrupt pack fails the fetch and closes the download instead of leaving 
         { headers: { "Content-Type": "application/x-git-upload-pack-advertisement" } });
     }
     if (++posts === 1) return result(Buffer.concat([pkt(`${id} refs/heads/main\n`), Buffer.from("0000")]));
-    // A pack section whose side-band data is not a pack, without end.
     const garbage = pkt(Buffer.concat([Buffer.from([1]), Buffer.alloc(60_000, 0x41)]));
     let first = true;
     return result(new ReadableStream<Uint8Array>({
@@ -367,7 +349,6 @@ test("a corrupt pack fails the fetch and closes the download instead of leaving 
   await assert.rejects(cache.refresh({ repository, ownerId: "test:alice", sessionId: "s1", remote }), /index-pack failed/);
   for (let attempt = 0; attempt < 50 && !cancelled; attempt++) await delay(20);
   assert.equal(cancelled, true, "the download is closed once Git gives up on the pack");
-  // Git refusing the pack is final, and what index-pack started is removed.
   assert.equal(posts, 2, "no second attempt at a pack Git refused");
   assert.deepEqual(await temporary(cache.mirrorDirectory(repository, "test:alice")), []);
 });

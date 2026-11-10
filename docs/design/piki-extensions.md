@@ -37,7 +37,9 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    bound of a tool result (its first 50 KiB or 2000 lines, which would drop a log's end); a longer one is saved whole
    (up to 1 MiB, its start and end beyond that) in the worktree's `tool-output/`, and the call returns its start and,
    mostly, its end, where a failure's reason is, with a line between them naming the file (`apps/runner/src/tool-output.ts`;
-   the program tools' results get the same). A non-zero exit is the call's error, with the output.
+   the program tools' results get the same). The connector keeps the newest 40 saved outputs of a session and deletes
+   older ones as new ones are saved, and does the same for code mode's `codemode-output/`; backups and packs carry
+   what is kept. A non-zero exit is the call's error, with the output.
 4. **Never a token in sight.** In the sandbox the command holds only the proxy's placeholder (`GH_TOKEN`,
    `GITHUB_TOKEN`, `GITLAB_TOKEN`, `AZURE_DEVOPS_EXT_PAT`), never a credential. On the host (rule 9) it gets the host's
    `PATH`, `HOME`, `XDG_*` directories, D-Bus session (for keyrings), proxies and CA bundles, and its own variables

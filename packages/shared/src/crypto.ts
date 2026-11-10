@@ -42,7 +42,6 @@ export async function signToken<T extends object>(payload: T, secret: string): P
   return `${message}.${base64url(signature)}`;
 }
 
-/** Verify signature and mandatory expiry; callers still validate audience, action and subject. */
 export async function verifyToken<T>(token: string, secret: string): Promise<T | null> {
   try {
     if (token.length > 24_000 || secret.length < 32) return null;

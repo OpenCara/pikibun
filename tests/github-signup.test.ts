@@ -8,7 +8,6 @@ import { testDatabase } from "./helpers/control-plane.js";
 const origin = "http://localhost:8787";
 const testSecret = "github-signup-test-secret-not-for-deployment";
 
-/** A server whose GitHub answers as whichever account `as` names next. */
 async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
   const { db, sqlite } = await testDatabase();
   t.after(() => db.close());
@@ -28,7 +27,6 @@ async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
       body: init.body === undefined ? undefined : JSON.stringify(init.body) }, env);
   const cookieOf = (response: Response, name: string) => (response.headers.get("set-cookie") ?? "").split(/,(?=\s*[\w-]+=)/)
     .map(part => part.trim().split(";")[0]!).find(part => part.startsWith(`${name}=`) && part.length > name.length + 1);
-  /** GitHub's callback for a sign-in that `start` began; returns where the browser goes next. */
   async function finish(start: Response | { url: string; cookie: string }) {
     const location = start instanceof Response ? start.headers.get("location")! : start.url;
     const cookie = start instanceof Response ? cookieOf(start, "test-oauth-state")! : start.cookie;
@@ -36,7 +34,6 @@ async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
     return request("GET", `/api/auth/github/callback?code=github-code&state=${state}`, { headers: { Cookie: cookie } });
   }
   const signIn = async (as: { id: number; login: string }) => { account = as; return finish(await request("GET", "/api/auth/github")); };
-  /** A sign-in started from an invite link, as the web app starts it: the token in a POST body. */
   async function invitedSignIn(as: { id: number; login: string }, inviteToken: string) {
     account = as;
     const started = await request("POST", "/api/auth/github/start", { headers: { Origin: origin }, body: { inviteToken } });
@@ -49,7 +46,6 @@ async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
     const csrf = await (await request("GET", "/api/auth/csrf", { headers: { Cookie: cookie } })).json() as { csrfToken: string };
     return { Cookie: cookie, Origin: origin, "X-CSRF-Token": csrf.csrfToken };
   }
-  /** A workspace owned by an existing GitHub account, with its invite link on. */
   async function invitingWorkspace() {
     const owner = cookieOf(await signIn({ id: 1, login: "owner" }), "test-auth")!;
     const created = await request("POST", "/api/workspaces", { headers: await browser(owner), body: { name: "Team" } });
@@ -63,12 +59,10 @@ async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
   return { env, sqlite, request, cookieOf, signIn, invitedSignIn, invitingWorkspace, browser, users, answerAs };
 }
 
-/** Where a refused browser sign-in goes: the sign-in page, saying why. */
 function refusal(response: Response): string {
   assert.equal(response.status, 302);
   const location = new URL(response.headers.get("location")!);
   assert.equal(location.origin + location.pathname, `${origin}/`);
-  // No session: the only cookie it sets is the expired sign-in state.
   assert.doesNotMatch(response.headers.get("set-cookie") ?? "", /test-auth=[A-Za-z0-9_-]{43}/);
   return location.searchParams.get("error")!;
 }
@@ -92,7 +86,6 @@ test("with SIGNUP=invite a new GitHub account needs an invite link, and existing
   const refused = await f.signIn({ id: 1001, login: "newcomer" });
   assert.match(refusal(refused), /need an invite link/);
   assert.deepEqual(f.users(), ["github:7"]);
-  // Refused before GitHub's token was kept.
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM github_tokens WHERE user_id = 'github:1001'").get()!.n, 0);
 
   const veteran = await f.signIn({ id: 7, login: "veteran" });
@@ -102,7 +95,6 @@ test("with SIGNUP=invite a new GitHub account needs an invite link, and existing
 
 test("a GitHub sign-up through an invite link creates the account with its request to join", async t => {
   const f = await fixture(t, { SIGNUP: "invite" });
-  // The workspace's owner exists already; ADMIN_USER_IDS lets that first account in.
   f.env.ADMIN_USER_IDS = "github:1";
   const { id, owner, token } = await f.invitingWorkspace();
   f.env.ADMIN_USER_IDS = "";
@@ -116,14 +108,11 @@ test("a GitHub sign-up through an invite link creates the account with its reque
   assert.deepEqual(f.sqlite.prepare("SELECT workspace_id, user_id FROM workspace_join_requests").all().map(row => ({ ...row })),
     [{ workspace_id: id, user_id: "github:1001" }]);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.join.request' AND actor_id = 'github:1001'").get()!.n, 1);
-  // Only the token's hash was kept with the sign-in.
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM oauth_states").get()!.n, 0);
 
-  // Signing in again through the link doesn't file a second request.
   await f.invitedSignIn({ id: 1001, login: "newcomer" }, token);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workspace_join_requests").get()!.n, 1);
 
-  // A link turned off between starting and GitHub's callback admits nobody new.
   f.env.SIGNUP = "invite";
   const started = await f.request("POST", "/api/auth/github/start", { headers: { Origin: origin }, body: { inviteToken: token } });
   const { url } = await started.json() as { url: string };
@@ -157,7 +146,6 @@ test("with SIGNUP=off nobody new signs up with GitHub, invited or not, except an
   const admin = await f.signIn({ id: 2, login: "operator" });
   assert.equal(admin.headers.get("location"), `${origin}/`);
   assert.deepEqual(f.users(), ["github:1", "github:2"]);
-  // And existing accounts still sign in.
   assert.equal((await f.signIn({ id: 1, login: "owner" })).headers.get("location"), `${origin}/`);
 });
 

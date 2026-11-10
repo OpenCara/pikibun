@@ -17,10 +17,6 @@ const inputStyle = () => ({
   backgroundColor: palette().surface, borderColor: palette().borderStrong, color: palette().text, placeholderColor: palette().faint,
 });
 
-/**
- * Signed out, or a stored sign-in whose server could not be reached. `inviteToken`: the invite link a signed-out visitor
- * opened (`#/join/<token>`), which a new account asks to join.
- */
 export function SignIn(props: { inviteToken?: string }) {
   const state = () => auth();
   const origin = () => {
@@ -58,12 +54,10 @@ function SignInForm(props: { inviteToken?: string }) {
   const username = signal("");
   const password = signal("");
   const confirmPassword = signal("");
-  /** Signing in, or creating an account, with a username and password. */
   const passwordMode = signal<"signin" | "signup">("signin");
   const action = createAction();
   const methods = signal<SignInMethods | null>(null);
   const github = signal<GitHubSignIn | null>(null);
-  /** Why the server's GitHub sign-in sent the browser back (`?error=`): a new account it refused, say. */
   const callbackError = signal("");
   const parsed = () => parseOrigin(server());
   const origin = () => {
@@ -71,12 +65,10 @@ function SignInForm(props: { inviteToken?: string }) {
     const result = parsed();
     return "origin" in result ? result.origin : null;
   };
-  // An invite link opened while signed out is remembered: GitHub's sign-in comes back to the app's root, without it.
   effect(() => {
     if (usesBrowserSession && props.inviteToken) void rememberInvite(props.inviteToken);
   });
   if (usesBrowserSession) void pageQuery().then(query => callbackError.set(query.get("error")?.slice(0, 300) ?? ""));
-  // What this server offers (password sign-in, a test-mode server's tokens), for the server chosen.
   effect(() => {
     const target = origin();
     methods.set(null);
@@ -90,16 +82,12 @@ function SignInForm(props: { inviteToken?: string }) {
   };
   const invited = () => usesBrowserSession && props.inviteToken !== undefined;
   const githubUnconfigured = () => methods()?.githubConfigured === false;
-  // Native builds sign in with a password too, for a bearer token (signInWithPassword).
   const passwords = () => methods()?.passwordAuth === true;
-  // Without GitHub, a server that offers passwords still signs people in.
   const unconfigured = () => githubUnconfigured() && !passwords();
   const local = () => methods()?.localServer;
   const passwordSignup = () => methods()?.passwordSignup ?? "off";
-  // New password accounts are made on the web, whose sign-up starts a browser session; native builds sign in to them.
   const canSignUp = () => usesBrowserSession && passwords() && (passwordSignup() === "open" || (passwordSignup() === "invite" && invited()));
   const signingUp = () => passwordMode() === "signup" && canSignUp();
-  /** Where neither offered method takes new accounts from anyone, how to get one. */
   const signupHint = () => {
     const current = methods();
     if (!usesBrowserSession || invited() || !current) return "";
@@ -113,14 +101,11 @@ function SignInForm(props: { inviteToken?: string }) {
     if (target === null) return;
     void action.run(async () => {
       if (usesBrowserSession) {
-        // From an invite link: the link's token goes in a request body, never a URL, and GitHub's page comes back here.
         if (props.inviteToken !== undefined) {
           const url = await startGitHubInviteSignIn(props.inviteToken);
           if (!authorizeInPage(url)) await openUrl(url);
           return;
         }
-        // The server's own GitHub sign-in, in place of the app: it sets this browser's session cookie and comes back to
-        // the app, which then starts signed in.
         if (!openServerPage("/api/auth/github")) await openUrl(`${target}/api/auth/github`);
         return;
       }
@@ -139,7 +124,6 @@ function SignInForm(props: { inviteToken?: string }) {
     void action.run(() => signInWithPassword(target, username(), password()));
   }
 
-  /** The web view went somewhere: the server's callback page finishes the sign-in. */
   function navigated(url: string) {
     const attempt = github();
     if (!attempt || !attempt.isCallback(url)) return;
@@ -221,7 +205,6 @@ function SignInForm(props: { inviteToken?: string }) {
           </View>
         </If>
       </If>
-      {/* Natively a server without GitHub still shows the button, which says why it can't, unless passwords sign in instead. */}
       <If when={!(githubUnconfigured() && (usesBrowserSession || passwords()))}>
         <Button testID="github-sign-in" variant="primary" large block icon="github" label="Continue with GitHub" busy={action.busy() && !developerOpen()}
           disabled={origin() === null || action.busy() || githubUnconfigured()} onPress={continueWithGitHub} />

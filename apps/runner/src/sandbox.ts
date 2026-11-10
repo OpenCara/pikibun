@@ -31,12 +31,10 @@ import type { SandboxNodePrograms } from "./program-availability.js";
 export { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 
 export const TIMEOUT_MS = 30_000;
-/** Push rewrites and packs move whole repositories; only push kinds get this deadline. */
 export const PUSH_TIMEOUT_MS = 60 * 60 * 1000;
 export const OID = /^[0-9a-f]{40}$/;
 export const MAX_FILE_BYTES = 1024 * 1024;
 export const MAX_SNAPSHOT_OUTPUT_BYTES = 48 * 1024 * 1024;
-/** A whole image file as base64 in one JSON object, with room for its key. */
 export const MAX_CONTENT_OUTPUT_BYTES = Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 64;
 const DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
 const sessionQueues = new Map<string, Promise<void>>();
@@ -44,106 +42,46 @@ const sessionQueues = new Map<string, Promise<void>>();
 export type SandboxAuthorize = () => Promise<void>;
 
 export interface SandboxExecutionOptions {
-  /** Trusted harness only: caller must separately require faux + allowTestShell. */
   allowTestShell?: boolean;
-  /**
-   * The host's owner allowed this command to run without the resource limits this host lacks. It still runs inside
-   * the sandbox's namespaces; provisioned limits are always used when present.
-   */
   unbounded?: boolean;
-  /** The command's time limit and per-process limits, from the host's configuration; a 30-second command's without them. */
   limits?: CommandLimits;
-  /** Lend the command the host's GPU render device, where it has one (HostConfig.gpu; see gpuMounts). */
   gpu?: boolean;
-  /** Stops the command, as closing the sandbox does: a stopped message or a closing session ends a long one at once. */
   signal?: AbortSignal;
 }
 
-/**
- * How one shell command runs, besides what every sandboxed step gets. `service`: it is a session service
- * (session-service.ts), with the directory it listens in, mounted writable at SANDBOX_SERVICE_SOCKETS, and its own
- * resource domain, so a command's start, which ends what its domain still runs, never ends it.
- */
 interface CommandOptions { limits?: CommandLimits; gpu?: boolean; signal?: AbortSignal; service?: { socketDirectory: string } }
 
 export interface SandboxOptions {
-  /** The Node.js the node tool runs (node-toolchain.ts): the connector's own by default; null for none. */
   node?: NodeToolchain | null;
-  /**
-   * The Chromium the browser tool runs (browser-toolchain.ts): the host's own by default, the one a connector has now
-   * (HostBrowserSource in browser-host.ts, looked up for each command, as its owner's choice and downloads change it), or
-   * null for none.
-   */
   browser?: BrowserToolchain | null | (() => BrowserToolchain | undefined);
-  /**
-   * Host path of the session's egress proxy socket (see EgressProxy). Shell commands get it read-only at EGRESS_SOCKET,
-   * and the helper relays the sandbox's loopback EGRESS_PORT to it: their only way out of the network namespace.
-   */
   egressSocket?: string;
-  /** The branch a clone session's shell commands may push through the proxy, given to them as PIKIBUN_SESSION_BRANCH. */
   sessionBranch?: string;
-  /**
-   * The host repository cache's mirrors this session may borrow from (clone sessions on a cache host), asked for before
-   * each shell command and each step that runs Git in a clone (a borrowing clone can't read its objects without them).
-   * Each is mounted read-only at its `target` below MIRROR_ROOT, and for shell commands a `git` shim first on PATH makes
-   * clones of the workspace's repositories borrow from them (see GIT_SHIM).
-   */
   mirrors?: () => Promise<readonly MirrorMount[]>;
-  /** Where the host's / is when shell commands look for its GPU (see gpuMounts): the host's own, unless a test gives a stand-in. */
   gpuRoot?: string;
 }
 
 export interface MirrorMount { source: string; target: string }
-/** Where a clone session's shell commands see the host's mirrors; clones' `objects/info/alternates` name paths below it. */
 export const MIRROR_ROOT = "/repository-mirrors";
 const SHIM_DIRECTORY = "/opt/pikibun/bin";
-/** The host's trusted certificates in the session's private root, mounted read-only at CA_BUNDLE for shell commands. */
 export const CA_BUNDLE_FILE = "ca-certificates.crt";
-/**
- * What a pack of a session's files (pack.ts) leaves out of its home, relative to it: package managers' caches, downloaded
- * again when needed, and temporary files. The sandbox helper's PACK_SKIPPED_HOME mirrors it.
- */
 export const PACK_SKIPPED_HOME: readonly string[] = Object.freeze([".tmp", ".cache", ".npm", ".pnpm-store", ".yarn", ".bun", ".local/share/pnpm",
   ".cargo/registry", ".cargo/git", "go/pkg/mod", ".m2/repository", ".gradle/caches", ".nuget/packages"]);
 
-/** The steps that may run Git in an agent's clone, and so need the mirrors a clone borrows from. */
 const MIRROR_KINDS: ReadonlySet<Request["kind"]> = new Set(["bash", "clone-head", "clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"]);
 
-/**
- * Where sandboxes find git-lfs: the host's own, as /usr is mounted read-only in every sandbox. Package managers install
- * it in /usr/bin; /usr/local/bin is not on sandboxed commands' PATH, so it is always named by its full path.
- */
 export const GIT_LFS_PATHS = ["/usr/bin/git-lfs", "/usr/local/bin/git-lfs"] as const;
-/** The host's git-lfs, which sandboxed sessions can run, if it has one. */
 export function hostGitLfs(): string | undefined {
   return GIT_LFS_PATHS.find(path => { try { accessSync(path, constants.X_OK); return true; } catch { return false; } });
 }
 
-/**
- * `git` for clone sessions on a host with a repository cache or git-lfs. A clone of a workspace repository:
- * - on a cache host, first asks the egress proxy for the host's mirror and borrows its objects (--reference-if-able)
- *   instead of downloading them again. It waits for the mirror however long that takes: a mirror's first fill downloads
- *   the whole repository once, with the host's own Git credentials, and the clone never downloads it a second time
- *   beside it. The wait is told on stderr, and the fill goes on if the command stops. A dropped connection or a failure
- *   that may pass is asked again; only a mirror the host can't fill at all lets the clone go ahead without it. A mirror
- *   that stays unavailable, or that the command can't see yet (mounts are fixed when a command starts), fails the
- *   clone, to be run again;
- * - where the workspace turned Git LFS on for the repository and git-lfs is installed, configures the clone's LFS
- *   filters (in its own .git/config), so its checkout downloads LFS files' content through the proxy. Elsewhere clones
- *   keep LFS pointer files, as plain Git does.
- * Everything else runs Git unchanged. Its source is apps/runner/src/sandbox-python/git_shim.py, embedded by
- * scripts/embed-python.mjs.
- */
 const GIT_SHIM = EMBEDDED_GIT_SHIM;
 
-/** The sandbox request that imports an attached file, checked before it goes to any helper. */
 export function importRequest(directory: string, name: string, data: Buffer): { kind: "import"; directory: string; name: string; data: string } {
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(directory) || directory.startsWith(".") || !name || uploadFileName(name) !== name
     || !Buffer.isBuffer(data) || data.length > fileUploadLimits.maxBytes) throw new Error("Invalid file import");
   return { kind: "import", directory: text(directory, "directory", 64), name, data: data.toString("base64") };
 }
 
-/** The path a helper says it imported a file to: in the requested directory, under a name `attachmentCandidate` makes. */
 export function importedPath(value: unknown, request: { directory: string; name: string }): string {
   const path = (value as { path?: unknown } | null)?.path;
   if (typeof path === "string" && path.startsWith(`${request.directory}/`)) {
@@ -154,17 +92,11 @@ export function importedPath(value: unknown, request: { directory: string; name:
 }
 
 export interface SnapshotFile {
-  /** Relative to the constructor's sandbox root; data is base64, including binary files. */
   path: string;
   data: string;
   mode: number;
 }
 
-/**
- * One clone of a clone session as a backup keeps it (see Sandbox.cloneBackup). `worktree` commits its working tree,
- * untracked files included and ignored ones not, on top of `head`; `bundle` (base64) holds what `origin` doesn't have:
- * `worktree` and the local branches, as `refs/pikibun/backup` and `refs/heads/*`.
- */
 export interface CloneBackup {
   path: string; origin: string | null; branch: string | null; head: string | null; worktree: string;
   branches: [string, string][]; bundle: string | null;
@@ -205,16 +137,10 @@ type Request =
   | { kind: "clone-pending" }
   | { kind: "clone-restore"; path: string; url: string; reference: string | null };
 
-/** Push transfers: a pack streamed after the request line, or stdout handed over uncapped. */
 interface Transfer { input?: AsyncIterable<Uint8Array>; output?: (stdout: Readable, kill: () => void) => void }
 
-/**
- * The helper every sandboxed step runs as (`python3 -I -c HELPER`): all untrusted filesystem access happens there, after
- * entering the namespace. Its source is apps/runner/src/sandbox-python/helper.py, embedded by scripts/embed-python.mjs.
- */
 export { HELPER };
 
-/** Waits for a writable to drain or close, removing whichever listener did not fire so long streams never accumulate listeners. */
 export function drained(stream: Writable): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   if (stream.destroyed) { resolve(); return promise; }
@@ -236,7 +162,6 @@ export function text(value: unknown, label: string, limit: number, multiline = f
 }
 
 function fdPath(directory: FileHandle, name: string): string {
-  // name is always an internal single component, never a tool-supplied path.
   return `/proc/self/fd/${directory.fd}/${name}`;
 }
 
@@ -263,8 +188,6 @@ async function privateDirectory(parent: FileHandle, name: string, create: boolea
 }
 
 async function openRoot(path: string): Promise<FileHandle> {
-  // Pin every ancestor rather than checking lstat/realpath and subsequently opening
-  // the original pathname. Even a renamed ancestor cannot redirect these operations.
   let current = await open(sep, DIRECTORY_FLAGS);
   try {
     const components = path.split(sep).filter(Boolean);
@@ -308,13 +231,11 @@ export function quoteGitConfig(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\t/g, "\\t")}"`;
 }
 
-/** Immutable per-session owner Git config, shared with the unsandboxed host workspace. */
 export function ownerGitConfig(identity: Readonly<SandboxIdentity>): string {
   const { ownerId, githubLogin, gitName, gitEmail, home, worktree } = identity;
   return `# Immutable session owner: ${JSON.stringify({ ownerId, githubLogin, gitName, gitEmail, home, worktree })}\n[user]\n\tname = ${quoteGitConfig(gitName)}\n\temail = ${quoteGitConfig(gitEmail)}\n[core]\n\thooksPath = /dev/null\n\tfsmonitor = false\n[commit]\n\tgpgSign = false\n[credential]\n\thelper =\n`;
 }
 
-/** The complete process environment for session tools; nothing is inherited from the runner. */
 export function sessionEnvironment(identity: Readonly<SandboxIdentity>, tools: { path: string; gitConfig: string }): Readonly<Record<string, string>> {
   return Object.freeze({
     ...identity.env,
@@ -346,13 +267,11 @@ export function sessionEnvironment(identity: Readonly<SandboxIdentity>, tools: {
   });
 }
 
-/** Only runner-owned cache directories, at their fixed place below MIRROR_ROOT. */
 function mirrorMount(mount: MirrorMount): boolean {
   return isAbsolute(mount.source) && !mount.source.split(sep).includes("..")
     && /^\/repository-mirrors\/[a-z0-9-]{1,32}\/[a-z0-9._-]{1,253}\/[A-Za-z0-9{}_-]{1,100}\.git$/.test(mount.target);
 }
 
-/** Creates the read-only owner Git config once, then verifies it is the unchanged private original. */
 export async function pinOwnerConfig(path: string, configText: string): Promise<FileHandle> {
   try {
     const created = await open(path, CREATE_FILE, 0o400);
@@ -379,12 +298,6 @@ export async function pinOwnerConfig(path: string, configText: string): Promise<
   }
 }
 
-/**
- * Linux-only execution boundary. The caller supplies a trusted live-authorization
- * callback, which is awaited after queueing, immediately before execution.
- * execute() takes the exact approved Operation, never a reconstructed shell command.
- * No host-shell, host-Git, or host-filesystem-tool fallback exists.
- */
 export class Sandbox implements IsolatedWorkspace {
   readonly isolated = true;
   readonly #root: string;
@@ -397,25 +310,16 @@ export class Sandbox implements IsolatedWorkspace {
   readonly #sessionBranch: string | undefined;
   readonly #mirrors: (() => Promise<readonly MirrorMount[]>) | undefined;
   readonly #gpuRoot: string;
-  /** Whether shell commands get the `git` shim: on a cache host, or where git-lfs is installed, in sessions with a proxy. */
   readonly #shim: boolean;
-  /** The connector's Node.js (its node, package managers and headers), read-only for shell commands where the sandbox doesn't see it already. */
   readonly #nodeMount: SandboxNodeMount | undefined;
   readonly nodeBin: string | undefined;
-  /**
-   * The connector's Node.js as commands find it (program-availability.ts): its bin directory and, where it is mounted
-   * rather than in /usr, the programs mounted there.
-   */
   readonly nodePrograms: SandboxNodePrograms | undefined;
-  /** The host's Chromium installation, read-only for shell commands where the sandbox doesn't see it already. */
   readonly #browserSource: () => BrowserToolchain | undefined;
-  /** Whether the browser tool's driver is written: wherever a Chromium may be given. */
   readonly #browserDriver: boolean;
   #initialization: Promise<void> | undefined;
   #mounts: Mounts | undefined;
   #closed = false;
   #cancelActive: (() => void) | undefined;
-  /** The session's services running now (startService): closing the sandbox ends them too. */
   readonly #services = new Set<() => void>();
 
   constructor(binding: RunnerBinding, root: string, resources?: ResourceConfig, options: SandboxOptions = {}) {
@@ -458,7 +362,6 @@ export class Sandbox implements IsolatedWorkspace {
 
   get home(): string { return this.#identity.home; }
   get worktree(): string { return this.#identity.worktree; }
-  /** Where the worktree is on the host; `worktree` is where it is mounted in the sandbox, a path the host doesn't have. */
   get hostWorktree(): string { return resolve(this.#root, "worktree"); }
 
   async identity(authorize: SandboxAuthorize): Promise<Readonly<SandboxIdentity>> {
@@ -496,7 +399,6 @@ export class Sandbox implements IsolatedWorkspace {
         opened.push(worktree);
         const git = await privateDirectory(root, "git", true);
         opened.push(git);
-        // File-only backups omit empty Git directories, including those in an unborn repository.
         for (const name of ["objects", "refs"]) {
           const directory = await privateDirectory(git, name, true);
           await directory.close();
@@ -507,16 +409,13 @@ export class Sandbox implements IsolatedWorkspace {
         await temporary.close();
         await placeholder(home, ".gitconfig");
         const config = await pinOwnerConfig(fdPath(root, "owner.gitconfig"), ownerGitConfig(this.#identity));
-        // The shim lives beside the session's mounts, where nothing in the sandbox can change it.
         if (this.#shim) {
           const shim = join(this.#root, "bin", "git");
           await mkdir(join(this.#root, "bin"), { recursive: true, mode: 0o700 });
-          // Written afresh at every open: the previous one is read-only, and may be an older version.
           await rm(shim, { force: true });
           await writeFile(shim, GIT_SHIM, { mode: 0o500 });
           await chmod(shim, 0o500);
         }
-        // The browser tool's driver, beside the shim and as it is, out of the sandbox's reach: written afresh at every open.
         if (this.#browserDriver) {
           const driver = join(this.#root, "browser", "pikibun-browser");
           await mkdir(join(this.#root, "browser"), { recursive: true, mode: 0o700 });
@@ -524,15 +423,12 @@ export class Sandbox implements IsolatedWorkspace {
           await writeFile(driver, BROWSER_DRIVER, { mode: 0o500 });
           await chmod(driver, 0o500);
         }
-        // The session service's driver, as the browser's: beside the shim, out of the sandbox's reach, written at every open.
         const service = join(this.#root, "service", "pikibun-service");
         await mkdir(join(this.#root, "service"), { recursive: true, mode: 0o700 });
         await rm(service, { force: true });
         await writeFile(service, SERVICE_DRIVER, { mode: 0o500 });
         await chmod(service, 0o500);
-        // Beside the shim, out of the sandbox's reach; written at every open, so the host's current store applies.
         if (this.#egressSocket !== undefined) {
-          // Replaced in one step, so no command ever finds the file missing or half written.
           const bundle = join(this.#root, CA_BUNDLE_FILE);
           const staged = `${bundle}.new`;
           await rm(staged, { force: true });
@@ -557,16 +453,13 @@ export class Sandbox implements IsolatedWorkspace {
     await this.initialize();
     return this.#exclusive(async () => {
       if (this.#closed) throw new Error("Sandbox is closed");
-      // Admission-time permission may have been revoked while this operation waited.
       await authorize();
       if (this.#closed) throw new Error("Sandbox is closed");
-      // A command stopped while it waited for the sandbox never starts.
       if (command.signal?.aborted) throw new SandboxProcessError("Command stopped before it started", null, null, "", "");
       return this.#run(request, readOnly, gitWritable, requireResources, {}, await this.#mirrorMounts(request), command);
     });
   }
 
-  /** The mirrors to mount for `request`: asked for only for steps that may run Git in a clone. */
   async #mirrorMounts(request: Request): Promise<readonly MirrorMount[]> {
     return this.#mirrors && MIRROR_KINDS.has(request.kind) ? (await this.#mirrors()).filter(mirrorMount) : [];
   }
@@ -576,7 +469,6 @@ export class Sandbox implements IsolatedWorkspace {
     return JSON.parse(output) as string;
   }
 
-  /** Like `readFile`, but an image (by signature, up to `MAX_IMAGE_BYTES`) comes back as its bytes. */
   async readContent(path: string, authorize: SandboxAuthorize): Promise<FileContent> {
     const output = JSON.parse(await this.#operation({ kind: "read-content", path: text(path, "path", 1024) }, true, authorize)) as { text: string } | { image: string };
     if ("text" in output) return { text: output.text };
@@ -591,7 +483,6 @@ export class Sandbox implements IsolatedWorkspace {
     await this.#operation({ kind: "write", path: text(path, "path", 1024), content }, false, authorize);
   }
 
-  /** A file attached to a message, as a new file in `directory`: see SessionWorkspace.importFile. */
   async importFile(directory: string, name: string, data: Buffer, authorize: SandboxAuthorize): Promise<string> {
     const request = importRequest(directory, name, data);
     return importedPath(JSON.parse(await this.#operation(request, false, authorize)), request);
@@ -602,23 +493,19 @@ export class Sandbox implements IsolatedWorkspace {
     return JSON.parse(output) as string[];
   }
 
-  /** Where shell commands find the browser tool's driver and the host's Chromium now; none where the host has no Chromium. */
   get browser(): SessionBrowser | undefined {
     const browser = sandboxBrowserMount(this.#browserSource());
     return browser ? { driver: SANDBOX_BROWSER_DRIVER, chromium: browser.executable } : undefined;
   }
 
-  /** The file browser's read-only look at one worktree path: a directory's entries or a file's preview. */
   async browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult> {
     return checkedBrowse(JSON.parse(await this.#operation({ kind: "browse", path: text(path, "path", 1024) }, true, authorize)));
   }
 
-  /** The search tool's search, in the helper: read-only, like reading a file. */
   async search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult> {
     return checkedSearch(JSON.parse(await this.#operation({ ...request, path: text(request.path, "path", 1024) }, true, authorize)));
   }
 
-  /** move_file, copy_file and delete_file (file-operations.ts), in the helper. */
   async fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult> {
     return checkedFileOperation(JSON.parse(await this.#operation(request, false, authorize)));
   }
@@ -644,14 +531,6 @@ export class Sandbox implements IsolatedWorkspace {
     }
   }
 
-  /**
-   * Starts a session service (session-service.ts): `command`, a shell command as `execute` runs one, with the session's
-   * files, network and limits, that runs beside the session's other operations rather than in their queue, until it ends,
-   * `kill`, its time limit (`limits.seconds`, the host's service lifetime) or the sandbox closing. It listens in
-   * `socketDirectory`, the session's own, which it alone gets, writable, at SANDBOX_SERVICE_SOCKETS. With resource limits
-   * it runs in a resource domain of its own with the same limits as the session's commands: a command's start ends what
-   * its domain still runs, which would end the service. Its output, uncapped, goes to `onOutput` as it comes.
-   */
   async startService(command: string, authorize: SandboxAuthorize, options: { limits: CommandLimits; unbounded: boolean; gpu?: boolean; socketDirectory: string;
     onOutput: (chunk: Buffer) => void; signal?: AbortSignal }): Promise<ServiceProcess> {
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
@@ -679,26 +558,17 @@ export class Sandbox implements IsolatedWorkspace {
     });
   }
 
-  /** The session's files, leaving out `clones` (worktree paths), which a backup keeps as bundles (cloneBackup). */
-  /** `skipCaches`: leave out the home's package caches and temporary files (PACK_SKIPPED_HOME), as a pack does. */
   async snapshot(authorize: SandboxAuthorize, clones: readonly string[] = [], { skipCaches = false }: { skipCaches?: boolean } = {}): Promise<SnapshotFile[]> {
     return JSON.parse(await this.#operation({ kind: "snapshot", ...(clones.length ? { clones: [...clones] } : {}), ...(skipCaches ? { skipCaches: true as const } : {}) },
       true, authorize)) as SnapshotFile[];
   }
 
-  /**
-   * A clone session's clones as a backup keeps them: for each, its origin, branches and HEAD, a commit of its working
-   * tree, and a bundle of what its origin doesn't have. Restorations still pending are carried over as they are.
-   * `found` are the clones in the worktree, which the snapshot leaves out.
-   */
   async cloneBackup(authorize: SandboxAuthorize, { pack = false }: { pack?: boolean } = {}): Promise<{ clones: CloneBackup[]; found: string[] }> {
-    // `pack`: the backup will replace the clones (pack.ts), so the sandbox refuses clones with what it can't carry.
     const value = JSON.parse(await this.#operation({ kind: "clone-backup", ...(pack ? { pack: true as const } : {}) }, false, authorize)) as { clones: CloneBackup[]; found: string[] };
     if (!Array.isArray(value?.clones) || !Array.isArray(value.found) || !value.found.every(path => validCloneDirectory(path))) throw new Error("Invalid sandbox clone response");
     return value;
   }
 
-  /** The clones a restore left to clone again, by worktree path. */
   async clonePending(authorize: SandboxAuthorize): Promise<{ path: string; origin: string | null }[]> {
     const value = JSON.parse(await this.#operation({ kind: "clone-pending" }, true, authorize)) as unknown;
     if (!Array.isArray(value)) throw new Error("Invalid sandbox clone response");
@@ -707,18 +577,12 @@ export class Sandbox implements IsolatedWorkspace {
       .map(entry => ({ path: entry.path, origin: entry.origin }));
   }
 
-  /**
-   * Clones one pending clone again from `url` (its workspace repository's https remote) through the egress proxy,
-   * borrowing from `reference` (a mounted mirror) when given, and puts its backed-up work back; its origin stays as the
-   * clone named it. Its pending entry goes once that is done.
-   */
   async cloneRestore(path: string, url: string, reference: string | null, authorize: SandboxAuthorize): Promise<void> {
     if (!validCloneDirectory(path) || !/^https:\/\/[\x21-\x7e]{1,2040}$/.test(url) || (reference !== null && !reference.startsWith(`${MIRROR_ROOT}/`)))
       throw new Error("Invalid clone restoration");
     await this.#operation({ kind: "clone-restore", path, url, reference }, false, authorize, true);
   }
 
-  /** Explicit host-owner-approved execution, serialized with sandbox file/Git operations; never a fallback. */
   async executeHost(operation: HostCommandOperation, authorize: SandboxAuthorize, signal: AbortSignal): Promise<string> {
     if (typeof authorize !== "function") throw new Error("Host command authorization is required");
     await this.initialize();
@@ -745,7 +609,6 @@ export class Sandbox implements IsolatedWorkspace {
     return { commit: value.commit, origin: value.origin };
   }
 
-  /** Which advertised tips the clone has, whether the branch's tip is an ancestor of `commit`, and the commits to push. */
   async clonePushPrepare(path: string, input: { commit: string; old: string | null; tips: string[] }, authorize: SandboxAuthorize): Promise<ClonePushPreparation> {
     if (!validCloneDirectory(path) || !OID.test(input.commit) || (input.old !== null && !OID.test(input.old))
       || input.tips.length > 1024 || !input.tips.every((tip) => OID.test(tip))) throw new Error("Invalid push request");
@@ -756,7 +619,6 @@ export class Sandbox implements IsolatedWorkspace {
     return { present: value.present, ancestor: value.ancestor, commits: value.commits.map(({ source, subject }) => ({ source, subject })), total: value.total };
   }
 
-  /** Streams the clone's pack of `commit` minus `exclude`; the session queue is held until the stream ends. */
   async clonePushPack(path: string, input: { commit: string; exclude: string[] }, authorize: SandboxAuthorize): Promise<AsyncIterable<Uint8Array>> {
     if (!validCloneDirectory(path) || !OID.test(input.commit) || input.exclude.length > 1024 || !input.exclude.every((oid) => OID.test(oid))) throw new Error("Invalid push request");
     if (typeof authorize !== "function") throw new Error("Sandbox authorization callback is required");
@@ -783,7 +645,6 @@ export class Sandbox implements IsolatedWorkspace {
     })();
   }
 
-  /** Release pinned descriptors when the owning runner session closes. */
   async close(): Promise<void> {
     this.#closed = true;
     this.#cancelActive?.();
@@ -804,7 +665,6 @@ export class Sandbox implements IsolatedWorkspace {
     if (requireResources && !this.#resources) return Promise.reject(new Error("Production bash resources are unavailable"));
     const mount = readOnly ? "--ro-bind-fd" : "--bind-fd";
     const egress = request.kind === "bash" || request.kind === "clone-restore" ? this.#egressSocket : undefined;
-    // Only shell commands get the GPU, and only its render device; it is looked up again for each one.
     const gpu = request.kind === "bash" && command.gpu ? gpuMounts(this.#gpuRoot) : undefined;
     const limits = request.kind === "bash" ? command.limits : undefined;
     const browser = request.kind === "bash" ? sandboxBrowserMount(this.#browserSource()) : undefined;
@@ -821,16 +681,11 @@ export class Sandbox implements IsolatedWorkspace {
       mount, "4", this.worktree,
       gitWritable ? "--bind-fd" : "--ro-bind-fd", "5", `${this.worktree}/.git`,
       "--ro-bind-fd", "6", `${this.home}/.gitconfig`,
-      // Only shell commands reach the network, and only through the session's proxy. A missing socket (the session is
-      // not open) is skipped; requests then fail to connect.
-      // The certificates are written whenever there is a proxy, so a missing file is an error, not a skipped mount.
       ...(egress ? ["--ro-bind-try", egress, EGRESS_SOCKET, "--ro-bind", join(this.#root, CA_BUNDLE_FILE), CA_BUNDLE] : []),
       ...(egress && this.#shim ? ["--ro-bind-try", join(this.#root, "bin"), SHIM_DIRECTORY] : []),
       ...mirrors.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
-      // The browser tool's driver and the host's Chromium, read-only, for shell commands only: the tool is one.
       ...(browser ? ["--ro-bind-try", join(this.#root, "browser", "pikibun-browser"), SANDBOX_BROWSER_DRIVER] : []),
       ...(browser?.mount ? ["--ro-bind-try", browser.mount.source, browser.mount.target] : []),
-      // A session service's driver, and the directory it listens in, which the connector connects to: the service's alone.
       ...(service ? ["--ro-bind", join(this.#root, "service", "pikibun-service"), SANDBOX_SERVICE_DRIVER, "--bind", service.socketDirectory, SANDBOX_SERVICE_SOCKETS] : []),
       ...(request.kind === "bash" && this.#nodeMount ? [...this.#nodeMount.binds.flatMap(({ source, target }) => ["--ro-bind-try", source, target]),
         ...this.#nodeMount.links.flatMap(({ path, target }) => ["--symlink", target, path])] : []),
@@ -846,14 +701,11 @@ export class Sandbox implements IsolatedWorkspace {
     const limit = request.kind === "snapshot" || request.kind === "clone-backup" ? MAX_SNAPSHOT_OUTPUT_BYTES : request.kind === "read-content" ? MAX_CONTENT_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
     const deadline = ["clone-push-prepare", "clone-push-pack", "clone-backup", "clone-restore"].includes(request.kind)
       ? PUSH_TIMEOUT_MS : (limits ?? commandLimits(TIMEOUT_MS / 1000)).seconds * 1000;
-    // A service's resource domain is its own, beside the session's (startService).
     const domain = service ? createHash("sha256").update(`${this.#sessionKey}\0service`).digest("hex") : this.#sessionKey;
     const launch = requireResources
       ? resourceLaunch(this.#resources!, domain, args, deadline / 1000)
       : { command: "/usr/bin/bwrap", args };
     return new Promise<string>((resolveResult, reject) => {
-      // Resource supervisor alone receives root fd 8 and liveness pipe 7. It closes
-      // both before bwrap exec; neither is exposed to the untrusted namespace.
       const child = spawn(launch.command, launch.args, {
         cwd: "/",
         env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8" },
@@ -870,8 +722,6 @@ export class Sandbox implements IsolatedWorkspace {
       const kill = () => {
         if (!child.pid) return;
         if (requireResources) {
-          // Never SIGKILL the supervisor: it must retain its lock until the entire
-          // cgroup is killed and empty. It also watches parent EOF + its own deadline.
           child.kill("SIGTERM");
           return;
         }
@@ -885,7 +735,6 @@ export class Sandbox implements IsolatedWorkspace {
         failure ??= "Sandbox closed";
         kill();
       };
-      // A service runs beside the session's queue: closing the sandbox ends it through #services, not as the active step.
       if (!service) this.#cancelActive = cancel;
       const stop = () => {
         failure ??= "Command stopped";
@@ -906,7 +755,6 @@ export class Sandbox implements IsolatedWorkspace {
           kill();
         }
       };
-      // Push packs stream to the forge uncapped; stderr stays bounded.
       if (transfer.output) transfer.output(child.stdout!, cancel);
       else child.stdout!.on("data", (chunk: Buffer) => capture(stdout, chunk));
       child.stderr!.on("data", (chunk: Buffer) => capture(stderr, chunk));
@@ -922,7 +770,6 @@ export class Sandbox implements IsolatedWorkspace {
         kill();
       });
       child.stdin!.on("error", (error: NodeJS.ErrnoException) => {
-        // Early process exit commonly closes stdin; the exit status is authoritative.
         if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") {
           failure ??= "Could not send sandbox request";
           kill();
@@ -941,8 +788,6 @@ export class Sandbox implements IsolatedWorkspace {
           if (spawnFailure) error.cause = spawnFailure;
           reject(error);
         } else {
-          // Structured filesystem responses use stdout only; shell/Git diagnostics
-          // remain visible without corrupting their exit status or JSON tool output.
           resolveResult(request.kind === "bash" ? out + err : out);
         }
       });
@@ -951,7 +796,6 @@ export class Sandbox implements IsolatedWorkspace {
       const input = transfer.input;
       if (!input) child.stdin!.end(line);
       else {
-        // One request line, then the upstream pack with backpressure.
         void (async () => {
           const stdin = child.stdin!;
           stdin.write(`${line}\n`);

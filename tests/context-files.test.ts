@@ -19,7 +19,6 @@ async function file(path: string, text: string): Promise<void> {
   await writeFile(path, text);
 }
 
-/** A Pikibun-like worktree: clones side by side, each with a .git directory. */
 async function worktree(t: test.TestContext): Promise<string> {
   const root = await directory(t);
   const cwd = join(root, "worktree");
@@ -198,7 +197,6 @@ test("URLs never reach the host's own or private networks, unless its owner allo
   assert.equal(blockedAddress("10.0.0.1", allowedRanges("198.18.0.0/15, nonsense, 10.0.0.0/99")), true);
   await assert.rejects(fetchText("https://127.0.0.1/rules.md"), /private network/);
   await assert.rejects(fetchText("https://[::1]/rules.md"), /private network/);
-  // A name is checked as it is connected to, against every address it resolves to (no network: a resolver stands in).
   const resolver = ((hostname: string, _options: unknown, callback: (error: Error | null, addresses: { address: string; family: number }[]) => void) =>
     callback(null, hostname === "internal.example.com" ? [{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.5", family: 4 }] : [])) as never;
   await assert.rejects(fetchText("https://internal.example.com/rules.md", undefined, resolver), /internal\.example\.com is on a private network \(10\.0\.0\.5\)/);
@@ -217,7 +215,6 @@ test("the prompt section keeps files within the limit and says what it left out 
   assert.match(section, /Not loaded: host:x\.md: not found on the host\.$/);
 });
 
-/** The extension's factory on a stand-in for Pi's API: its flags as `flags` says, its handlers by event. */
 function load(flags: Record<string, string> = {}) {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const registered: string[] = [];

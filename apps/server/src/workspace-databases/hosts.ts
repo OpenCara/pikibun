@@ -2,15 +2,10 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
 import { WorkspaceDatabaseError } from './types.js';
 
-/** Every address a host name resolves to (A and AAAA records), as the system resolver returns them. */
 export type HostLookup = (host: string) => Promise<string[]>;
 
 const lookupTimeoutMs = 10_000;
 
-// Addresses that are not on the public internet (IANA special-purpose registries): this network, private, shared,
-// loopback, link-local, documentation, benchmarking, multicast and reserved ranges, and the IPv6 transition prefixes
-// (IPv4-mapped, NAT64, 6to4, Teredo) that can carry any of them. One list per family: a BlockList also matches IPv4
-// addresses against IPv4-mapped IPv6 rules, so ::ffff:0:0/96 would otherwise cover every IPv4 address.
 const nonPublicIpv4 = new BlockList();
 for (const [network, prefix] of [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
@@ -23,7 +18,6 @@ for (const [network, prefix] of [
   ['2002::', 16], ['3fff::', 20], ['5f00::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
 ] as const) nonPublicIpv6.addSubnet(network, prefix, 'ipv6');
 
-/** True for a unicast address on the public internet: not loopback, private, link-local or otherwise special-purpose. */
 export function publicAddress(address: string): boolean {
   const family = isIP(address);
   if (family === 0 || address.includes('%')) return false;
@@ -35,9 +29,7 @@ export function publicAddress(address: string): boolean {
 }
 
 export interface DatabaseAddress {
-  /** The checked address the connection goes to, so a second DNS answer can't send it elsewhere. */
   address: string;
-  /** Whether that address is on the public internet. */
   public: boolean;
 }
 
@@ -45,10 +37,6 @@ async function systemLookup(host: string): Promise<string[]> {
   return (await dnsLookup(host, { all: true })).map(record => record.address);
 }
 
-/**
- * Resolves a database host once and pins the connection to its first address. Unless the operator allows private hosts,
- * every address must be public, so a name can't reach the server's own network through one of its records.
- */
 export async function resolveDatabaseHost(host: string, options: { privateHosts: boolean; lookup?: HostLookup | undefined }): Promise<DatabaseAddress> {
   let addresses: string[];
   if (isIP(host)) addresses = [host];

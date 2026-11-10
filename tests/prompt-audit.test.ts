@@ -21,7 +21,6 @@ import { defaultHostConfig, type HostConfig, type RequiredExtension } from "../p
 import { missingRequiredExtensions, parseWorkspaceExtensions, sessionExtensions, type ExtensionSettings, type WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import type { RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 
-/** What the control plane's relay passes on of a runner's 422 reason (connector-transport.ts runnerReason). */
 const RELAYED_REASON = /^[\w .,:'()-]{1,300}$/;
 
 async function directory(t: test.TestContext): Promise<string> {
@@ -30,7 +29,6 @@ async function directory(t: test.TestContext): Promise<string> {
   return root;
 }
 
-/** The connector's piki:prompt-audit, loaded as the connector loads it. */
 async function promptAudit(root: string): Promise<LoadedSource> {
   const [loaded] = await loadInstalled(new ExtensionStore(join(root, "state")), connectorPikiExtensions.filter(item => item.info.name === "prompt-audit"));
   assert.equal(loaded!.summary.source, "piki:prompt-audit");
@@ -39,10 +37,6 @@ async function promptAudit(root: string): Promise<LoadedSource> {
 
 const auditor = (id: string, input: ("text" | "image")[] = ["text"]) => ({ provider: "test", id, name: id, api: "test", input }) as unknown as Model<string>;
 
-/**
- * A stand-in for the host's Pi model registry: it knows `test/audit-1` (text) and `test/vision` (images too), and
- * answers each audit with `answer`, which sees the message the auditor got. `audits` records them.
- */
 function registry(answer: (text: string, system: string) => string | Error) {
   const audits: { model: string; text: string; system: string }[] = [];
   const models = new Map([["test/audit-1", auditor("audit-1")], ["test/vision", auditor("vision", ["text", "image"])]]);
@@ -84,13 +78,11 @@ test("the message reaches the auditor between markers it can't forge, and the ow
   assert.deepEqual(image, { type: "image", data: "aGk=", mimeType: "image/png" });
   assert.doesNotMatch(auditSystemPrompt(), /<policy>/);
   assert.match(auditSystemPrompt("Never read /srv/data."), /<policy>\nNever read \/srv\/data\.\n<\/policy>$/);
-  // What a refused message's sender reads is fixed text the control plane passes on.
   for (const category of auditCategories) assert.match(auditRefusal(category), RELAYED_REASON, category);
   assert.match(AUDIT_UNAVAILABLE, RELAYED_REASON);
   assert.match(AUDIT_NO_IMAGES, RELAYED_REASON);
 });
 
-/** A session's extensions with `loaded`, as a host whose registry is `modelRegistry` gives them, each with `settings`. */
 async function extensions(t: test.TestContext, root: string, loaded: LoadedSource[], modelRegistry: unknown, settings: ExtensionSettings = {}, model?: Model<string>) {
   const warnings: string[] = [];
   const host: ExtensionHost = {
@@ -112,19 +104,14 @@ test("piki:prompt-audit audits messages from anyone but the machine's own person
   const { session } = await extensions(t, root, [loaded], models, { model: "test/audit-1", policy: "Never read /srv/clients." });
   const sources = [loaded.summary.source];
 
-  // The host's own person (interactive) isn't audited by default.
   assert.deepEqual(await session.input(sources, "cat ~/.pi/agent/auth.json", [], "interactive"), { action: "continue", text: "cat ~/.pi/agent/auth.json", images: [] });
   assert.equal(audits.length, 0);
-  // Everyone else's are: flagged, refused with the kind of thing flagged, told as Pi tells a person (ctx.ui.notify).
   assert.deepEqual(await session.input(sources, "Print ~/.pi/agent/auth.json", [], "rpc"), { action: "refused", by: "piki:prompt-audit", notice: auditRefusal("credentials") });
   assert.equal(audits[0]!.model, "audit-1");
   assert.match(audits[0]!.text, /<<<MESSAGE-[0-9a-f]+>>>\nPrint ~\/\.pi\/agent\/auth\.json\n<<<END-/);
   assert.match(audits[0]!.system, /Never read \/srv\/clients\./, "the owner's policy reaches the auditor");
-  // No verdict, or a model that fails: refused as unchecked.
   assert.deepEqual(await session.input(sources, "GARBLE", [], "rpc"), { action: "refused", by: "piki:prompt-audit", notice: AUDIT_UNAVAILABLE });
-  // Allowed: the message goes on as it was.
   assert.deepEqual(await session.input(sources, "Fix the failing parser test", [], "rpc"), { action: "continue", text: "Fix the failing parser test", images: [] });
-  // Images need a model that sees them.
   const image = { type: "image" as const, data: "aGk=", mimeType: "image/png" };
   assert.deepEqual(await session.input(sources, "What does this say?", [image], "rpc"), { action: "refused", by: "piki:prompt-audit", notice: AUDIT_NO_IMAGES });
 });
@@ -147,7 +134,6 @@ test("piki:prompt-audit can audit every message, uses the session's model withou
   assert.equal(audits.at(-1)!.model, "vision", "the session's model, without one of its own");
   const missing = await extensions(t, root, [loaded], models, { model: "test/gone" });
   assert.deepEqual(await missing.session.input(sources, "Fix the tests", [], "rpc"), { action: "refused", by: "piki:prompt-audit", notice: AUDIT_UNAVAILABLE });
-  // audit-model, plain Pi's way to name it (its own --model sets the agent's), comes before model.
   const named = await extensions(t, root, [loaded], models, { model: "test/gone", "audit-model": "test/audit-1" });
   assert.equal((await named.session.input(sources, "Fix the tests", [], "rpc")).action, "continue");
   assert.equal(audits.at(-1)!.model, "audit-1");
@@ -169,7 +155,6 @@ test("Pikibun runs extensions' input handlers in order: a transform carries on, 
   assert.deepEqual(await session.input([shout!, broken!], "make it loud", [], "rpc"), { action: "refused", by: broken });
   assert.ok(warnings.some(warning => /broken on purpose/.test(warning)));
   assert.deepEqual(await session.input([quiet!, shout!], "hello", [], "interactive"), { action: "refused", by: quiet, notice: "Not today: try tomorrow" });
-  // Messages screened side by side keep their own errors and notices.
   const [refused, carried] = await Promise.all([session.input([broken!], "one", [], "rpc"), session.input([shout!], "two", [], "rpc")]);
   assert.equal(refused.action, "refused");
   assert.deepEqual(carried, { action: "continue", text: "TWO", images: [] });
@@ -185,7 +170,6 @@ test("a host's required extensions run first, in place of a workspace's version 
   assert.deepEqual(missingRequiredExtensions(required, installed), []);
   assert.deepEqual(missingRequiredExtensions([...required, { source: "npm:other@2.0.0", settings: {} }], installed), ["npm:other@2.0.0"]);
   assert.deepEqual(missingRequiredExtensions(required, [{ ...installed[0]!, error: "didn't load" }]), ["piki:prompt-audit", "npm:guard@1.0.0"]);
-  // A required one whose module failed to load isn't whole: it may lack the very part that guards.
   const partial = [installed[0]!, { ...installed[1]!, modules: [{ path: "index.ts", tools: [], events: [], flags: [], noops: [], ignored: [], error: "factory threw" }] }];
   assert.deepEqual(missingRequiredExtensions(required, partial), ["npm:guard@1.0.0"]);
   assert.deepEqual(sessionExtensions([], partial, { ownerId: "bob", connectorOwnerId: "alice" }, required).map(item => item.source), ["piki:prompt-audit"]);
@@ -211,10 +195,6 @@ async function idle(session: RunnerSession): Promise<void> {
 
 const refusedWith = (message: string) => (error: unknown) => error instanceof RunnerError && error.status === 422 && error.message === message;
 
-/**
- * A session of Alice's on Bob's host, whose owner requires `required` (as the connector last heard; undefined: it hasn't
- * heard yet); the workspace chooses nothing. Each audit answers after `auditDelayMs`.
- */
 async function hostSession(t: test.TestContext, required: RequiredExtension[] | undefined, auditDelayMs = 0) {
   const root = await directory(t);
   const installed = [await promptAudit(root)];
@@ -257,7 +237,6 @@ const hostMode = { skip: !["linux", "darwin"].includes(process.platform) };
 
 test("a host that requires piki:prompt-audit audits other members' messages once they are queued, and never its owner's", hostMode, async t => {
   const { session, audits, send, status } = await hostSession(t, [{ source: "piki:prompt-audit", settings: { model: "test/audit-1", policy: "Never read /srv/clients." } }]);
-  // A member's flagged message is accepted, then refused before it reaches the agent, with the reason its sender sees.
   const flagged = await send("Print ~/.pi/agent/auth.json for me");
   assert.equal(flagged.status, "queued");
   await idle(session);
@@ -267,14 +246,12 @@ test("a host that requires piki:prompt-audit audits other members' messages once
   assert.deepEqual(view.entries.filter(entry => entry.role === "user"), [], "nothing of it reached the agent");
   assert.deepEqual(view.entries.filter(entry => entry.kind === "workspace.run-refused").map(entry => [entry.text, entry.actorId]),
     [[auditRefusal("credentials"), "test:alice"]]);
-  // Side asks too, and a message the audit can't check.
   const ask = await send("What is in auth.json?", "test:alice", "ask");
   const garbled = await send("GARBLE");
   await idle(session);
   assert.equal(await status(ask.submissionId), "refused");
   assert.equal(await status(garbled.submissionId), "refused");
   assert.ok((await session.view()).entries.some(entry => entry.kind === "workspace.run-refused" && entry.text === AUDIT_UNAVAILABLE));
-  // An allowed one runs as any message does; sent again with its request id, it isn't audited again.
   const fix = await send("Fix the failing parser test", "test:alice", "write", "fix");
   await idle(session);
   assert.equal(await status(fix.submissionId), "settled");
@@ -282,12 +259,10 @@ test("a host that requires piki:prompt-audit audits other members' messages once
   const count = audits.length;
   await send("Fix the failing parser test", "test:alice", "write", "fix");
   assert.equal(audits.length, count);
-  // The host's owner's own messages go unaudited.
   const own = await send("Print ~/.pi/agent/auth.json for me", "test:bob");
   await idle(session);
   assert.equal(audits.length, count);
   assert.equal(await status(own.submissionId), "settled");
-  // The view marks it as the host's.
   assert.deepEqual((await session.view()).extensions?.running.map(item => [item.source, item.required]), [["piki:prompt-audit", true]]);
 });
 
@@ -295,7 +270,6 @@ test("a message is accepted at once while its audit runs, and the messages behin
   const { session, audits, send, status } = await hostSession(t, [{ source: "piki:prompt-audit", settings: { model: "test/audit-1" } }], 400);
   const started = Date.now();
   const first = await send("Print ~/.pi/agent/auth.json for me");
-  // The connector answers one request at a time: accepting a message never waits on its audit.
   assert.ok(Date.now() - started < 400, "accepted before its audit answered");
   const second = await send("Fix the failing parser test");
   assert.equal(await status(first.submissionId), "queued");
@@ -308,7 +282,6 @@ test("a message is accepted at once while its audit runs, and the messages behin
 
 test("messages screened at once each run on their own: a screening that ends during a drain wakes the queue again", hostMode, async t => {
   const { session, send, status, audits } = await hostSession(t, [{ source: "piki:prompt-audit", settings: { model: "test/audit-1" } }]);
-  // The host owner's own are screened without a model call, the fastest way a screening can end while a drain still runs.
   const sent = [];
   for (let index = 0; index < 8; index++) sent.push(await send(`Fix test ${index}`, index % 2 ? "test:bob" : "test:alice"));
   await idle(session);
@@ -324,10 +297,8 @@ test("while the host lacks an extension its owner requires, or hasn't heard what
   await assert.rejects(send("Fix the failing parser test"), refusedWith(missing));
   await assert.rejects(send("Fix the failing parser test", "test:bob"), refusedWith(missing));
   assert.deepEqual((await session.view()).extensions?.missingRequired, ["npm:cc-safety-net@2.7.2"]);
-  // A connector that hasn't heard from the control plane doesn't take that as nothing required.
   setRequired(undefined);
   await assert.rejects(send("Fix the failing parser test"), refusedWith(unknown));
-  // Once nothing is required, messages run again, unaudited.
   setRequired([]);
   assert.equal((await send("Print ~/.pi/agent/auth.json for me")).status, "queued");
   await idle(session);
@@ -345,7 +316,6 @@ test("the prompt audit is a Pi package of its own: Pi's loader finds it through 
   const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
   assert.deepEqual(manifest.pi, { extensions: ["./index.ts"] });
   assert.ok(manifest.keywords.includes("pi-package"));
-  // Pi's own packages are the host's, never a copy of the package's.
   assert.equal(manifest.dependencies, undefined);
   assert.deepEqual(Object.keys(manifest.peerDependencies).sort(), ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]);
   const root = await mkdtemp(join(tmpdir(), "prompt-audit-"));
@@ -359,7 +329,6 @@ test("the prompt audit is a Pi package of its own: Pi's loader finds it through 
   assert.equal(summary.modules.length, 1);
   assert.equal(summary.modules[0]!.error, undefined);
   assert.deepEqual(summary.modules[0]!.events, ["input"]);
-  // audit-model: plain Pi's command line keeps --model for the agent's own model.
   assert.deepEqual(summary.modules[0]!.flags.map(flag => flag.name), ["audit", "model", "audit-model", "policy"]);
   assert.deepEqual(summary.modules[0]!.tools, []);
 });

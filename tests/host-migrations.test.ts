@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { Env, WorkerEnv } from '../apps/server/src/types.js';
+import type { Env, AppEnv } from '../apps/server/src/types.js';
 import type { RestoreInput } from '../packages/shared/src/connector.js';
 import type { RunnerBinding } from '../packages/shared/src/types.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
@@ -64,7 +64,7 @@ async function fixture(t: TestContext, options: { targetCapabilities?: Record<st
     model: { id: 'old-model', workspaceId: 'workspace', name: 'Old model', provider: 'faux', modelId: 'faux-v1', ...route },
   };
   const snapshot = JSON.stringify({ format: 'pi-runner-backup-v1', binding, manifest: { version: 1 }, sqlite: 'c25hcHNob3Q=', files: [], createdAt: '2026-01-01' });
-  const app = new Hono<WorkerEnv>();
+  const app = new Hono<AppEnv>();
   app.use('/api/sessions/*', async (c, next) => {
     c.set('auth', { userId: c.req.header('x-test-user') ?? 'test:owner', tokenHash: 'test', csrfToken: 'test', client: 'browser' });
     await next();
@@ -76,7 +76,6 @@ async function fixture(t: TestContext, options: { targetCapabilities?: Record<st
     return app.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }, env);
   }
   const downloads: string[] = [];
-  /** The source host answers with its snapshot; the target host downloads it as a restore and confirms. */
   function hosts(target?: (input: RestoreInput) => Promise<Response>) {
     rpc = async (connectorId, { action, body }) => {
       if (connectorId === 'old-host' && action === 'backup') return new Response(snapshot, { headers: { 'content-type': 'application/json' } });
@@ -118,13 +117,11 @@ test('a session moves to another connected host and the source is archived', asy
   assert.equal(restore!.restore.migration, true);
   assert.equal(restore!.binding.model.connectorId, 'new-host');
   assert.equal(restore!.binding.agent.instructions, 'Instructions');
-  // The new host doesn't carry git_push, so the successor's agent doesn't offer it.
   assert.deepEqual(restore!.binding.agent.tools, ['read_file']);
   const source = f.sqlite.prepare("SELECT status, archived_status, policy_version FROM sessions WHERE id = 'source'").get()!;
   assert.deepEqual({ ...source }, { status: 'archived', archived_status: 'ready', policy_version: 4 });
   const job = f.sqlite.prepare('SELECT status, snapshot, download_token_hash FROM host_migrations').get()!;
   assert.deepEqual({ ...job }, { status: 'completed', snapshot: null, download_token_hash: null });
-  // Replays are inert and need neither host.
   f.env.CONNECTOR_HUB!.rpc = async () => { throw new Error('no host should be contacted'); };
   const replay = await f.request(migratePath, { requestId: 'move', modelId: 'new-model' });
   assert.equal(replay.status, 200);
@@ -145,11 +142,9 @@ test('a move needs another host that accepts moved sessions', async t => {
 });
 
 test('a clone session moves only to a host that restores its clones', async t => {
-  // An unverified sandbox (as real connectors advertise it) still runs clone sessions.
   const capabilities = { platform: 'linux', sandbox: false, productionShell: false, hostMigration: true, plainGit: true };
   const clone = (s: { sqlite: { exec(sql: string): void } }) => s.sqlite.exec("PRAGMA defer_foreign_keys = ON; BEGIN; DROP TRIGGER sessions_repository_mode_immutable;"
     + " UPDATE sessions SET repository_mode = 'clone' WHERE id = 'source'; COMMIT;");
-  // A connector from before clone backups would restore the session's files and drop its clones.
   const older = await fixture(t, { targetCapabilities: capabilities });
   clone(older);
   older.hosts();
@@ -167,13 +162,11 @@ test('a clone session moves only to a host that restores its clones', async t =>
 test('a clone session moves to another member\'s host without resource limits only with a host command grant there', async t => {
   const f = await fixture(t, { targetOwner: 'test:host', targetCapabilities: { platform: 'linux', sandbox: false, productionShell: false, hostMigration: true,
     plainGit: true, cloneBackups: true, hostCommands: true, hostGrants: true, unboundedShellGrants: true } });
-  // The session clones, and the host it moves to is test:host's, shared with the workspace.
   f.sqlite.exec("PRAGMA defer_foreign_keys = ON; BEGIN; DROP TRIGGER sessions_repository_mode_immutable;"
     + " UPDATE sessions SET repository_mode = 'clone' WHERE id = 'source'; COMMIT;"
     + " INSERT INTO connector_shares VALUES ('new-host','workspace','2026-01-01');");
   f.hosts();
   const move = (requestId: string) => f.request(migratePath, { requestId, modelId: 'new-model', trustedConnectorId: 'new-host' });
-  // Its owner's commands would be refused there: the host has no resource limits, and they hold no grant on it.
   const refused = await move('ungranted');
   assert.equal(refused.status, 409);
   assert.equal((await refused.json() as { code: string }).code, 'clone_host_required');
@@ -194,9 +187,7 @@ test('a move that fails on the target locks the source until it is retried or ca
   const moving = (error: unknown) => error instanceof HTTPException && error.status === 409;
   await assert.rejects(requireNoMigration(f.env, 'source'), moving);
   await assert.rejects(requireNoMigration(f.env, String(job.target_session_id)), moving);
-  // A second move of the same session is refused while one is in flight.
   assert.equal((await f.request(migratePath, { requestId: 'again', modelId: 'new-model' })).status, 409);
-  // The schema enforces that too, so concurrent READ COMMITTED transactions can't both commit a move.
   f.sqlite.exec(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,policy_version,status,created_at,connector_id,connector_owner_id)
     VALUES ('racer','workspace','test:owner','version','Racer',1,'provisioning','2026-01-01','new-host','test:owner')`);
   assert.throws(() => f.sqlite.prepare(`INSERT INTO host_migrations (id,request_id,owner_id,workspace_id,source_session_id,source_connector_id,
@@ -204,7 +195,6 @@ test('a move that fails on the target locks the source until it is retried or ca
     VALUES ('racer','racer','test:owner','workspace','source','old-host','racer','new-host','new-model',?,1,'{}','{}','2026-01-01')`)
     .run('a'.repeat(43)), /UNIQUE/);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, 3);
-  // The retry reuses the held snapshot: the source host isn't asked again.
   let backups = 0;
   f.hosts();
   const inner = f.env.CONNECTOR_HUB!.rpc.bind(f.env.CONNECTOR_HUB);
@@ -224,7 +214,6 @@ test('a move that fails on the target locks the source until it is retried or ca
   assert.equal(g.sqlite.prepare('SELECT status FROM sessions WHERE id = ?').get(String(pending.target_session_id))!.status, 'archived');
   assert.equal(g.sqlite.prepare('SELECT snapshot FROM host_migrations').get()!.snapshot, null);
   assert.equal((await g.request(migratePath, { requestId: 'move', modelId: 'new-model' })).status, 409);
-  // Back to the first move: its retry completes from the held snapshot.
   const retried = await f.request(migratePath, { requestId: 'move', modelId: 'new-model' });
   assert.equal(retried.status, 200);
   assert.equal(backups, 0);
@@ -236,7 +225,6 @@ test('only the target host can download a move snapshot, with the current grant'
   let grant: RestoreInput | undefined;
   f.hosts(async input => { grant = input; return Response.json({ error: 'busy' }, { status: 503 }); });
   assert.equal((await f.request(migratePath, { requestId: 'move', modelId: 'new-model' })).status, 503);
-  // The failed attempt released its lease, but its token is still the latest one issued.
   const descriptor = { targetSessionId: grant!.binding.session.id, sourceSessionId: 'source', backupId: grant!.restore.backupId,
     downloadToken: grant!.restore.downloadToken };
   const path = `/api/connectors/self/restores/${grant!.restore.id}/download`;

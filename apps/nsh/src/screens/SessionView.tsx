@@ -2,7 +2,7 @@ import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, pl
 import { Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
-  initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, pairToolResults, preparingRepositories,
+  initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, offersMemberAutoApprove, pairToolResults, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ApprovalRecord, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
 } from "../shared";
@@ -31,20 +31,8 @@ import type { PageRoute } from "../lib/page";
 import { SessionPanel } from "../session-panel";
 import { createSessionActions } from "../lib/session-actions";
 
-/**
- * On the desktops, a press on the transcript or the approvals docked above the chat box takes the keyboard focus out of
- * the chat box. The desktops leave the focus in a field when the mouse goes down elsewhere, as their own fields do, so
- * Cmd/Ctrl+C went to the chat box, which had nothing selected, rather than to the text just selected in a message: a
- * browser moves the focus off a field when its page's text is clicked, and so does this. The selection stays (the
- * window's root takes the focus, and its Copy copies it). Phones keep their keyboard up as they scroll.
- */
 const releaseChatBox = platform.desktop ? () => Keyboard.dismiss() : undefined;
 
-/**
- * One session: live transcript, pending approvals and the chat box. As a page of the stack (`page`) it carries its
- * header; embedded beside the list (the wide layout) it draws its own title bar. Mounted per session id, so drafts,
- * request IDs and picks never leak between sessions.
- */
 export function SessionView(props: { id: string; page: boolean; openSession: (id: string) => void; onBack?: () => void; go: (route: PageRoute) => void }) {
   const { user } = untracked(session);
   const data = useAppData();
@@ -52,7 +40,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   const approvalsOpen = signal(false);
   const panelOpen = signal(false);
   const permissions = () => live.session()?.permissions ?? [];
-  // Archived sessions, and sessions that pinned their repositories when they started, are read-only on the server.
   const archived = () => live.session()?.status === "archived";
   const readOnly = () => archived() || live.session()?.frozen === true;
   const canApprove = () => permissions().includes("approve") && !readOnly();
@@ -62,7 +49,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     return current?.connectorId ? `/api/workspaces/${segment(current.workspaceId)}/connectors` : null;
   }, 10_000);
   const host = () => hosts.data()?.connectors.find(item => item.id === live.session()?.connectorId);
-  // A host that reconnects would otherwise wait out the live-update backoff (up to a minute).
   let previousOnline: boolean | undefined;
   effect(() => {
     const online = host()?.online;
@@ -72,7 +58,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   const action = createAction();
   const approvalAction = createAction();
   const known = () => live.session() ?? data.sessions().find(item => item.id === props.id);
-  // Everyone a session names (owner, host owner, writers, approvers) is or was a member of its workspace.
   const people = createWorkspacePeople(() => known()?.workspaceId ?? null);
   const title = () => known()?.title ?? "Session";
   const workspace = () => {
@@ -83,15 +68,12 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     const current = live.session();
     return Boolean(current && managesSession(user.id, current.ownerId, workspace()?.role));
   };
-  // Renaming, visibility, backups and archiving: the header's menu and the panel share them, as on the web. Backups need
-  // an idle session whose live state is confirmed.
   const backupBlocked = () => {
     const current = live.view();
     return readOnly() || !current || Boolean(live.error()) || current.busy || (current.queue ?? []).some(item => activeStatuses.includes(item.status));
   };
   const actions = createSessionActions({ session: live.session, manages, backupBlocked,
     onChange: () => { live.refresh(); data.refreshSessions(); } });
-  // The list refreshes on its own, so a pull request opened while the session is on screen shows up without a reload.
   const pullRequest = () => data.sessions().find(item => item.id === props.id)?.pullRequest ?? live.session()?.pullRequest;
   const renaming = signal(false);
   const menu = (): (MenuAction | "separator")[] => {
@@ -121,19 +103,16 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   };
   const approvals = () => live.view()?.approvals ?? [];
   const pending = computed(() => approvals().filter(approval => approval.status === "pending"));
-  // The workspace has the browser on but the host has no Chromium for it (yet), as on the web.
   const browserWarning = () => (readOnly() ? undefined
     : live.view()?.extensions?.unavailable?.find(item => item.source === "piki:browser" && ["missing", "failed", "downloading"].includes(item.reason)));
   const dismissedBrowser = signal(false);
 
-  // Session lists show what this live view shows, not what they last fetched.
   effect(() => {
     const activity = live.view()?.activity;
     data.setLiveActivity(activity ? { sessionId: props.id, activity } : null);
   });
   cleanup(() => { data.setLiveActivity(null); data.refreshSessions(); });
 
-  /** Whether the viewer decides `approval` (see the Expo app's SessionView for the rules). */
   function decides(approval: ApprovalRecord): boolean {
     const current = live.session() ?? {};
     if (readOnly()) return false;
@@ -145,7 +124,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   async function decide(approval: ApprovalRecord, decision: "approve" | "deny", scope?: "call" | "session", always = false) {
     if (!decides(approval) || approvalAction.busy() || !approval.reviewHash || approval.status !== "pending") return;
     const name = (id: string) => username(people().person(id));
-    // The card is the prompt: it shows the exact operation, who it runs as, its limits and any unsandboxed-host warning.
     const notice = approval.operation.kind === "permission"
       ? decision === "deny" ? "Not allowed" : scope === "session" ? "Allowed for the rest of the session" : "Allowed for this call"
       : always ? `Approved. ${name(approval.requestedBy)}'s requests here now run without asking; stop it under Approvals.`
@@ -164,7 +142,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       data.refreshSessions();
     }, packed ? "Session unarchived, its files unpacked" : "Session unarchived");
   }
-  /** What the Archived notice says: whether, and by whom, the session can be unarchived. */
   const archivedText = () => {
     const current = live.session();
     if (current?.packed) {
@@ -176,7 +153,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
 
   const copyId = () => void action.run(() => Clipboard.writeText(props.id), "Session ID copied");
 
-  // A failed start explains itself in the conversation area, where the chat box restarts it.
   const startFailed = () => !live.view() && Boolean(live.session() && (live.session()!.status === "error" || live.session()!.status === "provisioning"));
   const badge = (): { tone?: "danger" | "running" | "warning" | "success"; text: string; dot: boolean } => {
     if (archived()) return { text: "Archived", dot: false };
@@ -204,7 +180,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       <IconButton testID="session-details" icon="panel-right" label="Session details" onPress={() => panelOpen.set(true)} active={panelOpen()} />
     </View>
   );
-  /** What the header says under the title: where the session lives and runs, and who sees it. */
   const subtitle = () => {
     const current = live.session();
     const parts = [workspace()?.name, host() ? `${host()!.name}${host()!.online ? "" : " (offline)"}` : undefined];
@@ -252,7 +227,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
             }>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               <Button small variant="primary" label="Allow once" disabled={disabled()} onPress={() => void decide(approval(), "approve", "call")} />
-              {/* Each host command asks again: it runs outside the sandbox. */}
               <If when={!(approval().operation.kind === "permission" && (approval().operation as { tool?: string }).tool === "host_bash")}>
                 <Button small variant="outline" label="Allow for this session" disabled={disabled()} onPress={() => void decide(approval(), "approve", "session")} />
               </If>
@@ -289,7 +263,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     </View>
   );
 
-  /** What waits for a decision, docked above the chat box so it can't scroll out of sight. */
   const approvalDock = (
     <If when={pending().length > 0 || approvalAction.error() || approvalAction.notice()}>
       <Scroll testID="approval-dock" onTouchStart={releaseChatBox} style={{ flexShrink: 1, maxHeight: "55%" }} contentStyle={{ gap: 10, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
@@ -365,7 +338,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   );
 }
 
-/** Every approval of the session, pending first, with what each decided one did. */
 function ApprovalsSheet(props: {
   open: boolean; approvals: ApprovalRecord[]; olderApprovals?: number; onClose: () => void; onOpenSession: (id: string) => void;
   session: SessionRecord | null; onChanged: () => void;
@@ -428,15 +400,14 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const current = () => props.live.session()!;
   const view = () => props.live.view()!;
   const owner = () => current().ownerId === user.id;
-  // Initialised once per session; view refreshes never reset the user's picks.
+  const memberAutoApprove = () => offersMemberAutoApprove(current(), props.host(), user.id,
+    data.workspaces().find(item => item.id === current().workspaceId)?.role, canWrite(), unsandboxed());
   const selection = signal<ChatSelection>(untracked(() => initialSelection(view(), owner())));
   const mode = signal<"write" | "ask">("write");
-  // The unsent text is remembered until it is sent, so switching to another session and back keeps it.
   const content = createDraft(props.id);
   const conversationId = signal("");
   const queueOpen = signal(false);
   let request: { key: string; id: string; images?: ChatImage[] } | null = null;
-  // Set while the owner decides on Auto-approve, so a second tap can't send the message twice.
   let confirming = false;
   const submission = createAction();
   const stopping = createAction();
@@ -448,10 +419,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const permissions = () => current().permissions ?? [];
   const canWrite = () => permissions().includes("write");
   const canAsk = () => permissions().includes("ask");
-  // Collaborators see the transcript's images; everyone else the lines that stand for them.
   const imagesOf = () => (seesEntryImages(current()) ? current().id : undefined);
-  // Images go with the message where its host takes them; files are uploaded into the session's worktree first, within
-  // its workspace's limit. A new session's first message that couldn't be sent hands its attachments over to here.
   const fileOptions = createFileOptions(() => current().workspaceId, props.host, canWrite);
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(props.host()), fileOptions, sessionId: props.id });
   const withdrawing = createAction();
@@ -463,21 +431,15 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const queue = () => view().queue ?? [];
   const activeQueue = computed(() => queue().filter(item => activeStatuses.includes(item.status)));
   const recentSubmissions = () => queue().filter(item => !activeStatuses.includes(item.status)).slice(-5).reverse();
-  // Stopping takes the running message and everything queued; hosts that predate it don't offer it.
   const canStop = () => Boolean(view().stoppable) && current().status !== "archived" && canWrite() && activeQueue().length > 0;
   const stopPending = () => queue().some(item => item.status === "stopping");
-  // Messages of yours still waiting in the queue can be taken back to edit, on a host that offers it: ↑ in an empty chat
-  // box takes the latest, and the queue's details list each.
   const editable = computed(() => (view().withdrawable && !readOnly()
     ? activeQueue().filter(item => item.actorId === user.id && item.status === "queued" && (item.mode === "ask" ? canAsk() : canWrite())) : []));
-  // A message comes back with its images, and the host keeps none of them: it is taken back only into a chat box
-  // without images, so none can be dropped for want of room.
   const editBlocked = () => attachments.images().length > 0;
   const sideConversations = computed(() => view().conversations.filter(item => item.mode === "ask" && (!item.actorId || item.actorId === user.id)));
   const shownConversation = (conversation: { id: string; mode?: string; actorId?: string } | undefined) => (actualMode() === "ask"
     ? conversation?.mode === "ask" && (!conversation.actorId || conversation.actorId === user.id) && (!conversationId() || conversation.id === conversationId())
     : conversation?.mode !== "ask");
-  // Each tool call shows with the result that answered it, which isn't an entry of its own then.
   const transcript = computed(() => {
     const conversations = view().conversations;
     return pairToolResults(view().entries.filter(entry => {
@@ -486,7 +448,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     }));
   });
   const entries = () => transcript().entries;
-  // In a workspace that loads transcripts latest first: the shown conversations with earlier entries still to read.
   const olderConversations = () => view().conversations.filter(conversation => (conversation.olderEntries ?? 0) > 0 && shownConversation(conversation));
   const olderCount = () => olderConversations().reduce((total, conversation) => total + (conversation.olderEntries ?? 0), 0);
   const loadingOlder = signal(false);
@@ -495,7 +456,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     loadingOlder.set(true);
     void Promise.all(olderConversations().map(conversation => props.live.loadOlder(conversation.id))).finally(() => loadingOlder.set(false));
   }
-  // Switching conversations starts at their newest entry; the list keeps to the end as entries arrive.
   effect(() => {
     actualMode();
     conversationId();
@@ -509,9 +469,8 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     if (!permitted() || (!text.trim() && !pasted.length && !attached.length) || submission.busy() || confirming) return;
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
-    const options = chatOptionsBody(host, selection(), kind);
+    const options = chatOptionsBody(host, selection(), kind, owner());
     const unavailable = accessUnavailable(host, selection(), kind) ?? modelUnavailable(host, selection());
-    // The owner's chat box can start on Auto-approve without asking, and it merges too: the first message that would asks.
     if (!unavailable && host && mustConfirmAutoApprove(options, data.autoApproveConfirmed())) {
       confirming = true;
       const confirmed = await askAutoApprove(host, unsandboxed()).finally(() => { confirming = false; });
@@ -520,16 +479,12 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     receipt.set(null);
     withdrawNotice.set("");
     const sent = text;
-    // Changing the options or the attachments is a different request, so it needs a new idempotency key.
     const key = `${kind}:${JSON.stringify(options ?? null)}:${[...pasted, ...attached].map(item => item.id).join(",")}:${sent}`;
-    // Retry the same failed submission with the same idempotency key, not a duplicate turn.
     if (request?.key !== key) request = { key, id: randomId() };
     const pending = request;
     void submission.run(async () => {
       if (unavailable) throw new Error(unavailable);
-      // Encoded once per request, so a retry sends the same bytes under the same key.
       const images = pending.images ??= await encodeImages(pasted);
-      // Files go into the worktree first, each once even when sending is tried again, and the message says where.
       const note = await attachments.upload(props.id, attached);
       const result = await session().api<SubmitResult>(`/api/sessions/${segment(props.id)}/${kind}`, { method: "POST",
         body: { content: withFilesNote(sent, note), requestId: pending.id, ...(options ? { options } : {}), ...(images.length ? { images } : {}) } });
@@ -544,16 +499,11 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     });
   }
 
-  /**
-   * Takes a queued message of yours back into the chat box, with its images and mode, to edit and send again: it leaves
-   * the queue, and the edited message queues behind what is there now. Text typed meanwhile stays, above it.
-   */
   function edit(submissionId: string) {
     if (withdrawing.busy() || submission.busy() || editBlocked()) return;
     withdrawNotice.set("");
     void withdrawing.run(async () => {
       const result = await session().api<WithdrawResult>(`/api/sessions/${segment(props.id)}/withdraw`, { method: "POST", body: { submissionId } });
-      // Through the session's draft and images, not this box's state: a box that closed meanwhile still gets it.
       restoreDraft(props.id, result.content);
       restoreImages(props.id, imageBlobs(result.images ?? []));
       if (result.imagesLost) withdrawNotice.set("Its images were no longer on the host: attach them again before sending.");
@@ -566,8 +516,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     if (latest) edit(latest.submissionId);
   };
 
-  // Shown while the reader has scrolled up from the latest entry: a button back down to it. Near the top of a transcript
-  // that has earlier entries, the next page is read before the reader gets there (onLoadMoreAtStart).
   const scrolledUp = signal(false);
   function jumpToLatest() {
     scrolledUp.set(false);
@@ -584,17 +532,10 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
 
   const working = () => view().busy || activeQueue().length > 0;
 
-  /** Copies a message's text, or a reply's Markdown without its tool calls (the copy icon beside it). */
   async function copyMessage(entry: EntryView) {
-    // Its own action, so copying neither waits for nor holds up going back and forking. The copy icon turns to a check
-    // and the notice says so; a failure shows below the transcript, and the icon stays a copy icon.
     if (!await copying.run(() => Clipboard.writeText(copyText(entry)), "Message copied")) throw new Error("Not copied");
   }
 
-  /**
-   * A message's actions beside its copy icon, where the viewer may take them: go back to it (anyone who drives the work);
-   * fork a new session of their own from it (its owner, and on a host that allows it, anyone who drives the work).
-   */
   const messageActions: MessageActions = entry => {
     const cut = rewindable(view()) && actualMode() === "write" && !readOnly() ? messageCut(entry) : undefined;
     if (!cut) return {};
@@ -621,7 +562,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   }
 
   async function fork(entry: EntryView, entryId: string, before: boolean) {
-    // Someone else's host can access the new session, as it can this one.
     const host = props.host();
     const hostOwner = host && host.ownerId !== user.id ? ` The host is ${host.ownerName}'s: it can access the new session, as it does this one.` : "";
     const confirmed = await confirm({
@@ -637,13 +577,11 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     });
   }
 
-  // The transcript hides secrets from everyone, but the agent and its host receive the message as typed.
   const draftHasSecret = () => Boolean(content().trim()) && redactSecrets(content()) !== content();
   const queueLabel = () => {
     const queued = activeQueue().length > 0 ? ` · ${activeQueue().length} queued` : "";
     return preparingRepositories(view()) ? `Preparing repositories…${queued}`
       : stopPending() ? `Stopping…${queued}`
-      // A call waiting on a card holds its message until someone decides.
       : view().busy ? `${view().activity === "waiting" ? "Waiting for a decision" : "Working"}…${queued}`
       : activeQueue().length ? `${activeQueue().length} queued` : "Idle";
   };
@@ -654,7 +592,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     : !permitted() ? (canAsk() ? "Read-only · switch to Side ask to ask questions" : "Read-only · submitting needs write permission")
     : actualMode() === "ask" ? "Read-only · anyone who can view this session can see side asks"
     : `Runs as ${view().owner.displayName}${view().owner.id === user.id ? " (you)" : ""}`;
-  // Phones keep the chat box above the software keyboard and the home indicator.
   const bottomInset = () => (platform.desktop ? 12 : Math.max(keyboardFrame().height, safeArea().bottom, 12));
 
   const statusShown = () => working() || activeQueue().length > 0 || queueOpen();
@@ -668,7 +605,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
         accessibilityLabel={actualMode() === "ask" ? "Side ask history" : "Shared session history"}
         scrollEventThrottle={100}
         onScroll={event => {
-          // A little further up than following stops, so the button doesn't flicker in and out at the bottom.
           const up = event.contentSize.height - event.offset.y - event.size.height > 240;
           if (up !== untracked(scrolledUp)) scrolledUp.set(up);
         }}
@@ -770,7 +706,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                     options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
                 </If>
                 <If when={permitted()}>
-                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} owner={owner()} showAccess={actualMode() === "write"}
+                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} owner={owner()} memberAutoApprove={memberAutoApprove()} showAccess={actualMode() === "write"}
                     unsandboxed={unsandboxed()} data={data} />
                 </If>
               </If>
@@ -785,10 +721,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   );
 }
 
-/**
- * Shown when the transcript cannot load. A session whose start failed is restarted by its owner's next message:
- * restart re-provisions on the pinned host, then the message is submitted.
- */
 function UnavailableConversation(props: { id: string; session: SessionRecord; error: string; recovered: () => void }) {
   const { user } = untracked(session);
   const content = createDraft(props.id);
@@ -799,7 +731,6 @@ function UnavailableConversation(props: { id: string; session: SessionRecord; er
   const canWrite = () => Boolean(props.session.permissions?.includes("write"));
   function send() {
     const sent = content();
-    // Same text retried after a failure keeps its idempotency key.
     if (request?.content !== sent) request = { content: sent, id: randomId() };
     const requestId = request.id;
     void action.run(async () => {
@@ -808,7 +739,6 @@ function UnavailableConversation(props: { id: string; session: SessionRecord; er
       try {
         await api<SubmitResult>(`/api/sessions/${segment(props.id)}/submit`, { method: "POST", body: { content: sent, requestId } });
       } catch (reason) {
-        // The session is running again; hand the unsent text to the live conversation.
         saveDraft(props.id, sent);
         props.recovered();
         throw reason;

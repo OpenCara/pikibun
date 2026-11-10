@@ -5,14 +5,10 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { acquireRunnerLease, RunnerLeaseBusyError } from '../../../runner/src/lease.js';
 
-// A local server's private state: the secrets it was set up with (generated once, never shown), the GitHub OAuth app its
-// owner registered for it, and the port it listens on. The database, backups and this machine's host live beside it.
-
 export const defaultLocalStateDir = (): string => join(homedir(), '.local', 'share', 'pikibun', 'server');
 export const DEFAULT_LOCAL_PORT = 7878;
 const STATE_FILE = 'server.json';
 const SECRET = /^[A-Za-z0-9_-]{43}$/;
-/** GitHub OAuth app client IDs (`Ov23li…`, older 20 hex digits) and secrets (40 hex digits). */
 const CLIENT_ID = /^[A-Za-z0-9._-]{1,100}$/;
 const CLIENT_SECRET = /^[A-Za-z0-9._-]{1,200}$/;
 
@@ -20,45 +16,25 @@ export class LocalStateError extends Error {}
 
 export interface GitHubOAuthApp { clientId: string; clientSecret: string }
 
-/**
- * Pikibun shared with others from this computer (`pikibun serve --share`, or the desktop app's "Share with others"): the
- * same server and data as for its owner alone, but a full multi-user server at a public HTTPS origin, which a
- * TLS-terminating proxy or tunnel (Caddy, Tailscale Serve, Cloudflare Tunnel) forwards to the port it listens on.
- */
 export interface SharedConfig {
-  /** The public origin people open, such as https://pikibun.example.com; it must be HTTPS. */
   origin: string;
-  /** Where it listens: this computer only (a proxy or tunnel running here), or every interface (a proxy elsewhere). */
   listen: 'loopback' | 'all';
-  /** Honor the proxy's X-Forwarded-Proto/-Host. */
   trustProxy: boolean;
-  /** Who may create an account (the server's SIGNUP). */
   signup: 'open' | 'invite' | 'off';
-  /** Username and password sign-in (the server's PASSWORD_AUTH). */
   passwordAuth: boolean;
-  /** The server's administrators (ADMIN_USER_IDS): github:12345 or password:alice. The first with an account owns this computer's host. */
   admins: string[];
-  /** A GitHub OAuth app whose callback is on `origin`; the loopback one (`github`) can't serve other people. */
   github?: GitHubOAuthApp;
 }
 
 export interface LocalState {
   version: 1;
   sessionSecret: string;
-  /** Encrypts the GitHub and Git tokens stored in the database: losing it loses them, never the reverse. */
   vaultKey: string;
-  /** In the owner's sign-in link until someone claims the server (auth.ts localClaim). */
   claimSecret: string;
   port: number;
   github?: GitHubOAuthApp;
-  /** Saved once the owner has shared it; kept while it runs for the owner alone, so sharing again needs nothing new. */
   shared?: SharedConfig;
-  /**
-   * Its owner (github:<id>), pinned once its data has served others: from then its first GitHub user may be a teammate,
-   * so running for its owner alone admits this account only (the server's LOCAL_OWNER_ID).
-   */
   owner?: string;
-  /** Set by its first shared start, before it served anyone: from then its first GitHub user may be a teammate. */
   sharedOnce?: true;
 }
 
@@ -78,7 +54,6 @@ const OWNER_ID = /^github:[1-9][0-9]{0,19}$/;
 const ADMIN_ID = /^(?:github:[1-9][0-9]{0,19}|password:[a-z0-9][a-z0-9_-]{2,38})$/;
 const SIGNUPS: readonly SharedConfig['signup'][] = ['open', 'invite', 'off'];
 
-/** The public origin of a shared server, canonical, or why it can't be one. */
 export function sharedOrigin(input: string): { ok: true; origin: string } | { ok: false; error: string } {
   let url: URL;
   try { url = new URL(input.trim()); } catch { return { ok: false, error: 'Enter the public address people open, such as https://pikibun.example.com.' }; }
@@ -87,7 +62,6 @@ export function sharedOrigin(input: string): { ok: true; origin: string } | { ok
   return { ok: true, origin: url.origin };
 }
 
-/** A shared server's settings, checked field by field; the message says which one is wrong. */
 export function sharedConfigError(value: unknown): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return 'The sharing settings are missing.';
   const config = value as Record<string, unknown>;
@@ -127,7 +101,6 @@ function parseState(value: unknown): LocalState {
     ...(state.sharedOnce ? { sharedOnce: true as const } : {}) };
 }
 
-/** The state directory, created owner-only; refused when it is a symlink, someone else's, or open to others. */
 export async function privateStateDirectory(directory: string): Promise<string> {
   const path = resolve(directory);
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -164,15 +137,9 @@ async function writeState(directory: string, state: LocalState): Promise<void> {
     await file.writeFile(`${JSON.stringify(state, null, 2)}\n`);
     await file.sync();
   } finally { await file.close(); }
-  // Atomic: a crash leaves the old state or the new one, so the vault key is never lost half-written.
   try { await rename(temporary, join(directory, STATE_FILE)); } catch (error) { await unlink(temporary).catch(() => {}); throw error; }
 }
 
-/**
- * Holds the state directory's kernel lease (flock on Linux, lockf on macOS, as the connector's runner lease): a
- * `pikibun serve` and a desktop app sharing the directory never both create or change the state, nor both run its
- * server. The kernel drops the lease when its holder exits, however it exits, so a crash leaves nothing stale behind.
- */
 async function lease(directory: string): Promise<() => Promise<void>> {
   try { return await acquireRunnerLease(directory, () => {}); }
   catch (error) {
@@ -181,11 +148,9 @@ async function lease(directory: string): Promise<() => Promise<void>> {
   }
 }
 
-/** What a start may change in the state; the secrets never change. */
 export interface LocalStateChanges {
   github?: GitHubOAuthApp;
   port?: number;
-  /** The sharing settings to save; without their `github`, the saved shared GitHub OAuth app (if any) is kept. */
   shared?: SharedConfig;
 }
 
@@ -206,16 +171,10 @@ function changed(state: LocalState | undefined, changes: LocalStateChanges): Loc
   return { ...base, ...(changes.github ? { github: { ...changes.github } } : {}), ...(changes.port ? { port: changes.port } : {}), ...(shared ? { shared } : {}) };
 }
 
-/** The saved state, read without the lease and without creating it: what a running server or the next start uses. */
 export async function peekLocalState(directory: string): Promise<LocalState | undefined> {
   return readState(await privateStateDirectory(directory));
 }
 
-/**
- * The state in `directory`, created with fresh secrets the first time, with `changes` (a GitHub OAuth app, a port)
- * saved before it is returned; the secrets never change once written. It holds the directory's lease until `release`:
- * a local server keeps it for as long as it runs, so whoever holds it is the only one creating or changing the state.
- */
 export async function openLocalState(directory: string, changes: LocalStateChanges = {}): Promise<{ state: LocalState; release(): Promise<void> }> {
   const path = await privateStateDirectory(directory);
   const release = await lease(path);
@@ -230,10 +189,6 @@ export async function openLocalState(directory: string, changes: LocalStateChang
   }
 }
 
-/**
- * Records who owns the state (its pinned owner) and that it has been shared, while the caller holds the lease
- * (openLocalState), so nothing else writes the state meanwhile. Returns the state as saved.
- */
 export async function recordLocalOwnership(directory: string, state: LocalState, changes: { owner?: string; sharedOnce?: true }): Promise<LocalState> {
   if (changes.owner !== undefined && !OWNER_ID.test(changes.owner)) throw new LocalStateError('The owner must be a GitHub user ID such as github:12345.');
   const next: LocalState = { ...state, ...(changes.owner ? { owner: changes.owner } : {}), ...(changes.sharedOnce ? { sharedOnce: true as const } : {}) };
@@ -241,7 +196,6 @@ export async function recordLocalOwnership(directory: string, state: LocalState,
   return next;
 }
 
-/** openLocalState, released at once: for changes made while no server runs. */
 export async function loadLocalState(directory: string, changes: LocalStateChanges = {}): Promise<LocalState> {
   const { state, release } = await openLocalState(directory, changes);
   await release();

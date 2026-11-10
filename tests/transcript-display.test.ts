@@ -17,24 +17,19 @@ const range = (from: number, to: number, conversationId = "0") =>
 test("brief tool output keeps a tool result's first line and says how long the whole one is", () => {
   const result = entry("0:1", "0", { role: "toolResult", text: "\n  first line  \nsecond\nthird" });
   assert.deepEqual(briefEntry(result), { ...result, text: "  first line", trimmed: { lines: 4, chars: result.text.length } });
-  // A result that is one short line already is the same entry, so feeds and patches see nothing new.
   const short = entry("0:2", "0", { role: "toolResult", text: "ok" });
   assert.equal(briefEntry(short), short);
   const empty = entry("0:3", "0", { role: "toolResult", text: "" });
   assert.equal(briefEntry(empty), empty);
-  // A long line is cut at whole code points, with an ellipsis.
   const long = briefEntry(entry("0:4", "0", { role: "toolResult", text: "😀".repeat(briefChars + 5) }));
   assert.equal(long.text, `${"😀".repeat(briefChars)}…`);
   assert.deepEqual(long.trimmed, { lines: 1, chars: briefChars + 5 }, "Characters as people count them, not UTF-16 units");
-  // Prose, user messages and system entries are never shortened.
   for (const role of ["user", "system"]) {
     const other = entry("0:5", "0", { role, text: "a\n".repeat(500) });
     assert.equal(briefEntry(other), other);
   }
-  // A tool result's images go with the lines that stood for them; a message's stay.
   const screenshot = entry("0:6", "0", { role: "toolResult", text: "{\"path\":\"shot.png\"}\n[image image/png]", images: [{ mimeType: "image/png" }] });
   assert.deepEqual(briefEntry(screenshot), { id: "0:6", kind: "message", role: "toolResult", conversationId: "0", text: "path: shot.png · 1 image", trimmed: { lines: 2, chars: screenshot.text.length } });
-  // A screenshot alone: its line is its first, and it shows that line, not the image.
   const alone = entry("0:8", "0", { role: "toolResult", text: "[image image/png]", images: [{ mimeType: "image/png" }] });
   assert.deepEqual(briefEntry(alone), { id: "0:8", kind: "message", role: "toolResult", conversationId: "0", text: "[image image/png]" });
   const pasted = entry("0:7", "0", { role: "user", text: "Look\n[image image/png]", images: [{ mimeType: "image/png" }] });
@@ -49,7 +44,6 @@ test("share links show the lines that stand for images, never the images' list",
 test("share links keep which call each result answers, and nothing else of it", () => {
   const calls = entry("0:1", "0", { text: 'bash({"command":"ls"})', toolCalls: [{ id: "c1", name: "bash" }] });
   const result = entry("0:2", "0", { role: "toolResult", text: "a", toolResult: { callId: "c1", tool: "bash", error: true } });
-  // What a misbehaving host might send: ids that aren't short strings, and fields no link decided to show.
   const odd = entry("0:3", "0", { role: "toolResult", text: "b", toolCalls: [{ id: 7, name: "x" }] as never,
     toolResult: { callId: "x".repeat(300), tool: "bash", note: "secret" } as never });
   assert.deepEqual(sharedView(view([calls, result, odd])).entries, [
@@ -75,16 +69,13 @@ test("brief tool output cuts long tool calls but keeps them tool calls, and leav
   const { prose, calls } = splitToolCalls(shown.text);
   assert.deepEqual(calls.map(item => item.name), ["write", "bash"]);
   assert.ok(calls[0]!.line.startsWith('write({"path":"src/a.ts","content":"xxx'), calls[0]!.line);
-  // Its long strings are cut, so its arguments are still JSON that clients read.
   assert.ok(calls[0]!.line.endsWith('…"})') && calls[0]!.line.length < briefChars + 20, calls[0]!.line);
   assert.equal((JSON.parse(calls[0]!.line.slice("write(".length, -1)) as { path: string }).path, "src/a.ts");
   assert.equal(calls[1]!.line, 'bash({"command":"ls"})');
-  // A call line inside a code block is prose, and prose keeps every word.
   assert.equal(prose, `I'll write it.\n${fenced}`);
   assert.deepEqual(shown.trimmed, { lines: text.split("\n").length, chars: text.length });
   const plain = entry("0:2", "0", { text: `Short answer\nbash({"command":"ls"})` });
   assert.equal(briefEntry(plain), plain);
-  // Arguments too many to fit even cut short: the line itself is cut, still a call line.
   const many = `run(${JSON.stringify(Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`key${index}`, "value".repeat(30)])))})`;
   const [line] = splitToolCalls(briefEntry(entry("0:3", "0", { text: many })).text).calls;
   assert.ok(line!.line.endsWith("…})") && line!.line.length < briefChars + 20, line!.line);
@@ -98,12 +89,10 @@ test("brief tool output shows what came of each tool call, and marks the ones th
   assert.deepEqual(read.toolResult, { callId: "c1", tool: "read_file" });
   const card = (status: string, output: string) => JSON.stringify({ id: "tool-1", operation: { kind: "program", tool: "git", command: "git status" }, status, result: output, ...attribution });
   assert.equal(result(card("executed", "line one\n\nall done\n")).text, "all done");
-  // A command that failed says so in its card: the line alone doesn't, so the entry does.
   const failed = result(card("failed", "Sandbox process failed (exit 1)\nnpm error 403"), { toolResult: { callId: "c2", tool: "node" } });
   assert.equal(failed.text, "Sandbox process failed (exit 1)");
   assert.deepEqual(failed.toolResult, { callId: "c2", tool: "node", error: true });
   assert.deepEqual(result(card("denied", "")).toolResult, { error: true });
-  // A tool's own error stays marked, with its first line.
   const error = result("Tool bash is not available\nmore", { toolResult: { tool: "bash", error: true } });
   assert.equal(error.text, "Tool bash is not available");
   assert.deepEqual(error.toolResult, { tool: "bash", error: true });
@@ -138,17 +127,13 @@ test("a client keeps the earlier entries it read, and those that slide out of th
   assert.deepEqual(shown.conversations, [{ id: "0", mode: "write", olderEntries: 2 }]);
   assert.deepEqual(withEarlier(first, new Map([["0", range(1, 4)]])).conversations, [{ id: "0", mode: "write" }], "Nothing left to read");
 
-  // New entries push 0:5 out of the window: it stays, after the earlier ones.
   const slid = view(range(6, 8), conversations(5, "0:5"));
   earlier = carryEarlier(earlier, first, slid);
   assert.deepEqual(ids(withEarlier(slid, earlier)), ["0:3", "0:4", "0:5", "0:6", "0:7", "0:8"]);
-  // Even with nothing read yet, what a reader saw doesn't vanish from the top.
   assert.deepEqual(ids(withEarlier(slid, carryEarlier(new Map(), first, slid))), ["0:5", "0:6", "0:7", "0:8"]);
 
-  // After a compaction the history no longer joins up: the conversation starts again from its window.
   const compacted = view([entry("0:20"), ...range(7, 8)], conversations(3, "0:6"));
   assert.equal(carryEarlier(earlier, slid, compacted).size, 0);
-  // So does a conversation the view no longer pages.
   assert.equal(carryEarlier(earlier, slid, view(range(1, 8))).size, 0);
 });
 

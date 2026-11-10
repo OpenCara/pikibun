@@ -31,12 +31,12 @@ else if (a[0] === 'inspect' || (a[0] === 'image' && a[1] === 'inspect')) console
 }
 
 test("Actions deployment serves NSH from the origin, removes the preview origin and keeps other settings", { skip: process.platform === "win32" }, async t => {
-  const f = await fixture(t, "APP_ORIGIN=https://pikibun.com\nPREVIEW_ORIGIN=https://preview.pikibun.com\nPREVIEW_STATIC_DIR=dist/preview\nSESSION_SECRET=keep-this-setting\n");
+  const f = await fixture(t, "APP_ORIGIN=https://pikibun.com\nPREVIEW_ORIGIN=https://preview.pikibun.com\nPREVIEW_STATIC_DIR=dist/client\nSESSION_SECRET=keep-this-setting\n");
   const result = f.run("nsh");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const env = await readFile(join(f.root, ".env"), "utf8");
   assert.doesNotMatch(env, /^STATIC_CLIENT=/m);
-  assert.match(env, /^STATIC_DIR=dist\/preview$/m);
+  assert.match(env, /^STATIC_DIR=dist\/client$/m);
   assert.doesNotMatch(env, /^PREVIEW_/m);
   assert.match(env, /^PIKIBUN_IMAGE=ghcr.io\/opencara\/pikibun:0.26.0$/m);
   assert.match(env, /^APP_ORIGIN=https:\/\/pikibun.com$/m);
@@ -49,7 +49,7 @@ test("deploying NSH replaces the removed React client's settings", { skip: proce
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const env = await readFile(join(f.root, ".env"), "utf8");
   assert.doesNotMatch(env, /^STATIC_CLIENT=/m);
-  assert.match(env, /^STATIC_DIR=dist\/preview$/m);
+  assert.match(env, /^STATIC_DIR=dist\/client$/m);
   assert.equal(env.match(/^STATIC_DIR=/gm)?.length, 1);
 });
 

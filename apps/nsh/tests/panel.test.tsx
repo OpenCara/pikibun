@@ -1,8 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { ORIGIN, server, signedIn, view } from "./fixtures";
 
-// A session's panel and header menu, ported from the web app: its details, approvals, files, schedules and activity.
-
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
   return request?.body ? JSON.parse(request.body) : undefined;
@@ -43,7 +41,6 @@ describe("a session's panel", () => {
     await unknown.waitFor("text:About 1.3M tokens");
     expect(unknown.shows("id:context-percent")).toBe(false);
     unknown.dispose();
-    // A reserve as large as the window compacts at once: the meter warns as its words do.
     const due = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, context: { tokens: 1200, window: 8192, compactsAt: 0 } }, revision: "r1" } } });
     await due.waitFor("text:Past where Pi compacts it, at about 0 tokens: Pi summarizes the older messages at its next step");
     expect(due.shows("text:15%")).toBe(true);
@@ -63,9 +60,7 @@ describe("a session's panel", () => {
     await app.press("id:file-README.md");
     await app.waitFor("id:file-text");
     expect(app.texts().join(" ")).toContain("The login test races the cookie.");
-    // Highlighted for its language, as the web app's Files tab does.
     expect(app.shows("label:README.md, markdown")).toBe(true);
-    // In a read-only editor with line numbers, as the web app's preview has them.
     expect(app.shows("label:README.md")).toBe(true);
     const texts = app.texts();
     expect(texts.slice(texts.indexOf("# Pikibun") - 2, texts.indexOf("# Pikibun"))).toEqual(["1", "2"]);
@@ -88,7 +83,6 @@ describe("a session's panel", () => {
     await app.press("id:schedule-save");
     await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)));
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)).toMatchObject({ content: "Run the tests", cron: "0 9 * * 1-5", access: "approval" });
-    // Runs in the session itself, the default, which older servers take without a runIn.
     expect(Object.keys(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`) as object)).not.toContain("runIn");
   });
 

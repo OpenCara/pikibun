@@ -34,7 +34,6 @@ async function fixture(t: TestContext, extra: Partial<Env> = {}) {
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) }, env);
     } };
   }
-  /** Owner alice, admin carol, member bob. */
   async function team() {
     const alice = await client('alice'); const bob = await client('bob'); const carol = await client('carol');
     const workspace = (await (await alice.request('POST', '/api/workspaces', { name: 'push' })).json() as { workspace: { id: string } }).workspace;
@@ -55,7 +54,6 @@ async function fixture(t: TestContext, extra: Partial<Env> = {}) {
 
 interface Call { method: string; url: string; headers: Record<string, string>; body: string; redirect: RequestRedirect | undefined }
 type Route = (call: Call) => Response;
-/** Serves `routes` keyed by "METHOD url"; unknown requests fail the test. */
 function mockFetch(t: TestContext, routes: Record<string, Route>): Call[] {
   const calls: Call[] = [];
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -81,7 +79,6 @@ async function failure(promise: Promise<unknown>): Promise<{ status: number; cod
 async function errorCode(response: Response): Promise<{ status: number; code: string }> {
   return { status: response.status, code: (await response.json() as { code: string }).code };
 }
-/** Verifies an RS256 JWT against `publicKey` and returns its header and claims. */
 function decodeJwt(jwt: string, publicKey: string): { header: Record<string, unknown>; claims: Record<string, unknown> } {
   const [header, claims, signature] = jwt.split('.') as [string, string, string];
   assert.ok(verify('RSA-SHA256', Buffer.from(`${header}.${claims}`), publicKey, Buffer.from(signature, 'base64url')), 'JWT signature must verify');
@@ -246,7 +243,6 @@ test('OAuth refresh identities reuse a fresh access token, rotate the refresh to
   assert.deepEqual(first, { clientSecret: 'gl-secret', refreshToken: 'refresh-2', accessToken: 'access-1', accessExpiresAt: first.accessExpiresAt });
   assert.equal(minted.expiresAt, first.accessExpiresAt);
 
-  // With at least 15 minutes left the cached token is handed out without a refresh, even while another request holds the lease.
   f.sqlite.prepare('UPDATE push_identities SET lease_until = ? WHERE id = ?').run(seconds() + 60, identityId);
   const reused = await mintPushToken(f.env, gitlab);
   assert.deepEqual([reused.authorization, reused.expiresAt], [basicHeader('oauth2', 'access-1'), first.accessExpiresAt]);
@@ -258,7 +254,6 @@ test('OAuth refresh identities reuse a fresh access token, rotate the refresh to
   assert.equal((await mintPushToken(f.env, gitlab)).authorization, basicHeader('oauth2', 'access-1'));
   assert.equal(calls.length, 1);
 
-  // Under 15 minutes left: refresh and persist the new access token, its expiry and the rotated refresh token.
   await setSecret({ ...first, accessExpiresAt: seconds() + 14 * 60 });
   const refreshed = await mintPushToken(f.env, gitlab);
   assert.equal(refreshed.authorization, basicHeader('oauth2', 'access-2'));
@@ -267,7 +262,6 @@ test('OAuth refresh identities reuse a fresh access token, rotate the refresh to
   assert.deepEqual(second, { clientSecret: 'gl-secret', refreshToken: 'refresh-3', accessToken: 'access-2', accessExpiresAt: refreshed.expiresAt });
   assert.equal(stored().lease_until, null);
 
-  // A concurrent refresh holds the lease and the cache is stale: waiters give up with a busy error (retry sleeps run immediately here).
   await setSecret({ ...second, accessExpiresAt: seconds() + 60 });
   f.sqlite.prepare('UPDATE push_identities SET lease_until = ? WHERE id = ?').run(seconds() + 60, identityId);
   const sleep = t.mock.method(globalThis, 'setTimeout', ((callback: () => void) => { queueMicrotask(callback); return 0; }) as unknown as typeof setTimeout);
@@ -348,7 +342,6 @@ test('only workspace owners and admins manage push identities, and settings are 
 test('push access can use the session owner\'s account or the host\'s Git credentials, with no settings or secret', async t => {
   const f = await fixture(t);
   const { carol, workspaceId } = await f.team();
-  // Nothing is verified upstream: each push checks the owner's account, or the host, when it runs.
   mockFetch(t, {});
   const path = `/api/workspaces/${workspaceId}/push-identities`;
   const owner = { provider: 'github', kind: 'owner-account', config: {} };
@@ -361,7 +354,6 @@ test('push access can use the session owner\'s account or the host\'s Git creden
   const replaced = await carol.request('POST', path, { provider: 'github', kind: 'host-credentials', config: {} });
   assert.equal(replaced.status, 201);
   assert.deepEqual((await replaced.json() as { identity: { id: string; kind: string } }).identity.id, identity.id, 'replacing keeps the identity');
-  // Every provider offers both, scoped like its app or bot identities.
   assert.deepEqual(await errorCode(await carol.request('POST', path, { provider: 'azure-devops', kind: 'owner-account', config: {} })), { status: 400, code: 'invalid_push_identity' });
   for (const [provider, extra] of [['azure-devops', { scope: 'Contoso' }], ['bitbucket', { scope: 'team' }], ['gitlab', {}], ['gitea', { host: 'git.example.org' }], ['github-enterprise', { host: 'ghe.example.com' }]] as const) {
     for (const kind of ['owner-account', 'host-credentials']) {

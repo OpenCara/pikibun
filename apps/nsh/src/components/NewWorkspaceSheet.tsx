@@ -6,7 +6,6 @@ import { createAction } from "../lib/resource";
 import { Field, TextField } from "../form";
 import { Button, Feedback, FormSheet } from "../ui";
 
-/** A new workspace, as the web app's NewWorkspaceSheet: its name; once created, `created` takes the person on to it. */
 export function NewWorkspaceSheet(props: { open: boolean; onClose: () => void; created: (workspace: Workspace) => void }) {
   const data = useAppData();
   const name = signal("");

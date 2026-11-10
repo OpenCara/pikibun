@@ -45,7 +45,6 @@ test('a view is cut to fit: entries first, then content', () => {
   assert.ok(view.truncated && view.content!.length > 50 * 1024);
 });
 
-/** A fake Google: a token endpoint that checks the service account's signed assertion, and a Drive with a small tree. */
 function googleFake(t: TestContext) {
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const key = { type: 'service_account', project_id: 'acme', private_key_id: 'abc123', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
@@ -122,21 +121,17 @@ test('a Google Drive service account reads the folders, Docs, Sheets and text fi
   const sheet = await googleDriveAdapter.read(secret, root, 'budgetSheet001');
   assert.equal(sheet.content, 'item,cost\nhosts,10');
   assert.equal((await googleDriveAdapter.read(secret, root, 'notesFile00001')).content, 'plain notes');
-  // An empty Doc is empty content, not a failed export.
   const blank = await googleDriveAdapter.read(secret, root, 'emptyDoc000001');
   assert.deepEqual([blank.content, blank.note], ['', undefined]);
   const photo = await googleDriveAdapter.read(secret, root, 'photoFile00001');
   assert.equal(photo.content, undefined);
   assert.match(photo.note!, /binary file \(image\/png\)/);
-  // The service account can read it, but it isn't under the bound folder.
   assert.deepEqual(await code(googleDriveAdapter.read(secret, root, 'payrollDoc0001')), { status: 403, code: 'source_outside' });
   assert.deepEqual(await code(googleDriveAdapter.read(secret, root, 'missingFile001')), { status: 404, code: 'source_item_not_found' });
   assert.deepEqual(await code(googleDriveAdapter.read(secret, root, 'not an id')), { status: 400, code: 'invalid_input' });
-  // One token served every read: it is kept until shortly before it expires.
   assert.equal(google.issued(), 1);
 });
 
-/** A fake Feishu: a tenant token for one app, a folder tree with a docx, and a wiki node with a child page. */
 function feishuFake(t: TestContext, origin = 'https://open.feishu.cn') {
   const app = { appId: 'cli_a1b2c3d4e5f6g7h8', appSecret: 'S3cr3tS3cr3tS3cr3tS3cr3tS3cr3t00' };
   const ok = (data: unknown) => Response.json({ code: 0, msg: 'success', data });
@@ -181,7 +176,6 @@ function feishuFake(t: TestContext, origin = 'https://open.feishu.cn') {
     }
     if (path === '/wiki/v2/spaces/7000/nodes') {
       return ok({ items: url.searchParams.get('parent_node_token') === 'wikRoot0000001'
-        // List items aren't guaranteed to repeat the space they were listed in.
         ? [{ node_token: 'wikChild000001', obj_token: 'doxWiki0000001', obj_type: 'docx', title: 'Runbook', has_child: false }] : [], has_more: false });
     }
     return assert.fail(`unexpected Feishu call ${path}`);
@@ -200,7 +194,6 @@ test('a Feishu/Lark app reads the docx documents, folders and wiki pages under t
   assert.deepEqual([folder.id, folder.type, folder.title, folder.url], ['folder:fldRoot0000001', 'folder', 'Specs', 'https://acme.feishu.cn/drive/folder/fldRoot0000001']);
   const listing = await feishuAdapter.read(secret, folder, null);
   assert.deepEqual(listing.entries?.map(entry => [entry.id, entry.type]), [['folder:fldSub00000001', 'folder'], ['sheet:shtBudget00001', 'spreadsheet']]);
-  // A document two folders down is found by searching down from the bound folder.
   const doc = await feishuAdapter.read(secret, folder, 'docx:doxArch0000001');
   assert.deepEqual([doc.type, doc.title, doc.content], ['document', 'Architecture', 'The plan.\n']);
   assert.deepEqual(await code(feishuAdapter.read(secret, folder, 'https://acme.feishu.cn/docx/doxSecret00001')), { status: 403, code: 'source_outside' });
@@ -212,7 +205,6 @@ test('a Feishu/Lark app reads the docx documents, folders and wiki pages under t
   assert.deepEqual([ops.type, ops.title, ops.content, ops.entries], ['wiki', 'Ops', 'Restart it.\n', [{ id: 'wiki:wikChild000001', type: 'wiki', title: 'Runbook' }]]);
   assert.equal((await feishuAdapter.read(secret, wiki, 'wiki:wikChild000001')).title, 'Runbook');
 
-  // A single bound document reads only itself.
   const single = await feishuAdapter.resolve(secret, 'docx:doxArch0000001');
   assert.equal((await feishuAdapter.read(secret, single, null)).content, 'The plan.\n');
   assert.deepEqual(await code(feishuAdapter.read(secret, single, 'docx:doxWiki0000001')), { status: 403, code: 'source_outside' });

@@ -1,9 +1,3 @@
-/**
- * Runs the client (apps/nsh) against a real Pikibun server: starts one in test mode on this machine with a fresh SQLite
- * database, builds the client for the web and checks the server serves it, then drives the app headless over the real
- * network (`nsh test`, network "live"): a test-mode sign-in, the session list, a workspace and the new-session form.
- * Uses the Native Shell CLI scripts/nsh.mjs pins. `pnpm test:client-live`
- */
 import { spawn } from "node:child_process";
 import { buildWeb, nshBinary } from "./nsh.mjs";
 import { randomBytes } from "node:crypto";
@@ -16,7 +10,6 @@ import { startServer } from "../apps/server/src/serve.ts";
 
 const app = resolve("apps/nsh");
 
-/** Runs nsh without blocking: the server this process hosts must keep answering the app meanwhile. */
 async function run(args: string[], cwd: string) {
   const nsh: string = await nshBinary();
   const child = spawn(nsh, args, { cwd, stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, NO_COLOR: "1" } });
@@ -51,7 +44,6 @@ try {
   stop = () => server.close();
   console.log(`Pikibun test server on ${origin}`);
 
-  // The client, served by the server itself.
   const page = await fetch(`${origin}/`);
   const policy = page.headers.get("content-security-policy") ?? "";
   if (page.status !== 200 || !policy.includes("'wasm-unsafe-eval'")) throw new Error(`/ answered ${page.status} with policy ${policy}`);
@@ -60,7 +52,6 @@ try {
   if (runtime?.headers.get("content-type") !== "application/wasm") throw new Error("the server does not serve the WebAssembly runtime");
   console.log(`✓ ${origin}/ serves the client (${wasm}) with its Content-Security-Policy`);
 
-  // A test user signed in as a native app, with a workspace of their own.
   const login = await fetch(`${origin}/api/auth/test`, {
     method: "POST",
     headers: { Authorization: `Bearer ${secret}`, Origin: origin, "Content-Type": "application/json", Accept: "application/json" },

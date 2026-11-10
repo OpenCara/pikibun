@@ -4,19 +4,12 @@ import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { ConnectorSetupError } from "./protocol.js";
 
-// The guardian reports LOCKED, then holds the kernel lock until its stdin reaches EOF.
 const GUARDIAN = ["/bin/sh", "-c", "echo LOCKED; exec /bin/cat >/dev/null"];
 
-/** The lease is held elsewhere: another connector or runner (a terminal `pikibun connect`, an app) uses this directory. */
 export class RunnerLeaseBusyError extends ConnectorSetupError {
   override name = "RunnerLeaseBusyError";
 }
 
-/**
- * Windows has neither flock nor lockf. A named pipe serves instead: only one process can listen on a name, Windows
- * frees it when that process ends however it ends, and the name comes from the state directory, so two connectors
- * on one directory never both run.
- */
 async function acquireWindowsLease(directory: string, onLost: () => void): Promise<() => Promise<void>> {
   const name = `\\\\.\\pipe\\pikibun-lease-${createHash("sha256").update(resolve(directory).toLowerCase()).digest("hex").slice(0, 32)}`;
   const server = createServer(socket => socket.destroy());
@@ -35,7 +28,6 @@ async function acquireWindowsLease(directory: string, onLost: () => void): Promi
   };
 }
 
-/** Kernel flock survives stale lock files; pipe EOF releases it even after Node is SIGKILLed. */
 export async function acquireRunnerLease(directory: string, onLost: () => void): Promise<() => Promise<void>> {
   if (process.platform === "win32") return acquireWindowsLease(directory, onLost);
   if (process.platform !== "linux" && process.platform !== "darwin") throw new Error("Runner lease requires Linux flock, macOS lockf or a Windows named pipe; no PID-file fallback");
@@ -45,7 +37,6 @@ export async function acquireRunnerLease(directory: string, onLost: () => void):
   let releasing = false;
   let output = "";
   const lock = join(directory, "runner.lock");
-  // util-linux flock(1) on Linux; macOS lockf(1) takes the same flock(2) lock via O_EXLOCK.
   const child = process.platform === "linux"
     ? spawn("/usr/bin/flock", ["--exclusive", "--timeout", "5", "--no-fork", lock, ...GUARDIAN], {
       env: { PATH: "/usr/bin:/bin", LANG: "C" }, stdio: ["pipe", "pipe", "ignore"],
@@ -53,7 +44,7 @@ export async function acquireRunnerLease(directory: string, onLost: () => void):
     : spawn("/usr/bin/lockf", ["-k", "-s", "-t", "5", lock, ...GUARDIAN], {
       env: { PATH: "/usr/bin:/bin", LANG: "C" }, stdio: ["pipe", "pipe", "ignore"],
     });
-  child.stdin.on("error", () => { /* Exit handler makes a lost lease fatal. */ });
+  child.stdin.on("error", () => { });
   child.stdout.on("data", (chunk: Uint8Array) => {
     output += new TextDecoder().decode(chunk);
     if (output === "LOCKED\n" && !acquired) { acquired = true; ready.resolve(); }

@@ -27,7 +27,6 @@ test("code mode is core: every session runs it, whatever the host's configuratio
   assert.deepEqual(builtins.select(["pi:codemode"], new Set()).map(item => item.name), ["pi:codemode"]);
   assert.deepEqual(builtins.select([], new Set(["codemode"])), [], "a workspace's extension offering codemode still replaces it");
   assert.deepEqual(builtins.select(["pi:codemode"], new Set(["codemode"])), []);
-  // Scripts get no models.* tools: only the codemode tool itself.
   assert.deepEqual(builtins.extensions.get("pi:codemode")!.tools!.map(tool => tool.name), ["codemode"]);
 });
 
@@ -64,10 +63,8 @@ test("a script's VM stops once it has computed too long, while time its calls ta
   const started = Date.now();
   assert.match(await run("while (true) {}"), /computed for more than 0 seconds/);
   assert.ok(Date.now() - started < 10_000);
-  // Waiting a second on a call, past the limit, is no computing.
   assert.match(await run("const a = await tools.slow({});\nreturn a;"), /slow done/);
   assert.doesNotMatch(await run("return 'x'.repeat(10)"), /computed for more than/);
-  // Output past the script's budget is cut, and kept whole in the worktree for read_file.
   const cut = await run('// @options: {"max_output_tokens": 50}\nreturn Array.from({ length: 2000 }, (_, i) => "line " + i).join("\\n");');
   const path = /Full output: (codemode-output\/[0-9a-f]{8}\/output\.txt)/.exec(cut)?.[1];
   assert.ok(path, cut);
@@ -100,7 +97,6 @@ test("code mode runs in every session, and its scripts' calls are decided like t
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
   const answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
   let config: HostConfig = { ...defaultHostConfig, builtinExtensions: ["pi:codemode"] };
-  // The tools each request offers the model.
   const offered: string[][] = [];
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   const respond: FauxResponseFactory = async request => {
@@ -152,11 +148,9 @@ test("code mode runs in every session, and its scripts' calls are decided like t
   };
   const assistant = async () => (await session.view()).entries.filter(entry => entry.role === "assistant").map(entry => entry.text).at(-1);
 
-  // On the host itself, a session has no browser, and says why.
   assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
     unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   await send("hello");
-  // Each call the script makes of the extension's tool is a card for the host's owner, as the model's own call would be.
   const decided = new Set<string>();
   for (let count = 0; count < 1000 && decided.size < 2; count++) {
     for (const card of (await session.view()).approvals.filter((item: ApprovalRecord) => item.status === "pending" && !decided.has(item.id))) {
@@ -171,7 +165,6 @@ test("code mode runs in every session, and its scripts' calls are decided like t
   assert.ok(offered[0]!.includes("codemode") && offered[0]!.includes("shout"), offered[0]!.join());
   assert.match((await assistant())!, /HELLO! TWICE!/);
 
-  // Output past the script's budget is kept whole in the session's worktree, where read_file reads it.
   await send("long");
   await idle();
   const toolText = (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text).at(-1)!;
@@ -182,7 +175,6 @@ test("code mode runs in every session, and its scripts' calls are decided like t
   assert.equal(found.length, 1);
   assert.match(await readFile(join(root, "runner", found[0]!), "utf8"), /^line 0\n[\s\S]*line 1999$/);
 
-  // Left out of the host's configuration: code mode is core, so the next message still offers it.
   config = { ...config, builtinExtensions: [] };
   assert.deepEqual((await session.view()).extensions?.builtin, ["pi:codemode"]);
   await send("later");

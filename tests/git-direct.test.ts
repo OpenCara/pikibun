@@ -20,7 +20,6 @@ function readGrant(extra: Partial<Extract<GitDirectGrant, { direct: true }>> = {
   return { direct: true, remote, authorization: "Basic cmVwbw==", kind: "repository-token", expiresAt: later(), cacheSeconds: 60, ...extra };
 }
 
-/** A forge answering Git smart HTTP and Git LFS, recording what it was asked. */
 function forge(handler?: (url: string, init: RequestInit) => Response | Promise<Response> | undefined) {
   const calls: { url: string; method: string; authorization: string | null; protocol: string | null; signature: string | null; body: string }[] = [];
   const forgeFetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -46,7 +45,6 @@ function forge(handler?: (url: string, init: RequestInit) => Response | Promise<
   return { calls, fetch: forgeFetch };
 }
 
-/** Names the tests' forge points downloads at: public ones, and one inside the host's own network. */
 const addresses: Record<string, string> = { "media.example.com": "93.184.216.34", "internal.example.com": "10.0.0.5" };
 
 function directGit(grant: (request: Omit<GitDirectRequest, "sessionId">) => Promise<unknown>, fetch: typeof globalThis.fetch, fallbacks: string[] = [],
@@ -54,7 +52,6 @@ function directGit(grant: (request: Omit<GitDirectRequest, "sessionId">) => Prom
   const asked: Omit<GitDirectRequest, "sessionId">[] = [];
   const direct = new DirectGit({ grant: async request => { asked.push(request); return grant(request); }, fetch, onFallback: (_request, reason) => fallbacks.push(reason),
     lookup: async host => addresses[host] ? [{ address: addresses[host], family: 4 }] : [],
-    // Downloads off the provider's origin connect only to the addresses checked; the tests' forge stands in for them.
     pinnedFetch: async (url, init, checked) => { pinned.push({ url: url.href, addresses: checked }); return fetch(url, init); } });
   return { direct, asked };
 }
@@ -76,11 +73,9 @@ test("a direct read goes to the forge with the granted credential, and one grant
   ]);
   assert.equal(upstream.calls[0]!.protocol, "version=2");
   assert.deepEqual(asked, [{ bindingId: "binding-app", access: "read" }]);
-  // A public repository is read without any credential.
   const open = directGit(async () => readGrant({ authorization: null, kind: "public" }), upstream.fetch);
   await (await open.direct.forward({ bindingId: "binding-app", service: "info-refs" }))!.text();
   assert.equal(upstream.calls.at(-1)!.authorization, null);
-  // A request the forge would refuse anyway is refused before it leaves the host.
   await assert.rejects(direct.forward({ bindingId: "binding-app", service: "upload-pack", contentType: "text/plain", body: new Uint8Array() }),
     (error: unknown) => error instanceof RunnerError && error.status === 415);
 });
@@ -91,26 +86,22 @@ test("the relay takes the request when the control plane says so or has no grant
   assert.equal(await relayed.direct.forward({ bindingId: "binding-app", service: "info-refs" }), undefined);
   assert.equal(await relayed.direct.forward({ bindingId: "binding-app", service: "info-refs" }), undefined);
   assert.equal(relayed.asked.length, 1, "the word to relay is kept as long as the control plane says");
-  // An older control plane has no direct grants: it is asked once a minute, not for every request.
   const older = directGit(async () => { throw new RunnerError(404, "Not found"); }, upstream.fetch);
   assert.equal(await older.direct.forward({ bindingId: "binding-app", service: "info-refs" }), undefined);
   assert.equal(await older.direct.forward({ bindingId: "binding-app", service: "receive-refs" }), undefined);
   assert.equal(older.asked.length, 2, "reads and pushes are asked about separately");
   assert.equal(upstream.calls.length, 0);
 
-  // A host that reaches the control plane but not the forge relays that repository's requests for a while.
   const fallbacks: string[] = [];
   const unreachable = directGit(async () => readGrant(), (async () => { throw new TypeError("fetch failed"); }) as typeof fetch, fallbacks);
   assert.equal(await unreachable.direct.forward({ bindingId: "binding-app", service: "info-refs" }), undefined);
   assert.equal(await unreachable.direct.forward({ bindingId: "binding-app", service: "info-refs" }), undefined);
   assert.deepEqual(fallbacks, ["github.com could not be reached."]);
   assert.equal(unreachable.asked.length, 1);
-  // A forge that refuses the granted credential: the relay, with the owner's own account, gives the answer.
   const denied = forge(url => url.includes("info/refs") ? new Response("denied", { status: 403 }) : undefined);
   const refused = directGit(async () => readGrant(), denied.fetch, fallbacks);
   assert.equal(await refused.direct.forward({ bindingId: "binding-app", service: "info-refs" }), undefined);
   assert.match(fallbacks.at(-1)!, /did not let the session owner's account read acme\/app/);
-  // A malformed or expired grant is never used.
   const expired = directGit(async () => readGrant({ expiresAt: new Date(Date.now() + 60_000).toISOString() }), upstream.fetch);
   assert.equal(await expired.direct.forward({ bindingId: "binding-app", service: "info-refs" }), undefined);
   assert.equal(upstream.calls.length, 0);
@@ -136,7 +127,6 @@ test("a direct push streams its pack to the forge, asks for each request, and re
     ["DELETE", "https://api.github.com/installation/token", "Bearer ghs_push", ""],
   ]);
 
-  // A push the forge refuses is not made again through the relay: its pack has been sent. Its token is revoked anyway.
   const denied = forge(url => url.endsWith("/git-receive-pack") ? new Response("denied", { status: 403 }) : undefined);
   const refused = directGit(async () => pushGrant(), denied.fetch);
   await assert.rejects(refused.direct.forward({ bindingId: "binding-app", service: "receive-pack", contentType: "application/x-git-receive-pack-request",
@@ -159,19 +149,15 @@ test("direct Git LFS downloads answer in the relay's own form; the provider's UR
   assert.equal(batches.length, 2);
   assert.equal(batches[0]!.authorization, "Basic cmVwbw==");
   assert.deepEqual(JSON.parse(batches[0]!.body).ref, { name: "refs/heads/main" });
-  // The action's own headers go to its storage; the granted credential never leaves the provider's origin.
   assert.deepEqual(upstream.calls.filter(call => call.url.startsWith("https://media.example.com/")).map(call => [call.authorization, call.signature]), [[null, "signed"]]);
-  // Its storage is reached at the address that was checked, never by resolving the name again.
   assert.deepEqual(pinned, [{ url: `https://media.example.com/${oid}`, addresses: [{ address: "93.184.216.34", family: 4 }] }]);
 
-  // A forge can't make the host download from its own networks: such an object is left to the relay.
   const inward = forge(url => url.endsWith("/info/lfs/objects/batch")
     ? Response.json({ objects: [{ oid, size: 3, actions: { download: { href: `https://internal.example.com/${oid}` } } }] }) : undefined);
   const fallbacks: string[] = [];
   const guarded = directGit(async () => readGrant(), inward.fetch, fallbacks);
   assert.equal(await guarded.direct.forward({ bindingId: "binding-app", service: "lfs-object", contentType: "application/json", body: json({ oid, size: 3 }) }), undefined);
   assert.ok(!inward.calls.some(call => call.url.startsWith("https://internal.example.com/")));
-  // The refusal says why, rather than that the provider couldn't be reached.
   assert.deepEqual(fallbacks, ["internal.example.com does not resolve to a public address; Git LFS objects are downloaded only from public addresses"]);
 });
 
@@ -181,7 +167,6 @@ test("a pinned download connects to the address that was checked and never resol
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
   const { port } = server.address() as AddressInfo;
-  // A name that resolves nowhere: only the pinned address can be reached. The TLS handshake fails against this server.
   await assert.rejects(pinnedFetch(new URL(`https://lfs.example.invalid:${port}/object`), undefined, [{ address: "127.0.0.1", family: 4 }]));
   assert.equal(connections.length, 1);
   await assert.rejects(pinnedFetch(new URL("http://lfs.example.invalid/object"), undefined, [{ address: "127.0.0.1", family: 4 }]), TypeError);
@@ -211,7 +196,6 @@ function get(socketPath: string, path: string, init: { method?: string; headers?
   });
 }
 
-/** One pkt-line of `text`. */
 function pkt(text: string): string { return (Buffer.byteLength(text, "latin1") + 4).toString(16).padStart(4, "0") + text; }
 
 async function proxyWithDirect(t: TestContext, grant: (request: Omit<GitDirectRequest, "sessionId">) => Promise<unknown>, fetch: typeof globalThis.fetch) {
@@ -221,7 +205,6 @@ async function proxyWithDirect(t: TestContext, grant: (request: Omit<GitDirectRe
   const instance = new EgressProxy({
     socketPath: join(directory, "proxy.sock"),
     grant: async (): Promise<EgressGrant> => ({ policy: { mode: "off", domains: [], packageRegistries: true }, repositories: [repository] }),
-    // As a session does: the forge directly where granted, else the relay.
     relay: async request => (await direct.forward(request)) ?? (relayed.push(request), new Response("relayed", { headers: { "content-type": "application/x-git-upload-pack-advertisement" } })),
     sessionBranch: "pikibun/session",
   });
@@ -238,7 +221,6 @@ test("the egress proxy serves the sandbox from the forge directly where granted,
   const refs = await get(instance.socketPath, "/git/github.com/acme/app.git/info/refs?service=git-upload-pack", { headers: { "user-agent": "git/2.43.0" } });
   assert.deepEqual([refs.status, refs.body], [200, "advertisement"]);
   assert.equal(relayed.length, 0);
-  // A push's one command, read by the proxy, goes with its grant request, for the control plane's checks and audit.
   const command = pkt(`${"0".repeat(40)} ${tip} refs/heads/pikibun/session\0report-status\n`) + "0000";
   const pushed = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack",
     { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body: `${command}PACK` });
@@ -248,7 +230,6 @@ test("the egress proxy serves the sandbox from the forge directly where granted,
   const status = JSON.parse((await get(instance.socketPath, "/__pikibun/status")).body) as { recent: { reason?: string }[]; gitRemotes: string };
   assert.deepEqual(status.recent.map(entry => entry.reason), ["info-refs (direct repository-token)", "push pikibun/session (direct push-identity)"]);
   assert.match(status.gitRemotes, /fetches them from the forge itself/);
-  // The sandbox never sees how the answer was carried.
   const raw = await new Promise<string>((resolve, reject) => {
     const request = httpRequest({ socketPath: instance.socketPath, path: "/git/github.com/acme/app.git/info/refs?service=git-upload-pack" }, response => {
       resolve(JSON.stringify(response.headers));

@@ -9,10 +9,6 @@ import { palette, text, weight } from "../theme";
 import { Banner, Button, Feedback, Loading, Logo } from "../ui";
 import { OwnJoinRequests } from "../settings/join-requests";
 
-/**
- * A workspace's invite link (`#/join/<token>`), once signed in, as the web app's JoinWorkspaceScreen: the workspace's
- * name and a request to join it, or where the request stands. The token travels in a header, never in a path.
- */
 export function JoinWorkspace(props: { token: string; onDone: () => void; go?: (route: PageRoute) => void }) {
   const data = useAppData();
   const invite = signal<WorkspaceInvite | null>(null);
@@ -31,7 +27,6 @@ export function JoinWorkspace(props: { token: string; onDone: () => void; go?: (
       .finally(() => { if (!controller.signal.aborted) loading.set(false); });
     return () => controller.abort();
   });
-  // Once a member, the workspace joins the lists.
   effect(() => { if (invite()?.status === "member") data.refreshWorkspaces(); });
   const refresh = () => revision.update(value => value + 1);
   function ask() {
@@ -60,7 +55,6 @@ export function JoinWorkspace(props: { token: string; onDone: () => void; go?: (
                   {heading("Join a workspace")}
                   <Banner tone="danger" title="Invite link not available" actions={<Button small variant="outline" label="Try again" onPress={refresh} />}>{error()}</Banner>
                   <Button block label="Go to Pikibun" onPress={props.onDone} />
-                  {/* A request outlives a link that was turned off or replaced, so its requester can still withdraw it here. */}
                   <OwnJoinRequests />
                 </>
               }>

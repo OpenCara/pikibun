@@ -156,16 +156,11 @@ The first run's open items, after the third run:
   and starts it in the job otherwise. The job isn't killed when its handle closes, so what a command leaves running
   when it finishes keeps running, as on Linux. Without koffi it falls back to `taskkill /T`.
 
-Fourth run, the Windows desktop app's native host (it had only run from the CLI before): the sandbox never started.
-The app's connector runs in an Electron utility process, where `process.execPath` is the app (`Pikibun.exe`), and the
-packaged app turns the RunAsNode fuse off, so it can't run as Node. The setup check, the runner and the helper were all
-started with it: the check's output wasn't JSON ("the check could not run"; each try also asked the running app to open
-its window), so the host fell back to unsandboxed with consent. Steps now run on real Node.js (`sandboxNodePath`,
-`platform.ts`): the CLI's own, or in the app `PIKIBUN_SANDBOX_NODE`, `node` on PATH or `%ProgramFiles%\nodejs\node.exe`,
-asked for its own `process.execPath` so launchers (Scoop, Volta and winget shims) resolve to the `node.exe` whose folder
-the container is granted. It is a prerequisite of the app's native sandbox, with a setup action (winget's
-`OpenJS.NodeJS.LTS`); the MXC SDK's install needs Node.js and npm anyway. With the Electron app removed, the connector
-always runs on Node.js (the CLI, or `pikibun host` for the app), so steps run on its own again and that lookup is gone.
+Fourth run, the removed Electron desktop app's native host (it had only run from the CLI before): the sandbox never
+started. That app's connector ran in an Electron utility process, where `process.execPath` was the app (`Pikibun.exe`),
+which could not run as Node, so the setup check, the runner and the helper all failed to start and the host fell back
+to unsandboxed with consent. The connector now always runs on Node.js (the CLI, or `pikibun host` for the app), and
+steps run on its own `process.execPath`.
 
 ## What the Linux sandbox guarantees today
 

@@ -37,13 +37,10 @@ test('the next run comes after the given time, in the schedule\'s time zone', ()
   assert.equal(iso(nextCronTime('0 9 * * 1-5', 'UTC', at('2026-03-06T10:00:00Z'))), '2026-03-09T09:00:00.000Z', 'Friday after nine: Monday');
   assert.equal(iso(nextCronTime('0 9 * * *', 'Asia/Tokyo', monday)), '2026-03-03T00:00:00.000Z', '09:00 in Tokyo is midnight UTC');
   assert.equal(iso(nextCronTime('0 0 1 * *', 'UTC', at('2026-01-31T12:00:00Z'))), '2026-02-01T00:00:00.000Z');
-  // Both day fields restricted: either runs, as in cron.
   assert.equal(iso(nextCronTime('0 0 13 * fri', 'UTC', at('2026-03-01T00:00:00Z'))), '2026-03-06T00:00:00.000Z');
   assert.equal(nextCronTime('0 0 31 2 *', 'UTC', monday), null, 'never comes round');
-  // Berlin moves to summer time at 02:00 on 29 March 2026: 02:30 doesn't exist that day, and 09:00 is 07:00 UTC after.
   assert.equal(iso(nextCronTime('30 2 * * *', 'Europe/Berlin', at('2026-03-28T12:00:00Z'))), '2026-03-30T00:30:00.000Z');
   assert.equal(iso(nextCronTime('0 9 * * *', 'Europe/Berlin', at('2026-03-28T12:00:00Z'))), '2026-03-29T07:00:00.000Z');
-  // And back at 03:00 on 25 October: 02:30 comes twice, and runs once.
   const first = nextCronTime('30 2 * * *', 'Europe/Berlin', at('2026-10-24T12:00:00Z'))!;
   assert.equal(new Date(first).getUTCHours() === 0 || new Date(first).getUTCHours() === 1, true);
   assert.equal(iso(nextCronTime('30 2 * * *', 'Europe/Berlin', first)), '2026-10-26T01:30:00.000Z');
@@ -59,7 +56,6 @@ test('a session at rest with a schedule shows as scheduled, unless what its agen
   assert.equal(sessionStatus({ ...ready, activity: 'failed' }).label, 'Failed');
   assert.equal(sessionStatus({ ...ready, status: 'archived' }).label, 'Archived');
   assert.equal(sessionStatus({ status: 'ready', activity: 'done' }).label, 'Done', 'no schedule');
-  // An open session's live activity wins over the list's.
   assert.equal(sessionStatus({ ...ready, activity: 'done' }, 'working').label, 'In progress');
 });
 
@@ -94,13 +90,11 @@ async function fixture(t: TestContext) {
     .run('scheduled-session', workspace.id, owner.user.id, agent.id, 'scheduled', 'ready', new Date().toISOString());
   assert.equal((await owner.request('POST', '/api/sessions/scheduled-session/grants', { userId: collaborator.user.id, role: 'collaborator' })).status, 200);
   env.RUNNER_URL = 'https://runner.example.test';
-  // The host: records what it is sent.
   const submitted: { path: string; body: Record<string, unknown> }[] = [];
   const previousFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = previousFetch; });
   globalThis.fetch = async (input, init) => {
     const path = new URL(String(input)).pathname;
-    // Starts a session: a schedule's run in a new child session.
     if (path === '/v1/sessions') return Response.json({ ok: true }, { status: 201 });
     if (path.endsWith('/submit')) {
       submitted.push({ path, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
@@ -128,7 +122,6 @@ test('only the session owner schedules prompts; everyone who can view the sessio
     assert.equal(response.status, 400, JSON.stringify(bad));
     assert.equal((await response.json() as { code: string }).code, code, JSON.stringify(bad));
   }
-  // Read-only and auto-approve are options a host must take; this session's runner takes none.
   const unsupported = await f.owner.request('POST', base, { ...body, access: 'read' });
   assert.equal(unsupported.status, 400);
   assert.equal((await unsupported.json() as { code: string }).code, 'options_unsupported');
@@ -148,7 +141,6 @@ test('only the session owner schedules prompts; everyone who can view the sessio
   assert.equal((await f.collaborator.request('PATCH', `${base}/${schedule.id}`, { enabled: false })).status, 403);
   assert.equal((await f.collaborator.request('DELETE', `${base}/${schedule.id}`)).status, 403);
 
-  // Paused: lists no longer show it waiting.
   const paused = await (await f.owner.request('PATCH', `${base}/${schedule.id}`, { enabled: false })).json() as { schedule: SessionSchedule };
   assert.equal(paused.schedule.nextRunAt, null);
   assert.equal((await f.session(f.owner)).nextScheduledAt, undefined);
@@ -185,20 +177,17 @@ test('the sweep sends due prompts as the owner, once, skips a busy session, and 
   assert.equal(listed.lastError, null);
   assert.equal((await f.session(f.owner)).nextScheduledAt, listed.nextRunAt);
 
-  // Busy at the next run: skipped, not queued, and the schedule still moves on.
   f.sqlite.prepare("UPDATE sessions SET activity = 'working' WHERE id = 'scheduled-session'").run();
   const busy = await runScheduledPrompts(f.env, due + 3600_000);
   assert.deepEqual(busy, [{ scheduleId: created.schedule.id, sessionId: 'scheduled-session', error: 'session_busy' }]);
   assert.equal(f.submitted.length, 1);
   f.sqlite.prepare("UPDATE sessions SET activity = 'done' WHERE id = 'scheduled-session'").run();
-  // Missed runs aren't caught up: a day later, one run, then the next hour from then.
   const late = due + 30 * 3600_000 + 60_000;
   assert.equal((await runScheduledPrompts(f.env, late)).length, 1);
   assert.equal(f.submitted.length, 2);
   const after = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules[0]!;
   assert.equal(after.nextRunAt, new Date(due + 31 * 3600_000).toISOString());
 
-  // An archived session sends nothing.
   f.sqlite.prepare("UPDATE sessions SET status = 'archived', archived_status = 'ready' WHERE id = 'scheduled-session'").run();
   assert.deepEqual(await runScheduledPrompts(f.env, due + 40 * 3600_000), []);
 });
@@ -213,7 +202,6 @@ test('a refused run is recorded on its schedule, and Run now sends at once witho
   assert.equal(result.schedule.nextRunAt, schedule.nextRunAt);
   assert.equal((await f.collaborator.request('POST', `${base}/${schedule.id}/run`)).status, 403);
 
-  // The owner lost the session's host: the sweep records why nothing was sent.
   globalThis.fetch = async () => Response.json({ error: 'offline', code: 'connector_relay_error' }, { status: 503 });
   const [outcome] = await runScheduledPrompts(f.env, Date.parse(schedule.nextRunAt!) + 1000);
   assert.ok(outcome && 'error' in outcome, JSON.stringify(outcome));
@@ -234,7 +222,6 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   const plain = (await (await f.owner.request('POST', base, { cron: '0 10 * * *', content: 'Report', enabled: false })).json() as { schedule: SessionSchedule }).schedule;
   assert.equal(plain.runIn, 'session', 'runs in the session itself by default');
 
-  // The session is at work: a run in it would be skipped, but this one starts a session of its own.
   f.sqlite.prepare("UPDATE sessions SET activity = 'working' WHERE id = 'scheduled-session'").run();
   const due = Date.parse(schedule.nextRunAt!);
   const [outcome] = await runScheduledPrompts(f.env, due + 1000);
@@ -256,11 +243,9 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   const listed = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
   assert.deepEqual([listed.lastSessionId, listed.lastSubmissionId, listed.lastError], [childId, 'sub-1', null]);
   assert.equal(listed.nextRunAt, new Date(due + 86400_000).toISOString(), 'moved on to the next day');
-  // Lists nest it under the session whose schedule started it.
   const connections = await (await f.owner.request('GET', '/api/sessions/scheduled-session/connections')).json() as SessionConnections;
   assert.deepEqual(connections.children.map(item => item.id), [childId]);
 
-  // Run now starts another.
   const ran = await f.owner.request('POST', `${base}/${schedule.id}/run`);
   assert.equal(ran.status, 202, await ran.clone().text());
   const result = await ran.json() as { schedule: SessionSchedule; sessionId: string };
@@ -268,7 +253,6 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   assert.equal(result.schedule.lastSessionId, result.sessionId);
   assert.equal(f.submitted.at(-1)!.path, `/v1/sessions/${result.sessionId}/submit`);
 
-  // Only so many stay open; archived ones no longer count.
   const fill = f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,parent_session_id,schedule_id)
     SELECT ?, workspace_id, owner_id, agent_version_id, 'filler', 'ready', created_at, 'private', id, ? FROM sessions WHERE id = 'scheduled-session'`);
   for (let index = 2; index < MAX_SCHEDULED_CHILDREN; index++) fill.run(`filler-${index}`, schedule.id);
@@ -277,15 +261,32 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   assert.equal((await full.json() as { code: string }).code, 'too_many_children');
   f.sqlite.prepare("UPDATE sessions SET status = 'archived', archived_status = 'ready' WHERE id = ?").run(childId);
 
-  // A session its host fails to start is archived again: a failed run leaves nothing open behind.
+  const openChildren = () => Number(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sessions WHERE schedule_id IS NOT NULL AND status <> 'archived'").get()!.n);
+  const sessionCount = () => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n);
+  f.sqlite.prepare("UPDATE sessions SET status = 'error' WHERE id = 'filler-2'").run();
+  const working = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ error: 'offline', code: 'connector_relay_error' }, { status: 503 });
-  const before = f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
+  const before = sessionCount();
   const [failed] = await runScheduledPrompts(f.env, due + 86400_000 + 1000);
   assert.ok(failed && 'error' in failed, JSON.stringify(failed));
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, Number(before) + 1);
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sessions WHERE schedule_id IS NOT NULL AND status <> 'archived'").get()!.n, MAX_SCHEDULED_CHILDREN - 1);
+  assert.equal(sessionCount(), before + 1);
+  assert.equal(openChildren(), MAX_SCHEDULED_CHILDREN - 1, 'the session the failed run started is archived again');
+  assert.equal(f.sqlite.prepare("SELECT status FROM sessions WHERE id = 'filler-2'").get()!.status, 'error', 'and only that one');
   const afterFailure = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
   assert.deepEqual([afterFailure.lastSessionId, afterFailure.lastSubmissionId, afterFailure.lastError], [null, null, failed.error]);
+
+  globalThis.fetch = working;
+  f.setBeforeQuery(sql => {
+    if (!/^INSERT INTO sessions\s/.test(sql)) return;
+    f.setBeforeQuery(undefined);
+    fill.run('filler-race', schedule.id);
+  });
+  const raced = await f.owner.request('POST', `${base}/${schedule.id}/run`);
+  assert.equal(raced.status, 409, await raced.clone().text());
+  assert.equal((await raced.json() as { code: string }).code, 'too_many_children');
+  assert.equal(sessionCount(), before + 3);
+  assert.equal(openChildren(), MAX_SCHEDULED_CHILDREN, 'a run that raced another past the limit gives way');
+  assert.equal(f.sqlite.prepare("SELECT status FROM sessions WHERE id = 'filler-race'").get()!.status, 'ready');
 });
 
 test('schedules due together for one session send one message; the rest find it busy', async t => {
@@ -304,7 +305,6 @@ test('an edit never brings back a run a sweep claimed while it was being saved',
   const f = await fixture(t);
   const { schedule } = await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Report' })).json() as { schedule: SessionSchedule };
   const claimed = new Date(Date.parse(schedule.nextRunAt!) + 86400_000).toISOString();
-  // A sweep claims the run between the edit's read and its write.
   const claim = (sql: string) => {
     if (!sql.startsWith('UPDATE session_schedules SET name')) return;
     f.setBeforeQuery(undefined);
@@ -316,7 +316,6 @@ test('an edit never brings back a run a sweep claimed while it was being saved',
   assert.equal((await renamed.json() as { schedule: SessionSchedule }).schedule.nextRunAt, claimed, 'a rename leaves the next run alone');
   assert.equal(f.sqlite.prepare('SELECT next_run_at FROM session_schedules WHERE id = ?').get(schedule.id)!.next_run_at, claimed);
 
-  // A change of when it runs replaces only the next run it read: here it read one the sweep has claimed since.
   f.setBeforeQuery(sql => { if (sql.startsWith('UPDATE session_schedules SET name')) { f.setBeforeQuery(undefined);
     f.sqlite.prepare('UPDATE session_schedules SET next_run_at = ? WHERE id = ?').run(new Date(Date.parse(claimed) + 86400_000).toISOString(), schedule.id); } });
   const moved = await f.owner.request('PATCH', `${base}/${schedule.id}`, { cron: '0 10 * * *' });
@@ -350,11 +349,9 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   const create = { action: 'create', cron: '0 9 * * 1-5', timeZone: 'Europe/Berlin', content: 'Check the nightly build' };
   const write = admit(ownerId);
 
-  // The agent was made without the tool, and the owner hasn't allowed it.
   await refused(tool(write, create), 403, 'tool_not_allowed');
   f.sqlite.prepare('INSERT INTO session_tool_grants (session_id,tool,call_id,approval_id,granted_by,created_at) VALUES (?,?,?,?,?,?)')
     .run('scheduled-session', 'schedule', '', 'permission-any', ownerId, new Date().toISOString());
-  // A collaborator's message, an ask, an expired message or another's admission schedule nothing: schedules run as the owner.
   await refused(tool(admit(f.collaborator.user.id), create, f.collaborator.user.id), 403, 'owner_required');
   for (const admission of [admit(ownerId, { mode: 'ask' }), admit(ownerId, { expiresAt: Math.floor(Date.now() / 1000) - 1 }), admit(f.collaborator.user.id), 'unknown']) {
     await refused(tool(admission, create), 403, 'schedule_not_admitted');
@@ -372,7 +369,6 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   const schedule = created.body.schedule as SessionSchedule;
   assert.deepEqual([schedule.name, schedule.cron, schedule.timeZone, schedule.access, schedule.enabled, schedule.createdBy],
     ['Check the nightly build', '0 9 * * 1-5', 'Europe/Berlin', 'approval', true, ownerId]);
-  // The owner sees it in the Schedules tab, and the session list shows it waiting.
   const listed = await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] };
   assert.deepEqual(listed.schedules.map(item => item.id), [schedule.id]);
   assert.equal((await f.session(f.owner)).nextScheduledAt, schedule.nextRunAt);
@@ -384,16 +380,13 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
     ['Build check', null, 'child']);
   await refused(tool(write, { action: 'update', scheduleId: 'missing', enabled: true }), 404, 'not_found');
 
-  // Auto-approved schedules come only from the owner's Auto-approve message: not created, and not changed, by any other.
   await refused(tool(write, { ...create, access: 'auto' }), 403, 'automatic_schedule_not_admitted');
   await refused(tool(write, { action: 'update', scheduleId: schedule.id, access: 'auto' }), 403, 'automatic_schedule_not_admitted');
-  // An Auto-approve message passes that check; this session's host takes no access options, so the schedule still can't be auto.
   await refused(tool(admit(ownerId, { access: 'auto' }), { ...create, access: 'auto' }), 400, 'options_unsupported');
   f.sqlite.prepare("UPDATE session_schedules SET access = 'auto' WHERE id = ?").run(schedule.id);
   for (const change of [{ content: 'Do anything' }, { enabled: true }, { enabled: false, content: 'Do anything' }, { access: 'auto' }]) {
     await refused(tool(write, { action: 'update', scheduleId: schedule.id, ...change }), 403, 'automatic_schedule_not_admitted');
   }
-  // Pausing it, or lowering its access, takes away only what it could do unattended.
   const pausedAuto = await tool(write, { action: 'update', scheduleId: schedule.id, enabled: false });
   assert.equal(pausedAuto.status, 200, JSON.stringify(pausedAuto.body));
   const lowered = await tool(write, { action: 'update', scheduleId: schedule.id, access: 'approval', content: 'Check the build again' });
@@ -401,7 +394,6 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   assert.deepEqual([(lowered.body.schedule as SessionSchedule).access, (lowered.body.schedule as SessionSchedule).content], ['approval', 'Check the build again']);
   f.sqlite.prepare("UPDATE session_schedules SET access = 'auto' WHERE id = ?").run(schedule.id);
 
-  // Deleting takes no more access than it had.
   const deleted = await tool(write, { action: 'delete', scheduleId: schedule.id });
   assert.deepEqual([deleted.status, deleted.body], [200, { deleted: schedule.id }]);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules').get()!.n, 0);

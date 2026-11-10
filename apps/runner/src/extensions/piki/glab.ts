@@ -1,11 +1,6 @@
 import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
 import { apiWrites, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
-/*
- * piki:glab, the GitLab CLI (docs/design/piki-extensions.md).
- */
-
-/** Commands that only read, by group: every subcommand of a group set to true. `ci view` is interactive, so it isn't one. */
 const PIPELINE_READS = ["list", "status", "trace", "get"];
 const READS: Record<string, readonly string[] | true> = {
   mr: ["list", "view", "diff"],
@@ -39,7 +34,6 @@ export const glabSpec: CliSpec = {
   passEnv: name => ["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN", "GITLAB_HOST", "GITLAB_URI", "GL_HOST", "GITLAB_API_HOST", "GLAB_CONFIG_DIR"].includes(name),
   setEnv: { NO_PROMPT: "1", GLAB_CHECK_UPDATE: "false", GLAB_SEND_TELEMETRY: "false", GLAMOUR_STYLE: "notty" },
   tokenEnv: ["GITLAB_TOKEN"],
-  // Options may sit anywhere among the command's words, and short ones cluster (-at): these look at every argument.
   refused(args) {
     const words = positionals(args);
     if (words.includes("auth") && (hasOption(args, ["--show-token"]) || hasShortOption(args, "t"))) return "--show-token would show its token";

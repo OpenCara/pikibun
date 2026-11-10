@@ -44,17 +44,15 @@ function header(width: number, height: number): Buffer {
   const data = Buffer.alloc(13);
   data.writeUInt32BE(width, 0);
   data.writeUInt32BE(height, 4);
-  data[8] = 8; // 8-bit RGB
+  data[8] = 8;
   data[9] = 2;
   return chunk("IHDR", data);
 }
-/** A real RGB PNG: each row is filter byte 0 and a gradient. */
 function png(width: number, height: number): Buffer {
   const rows = Buffer.alloc((width * 3 + 1) * height);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) rows.set([x % 256, y % 256, (x + y) % 256], y * (width * 3 + 1) + 1 + x * 3);
   return Buffer.concat([PNG_SIGNATURE, header(width, height), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
 }
-/** A GIF of `frames` frames on a 1×1 screen, each the same white pixel. */
 function gif(frames: number): Buffer {
   const frame = Buffer.from([0x21, 0xf9, 0x04, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00]);
   return Buffer.concat([Buffer.from("GIF89a"), Buffer.from([1, 0, 1, 0, 0x80, 0, 0, 0xff, 0xff, 0xff, 0, 0, 0]), ...Array.from({ length: frames }, () => frame), Buffer.from([0x3b])]);
@@ -69,7 +67,6 @@ async function service(t: TestContext, unsandboxed: boolean): Promise<RunnerSess
   return runner.provision(binding("images"), await ticket("images", "create"));
 }
 
-/** What the deterministic model answered to `TEST_READ path` (it lists the image blocks it received) and the tool result the transcript shows. */
 async function read(session: RunnerSession, path: string) {
   await session.submit(await ticket("images", "submit"), { content: `TEST_READ ${path}`, requestId: randomUUID() }, "write");
   for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
@@ -94,7 +91,6 @@ async function readsImagesAsTheModelSeesThem(t: TestContext, unsandboxed: boolea
   await writeFile(join(worktree, "broken.png"), Buffer.concat([PNG_SIGNATURE, header(3, 2)]));
   await writeFile(join(worktree, "moving.gif"), gif(2));
 
-  // Recognised by its signature despite the name, and passed through unchanged: the model gets these exact bytes.
   const pixels = await read(session, "pixels.dat");
   assert.equal(pixels.model.length, 2);
   assert.deepEqual(JSON.parse(pixels.model[0]!), { initiatedBy: "test:alice", actingAs: "test:alice", mode: "write", path: "pixels.dat", mimeType: "image/png", width: 3, height: 2 });
@@ -102,7 +98,6 @@ async function readsImagesAsTheModelSeesThem(t: TestContext, unsandboxed: boolea
   assert.equal(pixels.transcript, `${pixels.model[0]}\n[image image/png]`);
   assert.equal(pixels.view.includes(small.toString("base64")), false, "image data must not reach the web view");
 
-  // Larger than the limits: the model gets the prepared image, at the size it reports.
   const wide = await read(session, "wide.png");
   assert.equal(wide.model.length, 2);
   assert.deepEqual(JSON.parse(wide.model[0]!), { initiatedBy: "test:alice", actingAs: "test:alice", mode: "write", path: "wide.png", mimeType: "image/png", width: 1568, height: 20 });
@@ -117,7 +112,6 @@ async function readsImagesAsTheModelSeesThem(t: TestContext, unsandboxed: boolea
   assert.equal(broken.model.some(line => line.startsWith("image ")), false);
   assert.equal(broken.transcript.includes("[image"), false);
 
-  // An animated GIF reaches the model as a still image of its first frame.
   const moving = await read(session, "moving.gif");
   assert.deepEqual(JSON.parse(moving.model[0]!), { initiatedBy: "test:alice", actingAs: "test:alice", mode: "write", path: "moving.gif", mimeType: "image/png", width: 1, height: 1 });
 }
@@ -127,7 +121,6 @@ test("host read_file gives the model images by signature, prepared to fit, and k
 const base64 = (bytes: Buffer) => bytes.toString("base64");
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
-/** Sends a shared message as the owner. */
 async function send(session: RunnerSession, input: Omit<SubmitInput, "requestId"> & { requestId?: string }) {
   return session.submit(await ticket("images", "submit"), { requestId: randomUUID(), ...input }, "write");
 }
@@ -137,7 +130,6 @@ async function settle(session: RunnerSession) {
   assert.equal(view.busy, false, "runner did not settle");
   return view;
 }
-/** The images of queued messages that wait on the host. */
 const waiting = (session: RunnerSession) => readdir(join(session.directory, "inputs")).catch(() => [] as string[]);
 const refused = (status: number, message: RegExp) => (error: unknown) => error instanceof RunnerError && error.status === status && message.test(error.message);
 
@@ -148,17 +140,14 @@ test("pasted images reach the model after the message's text, prepared to fit, a
   await send(session, { content: "What do these show?", images: [{ mimeType: "image/png", data: base64(small) }, { mimeType: "image/png", data: base64(wide) }] });
   const view = await settle(session);
   const seen = view.entries.findLast(entry => entry.role === "assistant")!.text.split("\n");
-  // Within the limits the model gets these exact bytes; beyond them, the image prepared to fit.
   assert.deepEqual(seen.slice(0, 3), ["Deterministic test provider saw:", "What do these show?", `image image/png sha256:${digest(small)}`]);
   assert.match(seen[3]!, /^image image\/png sha256:[0-9a-f]{64}$/);
   assert.notEqual(seen[3], `image image/png sha256:${digest(wide)}`);
   assert.equal(seen.length, 4);
   assert.equal(view.entries.findLast(entry => entry.role === "user")!.text, "What do these show?\n[image image/png]\n[image image/png]");
   assert.equal(JSON.stringify(view).includes(base64(small)), false, "image data must not reach the web view");
-  // Pi's transcript holds them once the message reached it.
   assert.deepEqual(await waiting(session), []);
 
-  // A message can be images alone.
   await send(session, { content: "", images: [{ mimeType: "image/png", data: base64(small) }] });
   const alone = await settle(session);
   assert.deepEqual(alone.entries.findLast(entry => entry.role === "assistant")!.text.split("\n"), ["Deterministic test provider saw:", `image image/png sha256:${digest(small)}`]);
@@ -172,16 +161,13 @@ test("collaborators' clients read the transcript's images as thumbnails or as th
   await send(session, { content: "Look", images: [{ mimeType: "image/png", data: base64(small) }, { mimeType: "image/png", data: base64(wide) }] });
   const view = await settle(session);
   const message = view.entries.findLast(entry => entry.role === "user")!;
-  // The entry lists its images in the order of their lines; their data stays on the host until asked for.
   assert.equal(message.text, "Look\n[image image/png]\n[image image/png]");
   assert.deepEqual(message.images, [{ mimeType: "image/png" }, { mimeType: "image/png" }]);
   assert.equal(view.entries.findLast(entry => entry.role === "assistant")!.images, undefined);
   const ask = async (input: unknown) => (await session.entryImage(await ticket("images", "submit"), input)).image;
 
-  // An image within a thumbnail's limits comes back as it is, whole or as its thumbnail.
   assert.deepEqual(await ask({ entryId: message.id, index: 0, size: "thumbnail" }), { mimeType: "image/png", data: base64(small) });
   assert.deepEqual(await ask({ entryId: message.id, index: 0, size: "full" }), { mimeType: "image/png", data: base64(small) });
-  // A larger one: whole, as the model got it (fitted to 1568 pixels); its thumbnail within 480 and 64 KiB.
   const whole = await ask({ entryId: message.id, index: 1, size: "full" });
   assert.equal(Buffer.from(whole.data, "base64").readUInt32BE(16), 1568);
   const thumbnail = await ask({ entryId: message.id, index: 1, size: "thumbnail" });
@@ -189,7 +175,6 @@ test("collaborators' clients read the transcript's images as thumbnails or as th
   assert.ok(thumbnail.data.length <= 64 * 1024);
   if (thumbnail.mimeType === "image/png") assert.deepEqual([bytes.readUInt32BE(16), bytes.readUInt32BE(20)], [480, 60]);
   else assert.equal(thumbnail.mimeType, "image/jpeg");
-  // Asked again, it comes from what the host kept.
   assert.deepEqual(await ask({ entryId: message.id, index: 1, size: "thumbnail" }), thumbnail);
 
   await assert.rejects(ask({ entryId: message.id, index: 2, size: "thumbnail" }), refused(404, /not in the transcript/));
@@ -207,14 +192,12 @@ test("one image is prepared at a time; the model's go ahead of waiting thumbnail
   const work = (name: string, wait?: Promise<void>) => async () => { ran.push(`start ${name}`); await wait; ran.push(`end ${name}`); return name; };
   const first = inTurn("thumbnail", work("thumbnail 0", held.promise));
   const thumbnails = Array.from({ length: 32 }, (_, index) => inTurn("thumbnail", work(`thumbnail ${index + 1}`)));
-  // The thumbnails' line is full: one more is refused, and the model's line is still open.
   assert.equal(typeof await inTurn("thumbnail", work("refused")), "symbol");
   const model = inTurn("model", work("model"));
   await delay(10);
   assert.deepEqual(ran, ["start thumbnail 0"], "nothing starts while an image is prepared");
   held.resolve();
   assert.deepEqual(await Promise.all([first, model, ...thumbnails]), ["thumbnail 0", "model", ...Array.from({ length: 32 }, (_, index) => `thumbnail ${index + 1}`)]);
-  // Each ran alone, the model's right after the thumbnail under way, before the thumbnails that waited longer.
   assert.deepEqual(ran.slice(0, 4), ["start thumbnail 0", "end thumbnail 0", "start model", "end model"]);
   assert.ok(ran.every((line, index) => line.startsWith(index % 2 ? "end" : "start")));
 });
@@ -222,7 +205,6 @@ test("one image is prepared at a time; the model's go ahead of waiting thumbnail
 test("pasted images the host can't read or take are refused before anything is queued, and a request ID binds its images", hostMode, async t => {
   const session = await service(t, true);
   const image = { mimeType: "image/png" as const, data: base64(png(3, 2)) };
-  // The host decodes every image itself: a broken one, or one whose bytes aren't the type it names, gets a reason for its sender.
   await assert.rejects(send(session, { content: "Broken", images: [{ mimeType: "image/png", data: base64(Buffer.concat([PNG_SIGNATURE, header(3, 2)])) }] }), refused(422, /cannot be decoded/));
   await assert.rejects(send(session, { content: "Mislabelled", images: [{ mimeType: "image/jpeg", data: image.data }] }), refused(422, /cannot be decoded/));
   await assert.rejects(send(session, { content: "Mislabelled", images: [{ mimeType: "image/gif", data: image.data }] }), refused(422, /cannot be decoded/));
@@ -244,7 +226,6 @@ test("pasted images the host can't read or take are refused before anything is q
 test("a queued message's images wait on the host, outside the run ledger, until it runs, and go when it is stopped", hostMode, async t => {
   const session = await service(t, true);
   const small = png(3, 2);
-  // The first image a process prepares starts its image worker; later ones are quick.
   await send(session, { content: "Warm up", images: [{ mimeType: "image/png", data: base64(small) }] });
   await settle(session);
 
@@ -252,7 +233,6 @@ test("a queued message's images wait on the host, outside the run ledger, until 
   const later = png(4, 2);
   const queued = await send(session, { content: "Later", images: [{ mimeType: "image/png", data: base64(later) }] });
   assert.deepEqual(await waiting(session), [`${queued.submissionId}.json`]);
-  // Every change rewrites the run ledger whole, so a queued message's images are kept out of the database until it runs.
   const database = await Promise.all(["session.sqlite", "session.sqlite-wal"].map(name => readFile(join(session.directory, name)).catch(() => Buffer.alloc(0))));
   assert.equal(database.some(bytes => bytes.includes(base64(later))), false, "queued images stay out of the session database");
   const view = await settle(session);
@@ -266,8 +246,6 @@ test("a queued message's images wait on the host, outside the run ledger, until 
   assert.deepEqual(await waiting(session), []);
   await settle(session);
 
-  // Images the host no longer has (or can't read) when their message's turn comes: it ends, saying why, rather than
-  // running its text without them.
   await send(session, { content: "TEST_HOLD 3000" });
   const lost = await send(session, { content: "Lost", images: [{ mimeType: "image/png", data: base64(small) }] });
   await writeFile(join(session.directory, "inputs", `${lost.submissionId}.json`), "{");

@@ -17,7 +17,6 @@ function binding(id: string): RunnerBinding {
   return {
     session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Coordinator", policyVersion: 1, status: "ready", createdAt: "2026-01-01T00:00:00Z", repositories: [], repositoryMode: "clone" },
     owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice Owner", gitEmail: "alice@example.test", env: {}, githubConnected: false },
-    // A session from before the sessions tool: its agent lacks it.
     agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["read_file"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
     model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId: "faux-1" },
   };
@@ -81,7 +80,6 @@ test("the agent works with other sessions through the control plane, asking the 
   const transcript = async () => (await session.view()).entries.map(entry => entry.text).join("\n");
   const strip = (request: SessionsToolRequest) => ({ ...request, callId: undefined });
 
-  // The agent lacks the tool: the owner allows it for the rest of the session, seeing exactly what the call does.
   await session.submit(await ticket(id, "submit"), { content: "Which sessions are there?", requestId: "list", admissionId }, "write");
   const toolCard = await pendingApproval(session);
   assert.deepEqual(toolCard.operation, { kind: "permission", tool: "sessions", target: "list", needs: ["tool"] });
@@ -90,8 +88,6 @@ test("the agent works with other sessions through the control plane, asking the 
   await idle(session);
   assert.deepEqual(strip(requests[0]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "list" });
 
-  // The control plane says the read would show this session's readers a session they can't open: a second card, of
-  // the same call, asks for that alone, and the call is made again once the owner allows it.
   const target = audienceTarget({ id: "worker", title: "Worker" });
   answers.push({ consent: "audience", target, reason: "This session's readers include people who can't read that session." },
     { session: { id: "worker", title: "Worker", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], createdAt: "" }, busy: false, entries: [], pendingApprovals: [] });
@@ -105,7 +101,6 @@ test("the agent works with other sessions through the control plane, asking the 
   assert.deepEqual(strip(requests[2]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "read", targetSessionId: "worker" });
   assert.equal(audienceCard.id, `permission-${requests[2]!.callId}_audience`);
 
-  // A wait reads the message's outcome until it is done.
   const read = (done: boolean): SessionsToolResult => ({ session: { id: "worker", title: "Worker", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], createdAt: "" },
     busy: !done, entries: [{ id: "0:1", role: "assistant", kind: "message", text: "hidden" }], pendingApprovals: [],
     outcome: done ? { status: "settled", done: true, reply: "All green." } : { status: "running", done: false } });
@@ -116,13 +111,11 @@ test("the agent works with other sessions through the control plane, asking the 
   assert.match(await transcript(), /All green\./);
   assert.doesNotMatch(await transcript(), /hidden/, "a wait returns the outcome, not the transcript");
 
-  // An auto-approved message only from the owner's own auto-approve message.
   await session.submit(await ticket(id, "submit"), { content: "Send it with auto-approve.", requestId: "auto", admissionId }, "write");
   await idle(session);
   assert.match(await transcript(), /Only a message the session owner sent with auto-approve sends an auto-approved message/);
   assert.equal(requests.length, 5);
 
-  // A Read-only message changes another session only once the owner allows it.
   answers.push({ message: { id: "m2", kind: "send", originSessionId: id, targetSessionId: "worker", actorId: "test:alice", submissionId: "s", conversationId: "0", hops: 1, createdAt: "" } });
   await session.submit(await ticket(id, "submit"), { content: "Tell the worker to go.", requestId: "read-only", admissionId, options: { access: "read" } }, "write");
   const writeCard = await pendingApproval(session);
@@ -132,7 +125,6 @@ test("the agent works with other sessions through the control plane, asking the 
   assert.deepEqual(strip(requests[5]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "send", targetSessionId: "worker", message: "Go" });
   assert.match(await transcript(), /"m2"/);
 
-  // A new session for a sub-task, on the model and reasoning level the agent chose for it.
   answers.push({ session: { id: "docs", title: "Docs", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], parentSessionId: id, createdAt: "" },
     model: { id: "model-2", provider: "faux", modelId: "faux-2", thinkingLevel: "low" } });
   await session.submit(await ticket(id, "submit"), { content: "Start a docs sub-task.", requestId: "create", admissionId }, "write");

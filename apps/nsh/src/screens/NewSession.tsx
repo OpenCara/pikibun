@@ -28,16 +28,9 @@ function deriveTitle(content: string, fallback: string): string {
 
 const sameModel = (a: { provider: string; modelId: string }, b: { provider: string; modelId: string }) => a.provider === b.provider && a.modelId === b.modelId;
 
-/**
- * What should we work on: a chat box to describe the task, with the workspace, host, model and access to start it with
- * around it, like the web's new-session screen. `home` is the wide layout's home beside the sidebar, centered there.
- * `go` follows its links to settings (a workspace's sources, pairing a host).
- */
 export function NewSessionForm(props: { onStarted: (sessionId: string) => void; workspaceId?: string; home?: boolean; go?: (route: PageRoute) => void }) {
   const data = useAppData();
-  // A viewer follows a workspace's sessions but starts none there.
   const workspaces = () => data.workspaces().filter(item => canCreateSessions(item.role));
-  // A link to a workspace's new session (#/w/<id>/new) starts in that workspace.
   const chosen = signal(props.workspaceId ?? "");
   const workspace = () => workspaces().find(item => item.id === (chosen() || data.lastWorkspaceId())) ?? workspaces()[0];
   const creating = signal(false);
@@ -58,7 +51,6 @@ export function NewSessionForm(props: { onStarted: (sessionId: string) => void; 
           else={
             <If when={data.workspaces().length > 0}
               else={
-                // No workspace yet, as the web app's home: create one, or follow an invite link to join one.
                 <Scroll style={{ flex: 1 }} contentStyle={{ flexGrow: 1, justifyContent: "center", padding: 24 }}>
                   <View style={{ gap: 14, width: "100%", maxWidth: 520, alignSelf: "center", alignItems: "center" }}>
                     <Logo size={40} />
@@ -77,7 +69,6 @@ export function NewSessionForm(props: { onStarted: (sessionId: string) => void; 
             </If>
           }>
           {current => (
-            /* Keyed so host, trust and repository state never carry across workspaces. */
             <Each of={[current()]} key={item => item.id}>
               {item => <Form workspace={item()} onStarted={props.onStarted} home={props.home} workspacePicker={workspacePicker(item())} go={props.go} />}
             </Each>
@@ -98,34 +89,27 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const connections = createResource<{ connectors: ConnectorInfo[] }>(() => `${workspacePath}/connectors`, 10_000);
   const repos = createResource<WorkspaceRepositoryList>(() => `${workspacePath}/repositories`);
   const choice = signal("");
-  // Remembered per workspace, so switching to a session and back finds the unsent first message where it was.
   const draftId = newSessionDraftId(props.workspace.id);
   const content = createDraft(draftId);
   const visibility = signal<"workspace" | "private">("workspace");
   const trustedHost = signal("");
-  // Where the session runs: in the sandbox, or directly on the host, which only its owner, or a member they granted
-  // that, chooses where it accepts that.
   const onHost = signal(false);
   const action = createAction();
 
   const modelList = () => models.data()?.models;
   const connectors = () => connections.data()?.connectors;
   const repositories = () => repos.data()?.repositories ?? null;
-  // Until the listing says otherwise, sessions need a repository.
   const repositoriesRequired = () => repos.data()?.required ?? true;
-  // Hosts with a model you can use here, yours first.
   const hosts = computed(() => {
     const offering = new Set((modelList() ?? []).map(model => model.connectorId));
     return (connectors() ?? []).filter(host => offering.has(host.id) && !host.revokedAt)
       .sort((a, b) => Number(b.ownerId === user.id) - Number(a.ownerId === user.id));
   });
-  // The host picked here, else the one last chatted on, else the first online one.
   const host = () => hosts().find(item => item.id === choice()) ?? hosts().find(item => item.id === data.lastChat()?.connectorId) ?? hosts().find(item => item.online) ?? hosts()[0];
   const hostModel = (wanted?: { provider: string; modelId: string }) => {
     const current = host();
     return wanted && current && current.models.some(item => sameModel(item, wanted)) ? modelList()?.find(item => item.connectorId === current.id && sameModel(item, wanted)) : undefined;
   };
-  // Picks belong to one host; switching starts again from the model last chatted with when that host offers it.
   const chat = signal<{ key: string; value: ChatSelection } | null>(null);
   const selection = (): ChatSelection => {
     const current = host();
@@ -143,16 +127,11 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const sourceCount = () => { const list = repos.data(); return list ? list.sources ?? list.repositories.length : 0; };
   const repositoriesReady = () => Boolean(repositories() && !repos.error() && !repos.loading() && (sourceCount() || !repositoriesRequired()));
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
-  // The listing offers it to the host's owner, and to members whose grant in this workspace includes it.
   const hostSessions = () => Boolean(host()?.hostSessions);
   const runOnHost = () => hostSessions() && onHost();
   const unsandboxed = () => Boolean(host()?.capabilities.unsandboxed || runOnHost());
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
-  // The first message's images and files, as a session's chat box takes them.
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
-  // A trust acknowledgement covers one host against one repository set; each host starts in the sandbox, running on one
-  // being chosen for it, never carried over from another. Both go only when what they were given for changes: the host
-  // listing is fetched again every 10 seconds, with new objects for the same host.
   let trustKey: string | undefined;
   effect(() => {
     const key = JSON.stringify([host()?.id ?? null, host()?.ownerId ?? null, (repositories() ?? []).map(repository => repository.id)]);
@@ -183,7 +162,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     const hostEnvironment = runOnHost();
     void action.run(async () => {
       const { api } = session();
-      // Before the session exists: an image that can't be read stops the start instead of leaving a session behind.
       const images = await encodeImages(pasted);
       const result = await api<{ session: SessionRecord }>("/api/sessions", { method: "POST", body: {
         workspaceId: props.workspace.id, modelId: picked.id, title: deriveTitle(typed, picked.name), visibility: visibility(),
@@ -194,19 +172,15 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       data.rememberChat(current, selection());
       if (message || images.length || attached.length) {
         try {
-          // Files go into the new session's worktree first, and the message says where.
           const note = await attachments.upload(sessionId, attached);
           await api(`/api/sessions/${segment(sessionId)}/submit`, { method: "POST", body: {
             content: withFilesNote(message, note), requestId: randomId(), ...(options ? { options } : {}), ...(images.length ? { images } : {}),
           } });
         } catch {
-          // The session exists; keep the unsent text, images and files for its chat box instead of failing the start.
           saveDraft(sessionId, message);
           handOverAttachments(sessionId, pasted, attached);
         }
       }
-      // The session took the message (or its own draft holds it now): this screen starts empty next time, unless the text
-      // was edited meanwhile.
       forgetSentDraft(draftId, typed);
       attachments.sent(pasted, attached);
       data.refreshSessions();
@@ -220,7 +194,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const workspaceSettings: PageRoute = { name: "settings", section: "workspaces", id: props.workspace.id };
   const hostState = (item: ConnectorInfo) => item.revokedAt ? "Revoked" : !item.online ? "Offline" : item.capabilities.unsandboxed ? "Unsandboxed"
     : !item.capabilities.sandbox ? "Sandbox unverified" : "Online";
-  /** What keeps the session from starting, the first thing first. */
   const blocking = (): { tone: "danger" | "warning" | "info"; title: string; text: string; retry?: () => void; refresh?: boolean; trust?: ConnectorInfo; action?: JSX.Element } | null => {
     if (repos.error()) return { tone: "warning", title: "Unable to load sources", text: repos.error(), retry: repos.refresh };
     if (repositories() && !sourceCount() && repositoriesRequired()) {
@@ -249,7 +222,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         tone={host() && !host()!.online ? "warning" : undefined} />}
       options={hosts().map(item => ({ value: item.id, label: item.name, icon: "monitor" as const, hint: `${item.ownerId === user.id ? "Your host" : `${item.ownerName}'s host`} · ${hostState(item)}` }))} />
   );
-  /** Where the session runs, where its host takes sessions on it: the sandbox, or the host itself. */
   const environmentPicker = () => (
     <Picker<"sandbox" | "host"> title="Where it runs" value={runOnHost() ? "host" : "sandbox"} onSelect={value => onHost.set(value === "host")} placement="bottom"
       trigger={<Chip small testID="new-environment" icon={runOnHost() ? "server" : "shield"} label={runOnHost() ? "On host" : "Sandbox"} tone={runOnHost() ? "danger" : undefined} disabled={action.busy()} />}
@@ -259,7 +231,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       ]} />
   );
 
-  /** The session owner's acknowledgement that another member's host processes the session. */
   const trustSwitch = (trustHost: ConnectorInfo) => (
     <Switch testID="new-trust" checked={trustedHost() === trustHost.id} disabled={action.busy()}
       onChange={event => trustedHost.set(event.checked ? trustHost.id : "")}
@@ -270,7 +241,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
       </Text>
     </Switch>
   );
-  /** Who can see the session: the workspace's members, or only those it is shared with. */
   const visibilityPicker = () => (
     <Picker<"workspace" | "private"> title="Who can see it" value={visibility()} onSelect={value => visibility.set(value)} placement="bottom"
       trigger={<Chip small testID="new-visibility" icon={visibility() === "workspace" ? "users" : "lock"} label={visibility() === "workspace" ? "Workspace" : "Private"} disabled={action.busy()} />}
@@ -289,7 +259,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
           <If when={props.home}><Logo size={40} /></If>
           <Text role="header" style={{ fontSize: props.home ? 26 : 22, fontWeight: "300", color: palette().text, textAlign: props.home ? "center" : "auto" }}>What should we work on?</Text>
         </View>
-        {/* In the box, what the message runs with, as in a session's chat box; under it, where the session lives. */}
         <Composer testID="new-message" sendTestID="new-start" value={content()} onChange={value => content.set(value)} onSubmit={() => void start()}
           busy={action.busy()} ready={canStart()} minHeight={72} sendLabel="Start session" attachments={attachments}
           placeholder="Describe a task, or start without one"
@@ -303,7 +272,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
           {hostPicker()}
           <If when={hostSessions()}>{environmentPicker()}</If>
           {visibilityPicker()}
-          {/* What the session starts from, and the way to the host's details and the workspace's settings: together, at the end. */}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginLeft: "auto" }}>
             <If when={repositoryCount()}>
               {count => <Text style={{ fontSize: text.small, color: palette().faint, paddingHorizontal: 8 }}>{count()}</Text>}
@@ -326,10 +294,8 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
         </If>
         <If when={blocking()}>
           {alert => (
-            /* The trust switch goes with the actions, which lay out as a row of their own, so its words wrap there. */
             <Banner tone={alert().tone} title={alert().title}
               actions={alert().trust ? trustSwitch(alert().trust!) : alert().retry ? <Button small variant="outline" label="Retry" onPress={alert().retry!} /> : alert().refresh ? refreshHost() : alert().action}>
-              {/* The reason changes in place (no host yet, then no sources once those load): its words follow it. */}
               {alert().trust ? undefined : <Text>{alert().text}</Text>}
             </Banner>
           )}

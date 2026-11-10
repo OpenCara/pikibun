@@ -6,7 +6,6 @@ import { GitTransferError } from '../../../packages/shared/src/git-transfer.js';
 export function fail(status: ContentfulStatusCode, code: string, message: string): never {
   throw new HTTPException(status, { res: Response.json({ error: message, code }, { status }) });
 }
-/** Rethrows a Git transfer's fixed, credential-free refusal (git-transfer.ts) as this API's error; anything else as it is. */
 export function failTransfer(error: unknown): never {
   if (error instanceof GitTransferError) fail(error.status as ContentfulStatusCode, error.code, error.message);
   throw error;
@@ -57,20 +56,11 @@ export function userIdentifier(value: unknown, field = 'userId'): string {
   }
   return result;
 }
-/** A password account's username: lowercase, 3-39 letters, digits, `-` and `_`, starting with a letter or digit. */
 export const PASSWORD_USERNAME = /^[a-z0-9][a-z0-9_-]{2,38}$/;
-/** A password account's user ID, `password:<username>`. */
 export const PASSWORD_USER_ID = /^password:[a-z0-9][a-z0-9_-]{2,38}$/;
-/** Username and password sign-in and sign-up (password-auth.ts); never on a local server, which admits only its owner. */
 export function passwordAuthEnabled(env: Env): boolean {
   return env.PASSWORD_AUTH === 'true' && !localMode(env);
 }
-/**
- * Who may create an account with a sign-in method (SIGNUP): `open` anyone who reaches the server, `invite` only someone
- * holding a workspace's current invite link, whose request to join it is filed with the account, `off` nobody (the
- * operator still creates password accounts with --create-admin, and ADMIN_USER_IDS's GitHub accounts always sign up).
- * Unset, GitHub stays open as it always was, and passwords take invitations.
- */
 export type SignupMode = 'open' | 'invite' | 'off';
 export const signupModes: readonly SignupMode[] = ['open', 'invite', 'off'];
 export function signupMode(env: Env, method: 'github' | 'password'): SignupMode {
@@ -84,24 +74,15 @@ export function testMode(env: Env): boolean {
   return env.TEST_AUTH_ENABLED === 'true' &&
     !!env.TEST_AUTH_SECRET && env.TEST_AUTH_SECRET.length >= 32 && Number.isFinite(expiry) && expiry > Date.now();
 }
-/**
- * A local server (`pikibun serve`, or the desktop app's server on this computer): it listens on loopback only and admits
- * one GitHub account, the one that claimed it with the secret the launcher printed or opened (see local/claim.ts).
- */
 export function localMode(env: Env): boolean {
   return env.LOCAL_MODE === 'true' && !!env.LOCAL_CLAIM_SECRET && /^[A-Za-z0-9_-]{43}$/.test(env.LOCAL_CLAIM_SECRET);
 }
-/**
- * The local server's owner as SQL: the user LOCAL_OWNER_ID names (pinned once the same data has served others, see
- * local/launch.ts), else its first GitHub user, the one that claimed it.
- */
 export function localOwnerQuery(env: Env): { sql: string; params: string[] } {
   return env.LOCAL_OWNER_ID && /^github:[1-9][0-9]*$/.test(env.LOCAL_OWNER_ID)
     ? { sql: `SELECT id, github_id FROM users WHERE id = ? AND auth_kind = 'github' AND github_id IS NOT NULL`, params: [env.LOCAL_OWNER_ID] }
     : { sql: `SELECT id, github_id FROM users WHERE auth_kind = 'github' AND github_id IS NOT NULL ORDER BY created_at, id LIMIT 1`, params: [] };
 }
 const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]'];
-/** Plain HTTP is only for loopback, and only in test mode or on a local server, which never leaves this machine. */
 export function loopbackHttp(env: Env, url: URL): boolean {
   return url.protocol === 'http:' && LOOPBACK_HOSTNAMES.includes(url.hostname) && (testMode(env) || localMode(env));
 }

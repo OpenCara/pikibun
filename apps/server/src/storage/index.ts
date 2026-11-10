@@ -2,13 +2,6 @@ import { FilesystemStorage } from './filesystem.js';
 import { S3Storage } from './s3.js';
 import type { ObjectStorage } from './types.js';
 
-/**
- * Builds the backup store named by `STORAGE_URL`:
- * - `file:///data/backups` — a directory on the local filesystem.
- * - `s3://bucket/prefix?endpoint=https://minio.example&region=us-east-1` — any S3-compatible service.
- *   Credentials come from `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (or the standard `AWS_*` names,
- *   including the SDK's own provider chain when neither is set).
- */
 export function openStorage(url: string, processEnv: NodeJS.ProcessEnv = process.env): ObjectStorage {
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new Error(`STORAGE_URL is not a valid URL: ${url}`); }

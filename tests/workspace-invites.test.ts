@@ -7,7 +7,6 @@ import { testDatabase } from './helpers/control-plane.js';
 import type { WorkspaceInvite, WorkspaceInviteLink, WorkspaceJoinRequest } from '../packages/shared/src/invites.js';
 import type { Workspace } from '../packages/shared/src/types.js';
 
-// Invite links and pending members, end to end through the control plane.
 const origin = 'http://localhost:8787';
 const testSecret = 'workspace-invites-test-secret-not-for-deployment';
 
@@ -66,7 +65,6 @@ const invite = async (client: Client, token: string, status = 200) =>
 const ask = (client: Client, token: string) => client.request('POST', '/api/invite', { token });
 const requests = async (client: Client, workspaceId: string) =>
   (await json<{ requests: WorkspaceJoinRequest[] }>(await client.request('GET', `/api/workspaces/${workspaceId}/join-requests`))).requests;
-// Everyone has a private workspace too: these are the others.
 const workspaces = async (client: Client) => (await json<{ workspaces: Workspace[] }>(await client.request('GET', '/api/workspaces'))).workspaces
   .filter(item => !item.personal);
 
@@ -81,10 +79,8 @@ test('owners and admins share one invite link; other roles and outsiders cannot 
 
   assert.equal((await json<{ link: null }>(await owner.request('GET', path))).link, null);
   const created = (await json<{ link: WorkspaceInviteLink }>(await owner.request('PUT', path), 201)).link;
-  // Idempotent: the admin gets the same link, and so does a second request.
   assert.deepEqual((await json<{ link: WorkspaceInviteLink }>(await admin.request('PUT', path))).link, created);
   assert.deepEqual((await json<{ link: WorkspaceInviteLink }>(await admin.request('GET', path))).link, created);
-  // The token is stored only hashed and encrypted.
   const row = f.sqlite.prepare('SELECT token_hash, token_ciphertext FROM workspace_invite_links').get() as { token_hash: string; token_ciphertext: string };
   assert.notEqual(row.token_hash, tokenOf(created));
   assert.ok(!row.token_ciphertext.includes(tokenOf(created)));
@@ -107,14 +103,11 @@ test('opening the link makes a registered user a pending member, with no access 
   await addMember(owner, team.id, admin, 'admin');
   const token = tokenOf((await json<{ link: WorkspaceInviteLink }>(await admin.request('PUT', `/api/workspaces/${team.id}/invite-link`), 201)).link);
 
-  // The link shows the workspace's name, but not its id, to someone who isn't a member.
   assert.deepEqual(await invite(alice, token), { workspaceName: 'Team', status: 'none' });
   assert.deepEqual((await json<{ invite: WorkspaceInvite }>(await ask(alice, token), 201)).invite, { workspaceName: 'Team', status: 'pending' });
-  // Asking again keeps the request.
   assert.deepEqual((await json<{ invite: WorkspaceInvite }>(await ask(alice, token))).invite, { workspaceName: 'Team', status: 'pending' });
   assert.deepEqual(await invite(alice, token), { workspaceName: 'Team', status: 'pending' });
 
-  // Pending is not membership.
   assert.deepEqual(await workspaces(alice), []);
   await denied(await alice.request('GET', `/api/workspaces/${team.id}/members`), 404, 'not_found');
   const members = (await json<{ members: { userId: string }[] }>(await owner.request('GET', `/api/workspaces/${team.id}/members`))).members;
@@ -124,7 +117,6 @@ test('opening the link makes a registered user a pending member, with no access 
   const pending = await requests(admin, team.id);
   assert.deepEqual(pending.map(item => [item.userId, item.displayName]), [[alice.user.id, 'alice'], [bob.user.id, 'bob']]);
 
-  // Admins accept with the roles below their own; only the owner makes someone an admin.
   const accept = (by: Client, who: Client, role: string) => by.request('POST', `/api/workspaces/${team.id}/join-requests/${encodeURIComponent(who.user.id)}/accept`, { role });
   await denied(await accept(admin, alice, 'admin'), 403, 'forbidden');
   await denied(await accept(admin, alice, 'owner'), 400, 'invalid_input');
@@ -132,7 +124,6 @@ test('opening the link makes a registered user a pending member, with no access 
   assert.deepEqual(left.map(item => item.userId), [bob.user.id]);
   assert.deepEqual((await workspaces(alice)).map(item => [item.id, item.role]), [[team.id, 'collaborator']]);
   assert.deepEqual(await invite(alice, token), { workspaceName: 'Team', status: 'member', workspaceId: team.id });
-  // A member asking again stays a member and adds no request.
   assert.deepEqual((await json<{ invite: WorkspaceInvite }>(await ask(alice, token))).invite.status, 'member');
   await denied(await accept(admin, alice, 'member'), 404, 'not_found');
 
@@ -152,7 +143,6 @@ test('declining, withdrawing, adding directly and turning the link off', async t
   const token = tokenOf((await json<{ link: WorkspaceInviteLink }>(await owner.request('PUT', path), 201)).link);
   for (const client of [alice, bob, carol]) await json(await ask(client, token), 201);
 
-  // Only owners and admins decide.
   await denied(await member.request('DELETE', `/api/workspaces/${team.id}/join-requests/${encodeURIComponent(alice.user.id)}`), 403, 'forbidden');
   await denied(await member.request('POST', `/api/workspaces/${team.id}/join-requests/${encodeURIComponent(alice.user.id)}/accept`, { role: 'viewer' }), 403, 'forbidden');
 
@@ -161,14 +151,11 @@ test('declining, withdrawing, adding directly and turning the link off', async t
   assert.equal((await invite(alice, token)).status, 'none');
   await denied(await owner.request('DELETE', `/api/workspaces/${team.id}/join-requests/${encodeURIComponent(alice.user.id)}`), 404, 'not_found');
 
-  // Withdrawing one's own request.
   assert.equal((await json<{ invite: WorkspaceInvite }>(await bob.request('DELETE', '/api/invite', undefined, { 'x-invite-token': token }))).invite.status, 'none');
 
-  // Adding someone directly settles their pending request.
   await addMember(owner, team.id, carol, 'viewer');
   assert.deepEqual(await requests(owner, team.id), []);
 
-  // Turning the link off stops new requests, with one answer for every link that doesn't work, and keeps pending ones.
   await json(await ask(bob, token), 201);
   await json(await owner.request('DELETE', path));
   await denied(await alice.request('GET', '/api/invite', undefined, { 'x-invite-token': token }), 404, 'not_found');
@@ -177,11 +164,9 @@ test('declining, withdrawing, adding directly and turning the link off', async t
   await denied(await alice.request('GET', '/api/invite'), 404, 'not_found');
   assert.deepEqual((await requests(owner, team.id)).map(item => item.userId), [bob.user.id]);
 
-  // A request outlives its link: its requester still sees and withdraws it, without the link.
   const own = async (client: Client) => (await json<{ requests: { workspaceId: string; workspaceName: string }[] }>(await client.request('GET', '/api/join-requests'))).requests;
   assert.deepEqual((await own(bob)).map(item => [item.workspaceId, item.workspaceName]), [[team.id, 'Team']]);
   assert.deepEqual(await own(alice), []);
-  // Nobody withdraws someone else's request, and a workspace they aren't waiting on answers like a missing one.
   await denied(await alice.request('DELETE', `/api/join-requests/${team.id}`), 404, 'not_found');
   await denied(await alice.request('DELETE', '/api/join-requests/missing'), 404, 'not_found');
   assert.deepEqual((await requests(owner, team.id)).map(item => item.userId), [bob.user.id]);
@@ -189,7 +174,6 @@ test('declining, withdrawing, adding directly and turning the link off', async t
   assert.deepEqual(await own(bob), []);
   assert.deepEqual(await requests(owner, team.id), []);
 
-  // Turning it on again issues a new link; the old one keeps failing.
   const fresh = tokenOf((await json<{ link: WorkspaceInviteLink }>(await owner.request('PUT', path), 201)).link);
   assert.notEqual(fresh, token);
   await denied(await ask(alice, token), 404, 'not_found');
@@ -210,7 +194,6 @@ test('accepting a pending member brings their own hosts into the workspace, as a
     .get(credentials.connectorId, team.id) as { count: number };
   const token = tokenOf((await json<{ link: WorkspaceInviteLink }>(await owner.request('PUT', `/api/workspaces/${team.id}/invite-link`), 201)).link);
   await json(await ask(alice, token), 201);
-  // Pending brings nothing in.
   assert.equal(Number(attached().count), 0);
   await json(await owner.request('POST', `/api/workspaces/${team.id}/join-requests/${encodeURIComponent(alice.user.id)}/accept`, { role: 'member' }));
   assert.equal(Number(attached().count), 1);
@@ -232,7 +215,6 @@ test('the pending queue is bounded', async t => {
     insertRequest.run(team.id, `test:filler-${index}`, at);
   }
   await denied(await ask(late, token), 409, 'too_many_pending');
-  // Waiting requests count until someone decides them; declining one makes room.
   await json(await owner.request('DELETE', `/api/workspaces/${team.id}/join-requests/${encodeURIComponent('test:filler-0')}`));
   await json(await ask(late, token), 201);
 });

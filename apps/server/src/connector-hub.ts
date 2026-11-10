@@ -19,17 +19,12 @@ type Pending = {
   cancelTimer: () => void;
   bytes: number;
   responding: boolean;
-  /**
-   * Its deadline passed and its caller was answered: the host still owes a reply, which only frees its slot. The host
-   * answers every request it was sent, if need be as timed out itself, so the entry never outlives the connection.
-   */
   expired?: boolean;
 };
 const encoder = new TextEncoder();
 
 class SessionAuthorizationError extends HTTPException {}
 
-/** Answers a failed upgrade with a plain HTTP response on the raw socket and closes it. */
 export async function rejectUpgrade(socket: Duplex, response: Response): Promise<void> {
   const body = Buffer.from(await response.arrayBuffer());
   const lines = [`HTTP/1.1 ${response.status} ${STATUS_CODES[response.status] ?? ''}`, 'Connection: close', `Content-Length: ${body.byteLength}`];
@@ -41,12 +36,6 @@ export async function rejectUpgrade(socket: Duplex, response: Response): Promise
   socket.end(Buffer.concat([Buffer.from(`${lines.join('\r\n')}\r\n\r\n`), body]));
 }
 
-/**
- * The relay for one connector id: the same state machine the Durable Object ran, with the
- * current generation held in memory (the server is the single instance; every connector
- * reconnects after a restart) and fenced through `connectors.connection_hash` in the database.
- * Prompts, replies and plaintext tokens are never persisted.
- */
 class ConnectorRelay {
   private current: SocketGeneration | null = null;
   private readonly pending = new Map<string, Pending>();
@@ -57,7 +46,6 @@ class ConnectorRelay {
 
   constructor(readonly connectorId: string, private readonly env: Env, private readonly server: WebSocketServer) {}
 
-  /** Runs connection-changing work one at a time, as `blockConcurrencyWhile` did. */
   serialize<T>(work: () => Promise<T>): Promise<T> {
     const result = this.serial.then(work, work);
     this.serial = result.catch(() => {});
@@ -83,7 +71,6 @@ class ConnectorRelay {
       this.close(previous.socket, 1012, 'Connection replaced');
     }
     const attachment: Generation = { connectorId, credentialHash, connectionHash, generation };
-    // `handleUpgrade` completes synchronously: either the callback runs or ws has already answered the client.
     let accepted: WebSocket | undefined;
     this.server.handleUpgrade(request, socket, head, upgraded => { accepted = upgraded; });
     if (!accepted) { await this.clearConnection(attachment); return; }
@@ -110,7 +97,6 @@ class ConnectorRelay {
   }
 
   async rpc(envelope: ConnectorRelayEnvelope): Promise<Response> {
-    // Reserve before the first await, including requests still validating or checking the database.
     if (this.admitting + this.pending.size + this.replying >= connectorLimits.pendingRequests || !this.reserve(connectorRequestFrameBytes * 2)) {
       fail(429, 'connector_busy', 'The connector relay is at capacity.');
     }
@@ -121,7 +107,6 @@ class ConnectorRelay {
       const connection = this.current;
       if (!connection || envelope.connectorId !== connection.connectorId || envelope.credentialHash !== connection.credentialHash ||
           envelope.connectionHash !== connection.connectionHash || connection.socket.readyState !== WebSocket.OPEN) fail(503, 'connector_offline', 'The connector is offline or has reconnected.');
-      // A hub-minted wire nonce prevents reuse of an old RPC id from matching a late reply. The caller's envelope stays untouched.
       const wireId = id();
       const relayed: ConnectorRelayEnvelope = { ...envelope, request: { ...envelope.request, id: wireId, ticket: { ...envelope.request.ticket, jti: wireId } } };
       const wire = JSON.stringify(relayed.request);
@@ -133,14 +118,12 @@ class ConnectorRelay {
       if (this.current !== connection || connection.socket.readyState !== WebSocket.OPEN) fail(503, 'connector_replaced', 'The connector connection changed.');
       if (relayed.request.ticket.exp <= Math.floor(Date.now() / 1000)) fail(403, 'ticket_expired', 'Connector authorization expired.');
       const { promise: response, resolve } = Promise.withResolvers<Response>();
-      // One slow request ends with a timeout for its caller, not with the connection and every session's request on it.
       const timer = setTimeout(() => this.expire(wireId), connectorRequestTimeoutMs(relayed.request.ticket.action));
       const pending: Pending = { connection, envelope: relayed, resolve, bytes, responding: false, cancelTimer: () => clearTimeout(timer) };
       this.pending.set(wireId, pending);
       reserved = 0;
       try { connection.socket.send(wire); }
       catch { void this.disconnect(connection, 503, 'Connector disconnected').catch(() => {}); }
-      // Not awaited: admission ends once the request is on the wire; the pending entry owns the reply.
       return response;
     } finally {
       this.admitting--;
@@ -176,17 +159,14 @@ class ConnectorRelay {
     const socket = connection.socket;
     if (this.current !== connection) { this.close(socket, 1008, 'Stale connection'); return; }
     const frame = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data);
-    // Binary frames are not part of this protocol. Charge the complete JSON frame before parsing.
     if (isBinary || frame.byteLength > connectorLimits.frameBytes) {
       await this.disconnect(connection, 502, 'Invalid connector frame'); return;
     }
     const frameBytes = frame.byteLength;
-    // Heartbeats are answered without admission, as the Durable Object's auto-response did.
     if (frameBytes === 4 && frame.toString('latin1') === 'ping') {
-      try { socket.send('pong'); } catch { /* The close handler reports the drop. */ }
+      try { socket.send('pong'); } catch { }
       return;
     }
-    // Reserve both the wire text and its decoded body, not just one copy.
     let charged = frameBytes * 2;
     if (!this.reserve(charged)) {
       await this.disconnect(connection, 502, 'Connector buffer limit exceeded'); return;
@@ -209,14 +189,12 @@ class ConnectorRelay {
       if (!pending || pending.responding || pending.connection !== connection) {
         await this.disconnect(connection, 502, 'Unsolicited connector response'); return;
       }
-      // The late reply to a request whose caller already heard it timed out: it frees the slot and goes nowhere.
       if (pending.expired) { this.finish(reply.id, new Response(null, { status: 204 })); return; }
       pending.responding = true;
       try {
         await this.checkAuthority(connection, pending.envelope);
       } catch (error) {
         if (!(error instanceof SessionAuthorizationError)) throw error;
-        // A session policy change does not revoke other sessions on the same host.
         if (this.current === connection && this.pending.get(reply.id) === pending) {
           this.finish(reply.id, this.errorResponse(error.status, 'Session authorization changed; inspect the session before retrying'));
         }
@@ -229,7 +207,6 @@ class ConnectorRelay {
       if ([204, 205, 304].includes(reply.status)) {
         this.finish(reply.id, new Response(null, { status: reply.status }));
       } else {
-        // Keep completed replies charged until their internal fetch consumer drains or cancels them.
         this.replying++;
         let body = reply.body;
         reply.body = '';
@@ -244,7 +221,6 @@ class ConnectorRelay {
           body = '';
         };
         let controller: ReadableStreamDefaultController<Uint8Array>;
-        // Safety release for consumers that never drain; it must not keep an otherwise idle process alive.
         const timer = setTimeout(() => { controller.error(new Error('Connector response expired')); release(); }, 30000).unref();
         const stream = new ReadableStream<Uint8Array>({
           start(value) { controller = value; },
@@ -262,7 +238,6 @@ class ConnectorRelay {
         this.finish(reply.id, new Response(stream, { status: reply.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } }));
       }
     } catch {
-      // Do not retain or reflect connector-supplied data in protocol errors.
       this.failPending(connection, 403, 'Connector authorization or protocol validation failed');
       await this.disconnect(connection, 403, 'Connector authorization or protocol validation failed');
     } finally { this.bufferedBytes -= charged; }
@@ -280,17 +255,12 @@ class ConnectorRelay {
           if (!(error instanceof HTTPException) || ![403, 404, 409].includes(error.status)) throw error;
           denied = error;
         }
-        // Only isolate session denials after confirming the host generation is still valid.
         await requireConnectorGeneration(this.env, connection.connectorId, connection.credentialHash, connection.connectionHash);
         if (denied) throw new SessionAuthorizationError(denied.status, { res: denied.getResponse() });
       })()]);
     } finally { clearTimeout(timer); }
   }
 
-  /**
-   * A request past its deadline: its caller hears it timed out, and the effect may or may not have happened. Its entry
-   * stays, holding its slot and bytes, until the host's own answer arrives (see `Pending.expired`).
-   */
   private expire(requestId: string): void {
     const pending = this.pending.get(requestId);
     if (!pending || pending.responding || pending.expired) return;
@@ -318,7 +288,7 @@ class ConnectorRelay {
   }
 
   private close(socket: WebSocket, code: number, reason: string): void {
-    try { socket.close(code, reason); } catch { /* Already closed. */ }
+    try { socket.close(code, reason); } catch { }
   }
 
   private async clearConnection(connection: Generation): Promise<void> {
@@ -334,14 +304,12 @@ class ConnectorRelay {
   }
 }
 
-/** One relay per connector id for the life of the process; see `ConnectorHub`. */
 export class ConnectorHubRegistry implements ConnectorHub {
   private readonly relays = new Map<string, ConnectorRelay>();
   private readonly server: WebSocketServer;
 
   constructor(private readonly env: Env) {
     this.server = new WebSocketServer({
-      // Compression for connectors that offer it: each message on its own, so no message's content shapes another's size.
       noServer: true, maxPayload: connectorLimits.frameBytes,
       perMessageDeflate: { threshold: 1024, serverNoContextTakeover: true, clientNoContextTakeover: true },
       handleProtocols: () => 'opencara-pi-v1',
@@ -362,7 +330,6 @@ export class ConnectorHubRegistry implements ConnectorHub {
     try {
       await relay.serialize(() => relay.connect(request, socket, head, credentialHash));
     } catch (error) {
-      // Only pre-upgrade failures reach here; once upgraded, the relay closes the WebSocket itself.
       await rejectUpgrade(socket, connectorError(error));
     }
   }

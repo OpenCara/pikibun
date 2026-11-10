@@ -16,8 +16,8 @@ desktop builds run the installed command instead: see [This Computer](#this-comp
 From the repository (the scripts fetch the pinned NSH CLI once into `.cache/nsh`; `NSH_BIN` names another):
 
 ```sh
-pnpm build:preview            # the NSH web preview into dist/preview
-pnpm dev:preview              # the app in a window of this desktop, with hot reload
+pnpm build:client            # the NSH web preview into dist/client
+pnpm dev:client              # the app in a window of this desktop, with hot reload
 pnpm nsh run --target ios     # or android, web, macos, windows, linux: any `nsh` command, run in apps/nsh
 pnpm dev:native               # a test-mode server with a host and a session to point the app at
 ```
@@ -132,7 +132,7 @@ React web client's address for it) makes this computer one of your hosts:
 
 The connector isn't in the app: NSH bundles no Node.js. The app runs the `pikibun` command as `pikibun host --stdio`
 (`apps/runner/src/host-cli.ts` and `app-host.ts`), and talks to it with JSON lines
-on its stdin and stdout (`desktop-protocol.ts`), where pairing codes and API keys travel; never its command line.
+on its stdin and stdout (`app-host-protocol.ts`), where pairing codes and API keys travel; never its command line.
 When the command is missing or too old, the page's **Install pikibun** or **Update pikibun** button runs npm, with the
 owner's Node.js, into a `cli` folder of the app's data directory (`npm install --prefix <data dir>/cli pikibun@latest`),
 not npm's global folder: nothing needs sudo or a PATH change, and the copy is the app's to update. npm's output goes to

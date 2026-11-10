@@ -48,7 +48,6 @@ async function proxy(t: TestContext, options: { policy?: Partial<NetworkPolicy>;
   return { instance, upstream, asked, log, socketPath: instance.socketPath };
 }
 
-/** A CONNECT through the proxy's socket, then TLS that trusts only the proxy's authority, as a sandboxed client does. */
 function connect(socketPath: string, host = "api.github.com"): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
     const request = httpRequest({ socketPath, method: "CONNECT", path: `${host}:443` });
@@ -90,8 +89,6 @@ test("the proxy's authority vouches only for the credentialed API hosts, for str
   assert.equal(certificate.ca, false);
   assert.throws(() => authority.context("example.com"), /doesn't answer for example\.com/);
 
-  // OpenSSL's strict checks (as Python 3.13 applies them) accept it, and the name constraint refuses any other host
-  // even with a certificate the authority itself signed.
   const openssl = spawnSync("openssl", ["version"]).status === 0;
   if (!openssl) return t.diagnostic("openssl is not installed: strict verification not checked");
   const directory = await mkdtemp(join(tmpdir(), "ca-"));
@@ -116,7 +113,6 @@ test("GitHub API reads get the session's read-only token at the proxy, whatever 
   const answer = await call(socketPath, "/repos/acme/app/actions/runs/40860931084?per_page=1");
   assert.equal(answer.status, 200);
   assert.equal(answer.body, "{\"ok\":true}");
-  // HTTP/1.1 even for a client that offers h2, such as gh.
   assert.equal(answer.protocol, "http/1.1");
   assert.equal(upstream.length, 1);
   assert.equal(upstream[0]!.url.href, "https://api.github.com/repos/acme/app/actions/runs/40860931084?per_page=1");
@@ -129,7 +125,6 @@ test("GitHub API reads get the session's read-only token at the proxy, whatever 
   assert.deepEqual(log().map(entry => [entry.target, entry.outcome, entry.reason]),
     [["GET api.github.com/repos/acme/app/actions/runs/40860931084", "allowed", "read-only token for acme (200)"]]);
 
-  // Another installation's repository gets its own token, and the credential is reused for a minute.
   await call(socketPath, "/repos/Tools/CLI/pulls");
   assert.equal(upstream[1]!.headers.authorization, "Bearer ghs_tools");
   assert.deepEqual(asked, ["api.github.com"]);
@@ -159,7 +154,6 @@ test("GraphQL queries are read with the token of the owner they name", async t =
   assert.equal(answer.status, 200);
   assert.equal(upstream[0]!.headers.authorization, "Bearer ghs_tools");
   assert.equal(Buffer.from(upstream[0]!.body!).toString("utf8"), body);
-  // A query naming no owner gets the first installation's.
   await call(socketPath, "/graphql", { method: "POST", body: JSON.stringify({ query: "{ viewer { login } }" }), headers: { "content-type": "application/json" } });
   assert.equal(upstream[1]!.headers.authorization, "Bearer ghs_acme");
   assert.equal((await call(socketPath, "/graphql", { method: "POST", body: "not json" })).status, 400);
@@ -191,7 +185,6 @@ test("without a credential from Pikibun, the proxy says why", async t => {
   assert.match(JSON.parse(answer.body).message, new RegExp(`^${reason}; api\\.github\\.com is reachable only with that credential`));
   assert.equal(upstream.length, 0);
 
-  // An unreachable control plane is the same, briefly cached.
   const failing = await proxy(t, { credential: async () => { throw new Error("offline"); } });
   assert.equal((await call(failing.socketPath, "/repos/acme/app")).status, 403);
 });
@@ -201,7 +194,6 @@ test("downloads GitHub redirects to its storage are fetched by the proxy without
     if (request.url.pathname.endsWith("/logs")) return { status: 302, headers: { location: "https://results-receiver.actions.githubusercontent.com/logs/1?sig=abc" } };
     if (request.url.pathname.endsWith("/elsewhere")) return { status: 302, headers: { location: "https://evil.example/collect" } };
     if (request.url.pathname.endsWith("/artifacts/7/zip")) return { status: 302, headers: { location: "https://pipelines.actions.githubusercontent.com/a/start" } };
-    // A storage host's own relative redirect is relative to it, not to api.github.com.
     if (request.url.pathname === "/a/start") return { status: 302, headers: { location: "/a/blob?sig=1" } };
     if (request.url.hostname !== "api.github.com") return { status: 200, headers: { "content-type": "text/plain" }, body: "2026-10-29T11:09:42Z Unable to resolve \"./types.js\"" };
     return { status: 200 };
@@ -231,7 +223,6 @@ test("without the API in its grant (a pinned session, an older control plane), t
   assert.deepEqual(closed.asked, [], "no credential is asked for");
   assert.equal(closed.upstream.length, 0);
 
-  // Where the policy allows api.github.com, requests go on as they did through a tunnel, without the placeholder.
   const open = await proxy(t, { apis: false, policy: { mode: "open" } });
   assert.equal((await call(open.socketPath, "/repos/acme/app/releases/latest")).status, 200);
   assert.equal(open.upstream[0]!.headers.authorization, undefined);
@@ -305,7 +296,6 @@ test("an approved call's write lease writes as the session owner, and only while
   assert.equal(upstream[0]!.headers.authorization, "Bearer gho_owner");
   assert.equal(Buffer.from(upstream[0]!.body!).toString("utf8"), "{\"body\":\"hi\"}", "the body goes on as it was");
   assert.doesNotMatch(JSON.stringify(upstream[0]!.headers), new RegExp(API_TOKEN_PLACEHOLDER));
-  // Its reads and mutations go as the owner too, and the owner's credential is still only for the workspace's repositories.
   const mutation = await call(socketPath, "/graphql", { method: "POST", headers: { "content-type": "application/json", authorization: `bearer ${lease.token}` },
     body: JSON.stringify({ query: "mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }" }) });
   assert.equal(mutation.status, 200);
@@ -315,12 +305,10 @@ test("an approved call's write lease writes as the session owner, and only while
   assert.deepEqual(asked, ["api.github.com", "api.github.com (write)"]);
   assert.match(log()[0]!.reason!, /^the session owner's token for session-owner \(200\)$/);
 
-  // Released, its token is the plain placeholder's: writes are refused again.
   lease.release();
   const after = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{}", headers: { authorization: `token ${lease.token}` } });
   assert.equal(after.status, 403);
   assert.match(JSON.parse(after.body).message, /or the gh tool \(piki:gh\), approved, on the session owner's own host$/);
-  // A lease never handed out is no lease.
   const forged = await call(socketPath, "/repos/acme/app/issues/1/comments", { method: "POST", body: "{}", headers: { authorization: `token ${apiWriteToken("F".repeat(43))}` } });
   assert.equal(forged.status, 403);
   assert.equal(upstream.length, 2);
@@ -352,7 +340,6 @@ test("gitlab.com: glab's requests get the owner's token, its website goes on as 
   const note = await call(closed.socketPath, "/api/v4/projects/1/merge_requests/2/notes", { host: "gitlab.com", method: "POST", body: "{}", headers: { authorization: undefined, "private-token": API_TOKEN_PLACEHOLDER } });
   assert.equal(note.status, 403);
   assert.match(JSON.parse(note.body).message, /only read through the GitLab API; it writes only with the glab tool \(piki:glab\)/);
-  // The website, and the API without the placeholder, aren't Pikibun's to answer: only where the policy allows gitlab.com.
   const page = await call(closed.socketPath, "/group/project/-/raw/main/README.md", { host: "gitlab.com", headers: { authorization: undefined } });
   assert.equal(page.status, 403);
   assert.match(JSON.parse(page.body).message, /network policy doesn't allow gitlab\.com/);
@@ -376,7 +363,6 @@ test("dev.azure.com: az devops's Basic placeholder gets the owner's token for th
   const create = await call(socketPath, "/contoso/App/_apis/git/repositories/r/pullrequests", { host: "dev.azure.com", method: "POST", body: "{}", headers: { authorization: basic } });
   assert.equal(create.status, 403);
   assert.match(JSON.parse(create.body).message, /the az tool \(piki:azure-cli\)/);
-  // An organization the session owner has no token for gets none, not another organization's (review of #158).
   const other = await call(socketPath, "/elsewhere/_apis/projects", { host: "dev.azure.com", headers: { authorization: basic } });
   assert.equal(other.status, 403);
   assert.match(JSON.parse(other.body).message, /^elsewhere is not an organization of this workspace's repositories/);
@@ -403,17 +389,13 @@ test("the API's upstream takes public addresses and a local proxy's fake-IP ones
   const { upstreamAddresses } = await import("../apps/runner/src/api-access.js");
   const answer = (...addresses: string[]) => async () => addresses.map(address => ({ address, family: address.includes(":") ? 6 : 4 }));
   assert.deepEqual(await upstreamAddresses("api.github.com", answer("140.82.112.6")), [{ address: "140.82.112.6", family: 4 }]);
-  // Clash, sing-box and Surge answer from 198.18.0.0/15 for the names they route, and pass the connection on.
   assert.deepEqual(await upstreamAddresses("api.github.com", answer("198.18.0.1")), [{ address: "198.18.0.1", family: 4 }]);
   assert.deepEqual(await upstreamAddresses("gitlab.com", answer("::ffff:198.19.255.254")), [{ address: "::ffff:198.19.255.254", family: 6 }]);
-  // Just past the benchmarking network is the internet again.
   assert.equal((await upstreamAddresses("api.github.com", answer("198.20.0.1"))).length, 1);
   for (const address of ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "fd00::1"]) {
     await assert.rejects(upstreamAddresses("api.github.com", answer(address)), /does not resolve to a public address \(it resolves to/);
   }
-  // A name that resolves to both is refused whole, and an address given as the host is never a fake-IP one.
   await assert.rejects(upstreamAddresses("api.github.com", answer("198.18.0.1", "10.0.0.1")), /resolves to 10\.0\.0\.1 on this host/);
-  // The error names the address it refused, not the first one.
   await assert.rejects(upstreamAddresses("api.github.com", answer("140.82.112.6", "192.168.1.1")), /resolves to 192\.168\.1\.1 on this host/);
   await assert.rejects(upstreamAddresses("198.18.0.1"), /public address/);
   await assert.rejects(upstreamAddresses("api.github.com", async () => { throw new Error("ENOTFOUND"); }), /does not resolve to a public address$/);

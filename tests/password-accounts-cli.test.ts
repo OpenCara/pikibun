@@ -72,7 +72,6 @@ test("--reset-password sets a new password, clears failed sign-ins and signs the
   assert.equal((await app.request("/api/me", { headers: { Cookie: cookie } }, f.env)).status, 401);
   assert.equal((await f.signIn("root", password)).status, 401);
   assert.equal((await f.signIn("root", "a fresh long passphrase")).status, 200);
-  // Any password account, not only administrators: the way back in for someone who forgot theirs.
   f.sqlite.prepare("INSERT INTO users (id, display_name, git_name, git_email, auth_kind, created_at) VALUES ('password:alice', 'A', 'A', 'a@example.test', 'password', '2026-01-01')").run();
   f.sqlite.prepare("INSERT INTO password_credentials (user_id, password_hash, created_at, updated_at) VALUES ('password:alice', 'scrypt$x', '2026-01-01', '2026-01-01')").run();
   await runPasswordCommand(f.db, {}, { kind: "reset-password", username: "alice" }, read);

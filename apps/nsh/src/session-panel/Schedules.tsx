@@ -14,9 +14,6 @@ import { Card } from "../settings/accounts";
 import { CodeView } from "./Files";
 import { TabPage, type PanelTabProps } from "./parts";
 
-// The session panel's Schedules tab, as the web app's (session-schedules.tsx): the owner's scheduled prompts, which
-// wake the agent with a message on a cron schedule.
-
 type ScheduleListing = { schedules: SessionSchedule[]; canManage: boolean };
 
 const presets: { label: string; cron: string }[] = [
@@ -83,7 +80,6 @@ export function Schedules(props: PanelTabProps) {
   const editing = signal<SessionSchedule | "new" | null>(null);
   const canManage = () => Boolean(listing.data()?.canManage) && !props.session()?.frozen;
   const after = () => { listing.refresh(); data.refreshSessions(); props.refresh(); };
-  // The agent changes schedules too (its schedule tool): read them again when the session's next run or activity changes.
   let seen = "";
   effect(() => {
     const watched = `${props.session()?.nextScheduledAt ?? ""}|${props.session()?.activity ?? ""}`;
@@ -185,7 +181,6 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
   function save() {
     if (!ready() || form.busy()) return;
     void form.run(async () => {
-      // Older servers take no runIn: it goes only where it says something, or the schedule already has one.
       const body = { name: name().trim(), cron: cron(), timeZone: timeZone(), content: content(), access: access(),
         ...(runIn() !== "session" || existing?.runIn !== undefined ? { runIn: runIn() } : {}) };
       if (existing) await session().api(`${props.base}/${segment(existing.id)}`, { method: "PATCH", body: { ...body, ...(body.name ? {} : { name: existing.name }) } });

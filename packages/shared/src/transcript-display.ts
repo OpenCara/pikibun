@@ -2,15 +2,6 @@ import { briefCallLine, resultSummary } from "./tool-summary.js";
 import { transcriptLines } from "./transcript.js";
 import type { EntryView, SessionView } from "./types.js";
 
-/**
- * How the control plane shows a session's transcript to the people viewing it. Hosts always send the whole transcript;
- * these change only what leaves the control plane, so they work with every connector.
- *
- * - Tool output (per session, `SessionRecord.toolOutput`, starting as its workspace sets for new sessions): "brief" shows
- *   each tool result as one line saying what came of it (tool-summary.ts) and cuts long tool calls short.
- * - Paging (per workspace): views hold only each conversation's latest entries, and clients read earlier ones a page at
- *   a time as people scroll up.
- */
 export type ToolOutput = "full" | "brief";
 export const toolOutputs: readonly ToolOutput[] = ["full", "brief"];
 
@@ -20,12 +11,9 @@ export interface TranscriptDisplay {
 }
 export const fullTranscript: TranscriptDisplay = { toolOutput: "full", paging: false };
 
-/** Characters of a brief tool result's line, and of a cut tool call's arguments. */
 export const briefChars = 200;
-/** Entries per conversation a paged view holds, entries one page reads, and the most one request may ask for. */
 export const transcriptPage = { size: 50, max: 200 } as const;
 
-/** How many characters (code points) `text` has, as people count them: an emoji is one, not two UTF-16 units. */
 export function characters(text: string): number {
   let count = text.length;
   for (let index = 0; index < text.length - 1; index++) {
@@ -38,31 +26,19 @@ export function characters(text: string): number {
   return count;
 }
 
-/** At most `limit` characters (whole code points) of `text`, with an ellipsis when cut. */
 function cut(text: string, limit: number): string {
-  // A code point is at most two UTF-16 units: only text longer than `limit` units can need cutting, and its first
-  // `limit * 2 + 2` units hold more than `limit` code points whenever the whole text does.
   if (text.length <= limit) return text;
   const points = Array.from(text.slice(0, limit * 2 + 2));
   return points.length > limit ? `${points.slice(0, limit).join("")}…` : text;
 }
 
-/**
- * The entry as a session with brief tool output shows it, or the entry itself when that shows it whole. A tool result
- * becomes the line that says what came of it (`resultSummary`: a command's last line of output, the lines a read got,
- * or the first line of text), marked as failed where it says so, and keeps none of its images; an assistant message
- * keeps its prose and each tool call's name and its arguments cut short, still as a call line. Apply it after
- * redaction, so a cut never splits a secret the redaction would hide.
- */
 export function briefEntry(entry: EntryView): EntryView {
   const text = typeof entry.text === "string" ? entry.text : "";
   if (entry.role === "toolResult") {
     const lines = text.split("\n");
     const summary = resultSummary(text, { error: entry.toolResult?.error === true });
     const shown = cut(summary.text, briefChars);
-    // Its images go with the lines that stood for them, even where its only line is one of them (a screenshot alone).
     const { images, ...rest } = entry;
-    // The whole answer said it failed (a command's card): the line alone doesn't, so the entry does.
     const failed = summary.failed && entry.toolResult?.error !== true;
     if (shown === text && !failed) return images === undefined ? entry : rest;
     return { ...rest, ...(failed ? { toolResult: { ...entry.toolResult, error: true as const } } : {}), text: shown,
@@ -72,26 +48,18 @@ export function briefEntry(entry: EntryView): EntryView {
   let changed = false;
   const shown = transcriptLines(text).map(({ line, tool }) => {
     if (tool === undefined) return line;
-    // `name({...})`: the arguments' JSON is everything between the parentheses.
     const args = line.slice(tool.length + 1, -1);
     if (characters(args) <= briefChars) return line;
     changed = true;
-    // Long strings cut short, so the arguments stay JSON that clients read (what file, which command), or, where even
-    // that is too long, the line itself cut: still a call line (`name({…})`), so clients show it as a tool call.
     return briefCallLine(tool, line, briefChars * 2) ?? `${tool}(${cut(args, briefChars)}})`;
   });
   return changed ? { ...entry, text: shown.join("\n"), trimmed: { lines: shown.length, chars: characters(text) } } : entry;
 }
 
-/** The conversations whose entries a paged view can hold back: only those the view lists. */
 function listed(view: SessionView): Set<string> {
   return new Set((view.conversations ?? []).map(conversation => conversation.id));
 }
 
-/**
- * The view with each conversation's latest `size` entries only. A conversation with more says how many come before and
- * which entry is just before its first; the view itself is returned when every conversation fits.
- */
 export function latestEntries(view: SessionView, size: number = transcriptPage.size): SessionView {
   const conversations = listed(view);
   const counts = new Map<string, number>();
@@ -120,10 +88,6 @@ export function latestEntries(view: SessionView, size: number = transcriptPage.s
   };
 }
 
-/**
- * Up to `limit` of a conversation's entries just before `before`, oldest first, from the whole view, and how many come
- * before those. Null when the conversation has no entry `before`, e.g. after a compaction replaced its history.
- */
 export function entriesBefore(view: SessionView, conversationId: string, before: string, limit: number): { entries: EntryView[]; older: number } | null {
   if (!listed(view).has(conversationId)) return null;
   const entries = view.entries.filter(entry => entry.conversationId === conversationId);

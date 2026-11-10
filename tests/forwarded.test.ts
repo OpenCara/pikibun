@@ -6,7 +6,6 @@ import { trustForwardedHeaders } from "../apps/server/src/forwarded.js";
 
 type AdaptorFetch = Parameters<typeof createAdaptorServer>[0]["fetch"];
 
-/** Serves `fetch` through the node adaptor as main.ts does, so requests are its lightweight stand-ins. */
 async function serve(fetch: AdaptorFetch): Promise<{ origin: string; close: () => Promise<void> }> {
   const server = createAdaptorServer({ overrideGlobalObjects: false, fetch });
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -26,11 +25,6 @@ const echo = trustForwardedHeaders(async request => Response.json({
   body: request.method === "GET" ? null : await request.text(),
 }));
 
-/**
- * Node 26.12's undici brand-checks the `duplex` getter (older releases return "half" for any `this`), which is what
- * broke `new Request(url, adaptorRequest)` (#71). The test runs on the repository's Node, so it installs the stricter
- * getter: `url` has always been brand-checked.
- */
 async function withBrandCheckedDuplex(run: () => Promise<void>): Promise<void> {
   const duplex = Object.getOwnPropertyDescriptor(Request.prototype, "duplex");
   const url = Object.getOwnPropertyDescriptor(Request.prototype, "url")!.get!;
@@ -47,7 +41,6 @@ async function withBrandCheckedDuplex(run: () => Promise<void>): Promise<void> {
 
 test("a request forwarded over https reaches the app at its https URL, on Node 26's stricter Request", async () => {
   await withBrandCheckedDuplex(async () => {
-    // The simulation reproduces the bug: passing the adaptor's request as a RequestInit fails.
     const old = await serve((request, bindings) => {
       const incoming = bindings.incoming as { url: string };
       return Response.json(new Request(`https://example.test${incoming.url}`, request).url);

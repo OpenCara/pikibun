@@ -48,7 +48,6 @@ test("processes creating a local server's state at once all get the same secrets
   const states = await Promise.all(Array.from({ length: 8 }, () => loadLocalState(stateDir)));
   for (const state of states) assert.deepEqual(state, states[0]);
   assert.deepEqual(await loadLocalState(stateDir), states[0]);
-  // Concurrent changes are each applied to the state the last one left.
   const github = { clientId: "Ov23liAbCdEf", clientSecret: "0123456789abcdef0123456789abcdef01234567" };
   await Promise.all([loadLocalState(stateDir, { github }), loadLocalState(stateDir, { port: 9001 })]);
   assert.deepEqual(await loadLocalState(stateDir), { ...states[0], github, port: 9001 });
@@ -56,13 +55,11 @@ test("processes creating a local server's state at once all get the same secrets
 
 test("a running local server holds its state's lease: another can't open it, a left-over lock file doesn't stop the next", async t => {
   const stateDir = join(await directory(t), "server");
-  // A lock file a crashed holder left: the kernel lock it named went with that process.
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   await writeFile(join(stateDir, "runner.lock"), "4242", { mode: 0o600 });
   const held = await openLocalState(stateDir);
   t.after(() => held.release());
   await assert.rejects(openLocalState(stateDir), /already running with this state directory/);
-  // Reading it needs no lease, and creates nothing.
   assert.deepEqual(await peekLocalState(stateDir), held.state);
   assert.equal(await peekLocalState(join(stateDir, "other")), undefined);
   await held.release();
@@ -98,7 +95,6 @@ test("LOCAL_MODE listens on loopback only and needs its claim secret", async () 
   await config.env.DB.close();
 });
 
-/** GitHub's token exchange, user and verified email: the account signing in is `account.id`. */
 async function localFixture(t: TestContext, local = true) {
   const { db, sqlite, setBeforeQuery } = await testDatabase();
   t.after(() => db.close());
@@ -115,7 +111,6 @@ async function localFixture(t: TestContext, local = true) {
   });
   const request = (path: string, headers: Record<string, string> = {}) => app.request(path, { headers }, env);
   const cookies = (response: Response) => response.headers.getSetCookie().map(cookie => cookie.split(";")[0]!).filter(cookie => !cookie.endsWith("="));
-  /** Starts at `start` (the claim link or "Continue with GitHub") and comes back through GitHub's callback. */
   async function signIn(start: string) {
     const begun = await request(start);
     if (begun.status !== 302) return begun;
@@ -130,7 +125,6 @@ const errorCode = async (response: Response) => (await response.json() as { code
 
 test("two claims at once leave one owner: the later sign-in is undone before its token is stored", async t => {
   const f = await localFixture(t);
-  // Another claim's user is written between this callback's owner check and its own user's insert.
   let raced = false;
   f.setBeforeQuery(sql => {
     if (raced || !sql.trimStart().startsWith("INSERT INTO users")) return;
@@ -151,7 +145,6 @@ test("a local server admits the GitHub account that claims it with its sign-in l
   const f = await localFixture(t);
   assert.deepEqual(await f.health(), { claimed: false });
 
-  // "Continue with GitHub" can't claim it: only the launcher's link can.
   const unclaimed = await f.signIn("/api/auth/github");
   assert.equal(unclaimed.status, 403);
   assert.equal(await errorCode(unclaimed), "local_server_unclaimed");
@@ -165,13 +158,11 @@ test("a local server admits the GitHub account that claims it with its sign-in l
   const claimed = await f.signIn(`/api/auth/local/claim?token=${claimSecret}`);
   assert.equal(claimed.status, 302);
   assert.equal(claimed.headers.get("location"), `${origin}/`);
-  // The claim cookie ends with the sign-in.
   assert.ok(claimed.headers.getSetCookie().some(cookie => cookie.startsWith("local-claim=;")));
   const session = f.cookies(claimed).find(cookie => cookie.startsWith("test-auth="))!;
   assert.equal((await f.request("/api/me", { Cookie: session })).status, 200);
   assert.deepEqual(await f.health(), { claimed: true });
 
-  // Another GitHub account is refused, even with the link, and its token is never kept.
   f.account.id = 5151; f.account.login = "mallory";
   for (const start of ["/api/auth/github", `/api/auth/local/claim?token=${claimSecret}`]) {
     const other = await f.signIn(start);
@@ -180,7 +171,6 @@ test("a local server admits the GitHub account that claims it with its sign-in l
   }
   assert.deepEqual(f.sqlite.prepare("SELECT user_id FROM github_tokens").all().map(row => row.user_id), ["github:4242"]);
 
-  // The owner signs in again as on any server.
   f.account.id = 4242; f.account.login = "octo";
   assert.equal((await f.signIn("/api/auth/github")).status, 302);
 });
@@ -221,7 +211,6 @@ test("pikibun serve's server pairs this computer as its owner's host once claime
   const web = await directory(t);
   await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
   await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
-  // Test mode lets the host offer the fixture model; everything else is the local server as `pikibun serve` runs it.
   const testMode = { TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: "t".repeat(43), TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString() };
   const hostOptions = {
     localModels: createFauxLocalModels("faux-1"), allowFaux: true, unsandboxed: true, pollMs: 50,
@@ -242,7 +231,6 @@ test("pikibun serve's server pairs this computer as its owner's host once claime
   const connectors = () => server.env.DB.query<{ id: string; owner_id: string }>("SELECT id, owner_id FROM connectors WHERE revoked_at IS NULL").all();
   assert.deepEqual(await connectors(), []);
 
-  // Someone claims it (the sign-in above, here written directly): the host pairs itself for them, with no code to copy.
   await server.env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
     VALUES ('github:4242', '4242', 'octo', 'Octo', 'Octo', 'octo@example.test', '{}', 'github', ?)`).bind(new Date().toISOString()).run();
   await host.started;
@@ -251,7 +239,6 @@ test("pikibun serve's server pairs this computer as its owner's host once claime
   assert.equal(await server.claimUrl(), null);
   await host.stop();
 
-  // The next start reuses the saved pairing.
   const again = startLocalHost(server, stateDir, hostOptions);
   t.after(() => again.stop());
   await again.started;
@@ -280,7 +267,6 @@ test("sharing settings are checked field by field, saved with the state, and kee
   const github = { clientId: "Ov23liShared", clientSecret: "0123456789abcdef0123456789abcdef01234567" };
   const saved = await loadLocalState(stateDir, { shared: { ...sharedBase, passwordAuth: false, admins: ["github:4242"], github } });
   assert.deepEqual(saved.shared, { ...sharedBase, passwordAuth: false, admins: ["github:4242"], github });
-  // The loopback GitHub app and the secrets are untouched; a later change without an app keeps the saved one.
   assert.deepEqual({ ...saved, shared: undefined }, { ...first, shared: undefined });
   const changed = await loadLocalState(stateDir, { shared: { ...sharedBase, signup: "open" } });
   assert.deepEqual(changed.shared, { ...sharedBase, signup: "open", github });
@@ -305,7 +291,6 @@ test("shared, the same state serves others at its public origin: no claim link, 
   const health = await (await fetch(`${server.address}/api/health`)).json() as Record<string, unknown>;
   assert.deepEqual([health.passwordAuth, health.githubSignup, health.passwordSignup, health.localServer], [true, "invite", "invite", undefined]);
 
-  // Nobody has an account yet: this computer's host waits. The first listed administrator with one owns it.
   assert.equal(await server.owner(), null);
   await server.env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
     VALUES ('github:4242', '4242', 'octo', 'Octo', 'Octo', 'octo@example.test', '{}', 'github', ?)`).bind(new Date().toISOString()).run();
@@ -334,9 +319,7 @@ test("after serving others, running for its owner alone admits only the pinned o
   const { authenticateConnectorToken } = await import("../apps/server/src/authority/hosts.js");
   const { sha256 } = await import("../packages/shared/src/crypto.js");
   const f = await localFixture(t, false);
-  // Test mode lets this plain-HTTP origin serve outside local mode, as the shared server does behind its proxy.
   Object.assign(f.env, { TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: "t".repeat(43), TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600_000).toISOString() });
-  // Shared, a teammate's account is created before the owner's: the first GitHub user is no longer the owner.
   const user = (id: number, at: string) => f.sqlite.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
     VALUES (?, ?, ?, ?, ?, ?, '{}', 'github', ?)`).run(`github:${id}`, String(id), `u${id}`, `U${id}`, `U${id}`, `u${id}@example.test`, at);
   user(5151, "2000-01-01T00:00:00.000Z");
@@ -354,7 +337,6 @@ test("after serving others, running for its owner alone admits only the pinned o
   assert.equal((await f.request("/api/me", { Cookie: teammate })).status, 200);
   assert.equal((await authenticateConnectorToken(f.env, token)).id, "c1");
 
-  // For its owner alone again, with the owner pinned: only they sign in, and only their hosts connect.
   Object.assign(f.env, { LOCAL_MODE: "true", LOCAL_CLAIM_SECRET: claimSecret, LOCAL_OWNER_ID: "github:4242" });
   assert.equal((await f.request("/api/me", { Cookie: teammate })).status, 401);
   assert.equal((await f.request("/api/me", { Cookie: owner })).status, 200);
@@ -372,20 +354,17 @@ test("running for its owner alone after sharing pins its owner: the one recorded
   const insert = (env: Env, id: number) => env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
     VALUES (?, ?, 'u', 'U', 'U', 'u@example.test', '{}', 'github', ?)`).bind(`github:${id}`, String(id), new Date(Date.UTC(2000, 0, id % 1000)).toISOString()).run();
 
-  // Shared before anyone claimed it; a teammate signs up first, then the administrator.
   let { state, release } = await openLocalState(stateDir, { shared });
   let server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
   await insert(server.env, 5151);
   await insert(server.env, 4242);
   await server.close();
   assert.equal((await peekLocalState(stateDir))?.owner, undefined);
-  // Shared again (a relaunch, say): its first GitHub user is a teammate now, and nothing is pinned.
   ({ state, release } = await openLocalState(stateDir));
   server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
   await server.close();
   assert.deepEqual([(await peekLocalState(stateDir))?.owner, (await peekLocalState(stateDir))?.sharedOnce], [undefined, true]);
 
-  // For the owner alone: the listed GitHub administrator, not the first GitHub user, owns it, and stays pinned.
   ({ state, release } = await openLocalState(stateDir));
   server = await startLocalServer({ stateDir, state, release, staticDir: web });
   t.after(() => server.close());
@@ -407,7 +386,6 @@ test("this computer pairs again for a shared server's new owner, and keeps the p
     await local.env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
       VALUES (?, NULL, ?, ?, ?, ?, '{}', 'test', ?)`).bind(`test:${name}`, name, name, name, `${name}@example.test`, new Date().toISOString()).run();
   }
-  // The server as shared: the same origin, whose owner (its first administrator with an account) changes.
   let owner = "test:alice";
   const shared = { ...local, mode: "shared" as const, owner: async () => ({ id: owner }) };
   const hostOptions = {
@@ -435,12 +413,10 @@ test("sharing a Pikibun its owner had claimed pins them before anyone else can s
   await loadLocalState(stateDir, { port: await freePort() });
   const insert = (env: Env, id: number, at: string) => env.DB.query(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
     VALUES (?, ?, 'u', 'U', 'U', 'u@example.test', '{}', 'github', ?)`).bind(`github:${id}`, String(id), at).run();
-  // Claimed for its owner alone first.
   let { state, release } = await openLocalState(stateDir);
   let server = await startLocalServer({ stateDir, state, release, staticDir: web });
   await insert(server.env, 7777, "2001-01-01T00:00:00.000Z");
   await server.close();
-  // Shared: the owner is pinned at once, though a teammate's account then sorts before theirs.
   ({ state, release } = await openLocalState(stateDir, { shared: { ...sharedBase, admins: ["password:admin"] } }));
   server = await startLocalServer({ stateDir, state, release, staticDir: web, mode: "shared" });
   assert.equal((await peekLocalState(stateDir))?.owner, "github:7777");

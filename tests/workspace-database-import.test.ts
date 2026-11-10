@@ -63,7 +63,6 @@ test('a workspace dump brings its settings, full sessions, viewed records and wo
   const data = importFromDump(workspaceDump(), workspace);
   assert.deepEqual(Object.keys(data.workspaceData ?? {}).sort(), ['agents', 'database', 'members', 'models', 'pushIdentities', 'repositories']);
   assert.deepEqual(data.sessions.map(session => [session.id, session.data === null]), [['one', false], ['two', true]]);
-  // The exporter's permissions describe the exporter, not the session.
   assert.equal('permissions' in data.sessions[1]!.record, false);
   assert.equal(data.sessions[1]!.ownerId, 'test:member');
   assert.deepEqual(data.audit.map(entry => [entry.id, entry.sessionId, entry.actorId]), [['audit-1', 'one', 'test:owner'], ['audit-workspace', null, null]]);
@@ -83,7 +82,6 @@ test('dumps are checked before anything is written', () => {
   }
   assert.throws(() => importFromDump(sessionDump({ exportedAt: 'later' }), workspace), refused(/invalid export time/));
   assert.throws(() => importFromDump(sessionDump({ grants: {} }), workspace), refused(/not a list/));
-  // Workspace settings are kept as they are, but only as lists of objects.
   assert.throws(() => importFromDump(workspaceDump({ members: ['test:owner'] }), workspace), refused(/members are not all objects/));
   assert.throws(() => importFromDump(workspaceDump({ pushIdentities: [[]] }), workspace), refused(/push identities are not all objects/));
   assert.throws(() => importFromDump(workspaceDump({ database: 'db.example.com' }), workspace), refused(/database connection is not an object/));

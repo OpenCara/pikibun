@@ -5,15 +5,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-// The authority's module boundary (docs/design/authority.md): apps/server/src/authority decides who people and hosts
-// are, what each may do and which operations were approved, holds the credentials and writes the audit log; the rest
-// of the server asks it through authority/index.ts and never decides for it.
-
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const server = "apps/server/src";
 const authority = `${server}/authority`;
 const index = `${authority}/index.ts`;
-/** What the authority may use of the rest of the server: request context types, HTTP helpers and the database. */
 const infrastructure = new Set([`${server}/types.ts`, `${server}/http.ts`, `${server}/db.ts`, `${server}/db/types.ts`]);
 
 function sources(directory: string, files: string[] = []): string[] {
@@ -28,7 +23,6 @@ function sources(directory: string, files: string[] = []): string[] {
 
 interface Import { target: string; runtime: boolean }
 
-/** A file's relative imports and re-exports, static and dynamic, as repository paths; `runtime` unless only types. */
 function imports(file: string): Import[] {
   const source = ts.createSourceFile(file, readFileSync(join(repository, file), "utf8"), ts.ScriptTarget.Latest, true);
   const found: Import[] = [];
@@ -79,8 +73,6 @@ test("the authority uses nothing of the rest of the server but its request types
 });
 
 test("loading the authority loads none of the relay, views or other features", () => {
-  // What the authority's runtime imports load, through the infrastructure too, stays in the authority, the
-  // infrastructure and packages/shared: a later split can run it without the rest of the server.
   const loaded = new Set<string>();
   const pending = [...authorityFiles];
   while (pending.length) {

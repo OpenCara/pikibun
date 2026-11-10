@@ -1,3 +1,4 @@
+import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import {
   apiCredential, auditStatement, authenticateConnector, authorizeSession, connectorAdmins, connectorHostGrants, type ConnectorRow, egressGrant,
   gitDirect, githubComment, githubIssue, githubMerge, githubRead, gitRelay, legacyRepositoryFixture, managedConnector, pushComplete,
@@ -11,10 +12,9 @@ import type { ConnectorCapabilities, ConnectorInfo, ConnectorPairing, LocalModel
 import { gpuKinds, type GpuKind } from '../../../packages/shared/src/host-config.js';
 import { sessionActivities, thinkingLevels, type SessionActivity, type ThinkingLevel } from '../../../packages/shared/src/types.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
-// This release's definitions are the ones this server serves: connectors of any later release take them as they are.
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
-import { CONNECTOR_VERSION_HEADER, validVersion } from '../../../packages/shared/src/version.js';
-import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
+import { CONNECTOR_VERSION_HEADER, connectorTooOld, MINIMUM_CONNECTOR_VERSION, validVersion } from '../../../packages/shared/src/version.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import type { Query } from './db/types.js';
 import { appOrigin, fail, id, identifier, jsonObject, now, randomToken, requireOrigin, testMode, text } from './http.js';
 import { markSessionChanged } from './session-changes.js';
@@ -30,10 +30,6 @@ import { notifySessionActivityQuietly } from './notifications.js';
 function onlyFields(value: Record<string, unknown>, fields: string[]): void {
   if (Object.keys(value).some(key => !fields.includes(key))) fail(400, 'invalid_metadata', 'Only model and capability metadata is accepted.');
 }
-/**
- * The answer to the retired web_search tool's searches from connectors that still carry it: web search comes from
- * extensions now (docs/design/host-extensions.md). Older connectors pass the reason on to the agent.
- */
 export function webSearchRetired(): never {
   fail(410, 'web_search_retired', 'Pikibun no longer searches the web itself: web search comes from extensions now. A workspace\'s owners and admins add one under Settings → Workspaces → the workspace → Extensions.');
 }
@@ -55,7 +51,6 @@ export function parseManifest(input: Record<string, unknown>, env: Env): { model
     const levels = value.thinkingLevels;
     if (levels !== undefined && (!Array.isArray(levels) || !levels.length || levels.some(level => !thinkingLevels.includes(level))
       || new Set(levels).size !== levels.length)) fail(400, 'invalid_manifest', 'Invalid reasoning levels.');
-    // The level the host's Pi starts the model at must be one the model offers.
     const level = value.thinkingLevel;
     if (level !== undefined && (!thinkingLevels.includes(level as ThinkingLevel) || (levels && !levels.includes(level)))) fail(400, 'invalid_manifest', 'Invalid reasoning levels.');
     return { provider, modelId, name, ...(levels ? { thinkingLevels: [...levels] as ThinkingLevel[] } : {}), ...(level ? { thinkingLevel: level as ThinkingLevel } : {}) };
@@ -83,11 +78,9 @@ export function parseManifest(input: Record<string, unknown>, env: Env): { model
     || (cap.cloneBackups !== undefined && typeof cap.cloneBackups !== 'boolean') || (cap.cloneBackups && (!cap.plainGit || cap.unsandboxed))
     || (cap.sessionBranches !== undefined && typeof cap.sessionBranches !== 'boolean') || (cap.sessionBranches && !cap.plainGit)
     || (cap.conversationBackups !== undefined && typeof cap.conversationBackups !== 'boolean')
-    // Only sandboxed sessions are packed.
     || (cap.sessionPacking !== undefined && typeof cap.sessionPacking !== 'boolean') || (cap.sessionPacking && cap.unsandboxed)
     || (cap.hostConfig !== undefined && typeof cap.hostConfig !== 'boolean')
     || (cap.compactionConfig !== undefined && typeof cap.compactionConfig !== 'boolean') || (cap.compactionConfig && !cap.hostConfig)
-    // Unsandboxed commands already run on the host itself; a GPU is lent only to sandboxed ones.
     || (cap.gpu !== undefined && (!gpuKinds.includes(cap.gpu as GpuKind) || cap.unsandboxed))) fail(400, 'invalid_manifest', 'Invalid capabilities.');
   return { models, capabilities: { platform, sandbox: cap.sandbox, productionShell: cap.productionShell, ...(cap.unsandboxed ? { unsandboxed: true } : {}), ...(cap.chatOptions ? { chatOptions: true } : {}),
     ...(cap.chatImages ? { chatImages: true } : {}), ...(cap.gitProviders ? { gitProviders: true } : {}), ...(cap.gitServers ? { gitServers: true } : {}), ...(cap.gitPush ? { gitPush: true } : {}), ...(cap.gitCredentials ? { gitCredentials: true } : {}),
@@ -98,10 +91,6 @@ export function parseManifest(input: Record<string, unknown>, env: Env): { model
     ...(cap.hostConfig ? { hostConfig: true } : {}), ...(cap.compactionConfig ? { compactionConfig: true } : {}), ...(cap.gpu ? { gpu: cap.gpu as GpuKind } : {}) } };
 }
 
-/**
- * A connector reports what the agent of a session it serves is doing (see SessionActivity). Activity is display state,
- * neither binding nor policy: it bumps no policy version and leaves no audit entry.
- */
 async function reportSessionActivity(c: AppContext, connectorId: string): Promise<Response> {
   const input = await jsonObject(c, 4096);
   const activity = input.activity as SessionActivity;
@@ -112,14 +101,10 @@ async function reportSessionActivity(c: AppContext, connectorId: string): Promis
   if (!row) fail(404, 'not_found', 'Session not found.');
   await requireCallbackScope(c, row, connectorId);
   if (row.activity !== activity) {
-    // From the activity this report read, so that of two reports at once only the one that made a change notifies; the
-    // other still writes its activity, the latest report winning as before.
     const { changes } = await c.env.DB.query('UPDATE sessions SET activity = ? WHERE id = ? AND connector_id = ? AND COALESCE(activity, \'\') = ?')
       .bind(activity, row.id, connectorId, row.activity ?? '').run();
     if (!changes) await c.env.DB.query('UPDATE sessions SET activity = ? WHERE id = ? AND connector_id = ?').bind(activity, row.id, connectorId).run();
-    // An agent at work changes the session: the next automatic backup has something new to save.
     if (activity === 'working') await markSessionChanged(c.env, row.id);
-    // Waiting for an approval, finished or failed: the people it concerns hear about it (notifications.ts).
     if (changes) await notifySessionActivityQuietly(c.env, row, row.activity, activity);
   }
   return c.json({ ok: true });
@@ -133,17 +118,8 @@ async function ownedConnector(c: AppContext): Promise<ConnectorRow> {
 }
 
 type ConnectorInfoRow = ConnectorRow & { owner_name?: string; workspace_ids?: string; connected_workspace_ids?: string };
-/**
- * Who reads the listing: `role` adds the host's admins, host command grants and disabled models for its owner and
- * admins; `workspaceId` adds the viewer's own host command authority there. Everyone is shown only the models it offers.
- */
 type InfoViewer = { userId: string; role?: 'owner' | 'admin'; workspaceId?: string };
 
-/**
- * Whether a host's connector runs a session directly on the host when its binding asks (SessionRecord.hostEnvironment):
- * one that takes its configuration from Pikibun, on a sandboxed host. An unsandboxed host runs every session that way.
- * `granted`: for a member the host's owner granted that, which needs a connector that honors such grants.
- */
 export function hostSessionsSupported(capabilities: ConnectorCapabilities, granted = false): boolean {
   return capabilities.hostConfig === true && capabilities.unsandboxed !== true && (!granted || capabilities.hostSessionGrants === true);
 }
@@ -162,10 +138,8 @@ async function connectorInfo(env: Env, row: ConnectorInfoRow, viewer?: InfoViewe
   if (!row.revoked_at && env.CONNECTOR_HUB) {
     try {
       online = await env.CONNECTOR_HUB.status(row.id, 2000);
-    } catch { /* Offline is safe metadata; do not expose transport errors. */ }
+    } catch { }
   }
-  // The host's owner learns, in every listing, whether their sessions may run directly on it; a member granted that, in
-  // the listing of the workspace their grant is in.
   const owner = viewer?.userId === row.owner_id;
   const [admins, grants, disabled, config, authority, memberships] = await Promise.all([
     viewer?.role ? connectorAdmins(env, row.id) : undefined,
@@ -173,14 +147,13 @@ async function connectorInfo(env: Env, row: ConnectorInfoRow, viewer?: InfoViewe
     disabledModelKeys(env, row.id),
     viewer?.role || owner || viewer?.workspaceId ? connectorHostConfig(env, row.id) : undefined,
     viewer?.workspaceId ? viewerHostAuthority(env, row, viewer.workspaceId, viewer.userId) : undefined,
-    // An admin sees the owner's workspaces only where they are a member too.
     viewer?.role === 'admin' ? env.DB.query<{ workspace_id: string }>('SELECT workspace_id FROM workspace_members WHERE user_id = ?')
       .bind(viewer.userId).all().then(items => new Set(items.map(item => item.workspace_id))) : undefined,
   ]);
   const visible = (workspaceId: string) => !memberships || memberships.has(workspaceId);
   const hostGrants = grants?.filter(grant => visible(grant.workspaceId));
   const { models, disabledModels } = hostModelSettings(JSON.parse(row.models_json), disabled);
-  const capabilities = JSON.parse(row.capabilities_json) as ConnectorCapabilities;
+  const capabilities = parseCapabilities(row.capabilities_json);
   const hostCommandAccess = authority?.level;
   const hostSessions = (owner || authority?.sessions === true) && !row.revoked_at && config?.hostSessions === true
     && hostSessionsSupported(capabilities, !owner);
@@ -200,7 +173,6 @@ async function connectorInfos(env: Env, rows: ConnectorInfoRow[], viewer?: (row:
 }
 
 function modelStatements(env: Env, row: Pick<ConnectorRow, 'id' | 'models_json'>, workspaceId: string | null): Query<never>[] {
-  // Import with two set-based statements, not one query per model or workspace.
   return [
     env.DB.query<never>(`UPDATE models SET available = 0 WHERE connector_id = ? AND (? IS NULL OR workspace_id = ?)
       AND EXISTS (SELECT 1 FROM connectors WHERE id = ? AND models_json = ? AND revoked_at IS NULL)`)
@@ -222,11 +194,6 @@ async function syncModels(env: Env, row: ConnectorRow, workspaceId: string | nul
   await env.DB.batch(modelStatements(env, row, workspaceId));
 }
 
-/**
- * A host belongs to its owner, not to one workspace: it is connected, for the owner's private use, to every workspace
- * they belong to. These statements connect `userId`'s hosts to `workspaceId` and import their models there, once the
- * user is a member of it (a workspace they create or join); without that membership they change nothing.
- */
 export function ownerHostStatements(env: Env, userId: string, workspaceId: string): Query<never>[] {
   const createdAt = now();
   return [
@@ -252,7 +219,7 @@ export function ownerHostStatements(env: Env, userId: string, workspaceId: strin
   ];
 }
 
-export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
+export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/pairings/:id/claim', async c => {
     requireConnectorTLS(c.env, new URL(c.req.url));
     requireOrigin(c);
@@ -272,9 +239,6 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
     const token = randomToken();
     const credentialHash = await sha256(token);
     const createdAt = now();
-    // Consume the code, create the connector and connect it privately to its owner's workspaces in one transaction.
-    // A pairing names no workspace: the host is its owner's, wherever they work (ownerHostStatements).
-    // INSERT rechecks authority after the asynchronous preflight and token hashing.
     const results = await c.env.DB.batch<ConnectorRow>([
       c.env.DB.query<ConnectorRow>(`INSERT INTO connectors (id,owner_id,name,credential_hash,created_at,models_json,capabilities_json)
         SELECT ?, p.owner_id, p.name, ?, ?, ?, ? FROM connector_pairings p
@@ -299,17 +263,16 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
     if (!created) fail(403, 'invalid_pairing', 'Pairing is expired, used, or invalid.');
     return c.json({ credentials: { connectorId, token, controlPlaneUrl } }, 201);
   });
-  // The upgrade itself is completed by the HTTP server (`main.ts`) with `authenticateConnectorSocket`;
-  // a plain request to the socket path cannot be upgraded inside Hono.
   app.get('/api/connectors/socket', () => fail(426, 'upgrade_required', 'WebSocket upgrade is required.'));
   app.post('/api/connectors/self/manifest', async c => {
     const row = await authenticateConnector(c);
     const input = await jsonObject(c, 128 * 1024);
     onlyFields(input, ['models', 'capabilities']);
     const manifest = withHostToolCapabilities(input, base => parseManifest(base, c.env));
-    // The version it names (a header, which servers before it ignore), recorded at every connection: one that names none,
-    // or one that isn't a version, clears an earlier one, so the host's page never shows a version it no longer runs.
     const version = validVersion(c.req.header(CONNECTOR_VERSION_HEADER)) ?? null;
+    if (connectorTooOld(version)) {
+      fail(409, 'connector_update_required', `Update this host's connector (npx pikibun@latest connect): this server needs pikibun ${MINIMUM_CONNECTOR_VERSION} or newer.`);
+    }
     const updated = await c.env.DB.query<ConnectorRow>(`UPDATE connectors SET models_json = ?, capabilities_json = ?, connector_version = ? WHERE id = ?
       AND revoked_at IS NULL AND connection_hash = ? RETURNING *`)
       .bind(JSON.stringify(manifest.models), JSON.stringify(manifest.capabilities), version, row.id, row.connection_hash).first();
@@ -326,33 +289,24 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
   app.post('/api/connectors/self/github/merge', async c => githubMerge(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/github/issue', async c => githubIssue(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sources/read', async c => sourceRead(c, (await authenticateConnector(c)).id));
-  // The tools defined as data (tool-definitions.ts), which a connector runs with its own engine: this server's, so a tool it
-  // adds reaches sessions without a newer connector.
   app.post('/api/connectors/self/tools', async c => {
     await authenticateConnector(c);
     return c.json({ tools: toolDefinitions });
   });
   app.post('/api/connectors/self/schedules', async c => agentSchedules(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/sessions', async c => agentSessions(c, (await authenticateConnector(c)).id));
-  // The retired web_search tool's searches (web tools come from extensions now), from connectors that still carry it.
   app.post('/api/connectors/self/web/search', async c => { await authenticateConnector(c); return webSearchRetired(); });
   app.post('/api/connectors/self/git/push/credential', async c => pushCredential(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/git/push/complete', async c => pushComplete(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/restores/:restoreId/download', async c => connectorRestoreDownload(c, (await authenticateConnector(c)).id));
   app.post('/api/connectors/self/network', async c => egressGrant(c, (await authenticateConnector(c)).id));
-  // How the host runs its sessions, as its owner and admins set it; the connector asks when it connects, then at most
-  // every 30 seconds (HostConfigSource), so a change reaches running sessions within a minute.
   app.post('/api/connectors/self/config', async c => c.json({ config: await connectorHostConfig(c.env, (await authenticateConnector(c)).id) }));
   app.post('/api/connectors/self/git/relay/:bindingId/:service', async c => gitRelay(c, await authenticateConnector(c)));
-  // A credential for the host's egress proxy to make one Git request at the forge itself, or the word to relay it.
   app.post('/api/connectors/self/git/direct', async c => gitDirect(c, await authenticateConnector(c)));
-  // The credential a session's egress proxy adds to the GitHub API requests it answers itself (api-access.ts).
   app.post('/api/connectors/self/api/credential', async c => apiCredential(c, await authenticateConnector(c)));
-  // A direct-upload grant a desktop app handed this host, checked before the host takes the chunk (file-uploads.ts).
   app.post('/api/connectors/self/uploads/verify', async c => verifyDirectUpload(c, await authenticateConnector(c)));
 }
 
-/** A one-use pairing code for a new host of `ownerId`, valid ten minutes; also how a local server pairs its own machine. */
 export async function createPairing(env: Env, ownerId: string, name: string): Promise<ConnectorPairing> {
   const pairingId = id(); const code = randomToken(); const expires = Math.floor(Date.now() / 1000) + 600;
   await env.DB.query('DELETE FROM connector_pairings WHERE owner_id = ? AND expires_at <= ?').bind(ownerId, Math.floor(Date.now() / 1000)).run();
@@ -362,7 +316,6 @@ export async function createPairing(env: Env, ownerId: string, name: string): Pr
     AND EXISTS (SELECT 1 FROM users WHERE id = ? AND (? = 1 OR auth_kind <> 'test')) RETURNING id`)
     .bind(pairingId, ownerId, name, await sha256(code), expires, now(), ownerId, ownerId, ownerId, testMode(env) ? 1 : 0).first();
   if (!created) {
-    // The write refuses a test user once test mode is off: a refusal, not a limit, so tell them apart.
     const testUser = await env.DB.query('SELECT 1 FROM users WHERE id = ? AND auth_kind = \'test\'').bind(ownerId).first();
     if (testUser && !testMode(env)) fail(403, 'test_mode_disabled', 'Test users can pair hosts only while test mode is on.');
     fail(429, 'pairing_limit', 'Too many active pairings or connectors.');
@@ -370,10 +323,9 @@ export async function createPairing(env: Env, ownerId: string, name: string): Pr
   return { id: pairingId, code, expiresAt: new Date(expires * 1000).toISOString() };
 }
 
-export function registerConnectors(app: Hono<WorkerEnv>): void {
+export function registerConnectors(app: Hono<AppEnv>): void {
   app.post('/api/connectors/pairings', async c => {
     const input = await jsonObject(c, 4096);
-    // `workspaceId` is accepted, and ignored, from pages that predate it: a host is no longer paired into a workspace.
     onlyFields(input, ['name', 'workspaceId']);
     const name = text(input.name, 'name', 120);
     return c.json({ pairing: await createPairing(c.env, c.get('auth').userId, name) }, 201);
@@ -389,7 +341,6 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
       ORDER BY c.created_at DESC LIMIT 100`)
       .bind(c.get('auth').userId, c.get('auth').userId).all();
     const userId = c.get('auth').userId;
-    // Owners and admins see its admins and grants; an admin's listing names the owner's shares, which they manage.
     return c.json({ connectors: await connectorInfos(c.env, rows, row => ({ userId, role: row.owner_id === userId ? 'owner' : 'admin' })) });
   });
   app.get('/api/workspaces/:id/connectors', async c => {
@@ -410,14 +361,12 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
     const userId = c.get('auth').userId;
     return c.json({ connectors: await connectorInfos(c.env, rows, () => ({ userId, workspaceId })) });
   });
-  // Its owner or an admin shares a host, into a workspace both they and the owner belong to.
   app.put('/api/connectors/:id/shares/:workspaceId', async c => {
     const row = await managedConnector(c);
     if (row.revoked_at) fail(409, 'connector_revoked', 'Connector is revoked.');
     const workspaceId = identifier(c.req.param('workspaceId'));
     await requireManagedWorkspace(c.env, row, workspaceId, c.get('auth').userId);
     await requireMember(c.env, workspaceId, row.owner_id);
-    // A private workspace has nobody to share with: its owner's hosts are there already, for them alone.
     await requireSharedWorkspace(c.env, workspaceId);
     await requireConfiguredWorkspace(c.env, workspaceId, row.owner_id);
     const legacy = testMode(c.env) && await legacyRepositoryFixture(c.env, row.owner_id);
@@ -451,7 +400,6 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
     await auditStatement(c.env, c.get('auth').userId, 'connector.share.added', workspaceId, null, { connectorId: row.id }).run();
     return c.json({ connector: await connectorInfo(c.env, row) });
   });
-  // Unsharing also ends the workspace's host command grants. An admin unshares only where they are a member.
   app.delete('/api/connectors/:id/shares/:workspaceId', async c => {
     const row = await managedConnector(c);
     const workspaceId = identifier(c.req.param('workspaceId'));
@@ -468,7 +416,6 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
   app.delete('/api/connectors/:id/permanent', async c => {
     const row = await ownedConnector(c);
     const timestamp = now();
-    // Keep a revoked tombstone for immutable session and model bindings.
     await c.env.DB.batch([
       c.env.DB.query(`UPDATE connectors SET removed_at = ?, revoked_at = COALESCE(revoked_at, ?),
         connection_hash = NULL, credential_hash = ?, name = 'Removed host', models_json = '[]', capabilities_json = '{}', connector_version = NULL
@@ -486,7 +433,7 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
     ]);
     if (c.env.CONNECTOR_HUB) {
       try { await c.env.CONNECTOR_HUB.revoke(row.id); }
-      catch { /* Database revocation already fences all authority. */ }
+      catch { }
     }
     return c.body(null, 204);
   });
@@ -499,7 +446,7 @@ export function registerConnectors(app: Hono<WorkerEnv>): void {
     if (c.env.CONNECTOR_HUB) {
       try {
         await c.env.CONNECTOR_HUB.revoke(row.id);
-      } catch { /* Database revocation already fences all authority. */ }
+      } catch { }
     }
     return c.body(null, 204);
   });

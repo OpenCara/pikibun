@@ -5,6 +5,8 @@ import { rejectUpgrade } from './connector-hub.js';
 import { connectorError } from './connector-transport.js';
 import { authenticateConnectorSocket, refreshPullRequestStates, settlePushCredentials } from './authority/index.js';
 import type { Database } from './db/types.js';
+import { lockInstance, type InstanceLock } from './db/index.js';
+import { settleNotificationDeliveries } from './notifications.js';
 import { requestUrl, trustForwardedHeaders } from './forwarded.js';
 import { app } from './index.js';
 import { createStaticHandler } from './static.js';
@@ -12,7 +14,6 @@ import { runAutomaticBackups } from './automatic-backups.js';
 import { runScheduledPrompts } from './scheduled-prompts.js';
 import { runCrossSessionNotifications } from './cross-session.js';
 
-/** The `code` of a Node or pg error, looking one `cause` deep (pg wraps socket errors). */
 function errorCode(error: unknown): string | undefined {
   if (!error || typeof error !== 'object') return undefined;
   if ('code' in error && typeof error.code === 'string') return error.code;
@@ -20,20 +21,16 @@ function errorCode(error: unknown): string | undefined {
   return undefined;
 }
 
+const NOTIFICATION_DRAIN_MS = 15_000;
 const transientDatabaseCodes = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', '57P03'];
 
-/**
- * Applies migrations, waiting for the database to accept connections first: under docker compose
- * Postgres is often still starting when the server boots. Connection refusals are retried for up
- * to `DATABASE_WAIT_SECONDS` (default 60); every other error (bad credentials, broken migration) fails at once.
- */
-export async function migrateWhenReachable(db: Pick<Database, 'migrate' | 'provider'>): Promise<void> {
+async function whenReachable<T>(provider: Database['provider'], work: () => Promise<T>): Promise<T> {
   const deadline = Date.now() + Number(process.env.DATABASE_WAIT_SECONDS || 60) * 1000;
   for (let attempt = 1; ; attempt++) {
-    try { return await db.migrate(); } catch (error) {
+    try { return await work(); } catch (error) {
       const code = errorCode(error);
       if (!code || !transientDatabaseCodes.includes(code) || Date.now() >= deadline) throw error;
-      if (attempt === 1) console.error(`pikibun: waiting for the ${db.provider} database (${code})`);
+      if (attempt === 1) console.error(`pikibun: waiting for the ${provider} database (${code})`);
       const { promise, resolve } = Promise.withResolvers<void>();
       setTimeout(resolve, Math.min(5000, 500 * attempt));
       await promise;
@@ -41,7 +38,21 @@ export async function migrateWhenReachable(db: Pick<Database, 'migrate' | 'provi
   }
 }
 
-/** A sweep that runs every `ms`, one at a time, logging its failures. */
+export function migrateWhenReachable(db: Pick<Database, 'migrate' | 'provider'>): Promise<void> {
+  return whenReachable(db.provider, () => db.migrate());
+}
+
+async function lockThenMigrate(db: Database): Promise<InstanceLock> {
+  const lock = await whenReachable(db.provider, () => lockInstance(db));
+  try {
+    await migrateWhenReachable(db);
+    return lock;
+  } catch (error) {
+    await lock.release();
+    throw error;
+  }
+}
+
 function sweep(name: string, ms: number, run: () => Promise<unknown>): NodeJS.Timeout {
   let busy = false;
   const timer = setInterval(() => {
@@ -56,34 +67,27 @@ function sweep(name: string, ms: number, run: () => Promise<unknown>): NodeJS.Ti
 }
 
 export interface RunningServer {
-  /** The address it listens on, such as 127.0.0.1:8787 (its port, when the configuration asked for port 0). */
   address: AddressInfo;
-  /** Stops listening, then closes the connector hub and the database. */
   close(): Promise<void>;
 }
 
-/**
- * Serves the API, the web app and the connector socket with `config`, after applying pending migrations, and runs the
- * background sweeps. Resolves once it listens. One per process: the routes live on the shared `app`.
- */
 export async function startServer(config: ServerConfig): Promise<RunningServer> {
   const { env, host, port, trustProxy, staticDir, preview } = config;
-  // Never derive an authentication origin from an arbitrary Host or Origin header.
   const previewEnv = preview ? { ...env, APP_ORIGIN: preview.origin } : undefined;
   const environment = (url: string) => preview && new URL(url).origin === preview.origin ? previewEnv! : env;
   const hub = env.CONNECTOR_HUB!;
-  await migrateWhenReachable(env.DB);
+  let instanceLock: InstanceLock;
+  try { instanceLock = await lockThenMigrate(env.DB); } catch (error) {
+    await hub.close();
+    await env.DB.close();
+    throw error;
+  }
 
   const timers = [
-    // Push credentials no completion settled: pushes their host never reported, and owner-token resets to retry.
     sweep('push credential settling', 5 * 60_000, () => settlePushCredentials(env).catch(() => {})),
-    // The state of each session's pull request (pull-request-states.ts).
     sweep('pull request states', 30_000, () => refreshPullRequestStates(env)),
-    // Automatic backups into workspace databases (automatic-backups.ts).
     sweep('automatic backups', 60_000, async () => { if (env.WORKSPACE_DATABASES) await runAutomaticBackups(env); }),
-    // Scheduled prompts (scheduled-prompts.ts).
     sweep('scheduled prompts', 30_000, () => runScheduledPrompts(env)),
-    // Notifications of cross-session messages their targets finished (cross-session.ts).
     sweep('cross-session notifications', 15_000, () => runCrossSessionNotifications(env)),
   ];
 
@@ -96,7 +100,6 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
     const handler = servePreview && new URL(c.req.url).origin === preview!.origin ? servePreview : serveStatic;
     const served = await handler(c.req.raw);
     const response = c.newResponse(served.body, served);
-    // The page carries its own policy (static.ts), over the API's.
     const policy = served.headers.get('Content-Security-Policy');
     if (policy) response.headers.set('Content-Security-Policy', policy);
     return response;
@@ -109,7 +112,6 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
   });
 
   server.on('upgrade', (request, socket, head) => {
-    // Nothing owns the socket until the hub accepts it; an unhandled error event would crash the process.
     socket.on('error', () => {});
     void (async () => {
       let url: URL;
@@ -134,6 +136,7 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
   try { await listening.promise; } catch (error) {
     for (const timer of timers) clearInterval(timer);
     await hub.close();
+    await instanceLock.release();
     await env.DB.close();
     throw error;
   }
@@ -146,10 +149,11 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
       closing ??= (async () => {
         for (const timer of timers) clearInterval(timer);
         const closed = new Promise<void>(resolve => server.close(() => resolve()));
-        // Open connections (a browser's keep-alive, the connector's socket) would otherwise hold close() open.
         if ('closeAllConnections' in server) server.closeAllConnections();
         await hub.close();
         await closed;
+        await settleNotificationDeliveries(NOTIFICATION_DRAIN_MS);
+        await instanceLock.release();
         await env.DB.close();
       })();
       return closing;

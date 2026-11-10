@@ -13,7 +13,6 @@ export function OpenSession(props: { onOpen: (id: string) => void }) {
     const id = sessionId().trim();
     if (!id || action.busy()) return;
     void action.run(async () => {
-      // Checks access before leaving, so a wrong ID is explained here.
       const result = await session().api<{ session: SessionRecord }>(`/api/sessions/${segment(id)}`);
       props.onOpen(result.session.id);
     });

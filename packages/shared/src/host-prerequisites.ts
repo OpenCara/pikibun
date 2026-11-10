@@ -1,16 +1,8 @@
-// What the app's This Computer lists of a host's prerequisites (the connector's HostInspection). Generic over the
-// entries, so it needs nothing of the connector.
-
 export interface ListedPrerequisite<T> {
   entry: T;
-  /** Needed only by the sandbox the host would run in once ready (it runs unsandboxed until then). */
   sandbox: boolean;
 }
 
-/**
- * The prerequisites of how the host runs now, then what its sandbox still lacks: a host that runs unsandboxed because
- * its sandbox isn't ready lists only the unsandboxed mode's, and the sandbox's (with their fixes) would stay hidden.
- */
 export function listedPrerequisites<T extends { name: string; ok: boolean }>(
   inspection: { prerequisites: readonly T[]; sandboxPrerequisites?: readonly T[] } | undefined,
 ): ListedPrerequisite<T>[] {

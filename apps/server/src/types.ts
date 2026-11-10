@@ -6,18 +6,12 @@ import type { Database } from './db/types.js';
 import type { ObjectStorage } from './storage/types.js';
 import type { WorkspaceDatabaseProvider } from './workspace-databases/types.js';
 
-/** Everything a request handler can reach: providers plus configuration. Built once in `apps/server/src/config.ts`. */
 export interface Env {
   DB: Database;
   CONNECTOR_HUB?: ConnectorHub;
   BUCKET?: ObjectStorage;
-  /** Reaches the databases workspace owners connect for their session backups; absent unless the operator enabled them. */
   WORKSPACE_DATABASES?: WorkspaceDatabaseProvider;
   APP_ORIGIN: string;
-  /**
-   * The release this server is, which /api/health reports: the image's (the Dockerfile sets it from its build argument),
-   * else the bundle's own (buildVersion, in the CLI's and the desktop app's local server). Absent in development.
-   */
   PIKIBUN_VERSION?: string;
   RUNNER_URL?: string;
   RUNNER_EVENT_TRANSPORT?: string;
@@ -29,30 +23,13 @@ export interface Env {
   TEST_AUTH_ENABLED?: string;
   TEST_AUTH_SECRET?: string;
   TEST_AUTH_EXPIRES_AT?: string;
-  /** Operator GitHub App for github.com pushes: numeric app id, URL slug, and RSA private key (PEM, PKCS#1 or PKCS#8; secret). */
   GITHUB_APP_ID?: string;
   GITHUB_APP_SLUG?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
-  /**
-   * Direct Git transfers (network.ts gitDirect): `on` (default), `own-hosts` (credentials only to session owners' own hosts;
-   * public repositories are still read directly everywhere) or `off` (every Git request is relayed through the server).
-   */
   GIT_DIRECT?: string;
-  /**
-   * Sandboxed GitHub API reads (api-access.ts): `on` (default) gives every host running a clone session a token that
-   * only reads the workspace's github.com repositories, which its egress proxy adds to api.github.com requests;
-   * `own-hosts` only to session owners' own hosts and the server's own runner; `off` to none.
-   */
   SANDBOX_GITHUB_API?: string;
-  /** RSA private key (PEM, PKCS#8; secret) signing Pikibun OIDC assertions for Entra federation and Forgejo integrations. */
   OIDC_SIGNING_KEY?: string;
-  /** Comma-separated user IDs of the instance administrators, who manage every account (see `apps/server/src/authority/admin.ts`). */
   ADMIN_USER_IDS?: string;
-  /**
-   * OAuth apps the operator registered so members can connect document sources by signing in (see
-   * apps/server/src/authority/sources/source-oauth.ts). Each pair is optional; a provider without one offers no sign-in. Their redirect
-   * URI is APP_ORIGIN/api/source-accounts/<provider>/oauth/callback.
-   */
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   NOTION_CLIENT_ID?: string;
@@ -61,40 +38,24 @@ export interface Env {
   DROPBOX_CLIENT_SECRET?: string;
   MICROSOFT_CLIENT_ID?: string;
   MICROSOFT_CLIENT_SECRET?: string;
-  /** Microsoft Entra tenant for OneDrive and SharePoint sign-in: an id or domain, `organizations`, or `common` (the default). */
   MICROSOFT_TENANT?: string;
   TENCENT_DOCS_CLIENT_ID?: string;
   TENCENT_DOCS_CLIENT_SECRET?: string;
-  /**
-   * Notifications (notifications.ts): the contact push services are given with each Web Push, a mailto: or https: URL;
-   * the server's own origin by default, where it is https.
-   */
   WEB_PUSH_CONTACT?: string;
-  /** An Expo access token (secret), for an Expo project that requires one to send push notifications to the app. */
-  EXPO_ACCESS_TOKEN?: string;
-  /** `true` on a local server (http.ts localMode): loopback only, and only the GitHub account that claimed it signs in. */
   LOCAL_MODE?: string;
-  /** The local server's claim secret (base64url, 32 bytes): a sign-in carrying it may claim an unclaimed local server. */
   LOCAL_CLAIM_SECRET?: string;
-  /**
-   * The local server's owner (github:<id>), when its data has also served others (`pikibun serve --share`): then its
-   * first GitHub user may be someone else, and every other account's sign-ins and hosts are refused while it runs locally.
-   */
   LOCAL_OWNER_ID?: string;
-  /** `true` lets people sign up and sign in with a username and password (password-auth.ts), next to GitHub. */
   PASSWORD_AUTH?: string;
-  /** Who may create an account (http.ts signupMode): `open`, `invite` or `off`; unset, GitHub is open and passwords invite. */
   SIGNUP?: string;
 }
 export interface AuthIdentity {
   userId: string;
   tokenHash: string;
   csrfToken: string;
-  /** "browser": the session cookie, so changes need the CSRF token. "native": an app's bearer token, never ambient. */
   client: 'browser' | 'native';
 }
-export type WorkerEnv = { Bindings: Env; Variables: { auth: AuthIdentity } };
-export type AppContext = Context<WorkerEnv>;
+export type AppEnv = { Bindings: Env; Variables: { auth: AuthIdentity } };
+export type AppContext = Context<AppEnv>;
 export interface UserRow {
   id: string;
   github_id: string | null;
@@ -105,15 +66,9 @@ export interface UserRow {
   env_json: string;
   auth_kind: 'github' | 'test' | 'password';
   created_at: string;
-  /** Set while an instance administrator has the account suspended. */
   suspended_at?: string | null;
-  /**
-   * The account's unique username: a password account's is the name in its ID; a GitHub account chooses its own once,
-   * after signing up (password-auth.ts), and it stays NULL until then.
-   */
   username?: string | null;
   github_connected?: number;
-  /** Whether the account has a password to sign in with (getUser). */
   has_password?: number;
 }
 export interface WorkspaceRow { id: string; name: string; owner_id: string; created_at: string }
@@ -131,38 +86,22 @@ export interface SessionRow {
   policy_version: number; status: 'provisioning' | 'ready' | 'error' | 'archived'; created_at: string;
   connector_id?: string | null; connector_owner_id?: string | null;
   repositories_json?: string;
-  /** 'clone': no pins; the agent clones the workspace's repositories through the host's egress proxy. */
   repository_mode?: 'clone' | null;
-  /** A clone session's own branch, named when it was created; NULL: pikibun/<id>. Immutable. */
   branch?: string | null;
-  /** 1: the session runs directly on its host's own environment, without the sandbox (SessionRecord.hostEnvironment). Immutable. */
   host_environment?: number | null;
   visibility?: 'private' | 'workspace';
-  /** The status before archiving, restored on unarchive. */
   archived_status?: 'provisioning' | 'ready' | 'error' | null;
-  /** When the owner packed the session's files on its host (apps/runner/src/pack.ts); NULL or absent while they aren't. */
   packed_at?: string | null;
-  /** What its agent is doing, as its host last reported it; display state only, never part of the runner binding. */
   activity?: SessionActivity | null;
-  /** When its next scheduled prompt runs (scheduled-prompts.ts); display state only, never part of the runner binding. */
   next_scheduled_at?: string | null;
-  /** The session whose agent started this one with the sessions tool (cross-session.ts); null otherwise. Immutable. */
   parent_session_id?: string | null;
-  /** The scheduled prompt that started this session under parent_session_id (scheduled-prompts.ts); null otherwise. Immutable. */
   schedule_id?: string | null;
-  /** How its transcript shows tool output to viewers (transcript-display.ts); display only. Absent on older rows: full. */
   tool_output?: 'full' | 'brief';
-  /** Its server's public address while it is online through its tunnel, as its host last reported it (piki:tunnel); display state only. */
   tunnel_url?: string | null;
-  /** When that tunnel's service lifetime ends: the list no longer shows it online after that, whatever its host said. */
   tunnel_expires_at?: string | null;
-  /** Only on rows read through session access: the newest pull request a push from this session opened or found. */
   pull_request_url?: string | null;
-  /** Only on rows read through session access: that pull request's state as last read (pull-request-states.ts). */
   pull_request_state?: string | null;
-  /** Only on rows read through session access: the pull request found last for a branch its host reported (session-branches.ts). */
   branch_pull_request_url?: string | null;
-  /** Only on rows read through session access: that pull request's state as last read. */
   branch_pull_request_state?: string | null;
 }
 export interface RepositoryRow {
@@ -188,7 +127,6 @@ export interface PushCredentialRow {
 export interface SessionAccess {
   row: SessionRow;
   permissions: Permission[];
-  /** The actor's role in the session's workspace, from the same policy snapshot as `permissions`. */
   role: WorkspaceRole;
 }
 export type PublicProfile = UserProfile;

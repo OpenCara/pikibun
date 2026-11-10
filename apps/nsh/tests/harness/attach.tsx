@@ -4,11 +4,7 @@ import { mkdir, readdir, rmdir, unlink, writeFile } from "fs/promises";
 import { Composer } from "../../src/components/Composer";
 import { createAttachments, decodeBase64 } from "../../src/lib/attachments";
 
-// A chat box that takes files up to 1 KB, for what a desktop hands it as `file:` URLs (dropped, or pasted from a file
-// manager), which the app reads under the home folder (nsh.json). A test can't write files, so this harness puts the
-// ones it drops into `host.params.folder` under the home folder first, and removes them when the test presses Clean up.
 const folder = String((host.params as { folder?: unknown }).folder ?? "");
-// A 1x1 PNG.
 const dot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 mount(() => {

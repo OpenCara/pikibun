@@ -2,11 +2,6 @@ import type { DocumentItemType, SourceReadEntry, SourceReadView } from '../../..
 import { sourceReadLimits } from '../../../../../packages/shared/src/sources.js';
 import { fail } from '../../http.js';
 
-/**
- * Calls to document providers (Notion, Google, Dropbox, Microsoft, Feishu/Lark, Tencent Docs) as one connected account. Requests never follow redirects
- * and read bounded bodies; adapters send credentials only to their provider's fixed API origin and turn every refusal
- * into a fixed, credential-free reason.
- */
 export interface Upstream { status: number; headers: Headers; bytes: Uint8Array }
 
 const timeout = 15_000;
@@ -40,7 +35,6 @@ export async function upstream(provider: string, url: string, init: RequestInit 
   return { status: response.status, headers, bytes };
 }
 
-/** A successful JSON answer as an object; an oversized or malformed one is a fixed refusal. */
 export function json(provider: string, answer: Upstream): Record<string, unknown> {
   if (answer.headers.get('x-pikibun-truncated')) fail(502, 'invalid_source_response', `${provider} returned a response too large to read.`);
   let value: unknown;
@@ -50,7 +44,6 @@ export function json(provider: string, answer: Upstream): Record<string, unknown
   return value as Record<string, unknown>;
 }
 
-/** A text body, decoded leniently, and whether it was cut at the read limit. */
 export function textBody(answer: Upstream): { text: string; truncated: boolean } {
   return { text: new TextDecoder('utf-8').decode(answer.bytes), truncated: answer.headers.get('x-pikibun-truncated') === '1' };
 }
@@ -72,16 +65,9 @@ export function outsideSource(): never {
   return fail(403, 'source_outside', 'That item is not under this source, the page, folder or document bound to the workspace.');
 }
 
-/** The item a document source binds, as an adapter resolves it. */
 export interface BoundItem { id: string; type: DocumentItemType; title: string; url: string }
-/** What an adapter reads; the broker adds the source and kind. */
 export type ItemView = Omit<SourceReadView, 'source' | 'kind'>;
 
-/**
- * One document provider. `connect` verifies what the user pasted and returns the secret to store (encrypted) and the
- * account's name; `resolve` names the item an admin binds; `read` reads the bound item or one under it (`item`, raw
- * as the agent passed it), refusing anything that isn't under it.
- */
 export interface DocumentAdapter {
   name: string;
   connect(input: Record<string, unknown>): Promise<{ secret: string; name: string }>;
@@ -89,7 +75,6 @@ export interface DocumentAdapter {
   read(secret: string, root: BoundItem, item: string | null): Promise<ItemView>;
 }
 
-/** Cuts a view to fit sourceReadLimits.bytes of JSON: entries first, then content. */
 export function fit<T extends { entries?: SourceReadEntry[]; content?: string; truncated: boolean }>(view: T): T {
   const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
   if (view.entries && view.entries.length > sourceReadLimits.entries) { view.entries = view.entries.slice(0, sourceReadLimits.entries); view.truncated = true; }

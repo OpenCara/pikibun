@@ -1,6 +1,3 @@
-// A small Pikibun server, as routes for nsh test's stubbed network: one workspace, one host, one session with a
-// conversation and a pending push approval.
-
 export const ORIGIN = "https://pikibun.test";
 export const TOKEN = "tok_0123456789abcdefghijklmnopqrstuv";
 
@@ -53,7 +50,6 @@ export const view = {
 
 type Request = { method: string; url: string; body?: string | null };
 
-/** The routes of a signed-in user's server; `overrides` replace or add routes. */
 export function server(overrides: Record<string, unknown> = {}) {
   return {
     [`GET ${ORIGIN}/api/health`]: { body: { ok: true, githubConfigured: true, passwordAuth: false, testMode: true } },
@@ -64,10 +60,8 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [host] } },
     [`GET ${ORIGIN}/api/workspaces/w1/models`]: { body: { models: [{ id: "m1", workspaceId: "w1", name: "Claude Sonnet", connectorId: "c1", provider: "anthropic", modelId: "claude-sonnet" }] } },
     [`GET ${ORIGIN}/api/workspaces/w1/repositories`]: { body: { repositories: [{ id: "r1", provider: "github", host: "github.com", repositoryId: "1", fullName: "OpenCara/pikibun", ref: "main", private: false, lfs: false, forbidDefaultBranchPush: true, readAs: "members" }], required: true, sources: 1 } },
-    // A single session's read says whether its view would be served now, as the server's does.
     [`GET ${ORIGIN}/api/sessions/s1`]: { body: { session: { ...sessionRecord, viewable: true } } },
     [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view, revision: "r1" } },
-    // The stream ends at once, as the server ends every stream after a few snapshots; the client reopens it later.
     [`GET ${ORIGIN}/api/sessions/s1/events*`]: { status: 200, headers: { "content-type": "text/event-stream" }, body: "" },
     [`POST ${ORIGIN}/api/sessions/s1/approvals/ap1`]: { body: { ok: true } },
     [`POST ${ORIGIN}/api/sessions/s1/submit`]: (request: Request) => ({ body: { submissionId: "q2", conversationId: "0", status: "queued", queuePosition: 1, echo: JSON.parse(request.body ?? "{}") } }),
@@ -77,7 +71,6 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/sessions/s3/events*`]: { status: 200, headers: { "content-type": "text/event-stream" }, body: "" },
     [`POST ${ORIGIN}/api/sessions/s3/submit`]: { body: { submissionId: "q9", conversationId: "0", status: "queued" } },
     [`POST ${ORIGIN}/api/auth/logout`]: { status: 204 },
-    // Settings: the person's accounts and apps, their hosts, and the workspace's own settings.
     [`GET ${ORIGIN}/api/git/accounts`]: { body: { accounts: [] } },
     [`GET ${ORIGIN}/api/source-accounts`]: { body: { accounts: [], oauth: [] } },
     [`GET ${ORIGIN}/api/me/devices`]: { body: { devices: [{ id: "d1", name: "Ada's iPhone", createdAt: "2026-11-01T10:00:00.000Z", expiresAt: "2026-12-01T10:00:00.000Z" }] } },
@@ -100,7 +93,6 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/workspaces/w1/database`]: { body: { available: false, privateHosts: false, backupStorage: true, database: null, automaticBackups: null } },
     [`GET ${ORIGIN}/api/workspaces/w1/invite-link`]: { body: { link: null } },
     [`GET ${ORIGIN}/api/workspaces/w1/join-requests`]: { body: { requests: [] } },
-    // The session panel: its worktree, activity, schedules and people.
     [`GET ${ORIGIN}/api/sessions/s1/files?path=.`]: { body: { files: { type: "directory", path: ".", entries: [{ name: "src", type: "directory" }, { name: "README.md", type: "file", size: 42 }], total: 2, truncated: false } } },
     [`GET ${ORIGIN}/api/sessions/s1/files?path=README.md`]: { body: { files: { type: "file", path: "README.md", size: 42, text: "# Pikibun\nThe login test races the cookie." } } },
     [`GET ${ORIGIN}/api/sessions/s1/files?path=browser-output`]: { status: 404, body: { error: "No such file or directory" } },
@@ -118,5 +110,4 @@ export function server(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** Storage holding a sign-in to the stub server. */
 export const signedIn = { "pikibun.token": TOKEN, "pikibun.origin": ORIGIN };

@@ -10,7 +10,6 @@ import { validSessionBranch } from "../../../packages/shared/src/git-push.js";
 export class RunnerError extends Error {
   constructor(public readonly status: number, message: string) { super(message); }
 }
-/** Connector-authored setup failures with fixed text, safe to show the operator unlike SDK or HTTP errors. */
 export class ConnectorSetupError extends Error {
   override name = "ConnectorSetupError";
 }
@@ -27,10 +26,7 @@ export function requestKey(actorId: string, mode: "write" | "ask", requestId: st
   return sha256(JSON.stringify([actorId, mode, requestId]));
 }
 export function permissionFor(action: RunnerAction): Permission {
-  // The file browser reads the worktree as a collaborator could have the agent read it, and the transcript's images
-  // came from such files or from collaborators' messages.
   if (action === "submit" || action === "operations" || action === "create" || action === "stop" || action === "files" || action === "revert" || action === "fork" || action === "upload" || action === "tunnel" || action === "image") return "write";
-  // Taking back a queued message needs the access it was sent with, which the session checks: a side ask's is ask.
   if (action === "ask" || action === "withdraw") return "ask";
   if (action === "approve") return "approve";
   if (action === "restart" || action === "backup" || action === "restore" || action === "pack" || action === "unpack") return "manage";
@@ -47,10 +43,6 @@ export async function verifyRunnerTicket(token: string, secret: string, action: 
 }
 const githubPinKeys = "bindingId,commit,fullName,path,ref,repositoryId";
 const providerPinKeys = "bindingId,commit,fullName,host,path,provider,ref,repositoryId";
-/**
- * Checks one immutable repository pin (legacy GitHub or token-provider shape) and returns its repository identity key,
- * or null when the pin is malformed. Callers enforce uniqueness of binding ids, lowercase paths and identity keys.
- */
 export function repositoryPinIdentity(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const pin = value as Record<string, unknown>;
@@ -112,15 +104,12 @@ export function validateBinding(value: unknown, id: string, allowNativeModels = 
 }
 export function validateOperation(value: unknown): Operation {
   if (validHostOperation(value)) return value;
-  // In canonical key order, whatever order it came in, so approvals compare equal on both sides.
   if (validExtensionToolOperation(value)) return { kind: value.kind, source: value.source, tool: value.tool, arguments: value.arguments, digest: value.digest };
   if (!value || typeof value !== "object") throw new RunnerError(400, "Invalid operation");
   const op = value as Operation;
   const text = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !v.includes("\0");
   if (op.kind === "git.commit" && text(op.message, 4000) && Object.keys(op).length === 2) return op;
   if (op.kind === "bash" && text(op.command, 8192) && Object.keys(op).length === 2) return op;
-  // Pikibun's own program tools, and those defined as data this connector knows (tool-definitions.ts): the control plane
-  // decides whether the session may use it.
   if (op.kind === "program" && typeof op.tool === "string" && ((programToolNames as readonly string[]).includes(op.tool) || knownDefinedProgramTool(op.tool))
     && text(op.command, 8192) && Object.keys(op).length === 3) {
     return { kind: op.kind, tool: op.tool, command: op.command };
@@ -131,7 +120,6 @@ export function validateOperation(value: unknown): Operation {
   if (op.kind === "github.merge" && githubRepository(op.repository) && Number.isSafeInteger(op.pull) && op.pull > 0
     && typeof op.sha === "string" && /^[0-9a-f]{40}$/.test(op.sha) && githubMergeMethods.includes(op.method)
     && Object.keys(op).length === 5) return op;
-  // The same bounds as the control plane's parseOperation: a one-line title, a body that may be empty.
   if (op.kind === "github.issue" && githubRepository(op.repository) && text(op.title, GITHUB_ISSUE_TITLE_LIMIT) && !/[\r\n]/.test(op.title)
     && typeof op.body === "string" && op.body.length <= GITHUB_ISSUE_BODY_LIMIT && !op.body.includes("\0") && Object.keys(op).length === 4) return op;
   if (op.kind === "git.push") {
@@ -153,7 +141,6 @@ export function validateOperation(value: unknown): Operation {
   }
   if (op.kind === "permission") {
     const keys = Object.keys(op);
-    // Needs are unique and in permissionNeeds order, so equal requests hash equally.
     if (keys.length === 4 && keys.every(key => ["kind", "tool", "target", "needs"].includes(key)) && typeof op.tool === "string"
       && ((toolNames as readonly string[]).includes(op.tool) || definedToolNamePattern.test(op.tool))
       && typeof op.target === "string" && op.target.length <= 8192 && !op.target.includes("\0") && Array.isArray(op.needs) && op.needs.length > 0

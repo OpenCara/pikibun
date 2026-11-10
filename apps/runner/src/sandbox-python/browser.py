@@ -1,17 +1,4 @@
 #!/usr/bin/python3 -I
-# The browser tool's driver (piki:browser; see apps/runner/src/browser-command.ts and docs/design/piki-extensions.md),
-# embedded in the connector through sandbox-python.generated.ts (`pnpm python:embed` writes it; tests/sandbox-python.test.ts
-# checks it is current).
-#
-# It runs only in the session's Linux sandbox, never on the host itself. One call is one sandboxed command: it starts the
-# host's Chromium (which the sandbox gives commands read-only) headless with a profile in the session's home, drives
-# it over the DevTools protocol on a pipe (--remote-debugging-pipe, so it opens no port), opens the request's page, runs
-# its actions, and leaves a screenshot and a JSON report of the page in the worktree's browser-output directory, which
-# the session panel's Browser tab shows. It prints that report as the call's output. `serve`, the web app under test,
-# runs beside it for the call only, as a command's processes and network end with it: one of the node or python tools'
-# programs, started without a shell, with that tool's environment.
-#
-# Only the standard library: it runs with the sandbox's /usr/bin/python3, 3.9 or newer.
 import base64
 import fcntl
 import json
@@ -25,12 +12,8 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# Where the report and screenshots go, relative to the worktree, and how many calls' files are kept there. The runner
-# reads the screenshot back from it (browser-command.ts BROWSER_OUTPUT and BROWSER_KEPT, tests/sandbox-python.test.ts
-# checks them).
 OUTPUT = 'browser-output'
 KEPT = 30
-# Bounds of what the report holds, so the call's output stays well within a command's.
 MAX_TEXT = 6000
 MAX_ELEMENTS = 80
 MAX_CONSOLE = 40
@@ -38,15 +21,10 @@ MAX_ENTRY = 500
 MAX_VALUE = 4000
 MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 DEFAULT_VIEWPORT = (1280, 800)
-# The node and python tools' programs, and what they run with: node-command.ts nodePrograms and NODE_ENVIRONMENT,
-# python-command.ts pythonPrograms and PYTHON_ENVIRONMENT (tests/sandbox-python.test.ts checks them).
 NODE_PROGRAMS = ('node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack')
 NODE_ENVIRONMENT = 'NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true'
 PYTHON_PROGRAMS = ('python3', 'pip', 'pip3', 'uv', 'uvx', 'poetry', 'pytest')
 PYTHON_ENVIRONMENT = 'NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1'
-# Chromium's flags: headless, no sandbox of its own (the session's sandbox has no user namespaces to give it, and is the
-# boundary), no shared memory (the sandbox's /dev/shm is read-only), and none of the background traffic a fresh profile
-# makes, which the session's proxy would only refuse.
 CHROME_FLAGS = [
     '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--remote-debugging-pipe',
     '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update',
@@ -70,7 +48,6 @@ FONTS_CONF = '''<?xml version="1.0"?>
 {includes}
 </fontconfig>
 '''
-# The host's fontconfig rules worth having where the sandbox has no /etc/fonts: the generic families and their aliases.
 FONT_RULES = ('30-metric-aliases.conf', '40-nonlatin.conf', '45-generic.conf', '45-latin.conf', '49-sansserif.conf',
               '60-generic.conf', '60-latin.conf', '65-nonlatin.conf')
 
@@ -82,7 +59,6 @@ class BrowserError(Exception):
 OUT_OF_TIME = "the call ran out of time: the host's command time limit is almost up"
 
 
-# The page's side of the driver: finding elements, describing the page. Run with Runtime.evaluate.
 PAGE_SCRIPT = r'''
 (() => {
   if (window.__pikibun) return;
@@ -199,14 +175,12 @@ def bounded(text: Any, limit: int = MAX_ENTRY) -> str:
 
 
 def high_fd(fd: int) -> int:
-    # Out of the way of 3 and 4, which Chromium's end of the pipes takes.
     moved = fcntl.fcntl(fd, fcntl.F_DUPFD, 10)
     os.close(fd)
     return moved
 
 
 def fonts_config() -> Optional[str]:
-    # The sandbox has no /etc: give Chromium's fontconfig the host's fonts and family rules, cached in the session's home.
     if os.path.exists('/etc/fonts/fonts.conf'):
         return None
     temporary = os.environ.get('TMPDIR') or os.path.join(os.environ.get('HOME', '.'), '.tmp')
@@ -221,12 +195,9 @@ def fonts_config() -> Optional[str]:
 
 
 class Chrome:
-    """Chromium on a DevTools pipe: commands go to its fd 3, answers and events come from its fd 4."""
-
     def __init__(self, executable: str, profile: str, viewport: Tuple[int, int], log: str, deadline: float):
         self.deadline = deadline
         self.started = time.monotonic()
-        # Whether Chromium has said anything on the pipe yet: one that never does is stuck starting, and says why in its log.
         self.answered = False
         self.next_id = 0
         self.buffer = b''
@@ -235,22 +206,16 @@ class Chrome:
         commands_read, commands_write = (high_fd(fd) for fd in os.pipe())
         answers_read, answers_write = (high_fd(fd) for fd in os.pipe())
         for name in ('SingletonLock', 'SingletonSocket', 'SingletonCookie'):
-            # A call killed at its time limit leaves these; no other Chromium uses this session's profile.
             try:
                 os.unlink(os.path.join(profile, name))
             except OSError:
                 pass
         env = dict(os.environ)
-        # No D-Bus: headless Chromium needs none, and where it can reach the machine's bus (the driver run outside a
-        # session's sandbox, which has none), a call there that stalls holds its start for D-Bus's 25-second timeout.
         env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=/nonexistent/pikibun-no-bus'
         env['DBUS_SYSTEM_BUS_ADDRESS'] = 'unix:path=/nonexistent/pikibun-no-bus'
         fonts = fonts_config()
         if fonts:
             env['FONTCONFIG_FILE'] = fonts
-        # Chromium binds its profile's singleton socket in TMPDIR, and a Unix socket's path holds at most 107 bytes: the
-        # session's own (/sessions/<64 hex digits>/home/.tmp) leaves too few, and Chrome and Chromium (but not the headless
-        # shell) crash at start. So Chromium runs in a directory of its own there, which TMPDIR names by a short path.
         work = os.path.join(env.get('TMPDIR') or os.path.join(env.get('HOME', '.'), '.tmp'), 'pikibun-browser')
         os.makedirs(work, exist_ok=True)
         if os.path.isdir('/proc/self/cwd'):
@@ -258,7 +223,6 @@ class Chrome:
         proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
         flags = list(CHROME_FLAGS) + ['--user-data-dir=' + profile, '--window-size=%d,%d' % viewport]
         if proxy:
-            # Loopback (a `serve` command's port) stays direct, as Chromium bypasses the proxy for it by default.
             flags.append('--proxy-server=' + proxy)
 
         def child() -> None:
@@ -281,7 +245,6 @@ class Chrome:
         return max(0.0, min(timeout, self.deadline - time.monotonic()))
 
     def pump(self, timeout: float) -> bool:
-        """Reads what Chromium sent within `timeout`, dispatching events; false once the pipe is closed."""
         ready, _, _ = select.select([self.reader], [], [], max(0.0, timeout))
         if not ready:
             return True
@@ -369,8 +332,6 @@ def stop_group(process: 'subprocess.Popen[bytes]') -> None:
 
 
 class Page:
-    """One tab, attached in flat mode, with what it logged and loaded."""
-
     def __init__(self, chrome: Chrome, viewport: Tuple[int, int]):
         self.chrome = chrome
         self.console: List[Dict[str, Any]] = []
@@ -390,7 +351,6 @@ class Page:
         self.session = chrome.send('Target.attachToTarget', {'targetId': target, 'flatten': True})['sessionId']
         for method in ('Page.enable', 'Runtime.enable', 'Network.enable', 'Log.enable'):
             self.send(method)
-        # What the page's server serves now, never what an earlier call kept: the app under test changes between calls.
         self.send('Network.setCacheDisabled', {'cacheDisabled': True})
         self.send('Page.setLifecycleEventsEnabled', {'enabled': True})
         self.frame = self.send('Page.getFrameTree')['frameTree']['frame']['id']
@@ -442,7 +402,6 @@ class Page:
             self.loading = False
 
     def settle(self, timeout: float, quiet: float = 0.5, longest: float = 3.0) -> None:
-        """Waits for the main frame to load, then up to `longest` for the network to be quiet for `quiet` seconds."""
         until = time.monotonic() + self.chrome.remaining(timeout)
         while self.loading and time.monotonic() < until:
             self.chrome.pump(min(0.1, until - time.monotonic()))
@@ -452,7 +411,6 @@ class Page:
         calm_since = time.monotonic()
         while time.monotonic() < settled:
             now = time.monotonic()
-            # Requests open for long (a stream, a long poll) don't hold it up.
             busy = [started for started in self.inflight.values() if now - started < 5]
             if busy:
                 calm_since = now
@@ -479,7 +437,6 @@ class Page:
         self.settle(timeout)
 
     def after_input(self, timeout: float) -> None:
-        # A click or a key may start a navigation, which shows within a moment, or only change the page.
         before = self.navigated
         until = time.monotonic() + self.chrome.remaining(0.3)
         while time.monotonic() < until:
@@ -509,7 +466,6 @@ class Page:
             metrics = self.send('Page.getLayoutMetrics')
             size = metrics.get('cssContentSize') or metrics.get('contentSize') or {}
             width, height = size.get('width', 0), size.get('height', 0)
-            # A page longer than this is cut: its picture would only be scaled down past reading.
             if width and height:
                 params.update({'captureBeyondViewport': True, 'clip': {'x': 0, 'y': 0, 'width': width, 'height': min(height, 8000), 'scale': 1}})
         data = base64.b64decode(self.send('Page.captureScreenshot', params)['data'])
@@ -646,7 +602,6 @@ def log_tail(path: str, limit: int = 3000) -> str:
 
 
 def serve_launch(spec: Dict[str, Any], node_bin: Optional[str]) -> Tuple[List[str], str, Dict[str, str]]:
-    """What starts `serve`'s program, as its own tool would run it: its arguments, where, and with what environment."""
     program = spec['program']
     directory = os.path.abspath(spec.get('directory') or '.')
     env = dict(os.environ)
@@ -671,7 +626,6 @@ def serve_launch(spec: Dict[str, Any], node_bin: Optional[str]) -> Tuple[List[st
 
 
 def serve(spec: Dict[str, Any], node_bin: Optional[str], log: str, deadline: float) -> 'subprocess.Popen[bytes]':
-    """Starts the web app under test, in a process group of its own to stop when the call ends, and waits for its port."""
     args, directory, env = serve_launch(spec, node_bin)
     with open(log, 'wb') as output:
         try:
@@ -691,7 +645,6 @@ def serve(spec: Dict[str, Any], node_bin: Optional[str], log: str, deadline: flo
 
 
 def prune() -> None:
-    # Keeps the newest KEPT calls: a report and the screenshots named after it.
     try:
         names = sorted(os.listdir(OUTPUT))
     except OSError:
@@ -733,8 +686,6 @@ def main() -> int:
         print(json.dumps({'error': "usage: pikibun-browser --chrome <chromium> [--time-limit <seconds>] [--node-bin <directory>] '<request as JSON>'"}))
         return 2
     started = time.monotonic()
-    # Actions stop a few seconds before the command's own limit, which leaves the report (with a screenshot) time to be
-    # made; the report itself may take until a second before it.
     deadline = started + max(5, seconds - 5)
     final = started + max(6, seconds - 1)
     request = json.loads(args[0])
@@ -779,7 +730,6 @@ def main() -> int:
     except BrowserError as error:
         report['error'] = str(error)
     except (OSError, ValueError, KeyError, TypeError) as error:
-        # The browser answered something unexpected, or went away: the report still says what it got to.
         report['error'] = 'the browser failed: %s: %s' % (type(error).__name__, bounded(str(error)))
     if chrome is not None:
         chrome.deadline = final

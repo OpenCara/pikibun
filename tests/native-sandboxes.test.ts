@@ -18,10 +18,6 @@ import { WINDOWS_RUNNER, WINDOWS_SUPPORT_CHECK, WindowsBackend, windowsSandboxSu
 import type { EgressGrant } from "../packages/shared/src/network.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 
-// The macOS and Windows sandboxes can only run on those platforms. What runs anywhere is tested here: the egress
-// proxy's loopback mode, the workspace layer with both helpers run unconfined (the Python helper as macOS runs it, the
-// Node helper as Windows does), the Seatbelt profile, and the Windows scripts' syntax.
-
 const allow = async () => {};
 const git = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
 const bash = ["/bin/bash", "/usr/bin/bash"].find(path => existsSync(path))!;
@@ -37,7 +33,6 @@ function binding(id: string): RunnerBinding {
   };
 }
 
-/** A backend that runs a helper with no boundary at all: the workspace layer and the helper's own logic, nothing else. */
 class Unconfined implements HelperBackend {
   readonly path = "/usr/bin:/bin";
   readonly launched: { request: SandboxRequest; context: HelperContext }[] = [];
@@ -131,7 +126,6 @@ test("each step gets only what it needs: read-only file reads, a writable Git di
     assert.deepEqual([by("initialize").readOnly, by("initialize").gitWritable], [false, true]);
     assert.deepEqual([by("read").readOnly, by("read").gitWritable, by("read").egress], [true, false, false]);
     assert.deepEqual([by("write").readOnly, by("write").gitWritable], [false, false]);
-    // No proxy was configured for this workspace, so not even the command reaches one.
     assert.equal(by("bash").egress, false);
   });
 
@@ -170,7 +164,6 @@ test("a proxy for sandboxes that share the host's network listens on loopback on
 
   assert.equal((await call(endpoint.port, { path: "http://example.com/" })).status, 407);
   assert.equal((await call(endpoint.port, { method: "CONNECT", path: "example.com:443" })).status, 407);
-  // With the token the request reaches the policy, which refuses: this workspace's network is off.
   assert.equal((await call(endpoint.port, { method: "CONNECT", path: "example.com:443", headers: { "Proxy-Authorization": basic("session-token") } })).status, 403);
 
   const environment = egressEnvironment("pikibun/work-1", endpoint, "/session/ca.crt");
@@ -185,7 +178,6 @@ const layout: HelperLayout = { root: "/s", home: "/s/home", worktree: "/s/worktr
 test("the Seatbelt profile denies by default, passes paths as parameters, and opens writes and the network per step", () => {
   const read = seatbeltProfile({ layout, readOnly: true, gitWritable: false, toolRoots: ["/opt/homebrew"] });
   assert.match(read.profile, /^\(version 1\)\n\(deny default\)\n/);
-  // trustd would fetch certificate URLs on the host's network, outside the egress proxy.
   assert.ok(!read.profile.includes("trustd"), "no trustd lookup");
   assert.ok(!read.profile.includes("/s/"), "no session path is spliced into the profile");
   assert.equal(read.parameters.WORKTREE, "/s/worktree");
@@ -198,7 +190,6 @@ test("the Seatbelt profile denies by default, passes paths as parameters, and op
   assert.match(command.profile, /\(allow file-write\* \(subpath \(param "HOME_DIR"\)\) \(subpath \(param "WORKTREE"\)\)\)/);
   assert.match(command.profile, /\(allow network-outbound \(remote ip "localhost:51234"\)\)/);
   assert.ok(!command.profile.includes('(allow network-outbound (remote ip "localhost:*"))'));
-  // The worktree's pointer to the Git directory, and the Git directory, are written last, so they win.
   const lines = command.profile.trimEnd().split("\n");
   assert.deepEqual(lines.slice(-2), ['(deny file-write* (literal (param "GIT_POINTER")))', '(deny file-write* (subpath (param "GIT_DIR")))']);
 
@@ -230,7 +221,6 @@ test("a workspace opens again over its own read-only files, and a step that shou
   assert.throws(() => egressPort({ ...context, egress: true, environment: { HTTPS_PROXY: "http://127.0.0.1:41234" } }), /egress proxy endpoint is missing/);
 });
 
-/** A stand-in for MXC's SDK: `probe` reports the given tier, and the "container" echoes its input with a prefix. */
 const FAKE_SDK = (tier: string) => `
 import { spawn as start } from "node:child_process";
 export function probe() { return { tier: ${JSON.stringify(tier)}, warnings: [], probes: {} }; }
@@ -275,14 +265,9 @@ test("the Node helper gives commands the session's own proxy URL back, after MXC
   const restored = run({ SANDBOX_EGRESS_PROXY: own, SANDBOX_EGRESS_NO_PROXY: "localhost,127.0.0.1,::1" });
   assert.equal(restored.status, 0, restored.stderr);
   assert.equal(restored.stdout, `${own} ${own} ${own} ${own} unset [localhost,127.0.0.1,::1] [localhost,127.0.0.1,::1] unset\n`);
-  // A step without the network has no proxy of its own to restore.
   assert.equal(run({}).stdout, "http://127.0.0.1:41234 http://127.0.0.1:41234 http://127.0.0.1:41234 http://127.0.0.1:41234 unset [] [] unset\n");
 });
 
-/**
- * A stand-in for MXC's SDK in the setup check: `probe` reports `tier` (and the identity-less proxy flag), and `spawn` runs
- * the check's own command in a shell, or, with `denied`, fails as Windows did before its October 2026 update.
- */
 const FAKE_CHECK_SDK = (tier: string, options: { identityless?: boolean; denied?: boolean } = {}) => `
 import { spawn as start } from "node:child_process";
 export function probe() { return { tier: ${JSON.stringify(tier)}, warnings: [], probes: { baseContainerSupportsIdentitylessLoopbackProxy: ${options.identityless ?? true} } }; }

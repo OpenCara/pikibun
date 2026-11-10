@@ -9,12 +9,8 @@ import { TextField } from "../form";
 import { Badge, CardBody, confirm, DropdownMenu, Feedback, IdentityBadge, Note, ResourceState, Row, Section, Small, StatusDot } from "../ui";
 import { SectionPage, type SectionProps } from "./parts";
 
-// Settings → Administration, as the web app's (settings/AdminSettings.tsx): who uses the server and what they run
-// it on, never what they work on.
-
 const count = (value: number, singular: string, plural: string) => `${value} ${value === 1 ? singular : plural}`;
 
-/** Whether a listed item mentions every word typed, case-insensitively. */
 function matches(query: string, ...fields: (string | null | undefined)[]) {
   const text = fields.filter(Boolean).join(" ").toLowerCase();
   return query.toLowerCase().split(/\s+/).filter(Boolean).every(word => text.includes(word));

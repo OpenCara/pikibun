@@ -82,7 +82,6 @@ test("the git tool's command quotes every argument and runs Git without a pager,
     "GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0 git --no-pager 'status' </dev/null 2>&1");
   assert.equal(gitShellCommand({ directory: "my app", args: ["commit", "-m", "It's $(done); `really`\nyes"] }),
     "cd -- './my app' && GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0 git --no-pager 'commit' '-m' 'It'\\''s $(done); `really`\nyes' </dev/null 2>&1");
-  // Within what a bash operation may be (validateOperation's 8192), so a long call is refused saying why, before any card.
   assert.equal(gitLimits.commandLength, 8192);
   assert.throws(() => gitRequest({ args: ["commit", "-m", "x".repeat(gitLimits.argumentLength + 1)] }), /at most 8192 characters/);
   assert.throws(() => gitShellCommand({ directory: ".", args: ["commit", "-m", "x".repeat(8100)] }), /over 8192 characters/);

@@ -17,15 +17,9 @@ import { Field, Select, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, confirm, CopyField, DropdownMenu, Feedback, FormSheet, Note, ResourceState, Row, Section, Small } from "../ui";
 import { Card, ConnectDocumentSheet, ConnectGitAccountSheet, GroupTitle } from "./accounts";
 
-// A workspace's sources and the accounts they read and push with, as the web app's (sources.tsx,
-// workspace-connections.tsx, settings/PushAccess.tsx).
-
-/** Provider name, plus the host when it differs from the provider's default (self-hosted instances). */
 export function gitProviderLabel(provider: GitProvider, host: string): string {
   return host === gitProviderHosts[provider].default ? gitProviderNames[provider] : `${gitProviderNames[provider]} (${host})`;
 }
-
-/* ---------- Connections ---------- */
 
 export function createWorkspaceConnections(workspaceId: () => string) {
   return createResource<WorkspaceConnectionList>(() => `/api/workspaces/${segment(workspaceId())}/connections`);
@@ -45,7 +39,6 @@ export function documentConnectionFor(connections: WorkspaceConnection[] | null,
   return connections?.find(item => item.family === "document" && item.provider === kind) ?? null;
 }
 
-/** Which identity a source reads with, on its row: owners and admins switch it; members see it where it isn't their own. */
 export function ReadAsControl(props: {
   workspaceId: string; sourceId: string; title: string; readAs: SourceReadAs; connection: WorkspaceConnection | null; admin: boolean; action: Action; changed: () => void;
 }) {
@@ -65,7 +58,6 @@ export function ReadAsControl(props: {
   );
 }
 
-/** Settings → Workspaces → the workspace → Connections. */
 export function WorkspaceConnections(props: { workspaceId: string; admin: boolean; connections: WorkspaceConnection[] | null; loading: boolean; error: string; refresh: () => void; changed: () => void }) {
   const action = createAction();
   const git = signal<TokenGitProvider | null>(null);
@@ -126,8 +118,6 @@ export function WorkspaceConnections(props: { workspaceId: string; admin: boolea
   );
 }
 
-/* ---------- Document sources ---------- */
-
 const itemLabels: Record<DocumentItemType, string> = {
   page: "Page", database: "Database", folder: "Folder", document: "Document", spreadsheet: "Spreadsheet", presentation: "Presentation", file: "File", wiki: "Wiki page",
 };
@@ -140,7 +130,6 @@ const linkHints: Record<DocumentKind, string> = {
   "tencent-docs": "A Tencent Docs folder or document link (docs.qq.com/…)",
 };
 
-/** The document part of a workspace's Sources, which owners and admins add and remove. */
 export function DocumentSources(props: {
   workspaceId: string; workspaceName: string; admin: boolean; sources: WorkspaceDocumentSource[] | null; loading: boolean; error: string; refresh: () => void; changed: () => void;
   connections: WorkspaceConnection[] | null; go: (route: { name: "settings"; section: string }) => void;
@@ -252,8 +241,6 @@ function AddSourceSheet(props: { open: boolean; kinds: DocumentKind[]; own: Docu
   );
 }
 
-/* ---------- Push access ---------- */
-
 interface PushIdentitiesResponse {
   identities: PushIdentity[];
   oidc: { issuer: string; subject: string } | null;
@@ -282,7 +269,6 @@ const ownerAccount: Record<GitProvider, string> = {
 const entraAudience = "api://AzureADTokenExchange";
 const scopeLabel = (identity: PushIdentity) => `${gitProviderLabel(identity.provider, identity.host)}${identity.scope ? ` · ${identity.scope}` : ""}`;
 
-/** Opens the provider's authorization of an OAuth app, where the bot account signs in; it returns to the server. */
 async function authorizeIdentity(path: string, identity: PushIdentity) {
   const result = await session().api<{ url: string }>(`${path}/${segment(identity.id)}/authorize`, { method: "POST" });
   openExternal(result.url);

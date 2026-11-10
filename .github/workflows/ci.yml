@@ -30,9 +30,9 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -48,7 +48,7 @@ jobs:
             --symlink usr/bin /bin --proc /proc --dev /dev -- /usr/bin/true
       - run: pnpm install --frozen-lockfile
       # The Native Shell CLI the client (apps/nsh) is built with, at the version scripts/nsh.mjs pins.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
@@ -63,7 +63,7 @@ jobs:
       # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
       # lacks `lifecycle`, and the page's Content-Security-Policy applies), and only a browser shows it.
       - run: pnpm test:client-web
-      # The NSH web client into dist/preview.
+      # The NSH web client into dist/client.
       - run: pnpm build
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build
