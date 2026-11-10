@@ -16,12 +16,12 @@
     "prepublishOnly": "node scripts/shrinkwrap.mjs --check && pnpm run build"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.0",
-    "@earendil-works/pi-ai": "1.5.0",
-    "@earendil-works/pi-codemode": "1.5.0",
-    "@earendil-works/pi-coding-agent": "1.5.0",
-    "@earendil-works/pi-durable": "1.5.0",
-    "@earendil-works/pi-schema": "1.5.0",
+    "@earendil-works/chord": "1.5.1",
+    "@earendil-works/pi-ai": "1.5.1",
+    "@earendil-works/pi-codemode": "1.5.1",
+    "@earendil-works/pi-coding-agent": "1.5.1",
+    "@earendil-works/pi-durable": "1.5.1",
+    "@earendil-works/pi-schema": "1.5.1",
     "@hono/node-server": "1.19.11",
     "hono": "4.12.8",
     "ws": "8.21.0",
