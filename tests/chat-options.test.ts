@@ -18,6 +18,12 @@ test("a chosen access goes with every shared message, or the message waits until
   assert.match(accessUnavailable(undefined, { access: "read" }, "submit") ?? "", /Read only/);
   assert.equal(accessUnavailable(undefined, { access: "approval" }, "submit"), undefined);
   assert.equal(accessUnavailable(undefined, auto, "ask"), undefined);
+  // A sandboxed session: a message on the default goes before the host is known, and the server applies the same default.
+  assert.equal(accessUnavailable(undefined, auto, "submit", true), undefined);
+  assert.equal(accessUnavailable(undefined, { access: "approval" }, "submit", true), undefined);
+  assert.match(accessUnavailable(undefined, { access: "approval" }, "submit", false) ?? "", /Ask before acting/, "a picked access waits for the host");
+  assert.match(accessUnavailable(undefined, auto, "submit", false) ?? "", /Auto-approve/);
+  assert.equal(accessUnavailable(host, { access: "approval" }, "submit", false), undefined);
 });
 
 test("a message waits for a model its host offers, once the conversation's own one is disabled there", () => {

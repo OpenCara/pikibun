@@ -243,6 +243,21 @@ describe("on a phone", () => {
     await app.waitUntil(() => app.value("id:composer-input") === "");
   });
 
+  test("a sandboxed session an agent started asking before acting opens on Auto-approve, and its messages go with it", async () => {
+    const app = await open("../App.tsx", {
+      network: server({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, access: "approval" }, revision: "r1" } } }),
+      storage: signedIn,
+    });
+    await app.press("id:session-row-s1");
+    await app.waitFor("id:chat-access");
+    expect(app.texts().join(" ")).toContain("Auto-approve");
+    expect(app.texts().join(" ")).not.toContain("Ask before acting");
+    await app.type("id:composer-input", "Carry on");
+    await app.press("id:composer-send");
+    await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/submit`) !== undefined);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/submit`).options).toMatchObject({ access: "auto" });
+  });
+
   test("starts a new session with a first message", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn });
     await app.waitFor("id:new-session");
