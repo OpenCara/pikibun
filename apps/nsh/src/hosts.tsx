@@ -56,6 +56,7 @@ export function HostDetails(props: { connector: ConnectorInfo }) {
           ? `Sessions on the host: its owner${config()?.hostSessions ? ", and members they grant it," : ""} may start sessions that run directly on it, without the sandbox.`
           : "Sessions on the host: its owner may start sessions that run directly on it, without the sandbox."}</Note>
       </If>
+      <If when={config()?.fakeIpTunnels && capabilities().fakeIpTunnels && !capabilities().unsandboxed}><Note>Fake-IP proxy: its owner trusts a local proxy's fake-IP addresses for every host a workspace's network policy allows, where Pikibun can't check where that proxy connects.</Note></If>
       <If when={config() && capabilities().hostConfig}>
         <Note>{`Commands: stopped after ${config()?.commandTimeoutSeconds} seconds${config()?.gpu && capabilities().gpu ? `, with the host's GPU (${capabilities().gpu === "dxg" ? "WSL /dev/dxg" : "render nodes"})` : ""}.`}</Note>
       </If>

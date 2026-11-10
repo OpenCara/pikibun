@@ -47,6 +47,7 @@ export interface ConnectorCapabilities {
   extensions?: boolean;
   builtinExtensions?: boolean;
   requiredExtensions?: boolean;
+  fakeIpTunnels?: boolean;
   hostConfig?: boolean;
   compactionConfig?: boolean;
   gpu?: GpuKind;

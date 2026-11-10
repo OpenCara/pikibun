@@ -34,7 +34,7 @@ const cacheHints: Record<RepositoryCacheMode, string> = {
 
 const configInfo = (
   <View style={{ gap: 8 }}>
-    <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache or runs their sessions without the sandbox.</Note>
+    <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache, runs their sessions without the sandbox or trusts a fake-IP proxy on it.</Note>
     <Note>Running sessions pick up a change within a minute. A repository cache change applies when the host's connector next connects.</Note>
     <Note>The service lifetime bounds a session service: a server a session keeps running after the call that started it, such as the one the tunnel tool puts online. It stops then, and goes offline.</Note>
     <Note>A longer time limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB files, 256 open files) so builds fit. Without provisioned resource limits on the host (connect --resources), a command can use the whole machine for that long.</Note>
@@ -71,6 +71,8 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
       message: `Members you grant sessions on the host under Host command access will be able to start sessions on ${name} without the sandbox. Their commands then run as that machine's user, with its files, credentials, network and GPU, and no resource limits, and only you, or members you granted host commands, decide them. Members without that grant stay in the sandbox. Your own sessions can run on the host either way.` })) return;
     if (next.hostSessions && !before.hostSessions && !capabilities().ownerHostSessions && !await confirm({ title: "Let your sessions run directly on this host?", confirmLabel: "Allow", destructive: true,
       message: `When you start a session on ${name}, you'll be able to run it without the sandbox. Its commands then run as that machine's user, with its files, credentials, network and GPU, and no resource limits, and only you, or members you granted host commands, decide them. Other members' sessions stay in the sandbox, and so do yours unless you choose otherwise when you start one.` })) return;
+    if (next.fakeIpTunnels && !before.fakeIpTunnels && !await confirm({ title: "Trust this host's fake-IP proxy for every host?", confirmLabel: "Trust it", destructive: true,
+      message: `Sessions on ${name} will reach any host their workspace's network policy allows even where ${name}'s DNS answers with a local proxy's fake-IP addresses (198.18.0.0/15, as Clash, mihomo, sing-box or Surge give in a fake-IP or TUN mode). Pikibun can't check where that proxy then connects: a name a session picks that really points at this machine or its local network (its router, a NAS, an intranet) is reached on port 443 through it. Without this, only hosts the policy names exactly and package registries go through such addresses.` })) return;
     if (next.gpu && !before.gpu && !await confirm({ title: "Lend this host's GPU to sandboxed commands?", confirmLabel: "Lend GPU", destructive: true,
       message: `Shell commands in every session on ${name} will be able to use its GPU for rendering and compute. They get its render device only, never the screen, windows or input, but its driver is more of the kernel exposed to them, and they share the GPU with everything else on the machine.` })) return;
     await action.run(async () => {
@@ -112,6 +114,14 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
         trailing={capabilities().unsandboxed ? <Badge tone="danger">Every session</Badge>
           : owner() ? <Checkbox label={capabilities().ownerHostSessions ? "Allow members' sessions on the host" : "Allow sessions on the host"} checked={config().hostSessions} disabled={!editable()} onChange={hostSessions => set({ hostSessions })} />
           : <Badge tone={saved().hostSessions ? "danger" : "neutral"}>{saved().hostSessions ? "On" : "Off"}</Badge>} />
+      <If when={!capabilities().unsandboxed}>
+        <Row title="Fake-IP proxy" hint={!owner() ? "Only the host's owner changes this"
+          : !capabilities().fakeIpTunnels ? "This host's connector predates this setting: update it (npx pikibun@latest connect) for it to apply"
+          : "Where this machine's DNS answers with a local proxy's fake-IP addresses (198.18.0.0/15: Clash, mihomo, sing-box, Surge), sessions reach any host the network policy allows through them, not only hosts it names exactly and package registries. That proxy then connects where Pikibun can't check"}
+          trailing={owner() ? <Checkbox label="Trust for every host" checked={config().fakeIpTunnels} disabled={!editable() || (!config().fakeIpTunnels && !capabilities().fakeIpTunnels)}
+            onChange={fakeIpTunnels => set({ fakeIpTunnels })} />
+            : <Badge tone={saved().fakeIpTunnels ? "warning" : "neutral"}>{saved().fakeIpTunnels ? "On" : "Off"}</Badge>} />
+      </If>
       <If when={!capabilities().hostConfig}>
         <Row title="Update the host's connector" hint="This host's connector predates configuration in Pikibun and keeps its connect options until it is updated (npx pikibun@latest connect). What you save here applies then." />
       </If>
