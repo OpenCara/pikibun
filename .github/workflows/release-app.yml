@@ -40,6 +40,7 @@ on:
       - apps/nsh/icon.png
       - apps/nsh/windows/**
       - scripts/nsh.mjs
+      - scripts/app-version.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -112,6 +113,8 @@ jobs:
               Write-Output "::warning::SignPath is not set up (SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID): the Windows installer is unsigned, so SmartScreen warns before it runs."
             }
           }
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs $env:VERSION
       - name: Package
         run: node scripts/nsh.mjs package App.tsx --target windows --app-version $env:APP_VERSION --build $env:BUILD --out "$env:RUNNER_TEMP\app"
       - name: Installer
@@ -211,6 +214,8 @@ jobs:
         run: |
           version="${TAG_VERSION:-$(node -p 'require("./apps/nsh/nsh.json").version')-dev.$GITHUB_RUN_NUMBER}"
           { echo "VERSION=$version"; echo "APP_VERSION=${version%%-*}"; echo "BUILD=$GITHUB_RUN_NUMBER"; } >> "$GITHUB_ENV"
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
       - name: Package
         run: |
           node scripts/nsh.mjs package App.tsx --target macos --app-version "$APP_VERSION" --build "$BUILD" --out "$RUNNER_TEMP/app"
@@ -360,6 +365,8 @@ jobs:
         run: |
           version="${TAG_VERSION:-$(node -p 'require("./apps/nsh/nsh.json").version')-dev.$GITHUB_RUN_NUMBER}"
           { echo "VERSION=$version"; echo "APP_VERSION=${version%%-*}"; echo "BUILD=$GITHUB_RUN_NUMBER"; } >> "$GITHUB_ENV"
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
       # The app's directory (the runner, its bundle, a .desktop file and the icon) as a .tar.gz.
       - name: Package
         run: |
@@ -415,6 +422,8 @@ jobs:
             echo "::error::Android signing is partly configured; missing: ${missing[*]}."
             exit 1
           fi
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
       - name: Package
         env:
           SIGNED: ${{ steps.signing.outputs.configured }}
@@ -588,6 +597,8 @@ jobs:
             exit 1
           fi
           echo "NSH_RUNTIME=$runtime" >> "$GITHUB_ENV"
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
       - name: Package
         env:
           SIGNED: ${{ steps.signing.outputs.configured }}
