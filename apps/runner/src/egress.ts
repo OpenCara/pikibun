@@ -382,9 +382,9 @@ export class EgressProxy {
     if (!results.length || results.some(result => !publicAddress(result.address) && !fakeIpAddress(result.address))) return refused;
     const fake = results.find(result => fakeIpAddress(result.address));
     if (fake && !hostNamed(policy, host) && !await this.#fakeIpTunnels()) {
-      return { reason: `${host} resolves to ${fake.address}, a fake-IP address of a proxy on this host; tunnels go to such addresses only for `
-        + `hosts the network policy names exactly (an allowlist entry without *. or a package registry), unless the host's owner trusts that proxy `
-        + `(Settings → Hosts → the host → Configuration → Fake-IP proxy), or exclude ${host} from the proxy's fake-IP mode` };
+      return { reason: `${host} resolves to ${fake.address}, a fake-IP address of a proxy on this host. Tunnels go to such addresses only for `
+        + `hosts the network policy names exactly (an allowlist entry without *. or a package registry), or for any host it allows once the `
+        + `host's owner trusts that proxy (Settings → Hosts → the host → Configuration → Fake-IP proxy). Otherwise, exclude ${host} from the proxy's fake-IP mode` };
     }
     return { addresses: results.map(result => result.address) };
   }

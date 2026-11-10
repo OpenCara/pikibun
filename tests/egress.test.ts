@@ -398,7 +398,7 @@ test("a host's owner who trusts its fake-IP proxy lets any host the policy allow
   trusted = false;
   const off = await through(anything, "anything.example.org:443");
   assert.equal(off.status, 403, "turned off, the next tunnel is refused");
-  assert.match(off.body!, /a fake-IP address of a proxy on this host; .*unless the host's owner trusts that proxy/);
+  assert.match(off.body!, /a fake-IP address of a proxy on this host\. .*or for any host it allows once the host's owner trusts that proxy .*\. Otherwise, exclude anything\.example\.org/);
   trusted = new Error("control plane unreachable");
   assert.equal((await through(anything, "anything.example.org:443")).status, 403, "an unknown setting counts as off");
   assert.deepEqual(connected, ["198.18.0.9", "93.184.216.35", "198.18.0.11"]);
