@@ -9,8 +9,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Readable, type Duplex } from "node:stream";
 import { bindingRemote, gitProviders, validGitHost, validRepositoryId, validRepositoryName, type GitProvider } from "../../../packages/shared/src/repositories.js";
 import { documentItemTypes, documentKind, sourceLimits, type DocumentItemType, type GrantSource } from "../../../packages/shared/src/sources.js";
-import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, credentialedApiProviders, type ApiAccessKind, type CredentialedApiProvider, egressPushService, hostAllowed, lfsLimits, parseLfsBatchRequest, parseNetworkPolicy, validLfsOid, validLfsSize,
-  type EgressApi, type EgressGitService, type EgressGrant, type EgressRepository, type LfsBatchResult } from "../../../packages/shared/src/network.js";
+import { API_TOKEN_PLACEHOLDER, credentialedApiHosts, credentialedApiProviders, type ApiAccessKind, type CredentialedApiProvider, egressPushService, hostAllowed, hostNamed, lfsLimits, parseLfsBatchRequest, parseNetworkPolicy, validLfsOid, validLfsSize,
+  type EgressApi, type EgressGitService, type EgressGrant, type EgressRepository, type LfsBatchResult, type NetworkPolicy } from "../../../packages/shared/src/network.js";
 import { boundedStream, drainStream, PUSH_REQUEST_BYTES, pushRejection, PushRequestError, readPushCommands, sessionBranchRefusal, type PushCommand } from "../../../packages/shared/src/git-push.js";
 import { RunnerError } from "./protocol.js";
 import { CA_BUNDLE, CA_BUNDLE_VARIABLES } from "./trust-store.js";
@@ -479,12 +479,24 @@ export class EgressProxy {
     }
   }
 
-  async #addresses(host: string): Promise<string[]> {
-    if (isIP(host)) return publicAddress(host) ? [host] : [];
+  /**
+   * The addresses a tunnel to `host` may connect to, or why there are none. Every address must be public: a name that
+   * also points inside the host's networks is refused outright. A local proxy's fake-IP addresses (fakeIpAddress) are
+   * taken too for a name, never an address given as the host, that the policy names itself (hostNamed): that proxy
+   * passes the connection on to the name as the host's own traffic goes (#248), and a name the session chose freely in
+   * open mode could have it resolved into the host's networks on the proxy's side, where it can't be checked.
+   */
+  async #addresses(host: string, policy: NetworkPolicy): Promise<{ addresses: string[] } | { reason: string }> {
+    const refused = { reason: `${host} does not resolve to a public address` };
+    if (isIP(host)) return publicAddress(host) ? { addresses: [host] } : refused;
     const results = await (this.#options.lookup ?? (name => dnsLookup(name, { all: true, verbatim: true })))(host);
-    // Every address must be public: a name that also points inside the host's networks is refused outright.
-    if (!results.length || results.some(result => !publicAddress(result.address))) return [];
-    return results.map(result => result.address);
+    if (!results.length || results.some(result => !publicAddress(result.address) && !fakeIpAddress(result.address))) return refused;
+    const fake = results.find(result => fakeIpAddress(result.address));
+    if (fake && !hostNamed(policy, host)) {
+      return { reason: `${host} resolves to ${fake.address}, a fake-IP address of a proxy on this host; tunnels go to such addresses only for `
+        + `hosts the network policy names exactly (an allowlist entry without *. or a package registry), or exclude ${host} from the proxy's fake-IP mode` };
+    }
+    return { addresses: results.map(result => result.address) };
   }
 
   /** The first of `addresses` that accepts a connection in time; IPv6 first on an IPv4-only host just falls through. */
@@ -537,8 +549,9 @@ export class EgressProxy {
           ? `${target.host} is not reachable: this workspace's network access is off`
           : `${target.host} is not allowed by this workspace's network policy`);
       }
-      const addresses = await this.#addresses(target.host);
-      if (!addresses.length) return deny(403, `${target.host} does not resolve to a public address`);
+      const resolved = await this.#addresses(target.host, grant.policy);
+      if ("reason" in resolved) return deny(403, resolved.reason);
+      const { addresses } = resolved;
       if (client.destroyed) return;
       this.#sockets.add(client);
       let upstream: Duplex;
