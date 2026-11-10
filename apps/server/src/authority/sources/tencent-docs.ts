@@ -3,15 +3,6 @@ import { fail } from '../../http.js';
 import { accountRejected, clean, json, notFound, outsideSource, rateLimited, upstream, type BoundItem, type DocumentAdapter, type ItemView } from './document-http.js';
 import { docxText } from './office.js';
 
-/**
- * Tencent Docs (docs.qq.com) through its open platform, signed in as the member. UNVERIFIED: the endpoints, fields and
- * codes below were written from memory of the open platform's documentation, without access to it or to the API, and
- * are tested only against a fake. Check them before enabling TENCENT_DOCS_CLIENT_ID in production.
- *
- * Calls carry the access token, the app's client id and the member's open id as headers. Folders list; a document
- * ("doc") is exported to .docx asynchronously and read as its text; other kinds are listed but not read. Tencent Docs
- * names no parent of a file, so "under" searches down from the bound folder, through at most 40 listings.
- */
 export const tencentApi = 'https://docs.qq.com/openapi';
 const share = 'your Tencent Docs account';
 const searchListings = 40;
@@ -86,7 +77,6 @@ async function requireUnder(secret: string, root: { type: 'folder' | 'file'; id:
   outsideSource();
 }
 
-/** A document's text: exported to .docx (polling the export a few seconds), downloaded from docs.qq.com's storage, read. */
 async function documentText(secret: string, id: string): Promise<{ content?: string; note?: string; truncated: boolean }> {
   const started = await call(secret, `/drive/v2/files/${encodeURIComponent(id)}/async-export`, {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ exportType: 'docx' }).toString() });

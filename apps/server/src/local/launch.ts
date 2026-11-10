@@ -10,18 +10,9 @@ import { webBuild } from '../static.js';
 import type { Env } from '../types.js';
 import { recordLocalOwnership, type LocalState } from './state.js';
 
-// A Pikibun server on its owner's computer: SQLite and backups in its state directory. For one person (the default) it
-// listens on 127.0.0.1 only and admits only the GitHub account that claims it with the sign-in link it prints (auth.ts).
-// Shared (state.shared), it is a full multi-user server at a public HTTPS origin behind its owner's TLS proxy or tunnel,
-// with the sign-ins, sign-up policy and administrators they chose, from the same data.
-
 export const LOCAL_ORIGIN_HOST = '127.0.0.1';
 export const githubCallbackPath = '/api/auth/github/callback';
 
-/**
- * The client built for the web: `web/` beside the bundle (the published CLI stages the NSH build there), else the
- * repository's `dist/client` (`pnpm build`) when running from source: the first that holds Native Shell's web build.
- */
 export function defaultStaticDir(): string | undefined {
   let directory = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 6; depth++) {
@@ -36,13 +27,9 @@ export function defaultStaticDir(): string | undefined {
 export interface LocalServerOptions {
   stateDir: string;
   state: LocalState;
-  /** The built web app; defaultStaticDir() when omitted. */
   staticDir?: string;
-  /** Tests and development only: settings added to the server's (test mode, say). */
   extraEnv?: Record<string, string>;
-  /** Releases the state's lease (state.ts openLocalState): called once the server has closed, or failed to start. */
   release?: () => Promise<void>;
-  /** `shared` serves others at state.shared's public origin; `local` (the default) its owner alone. */
   mode?: LocalServerMode;
 }
 
@@ -50,19 +37,11 @@ export type LocalServerMode = 'local' | 'shared';
 
 export interface LocalServer {
   readonly mode: LocalServerMode;
-  /** What people open: http://127.0.0.1:PORT, or the shared server's public origin. */
   readonly origin: string;
-  /** Where it listens, for the proxy or tunnel in front of a shared server: http://127.0.0.1:PORT or http://0.0.0.0:PORT. */
   readonly address: string;
   readonly env: Env;
-  /**
-   * Whose host this computer becomes: the GitHub account that claimed it, or shared, the first administrator in the
-   * order listed who has an account. Null while there is none.
-   */
   owner(): Promise<{ id: string } | null>;
-  /** The owner's sign-in link while the server is unclaimed: whoever opens it first becomes its owner. Null once claimed, and always when shared. */
   claimUrl(): Promise<string | null>;
-  /** Shared with password sign-in only: creates the listed administrator `password:<username>`, as `--create-admin` does. */
   createAdmin(username: string, password: string): Promise<string>;
   close(): Promise<void>;
 }
@@ -76,7 +55,6 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Loc
 
 async function start(options: LocalServerOptions): Promise<LocalServer> {
   let { state } = options;
-  // Absolute, so the database and storage URLs below name it whatever the working directory.
   const stateDir = resolve(options.stateDir);
   const staticDir = options.staticDir ?? defaultStaticDir();
   if (!staticDir) throw new LocalServerError('The Pikibun web app is missing from this installation. Reinstall it, or run `pnpm build` in a source checkout.');
@@ -92,14 +70,10 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
     DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STORAGE_URL: pathToFileURL(backups).href, STATIC_DIR: staticDir,
     SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey,
   };
-  // Shared for the first time: before it serves anyone, whoever claimed it for themselves (its first GitHub user) is
-  // pinned as its owner, for when it runs for them alone again; claimed by nobody yet, nobody is pinned. Later shared
-  // starts change nothing: by then its first GitHub user may be a teammate.
   if (shared && !state.sharedOnce) {
     const first = await withData(state, stateDir, staticDir, firstGitHubUser);
     state = await recordLocalOwnership(stateDir, state, { ...(first && !state.owner ? { owner: first } : {}), sharedOnce: true });
   }
-  // Once its data has served others, running for its owner alone admits only the owner pinned then (see pinnedOwner).
   const owner = shared ? undefined : await pinnedOwner(state, stateDir, staticDir);
   const settings: Record<string, string> = shared ? {
     ...common, TRUST_PROXY: String(shared.trustProxy), LOCAL_MODE: 'false', SIGNUP: shared.signup, PASSWORD_AUTH: String(shared.passwordAuth),
@@ -157,11 +131,6 @@ async function firstGitHubUser(env: Env): Promise<string | undefined> {
   return (await env.DB.query<{ id: string }>(`SELECT id FROM users WHERE auth_kind = 'github' AND github_id IS NOT NULL ORDER BY created_at, id LIMIT 1`).first())?.id;
 }
 
-/**
- * The owner to admit alone where the data has served others: the one pinned when it was first shared, else (shared
- * before anyone claimed it) the first of its GitHub administrators with an account, pinned now. Never shared, nothing is
- * pinned: its first GitHub user is its owner, as ever.
- */
 async function pinnedOwner(state: LocalState, stateDir: string, staticDir: string): Promise<string | undefined> {
   if (state.owner) return state.owner;
   if (!state.shared && !state.sharedOnce) return undefined;
@@ -177,7 +146,6 @@ async function pinnedOwner(state: LocalState, stateDir: string, staticDir: strin
   return owner;
 }
 
-/** Reads the data before anything serves it, with the server's own migrations applied. */
 async function withData<T>(state: LocalState, stateDir: string, staticDir: string, read: (env: Env) => Promise<T>): Promise<T> {
   const config = await loadConfig({ APP_ORIGIN: `http://${LOCAL_ORIGIN_HOST}:${state.port}`, SESSION_SECRET: state.sessionSecret, VAULT_KEY: state.vaultKey,
     DATABASE_URL: `sqlite://${join(stateDir, 'pikibun.sqlite')}`, STATIC_DIR: staticDir });
@@ -190,7 +158,6 @@ async function withData<T>(state: LocalState, stateDir: string, staticDir: strin
   }
 }
 
-/** What to register at https://github.com/settings/applications/new for a local server on any port. */
 export function githubOAuthAppInstructions(): string {
   return `Pikibun signs you in with GitHub through an OAuth app of your own. Register one once at
   https://github.com/settings/applications/new

@@ -1,8 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { ORIGIN, server, signedIn } from "./fixtures";
 
-// A session's panel and header menu, ported from the web app: its details, approvals, files, schedules and activity.
-
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
   return request?.body ? JSON.parse(request.body) : undefined;
@@ -39,9 +37,7 @@ describe("a session's panel", () => {
     await app.press("id:file-README.md");
     await app.waitFor("id:file-text");
     expect(app.texts().join(" ")).toContain("The login test races the cookie.");
-    // Highlighted for its language, as the web app's Files tab does.
     expect(app.shows("label:README.md, markdown")).toBe(true);
-    // In a read-only editor with line numbers, as the web app's preview has them.
     expect(app.shows("label:README.md")).toBe(true);
     const texts = app.texts();
     expect(texts.slice(texts.indexOf("# Pikibun") - 2, texts.indexOf("# Pikibun"))).toEqual(["1", "2"]);

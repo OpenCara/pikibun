@@ -14,8 +14,6 @@ import { REDACTED } from '../packages/shared/src/redaction.js';
 import type { SessionLink, SharedSession, SharedSessionView } from '../packages/shared/src/sharing.js';
 import type { ApprovalRecord, EntryView, ModelDefinition, SessionRecord, SessionView } from '../packages/shared/src/types.js';
 
-// Share links and secret redaction, end to end through the control plane. The fixture is the one connectors.test.ts
-// uses for a session on its owner's own host.
 const origin = 'http://localhost:8787';
 const testSecret = 'session-links-test-secret-not-for-deployment';
 const internalSecret = 'session-links-internal-secret-not-for-deployment';
@@ -92,7 +90,6 @@ async function connect(f: Fixture, owner: Client, workspaceId?: string): Promise
   const pending = await pairing(owner, 'Local Pi', workspaceId);
   const { credentials } = await json<{ credentials: ConnectorCredentials }>(await claim(f, pending), 201);
   const connectionToken = token();
-  // The socket hub normally installs this generation. These tests exercise HTTP routes, not WebSockets.
   f.sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   return { ...credentials, connectionToken, pairing: pending };
 }
@@ -142,7 +139,6 @@ async function privateWorkspace(f: Fixture) {
   return { owner, member, outsider, team, connector, model, hub, input };
 }
 
-/** A session on its owner's own host, started from its model: the agent has every tool the host carries, bash included. */
 async function privateHostSession(f: Fixture) {
   const setup = await privateWorkspace(f);
   const { session } = await json<{ session: SessionRecord }>(await setup.owner.request('POST', '/api/sessions', setup.input), 201);
@@ -177,13 +173,11 @@ test('share links show anyone who has one the shared conversation, and nothing e
     busy: true,
   };
   const requests = rpcHub(f, s.connector, envelope => {
-    // The control plane reads as the owner once it has checked the link: a link holder is never an actor on the host.
     assert.equal(envelope.request.ticket.action, 'view');
     assert.equal(envelope.request.ticket.actorId, s.owner.user.id);
     return Response.json({ view });
   });
 
-  // Only the owner can see, create or turn off a link: manage is not ownership, and outsiders don't learn the session exists.
   await denied(await s.member.request('PUT', `${path}/link`), 403, 'forbidden');
   await json(await s.owner.request('POST', `${path}/grants`, { userId: s.member.user.id, permissions: ['manage'] }));
   for (const method of ['GET', 'PUT', 'DELETE']) {
@@ -199,7 +193,6 @@ test('share links show anyone who has one the shared conversation, and nothing e
   assert.ok(link.url.startsWith(prefix), link.url);
   const token = link.url.slice(prefix.length);
   assert.match(token, /^[A-Za-z0-9_-]{43}$/);
-  // Turning it on again, or reading it, gives the same link while it exists.
   assert.deepEqual(await json(await s.owner.request('PUT', `${path}/link`)), { link });
   assert.deepEqual(await json(await s.owner.request('GET', `${path}/link`)), { link });
   const stored = f.sqlite.prepare('SELECT * FROM session_links WHERE session_id = ?').get(s.session.id)!;
@@ -209,7 +202,6 @@ test('share links show anyone who has one the shared conversation, and nothing e
     assert.equal((await json<{ session: SessionRecord }>(await client.request('GET', path))).session.linkShared, true, 'Everyone who can view learns that a link exists');
   }
 
-  // Anyone with the link, signed in or not, reads the title and the shared conversation: no side asks, approvals, queue or attribution.
   const metadata = await json<{ session: SharedSession }>(await shared(token));
   assert.deepEqual(metadata, { session: { title: s.session.title, status: 'ready', createdAt: s.session.createdAt, ownerName: 'private-owner' } });
   assert.deepEqual(await json(await f.request('GET', '/api/shared', undefined, { 'X-Share-Token': token, Cookie: s.outsider.cookie })), metadata);
@@ -226,7 +218,6 @@ test('share links show anyone who has one the shared conversation, and nothing e
     assert.ok(!serialized.includes(hidden), `A share link must not reveal ${hidden}`);
   }
 
-  // A link is no credential anywhere else, can't change anything, and unknown or malformed links reach no host.
   for (const route of [path, `${path}/view`, `${path}/audit`, `${path}/link`, '/api/sessions', '/api/me']) {
     assert.equal((await f.request('GET', route, undefined, { 'X-Share-Token': token })).status, 401, route);
   }
@@ -241,7 +232,6 @@ test('share links show anyone who has one the shared conversation, and nothing e
   }
   assert.equal(requests.length, 1);
 
-  // A link shows only what its owner can see: it stops while they're out of the workspace and works again on their return.
   const membership = f.sqlite.prepare('SELECT * FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(s.team.id, s.owner.user.id)!;
   f.sqlite.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(s.team.id, s.owner.user.id);
   for (const route of ['/api/shared', '/api/shared/view']) await denied(await shared(token, route), 404, 'not_found');
@@ -250,7 +240,6 @@ test('share links show anyone who has one the shared conversation, and nothing e
   assert.deepEqual(await json(await shared(token)), metadata);
   assert.equal(requests.length, 1);
 
-  // A view fetched while the link was being turned off is never answered.
   rpcHub(f, s.connector, () => {
     f.sqlite.prepare('DELETE FROM session_links WHERE session_id = ?').run(s.session.id);
     return Response.json({ view });
@@ -259,7 +248,6 @@ test('share links show anyone who has one the shared conversation, and nothing e
   assert.deepEqual(await json(await s.owner.request('GET', `${path}/link`)), { link: null });
   assert.equal((await json<{ session: SessionRecord }>(await s.member.request('GET', path))).session.linkShared, undefined);
 
-  // Turning link sharing on again issues a new link; the old one stays dead.
   rpcHub(f, s.connector, () => Response.json({ view }));
   const { link: renewed } = await json<{ link: SessionLink }>(await s.owner.request('PUT', `${path}/link`), 201);
   assert.notEqual(renewed.url, link.url);
@@ -267,7 +255,6 @@ test('share links show anyone who has one the shared conversation, and nothing e
   const renewedToken = renewed.url.slice(prefix.length);
   await json(await shared(renewedToken, '/api/shared/view'));
 
-  // An archived session stays readable by link and can't get a new one, but its link can always be turned off.
   await json(await s.owner.request('POST', `${path}/archive`));
   assert.equal((await json<{ session: SharedSession }>(await shared(renewedToken))).session.status, 'archived');
   await json(await shared(renewedToken, '/api/shared/view'));
@@ -287,19 +274,15 @@ test('the workspace\'s owner and admins turn off any session\'s share link, whic
   await json(await s.owner.request('PATCH', path, { visibility: 'private' }));
   const { link } = await json<{ link: SessionLink }>(await s.owner.request('PUT', `${path}/link`), 201);
   const token = link.url.slice(`${origin}/#/shared/`.length);
-  // A member made an admin manages the private session: they learn it is shared by link, but the link, which shows
-  // the session beyond the workspace, stays its owner's to see or create.
   await json(await s.owner.request('POST', `/api/workspaces/${s.team.id}/members`, { userId: s.member.user.id, role: 'admin' }));
   assert.equal((await json<{ session: SessionRecord }>(await s.member.request('GET', path))).session.linkShared, true);
   for (const method of ['GET', 'PUT']) await denied(await s.member.request(method, `${path}/link`), 403, 'owner_required');
-  // Turning it off only takes access away, so they can, archived or not, and it is recorded as theirs.
   await json(await s.member.request('POST', `${path}/archive`));
   assert.deepEqual(await json(await s.member.request('DELETE', `${path}/link`)), { ok: true });
   await denied(await f.request('GET', '/api/shared', undefined, { 'X-Share-Token': token }), 404, 'not_found');
   assert.deepEqual(await json(await s.owner.request('GET', `${path}/link`)), { link: null });
   assert.deepEqual(f.sqlite.prepare("SELECT actor_id FROM audit WHERE session_id = ? AND action = 'session.link.revoked'").all(s.session.id)
     .map(row => row.actor_id), [s.member.user.id]);
-  // Demoted, they can't any more.
   await json(await s.owner.request('POST', `/api/workspaces/${s.team.id}/members`, { userId: s.member.user.id, role: 'collaborator' }));
   await denied(await s.member.request('DELETE', `${path}/link`), 404, 'not_found');
 });
@@ -312,7 +295,6 @@ test('a share link shows only entries of a conversation the view lists as shared
   const entries = [entry('shared', '0'), entry('side-ask', '1'), entry('unlisted', '2'), entry('unlabelled', '3'), entry('no-conversation')];
   const conversations = [{ id: '0', mode: 'write' }, { id: '1', mode: 'ask' }, { id: '3' }];
   assert.deepEqual(sharedView({ ...base, entries, conversations } as unknown as SessionView).entries.map(item => item.id), ['shared']);
-  // A view that drops or garbles its conversations shows nothing rather than everything.
   for (const broken of [undefined, null, 'write', [null, 5, { mode: 'write' }]]) {
     assert.deepEqual(sharedView({ ...base, entries, conversations: broken } as unknown as SessionView).entries, [], JSON.stringify(broken));
   }
@@ -321,7 +303,6 @@ test('a share link shows only entries of a conversation the view lists as shared
 test('turning link sharing on answers a concurrent request with the same link and refuses an owner who just lost access', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}/link`;
-  // Another request turns link sharing on between this one's check and its insert.
   const winner = token();
   const ciphertext = await encryptToken(f.env, `session-link:${s.session.id}`, winner);
   const winnerHash = await sha256(winner);
@@ -339,7 +320,6 @@ test('turning link sharing on answers a concurrent request with the same link an
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_links').get()!.n, 1);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'session.link.created'").get()!.n, 0);
 
-  // The owner leaves the workspace between the check and the insert: no link is created.
   f.sqlite.prepare('DELETE FROM session_links').run();
   let removed = false;
   f.setBeforeQuery(sql => {
@@ -355,11 +335,9 @@ test('turning link sharing on answers a concurrent request with the same link an
 });
 
 test('no viewer ever receives a secret, while approvals still review, decide and run the exact operation', async t => {
-  // The owner requests and approves; the member reads through workspace visibility.
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}`;
   const secret = `ghp_${'a1B2'.repeat(9)}`;
-  // A program operation, as a person may request one by hand (bash, retired, would be refused: #163).
   const operation = { kind: 'program' as const, tool: 'node' as const, command: `curl -H "Authorization: Bearer ${secret}" https://api.github.com/user` };
   const shownCommand = 'curl -H "Authorization: Bearer [redacted]" https://api.github.com/user';
   const pending: ApprovalRecord = { id: 'secret-approval', sessionId: s.session.id, requestedBy: s.owner.user.id, operation,
@@ -381,7 +359,6 @@ test('no viewer ever receives a secret, while approvals still review, decide and
     return Response.json({ approval: { ...pending, status: 'executed', decidedBy: s.owner.user.id, result: `{"login":"creator","token":"${secret}"}` } });
   });
 
-  // Requesting the operation answers with it redacted, and a review hash that commits to the real operation.
   const reviewHash = await sha256(JSON.stringify({ sessionId: s.session.id, approvalId: pending.id, requestedBy: s.owner.user.id, operation }));
   const created = await s.owner.request('POST', `${path}/operations`, operation);
   const createdBody = await created.text();
@@ -393,7 +370,6 @@ test('no viewer ever receives a secret, while approvals still review, decide and
   assert.deepEqual(JSON.parse(String(f.sqlite.prepare('SELECT operation_json FROM approval_reviews WHERE approval_id = ?').get(pending.id)!.operation_json)), operation,
     'The review keeps the real operation');
 
-  // Every viewer, the owner included, gets the same redacted view.
   for (const client of [s.owner, s.member]) {
     const response = await client.request('GET', `${path}/view`);
     const body = await response.text();
@@ -404,7 +380,6 @@ test('no viewer ever receives a secret, while approvals still review, decide and
     assert.deepEqual(seen.approvals[0]!.operation, { kind: 'program', tool: 'node', command: shownCommand });
     assert.equal(seen.approvals[0]!.reviewHash, reviewHash);
   }
-  // So are live updates.
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const stream = await s.member.request('GET', `${path}/events`);
   assert.equal(stream.status, 200);
@@ -415,7 +390,6 @@ test('no viewer ever receives a secret, while approvals still review, decide and
   assert.match(snapshot, /event: view/);
   assert.ok(snapshot.includes(REDACTED) && !leaks(snapshot));
 
-  // Approving with the hash of what was shown runs the real command on the host; its output comes back redacted.
   const approved = await s.owner.request('POST', `${path}/approvals/${pending.id}`, { decision: 'approve', reviewHash });
   const approvedBody = await approved.text();
   assert.equal(approved.status, 200, approvedBody);
@@ -425,7 +399,6 @@ test('no viewer ever receives a secret, while approvals still review, decide and
   assert.equal(decided.result, '{"login":"creator","token":"[redacted]"}');
   assert.deepEqual(decided.operation, { kind: 'program', tool: 'node', command: shownCommand });
 
-  // A share link shows the same redacted transcript.
   const { link } = await json<{ link: SessionLink }>(await s.owner.request('PUT', `${path}/link`), 201);
   const shared = await f.request('GET', '/api/shared/view', undefined, { 'X-Share-Token': link.url.split('/').at(-1)! });
   const sharedBody = await shared.text();
@@ -434,8 +407,6 @@ test('no viewer ever receives a secret, while approvals still review, decide and
   assert.equal((JSON.parse(sharedBody) as { view: SharedSessionView }).view.entries[0]!.text, 'Use ghp_[redacted] with DB_PASSWORD=[redacted]');
 });
 
-// The same fixture serves transcript display (packages/shared/src/transcript-display.ts): what views carry once a session
-// shows brief tool output, or its workspace loads transcripts latest first. Hosts keep sending whole views.
 test('brief tool output and paged transcripts change what views carry, not what hosts send', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}`;
@@ -455,13 +426,11 @@ test('brief tool output and paged transcripts change what views carry, not what 
   const read = async () => (await json<{ view: SessionView }>(await s.owner.request('GET', `${path}/view`))).view;
   const shown = (view: SessionView, id: string) => view.entries.find(item => item.id === id)!;
 
-  // Full tool output by default.
   const whole = await read();
   assert.equal(whole.entries.length, 63);
   assert.equal(shown(whole, '0:2').text, 'first of 2\nsecond\nthird');
   assert.equal(shown(whole, '0:2').trimmed, undefined);
 
-  // Only the owner changes it, to full or brief, and it leaves the session's policy alone.
   await json(await s.owner.request('POST', `${path}/grants`, { userId: s.member.user.id, permissions: ['manage'] }));
   await denied(await s.member.request('PATCH', path, { toolOutput: 'brief' }), 403, 'owner_required');
   await denied(await s.owner.request('PATCH', path, { toolOutput: 'short' }), 400, 'invalid_tool_output');
@@ -477,7 +446,6 @@ test('brief tool output and paged transcripts change what views carry, not what 
   assert.ok(cut.startsWith('Writing it.\nwrite({"path":"a.txt","content":"xxx') && cut.endsWith('…})') && cut.length < 260, cut);
   assert.equal(shown(briefView, '0:1').text, 'answer 1', 'Prose is never shortened');
 
-  // Paging is the workspace's: members see it, owners and admins change it.
   const settingsPath = `/api/workspaces/${s.team.id}/transcripts`;
   assert.deepEqual(await json(await s.member.request('GET', settingsPath)), { settings: { paging: false, toolOutput: 'full' } });
   await denied(await s.member.request('PUT', settingsPath, { paging: true }), 403, 'forbidden');
@@ -487,13 +455,11 @@ test('brief tool output and paged transcripts change what views carry, not what 
   await denied(await s.owner.request('PUT', settingsPath, {}), 400, 'invalid_input');
   assert.deepEqual(await json(await s.owner.request('PUT', settingsPath, { paging: true })), { settings: { paging: true, toolOutput: 'full' } });
 
-  // A paged view holds each conversation's latest 50 entries, and says what comes before.
   const paged = await read();
   assert.deepEqual(paged.entries.filter(item => item.conversationId === '0').map(item => item.id), entries.slice(10).map(item => item.id));
   assert.deepEqual(paged.conversations, [{ id: '0', mode: 'write', olderEntries: 10, previousEntryId: '0:10' }, { id: '1', mode: 'ask', actorId: s.owner.user.id }]);
   assert.equal(paged.entries.filter(item => item.conversationId === '1').length, 3);
 
-  // Earlier entries come a page at a time, presented as views are.
   const page = await json<{ entries: EntryView[]; older: number }>(await s.owner.request('GET', `${path}/entries?conversation=0&before=${encodeURIComponent('0:11')}&limit=5`));
   assert.deepEqual(page.entries.map(item => item.id), ['0:6', '0:7', '0:8', '0:9', '0:10']);
   assert.equal(page.older, 5);
@@ -504,7 +470,6 @@ test('brief tool output and paged transcripts change what views carry, not what 
   }
   await denied(await s.outsider.request('GET', `${path}/entries?conversation=0&before=0%3A11`), 404, 'not_found');
 
-  // Back to full tool output, and to whole transcripts.
   await json(await s.owner.request('PATCH', path, { toolOutput: 'full' }));
   await json(await s.owner.request('PUT', settingsPath, { paging: false }));
   const restored = await read();
@@ -513,14 +478,12 @@ test('brief tool output and paged transcripts change what views carry, not what 
   assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', path))).session.toolOutput, undefined);
 });
 
-// A workspace's owners and admins choose the tool output its new sessions start with; existing sessions keep theirs.
 test('new sessions start with the tool output their workspace sets', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const settingsPath = `/api/workspaces/${s.team.id}/transcripts`;
   assert.equal(s.session.toolOutput, undefined, 'Full tool output until the workspace says otherwise');
   await denied(await s.member.request('PUT', settingsPath, { toolOutput: 'brief' }), 403, 'forbidden');
   await json(await s.owner.request('PUT', settingsPath, { paging: true }));
-  // Either setting alone leaves the other as it was.
   assert.deepEqual(await json(await s.owner.request('PUT', settingsPath, { toolOutput: 'brief' })), { settings: { paging: true, toolOutput: 'brief' } });
   assert.deepEqual(await json(await s.member.request('GET', settingsPath)), { settings: { paging: true, toolOutput: 'brief' } });
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE workspace_id = ? AND action = 'workspace.transcripts.updated'").get(s.team.id)!.n, 2);
@@ -529,7 +492,6 @@ test('new sessions start with the tool output their workspace sets', async t => 
   assert.equal(next.toolOutput, 'brief');
   assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', `/api/sessions/${next.id}`))).session.toolOutput, 'brief');
   assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', `/api/sessions/${s.session.id}`))).session.toolOutput, undefined);
-  // Its owner still changes their own session's.
   const { session: shown } = await json<{ session: SessionRecord }>(await s.owner.request('PATCH', `/api/sessions/${next.id}`, { toolOutput: 'full' }));
   assert.equal(shown.toolOutput, undefined);
 

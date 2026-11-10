@@ -13,16 +13,8 @@ import { MXC_SDK_VERSION, mxcEntry, mxcInstallHint, windowsRuntimeDirectory } fr
 import { SANDBOX_EXEC, seatbeltTools } from "./seatbelt.js";
 import { windowsBuild, windowsSandboxSupport } from "./windows-sandbox.js";
 
-// Front-end-neutral connector preflight shared by `pikibun connect` and the desktop host. Messages that name CLI flags
-// stay in their front end; everything here reads the same in a terminal and in an app.
-
-/** Private connector state shared by every front end, so a machine paired by one is adopted by the other. */
 export const defaultStateDir = (): string => join(homedir(), ".local", "share", "pikibun", "connector");
 
-/**
- * Node.js and operating-system rules for the chosen isolation. Linux (and WSL2) runs the bubblewrap sandbox; macOS and
- * native Windows run their experimental sandboxes (`experimentalSandbox`) or, with the owner's consent, none.
- */
 export function assertConnectorPlatform(mode: { unsandboxed?: boolean; experimentalSandbox?: boolean } = {}): void {
   if (Number(process.versions.node.split(".")[0]) < 24) throw new ConnectorSetupError(`Node.js 24 or newer is required (found ${process.versions.node}).`);
   if (process.platform === "win32" && !mode.unsandboxed && !mode.experimentalSandbox) {
@@ -37,7 +29,6 @@ const windowsGit = (): Prerequisite[] => [
   { name: "Git for Windows' bash.exe", ok: bashPath() !== undefined, fix: fixes.gitForWindows },
 ];
 
-/** The binaries the chosen isolation mode needs, each named with where it is looked for. */
 export async function checkPrerequisites(unsandboxed: boolean, experimental?: { stateDir: string }): Promise<Prerequisite[]> {
   if (process.platform === "win32") {
     if (unsandboxed || !experimental) return windowsGit();
@@ -45,14 +36,11 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
     const found = windowsBuild() ?? release().split(".")[2] ?? "unknown";
     const build = Number(found.split(".")[0]);
     const sdk = mxcEntry(runtime);
-    // The connector's own Node, which runs the sandbox's steps (sandboxNodePath).
     const node = sandboxNodePath();
     const result: Prerequisite[] = [{ name: "Git for Windows (git on PATH)", ok: gitForWindowsRoot() !== undefined, fix: fixes.gitForWindows },
       { name: `busybox-w32, the sandbox's shell (${SANDBOX_SHELL_HINT}; or set PIKIBUN_SANDBOX_SHELL)`, ok: sandboxShellPath() !== undefined, fix: fixes.busybox },
       { name: `Windows 11 24H2 or later (build 26100+, found ${found})`, ok: build >= 26100, fix: fixes.windowsUpdate },
       { name: `Microsoft MXC SDK ${MXC_SDK_VERSION} in ${runtime} (install: ${mxcInstallHint(runtime)})`, ok: sdk !== undefined, fix: fixes.mxcSdk(runtime) }];
-    // The update level decides whether sessions can work, and its number differs between releases (25H2 is 26200.x,
-    // 26H2 26300.x), so Windows is asked: one container with a session's network policy, resolving a path in it.
     if (sdk && build >= 26100) {
       const support = await windowsSandboxSupport(sdk, node);
       result.push(
@@ -75,11 +63,9 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
     try { seatbeltTools(); } catch { tools = false; }
     result.push({ name: "Python 3 and Git from the developer tools (xcode-select --install)", ok: tools, fix: fixes.xcodeTools });
   }
-  // Unsandboxed sessions use the owner's Git from PATH, e.g. Xcode tools or Homebrew on macOS.
   if (unsandboxed) result.push({ name: "Git on PATH", ok: spawnSync("git", ["--version"], { stdio: "ignore", env: { PATH: process.env.PATH ?? "" } }).status === 0,
     ...(process.platform === "darwin" ? { fix: fixes.xcodeTools } : {}) });
   if (process.platform === "linux") {
-    // Every missing package in one fix: Git on PATH counts as the git package.
     const missing = Object.entries(required).filter((_, index) => !result[index]!.ok).map(([binary]) => linuxPackages[binary]!);
     if (unsandboxed && !result.at(-1)!.ok) missing.push("git");
     const fix = aptFix(missing, await executable("/usr/bin/apt-get"));
@@ -88,22 +74,12 @@ export async function checkPrerequisites(unsandboxed: boolean, experimental?: { 
   return result;
 }
 
-/**
- * npm on the host's PATH, which installing extensions from npm or Git needs (extensions/store.ts): optional, since a host
- * runs without extensions, so it never keeps one from starting. `npm --version` needs Node.js on PATH as well.
- */
 export function npmPrerequisite(platform: NodeJS.Platform = process.platform, path = process.env.PATH ?? ""): Prerequisite {
   const found = spawnSync(platform === "win32" ? "npm.cmd" : "npm", ["--version"], { stdio: "ignore", timeout: 15_000, windowsHide: true,
     shell: platform === "win32", env: { ...process.env, PATH: path } }).status === 0;
   return { name: "Node.js and npm on PATH, to install extensions from npm or Git", ok: found, optional: true, ...(found ? {} : { fix: fixes.node(platform) }) };
 }
 
-/**
- * Linux: Python's venv and ensurepip in the sandbox's Python (/usr/bin/python3), which the python tool's virtual
- * environments need (`python3 -m venv .venv`, then pip in it); Debian and Ubuntu ship them apart, as python3-venv.
- * Optional, like npm: sessions run without it, only not Python projects' installs. None elsewhere: macOS's developer
- * tools and Windows' Python have them.
- */
 export function pythonVenvPrerequisite(platform: NodeJS.Platform = process.platform, python = "/usr/bin/python3",
   apt = existsSync("/usr/bin/apt-get")): Prerequisite | undefined {
   if (platform !== "linux") return undefined;
@@ -112,7 +88,6 @@ export function pythonVenvPrerequisite(platform: NodeJS.Platform = process.platf
     ...(found ? {} : { fix: aptFix(["python3-venv"], apt) }) };
 }
 
-/** Fails with the missing prerequisites; `sandboxHint` offers the unsandboxed mode where the front end has one. */
 export function assertPrerequisites(prerequisites: readonly Prerequisite[], unsandboxed: boolean, sandboxHint: string): void {
   const missing = prerequisites.filter(item => !item.ok && !item.optional).map(item => item.name);
   if (!missing.length) return;
@@ -123,14 +98,11 @@ export function assertPrerequisites(prerequisites: readonly Prerequisite[], unsa
 }
 
 export interface ModelChoice {
-  /** Fixture models only; never combined with personal Pi configuration. */
   allowFaux?: boolean;
   piAgentDir?: string;
-  /** Explicit subset; without it Pi's enabledModels setting, else every authenticated model, is advertised. */
   models?: readonly { provider: string; modelId: string }[];
 }
 
-/** The local models this machine would advertise, read from Pi's own settings and authentication. */
 export async function loadConnectorModels(choice: ModelChoice): Promise<LocalModels> {
   if (choice.allowFaux && (choice.piAgentDir || choice.models)) throw new ConnectorSetupError("Fixture mode cannot select personal Pi models.");
   if (choice.allowFaux) return createFauxLocalModels();
@@ -147,23 +119,15 @@ export async function loadConnectorModels(choice: ModelChoice): Promise<LocalMod
   return localModels;
 }
 
-/** The sandbox a host's sessions run in: bubblewrap (Linux, WSL2), or macOS's or Windows' own (experimental). */
 export type SandboxKind = "bubblewrap" | "seatbelt" | "windows";
 
 export interface HostIsolation {
   mode: "sandboxed" | "unsandboxed";
-  /** Set when sandboxed. */
   sandbox?: SandboxKind;
-  /** The sandbox's own prerequisites, present even when some are missing. */
   sandboxPrerequisites?: Prerequisite[];
-  /** The chosen mode's prerequisites. */
   prerequisites: Prerequisite[];
 }
 
-/**
- * Sandboxed on Linux with every sandbox prerequisite and, with `experimental`, on macOS and native Windows with every
- * prerequisite of their own sandbox; anything else runs unsandboxed after explicit consent.
- */
 export async function hostIsolation(experimental?: { stateDir: string }): Promise<HostIsolation> {
   const native = process.platform === "darwin" || process.platform === "win32";
   if (process.platform !== "linux" && !(native && experimental)) return { mode: "unsandboxed", prerequisites: await checkPrerequisites(true) };
@@ -173,8 +137,6 @@ export async function hostIsolation(experimental?: { stateDir: string }): Promis
     ? { mode: "sandboxed", sandbox, sandboxPrerequisites, prerequisites: sandboxPrerequisites }
     : { mode: "unsandboxed", sandboxPrerequisites, prerequisites: await checkPrerequisites(true) };
 }
-
-/** The control-plane origin this state directory is paired with, if any. */
 
 export async function savedPairing(dataDir: string, allowInsecureLoopback = false): Promise<string | undefined> {
   return (await readConnectorState(dataDir, undefined, allowInsecureLoopback))?.controlPlaneUrl;

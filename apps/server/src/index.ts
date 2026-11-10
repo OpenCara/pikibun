@@ -50,14 +50,12 @@ app.onError((error, c) => {
     const response = error.getResponse();
     return c.newResponse(response.body, response);
   }
-  // Never log request bodies, cookies, upstream responses, or exceptions that could contain credentials.
   return c.json({ error: 'The request could not be completed.', code: 'internal_error' }, 500);
 });
 app.get('/api/health', async c => {
   let vaultReady = false;
-  try { await assertVaultConfigured(c.env); vaultReady = true; } catch { /* Readiness only; no configuration values are exposed. */ }
+  try { await assertVaultConfigured(c.env); vaultReady = true; } catch { }
   return c.json({ ok: true,
-    // The release it runs, such as 0.24.0; null in development. Shown in the web app's settings.
     version: validVersion(c.env.PIKIBUN_VERSION) ?? buildVersion ?? null,
     githubConfigured: !!c.env.GITHUB_CLIENT_ID && !!c.env.GITHUB_CLIENT_SECRET && vaultReady,
     runnerConfigured: !!c.env.RUNNER_URL && !!c.env.RUNNER_SHARED_SECRET && c.env.RUNNER_SHARED_SECRET.length >= 32,
@@ -65,12 +63,9 @@ app.get('/api/health', async c => {
     backupsConfigured: !!c.env.BUCKET, storageProvider: c.env.BUCKET?.provider ?? null,
     workspaceDatabasesConfigured: !!c.env.WORKSPACE_DATABASES,
     connectorsConfigured: !!c.env.CONNECTOR_HUB, testMode: testMode(c.env),
-    // The sign-in page offers a username and password next to GitHub.
     passwordAuth: passwordAuthEnabled(c.env),
-    // Who may create an account with each method, so the sign-in page offers sign-up only where it works.
     githubSignup: signupMode(c.env, 'github'),
     ...(passwordAuthEnabled(c.env) ? { passwordSignup: signupMode(c.env, 'password') } : {}),
-    // A local server says whether someone has claimed it, so the sign-in page can point to the launcher's link.
     ...(localMode(c.env) ? { localServer: { claimed: !!await localOwner(c.env) } } : {}),
   });
 });
@@ -80,7 +75,6 @@ registerInternal(app);
 registerConnectorCredentials(app);
 registerConnectorExtensions(app);
 registerOidc(app);
-// Share links are their own read-only credential: anyone who has one can view without signing in.
 registerSharedSessions(app);
 app.use('/api/*', authenticate, csrfGuard);
 registerCatalog(app);

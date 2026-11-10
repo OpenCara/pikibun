@@ -6,29 +6,15 @@ import { pipeline } from "node:stream/promises";
 import { createInflateRaw, crc32 } from "node:zlib";
 import { browserAt, type BrowserToolchain } from "./browser-toolchain.js";
 
-/*
- * The Chromium a connector downloads for the browser tool when its host's owner chooses that (HostConfig.browser
- * `download`): Chrome for Testing's headless shell, the build Google publishes for automation, at the Stable channel's
- * version. It goes to the connector's own folder (<state>/browser/<version>), which the Linux sandbox gives sessions
- * read-only as it would a system install; nothing in a session downloads or changes it. Only Google's download host is
- * taken, the zip is read entry by entry with every name, type, size and checksum checked, and what it holds is used only
- * once it is a Chromium installation (browserAt).
- */
-
-/** Chrome for Testing's versions of each channel, with where to download each build. */
 export const CHROME_FOR_TESTING_VERSIONS = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
-/** Where its builds are; a download from anywhere else is refused. */
 const DOWNLOAD_PREFIX = "https://storage.googleapis.com/chrome-for-testing-public/";
-/** Its Linux build (x86-64 only), and the executable in it. */
 const PLATFORM = "linux64";
 const SHELL_DIRECTORY = "chrome-headless-shell-linux64";
 const SHELL = "chrome-headless-shell";
 const VERSION = /^\d{1,5}(?:\.\d{1,6}){3}$/;
 
 export const downloadLimits = Object.freeze({
-  /** The zip, about 110 MB today. */
   zipBytes: 512 * 1024 * 1024,
-  /** What it holds once extracted, about 210 MB today. */
   extractedBytes: 2 * 1024 * 1024 * 1024,
   entries: 10_000,
   versionsBytes: 4 * 1024 * 1024,
@@ -38,7 +24,6 @@ export interface BrowserRelease { version: string; url: string }
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
-/** `url`, or an error that names the host it couldn't reach and why, for the host's owner (a firewall, a proxy). */
 async function reach(fetcher: typeof fetch, url: string, signal: AbortSignal | undefined, what: string): Promise<Response> {
   try { return await fetcher(url, { ...(signal ? { signal } : {}) }); }
   catch (error) {
@@ -48,7 +33,6 @@ async function reach(fetcher: typeof fetch, url: string, signal: AbortSignal | u
   }
 }
 
-/** The Stable channel's headless shell for Linux, as Chrome for Testing lists it now. */
 export async function latestHeadlessShell(options: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<BrowserRelease> {
   const response = await reach(options.fetch ?? fetch, CHROME_FOR_TESTING_VERSIONS, options.signal, "Chrome for Testing's versions");
   if (!response.ok) throw new Error(`Chrome for Testing's versions answered ${response.status}`);
@@ -68,7 +52,6 @@ export async function latestHeadlessShell(options: { fetch?: typeof fetch; signa
   return { version, url };
 }
 
-/** The headless shells downloaded under `root`, newest first. */
 export async function downloadedHeadlessShells(root: string): Promise<{ version: string; browser: BrowserToolchain }[]> {
   const names = await readdir(root).catch(() => [] as string[]);
   const newer = (a: string, b: string) => { const x = a.split(".").map(Number); const y = b.split(".").map(Number); for (let i = 0; i < 4; i++) if (x[i] !== y[i]) return y[i]! - x[i]!; return 0; };
@@ -78,10 +61,6 @@ export async function downloadedHeadlessShells(root: string): Promise<{ version:
   });
 }
 
-/**
- * Downloads `release` to `root`/<version> unless it is there already, and answers it. It is fetched and extracted beside
- * that, and moved into place only whole: a download that stops part way leaves nothing a session could run.
- */
 export async function downloadHeadlessShell(root: string, release: BrowserRelease, options: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<BrowserToolchain> {
   if (!VERSION.test(release.version) || !release.url.startsWith(DOWNLOAD_PREFIX)) throw new Error("Not a Chrome for Testing build");
   const target = join(root, release.version);
@@ -116,7 +95,6 @@ export async function downloadHeadlessShell(root: string, release: BrowserReleas
   return browser;
 }
 
-/** Removes from `root` every download but those of the versions in `keep`, and anything a stopped one left. */
 export async function pruneHeadlessShells(root: string, keep: readonly string[]): Promise<void> {
   for (const name of await readdir(root).catch(() => [] as string[])) {
     if (!keep.includes(name)) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});
@@ -130,7 +108,6 @@ const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
 const S_IFREG = 0o100000;
 
-/** An entry's name as a relative path within the archive: no absolute paths, backslashes, `..` or empty parts. */
 function entryPath(name: string): string {
   const parts = name.split("/");
   const directory = name.endsWith("/");
@@ -140,11 +117,6 @@ function entryPath(name: string): string {
   return posix.join(...parts);
 }
 
-/**
- * Extracts the zip at `file` into `destination`, which it makes: regular files and directories only (no links), each name
- * within it, each file's size and CRC-32 as its central directory says, within downloadLimits. Executables stay
- * executable, and nothing is writable but by its owner.
- */
 export async function extractZip(file: string, destination: string): Promise<void> {
   const handle = await open(file, "r");
   const entries: { name: string; method: number; compressed: number; size: number; crc: number; offset: number; mode: number }[] = [];
@@ -181,7 +153,6 @@ export async function extractZip(file: string, destination: string): Promise<voi
       if (flags & 1) throw new Error("Encrypted zip entries aren't taken");
       if (compressed === 0xffffffff || uncompressed === 0xffffffff || offset === 0xffffffff) throw new Error("ZIP64 archives aren't taken");
       if (method !== 0 && method !== 8) throw new Error(`Zip compression method ${method} isn't taken`);
-      // Unix modes where the archive was made on Unix (3); elsewhere a name ending in / is a directory and the rest files.
       const unix = madeBy === 3 ? external >>> 16 : 0;
       const type = unix & S_IFMT;
       if (type && type !== S_IFREG && type !== S_IFDIR) throw new Error(`The archive holds a link or special file: ${JSON.stringify(name.slice(0, 200))}`);

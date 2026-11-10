@@ -17,24 +17,19 @@ const range = (from: number, to: number, conversationId = "0") =>
 test("brief tool output keeps a tool result's first line and says how long the whole one is", () => {
   const result = entry("0:1", "0", { role: "toolResult", text: "\n  first line  \nsecond\nthird" });
   assert.deepEqual(briefEntry(result), { ...result, text: "  first line", trimmed: { lines: 4, chars: result.text.length } });
-  // A result that is one short line already is the same entry, so feeds and patches see nothing new.
   const short = entry("0:2", "0", { role: "toolResult", text: "ok" });
   assert.equal(briefEntry(short), short);
   const empty = entry("0:3", "0", { role: "toolResult", text: "" });
   assert.equal(briefEntry(empty), empty);
-  // A long line is cut at whole code points, with an ellipsis.
   const long = briefEntry(entry("0:4", "0", { role: "toolResult", text: "😀".repeat(briefChars + 5) }));
   assert.equal(long.text, `${"😀".repeat(briefChars)}…`);
   assert.deepEqual(long.trimmed, { lines: 1, chars: briefChars + 5 }, "Characters as people count them, not UTF-16 units");
-  // Prose, user messages and system entries are never shortened.
   for (const role of ["user", "system"]) {
     const other = entry("0:5", "0", { role, text: "a\n".repeat(500) });
     assert.equal(briefEntry(other), other);
   }
-  // A tool result's images go with the lines that stood for them; a message's stay.
   const screenshot = entry("0:6", "0", { role: "toolResult", text: "{\"path\":\"shot.png\"}\n[image image/png]", images: [{ mimeType: "image/png" }] });
   assert.deepEqual(briefEntry(screenshot), { id: "0:6", kind: "message", role: "toolResult", conversationId: "0", text: "{\"path\":\"shot.png\"}", trimmed: { lines: 2, chars: screenshot.text.length } });
-  // A screenshot alone: its line is its first, and it shows that line, not the image.
   const alone = entry("0:8", "0", { role: "toolResult", text: "[image image/png]", images: [{ mimeType: "image/png" }] });
   assert.deepEqual(briefEntry(alone), { id: "0:8", kind: "message", role: "toolResult", conversationId: "0", text: "[image image/png]" });
   const pasted = entry("0:7", "0", { role: "user", text: "Look\n[image image/png]", images: [{ mimeType: "image/png" }] });
@@ -64,7 +59,6 @@ test("brief tool output cuts long tool calls but keeps them tool calls, and leav
   assert.ok(calls[0]!.line.startsWith('write({"path":"src/a.ts","content":"xxx'), calls[0]!.line);
   assert.ok(calls[0]!.line.endsWith("…})") && calls[0]!.line.length < briefChars + 20, calls[0]!.line);
   assert.equal(calls[1]!.line, 'bash({"command":"ls"})');
-  // A call line inside a code block is prose, and prose keeps every word.
   assert.equal(prose, `I'll write it.\n${fenced}`);
   assert.deepEqual(shown.trimmed, { lines: text.split("\n").length, chars: text.length });
   const plain = entry("0:2", "0", { text: `Short answer\nbash({"command":"ls"})` });
@@ -100,17 +94,13 @@ test("a client keeps the earlier entries it read, and those that slide out of th
   assert.deepEqual(shown.conversations, [{ id: "0", mode: "write", olderEntries: 2 }]);
   assert.deepEqual(withEarlier(first, new Map([["0", range(1, 4)]])).conversations, [{ id: "0", mode: "write" }], "Nothing left to read");
 
-  // New entries push 0:5 out of the window: it stays, after the earlier ones.
   const slid = view(range(6, 8), conversations(5, "0:5"));
   earlier = carryEarlier(earlier, first, slid);
   assert.deepEqual(ids(withEarlier(slid, earlier)), ["0:3", "0:4", "0:5", "0:6", "0:7", "0:8"]);
-  // Even with nothing read yet, what a reader saw doesn't vanish from the top.
   assert.deepEqual(ids(withEarlier(slid, carryEarlier(new Map(), first, slid))), ["0:5", "0:6", "0:7", "0:8"]);
 
-  // After a compaction the history no longer joins up: the conversation starts again from its window.
   const compacted = view([entry("0:20"), ...range(7, 8)], conversations(3, "0:6"));
   assert.equal(carryEarlier(earlier, slid, compacted).size, 0);
-  // So does a conversation the view no longer pages.
   assert.equal(carryEarlier(earlier, slid, view(range(1, 8))).size, 0);
 });
 

@@ -1,50 +1,28 @@
 import { Worker } from "node:worker_threads";
 
-/*
- * The search tool's file search (docs/design/piki-extensions.md, "piki:files"): a regular expression or literal text over
- * the worktree's text files, from a directory or one file, without leaving the worktree or following links. Sessions
- * read and searched code with grep, sed -n and head in a third of their shell commands (#163); this does that without a
- * shell, so it needs no approval, like read_file.
- *
- * Every workspace backend runs the same search and gives the same answer (tests/sandbox-conformance.test.ts): the
- * Linux and macOS sandboxes in their Python helper (`search` in sandbox-python/helper.py), native Windows in its Node
- * helper and unsandboxed hosts in a worker thread, both from SEARCH_CORE below.
- */
-
-/** What one search may ask for and find; the Python helper mirrors these. */
 export const searchLimits = Object.freeze({
   pattern: 1000,
   glob: 200,
   context: 5,
   defaultResults: 100,
   maxResults: 500,
-  /** A line, or a context line, is shown up to this many characters (code points), then `…`. */
   lineText: 300,
-  /** Files larger than this are skipped, as read_file refuses them. */
   fileBytes: 1024 * 1024,
   files: 20000,
   bytes: 64 * 1024 * 1024,
-  /** It stops here and answers what it found, as truncated, within the helpers' 30-second operations. */
   seconds: 10,
-  /**
-   * The characters (code points) of matched and context lines one answer holds: within the helpers' 4 MB of output even
-   * where the Python helper escapes each as 12 bytes of JSON (a character outside the BMP).
-   */
   text: 256 * 1024,
 });
 
 export interface SearchRequest {
   kind: "search";
-  /** The directory or file to search, relative to the worktree; `.` for all of it. */
   path: string;
   pattern: string;
   literal: boolean;
   ignoreCase: boolean;
-  /** Only files whose path matches: `*.ts`, or with a slash, against the path from the worktree (`apps/** /*.ts`). */
   glob?: string;
   context: number;
   maxResults: number;
-  /** Also search dependency directories (node_modules), which are skipped by default; `.git` directories are always skipped as it walks. */
   all: boolean;
 }
 
@@ -58,9 +36,7 @@ export interface SearchMatch {
 
 export interface SearchResult {
   matches: SearchMatch[];
-  /** Text files searched. */
   files: number;
-  /** It stopped early: at `maxResults` with files or lines left unsearched, or at a limit on files, bytes, text or time. */
   truncated: boolean;
 }
 
@@ -69,7 +45,6 @@ const flag = (value: unknown, name: string): boolean => value === undefined ? fa
 const count = (value: unknown, name: string, min: number, max: number, fallback: number): number => value === undefined ? fallback
   : Number.isInteger(value) && (value as number) >= min && (value as number) <= max ? value as number : fail(`${name} must be a whole number from ${min} to ${max}`);
 
-/** The tool's arguments as a request, or why not. */
 export function searchRequest(args: { path?: unknown; pattern?: unknown; literal?: unknown; ignore_case?: unknown; glob?: unknown; context?: unknown; max_results?: unknown; all?: unknown }): SearchRequest {
   const { pattern, glob } = args;
   if (typeof pattern !== "string" || !pattern || pattern.length > searchLimits.pattern || pattern.includes("\0")) fail(`pattern must be 1 to ${searchLimits.pattern} characters`);
@@ -80,7 +55,6 @@ export function searchRequest(args: { path?: unknown; pattern?: unknown; literal
     maxResults: count(args.max_results, "max_results", 1, searchLimits.maxResults, searchLimits.defaultResults), all: flag(args.all, "all") };
 }
 
-/** A helper's answer, checked: it comes from inside the sandbox. */
 export function checkedSearch(value: unknown): SearchResult {
   const lines = (list: unknown) => Array.isArray(list) && list.length <= searchLimits.context && list.every(item => typeof item === "string");
   if (!value || typeof value !== "object") fail("Invalid sandbox search response");
@@ -91,13 +65,6 @@ export function checkedSearch(value: unknown): SearchResult {
   return { matches, files, truncated };
 }
 
-/**
- * The search itself, as JavaScript source with no imports: the Node helper embeds it (node-helper.ts) and unsandboxed
- * hosts run it in a worker (`searchInWorker`). `searchTree(fs, start, startPath, request)` walks from `start`, the
- * absolute path of `startPath` (relative to the worktree, `.` for its root), which the caller already checked is inside
- * the worktree; `fs` gives `lstat(path)` (`{ directory, file, link, size }`), `list(path)` and `read(path)` (a Buffer),
- * and `join(directory, name)`. Mirrors `search` in sandbox-python/helper.py: change both together.
- */
 export const SEARCH_CORE = String.raw`
 function searchTree(fs, start, startPath, request) {
   const LIMITS = { fileBytes: ${searchLimits.fileBytes}, files: ${searchLimits.files}, bytes: ${searchLimits.bytes}, lineText: ${searchLimits.lineText}, seconds: ${searchLimits.seconds}, text: ${searchLimits.text} };
@@ -113,7 +80,6 @@ function searchTree(fs, start, startPath, request) {
   const shown = line => { const chars = Array.from(line); return chars.length > LIMITS.lineText ? chars.slice(0, LIMITS.lineText).join("") + "\u2026" : line; };
   const length = line => Array.from(line).length;
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-  // Stopping with results to spare is stopping early: what lies beyond may hold more matches.
   const done = () => { if (matches.length >= request.maxResults) truncated = true; return truncated; };
   function searchFile(path, relative, size) {
     if (size > LIMITS.fileBytes) return;
@@ -184,13 +150,8 @@ function globExpression(glob) {
 class SearchRefusal extends Error {}
 `;
 
-/** How long a worker search may take before it is stopped, beyond its own time limit. */
 const WORKER_TIMEOUT_MS = (searchLimits.seconds + 20) * 1000;
 
-/**
- * Runs SEARCH_CORE in a worker thread, for unsandboxed hosts, whose file operations run in the connector itself: a
- * pattern that backtracks without end, or a huge tree, then stops the worker, never the connector.
- */
 export async function searchInWorker(start: string, startPath: string, request: SearchRequest, timeoutMs = WORKER_TIMEOUT_MS): Promise<SearchResult> {
   const code = `
 const { parentPort, workerData } = require("node:worker_threads");
@@ -200,7 +161,6 @@ ${SEARCH_CORE}
 const fs = {
   lstat: path => { const info = lstatSync(path); return { directory: info.isDirectory(), file: info.isFile(), link: info.isSymbolicLink(), size: info.size }; },
   list: path => readdirSync(path),
-  // Like the helpers' reads: a regular file with one link, never a hard link to a file outside the worktree.
   read: path => { const info = lstatSync(path); if (!info.isFile() || info.nlink !== 1) throw new Error("skipped"); return readFileSync(path); },
   join,
 };

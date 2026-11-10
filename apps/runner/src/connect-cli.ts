@@ -83,7 +83,6 @@ export function promptPairingCode(): Promise<string> {
   return promptHidden("Pairing code (hidden): ", "Pairing", "pairing code");
 }
 
-/** A secret typed at a hidden prompt on the terminal: never argv, never a pipe. `noun` names it in errors. */
 export function promptHidden(label: string, action: string, noun: string): Promise<string> {
   if (!process.stdin.isTTY || !process.stderr.isTTY || !process.stdin.setRawMode) throw new Error(`${action} requires a private interactive terminal; ${noun}s are never accepted on argv or stdin pipes`);
   const wasRaw = process.stdin.isRaw;
@@ -99,7 +98,7 @@ export function promptHidden(label: string, action: string, noun: string): Promi
     process.stdin.off("error", onError);
     process.off("SIGTERM", onTerminate);
     process.off("SIGINT", onTerminate);
-    try { process.stdin.setRawMode(wasRaw); } catch { /* Terminal may have closed. */ }
+    try { process.stdin.setRawMode(wasRaw); } catch { }
     if (wasPaused) process.stdin.pause();
     process.stderr.write("\n");
     if (error) completion.reject(error); else completion.resolve(code);
@@ -145,7 +144,6 @@ export async function resourceConfig(path: string): Promise<ResourceConfig> {
   };
 }
 
-/** The macOS or Windows sandbox --experimental-sandbox asks for, with the Windows limits given. */
 function experimentalBackend(dataDir: string, values: { "memory-limit"?: string; "process-limit"?: string; "cpu-limit"?: string }): SandboxBackendConfig {
   if (process.platform === "darwin") return { kind: "seatbelt" };
   const number = (value: string | undefined, name: string, fallback: number) => {
@@ -180,10 +178,8 @@ export async function confirmUnsandboxed(): Promise<void> {
   }
 }
 
-/** Options that became host configuration in Pikibun: still accepted, so existing service units keep starting, and ignored. */
 const MOVED_OPTIONS = ["git-credentials", "repo-cache", "repo-cache-scope"] as const;
 
-/** The notice for moved options someone still passes, or nothing. */
 export function movedOptionsNotice(given: readonly string[]): string {
   if (!given.length) return "";
   return `${given.map(name => `--${name}`).join(", ")} ${given.length === 1 ? "is" : "are"} ignored: the host's owner sets ${given.length === 1 ? "it" : "them"} in Pikibun now `
@@ -237,8 +233,6 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
   });
   const localModels = await loadConnectorModels({ allowFaux: values["allow-faux"], piAgentDir: values["pi-agent-dir"], models });
   const resources = values.resources ? await resourceConfig(values.resources) : undefined;
-  // Checked before any prompt, so no pairing code is typed for nothing; the connector checks again under its lease.
-  // --force never reads the saved pairing: it may be revoked, unreadable or bound to another server.
   const paired = !values.force && await savedPairing(dataDir, values["allow-insecure-loopback"]) !== undefined;
   if (!pairingId && !paired) {
     throw new ConnectorSetupError("This machine is not paired yet. In Pikibun, open Connections, create a pairing code, then run:\n  npx pikibun@latest connect --server https://pikibun.com --pairing-id <PAIRING_ID>");
@@ -255,8 +249,6 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     server: values.server, pairing, replacePairing: values.force, localModels, resources, unsandboxed, ...(sandboxBackend ? { sandboxBackend } : {}),
     remoteExtensionInstalls: values["no-remote-installs"] !== true,
     allowInsecureLoopback: values["allow-insecure-loopback"], allowFaux: values["allow-faux"], allowTestShell: values["allow-test-shell"],
-    // Binary presence cannot attest a working namespace or a per-session resource
-    // domain. Advertise conservatively; each actual operation verifies isolation.
     capabilities: { platform: process.platform, sandbox: false, productionShell: false },
     onStatus: (status, reason) => { process.stderr.write(`Local connector: ${status}${reason ? ` (${reason})` : ""}\n`); },
     onWarning: () => { process.stderr.write("Some resource domains are unavailable; production bash remains fail-closed.\n"); },

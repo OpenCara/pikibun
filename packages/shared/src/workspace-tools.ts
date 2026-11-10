@@ -2,17 +2,6 @@ import { builtinExtensions } from "./host-config.js";
 import { parseExtensionSourceSpec, type ExtensionToolMode, type InstalledExtension, type WorkspaceExtension } from "./host-extensions.js";
 import { pikiExtension, pikiExtensionOn, pikiSessionToolExtensions, sessionToolsOff } from "./piki-extensions.js";
 
-/*
- * The tools a workspace's sessions can use, as its Extensions page lists them (docs/extensions.md): the session's own,
- * which its session-tool extensions turn on or off; Pi's built-in code mode, in every session; and the tools of its
- * enabled extensions, as its hosts report them. It follows the runner's rules for names: an extension's tool named like
- * one of the session's own (on or off), or like one an earlier extension in the workspace's order offers, is left out
- * (settleToolNames), and an extension's tool named like a built-in's replaces the built-in (SessionBuiltins.select).
- * Each host offers what it can of them: not the browser without Chromium, say, nor an extension it hasn't installed; and
- * it may add the extensions its owner requires of every session there, or their own dev extensions.
- */
-
-/** What Pikibun's own tools do, for people: the session's own tools and the built-in code mode's. The model reads its own, longer, descriptions. */
 export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.freeze({
   identity: "Tells the agent who the session is for: its owner's identity and the session's APP_ environment.",
   list_files: "Lists the session's files.",
@@ -43,67 +32,34 @@ export const pikibunToolDescriptions: Readonly<Record<string, string>> = Object.
   codemode: "Runs JavaScript that calls the session's tools, to batch, chain and filter their calls.",
 });
 
-/**
- * Where a tool comes from: the session's own (a session-tool extension, `piki:files` ...), a Pi built-in in every
- * session (`pi:codemode`), or one of the workspace's extensions, which runs on the host, outside the sandbox.
- */
 export type WorkspaceToolOrigin = "session" | "builtin" | "extension";
 
 export interface WorkspaceTool {
   name: string;
-  /** The extension it comes with. */
   source: string;
   origin: WorkspaceToolOrigin;
-  /** What it does: Pikibun's own words for its own tools, the extension's (as a host reports it) for an extension's. */
   description: string;
-  /** An extension's tool: whether its calls wait for an approval or may run automatically, as the workspace set it. */
   mode?: ExtensionToolMode;
 }
 
-/** What an extension offers, as a host that has it at that version reports it or, for Pikibun's own, as this version knows it. */
 export interface ExtensionOffer {
   description?: string;
-  /**
-   * Its tools; none for one that only adds prompt text or hooks. `own`: one named like one of Pikibun's own tools, which
-   * sessions keep instead: the connector reports it among what it ignores, without its description (summarizeModules).
-   */
   tools: { name: string; description: string; own?: true }[];
 }
 
-/** How a host's report lists a tool it left out for being named like one of Pikibun's own (summarizeModules). */
 const OWN_TOOL = /^tool (.+) \(one of Pikibun's own\)$/;
 
-/**
- * Why sessions leave a tool out: `own`, an extension's tool named like one of the session's own; `extension`, one named
- * like an earlier extension's; `builtin`, a built-in's (`pi:codemode`), which an extension's tool of its name replaces.
- */
 export type ShadowKind = "own" | "extension" | "builtin";
 
-/** Who keeps a name an extension's tool can't have, when it is one of Pikibun's own this version doesn't know. */
 export const PIKIBUN = "Pikibun";
 
 export interface WorkspaceTools {
-  /**
-   * The tools sessions can use: the session's own that are on (the file tools first), then the built-in ones, then the
-   * extensions', in the workspace's order.
-   */
   tools: WorkspaceTool[];
-  /** The session's own tools the workspace turned off, with the extension that turns them on. */
   off: { name: string; source: string }[];
-  /**
-   * Tools sessions leave out (`source`'s) because another (`by`) has the name, and why (`kind`): an enabled extension's,
-   * named like one of the session's own (`by` its session-tool extension, or PIKIBUN) or an earlier extension's, or a
-   * built-in's (`pi:codemode`), which an extension's of its name replaces.
-   */
   shadowed: { name: string; source: string; by: string; kind: ShadowKind }[];
-  /** Enabled extensions none of the hosts has reported, whose tools aren't known yet. */
   unreported: string[];
 }
 
-/**
- * What `source` offers: as the first of `installed` (hosts' reports, in order) that has it at that version and loads it
- * reports it; for one of Pikibun's own, as this version knows it where no host reports it. Undefined while neither does.
- */
 export function extensionOffer(source: string, installed: readonly InstalledExtension[]): ExtensionOffer | undefined {
   const piki = pikiExtension(source);
   if (piki?.sessionTools) return { description: piki.description, tools: piki.sessionTools.map(name => ({ name, description: pikibunToolDescriptions[name] ?? "" })) };
@@ -112,7 +68,6 @@ export function extensionOffer(source: string, installed: readonly InstalledExte
     const tools = new Map<string, ExtensionOffer["tools"][number]>();
     for (const module of reported.modules) {
       for (const tool of module.tools) if (!tools.has(tool.name)) tools.set(tool.name, { name: tool.name, description: tool.description });
-      // The connector leaves a tool named like one of Pikibun's own out of `tools`, and says so among what it ignores.
       for (const item of module.ignored) {
         const name = OWN_TOOL.exec(item)?.[1];
         if (name && !tools.has(name)) tools.set(name, { name, description: "", own: true });
@@ -124,20 +79,15 @@ export function extensionOffer(source: string, installed: readonly InstalledExte
   return undefined;
 }
 
-/** The tools `extensions` (a workspace's) give its sessions, with `installed` its hosts' reports, in order. */
 export function workspaceTools(extensions: readonly WorkspaceExtension[], installed: readonly InstalledExtension[]): WorkspaceTools {
   const tools: WorkspaceTool[] = [];
   const off: WorkspaceTools["off"] = [];
-  // The session's own tools, on or off, keep their names from every extension (SessionExtensions' reserved names). The
-  // ones every session has (the file tools) lead.
   const owners = new Map<string, string>();
   const own = pikiSessionToolExtensions().filter(item => !item.retired);
   const offTools = sessionToolsOff(extensions);
   for (const extension of [...own.filter(item => item.core), ...own.filter(item => !item.core)]) {
     for (const name of extension.sessionTools ?? []) {
       if (owners.has(name)) continue;
-      // A tool several extensions offer (source_read, one per kind of document source) is on while any of them is, and
-      // listed with the first that has it on.
       const on = !offTools.has(name);
       const source = (on ? own.find(item => item.sessionTools?.includes(name) && pikiExtensionOn(item, extensions)) : undefined)?.source ?? extension.source;
       owners.set(name, source);
@@ -163,7 +113,6 @@ export function workspaceTools(extensions: readonly WorkspaceExtension[], instal
       offered.push({ name: tool.name, source: extension.source, origin: "extension", description: tool.description, mode: extension.tools });
     }
   }
-  // Built-ins every session runs, unless an extension offers a tool of the same name, which replaces it.
   for (const builtin of builtinExtensions.filter(item => "core" in item && item.core)) {
     for (const name of builtin.tools) {
       const by = owners.get(name);
@@ -174,7 +123,6 @@ export function workspaceTools(extensions: readonly WorkspaceExtension[], instal
   return { tools: [...tools, ...offered], off, shadowed, unreported };
 }
 
-/** A short name for the extension `source` names: Pikibun's or Pi's built-in's title, an npm package's name, a Git repository's. */
 export function extensionLabel(source: string): string {
   const builtin = builtinExtensions.find(item => item.name === source);
   if (builtin) return builtin.title;
@@ -186,7 +134,6 @@ export function extensionLabel(source: string): string {
   } catch { return source; }
 }
 
-/** The start of a tool's or extension's description, for a line in a list: its first paragraph, cut to about `limit` characters. */
 export function descriptionSummary(description: string, limit = 200): string {
   const first = description.trim().split(/\n\s*\n/)[0]!.replace(/\s+/g, " ");
   if (first.length <= limit) return first;

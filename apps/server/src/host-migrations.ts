@@ -16,13 +16,6 @@ import { boundedSnapshotText, MAX_BACKUP_BYTES, repositoryIdentity, validateSnap
 import { migratedAgentVersion, requireModel } from './catalog.js';
 import { ConstraintError } from './db/types.js';
 
-/**
- * Moving a session to another host while both are connected. The source host's live snapshot (the same one a backup
- * saves) is held in the migration receipt, never in backup storage, so no STORAGE_URL is needed. The target host restores
- * it into a successor session bound to that host and one of its models, exactly as it restores a backup, and the source
- * is archived once the target confirms. Until then both sessions only accept reads, so nothing said to the source after
- * its snapshot is lost; a move that can't finish is retried with the same requestId, or cancelled.
- */
 interface MigrationJob {
   id: string; request_id: string; owner_id: string; workspace_id: string;
   source_session_id: string; source_connector_id: string;
@@ -37,7 +30,6 @@ function readJob(c: AppContext, ownerId: string, requestId: string): Promise<Mig
   return c.env.DB.query<MigrationJob>('SELECT * FROM host_migrations WHERE owner_id = ? AND request_id = ?').bind(ownerId, requestId).first();
 }
 
-/** The owner's own, unarchived, connected session; `host` also requires its host to still serve it. */
 async function sourceAuthority(c: AppContext, sessionId: string, ownerId: string, host = true): Promise<SessionRow> {
   const access = await sessionAccess(c.env, sessionId, ownerId);
   if (!access || access.row.owner_id !== ownerId) fail(404, 'not_found', 'Source session not found.');
@@ -47,7 +39,6 @@ async function sourceAuthority(c: AppContext, sessionId: string, ownerId: string
   return access.row;
 }
 
-/** The successor exactly as the receipt pinned it. */
 async function jobTarget(c: AppContext, job: MigrationJob): Promise<SessionRow> {
   const target = await c.env.DB.query<SessionRow>('SELECT * FROM sessions WHERE id = ?').bind(job.target_session_id).first();
   const binding = JSON.parse(job.binding_json) as RunnerBinding;
@@ -70,13 +61,11 @@ function result(c: AppContext, job: MigrationJob, target: SessionRow, created: b
   return c.json({ session: sessionRecord(target, [...permissions]), migration: migrationInfo(job) }, created ? 201 : 200);
 }
 
-/** Takes the source host's live snapshot and records the successor and receipt in one transaction. */
 async function startMigration(c: AppContext, input: { sourceId: string; requestId: string; modelId: string; title: string | null; trusted: string | null }): Promise<MigrationJob> {
   const ownerId = c.get('auth').userId;
   const access = await sessionAccess(c.env, input.sourceId, ownerId);
   if (!access) fail(404, 'not_found', 'Source session not found.');
   if (access.row.owner_id !== ownerId) fail(403, 'owner_required', 'Only the session owner can move it to another host.');
-  // A move creates the successor session, which a viewer can't.
   await requireSessionCreator(c.env, access.row.workspace_id, ownerId);
   const source = await sourceAuthority(c, input.sourceId, ownerId);
   requireUnfrozen(source);
@@ -94,8 +83,6 @@ async function startMigration(c: AppContext, input: { sourceId: string; requestI
   if (capabilities.hostMigration !== true) {
     fail(409, 'connector_update_required', 'Update the target host\'s connector (npx pikibun@latest connect, on Linux) to move sessions to it.');
   }
-  // A clone session has no pins to carry: its successor needs a host where the agent can clone again, and that restores
-  // its clones' local work from the snapshot.
   const destination = { connector_id: model.connector_id, connector_owner_id: model.connector_owner_id, workspace_id: source.workspace_id };
   if (source.repository_mode === 'clone' && (capabilities.plainGit !== true || capabilities.cloneBackups !== true || capabilities.unsandboxed
     || !await runsShellCommands(c.env, capabilities, destination, ownerId))) {
@@ -104,7 +91,6 @@ async function startMigration(c: AppContext, input: { sourceId: string; requestI
   const sourceAgent = await c.env.DB.query<AgentRow>('SELECT * FROM agent_versions WHERE id = ?').bind(source.agent_version_id).first();
   if (!sourceAgent) fail(409, 'invalid_binding', 'Session binding is incomplete.');
   const sourceBinding = await bindingForSession(c, source);
-  // The same idle, checkpointed snapshot a backup takes; the source host refuses it while work is queued or running.
   const response = await runnerRequest(c, source, 'backup', '', {});
   if (!response.headers.get('content-type')?.includes('application/json')) {
     await response.body?.cancel();
@@ -114,7 +100,6 @@ async function startMigration(c: AppContext, input: { sourceId: string; requestI
   validateSnapshot(snapshot, sourceBinding);
   const fresh = await sourceAuthority(c, source.id, ownerId);
   if (fresh.policy_version !== source.policy_version) fail(409, 'policy_changed', 'The session changed while its snapshot was taken. Try again.');
-  // Created only once the move is otherwise admissible; a refused move leaves at most this unused session agent.
   const agent = await migratedAgentVersion(c.env, ownerId, sourceAgent, model, capabilities);
   const target: SessionRow = { id: id(), workspace_id: source.workspace_id, owner_id: ownerId, agent_version_id: agent.id,
     connector_id: model.connector_id, connector_owner_id: model.connector_owner_id, title: input.title ?? source.title,
@@ -127,9 +112,6 @@ async function startMigration(c: AppContext, input: { sourceId: string; requestI
   const size = new TextEncoder().encode(snapshot).byteLength;
   if (size > MAX_BACKUP_BYTES) fail(502, 'invalid_backup', 'The snapshot exceeds its size limit.');
   const migrationId = id();
-  // The successor is created only while the move is admissible. The receipt insert is unconditional, so a concurrent move
-  // of the same source (or a racing retry of this requestId) violates its unique indexes and rolls the whole batch back,
-  // even under Postgres READ COMMITTED: there is at most one move in flight and never an orphan successor.
   const admissible = `NOT EXISTS (SELECT 1 FROM host_migrations WHERE owner_id = ? AND request_id = ?)
     AND NOT EXISTS (SELECT 1 FROM host_migrations WHERE status = 'pending' AND (source_session_id = ? OR target_session_id = ?))
     AND EXISTS (SELECT 1 FROM sessions source WHERE source.id = ? AND source.owner_id = ? AND source.policy_version = ? AND source.status <> 'archived')
@@ -151,9 +133,7 @@ async function startMigration(c: AppContext, input: { sourceId: string; requestI
           target.id),
     ]);
   } catch (error) {
-    // SQLite: 'UNIQUE constraint failed: host_migrations.source_session_id'; Postgres: '... "host_migrations_pending_source"'.
     if (!(error instanceof ConstraintError) || !/host_migrations/.test(error.constraint)) throw error;
-    // Another move of this session, or of this requestId, committed first; a racing retry reads that receipt below.
   }
   const job = await readJob(c, ownerId, input.requestId);
   if (!job) fail(409, 'migration_changed', 'The session changed or is already moving to another host. Reload and try again.');
@@ -190,7 +170,6 @@ export function registerHostMigrations(app: Hono<AppEnv>): void {
     if (job.status === 'cancelled') fail(409, 'migration_cancelled', 'This move was cancelled. Start a new one to move the session.');
     const target = await jobTarget(c, job);
     if (target.status === 'archived') fail(409, 'session_archived', 'The move target is archived.');
-    // The snapshot is held here, so a retry needs the target host, not the source host.
     const source = await sourceAuthority(c, sourceId, ownerId, false);
     if (source.connector_id !== job.source_connector_id) fail(409, 'invalid_migration', 'The source session binding has changed.');
     if (job.snapshot === null) fail(409, 'invalid_migration', 'The move snapshot is no longer held.');
@@ -215,8 +194,6 @@ export function registerHostMigrations(app: Hono<AppEnv>): void {
         fail(502, 'invalid_restore_receipt', 'The target host did not confirm the pinned move target.');
       }
       const held = `EXISTS (SELECT 1 FROM host_migrations WHERE id = ? AND status = 'pending' AND download_token_hash = ?)`;
-      // A delayed response may not commit after another attempt has acquired the move. The source is archived, not
-      // deleted: its history stays readable and its owner can unarchive it.
       await c.env.DB.batch([
         c.env.DB.query(`UPDATE sessions SET status = 'ready' WHERE id = ? AND status <> 'archived' AND ${held}`)
           .bind(target.id, job.id, tokenHash),
@@ -236,7 +213,6 @@ export function registerHostMigrations(app: Hono<AppEnv>): void {
       ]);
       return result(c, completed, await jobTarget(c, completed), created);
     } catch (error) {
-      // Unknown outcomes keep the exact successor and receipt; only the target's durable restore marker reconciles a retry.
       await c.env.DB.batch([
         c.env.DB.query(`UPDATE sessions SET status = 'error' WHERE id = ? AND status <> 'archived'
           AND EXISTS (SELECT 1 FROM host_migrations WHERE id = ? AND status = 'pending' AND download_token_hash = ?)`)
@@ -248,7 +224,6 @@ export function registerHostMigrations(app: Hono<AppEnv>): void {
     }
   });
 
-  // The owner's move in flight from this session, so the web app can retry or cancel it after a reload.
   app.get('/api/sessions/:sourceId/migrations', async c => {
     const sourceId = identifier(c.req.param('sourceId'));
     const ownerId = c.get('auth').userId;
@@ -263,8 +238,6 @@ export function registerHostMigrations(app: Hono<AppEnv>): void {
       modelId: row.target_model_id, title: row.request_title, createdAt: row.created_at, completedAt: row.completed_at })) });
   });
 
-  // Gives up on a move that can't finish. The successor is archived (its host may already hold the restored copy); the
-  // source accepts work again, and nothing said to it was lost.
   app.post('/api/sessions/:sourceId/migrations/:migrationId/cancel', async c => {
     const sourceId = identifier(c.req.param('sourceId'));
     const migrationId = identifier(c.req.param('migrationId'), 'migrationId');
@@ -294,10 +267,6 @@ export function registerHostMigrations(app: Hono<AppEnv>): void {
   });
 }
 
-/**
- * The target host's download of a move snapshot, through the restore download routes (the connector asks for it as a
- * restore). Null when `migrationId` names no move, so the caller handles it as a backup restore.
- */
 export async function downloadMigrationSnapshot(c: AppContext, expectedConnectorId: string | null, migrationId: string,
   input: Record<string, unknown>, token: string): Promise<Response | null> {
   const job = await c.env.DB.query<MigrationJob>('SELECT * FROM host_migrations WHERE id = ?').bind(migrationId).first();
@@ -307,14 +276,12 @@ export async function downloadMigrationSnapshot(c: AppContext, expectedConnector
       !constantTimeEqual(await sha256(token), job.download_token_hash)) {
     fail(403, 'invalid_restore_grant', 'The restore download grant is invalid or expired.');
   }
-  // Moves are between connected hosts only; the legacy shared-secret runner never receives one.
   if (expectedConnectorId === null || job.target_connector_id !== expectedConnectorId) {
     fail(403, 'invalid_restore_grant', 'This runtime does not own the move target.');
   }
   const target = await jobTarget(c, job);
   if (target.connector_id !== expectedConnectorId || target.status === 'archived') fail(403, 'invalid_restore_grant', 'This runtime does not own the move target.');
   await requireConnectorSession(c.env, expectedConnectorId, target);
-  // The source's own host need not serve it any more: moving away from a host is the point.
   const source = await sourceAuthority(c, job.source_session_id, job.owner_id, false);
   if (source.connector_id !== job.source_connector_id) fail(409, 'invalid_migration', 'The source session binding has changed.');
   const raw = job.snapshot;

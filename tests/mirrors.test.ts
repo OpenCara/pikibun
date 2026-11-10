@@ -14,7 +14,6 @@ import type { RunnerBinding } from "../packages/shared/src/types.js";
 import { startGitHttpServer } from "./helpers/git-http.js";
 
 const repository = { bindingId: "binding-app", provider: "github", host: "github.com", repositoryId: "1701", fullName: "acme/app" } as const;
-/** The Git credential the host's own credential helper would give: only the host's direct reads carry it. */
 const HOST_AUTH = "Basic aG9zdDpjcmVkZW50aWFs";
 const environment = { ...process.env, GIT_AUTHOR_NAME: "U", GIT_AUTHOR_EMAIL: "u@example.test", GIT_COMMITTER_NAME: "U", GIT_COMMITTER_EMAIL: "u@example.test" };
 
@@ -24,11 +23,6 @@ function git(args: string[], cwd: string): string {
   return result.stdout.trim();
 }
 
-/**
- * An upstream repository served by git http-backend twice: as the control plane's relay reaches it with the session
- * owner's account (`relay`, recording every request), and as the host reaches it directly with its own Git credential
- * (`cacheRemote`, which only accepts that credential, recording what it is asked).
- */
 async function upstream(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), "mirrors-"));
   await chmod(directory, 0o700);
@@ -61,11 +55,9 @@ async function upstream(t: TestContext) {
   const cacheRemote = async () => new GitRemote({ url: hosted.url("acme/app.git"), authorization: HOST_AUTH, fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(input)).pathname;
     fetched.push(path);
-    // A slow download, for a clone that must wait for the fill.
     if (delay && path.endsWith("/git-upload-pack")) await new Promise(resolve => setTimeout(resolve, delay));
     return fetch(input, init);
   }) as typeof fetch });
-  /** Whether a pack ever went through the relay: an upload-pack request that wants something. */
   const relayedPack = () => relayed.some(request => request.service === "upload-pack" && request.body instanceof Uint8Array
     && new TextDecoder().decode(request.body).includes("want "));
   return { directory, work, bare, relay, relayed, remote, cacheRemote, fetched, relayedPack, slow: (ms: number) => { delay = ms; } };
@@ -84,7 +76,6 @@ test("a mirror is filled with the host's own credential, keeps each session's br
   const keep = git(["--git-dir", first.directory, "for-each-ref", "--format=%(refname)", "refs/pikibun/sessions/"], u.directory).split("\n");
   assert.equal(keep.length, 1);
   assert.equal(git(["--git-dir", first.directory, "rev-parse", `${keep[0]}^1`], u.directory), head);
-  // A later refresh keeps what the session saw before: the new keep commit's first parent is the previous one.
   const before = git(["--git-dir", first.directory, "rev-parse", keep[0]!], u.directory);
   await writeFile(join(u.work, "NEXT.md"), "next\n");
   git(["add", "NEXT.md"], u.work);
@@ -93,26 +84,21 @@ test("a mirror is filled with the host's own credential, keeps each session's br
   assert.equal((await cache.refresh({ repository, ownerId: "test:alice", sessionId: "session-1", remote: await u.cacheRemote() })).fetched, true);
   assert.equal(git(["--git-dir", first.directory, "rev-parse", `${keep[0]}^1`], u.directory), before);
   assert.equal(git(["--git-dir", first.directory, "rev-parse", `${keep[0]}^2`], u.directory), git(["rev-parse", "main"], u.work));
-  // Touching moves the keep ref on without fetching.
   await cache.touch(repository, "test:alice", "session-1");
   assert.equal(git(["--git-dir", first.directory, "rev-parse", `${keep[0]}^1^1`], u.directory), before);
-  // Nothing new upstream: nothing is fetched again.
   assert.equal((await cache.refresh({ repository, ownerId: "test:alice", sessionId: "session-2", remote: await u.cacheRemote() })).fetched, false);
   const listed = await cache.list();
   assert.equal(listed.length, 1);
   assert.equal(listed[0]!.sessions, 2);
   assert.ok(listed[0]!.bytes > 0);
-  // A refusal fails the refresh.
   const refused = new GitRemote({ url: "https://github.com/acme/app.git", authorization: "Bearer relay", fetch: relayFetch(repository.bindingId, async () => {
     const { RunnerError } = await import("../apps/runner/src/protocol.js");
     throw new RunnerError(403, "The session owner lost access.");
   }) });
   await assert.rejects(cache.refresh({ repository, ownerId: "test:alice", sessionId: "session-3", remote: refused }), /403/);
-  // Keep refs younger than the age stay; older ones go.
   assert.deepEqual(await cache.prune(24 * 60 * 60 * 1000), { repositories: 1, sessions: 0 });
   assert.deepEqual(await cache.prune(0), { repositories: 1, sessions: 2 });
   assert.equal((await cache.list())[0]!.sessions, 0);
-  // Owner-scoped caches keep owners apart.
   const owned = new RepositoryCache({ root: join(u.directory, "owned"), scope: "owner" });
   assert.notEqual(owned.mirrorDirectory(repository, "test:alice"), owned.mirrorDirectory(repository, "test:bob"));
 });
@@ -148,13 +134,11 @@ test("the proxy's mirror endpoint serves only workspace repositories, and only w
   assert.equal((await get(cached.socketPath, "https://github.com/acme/other.git")).status, 404);
   const uncached = await start("uncached");
   assert.equal((await get(uncached.socketPath, "https://github.com/acme/app.git")).status, 404);
-  // Why it couldn't be filled is the last line; the wait itself streams the fill's progress, Git's numbers only.
   const failing = await start("failing", async () => { throw new Error("Git remote returned HTTP 403"); });
   const failed = await get(failing.socketPath, "https://github.com/acme/app.git");
   assert.equal(failed.status, 200);
   assert.match(String(lines(failed.body).at(-1)?.error), /403/);
   assert.equal(lines(failed.body).at(-1)?.retry, undefined, "final: the clone goes ahead without the cache");
-  // A failure another attempt may get past says so: the clone asks again.
   const { RunnerError } = await import("../apps/runner/src/protocol.js");
   const busy = await start("busy", async () => { throw new RunnerError(503, "Pikibun could not confirm right now that this session's owner can read acme/app"); });
   assert.deepEqual(lines((await get(busy.socketPath, "https://github.com/acme/app.git")).body).at(-1),
@@ -204,7 +188,6 @@ test("a sandboxed clone borrows the host mirror's objects through the git shim",
   });
   await proxy.start();
   t.after(() => proxy.close());
-  // The mirror exists from an earlier session and this one may use it, as after a reopen.
   await cache.refresh({ repository, ownerId: "test:alice", sessionId: "earlier", remote: await u.cacheRemote() });
   mounts.push({ source: cache.mirrorDirectory(repository, "test:alice"), target });
   const sandbox = new Sandbox(binding("mirror"), join(u.directory, "session"), undefined, { egressSocket: proxy.socketPath, mirrors: async () => mounts });
@@ -215,16 +198,12 @@ test("a sandboxed clone borrows the host mirror's objects through the git shim",
   await shell("git clone -q https://github.com/acme/app.git app");
   assert.equal(await sandbox.readFile("app/README.md", authorize), "from upstream\n");
   assert.equal((await sandbox.readFile("app/.git/objects/info/alternates", authorize)).trim(), `${target}/objects`);
-  // The clone holds none of the mirror's objects itself, and reads them fine; no pack went through the relay for it.
   assert.equal((await shell("cd app && git count-objects -v | grep '^count\\|^in-pack'")).trim(), "count: 0\nin-pack: 0");
   assert.equal(u.relayedPack(), false);
   assert.match(await shell("cd app && git log --oneline"), /initial/);
-  // A clone that already chose how to borrow, or none of the workspace's, is left alone.
   await shell("git clone -q --dissociate https://github.com/acme/app.git plain");
   await assert.rejects(sandbox.readFile("plain/.git/objects/info/alternates", authorize));
-  // Other Git commands go straight through.
   assert.match(await shell("git --version"), /^git version/);
-  // A borrowing clone pushes: the push steps see the mirror too.
   await shell("cd app && git switch -q -c feature && echo change > change.txt && git add change.txt && git commit -q -m 'Add a change'");
   const head = await sandbox.cloneHead("app", authorize);
   const { performClonePush } = await import("../apps/runner/src/push.js");
@@ -234,7 +213,6 @@ test("a sandboxed clone borrows the host mirror's objects through the git shim",
     operation: { kind: "git.push", repository: "acme/app", directory: "app", branch: "feature", commit: head.commit } });
   assert.equal(pushed.outcome, "pushed");
   assert.equal(git(["rev-parse", "refs/heads/feature"], u.bare), head.commit);
-  // Pushing to an existing branch needs the mirror's objects to tell it is a fast-forward.
   await shell("cd app && echo more >> change.txt && git commit -q -am 'More'");
   const next = await sandbox.cloneHead("app", authorize);
   assert.equal((await performClonePush({ workspace: sandbox, credential: { remote: server.url("acme/app.git"), authorization: "Basic dTpw" }, authorize,
@@ -266,8 +244,6 @@ test("a clone session lists every workspace repository's mirror, creating missin
     await assert.rejects(session.open(), /model boundary/);
     return session as unknown as { mirrorMounts(): Promise<{ source: string; target: string }[]> };
   };
-  // The repository the host never mirrored gets an empty mirror at the open, so the first command that clones it can
-  // mount it; each only once the relay confirms the owner's access.
   const confirmed = await open("confirmed");
   assert.equal(await cache.filled(other, "test:alice"), false);
   assert.deepEqual(await confirmed.mirrorMounts(), mounts);
@@ -277,13 +253,11 @@ test("a clone session lists every workspace repository's mirror, creating missin
   assert.deepEqual(await refused.mirrorMounts(), []);
   allowed = true;
   assert.deepEqual(await refused.mirrorMounts(), [], "a refusal ends borrowing for the rest of the open");
-  // A rate limit or an outage only skips the step: the next one asks again.
   allowed = "busy";
   const busy = await open("busy");
   assert.deepEqual(await busy.mirrorMounts(), []);
   allowed = true;
   assert.equal((await busy.mirrorMounts()).length, 2);
-  // A repository the workspace no longer binds stops being mounted at once.
   allowed = true;
   const removed = await open("removed");
   assert.equal((await removed.mirrorMounts()).length, 2);
@@ -343,14 +317,12 @@ test("a clone session's backup and restore carry its clones' local work, cloned 
   await targetService.initialize();
   await targetService.restore({ binding: binding("move-target"), restore: descriptor }, await ticket("move-target", "restore"));
   const restored = await targetService.get("move-target");
-  // The clone is cloned again in the background; the session's work waits for it.
   for (let attempt = 0; (await restored.view()).repositories && attempt < 300; attempt++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal((await restored.view()).repositories, undefined);
   assert.equal(await restored.sandbox.readFile("notes.txt", allow), "notes\n");
   assert.equal(await restored.sandbox.readFile("app/draft.txt", allow), "draft\n");
   assert.match(await shell(restored, "cd app && git rev-parse --abbrev-ref HEAD && git log --format=%s -1 && git status --porcelain"),
     /^feature\nLocal commit\n\?\? draft\.txt\n$/);
-  // It borrowed from the host's mirror, which the host filled with its own credential: no pack ever went through the relay.
   assert.match(await restored.sandbox.readFile("app/.git/objects/info/alternates", allow), /^\/repository-mirrors\/github\/github\.com\/1701\.git\/objects\n$/);
   assert.deepEqual(await (restored.sandbox as Sandbox).clonePending(allow), []);
   assert.equal(u.relayedPack(), false);
@@ -377,7 +349,6 @@ test("a session's first clone waits for the host to fill its mirror, with the ho
   const shell = (session: Awaited<ReturnType<typeof provision>>, command: string) =>
     session.sandbox.execute({ kind: "bash", command }, false, allow, { allowTestShell: true });
 
-  // A host that can't read the repository: the clone says why and goes ahead without the cache, through the relay.
   const refusing = service("refusing", async () => new GitRemote({ url: "https://github.com/acme/app.git", fetch: (async () => {
     throw new GitRemoteError("Git remote returned HTTP 404", 404);
   }) as typeof fetch }));
@@ -390,7 +361,6 @@ test("a session's first clone waits for the host to fill its mirror, with the ho
   await assert.rejects(alone.sandbox.readFile("app/.git/objects/info/alternates", allow));
   assert.equal(await cache.filled(repository, "test:alice"), false);
 
-  // The first clone waits while the host fills the mirror (slowly here), and says so; then it borrows everything.
   u.relayed.length = 0;
   u.slow(3_500);
   const runner = service("cached", u.cacheRemote);
@@ -406,7 +376,6 @@ test("a session's first clone waits for the host to fill its mirror, with the ho
   assert.equal((await shell(session, "cd app && git count-objects -v | grep '^count\\|^in-pack'")).trim(), "count: 0\nin-pack: 0");
   assert.ok(u.fetched.some(path => path.endsWith("/git-upload-pack")), "the host fetched the repository itself");
   assert.equal(u.relayedPack(), false, "no pack went through the relay");
-  // A filled mirror is borrowed straight away: no wait to tell of.
   u.slow(0);
   const again = await shell(session, "git clone -q https://github.com/acme/app.git copy");
   assert.doesNotMatch(again, /pikibun:/);
@@ -435,11 +404,9 @@ test("a clone asks again after a failure that may pass, and stops to be run agai
   await sandbox.initialize();
   const authorize = async () => {};
   const shell = (command: string) => sandbox.execute({ kind: "bash", command }, false, authorize, { allowTestShell: true });
-  // Unavailable once: asked again, then borrowed.
   await shell("git clone -q https://github.com/acme/app.git app");
   assert.equal(asked, 2);
   assert.equal((await sandbox.readFile("app/.git/objects/info/alternates", authorize)).trim(), `${target}/objects`);
-  // Unavailable for good: after three tries the clone stops, to be run again, having downloaded nothing.
   unavailable = Infinity;
   u.relayed.length = 0;
   await assert.rejects(shell("git clone -q https://github.com/acme/app.git again"), (error: { stderr?: string }) =>
@@ -470,20 +437,15 @@ test("a session asks the relay again for its owner's refs after a failure that m
   t.after(() => session.sandbox.close());
   await assert.rejects(session.open(), /model boundary/);
   const mirror = (value: typeof repository) => (session as unknown as { mirror(value: typeof repository): Promise<string> }).mirror(value);
-  // Two hiccups: the listing is asked again each time, then the mirror fills.
   hiccups = 2;
   assert.equal(await mirror(repository), "/repository-mirrors/github/github.com/1701.git");
   assert.equal(await cache.filled(repository, "test:alice"), true);
-  // Still failing after its own attempts: the clone is told to ask again (503).
   hiccups = Infinity;
   await assert.rejects(mirror(repository), (error: unknown) => error instanceof RunnerError && error.status === 503 && /right now/.test(error.message));
-  // A listing that will fail just the same every time (no Git answer at all) is final, after one attempt, and not 503: the
-  // clone goes ahead without the cache, through the relay, where Git says what is wrong.
   hiccups = 0;
   garbled = 1;
   await assert.rejects(mirror(repository), (error: unknown) => error instanceof RunnerError && error.status === 502);
   assert.equal(garbled, 2, "asked once");
-  // A refusal is final (403): the clone goes ahead without the cache, and the relay refuses that too.
   garbled = 0;
   refusing = true;
   await assert.rejects(mirror(repository), (error: unknown) => error instanceof RunnerError && error.status === 403);
@@ -500,7 +462,6 @@ test("a relayed read its caller gives up on fails at once, and an answer that co
   answer!(new Response(new ReadableStream({ cancel() { cancelled = true; } })));
   for (let attempt = 0; attempt < 50 && !cancelled; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(cancelled, true);
-  // A listing through the relay keeps to its time limit, and says another attempt is the caller's to decide.
   const { GitRemoteError } = await import("../apps/runner/src/git-remote.js");
   const started = Date.now();
   const hung = new GitRemote({ url: "https://github.com/acme/app.git", authorization: "Bearer relay", signal: AbortSignal.timeout(100),
@@ -516,7 +477,6 @@ test("a clone whose mirror its command can't see yet fails, to be run again, rat
     mirror: async () => "/repository-mirrors/github/github.com/1701.git" });
   await proxy.start();
   t.after(() => proxy.close());
-  // Mounts are fixed when a command starts; this one's had none.
   const sandbox = new Sandbox(binding("unmounted"), join(u.directory, "session"), undefined, { egressSocket: proxy.socketPath, mirrors: async () => [] });
   t.after(() => sandbox.close());
   await sandbox.initialize();

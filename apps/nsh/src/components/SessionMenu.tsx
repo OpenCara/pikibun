@@ -8,31 +8,22 @@ import { confirmArchive, confirmVisibilityChange, unarchiveNotice, visibilityNot
 import { Field, TextField } from "../form";
 import { Button, Feedback, FormSheet, type MenuAction } from "../ui";
 
-/** A session's address on its server, as the web app's links have it. */
 export const sessionLink = (id: string): string => `${session().origin}/${routeHash({ name: "session", sessionId: id })}`;
 
 export interface SessionMenu {
-  /** The outcome of what its items did: show it beside the list (`Feedback`). */
   action: Action;
   items: (current: SessionRecord) => (MenuAction | "separator")[];
-  /** The session being renamed, for `RenameSheet`. */
   renaming: Accessor<SessionRecord | null>;
   rename: (title: string) => void;
   closeRename: () => void;
 }
 
-/**
- * The right-click menu of a session in a list (the web app's useSessionMenu, session-menu.tsx): opening it in a new tab
- * (the web), copying its link or ID for everyone; and to its owner and its workspace's owner and admins (managesSession)
- * Rename, its visibility and Archive, or Unarchive, as its header's menu has them, with the same confirmations.
- */
 export function createSessionMenu(): SessionMenu {
   const data = useAppData();
   const action = createAction();
   const renaming = signal<SessionRecord | null>(null);
   const base = (current: SessionRecord) => `/api/sessions/${segment(current.id)}`;
   const changed = () => data.refreshSessions();
-  // What it did shows beside the list for a moment; a failure stays until the next action.
   effect(() => {
     if (!action.notice()) return;
     const timer = setTimeout(() => action.clear(), 4000);
@@ -61,7 +52,6 @@ export function createSessionMenu(): SessionMenu {
     const archived = current.status === "archived";
     const busy = action.busy();
     const menu: (MenuAction | "separator")[] = [
-      // A native app is one window, and the server's web app there would need a sign-in of its own.
       ...(pageAvailable() ? [{ label: "Open in new tab", icon: "external-link" as const, testID: "menu-open-tab", onSelect: () => void openUrl(sessionLink(current.id)).catch(() => undefined) }] : []),
       { label: "Copy link", icon: "link", testID: "menu-copy-link", onSelect: () => void action.run(() => Clipboard.writeText(sessionLink(current.id)), "Link copied") },
       { label: "Copy session ID", icon: "copy", testID: "menu-copy-id", onSelect: () => void action.run(() => Clipboard.writeText(current.id), "Session ID copied") },
@@ -71,7 +61,6 @@ export function createSessionMenu(): SessionMenu {
       { label: current.visibility === "workspace" ? "Make private" : "Make workspace-visible", icon: current.visibility === "workspace" ? "lock" : "globe",
         testID: "menu-visibility", disabled: busy, onSelect: () => void changeVisibility(current) },
       { label: "Archive", icon: "archive", testID: "menu-archive", disabled: busy, onSelect: () => void archive(current) });
-    // Packed files come back as the session is unarchived, which only its owner may then do.
     if (manages && archived) menu.push("separator", { label: "Unarchive", icon: "archive", testID: "menu-unarchive",
       disabled: busy || (Boolean(current.packed) && current.ownerId !== user.id), hint: current.packed && current.ownerId !== user.id ? "Its files are packed: only its owner can" : undefined,
       onSelect: () => void action.run(async () => { await session().api(`${base(current)}/unarchive`, { method: "POST" }); changed(); }, unarchiveNotice(current)) });
@@ -81,7 +70,6 @@ export function createSessionMenu(): SessionMenu {
   return { action, items, renaming, rename: title => void rename(title), closeRename: () => renaming.set(null) };
 }
 
-/** The sheet that renames a session (its header's menu, a list's right-click menu), starting from its title each time it opens. */
 export function RenameSheet(props: { open: boolean; title: string; busy: boolean; error?: string; onClose: () => void; onSave: (title: string) => void }) {
   const value = signal(untracked(() => props.title));
   effect(() => { if (props.open) value.set(untracked(() => props.title)); });

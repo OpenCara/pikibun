@@ -23,7 +23,6 @@ interface RunAdmissionRow {
 
 const sqlList = (values: readonly string[]) => values.map(value => `'${value}'`).join(', ');
 
-// Recheck authority in each statement, including replays after a racing revocation.
 const ELIGIBLE_SESSION = `SELECT s.id FROM sessions s
   JOIN workspace_members actor ON actor.workspace_id = s.workspace_id AND actor.user_id = ?
   JOIN workspace_members owner ON owner.workspace_id = s.workspace_id AND owner.user_id = s.owner_id
@@ -67,14 +66,11 @@ async function admissionStorage<T>(operation: Promise<T>): Promise<T> {
   catch { fail(503, 'admission_unavailable', 'Run admission storage is temporarily unavailable.'); }
 }
 
-/** `autoMerge`: the message's merges run without asking too, as the apps ask for every Auto-approve message (only with `access` auto). */
 export async function issueRunAdmission(c: AppContext, row: SessionRow, content: string, requestId: string, access?: AccessMode,
   images?: readonly ChatImage[], autoMerge = false): Promise<string> {
   if (autoMerge && access !== 'auto') fail(400, 'invalid_options', 'Auto-merge needs Auto-approve.');
-  // Authentication middleware derives this identity from the cookie, never the submit body.
   const actorId = c.get('auth')?.userId;
   if (!actorId) fail(401, 'unauthorized', 'Authentication is required.');
-  // A message of images alone has no text.
   text(content, 'content', 60000, images?.length ? 0 : 1);
   text(requestId, 'requestId', 128);
 
@@ -91,7 +87,6 @@ export async function issueRunAdmission(c: AppContext, row: SessionRow, content:
   if (current.status === 'archived') fail(409, 'session_archived', 'Session is archived.');
   if (current.connector_id) await requireConnectorSession(c.env, current.connector_id, current);
 
-  // The request ID then can't be reused for other images either; a message without images keeps the hash of its text.
   const contentHash = await messageHash(content, images);
   const createdAt = now();
   const issuedAt = Math.floor(Date.parse(createdAt) / 1000);
@@ -99,8 +94,6 @@ export async function issueRunAdmission(c: AppContext, row: SessionRow, content:
   const guardBindings = [actorId, current.id, current.workspace_id, current.owner_id, current.agent_version_id,
     current.policy_version, current.connector_id ?? null, current.connector_owner_id ?? null, allowTest, allowTest];
 
-  // Tenant-local quotas share the insertion statement; one account cannot consume a global gate.
-  // Never delete proof rows or renew their expiry, including after ambiguous dispatches.
   await admissionStorage(c.env.DB.query(`WITH eligible AS (${ELIGIBLE_SESSION})
     INSERT INTO run_admissions (id, session_id, actor_id, mode, request_id, content_hash, expires_at, created_at, access, auto_merge)
     SELECT ?, eligible.id, ?, 'write', ?, ?, ?, ?, ?, ? FROM eligible
@@ -120,7 +113,6 @@ export async function issueRunAdmission(c: AppContext, row: SessionRow, content:
       actorId, issuedAt, MAX_ACTOR_PENDING, MAX_ACTOR_PENDING,
       current.owner_id, issuedAt, MAX_OWNER_PENDING, MAX_OWNER_PENDING).run());
 
-  // Read the winner rather than the candidate token; a retry never extends the original expiry.
   const admission = await admissionStorage(c.env.DB.query<RunAdmissionRow>(`WITH eligible AS (${ELIGIBLE_SESSION})
     SELECT admission.* FROM run_admissions admission JOIN eligible ON eligible.id = admission.session_id
     WHERE admission.session_id = ? AND admission.actor_id = ? AND admission.request_id = ?`)

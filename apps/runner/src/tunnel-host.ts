@@ -6,25 +6,11 @@ import { hostTunnelStatusLimits, quickTunnelUrl, type HostTunnelConfig, type Hos
 import { cloudflaredAsset, downloadCloudflared, downloadedCloudflareds, hostCloudflared, inspectCloudflared, pinnedCloudflared, pruneCloudflareds,
   type CloudflaredRelease, type CloudflaredToolchain } from "./cloudflared.js";
 
-/*
- * The connector's side of the tunnel tool (piki:tunnel; docs/design/tunnel.md):
- * - HostTunnelSource: the cloudflared its sessions get, as its host's owner chose on the host's page (HostConfig.tunnel):
- *   one found on the host, the one at a path they gave, one the connector downloaded, or none. Applied as the browser's
- *   is (HostBrowserSource), when the connector connects and as it reports its extensions, and reported with them.
- * - HostTunnels: quick tunnels, one per session that asks: a loopback port on the host that the connector forwards to the
- *   Unix socket the session's service listens on, and cloudflared, on the host, pointed at it. cloudflared gets an
- *   address of Cloudflare's (trycloudflare.com) and carries requests to it; nothing it holds enters the sandbox.
- */
-
-/** A failed download is tried again after this long, or when the host's owner chooses again. */
 const RETRY_MS = 10 * 60_000;
-/** How often a downloaded cloudflared is checked against the release this connector pins. */
 const UPDATE_MS = 24 * 3600_000;
 
 export interface HostTunnelOptions {
-  /** Where the connector keeps the cloudflareds it downloads: its own state, never a session's. */
   root: string;
-  /** Whether its sessions have the Linux sandbox their services run in. */
   supported: boolean;
   fetch?: typeof fetch;
   env?: NodeJS.ProcessEnv;
@@ -32,7 +18,6 @@ export interface HostTunnelOptions {
   arch?: string;
   now?: () => number;
   signal?: AbortSignal;
-  /** How `auto` looks on the host (hostCloudflared); tests stand in their own, whatever this machine has. */
   detect?: () => CloudflaredToolchain | undefined;
   release?: (asset: string) => CloudflaredRelease;
 }
@@ -51,15 +36,12 @@ export class HostTunnelSource {
     this.#status = { source: "auto", state: options.supported ? "missing" : "unsupported", downloadable: this.downloadable };
   }
 
-  /** Cloudflare builds a lone cloudflared for Linux on x86-64 and ARM64; elsewhere the host's owner installs one. */
   get downloadable(): boolean { return this.options.supported && cloudflaredAsset(this.options.platform ?? process.platform, this.options.arch ?? process.arch) !== undefined; }
 
-  /** The cloudflared sessions get now, if any. */
   current(): CloudflaredToolchain | undefined { return this.#current; }
 
   status(): HostTunnelStatus { return this.#status; }
 
-  /** Applies `config`: finds the cloudflared it names, and starts a download it needs, in the background. */
   async apply(config: HostTunnelConfig): Promise<HostTunnelStatus> {
     if (config.source !== this.#config.source || config.path !== this.#config.path) this.#failure = undefined;
     this.#config = config;
@@ -69,7 +51,6 @@ export class HostTunnelSource {
 
   close(): void { this.#abort.abort(); }
 
-  /** Within what the control plane takes (hostTunnelStatusLimits), as the browser's status is. */
   private set(status: Omit<HostTunnelStatus, "source" | "downloadable">, cloudflared?: CloudflaredToolchain): void {
     this.#current = status.state === "ready" ? cloudflared : undefined;
     const clip = (text: string) => text.length > hostTunnelStatusLimits.text ? `${text.slice(0, hostTunnelStatusLimits.text - 1)}…` : text;
@@ -109,7 +90,6 @@ export class HostTunnelSource {
     this.set({ state: "downloading", ...retried });
   }
 
-  /** Downloads the cloudflared this connector pins, unless `have` is that version already. */
   private startDownload(have?: string): void {
     const now = this.options.now ?? Date.now;
     this.#checked = now();
@@ -118,7 +98,6 @@ export class HostTunnelSource {
     const task = (async () => {
       try {
         const release = this.release();
-        // The one in use stays, and the one it replaced until the next check: a tunnel may still run it.
         await pruneCloudflareds(this.options.root, have ? [have, release.version] : [release.version]);
         if (release.version !== have) await downloadCloudflared(this.options.root, release, options);
         this.#failure = undefined;
@@ -138,46 +117,28 @@ export class HostTunnelSource {
     return (this.options.release ?? pinnedCloudflared)(asset);
   }
 
-  /** The last download, and its outcome applied, for tests. */
   settled(): Promise<void> { return this.#task ?? Promise.resolve(); }
 }
 
-/** Where a connector whose state is in `directory` keeps the cloudflareds it downloads. */
 export function cloudflaredDownloads(directory: string): string { return join(directory, "cloudflared"); }
 
-/** A session's quick tunnel as it runs. */
 export interface QuickTunnel {
-  /** Its public address, https://<name>.trycloudflare.com. */
   readonly url: string;
-  /** cloudflared holds at least one connection to Cloudflare's edge now. */
   connected(): boolean;
-  /** Settles once cloudflared has exited, whoever ended it. */
   readonly closed: Promise<void>;
-  /** Ends cloudflared and the forwarding, and waits until they have ended. */
   close(): Promise<void>;
 }
 
 export interface HostTunnelsOptions {
-  /** The cloudflared to run now (HostTunnelSource.current). */
   cloudflared: () => CloudflaredToolchain | undefined;
-  /** The connector's own directory for tunnels: an empty configuration, a home for cloudflared, and its processes. */
   directory: string;
-  /** How long cloudflared may take to get its address; and then to connect to Cloudflare's edge, after which it is reported unconnected. */
   addressMs?: number;
   connectMs?: number;
-  /** Where cloudflared's own output goes, for the host's owner: the connector's log. */
   log?: (line: string) => void;
 }
 
-/** What a tool call is told when cloudflared gave no address: fixed words, never the host's paths or cloudflared's errors. */
 export const NO_ADDRESS = "cloudflared couldn't get an address from Cloudflare. The host needs to reach Cloudflare's edge on port 7844 (UDP or TCP) and api.trycloudflare.com on 443; its owner finds cloudflared's errors in the connector's log";
 
-/**
- * Quick tunnels for a connector's sessions. cloudflared runs on the host with the host's network, as the connector's OS
- * user, with nothing of the connector's environment but its PATH and certificates, an empty configuration (so neither a
- * host's ~/.cloudflared nor /etc/cloudflared applies) and a home of its own. Each one's process is recorded in the
- * connector's state while it runs, so a connector that stopped without ending them ends them as it starts again.
- */
 export class HostTunnels {
   readonly #open = new Set<QuickTunnel>();
   readonly #config: string;
@@ -195,13 +156,8 @@ export class HostTunnels {
     this.reap();
   }
 
-  /** Whether cloudflared is there to run. */
   get available(): boolean { return this.options.cloudflared() !== undefined; }
 
-  /**
-   * Ends the cloudflareds a connector that stopped without ending them left running: those its state recorded, and only
-   * while that pid is still the cloudflared it ran (Linux only: elsewhere a recorded pid could be anything by now).
-   */
   private reap(): void {
     for (const name of readdirSync(this.#processes)) {
       const path = join(this.#processes, name);
@@ -209,22 +165,15 @@ export class HostTunnels {
       try {
         const executable = readFileSync(path, "utf8");
         if (pid > 1 && process.platform === "linux" && readlinkSync(`/proc/${pid}/exe`) === executable) process.kill(pid, "SIGKILL");
-      } catch { /* Gone already, or not ours. */ }
+      } catch { }
       rmSync(path, { force: true });
     }
   }
 
-  /**
-   * Opens a quick tunnel to the service listening on the Unix socket at `socket`, a path the sandbox can't change
- * (pinServiceSocket): a loopback port that forwards each
-   * connection there, and cloudflared pointed at it. Answers once cloudflared has its address, and has connected to
-   * Cloudflare's edge or `connectMs` passed; throws NO_ADDRESS (or why it couldn't start) otherwise.
-   */
   async open(socket: string, signal?: AbortSignal): Promise<QuickTunnel> {
     const cloudflared = this.options.cloudflared();
     if (!cloudflared) throw new Error("This host has no cloudflared for the tunnel");
     const connections = new Set<Socket>();
-    // Only the session's service: each connection to the port goes to its socket and nowhere else.
     const forward: Server = createServer({ allowHalfOpen: true }, client => {
       const upstream = connect({ path: socket, allowHalfOpen: true });
       connections.add(client);
@@ -236,7 +185,6 @@ export class HostTunnels {
       upstream.pipe(client);
     });
     await new Promise<void>((resolve, reject) => { forward.once("error", reject); forward.listen(0, "127.0.0.1", () => { forward.off("error", reject); resolve(); }); });
-    // Later errors (out of descriptors while accepting, say) are the connector's log's, never an unhandled event.
     forward.on("error", error => this.options.log?.(`ERR forwarding: ${error instanceof Error ? error.message : String(error)}`));
     const port = (forward.address() as { port: number }).port;
     const closeForward = () => new Promise<void>(resolve => {
@@ -254,7 +202,7 @@ export class HostTunnels {
       throw error;
     }
     const record = child.pid ? join(this.#processes, String(child.pid)) : undefined;
-    if (record) { try { writeFileSync(record, cloudflared.executable, { mode: 0o600 }); } catch { /* Only for reaping after a crash. */ } }
+    if (record) { try { writeFileSync(record, cloudflared.executable, { mode: 0o600 }); } catch { } }
     const exited = new Promise<void>(resolve => {
       child.once("close", () => resolve());
       child.once("error", () => resolve());
@@ -306,7 +254,6 @@ export class HostTunnels {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", abort);
     }
-    // Online once cloudflared holds a connection to the edge; it may take a moment, and status says how it stands.
     await Promise.race([edge.promise, exited, new Promise(resolve => setTimeout(resolve, this.options.connectMs ?? 15_000).unref())]);
     const tunnel: QuickTunnel = {
       url: url!, connected: () => connections_ > 0 && child.exitCode === null && child.signalCode === null,
@@ -317,7 +264,6 @@ export class HostTunnels {
     return tunnel;
   }
 
-  /** Ends every tunnel, as the connector stops. */
   async close(): Promise<void> {
     await Promise.allSettled([...this.#open].map(tunnel => tunnel.close()));
   }

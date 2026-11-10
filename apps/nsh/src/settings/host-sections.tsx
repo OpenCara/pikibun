@@ -14,10 +14,6 @@ import { Checkbox, Select, TextField } from "../form";
 import { Badge, Button, CardBody, CollapsibleRow, confirm, Feedback, Note, Row, Section, Segmented, Small } from "../ui";
 import { Card } from "./accounts";
 
-// A host's settings past its status, as the web app's (HostConfig.tsx, HostCompaction.tsx, HostAccess.tsx).
-
-/* ---------- Configuration ---------- */
-
 const timeouts = [30, 60, 120, 300, 600, 1800, 3600];
 const lifetimes = [900, 1800, 3600, 7200, 14_400, 28_800, 43_200, 86_400];
 
@@ -50,7 +46,6 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
   const saved = () => props.connector.config ?? defaultHostConfig;
   const config = signal<HostConfig>(untracked(saved));
   let shown = untracked(saved);
-  // Status refreshes every few seconds: a setting saved meanwhile, by anyone, replaces only its own edit.
   effect(() => {
     const next = saved();
     untracked(() => {
@@ -131,8 +126,6 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
   );
 }
 
-/* ---------- Compaction ---------- */
-
 type Draft = { reserveTokens: string; keepRecentTokens: string };
 type Drafts = { overall: Draft; models: Record<string, Draft> };
 const tokenKeys = ["reserveTokens", "keepRecentTokens"] as const;
@@ -140,7 +133,6 @@ const emptyDraft: Draft = { reserveTokens: "", keepRecentTokens: "" };
 const draft = (tokens: CompactionTokens | undefined): Draft => ({ reserveTokens: tokens?.reserveTokens?.toString() ?? "", keepRecentTokens: tokens?.keepRecentTokens?.toString() ?? "" });
 const drafts = (compaction: HostCompaction): Drafts => ({ overall: draft(compaction), models: Object.fromEntries(Object.entries(compaction.modelOverrides ?? {}).map(([model, tokens]) => [model, draft(tokens)])) });
 
-/** A count as typed: null when empty, the number when it is a whole number in bounds, undefined when it is neither. */
 function count(value: string): number | null | undefined {
   const digits = value.trim().replace(/[,_\s]/g, "");
   if (!digits) return null;
@@ -173,7 +165,6 @@ function compactionOf(value: Drafts): HostCompaction | undefined {
 
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-/** The reserve and keep-recent counts, each a short number field labelled above (.token-inputs). */
 function TokenInputs(props: { value: Draft; onChange: (value: Draft) => void; disabled: boolean; label: string }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
@@ -263,8 +254,6 @@ export function HostCompactionSection(props: { connector: ConnectorInfo; refresh
   );
 }
 
-/* ---------- Admins and host command access ---------- */
-
 const levelLabels: Record<HostCommandLevel, { label: string; hint: string }> = {
   approve: { label: "Approve host commands", hint: "Decides each host command in sessions they can approve" },
   auto: { label: "Auto-approve host commands", hint: "Also runs the host commands of their own Auto-approve messages without asking" },
@@ -279,7 +268,6 @@ function createMembers(workspaceId: () => string | undefined) {
   return createResource<{ members: WorkspaceMember[] }>(() => { const id = workspaceId(); return id ? `/api/workspaces/${segment(id)}/members` : null; });
 }
 
-/** Who manages this host's sharing, and which of its models it offers, besides its owner. */
 export function HostAdminsSection(props: { connector: ConnectorInfo; refresh: () => void }) {
   const data = useAppData();
   const { user } = untracked(session);
@@ -345,7 +333,6 @@ export function HostAdminsSection(props: { connector: ConnectorInfo; refresh: ()
   );
 }
 
-/** Who may decide host commands, or run their own without asking, in the workspaces this host is shared with. */
 export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refresh: () => void }) {
   const data = useAppData();
   const action = createAction();
@@ -458,7 +445,6 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
   );
 }
 
-/** The models Pi on the host offers; its owner and admins choose which of them it offers to sessions. */
 export function ModelsSection(props: { connector: ConnectorInfo; refresh: () => void; modelKey: (model: LocalModelSummary) => string }) {
   const action = createAction();
   const disabled = () => new Set((props.connector.disabledModels ?? []).map(props.modelKey));

@@ -11,22 +11,12 @@ import { HELPER, Sandbox, type SandboxRequest } from "../../apps/runner/src/sand
 import type { SessionWorkspace } from "../../apps/runner/src/workspace.js";
 import type { RunnerBinding } from "../../packages/shared/src/types.js";
 
-/*
- * Every implementation of a session's files, made the same way for tests that hold them all to the same rules
- * (tests/sandbox-conformance.test.ts): the Linux sandbox (bubblewrap and the Python helper), the Python helper as the
- * macOS sandbox runs it, the Node helper as the Windows sandbox runs it, and the unsandboxed host's own TypeScript.
- * The two helpers run here without their OS boundary (Seatbelt, AppContainer), which only the real platforms have: what
- * is held to the rules is each helper's own logic.
- */
-
-// Without sh (Windows), nothing is found, and the kinds that need these are skipped.
 const which = (command: string) => spawnSync("sh", ["-c", `command -v ${command}`], { encoding: "utf8" }).stdout?.trim() ?? "";
 export const git = which("git");
 export const bash = ["/bin/bash", "/usr/bin/bash"].find(path => existsSync(path)) ?? "";
 export const python = which("python3");
 const posix = process.platform !== "win32" && !!git && !!bash;
 
-/** Why the Linux sandbox can't run here, if it can't: bubblewrap missing, or no user namespaces for it. */
 export function linuxSandboxMissing(): string | undefined {
   if (process.platform !== "linux") return "the Linux sandbox runs only on Linux";
   if (!existsSync("/usr/bin/bwrap")) return "bubblewrap (/usr/bin/bwrap) is not installed";
@@ -48,7 +38,6 @@ export function binding(id: string): RunnerBinding {
   };
 }
 
-/** A backend that runs a helper with no boundary at all: the workspace layer and the helper's own logic, nothing else. */
 export class Unconfined implements HelperBackend {
   readonly path = "/usr/bin:/bin";
   readonly launched: { request: SandboxRequest; context: HelperContext }[] = [];
@@ -68,12 +57,7 @@ export class Unconfined implements HelperBackend {
 
 export interface WorkspaceKind {
   name: string;
-  /** Why it can't run here, if it can't: its tests are skipped with this reason. */
   missing?: string;
-  /**
-   * Opens one, and says where its worktree is on this machine (its `hostWorktree`), for a test to set up files in. The
-   * Linux sandbox's own `worktree` is the path its commands see inside the sandbox, not this one.
-   */
   open(t: TestContext): Promise<{ workspace: SessionWorkspace; worktree: string }>;
 }
 
@@ -89,7 +73,6 @@ async function opened(t: TestContext, workspace: SessionWorkspace): Promise<{ wo
   return { workspace, worktree: workspace.hostWorktree };
 }
 
-/** Each implementation of a session's files, and why it can't run here, if it can't. */
 export const workspaceKinds: readonly WorkspaceKind[] = [
   {
     name: "the Linux sandbox (bubblewrap, Python helper)", missing: linuxSandboxMissing(),

@@ -19,7 +19,6 @@ test("preview configuration is explicit: an exact, distinct HTTPS origin, never 
     await assert.rejects(loadConfig({ ...environment, PREVIEW_ORIGIN: origin }), /PREVIEW_ORIGIN/, origin);
   }
   await assert.rejects(loadConfig({ ...environment, PREVIEW_STATIC_DIR: "dist/client" }), /requires PREVIEW_ORIGIN/);
-  // The React client is gone: a server still set to serve it says so.
   await assert.rejects(loadConfig({ ...environment, STATIC_CLIENT: "web" }), /React web client was removed/);
   await assert.rejects(loadConfig({ ...environment, APP_ORIGIN: "http://127.0.0.1", LOCAL_MODE: "true",
     LOCAL_CLAIM_SECRET: "x".repeat(43), PREVIEW_ORIGIN: preview }), /PREVIEW_ORIGIN/);
@@ -32,7 +31,6 @@ test("preview configuration is explicit: an exact, distinct HTTPS origin, never 
   }
   const config = await loadConfig({ ...environment, PREVIEW_ORIGIN: preview });
   try {
-    // Unset, the server serves the NSH build (dist/client), whether it's built yet or not.
     assert.equal(config.staticDir, resolve("dist/client"));
     assert.deepEqual(config.preview, { origin: preview, staticDir: resolve("dist/client") });
   } finally {
@@ -51,7 +49,6 @@ test("each origin serves its own NSH build, and each host's authentication keeps
   await writeFile(join(web, "nsh.abcdef0123.wasm"), new Uint8Array([0, 97, 115, 109]));
   await writeFile(join(nsh, "index.html"), '<html><head></head><body>NSH preview</body></html>');
   await writeFile(join(nsh, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
-  // A page without Native Shell's runtime, such as an old React build, is refused rather than served as NSH.
   const react = join(root, "react");
   await mkdir(react);
   await writeFile(join(react, "index.html"), '<div id="root"></div>');

@@ -20,7 +20,6 @@ test("progress text shows Git's percentage, counts and received bytes", () => {
   assert.equal(repositoryProgressText(item({ phase: "enumerating", done: 1234 })), "Enumerating objects · 1,234");
   assert.equal(repositoryProgressText(item({ phase: "authorizing" })), "Checking access");
   assert.equal(repositoryProgressText(item({ phase: "done", percent: 100, bytes: 2048 })), "Ready · 2.0 KiB");
-  // Values that are not plain counts are left out rather than shown.
   assert.equal(repositoryProgressText(item({ done: -1, total: Number.NaN, bytes: 1.5 })), "Receiving objects");
 });
 

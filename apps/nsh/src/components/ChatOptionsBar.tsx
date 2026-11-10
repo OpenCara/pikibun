@@ -10,10 +10,6 @@ import { Chip, confirm, Picker } from "../ui";
 
 const accessIcons: Record<AccessMode, IconName> = { read: "eye", approval: "shield-check", auto: "zap" };
 
-/**
- * Asks the session owner to confirm Auto-approve, with what it does on a host. A confirmed warning that names merges is
- * remembered on this device, so messages that go with Auto-approve by default don't ask again.
- */
 export function confirmAutoApprove(data: AppData) {
   return async (host: ConnectorInfo, unsandboxed: boolean) => {
     const confirmed = await confirm({ title: "Auto-approve commands?", message: autoApproveWarning(host, unsandboxed), confirmLabel: "Enable auto-approve", destructive: true });
@@ -22,14 +18,11 @@ export function confirmAutoApprove(data: AppData) {
   };
 }
 
-/** Model, reasoning and access pickers for a chat box. Renders nothing until the host is known. */
 export function ChatOptionsBar(props: {
   host: ConnectorInfo | undefined;
   value: ChatSelection;
   onChange: (value: ChatSelection) => void;
-  /** Session owner: may choose auto-approve. */
   owner: boolean;
-  /** Access applies to the shared conversation only, not side asks. */
   showAccess: boolean;
   unsandboxed: boolean;
   data: AppData;

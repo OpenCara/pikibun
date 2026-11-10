@@ -1,19 +1,4 @@
 #!/usr/bin/env node
-/**
- * Puts this checkout's Pikibun online through a Cloudflare quick tunnel, for trying the client from anywhere: builds it
- * for the web, starts the server and `cloudflared` in the background, and prints the public address with an
- * administrator's password. Sign-ups are off and the only account is that administrator.
- *
- *   node scripts/tunnel.mjs start [--local]   # in the background; --local: no tunnel, on 127.0.0.1 only, where the
- *                                             # pages load but signing in needs the tunnel's https address
- *   node scripts/tunnel.mjs run [--local]     # the same in the foreground, until Ctrl-C (for tmux or a service manager)
- *   node scripts/tunnel.mjs status
- *   node scripts/tunnel.mjs stop
- *
- * Needs Node 24 and network access; downloads `cloudflared` into .tunnel/ when it isn't on PATH, and the Native Shell
- * CLI as scripts/nsh.mjs does.
- * Its state (database, logs, the password) stays in .tunnel/, which is git-ignored.
- */
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -101,7 +86,6 @@ function stop() {
 
 async function start() {
   if (readState()) stop();
-  // The server's dependencies, then the client built for the web.
   run("npx", ["--yes", "pnpm@10.32.1", "install", "--frozen-lockfile"]);
   await buildWeb(path.join(repo, "dist", "client"));
 
@@ -127,7 +111,6 @@ async function start() {
   const data = path.join(dir, "data");
   mkdirSync(data, { recursive: true });
   const secretsFile = path.join(dir, "secrets.json");
-  // The database's keys stay the same across restarts, so its sign-ins and encrypted values survive one.
   const secrets = existsSync(secretsFile) ? JSON.parse(readFileSync(secretsFile, "utf8")) : {
     SESSION_SECRET: randomBytes(36).toString("base64url"), VAULT_KEY: randomBytes(32).toString("base64url"), password: randomBytes(18).toString("base64url"),
   };
@@ -141,7 +124,6 @@ async function start() {
     STATIC_DIR: path.join(repo, "dist/client"), STATIC_CLIENT: "nsh",
   };
   const server = ["--import", "tsx", "apps/server/src/main.ts"];
-  // The administrator, its password on standard input (never in argv); already there after a restart.
   const admin = spawnSync(process.execPath, [...server, "--create-admin", "admin"], { cwd: repo, env, input: `${secrets.password}\n`, encoding: "utf8" });
   console.log((admin.stdout + admin.stderr).trim());
   const log = path.join(dir, "server.log");
@@ -150,14 +132,13 @@ async function start() {
   let healthy = false;
   for (let i = 0; i < 60 && !healthy; i++) {
     await sleep(1000);
-    try { healthy = (await fetch(`http://127.0.0.1:${port}/api/health`)).ok; } catch { /* starting */ }
+    try { healthy = (await fetch(`http://127.0.0.1:${port}/api/health`)).ok; } catch { }
     if (!alive(child.pid)) break;
   }
   if (!healthy) throw new Error(`the server did not start:\n${readFileSync(log, "utf8")}`);
   writeFileSync(stateFile, JSON.stringify({ url, port, serverPid: child.pid, tunnelPid, username: "admin", password: secrets.password }, null, 2), { mode: 0o600 });
-  // A new quick tunnel's name takes a moment to resolve.
   for (let i = 0; i < 30; i++) {
-    try { if ((await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(5000) })).ok) break; } catch { /* not yet */ }
+    try { if ((await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(5000) })).ok) break; } catch { }
     await sleep(2000);
   }
   await status();
@@ -171,7 +152,6 @@ else if (command === "run") {
   const end = () => { stop(); process.exit(0); };
   process.on("SIGINT", end);
   process.on("SIGTERM", end);
-  // Ends with the server or the tunnel, so a service manager restarts the pair.
   for (;;) {
     await sleep(5000);
     if (!alive(state.serverPid) || (state.tunnelPid && !alive(state.tunnelPid))) {

@@ -19,7 +19,6 @@ import { mintPushToken, revokePushToken, type MintedToken, type PushRevocation }
 import { branchTip, openPullRequest, pushTarget } from './targets.js';
 
 const outcomes: readonly PushOutcome[] = ['pushed', 'up-to-date', 'failed', 'unknown'];
-/** Automatic credentials one auto-approve admission may mint. */
 const automaticPushesPerAdmission = 20;
 
 export async function requireNoRestore(c: AppContext, sessionId: string): Promise<void> {
@@ -29,10 +28,6 @@ export async function requireNoRestore(c: AppContext, sessionId: string): Promis
   await requireNoMigration(c.env, sessionId);
 }
 
-/**
- * The workspace repository at the path the operation names, shaped like a pin. Pushes name a clone's directory; a
- * pinned session is read-only.
- */
 async function pushPin(env: Env, row: SessionRow, operation: GitPushOperation): Promise<SessionRepository> {
   const path = operation.repository;
   if (row.repository_mode !== 'clone' || operation.directory === undefined) fail(400, 'invalid_operation', 'A session pushes a clone\'s directory.');
@@ -43,7 +38,6 @@ async function pushPin(env: Env, row: SessionRow, operation: GitPushOperation): 
 function pinProvider(pin: SessionRepository): { provider: GitProvider; host: string } {
   return 'provider' in pin ? { provider: pin.provider, host: pin.host } : { provider: 'github', host: 'github.com' };
 }
-/** The workspace binding still configured for the pin, with its default-branch policy; removed bindings stop pushes and GitHub merges. */
 export async function requireBinding(c: AppContext, workspaceId: string, pin: SessionRepository): Promise<{ forbid_default_branch: number | null }> {
   const { provider, host } = pinProvider(pin);
   const binding = await c.env.DB.query<{ forbid_default_branch: number | null }>(`SELECT policy.forbid_default_branch FROM workspace_repositories binding
@@ -53,24 +47,15 @@ export async function requireBinding(c: AppContext, workspaceId: string, pin: Se
   if (!binding) fail(403, 'repository_binding_removed', 'This repository is no longer configured for the workspace.');
   return binding;
 }
-/**
- * Undoes a finished push's credential and forgets it, also when the record can't be read (only expiry is left then).
- * An owner's token that could not be reset yet keeps its record, for settlePushCredentials to retry.
- */
 async function revokeStored(env: Env, credentialId: string, ciphertext: string | null): Promise<void> {
   if (!ciphertext) return;
   let settled = true;
   try {
     settled = await revokePushToken(env, JSON.parse(await decryptToken(env, `push-credential:${credentialId}`, ciphertext)) as PushRevocation);
-  } catch { /* an unreadable record can't be retried */ }
+  } catch { }
   if (settled) await env.DB.query('UPDATE push_credentials SET revocation_ciphertext = NULL WHERE id = ? AND revocation_ciphertext = ?').bind(credentialId, ciphertext).run();
 }
 
-/**
- * Settles the push credentials no completion settled: closes those that expired unreported, since their host never said
- * whether it pushed, and retries owner-token resets that failed. Run periodically, it stops an owner's GitHub token from
- * working within about an hour of a push even when the host never reports back.
- */
 export async function settlePushCredentials(env: Env): Promise<void> {
   const rows = await env.DB.query<{ id: string; revocation_ciphertext: string; completed_at: string | null; session_id: string; approval_id: string;
     requested_by: string; workspace_id: string }>(`SELECT c.id, c.revocation_ciphertext, c.completed_at, c.session_id, c.approval_id, c.requested_by, s.workspace_id
@@ -81,7 +66,6 @@ export async function settlePushCredentials(env: Env): Promise<void> {
     if (!row.completed_at) {
       const closed = await env.DB.query(`UPDATE push_credentials SET completed_at = ?, outcome = 'unknown' WHERE id = ? AND completed_at IS NULL RETURNING id`)
         .bind(now(), row.id).first();
-      // A completion that arrived meanwhile revokes the credential itself.
       if (!closed) continue;
       await auditStatement(env, row.requested_by, 'git.push.completed', row.workspace_id, row.session_id, {
         approvalId: row.approval_id, credentialId: row.id, outcome: 'unknown',
@@ -106,13 +90,11 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
   const capability = automatic ? null : text(input.capability, 'capability', 128);
   const admissionId = automatic ? text(input.admissionId, 'admissionId', 128) : null;
   const tokenHash = capability ? await sha256(capability) : null;
-  // Automatic pushes come only from the runner's own tool-call approvals.
   if (automatic && !approvalId.startsWith('tool-')) fail(400, 'invalid_push_request', 'Automatic pushes must name a tool-call approval.');
   let requestedBy = actorId;
   let consumedHere = false;
   const credentialId = id();
 
-  // Every authority check, repeated after each await boundary that precedes an effect.
   const authorize = async (): Promise<SessionAccess> => {
     if (tokenHash) {
       const stored = await c.env.DB.query<{
@@ -123,7 +105,6 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
           !constantTimeEqual(stored.operation_hash, await sha256(JSON.stringify(operation)))) {
         fail(403, 'invalid_capability', 'This push does not match its approval capability.');
       }
-      // After this request consumed the capability, only its single use remains authorized.
       if (consumedHere ? !stored.consumed_at : stored.consumed_at) fail(409, 'capability_consumed', 'This approved push has already been attempted; do not retry it.');
       if (!consumedHere && stored.expires_at <= Math.floor(Date.now() / 1000)) fail(403, 'capability_expired', 'The approval capability has expired.');
       requestedBy = stored.requested_by;
@@ -137,15 +118,12 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
       return approver;
     }
     const owner = await sessionAccess(c.env, sessionId, actorId);
-    // Another member's message pushes without asking only while the session's owner auto-approves their requests.
     const member = !!owner && owner.row.owner_id !== actorId;
     if (!owner || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write') || (member && !await autoApprovesRequester(c.env, owner.row, actorId))) {
       fail(403, 'permission_revoked', 'Automatic pushes require the session owner, or a member whose requests the owner auto-approves.');
     }
     const admission = await c.env.DB.query<{ session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>('SELECT session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?')
       .bind(admissionId).first();
-    // The owner's Auto-approve message pushes without asking, as does any owner message once the owner allowed git_push
-    // for the rest of the session, and any message of a member whose requests the owner auto-approves.
     const sessionGrant = async () => !!await c.env.DB.query(`SELECT 1 AS granted FROM session_tool_grants
       WHERE session_id = ? AND tool = 'git_push' AND call_id = ''`).bind(sessionId).first();
     if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' ||
@@ -154,7 +132,6 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
     }
     await requireCallbackScope(c, owner.row, connectorId);
     await requireOperationTool(c.env, owner.row, operation, approvalId, admission);
-    // This request's own ledger row does not count against it on the post-mint recheck.
     const used = await c.env.DB.query<{ count: number }>('SELECT COUNT(*) AS count FROM push_credentials WHERE admission_id = ? AND id <> ?')
       .bind(admissionId, credentialId).first();
     if ((used?.count ?? 0) >= automaticPushesPerAdmission) fail(429, 'automatic_push_limit', 'This message already used its automatic pushes.');
@@ -171,13 +148,10 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
   const access = await repositoryAccess(c.env, row.owner_id, provider, host, pin.fullName);
   const target = await pushTarget(access, pin, operation.branch, operation.tag);
   if (!target.canPush) fail(403, 'push_permission_required', 'The session owner cannot push to this repository.');
-  // A tag push moves no branch: it only creates a tag at a commit already on `branch`, which the runner checks against
-  // the remote before it pushes. The default-branch policy is about moving that branch.
   if (operation.tag === undefined && policy.forbid_default_branch === 1 && operation.branch === target.defaultBranch) {
     fail(403, 'default_branch_push_forbidden', 'This workspace forbids pushes to the repository default branch.');
   }
   if (operation.tag !== undefined && operation.pullRequest) fail(400, 'invalid_pull_request', 'A tag push opens no pull request.');
-  // Refused before the push, not after it: a plain Git server has nowhere to open one.
   if (operation.pullRequest && provider === 'git') fail(422, 'pull_request_unsupported', `A ${gitProviderNames.git} has no pull requests; push the branch without one.`);
   if (operation.pullRequest && (operation.pullRequest.base ?? target.defaultBranch) === operation.branch) {
     fail(400, 'invalid_pull_request', 'The pull request base must differ from the pushed branch.');
@@ -190,7 +164,6 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
   await requireNoRestore(c, sessionId);
   await requireBinding(c, row.workspace_id, pin);
   if (tokenHash) {
-    // Consume before the effect. A failed mint is not permission to replay the approval.
     const consumed = await c.env.DB.query(`UPDATE broker_capabilities SET consumed_at = ?
       WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?
       AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND owner_id = ? AND policy_version = ? AND status <> ?)
@@ -198,7 +171,6 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
     if (!consumed) fail(409, 'capability_consumed', 'This capability was consumed, expired, or revoked. Do not retry the push.');
     consumedHere = true;
   }
-  // The admission limit is enforced in the insert itself, so concurrent automatic pushes cannot exceed it.
   const inserted = await c.env.DB.query(`INSERT INTO push_credentials (id, session_id, approval_id, requested_by, identity_id, kind, binding_id,
       operation_json, automatic, admission_id, revocation_ciphertext, expires_at, created_at)
     SELECT ?, ?, ?, ?, NULL, 'pending', ?, ?, ?, ?, NULL, ?, ?
@@ -238,12 +210,10 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
     await requireBinding(c, row.workspace_id, pin);
     await recheckAccess(c.env, access);
   } catch (error) {
-    // Never hand out a credential whose ledger, audit or authority step failed: close the row and revoke an installation
-    // token directly. The owner's token never left the server, so it needs no reset.
-    try { await closeFailed(); } catch { /* the token is still revoked below */ }
+    try { await closeFailed(); } catch { }
     if (minted.revocation) {
       if (minted.revocation.kind === 'github-installation') await revokePushToken(c.env, minted.revocation);
-      try { await c.env.DB.query('UPDATE push_credentials SET revocation_ciphertext = NULL WHERE id = ?').bind(credentialId).run(); } catch { /* expiry bounds it */ }
+      try { await c.env.DB.query('UPDATE push_credentials SET revocation_ciphertext = NULL WHERE id = ?').bind(credentialId).run(); } catch { }
     }
     throw error;
   }
@@ -276,7 +246,6 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
   try {
     await requireCallbackScope(c, session, connectorId);
   } catch (error) {
-    // The connector lost its scope: the credential is closed and revoked anyway; only the pull request needs the scope.
     const closed = await c.env.DB.query<{ revocation_ciphertext: string | null }>(`UPDATE push_credentials SET completed_at = ?, outcome = 'failed', tip = NULL
       WHERE id = ? AND completed_at IS NULL RETURNING revocation_ciphertext`).bind(now(), credentialId).first();
     if (closed) {
@@ -300,7 +269,6 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
   const result: PushCompletionResult = {};
   if ((outcome !== 'pushed' && outcome !== 'up-to-date') || !operation.pullRequest || !tip) return c.json(result);
   const pullRequestInput = operation.pullRequest;
-  // Pull requests are opened as the owner, who must still hold the session and write access to the repository.
   const authorize = async (): Promise<SessionRow> => {
     const owner = await sessionAccess(c.env, sessionId, session.owner_id);
     if (!owner || owner.row.status === 'archived' || owner.row.policy_version !== session.policy_version ||
@@ -327,8 +295,6 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
     await requireBinding(c, row.workspace_id, pin);
     const pullRequest = await openPullRequest(access, pin, { head: operation.branch, base, title: pullRequestInput.title, body: pullRequestInput.body,
       ...(pullRequestInput.draft === undefined ? {} : { draft: pullRequestInput.draft }) }, target.azureProjectId);
-    // A push to a pull request this session already pushed to keeps showing its last read state until it is read again
-    // (left unread, so the next sweep reads it first); merged and closed ones aren't carried over.
     await c.env.DB.query(`UPDATE push_credentials SET pull_request_url = ?, pull_request_checked_at = NULL, pull_request_state = (SELECT p.pull_request_state
       FROM push_credentials p WHERE p.session_id = ? AND p.pull_request_url = ? AND p.pull_request_state IS NOT NULL
         AND p.pull_request_state NOT IN ('merged', 'closed')
@@ -337,14 +303,12 @@ export async function pushComplete(c: AppContext, connectorId: string | null): P
       approvalId, credentialId, url: pullRequest.url, number: pullRequest.number, created: pullRequest.created, actingAs: row.owner_id,
       ...(pullRequestInput.draft === undefined ? {} : { draft: pullRequest.draft }),
     }).run();
-    // `draft` only for a push that asked about it: a connector that predates drafts takes no key it doesn't know.
     result.pullRequest = { url: pullRequest.url, number: pullRequest.number, created: pullRequest.created,
       ...(pullRequestInput.draft === undefined ? {} : { draft: pullRequest.draft }) };
   } catch (error) {
     let code = 'internal_error';
     if (error instanceof HTTPException && error.res) {
-      // Read a clone: the shared error handler still sends the original body.
-      try { code = String((await error.res.clone().json() as { code?: unknown }).code ?? code); } catch { /* keep the generic code */ }
+      try { code = String((await error.res.clone().json() as { code?: unknown }).code ?? code); } catch { }
     }
     await auditStatement(c.env, ledger.requested_by, 'git.push.pull_request_failed', session.workspace_id, sessionId, { approvalId, credentialId, code }).run();
     throw error;

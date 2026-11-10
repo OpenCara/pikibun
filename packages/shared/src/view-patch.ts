@@ -1,21 +1,7 @@
 import type { SessionView } from "./types.js";
 
-/**
- * Session views sent as what changed. A view grows with its session (every transcript entry, approval and run stays in
- * it), so after the first one, hosts and the control plane send a patch from a revision the other side already holds:
- * the lists' changed items and the view's small fields, never the unchanged entries again.
- *
- * Revisions are random and only name a view someone kept; nothing derives them from content. Views are treated as
- * immutable once recorded or diffed: items are compared by identity first, then by their JSON.
- */
-
-/**
- * A list rebuilt from the one at the patch's base: a positive number copies that many of its next items, a negative
- * one skips that many, and an object is a new or changed item, taken as is. Base items left over at the end are dropped.
- */
 export type ListPatch<T> = (number | T)[];
 
-/** The lists that grow with a session, each keyed by the field that names its items. */
 const keyedLists = {
   entries: (item: { id: string }) => item.id,
   approvals: (item: { id: string }) => item.id,
@@ -24,22 +10,18 @@ const keyedLists = {
 } as const;
 type KeyedList = keyof typeof keyedLists;
 const listNames = Object.keys(keyedLists) as KeyedList[];
-/** Lists every view has; `queue` is absent from older runners. */
 const requiredLists: KeyedList[] = ["entries", "approvals", "conversations"];
 
 export type ViewFields = Omit<SessionView, KeyedList>;
 type ViewLists = { [K in KeyedList]?: ListPatch<NonNullable<SessionView[K]>[number]> };
 
 export interface SessionViewPatch {
-  /** The revision this patch applies to. */
   base: string;
-  /** The revision the patch produces; equal to `base` when nothing changed, and then nothing else is sent. */
   revision: string;
   view?: ViewFields;
   lists?: ViewLists;
 }
 
-/** At most this many items in one list of a patched view, and operations in one list patch. */
 export const patchLimits = { items: 200_000 } as const;
 
 const revisionPattern = /^[0-9a-f]{32}$/;
@@ -88,7 +70,6 @@ export function diffList<T>(base: readonly T[], next: readonly T[], key: (item: 
   let at = 0;
   for (const item of next) {
     const index = positions.get(key(item));
-    // Only an equal item at or after the cursor is copied; anything else travels in full.
     if (index !== undefined && index >= at && same(base[index], item)) {
       if (index > at) run(at - index);
       run(1);
@@ -114,7 +95,6 @@ export function applyList<T>(base: readonly T[], patch: unknown): T[] {
   return result;
 }
 
-/** Whether two views hold the same content. */
 export function sameView(a: SessionView, b: SessionView): boolean {
   if (a === b) return true;
   const left = split(a);
@@ -149,7 +129,6 @@ export function isViewPatch(value: unknown): value is SessionViewPatch {
     && !!patch.lists && typeof patch.lists === "object" && !Array.isArray(patch.lists);
 }
 
-/** Whether a view from a host has the lists patches work on: arrays of objects, `queue` optional. */
 export function isPatchableView(value: unknown): value is SessionView {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const view = value as Record<string, unknown>;
@@ -160,7 +139,6 @@ export function isPatchableView(value: unknown): value is SessionView {
   });
 }
 
-/** The view a patch produces from `base`, the view at `patch.base`. Throws on a patch that does not fit it. */
 export function applyViewPatch(base: SessionView, patch: SessionViewPatch): SessionView {
   if (!isViewPatch(patch)) throw new Error("Invalid view patch");
   if (patch.base === patch.revision) return base;
@@ -178,21 +156,15 @@ export function applyViewPatch(base: SessionView, patch: SessionViewPatch): Sess
   return view as unknown as SessionView;
 }
 
-/** `next` with every item equal to one in `base` replaced by that one, so unchanged items keep their identity. */
 export function reuseUnchanged(base: SessionView, next: SessionView): SessionView {
   return applyViewPatch(base, diffView(base, next, "0".repeat(32), "1".repeat(32)));
 }
 
-/** The latest views of one session under their revisions, to answer "what changed since". */
 export class ViewRevisions {
   private readonly views: { revision: string; view: SessionView }[] = [];
 
   constructor(private readonly keep = 4) {}
 
-  /**
-   * Records `view` as the latest. When nothing changed it keeps the latest revision and returns that view instead;
-   * otherwise unchanged items are the latest view's own, so the kept views share them.
-   */
   record(view: SessionView): { revision: string; view: SessionView } {
     const latest = this.views.at(-1);
     if (latest && sameView(latest.view, view)) return latest;
@@ -202,7 +174,6 @@ export class ViewRevisions {
     return recorded;
   }
 
-  /** What changed from `since` to `current`, or null when `since` is not a kept revision and the whole view must go. */
   since(since: string | undefined, current: { revision: string; view: SessionView }): SessionViewPatch | null {
     if (since === current.revision) return { base: since, revision: since };
     const base = since === undefined ? undefined : this.views.find(item => item.revision === since);

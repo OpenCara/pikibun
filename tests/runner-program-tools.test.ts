@@ -89,13 +89,11 @@ test("the git tool runs Git without a shell: refused calls ask nobody, others ge
   assert.match(transcript, /within the session's worktree/);
   assert.match(transcript, /Initialized\./);
 
-  // Turned off in the workspace: neither offered nor run.
   answer = { extensions: [{ source: "piki:git", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Status?", requestId: "off", admissionId: await sha256("git admission off") }, "write");
   await idle(session);
   view = await session.view();
   transcript = view.entries.map(entry => entry.text).join("\n");
-  // Not offered, so the model can't call it; a code mode script calling it by name is refused (requireSessionTool).
   assert.match(transcript, /Tool git is not available/);
   assert.equal(view.approvals.length, 1);
 });
@@ -210,7 +208,6 @@ test("the python tool runs Python without a shell, in a virtual environment it n
   let view = await session.view();
   assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "python", status: "executed" }, { tool: "python", status: "executed" }],
     "the refused call ran nothing; the others ran under Auto-approve");
-  // The environment's python3 also for a program that left its directory: on PATH as an absolute path (review of #186).
   assert.match(view.entries.map(entry => entry.text).join("\n"), /venv-python True True/);
   assert.match(view.entries.map(entry => entry.text).join("\n"), /uv publish acts on a package index as an account/);
 
@@ -256,7 +253,6 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
   const id = "ecosystem-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("ecosystem admission") }, "write");
-  // No toolchain needed: the card shows the exact command, and denying it runs nothing.
   const approval = await pendingApproval(session);
   assert.deepEqual(approval.operation, { kind: "program", tool: "go",
     command: "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/go/bin':'/usr/lib/go/bin':'/usr/local/bin' NO_COLOR=1 go 'test' './...' </dev/null 2>&1" });
@@ -276,11 +272,9 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool rust is not available/);
   assert.equal(view.approvals.length, 1);
-  // Its example is of a tool the session still has (review of #194).
   assert.match(offInstructions, /Run go and gofmt, dotnet, make with the go, dotnet, make tools: .*such as go \{program/);
 });
 
-/** A Chromium for the browser tool's session test: PIKIBUN_TEST_BROWSER, or the host's own. */
 const chromium = process.env.PIKIBUN_TEST_BROWSER ? browserAt(process.env.PIKIBUN_TEST_BROWSER) : hostBrowser();
 
 test("the browser tool drives the host's Chromium in the session's sandbox as one exact command card, answering with the page and its screenshot; piki:browser turns it off",
@@ -312,13 +306,11 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   await service.initialize();
   t.after(() => service.close());
   const id = "browser-session";
-  // Not a clone session: its sandbox needs nothing of the control plane's repositories.
   const sandboxed = binding(id);
   delete sandboxed.session.repositoryMode;
   const session = await service.provision(sandboxed, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Look at the app.", requestId: "look", admissionId: await sha256("browser admission") }, "write");
   const approval = await pendingApproval(session);
-  // A program operation of its own: the driver, and the host's Chromium where the sandbox gives it.
   assert.equal(approval.operation.kind, "program");
   assert.equal(approval.operation.kind === "program" && approval.operation.tool, "browser");
   const command = approval.operation.kind === "program" ? approval.operation.command : "";
@@ -332,7 +324,6 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   const transcript = view.entries.map(entry => entry.text).join("\n");
   assert.match(transcript, /url is an http, https or file URL, or about:blank\. Nothing ran\./);
   assert.match(transcript, /Seen\./);
-  // The model got the report, without the raw output, and the screenshot as an image.
   const result = seen as { role: string; toolName: string; content: { type: string; text?: string; mimeType?: string }[] };
   assert.equal(result.role, "toolResult");
   assert.equal(result.toolName, "browser");
@@ -342,7 +333,6 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   assert.equal(answerText.report.title, "Faux app");
   assert.equal(answerText.report.actions[0]!.value, "Hello from the sandbox");
   assert.ok(result.content.some(part => part.type === "image" && /^image\/(png|jpeg|webp)$/.test(part.mimeType ?? "")), "the screenshot reached the model");
-  // The Browser tab reads the same report and screenshot from the worktree.
   const listing = await session.sandbox.browse("browser-output", async () => {});
   assert.equal(listing.type, "directory");
   assert.ok(listing.type === "directory" && listing.entries.some(entry => entry.name === answerText.report.screenshot.split("/").at(-1)));
@@ -386,7 +376,6 @@ test("a session on the host is never offered the browser tool, even where the ho
   const view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
   assert.equal(view.approvals.length, 0, "nothing ran on the host");
-  // The workspace has it on: its people see why this session hasn't, and so does its agent.
   assert.deepEqual(view.extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }]);
   assert.match(instructions, /This session has no browser tool: The browser runs only in a session's sandbox, and this session runs on its host itself/);
 });
@@ -405,7 +394,6 @@ test("a sandboxed session whose host has no Chromium yet says why it has no brow
   faux.setResponses([reply, reply]);
   const models = createModels();
   models.setProvider(faux.provider);
-  // The connector's browser, as its owner's choice and a download change it (HostBrowserSource).
   let current: { executable: string; directory: string } | undefined;
   let status: HostBrowserStatus = { source: "download", state: "downloading", downloadable: true };
   const service = new RunnerService({
@@ -420,14 +408,12 @@ test("a sandboxed session whose host has no Chromium yet says why it has no brow
   const id = "browser-missing-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   assert.equal(session.sandbox.browser, undefined);
-  // The browser's entry: program tools whose programs this host lacks have theirs (reason "programs").
   const browserEntries = async () => (await session.view()).extensions?.unavailable?.filter(item => item.source === "piki:browser") ?? [];
   assert.deepEqual(await browserEntries(), [{ source: "piki:browser", tools: ["browser"], reason: "downloading" }]);
   await session.submit(await ticket(id, "submit"), { content: "Look.", requestId: "look", admissionId: await sha256("browser missing admission") }, "write");
   await idle(session);
   assert.ok(!offered[0]!.includes("browser"));
   assert.match(instructions[0]!, /This session has no browser tool: This host is downloading Chromium for the browser/);
-  // The download is done: the next message has the tool, with no restart.
   current = { executable: "/opt/chrome-headless-shell/chrome-headless-shell", directory: "/opt/chrome-headless-shell" };
   status = { source: "download", state: "ready", executable: current.executable, version: "131.0.6778.85", downloadable: true };
   assert.deepEqual(await browserEntries(), []);
@@ -466,7 +452,6 @@ test("the make tool runs make without a shell of its own, as one exact command c
   const id = "make-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("make admission") }, "write");
-  // No make needed: the card shows the exact command, and denying it runs nothing.
   const approval = await pendingApproval(session);
   assert.deepEqual(approval.operation, { kind: "program", tool: "make", command: "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' make '-j4' 'test' </dev/null 2>&1" });
   await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
@@ -496,7 +481,6 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
-  // A tool defined as data whose one program no host has, and whose other every Linux has in /usr/bin.
   let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
   const { summary: _summary, ...make } = bundledToolDefinitions.find(definition => definition.name === "make") as ProgramToolDefinition;
   const frob: ProgramToolDefinition = { ...make, name: "frob", extensions: ["piki:frob"], programs: ["frob-not-installed-anywhere", "env"] };
@@ -510,15 +494,12 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   await service.initialize();
   t.after(() => service.close());
   const id = "missing-programs-session";
-  // The agent has the defined tool, as a control plane that defines it lists it. Not a clone session: its sandbox needs
-  // nothing of the control plane's repositories to run the command.
   const bound = binding(id);
   delete bound.session.repositoryMode;
   const session = await service.provision({ ...bound, agent: { ...bound.agent, tools: [...bound.agent.tools, "frob"] } }, await ticket(id, "create"));
   assert.deepEqual((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"),
     { source: "piki:frob", tools: ["frob"], reason: "programs", programs: ["frob-not-installed-anywhere"] });
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("missing programs admission") }, "write");
-  // The program it has asks for approval as before.
   let approval;
   for (let count = 0; count < 1000 && !approval; count++) {
     approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
@@ -531,10 +512,8 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   const view = await session.view();
   assert.equal(view.approvals.length, 1, "the missing program's call left no card");
   assert.match(view.entries.map(entry => entry.text).join("\n"), /frob-not-installed-anywhere isn't installed on this host where the session's sandbox sees it[^]*Nothing ran\./);
-  // Other tools' missing programs (the python tool's uv, say) may follow in the same sentence, as the host has them.
   assert.match(instructions, /This host doesn't have the frob tool's frob-not-installed-anywhere[^.]* where the session's sandbox sees them/);
   assert.match(instructions, /Calls to them are refused before they run/);
-  // The workspace turns the tool off: the panel no longer lists its programs (review of #216).
   answer = { extensions: [{ source: "piki:frob", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
   assert.equal((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"), undefined);
 });

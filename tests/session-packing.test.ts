@@ -36,7 +36,6 @@ async function ticket(id: string, action: RunnerAction, actorId = OWNER, body = 
 async function directory(t: TestContext): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), "session-packing-"));
   t.after(async () => {
-    // Tests leave directories without permissions behind on purpose.
     await chmodTree(path).catch(() => {});
     await rm(path, { recursive: true, force: true });
   });
@@ -58,7 +57,6 @@ test("settling a session directory finishes or undoes whatever a crash cut off",
   const root = await directory(t);
   assert.equal(await settlePack(join(root, "missing")), false);
 
-  // Packed: leftovers of an unpack and of a deletion that broke off go, the pack stays.
   const packed = join(root, "packed");
   await mkdir(join(packed, ".sandbox-unpack-1", "worktree", "locked"), { recursive: true });
   await writeFile(join(packed, ".sandbox-unpack-1", "worktree", "locked", "file"), "staged");
@@ -71,14 +69,12 @@ test("settling a session directory finishes or undoes whatever a crash cut off",
   assert.equal(await settlePack(packed), true);
   assert.deepEqual((await readdir(packed)).sort(), [PACK_FILE, "session.sqlite"]);
 
-  // Both: the sandbox is only ever complete where it is, so it wins.
   const both = join(root, "both");
   await mkdir(join(both, "sandbox", "worktree"), { recursive: true });
   await writeFile(join(both, PACK_FILE), "pack", { mode: 0o600 });
   assert.equal(await settlePack(both), false);
   assert.deepEqual(await readdir(both), ["sandbox"]);
 
-  // Unpacked and untouched.
   const plain = join(root, "plain");
   await mkdir(join(plain, "sandbox"), { recursive: true });
   assert.equal(await settlePack(plain), false);
@@ -96,11 +92,9 @@ test("a pack is checked as unpacking checks it, and reads back the files a resto
     file("home/.profile", "kept"), file("owner.gitconfig", "[user]\n")] });
   await writePrivate(join(root, PACK_FILE), bytes);
   const files = await readPack(root, target);
-  // The owner's Git configuration comes from the current binding when the sandbox initializes, never from a pack.
   assert.deepEqual(files.map(entry => [entry.path, entry.bytes.toString(), entry.mode]).sort(), [
     ["home/.profile", "kept", 0o600], ["worktree/run.sh", "#!/bin/sh", 0o700], ["worktree/src/app.ts", "export {};", 0o600],
   ]);
-  // Another session's pack, or one damaged on disk, is never unpacked.
   await assert.rejects(readPack(root, binding("another-session")), refusedWith(409, /damaged/));
   await rm(join(root, PACK_FILE));
   await writePrivate(join(root, PACK_FILE), Buffer.from("not a pack"));
@@ -113,7 +107,6 @@ test("a pack is checked as unpacking checks it, and reads back the files a resto
   await chmod(join(root, PACK_FILE), 0o644);
   await assert.rejects(readPack(root, target), refusedWith(409, /private file/));
 
-  // Refused with words the control plane shows (a runner 422 of plain words).
   const shown = /^[\w .,:'()-]{1,300}$/;
   for (const [content, reason] of [
     [{ files: [file("worktree/../escape", "x")] }, /can't be packed/],
@@ -187,7 +180,6 @@ test("a clone a pack can't keep in full is refused: stashes, other refs, tags it
   git(app, "add", ".");
   git(app, "commit", "-qm", "one");
   git(app, "push", "-q", "origin", "main");
-  // The helper's own backup, as the sandbox runs it, without the namespace: a pack's and a backup's.
   const program = HELPER.replace(/\ntry:\n    main\(\)[\s\S]*$/, "\n") + `
 for pack in (False, True):
     try:
@@ -232,7 +224,6 @@ for pack in (False, True):
   }
 });
 
-// Packing and unpacking a live session run in the Linux sandbox, so they need bubblewrap with working user namespaces.
 const isolation = process.platform !== "linux" ? "Linux only"
   : spawnSync("/usr/bin/bwrap", ["--unshare-all", "--unshare-user", "--die-with-parent", "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
     "--ro-bind", "/lib64", "/lib64", "--symlink", "usr/bin", "/bin", "--proc", "/proc", "--dev", "/dev", "--", "/usr/bin/true"], { timeout: 5000 }).status === 0
@@ -281,9 +272,7 @@ test("an archived session's files pack into one file, its conversation stays rea
   await mkdir(join(sandbox, "home", ".local", "bin"), { recursive: true });
   await writeFile(join(sandbox, "home", ".local", "bin", "tool"), "kept");
 
-  // Only its owner packs it.
   await assert.rejects(runner.pack(id, await ticket(id, "pack", "test:bob")), refusedWith(403, /owner/));
-  // Two packs at once: the second waits for the first, then finds the session packed.
   const [result, again] = await Promise.all([runner.pack(id, await ticket(id, "pack")), runner.pack(id, await ticket(id, "pack"))]);
   assert.equal(result.packed, true);
   assert.ok(result.bytes! > 0 && result.files! >= 3);
@@ -293,7 +282,6 @@ test("an archived session's files pack into one file, its conversation stays rea
   assert.equal(await exists(join(root, "sessions", id, PACK_FILE)), true);
   assert.deepEqual(await runner.pack(id, await ticket(id, "pack")), { packed: true }, "packing again changes nothing");
 
-  // Packed, it opens to show its conversation, and nothing else runs.
   const packed = await runner.get(id);
   assert.equal(packed.packed, true);
   assert.ok((await packed.view()).entries.some(entry => entry.text.includes("TEST_WRITE kept.txt")));
@@ -305,7 +293,6 @@ test("an archived session's files pack into one file, its conversation stays rea
   assert.match((await refused.json() as { error: string }).error, /packed/);
   assert.equal(await exists(sandbox), false, "opening a packed session leaves its sandbox packed");
 
-  // Unpacking, over the runner's route, brings back what the pack kept: not the home's package caches.
   const unpack = await app.request(`/v1/sessions/${id}/unpack`, { method: "POST", body: "{}",
     headers: { authorization: `Bearer ${await signToken(await ticket(id, "unpack", OWNER, "{}"), SECRET)}`, "content-type": "application/json" } });
   assert.equal(unpack.status, 200, await unpack.clone().text());

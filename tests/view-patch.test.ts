@@ -29,13 +29,11 @@ test("list patches rebuild the next list from the base for appends, edits, remov
     const patch = diffList(base, next, byId);
     assert.deepEqual(applyList(base, patch), next);
   }
-  // Unchanged items travel as counts only, and keep their identity.
   const appended = [...base, entry("f")];
   const patch = diffList(base, appended, byId);
   assert.deepEqual(patch, [5, appended[5]]);
   const rebuilt = applyList(base, patch);
   assert.ok(rebuilt.slice(0, 5).every((item, index) => item === base[index]));
-  // An item with the same id but other content travels in full.
   assert.deepEqual(diffList(base, [base[0]!, entry("b", "edited")], byId), [1, entry("b", "edited")]);
 });
 
@@ -47,11 +45,9 @@ test("a view patch carries the changed entries and the small fields, never the u
   assert.ok(JSON.stringify(patch).length < 1000, "The patch is tiny next to the 100 kB view");
   assert.deepEqual(applyViewPatch(before, patch), after);
   assert.ok(isViewPatch(JSON.parse(JSON.stringify(patch))));
-  // queue is optional: absent from the next view, it stays absent.
   const withoutQueue = applyViewPatch(after, diffView(after, before, "b".repeat(32), "c".repeat(32)));
   assert.deepEqual(withoutQueue, before);
   assert.equal(Object.hasOwn(withoutQueue, "queue"), false);
-  // No change sends nothing but the revision, and leaves the very same view.
   const unchanged = diffView(before, before, "a".repeat(32), "a".repeat(32));
   assert.deepEqual(unchanged, { base: "a".repeat(32), revision: "a".repeat(32) });
   assert.equal(applyViewPatch(before, unchanged), before);
@@ -95,7 +91,6 @@ test("revisions name only views someone kept, and an unchanged view keeps its re
   assert.deepEqual(revisions.since(second.revision, second), { base: second.revision, revision: second.revision });
   assert.equal(revisions.since(undefined, second), null);
   assert.equal(revisions.since("f".repeat(32), second), null);
-  // Only the latest `keep` revisions answer.
   const third = revisions.record(view([entry("c")]));
   assert.equal(revisions.since(first.revision, third), null);
   assert.ok(revisions.since(second.revision, third));

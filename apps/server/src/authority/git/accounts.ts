@@ -11,10 +11,6 @@ import { githubRepositories, validRepositoryRef } from '../repositories.js';
 import { gitProviderAdapters, plainRepositoryId } from './providers.js';
 import type { GitCredential } from './types.js';
 
-/**
- * A decrypted token account plus the exact ciphertext it was read from, for authority rechecks: a member's own account
- * (`userId`), or with `workspaceId` the workspace connection it is (and then `userId` is empty).
- */
 export interface LoadedCredential {
   credential: GitCredential;
   ciphertext: string;
@@ -29,15 +25,12 @@ export function tokenProvider(value: unknown): value is TokenGitProvider {
   return typeof value === 'string' && value !== 'github' && (gitProviders as readonly string[]).includes(value);
 }
 
-/** True when `host` is the canonical API host for `provider`: the fixed host, or a public self-hosted name. */
 export function validProviderHost(provider: GitProvider, host: unknown): host is string {
   const fixed = gitProviderHosts[provider].fixed;
   if (fixed) return host === fixed;
-  // github.com is served by the sign-in OAuth connection, never by a personal access token.
   return validGitHost(host) && host !== 'github.com' && !host.endsWith('.github.com');
 }
 
-/** Normalizes a user-supplied host (case, an https:// prefix, trailing slashes) and applies the provider default. */
 export function gitHost(provider: GitProvider, value: unknown): string {
   const name = gitProviderNames[provider];
   const hosts = gitProviderHosts[provider];
@@ -53,7 +46,6 @@ export function gitHost(provider: GitProvider, value: unknown): string {
   return host;
 }
 
-/** Azure DevOps accounts are per organization (case-insensitive); other providers have none. */
 export function credentialOrganization(provider: GitProvider, fullName: string): string {
   return provider === 'azure-devops' ? fullName.split('/')[0]!.toLowerCase() : '';
 }
@@ -87,7 +79,6 @@ export async function recheckCredential(env: Env, access: LoadedCredential): Pro
   if (row?.ciphertext !== access.ciphertext) fail(403, 'git_access_changed', 'Git account access changed; retry with the current connection.');
 }
 
-/** Re-validates adapter output before it reaches a client or a binding. */
 export function providerRepository(provider: GitProvider, value: unknown): ProviderRepository {
   const item = value as Partial<ProviderRepository> | null;
   if (!item || typeof item !== 'object' || !validRepositoryId(item.id) || !validRepositoryName(provider, item.fullName) ||
@@ -124,7 +115,6 @@ export function accountInput(input: Record<string, unknown>) {
     fail(400, 'invalid_git_username', 'Enter the user name for this Git server.');
   }
   if (takesUsername && input.username !== undefined && input.username !== '') {
-    // Basic auth: a colon or control character would change the credential's meaning.
     if (typeof input.username !== 'string' || !/^[^\s:\x00-\x1f\x7f]{1,254}$/.test(input.username.trim())) {
       fail(400, 'invalid_git_username', provider === 'git' ? 'Use the user name you sign in to the Git server with, without colons or spaces.'
         : 'Use your Atlassian account email or username.');
@@ -166,7 +156,6 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
     }
     const ciphertext = await encryptToken(c.env, userId, input.token);
     const timestamp = now();
-    // Reconnecting the same provider/host/organization replaces the token in place and keeps the account id.
     const row = await c.env.DB.query<Pick<GitCredentialRow, 'id' | 'provider' | 'host' | 'organization' | 'login' | 'created_at'>>(`INSERT INTO git_credentials
       (id, user_id, provider, host, organization, username, login, ciphertext, created_at, updated_at)
       SELECT ?,?,?,?,?,?,?,?,?,?
@@ -188,9 +177,6 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
   app.delete('/api/git/accounts/:id', async c => {
     const userId = c.get('auth').userId;
     if (c.req.param('id') === 'github') {
-      // Disconnecting GitHub deletes the sign-in token, as when it stopped working; the owner stays signed in to Pikibun
-      // and connects again by signing in with GitHub, which stores a new one.
-      // The token leaves the vault together with its audit entry, so a failed audit write leaves it there to retry with.
       const [deleted] = await c.env.DB.batch<{ ciphertext: string }>([
         c.env.DB.query<{ ciphertext: string }>(`DELETE FROM github_tokens WHERE user_id = ?
           AND EXISTS (SELECT 1 FROM users WHERE id = ? AND auth_kind = 'github') RETURNING ciphertext`).bind(userId, userId),
@@ -198,9 +184,8 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
       ]);
       const ciphertext = deleted.results[0]?.ciphertext;
       if (!ciphertext) fail(404, 'not_found', 'Git account not found.');
-      // GitHub forgets it as well, so a copy elsewhere stops working; the vault no longer holds it either way.
       let revoked = false;
-      try { revoked = await revokeGitHubToken(c.env, await decryptToken(c.env, userId, ciphertext)); } catch { /* reported below */ }
+      try { revoked = await revokeGitHubToken(c.env, await decryptToken(c.env, userId, ciphertext)); } catch { }
       if (!revoked) console.error(`pikibun: the GitHub sign-in token of ${userId} left the vault, but GitHub could not be asked to revoke it`);
       return c.body(null, 204);
     }
@@ -212,8 +197,6 @@ export function registerGitAccounts(app: Hono<AppEnv>): void {
     return c.body(null, 204);
   });
 
-  // The repositories an account can read, for the repository picker. A plain Git server lists nothing, so its picker asks
-  // for one repository by its path (`?path=team/project.git`), which is read with the account like any other.
   app.get('/api/git/accounts/:id/repositories', async c => {
     const userId = c.get('auth').userId;
     const accountId = c.req.param('id');

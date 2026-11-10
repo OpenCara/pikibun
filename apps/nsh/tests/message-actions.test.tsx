@@ -1,9 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { ORIGIN, server, sessionRecord, signedIn, view } from "./fixtures";
 
-// A message's actions, small icons beside who sent it: copy it, go back to it, fork a new session from it.
-
-/** An idle session whose host takes conversations back: its entries are the host's own (`<conversation>:<entry>`). */
 const idle = {
   ...view,
   entries: [
@@ -32,7 +29,6 @@ describe("a message's actions", () => {
     await app.press("id:session-row-s1");
     await app.waitFor("id:message-copy-0-2");
     for (const id of ["message-copy-0-1", "message-revert-0-1", "message-fork-0-1", "message-revert-0-2", "message-fork-0-2"]) expect(app.shows(`id:${id}`)).toBe(true);
-    // No action sheet opens: the icon copies at once.
     await app.press("id:message-copy-0-2");
     await app.waitFor("text:Message copied");
     expect(app.clipboard()).toBe("The test races the session cookie.");
@@ -64,7 +60,6 @@ describe("a message's actions", () => {
     await app.press("id:session-row-s1");
     await app.waitFor("id:message-revert-0-1");
     expect(app.shows("id:message-copy-0-1")).toBe(true);
-    // An older host forks only for the session's owner.
     expect(app.shows("id:message-fork-0-1")).toBe(false);
     expect(app.shows("id:message-fork-0-2")).toBe(false);
   });

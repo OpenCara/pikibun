@@ -3,18 +3,10 @@ import { parseCapabilities, type ConnectorCapabilities } from '../../../../packa
 import type { AppContext, Env, SessionRow } from '../types.js';
 import { appOrigin, fail, localMode, localOwnerQuery, loopbackHttp, testMode } from '../http.js';
 
-/*
- * Hosts as the authority knows them: a connector proves who it is with the credential its pairing issued and, for
- * callbacks, the token of its current connection; and a host serves a session only while it is the one bound to it,
- * still shared with the session's workspace, and offering its model. Pairing and the routes hosts call are in
- * connectors.ts; every check of who a host is lives here.
- */
-
 export interface ConnectorRow {
   id: string; owner_id: string; name: string; credential_hash: string; revoked_at: string | null;
   created_at: string; last_seen_at: string | null; connection_hash: string | null;
   models_json: string; capabilities_json: string; removed_at: string | null;
-  /** The version its connector reported when it last connected; null where it reported none. */
   connector_version?: string | null;
 }
 
@@ -43,7 +35,6 @@ export async function authenticateConnectorToken(env: Env, token: string, connec
     WHERE c.credential_hash = ? AND c.revoked_at IS NULL AND u.suspended_at IS NULL AND (? = 1 OR u.auth_kind <> 'test')`)
     .bind(await sha256(token), testMode(env) ? 1 : 0).first();
   if (!row) fail(401, 'connector_authentication_required', 'Connector authentication is required.');
-  // A local server's hosts are its owner's alone, even where the same data has served others' hosts.
   if (localMode(env) && !(testMode(env) && row.owner_id.startsWith('test:'))) {
     const owner = localOwnerQuery(env);
     const found = await env.DB.query<{ id: string }>(owner.sql).bind(...owner.params).first();
@@ -55,11 +46,6 @@ export async function authenticateConnectorToken(env: Env, token: string, connec
   return row;
 }
 
-/**
- * Authenticates a `/api/connectors/socket` upgrade request before the HTTP server hands the
- * socket to the connector hub. Throws the same HTTPExceptions as the other connector routes;
- * the caller turns them into a plain HTTP response on the raw socket.
- */
 export async function authenticateConnectorSocket(env: Env, headers: Headers, url: URL): Promise<{ connectorId: string; credentialHash: string }> {
   requireConnectorTLS(env, url);
   const origin = headers.get('origin');
@@ -99,10 +85,6 @@ export async function requireConnectorSession(env: Env, connectorId: string, row
   if (!allowed) fail(403, 'connector_unavailable', 'The connector or its workspace sharing is no longer authorized.');
 }
 
-/**
- * A runner callback about `row` comes from the connector serving it over its current connection, or, for sessions
- * without a connector, through the shared-secret internal route.
- */
 export async function requireCallbackScope(c: AppContext, row: SessionRow, connectorId: string | null): Promise<void> {
   if (connectorId) {
     const connector = await authenticateConnector(c);

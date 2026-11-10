@@ -8,7 +8,6 @@ import { join } from "node:path";
 // @ts-expect-error: a plain .mjs build script
 import { BEFORE_BOOTSTRAP, EARLY_MAP, LATE_MAP, fixWebSite } from "../scripts/nsh-web-fixes.mjs";
 
-// Native Shell 0.4's site, reduced to what the fix reads: the runtime around its two spots, its loader and the page.
 async function site(t: test.TestContext, runtime = `async run(e){try{${BEFORE_BOOTSTRAP}let O=1;${LATE_MAP}}catch{}}`) {
   const root = await mkdtemp(join(tmpdir(), "nsh-site-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -56,7 +55,6 @@ test("the early map maps the entry, chunks and every native module, whose export
   assert.equal(map["https://pikibun.test/chunk.js"], "https://pikibun.test/chunk.0123456789.js");
   assert.deepEqual(urls, [map["nsh"], map["nsh:rt"]]);
 
-  // The `nsh` module, run as the browser would once the bootstrap has set up the realm.
   const source = await resolveObjectURL(map["nsh"])!.text();
   const watchers: (() => void)[] = [];
   const nsh: Record<string, unknown> = { signal: 1 };

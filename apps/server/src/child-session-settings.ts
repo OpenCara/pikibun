@@ -5,16 +5,8 @@ import type { AppEnv } from './types.js';
 import { auditStatement, requireMember } from './authority/index.js';
 import { fail, identifier, jsonObject, now } from './http.js';
 
-/**
- * The workspace's settings for sessions its agents start with the sessions tool's create (cross-session.ts): whether
- * an agent may choose the new session's model and reasoning level to suit its sub-task (`childModels`, on by default),
- * or every such session runs on its parent's current model and reasoning level. Its owners and admins decide.
- */
-
-/** Owner/admin authority, re-checked inside the write, on insert and on update alike (binds workspace id, user id). */
 const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
 
-/** The workspace's settings for sessions its agents start; the defaults until an owner or admin saves some. */
 export async function workspaceChildSessionSettings(db: Database, workspaceId: string): Promise<ChildSessionSettings> {
   const row = await db.query<{ child_models: number }>('SELECT child_models FROM workspace_child_session_settings WHERE workspace_id = ?')
     .bind(workspaceId).first();
@@ -22,7 +14,6 @@ export async function workspaceChildSessionSettings(db: Database, workspaceId: s
 }
 
 export function registerChildSessionSettings(app: Hono<AppEnv>): void {
-  // Every member may see what their sessions' agents may choose; owners and admins change it.
   app.get('/api/workspaces/:id/child-sessions', async c => {
     const workspaceId = identifier(c.req.param('id'));
     await requireMember(c.env, workspaceId, c.get('auth').userId);

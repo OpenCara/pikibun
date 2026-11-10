@@ -5,20 +5,17 @@ import { validHostOperation } from "../../../packages/shared/src/host-operations
 import { MAX_OUTPUT_BYTES, SandboxProcessError } from "./process-output.js";
 import { bashPath, hostBashArgs, killTree, startHostBash, windows, windowsSystemEnvironment } from "./platform.js";
 
-/** No namespace or resource boundary. Callers must verify the host owner's exact approval immediately before launch. */
 export async function runHostShell(operation: HostCommandOperation, options: {
   worktree: string; git: string; gitConfig: string; gitName: string; gitEmail: string; signal: AbortSignal;
 }): Promise<string> {
   if (!validHostOperation(operation) || operation.kind !== "host.bash") throw new Error("Invalid host command");
   options.signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    // Use host tools and the host home (SDKs/caches), but never inherit the connector's tokens or provider environment.
     const bash = bashPath();
     if (!bash) throw new Error(windows ? "Host commands need Git for Windows' bash.exe" : "Host commands need /bin/bash");
     const child = spawn(bash, hostBashArgs(operation.command), {
       cwd: options.worktree, detached: !windows, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       env: {
-        // Windows needs its system variables to start anything; bash finds its own tools from Git's install.
         ...(windows ? windowsSystemEnvironment() : {}),
         PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME: homedir(), TMPDIR: tmpdir(),
         LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TERM: "dumb", PWD: options.worktree,
@@ -35,7 +32,6 @@ export async function runHostShell(operation: HostCommandOperation, options: {
     const stop = (reason: string) => {
       failure ??= reason;
       kill();
-      // A detached descendant may retain the pipes after Bash dies; do not wait for its output forever.
       child.stdout.destroy();
       child.stderr.destroy();
     };
@@ -52,13 +48,11 @@ export async function runHostShell(operation: HostCommandOperation, options: {
     child.stdout.on("data", (chunk: Buffer) => capture(out, chunk));
     child.stderr.on("data", (chunk: Buffer) => capture(err, chunk));
     child.on("error", () => { failure ??= "Cannot start host bash"; });
-    child.stdin.on("error", () => { /* Early exit closes stdin; the exit status is authoritative. */ });
-    // A command cancelled before it starts never gets to bash, which then ends at once.
+    child.stdin.on("error", () => { });
     if (failure) child.stdin.end(); else startHostBash(child, operation.command);
     child.on("close", (code, signal) => {
       clearTimeout(timer);
       options.signal.removeEventListener("abort", abort);
-      // Best effort only: unrestricted commands can deliberately escape a process group.
       kill();
       const stdout = Buffer.concat(out).toString("utf8"), stderr = Buffer.concat(err).toString("utf8");
       if (failure || code !== 0 || signal) reject(new SandboxProcessError(

@@ -13,24 +13,15 @@ import { assertVaultConfigured, encryptToken } from './vault.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 
 const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
-/** Native apps keep their sign-in longer than a browser; a device can be revoked from the web app any time. */
 const NATIVE_SESSION_TTL = 30 * 24 * 60 * 60 * 1000;
 const STATE_TTL = 10 * 60 * 1000;
-/** The app has this long to exchange the code it received at its callback. */
 const NATIVE_CODE_TTL = 2 * 60 * 1000;
 const OPAQUE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const CALLBACK_PATH = '/api/auth/github/callback';
-/** Where the server hands a native sign-in back to the app (the apps register the `pikibun` URL scheme). */
 const NATIVE_CALLBACK = 'pikibun://auth';
-/**
- * Where it hands it back to an app that signs in through a web view of its own (`callback=page`): the client on Native
- * Shell, whose web views navigate only to http and https and which has no URL schemes, watches for this page.
- */
 const NATIVE_PAGE_PATH = '/api/auth/native/done';
 
-/** A native sign-in in progress: the app's PKCE challenge and state, and where the result goes back. */
 interface NativeRequest { challenge: string; state: string; callback: 'scheme' | 'page' }
-/** A PKCE verifier (RFC 7636: 43-128 unreserved characters; the apps use base64url) or an app's opaque state. */
 const VERIFIER = /^[A-Za-z0-9_-]{43,128}$/;
 const APP_STATE = /^[A-Za-z0-9_-]{16,128}$/;
 const PROFILE_FIELDS: Record<string, true> = { displayName: true, gitName: true, gitEmail: true, env: true };
@@ -41,7 +32,6 @@ function cookies(env: Env) {
   return {
     auth: secure ? '__Host-auth' : 'test-auth',
     state: secure ? '__Host-oauth-state' : 'test-oauth-state',
-    /** A local server's claim, from its launcher's sign-in link to GitHub's callback (localOwner). */
     claim: secure ? '__Host-local-claim' : 'local-claim',
     options: { secure, httpOnly: true, sameSite: 'Lax' as const, path: '/' },
   };
@@ -58,10 +48,7 @@ export async function dbResult<T>(operation: Promise<T>): Promise<T> {
 }
 
 export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
-  // A native app sends only its bearer token: a browser cookie never stands in for it, nor a bearer for a browser.
-  // Other Authorization schemes (e.g. a reverse proxy's Basic auth) leave the browser's cookie in charge.
   const authorization = c.req.header('authorization');
-  // The scheme is case-insensitive, and one or more spaces separate it from the token (RFC 9110).
   const bearer = authorization === undefined ? undefined : /^Bearer +(.*)$/i.exec(authorization)?.[1];
   const client = bearer === undefined ? 'browser' : 'native';
   const token = bearer ?? getCookie(c, cookies(c.env).auth);
@@ -76,15 +63,11 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
       (session.auth_kind === 'test' && (!testMode(c.env) || !session.user_id.startsWith('test:'))) ||
       (session.auth_kind === 'github' && session.user_id.startsWith('test:')) ||
       (session.auth_kind !== 'password' && session.user_id.startsWith('password:')) ||
-      // Turning PASSWORD_AUTH off ends password sign-ins at once, not when they expire: a password account's, and a
-      // GitHub account's that signed in with its username and password.
       (session.auth_kind === 'password' && (!passwordAuthEnabled(c.env) || !session.user_id.startsWith('password:'))) ||
       (session.method !== null && (session.method !== 'password' || !passwordAuthEnabled(c.env)))) {
     if (client === 'browser') expireCookie(c, 'auth');
     fail(401, 'unauthorized', 'Authentication is required.');
   }
-  // A local server admits its owner alone, even where the same data has served others (pikibun serve --share): their
-  // sign-ins from then stay refused until it is shared again. Test sign-ins (test mode only) are development's own.
   if (localMode(c.env) && session.auth_kind !== 'test' && (await localOwner(c.env))?.id !== session.user_id) {
     if (client === 'browser') expireCookie(c, 'auth');
     fail(401, 'unauthorized', 'Authentication is required.');
@@ -105,13 +88,11 @@ function requireTestBearer(c: AppContext): void {
 export const csrfGuard: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
     requireOrigin(c);
-    // Only this public endpoint authenticates independently of ambient cookies.
     if (c.req.method === 'POST' && c.req.path === '/api/auth/test') {
       requireTestBearer(c);
     } else {
       const auth: AuthIdentity | undefined = c.get('auth');
       if (!auth) fail(401, 'unauthorized', 'Authentication is required.');
-      // A bearer token is never sent by the browser on its own, so it needs no CSRF token.
       if (auth.client === 'browser') {
         const token = c.req.header('x-csrf-token');
         if (!token || !OPAQUE_TOKEN.test(token) || !constantTimeEqual(token, auth.csrfToken)) {
@@ -162,15 +143,10 @@ async function currentUser(c: AppContext): Promise<UserRow> {
   return user;
 }
 
-/**
- * Whether an account must choose its username before using the app: a GitHub account without one. A local server's
- * only account is its owner's, which nobody else needs to name and which can't sign in with a password there.
- */
 export function usernameRequired(env: Env, user: UserRow): boolean {
   return user.auth_kind === 'github' && !user.username && !localMode(env);
 }
 
-/** The signed-in user's own profile, which also says whether they administer this server. */
 export function ownProfile(env: Env, user: UserRow) {
   return { ...userProfile(user), ...(isInstanceAdmin(env, user.id) ? { instanceAdmin: true as const } : {}),
     ...(user.auth_kind === 'password' ? { passwordSignIn: true as const } : {}),
@@ -178,10 +154,6 @@ export function ownProfile(env: Env, user: UserRow) {
     ...(usernameRequired(env, user) ? { usernameRequired: true as const } : {}) };
 }
 
-/**
- * A new sign-in. Native sessions are bearer tokens listed as devices under the app's `deviceName`. `password` is a sign-in
- * with a username and password, whichever kind of account it is: it ends when PASSWORD_AUTH is turned off.
- */
 export async function newSession(env: Env, userId: string, kind: 'github' | 'test' | 'password', native?: { deviceName: string | null }) {
   const issuedAt = Date.now();
   let expiresAt = issuedAt + (native ? NATIVE_SESSION_TTL : SESSION_TTL);
@@ -198,9 +170,7 @@ export async function newSession(env: Env, userId: string, kind: 'github' | 'tes
     native ? 'native' : 'browser', native ? id() : null, native?.deviceName ?? null, kind === 'password' ? 'password' : null];
   return {
     token, expiresAt,
-    // `sql` and `values` let a caller insert it inside its own transaction.
     sql, values, statement: env.DB.query(sql).bind(...values),
-    /** The insert, made only while `condition` (SQL, with `conditionValues`) holds as it runs. */
     statementWhere: (condition: string, ...conditionValues: SqlValue[]) =>
       env.DB.query(`INSERT INTO auth_sessions ${columns} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${condition}`).bind(...values, ...conditionValues),
   };
@@ -215,7 +185,6 @@ export function sessionCookie(c: AppContext, session: { token: string; expiresAt
 }
 
 interface GitHubConfig { clientId: string; clientSecret: string; redirectUri: string }
-/** A user GitHub just signed in, and the statement that stores their GitHub token with their new sign-in. */
 interface GitHubSignIn { user: UserRow; tokenStatement: Query<Record<string, SqlValue>> }
 
 function githubConfig(env: Env): GitHubConfig {
@@ -228,7 +197,6 @@ function githubConfig(env: Env): GitHubConfig {
   return { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET, redirectUri: origin + CALLBACK_PATH };
 }
 
-/** One bounded GitHub JSON exchange that never follows redirects. Non-2xx answers carry no body; transport, size and JSON failures throw. */
 async function githubRequest(url: string, init: RequestInit): Promise<{ status: number; body: unknown }> {
   const response = await fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(15_000) });
   if (!response.ok || !response.body) {
@@ -254,7 +222,6 @@ async function githubRequest(url: string, init: RequestInit): Promise<{ status: 
   return { status: response.status, body: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown };
 }
 
-// Upstream error bodies are never exposed.
 async function githubJson(url: string, init: RequestInit): Promise<unknown> {
   try {
     const result = await githubRequest(url, init);
@@ -265,15 +232,9 @@ async function githubJson(url: string, init: RequestInit): Promise<unknown> {
   }
 }
 
-/**
- * Resets a GitHub sign-in token through Pikibun's OAuth app: the token stops working at once, and the replacement GitHub
- * issues with the same scopes takes its place in the vault while the vault still holds it (`ciphertext`), so the owner
- * stays connected. Returns false only when the reset could not be completed and should be retried.
- */
 export async function resetGitHubToken(env: Env, userId: string, token: string, ciphertext: string): Promise<boolean> {
   const { GITHUB_CLIENT_ID: clientId, GITHUB_CLIENT_SECRET: clientSecret } = env;
   if (!clientId || !clientSecret) return false;
-  // The OAuth app API authenticates as the app and names the user's token in the body.
   const request = (method: 'PATCH' | 'DELETE', accessToken: string) => githubRequest(`https://api.github.com/applications/${encodeURIComponent(clientId)}/token`, {
     method, body: JSON.stringify({ access_token: accessToken }),
     headers: { Accept: 'application/vnd.github+json', Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`, 'Content-Type': 'application/json',
@@ -282,7 +243,6 @@ export async function resetGitHubToken(env: Env, userId: string, token: string, 
   let replacement: string;
   try {
     const reset = await request('PATCH', token);
-    // A token GitHub no longer knows was reset or revoked already.
     if (reset.status === 404) return true;
     const issued = record(reset.body) ? reset.body.token : undefined;
     if (reset.status !== 200 || typeof issued !== 'string' || !issued || issued.length > 16_384 || /[^\x21-\x7e]/.test(issued)) return false;
@@ -292,16 +252,10 @@ export async function resetGitHubToken(env: Env, userId: string, token: string, 
   }
   const stored = await env.DB.query('UPDATE github_tokens SET ciphertext = ?, updated_at = ? WHERE user_id = ? AND ciphertext = ? RETURNING user_id')
     .bind(await encryptToken(env, userId, replacement), now(), userId, ciphertext).first();
-  // The owner signed in again meanwhile, so the vault holds a newer token and the replacement is not needed.
   if (!stored) await request('DELETE', replacement).catch(() => undefined);
   return true;
 }
 
-/**
- * Revokes a GitHub sign-in token through Pikibun's OAuth app, once the owner disconnected GitHub and the vault no longer
- * holds it, so no copy of it (a host's, for a push) keeps working. Only that token: the owner's other authorizations of
- * the app stay. Best effort; false when GitHub could not be asked.
- */
 export async function revokeGitHubToken(env: Env, token: string): Promise<boolean> {
   const { GITHUB_CLIENT_ID: clientId, GITHUB_CLIENT_SECRET: clientSecret } = env;
   if (!clientId || !clientSecret) return false;
@@ -311,7 +265,6 @@ export async function revokeGitHubToken(env: Env, token: string): Promise<boolea
       headers: { Accept: 'application/vnd.github+json', Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`, 'Content-Type': 'application/json',
         'User-Agent': 'pikibun', 'X-GitHub-Api-Version': '2022-11-28' },
     });
-    // 404: GitHub no longer knows the token, as when a reset or revocation already ended it.
     return revoked.status === 204 || revoked.status === 404;
   } catch {
     return false;
@@ -322,15 +275,10 @@ function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Starts GitHub's OAuth. A native app's sign-in carries its PKCE challenge and state through to the callback. */
 async function githubStart(c: AppContext, native?: NativeRequest) {
   return c.redirect(await githubAuthorization(c, native));
 }
 
-/**
- * GitHub's authorization URL for a new sign-in, whose state (saved here and in a cookie) carries a native app's PKCE
- * challenge, or the hash of the invite link a browser sign-in started from (githubInviteStart).
- */
 async function githubAuthorization(c: AppContext, native?: NativeRequest, inviteTokenHash?: string): Promise<string> {
   requireOrigin(c);
   await assertVaultConfigured(c.env);
@@ -353,11 +301,6 @@ async function githubAuthorization(c: AppContext, native?: NativeRequest, invite
   return authorization.toString();
 }
 
-/**
- * A browser's GitHub sign-in from a workspace's invite link: the token comes in the body, never a URL, and only its hash
- * is kept with the sign-in, so a new account can be created where SIGNUP=invite and asks to join that workspace. The
- * app then sends the browser to the URL it answers with.
- */
 async function githubInviteStart(c: AppContext) {
   requireOrigin(c);
   const body = await jsonObject(c, 1024);
@@ -366,21 +309,11 @@ async function githubInviteStart(c: AppContext) {
   return c.json({ url: await githubAuthorization(c, undefined, await sha256(body.inviteToken as string)) });
 }
 
-/**
- * A new account refused (githubSignup): a browser goes back to the sign-in page, which says why, and an app to its
- * callback with the code.
- */
 class SignupRefusal extends Error {
   constructor(readonly code: 'signup_closed' | 'invite_required' | 'too_many_pending', message: string) { super(message); }
 }
-/** The invite link's queue filled, or the link went, while a new account was being created. */
 class JoinRequestRefused extends Error {}
 
-/**
- * Whether GitHub's `githubId` may sign in: an account that exists always may; a new one only as SIGNUP allows, or when
- * ADMIN_USER_IDS lists it, so a server's administrators can always set it up. Returns the invite link's workspace a new
- * account asks to join, or null. Checked before GitHub's token is stored.
- */
 async function githubSignup(c: AppContext, githubId: string, inviteTokenHash: string | null, native: boolean): Promise<{ workspaceId: string; tokenHash: string } | null> {
   if (localMode(c.env)) return null;
   if (await dbResult(c.env.DB.query('SELECT 1 FROM users WHERE github_id = ?').bind(githubId).first())) return null;
@@ -398,12 +331,6 @@ async function githubSignup(c: AppContext, githubId: string, inviteTokenHash: st
   return invite && inviteTokenHash ? { workspaceId: invite.workspace_id, tokenHash: inviteTokenHash } : null;
 }
 
-/**
- * A native app's sign-in, opened in the system's authentication browser: `challenge` is base64url(SHA-256) of the
- * app's PKCE verifier and `state` the app's own nonce, both returned to `pikibun://auth` after GitHub, or with
- * `callback=page` to this server's NATIVE_PAGE_PATH, for an app signing in through a web view of its own. Either way
- * the code is worth nothing without the verifier only the app holds, and works once, for two minutes.
- */
 function nativeStart(c: AppContext) {
   const challenges = c.req.queries('challenge');
   const states = c.req.queries('state');
@@ -420,23 +347,17 @@ function nativeCallback(c: AppContext, native: NativeRequest, params: Record<str
   return native.callback === 'page' ? `${appOrigin(c.env)}${NATIVE_PAGE_PATH}?${query}` : `${NATIVE_CALLBACK}?${query}`;
 }
 
-/** The app's authentication browser closes on its callback, so the app shows a failure, not a JSON page. */
 async function nativeFailure(c: AppContext, error: unknown, native: NativeRequest): Promise<Response> {
   if (!(error instanceof HTTPException)) throw error;
   const body = await error.getResponse().json().catch(() => null) as { code?: unknown } | null;
   return c.redirect(nativeCallback(c, native, { error: typeof body?.code === 'string' ? body.code : 'sign_in_failed' }));
 }
 
-/**
- * The page a web-view sign-in ends on (`callback=page`): the app reads the code from its address and closes the web
- * view, so this is only what shows meanwhile. It repeats nothing of its address.
- */
 function nativeDone(c: AppContext) {
   return c.html('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pikibun</title>'
     + '<p style="font:16px system-ui,sans-serif;text-align:center;margin-top:30vh">You can return to Pikibun.</p>');
 }
 
-/** Exchanges GitHub's code, then creates or updates the user it names; the token statement stores their GitHub token. */
 async function githubUser(c: AppContext, config: GitHubConfig, code: string, verifier: string, inviteTokenHash: string | null = null, native = false): Promise<GitHubSignIn> {
   const exchange = await githubJson('https://github.com/login/oauth/access_token', {
     method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -464,12 +385,10 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
   const displayName = typeof identity.name === 'string' && identity.name.trim() && identity.name.length <= 200 &&
     !/[\u0000-\u001f\u007f]/.test(identity.name) ? identity.name : identity.login;
   const githubId = String(identity.id);
-  // Narrowed above; the statement below is built in a closure, which doesn't keep the narrowing.
   const verifiedEmail: string = email;
   const login: string = identity.login;
   if (localMode(c.env)) await admitLocalOwner(c, githubId);
   const invited = await githubSignup(c, githubId, inviteTokenHash, native);
-  // Identity comes exclusively from GitHub, never the current cookie (especially test cookies).
   const upsert = (db: Pick<Database, 'query'>) => db.query<UserRow>(`INSERT INTO users
     (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
     VALUES (?, ?, ?, ?, ?, ?, '{}', 'github', ?)
@@ -480,8 +399,6 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
   if (!invited) {
     user = await dbResult(upsert(c.env.DB).first());
   } else {
-    // A new account through an invite link exists only with its request to join: a full queue, or the link turned off
-    // meanwhile, creates neither.
     try {
       user = await c.env.DB.transaction(async tx => {
         const created = await upsert(tx).first();
@@ -501,7 +418,6 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
     fail(409, 'identity_conflict', 'GitHub identity cannot be used for this account.');
   }
   if (localMode(c.env)) await settleLocalClaim(c.env, user.id);
-  // Refused before the new token is stored, so a suspended account keeps none it didn't already have.
   if (user.suspended_at) fail(403, 'account_suspended', SUSPENDED);
   const ciphertext = await encryptToken(c.env, user.id, exchange.access_token);
   return { user, tokenStatement: c.env.DB.query(`INSERT INTO github_tokens (user_id, ciphertext, updated_at) VALUES (?, ?, ?)
@@ -509,20 +425,11 @@ async function githubUser(c: AppContext, config: GitHubConfig, code: string, ver
     .bind(user.id, ciphertext, now()) };
 }
 
-/**
- * The GitHub account that claimed this local server, or null while nobody has: its first GitHub user, or the one
- * LOCAL_OWNER_ID pins once the same data has served others.
- */
 export async function localOwner(env: Env): Promise<{ id: string; github_id: string } | null> {
   const owner = localOwnerQuery(env);
   return await dbResult(env.DB.query<{ id: string; github_id: string }>(owner.sql).bind(...owner.params).first()) ?? null;
 }
 
-/**
- * A local server admits one GitHub account. Its owner signs in as on any server; before anyone has, only a sign-in started
- * from the launcher's link (localClaim), which carries the claim secret, may claim it. Checked before GitHub's token is
- * stored, so nobody else's token is ever kept.
- */
 async function admitLocalOwner(c: AppContext, githubId: string): Promise<void> {
   const owner = await localOwner(c.env);
   if (owner) {
@@ -535,11 +442,6 @@ async function admitLocalOwner(c: AppContext, githubId: string): Promise<void> {
   }
 }
 
-/**
- * Two claims at once (both holding the claim secret) could each pass admitLocalOwner before either user exists: once
- * this sign-in's user is written, only the server's owner, its first GitHub user, goes on. A later one is removed again,
- * before any token of its own is stored.
- */
 async function settleLocalClaim(env: Env, userId: string): Promise<void> {
   const owner = await localOwner(env);
   if (owner?.id === userId) return;
@@ -549,10 +451,6 @@ async function settleLocalClaim(env: Env, userId: string): Promise<void> {
   fail(403, 'local_server_owner_only', 'This Pikibun runs on its owner\'s computer, and only the GitHub account that set it up can sign in.');
 }
 
-/**
- * The launcher's sign-in link on a local server: `?token=` is its claim secret. It goes to GitHub like "Continue with
- * GitHub", carrying the claim in a cookie to the callback, where an unclaimed server takes the account as its owner.
- */
 async function localClaim(c: AppContext) {
   if (!localMode(c.env)) fail(404, 'not_found', 'Not found.');
   const tokens = c.req.queries('token');
@@ -573,7 +471,6 @@ async function githubCallback(c: AppContext) {
       !constantTimeEqual(state, cookieState)) {
     fail(400, 'invalid_oauth_state', 'Invalid or expired OAuth state.');
   }
-  // DELETE RETURNING makes concurrent callbacks and replay fail before code exchange.
   const saved = await dbResult(c.env.DB.query<{ verifier: string; expires_at: number; native_challenge: string | null; native_state: string | null; native_callback: string | null; invite_token_hash: string | null }>(
     'DELETE FROM oauth_states WHERE state_hash = ? RETURNING verifier, expires_at, native_challenge, native_state, native_callback, invite_token_hash')
     .bind(await sha256(state)).first());
@@ -621,10 +518,6 @@ async function githubCallback(c: AppContext) {
   return c.redirect(appOrigin(c.env) + '/');
 }
 
-/**
- * The app exchanges the code from its callback, with the PKCE verifier only it holds, for a bearer session. A code
- * works once, also when the verifier is wrong, and only for two minutes.
- */
 async function nativeToken(c: AppContext) {
   const body = await jsonObject(c, 4096);
   if (Object.keys(body).some(key => !['code', 'verifier', 'deviceName'].includes(key))) fail(400, 'invalid_input', 'Only code, verifier and deviceName are accepted.');
@@ -650,9 +543,7 @@ async function testLogin(c: AppContext) {
   requireTestBearer(c);
   const body = await jsonObject(c, 131_072);
   const { githubLogin: requestedGithubLogin, client, deviceName, ...profileBody } = body;
-  // Development of the native apps: a test-mode bearer session instead of the cookie.
   if (client !== undefined && client !== 'browser' && client !== 'native') fail(400, 'invalid_input', 'Invalid test client.');
-  // An app with no name for its device may send null or leave it out.
   if (client !== 'native' && deviceName !== undefined && deviceName !== null) fail(400, 'invalid_input', 'Only native test sessions have a device name.');
   const native = client === 'native' ? { deviceName: deviceName === undefined || deviceName === null ? null : safeText(deviceName, 'deviceName', 100) } : undefined;
   const profile = profileInput(profileBody, true);
@@ -671,12 +562,10 @@ async function testLogin(c: AppContext) {
     fail(409, 'identity_conflict', 'Test identity cannot be used for this account.');
   }
   if (existing?.suspended_at) fail(403, 'account_suspended', SUSPENDED);
-  // Omitted fields preserve an existing identity's profile; names and emails never select an identity.
   const displayName = profile.displayName ?? existing?.display_name ?? stableId;
   const gitName = profile.gitName ?? existing?.git_name ?? displayName;
   const gitEmail = profile.gitEmail ?? existing?.git_email ?? 'test@example.test';
   const environment = profile.env ? JSON.stringify(profile.env) : existing?.env_json ?? '{}';
-  // Test-only display metadata is never a GitHub identity or evidence of a connection.
   const githubLogin = requestedGithubLogin ?? existing?.github_login ?? null;
   const session = await newSession(c.env, userId, 'test', native);
   await dbResult(c.env.DB.batch([
@@ -699,7 +588,6 @@ async function testLogin(c: AppContext) {
   return c.json({ user: userProfile(user) });
 }
 
-// Register before a parent's /api/* authenticate + csrfGuard stack. These routes own their guards.
 export function registerAuth(app: Hono<AppEnv>): void {
   app.get('/api/auth/github', privateResponse, c => githubStart(c));
   app.post('/api/auth/github/start', privateResponse, githubInviteStart);
@@ -729,7 +617,6 @@ export function registerAuth(app: Hono<AppEnv>): void {
     if (c.get('auth').client === 'browser') expireCookie(c, 'auth');
     return c.json({ ok: true });
   });
-  // The native apps signed in as this user, so a lost device can be cut off from the web app.
   app.get('/api/me/devices', privateResponse, authenticate, async (c) => {
     const auth = c.get('auth');
     const rows = await dbResult(c.env.DB.query<{ device_id: string; device_name: string | null; created_at: string; expires_at: number; token_hash: string }>(

@@ -1,11 +1,6 @@
 import { Canvas, Path2D, type ViewStyle } from "nsh";
 import { palette } from "./theme";
 
-/**
- * The app's icons: 24×24 outlines in Lucide's style (lucide.dev, ISC license), drawn natively with `Canvas` so they are
- * crisp at any size and take the theme's colors. NSH has no icon font; emoji and text symbols looked different on
- * every platform. A circle is written as two arcs (`M cx+r cy a r r 0 1 1 -2r 0 a r r 0 1 1 2r 0`).
- */
 const circle = (cx: number, cy: number, r: number) => `M${cx + r} ${cy}a${r} ${r} 0 1 1 ${-2 * r} 0a${r} ${r} 0 1 1 ${2 * r} 0`;
 const rect = (x: number, y: number, w: number, h: number, r: number) =>
   `M${x + r} ${y}h${w - 2 * r}a${r} ${r} 0 0 1 ${r} ${r}v${h - 2 * r}a${r} ${r} 0 0 1 ${-r} ${r}h${-(w - 2 * r)}a${r} ${r} 0 0 1 ${-r} ${-r}v${-(h - 2 * r)}a${r} ${r} 0 0 1 ${r} ${-r}z`;
@@ -75,7 +70,6 @@ const outlines = {
   server: `${rect(2, 2, 20, 8, 2)}${rect(2, 14, 20, 8, 2)}M6 6h.01M6 18h.01`,
 } as const;
 
-/** Icons drawn filled rather than outlined. */
 const fills = {
   stop: rect(5, 5, 14, 14, 3),
   dot: circle(12, 12, 5),
@@ -93,7 +87,6 @@ function path(name: IconName): Path2D {
   return found;
 }
 
-/** An icon, `size` points square, in `color` (the muted text color by default). */
 export function Icon(props: { name: IconName; size?: number; color?: string; strokeWidth?: number; style?: ViewStyle }) {
   const size = () => props.size ?? 16;
   return (

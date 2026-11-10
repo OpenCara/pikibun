@@ -4,32 +4,23 @@ import { translateToPostgres } from './sql.js';
 import { ConstraintError, InstanceLockedError, type Database, type ExecResult, type InstanceLock, type Query, type SqlValue, type Transaction } from './types.js';
 
 const { Client, Pool, types } = pg;
-// SQLite INTEGER columns are bigint in Postgres; the application reads them as JS numbers (all values are < 2^53).
 types.setTypeParser(types.builtins.INT8, Number);
 
-const MIGRATION_LOCK = 0x70697374; // 'pist'
+const MIGRATION_LOCK = 0x70697374;
 const INSTANCE_LOCK = 0x70696b69;
 
-/**
- * Pistead became Pikibun: 0001_schema.sql creates the trigger function as pikibun_raise(), but a database migrated before
- * the rename holds it as pistead_raise(), and its pending migrations (0033 and later, for one that skipped releases) call
- * the new name. A migration file can't run ahead of files already applied, so migrate() renames it first, every time: a
- * no-op once renamed, and on databases created since. Triggers keep working, since they reference the function itself.
- */
 const RENAME_RAISE_FUNCTION = `DO $$ BEGIN
   IF to_regprocedure('pistead_raise()') IS NOT NULL AND to_regprocedure('pikibun_raise()') IS NULL THEN
     ALTER FUNCTION pistead_raise() RENAME TO pikibun_raise;
   END IF;
 END $$`;
 
-/** Something that runs `$n` statements: the pool outside transactions, a checked-out client inside one. */
 interface Executor {
   query(config: { text: string; values: unknown[] }): Promise<pg.QueryResult>;
 }
 
 interface Session {
   executor: Executor;
-  /** Row count of the previous INSERT/UPDATE/DELETE in this transaction, what SQLite's `changes()` would return. */
   changes: number;
 }
 
@@ -102,7 +93,6 @@ export class PostgresDatabase implements Database {
     });
     for (const file of files) {
       await this.withClient(async ({ executor }) => {
-        // Serialize concurrent starters; re-check once the lock is held.
         await executor.query({ text: 'SELECT pg_advisory_xact_lock($1)', values: [MIGRATION_LOCK] });
         const applied = await executor.query({ text: 'SELECT 1 FROM schema_migrations WHERE name = $1', values: [file.name] });
         if (applied.rowCount) return;
@@ -131,7 +121,6 @@ export class PostgresDatabase implements Database {
     await this.pool.end();
   }
 
-  /** BEGIN … COMMIT on a dedicated client; ROLLBACK and rethrow (mapped) on any failure. */
   private async withClient<T>(work: (session: Session) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     let broken = false;

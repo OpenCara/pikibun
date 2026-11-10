@@ -4,7 +4,6 @@ import { boundOutput, excerpt, fitsModel, KEPT_OUTPUTS, MODEL_OUTPUT, outputsToP
 
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
 const lines = (text: string) => text.split('\n').length;
-/** A test run's log: many passing lines, then the failure at its end. */
 const log = (count: number) => `${Array.from({ length: count }, (_, index) => `ok ${index} - a passing test with some words in it`).join('\n')}\nnot ok ${count} - the failure\nFAILED: 1 test`;
 
 test('an output that fits reaches the model as it is, saved nowhere', async () => {

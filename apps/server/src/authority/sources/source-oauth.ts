@@ -9,26 +9,16 @@ import { fail, id, now } from '../../http.js';
 import { encryptToken } from '../vault.js';
 import { accountRejected, clean, json, rateLimited, upstream } from './document-http.js';
 
-/**
- * Connecting a document source by signing in to its provider (OAuth 2.0 authorization code, with PKCE where the
- * provider takes it). The operator registers one app per provider (GOOGLE_CLIENT_ID, NOTION_CLIENT_ID,
- * DROPBOX_CLIENT_ID, MICROSOFT_CLIENT_ID, TENCENT_DOCS_CLIENT_ID and their secrets) with the redirect URI
- * APP_ORIGIN/api/source-accounts/<provider>/oauth/callback. Pikibun keeps the member's tokens encrypted, refreshes them
- * on the control plane, and hands adapters only a current access token; none of it reaches a host.
- */
 const STATE_TTL = 10 * 60 * 1000;
 const STATE = /^[A-Za-z0-9_-]{43}$/;
 
 type Json = Record<string, unknown>;
 
-/** What a member's OAuth connection stores (encrypted). */
 export interface OAuthSecret {
   mode: 'oauth';
   accessToken: string;
   refreshToken?: string;
-  /** Milliseconds since the epoch; absent where the provider's tokens don't expire (Notion). */
   expiresAt?: number;
-  /** Tencent Docs' user id, which its API wants with every call. */
   openId?: string;
 }
 
@@ -36,12 +26,9 @@ interface Provider {
   clientId: (env: Env) => string | undefined;
   clientSecret: (env: Env) => string | undefined;
   authorize: (env: Env) => string;
-  /** Extra authorization parameters (scopes, offline access). */
   params: Record<string, string>;
   pkce: boolean;
-  /** Exchanges a code or a refresh token; returns the provider's token JSON. */
   token: (env: Env, grant: Record<string, string>) => Promise<Json>;
-  /** The account's name, as its owner recognizes it. */
   name: (secret: OAuthSecret, tokens: Json) => Promise<string>;
 }
 
@@ -52,7 +39,6 @@ async function tokenAnswer(provider: string, answer: Awaited<ReturnType<typeof u
   return json(provider, answer);
 }
 
-/** A standard token endpoint: a form POST with the app's credentials in the body. */
 function formToken(provider: string, url: (env: Env) => string, clientId: (env: Env) => string | undefined, clientSecret: (env: Env) => string | undefined) {
   return async (env: Env, grant: Record<string, string>) => tokenAnswer(provider, await upstream(provider, url(env), {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
@@ -86,7 +72,6 @@ export const oauthProviders: Record<Exclude<DocumentKind, 'feishu'>, Provider> =
     authorize: () => 'https://api.notion.com/v1/oauth/authorize',
     params: { owner: 'user' },
     pkce: false,
-    // Notion's token endpoint takes JSON with the app's credentials as Basic auth.
     token: async (env, grant) => tokenAnswer('Notion', await upstream('Notion', 'https://api.notion.com/v1/oauth/token', {
       method: 'POST',
       headers: { Authorization: `Basic ${Buffer.from(`${env.NOTION_CLIENT_ID}:${env.NOTION_CLIENT_SECRET}`).toString('base64')}`, 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -121,7 +106,6 @@ export const oauthProviders: Record<Exclude<DocumentKind, 'feishu'>, Provider> =
     authorize: () => 'https://docs.qq.com/oauth/v2/authorize',
     params: { scope: 'all' },
     pkce: false,
-    // Tencent Docs' token endpoint is a GET with everything in the query (verify against its documentation).
     token: async (env, grant) => {
       const query = new URLSearchParams({ ...grant, client_id: env.TENCENT_DOCS_CLIENT_ID!, client_secret: env.TENCENT_DOCS_CLIENT_SECRET! });
       return tokenAnswer('Tencent Docs', await upstream('Tencent Docs', `https://docs.qq.com/oauth/v2/token?${query}`, { headers: { Accept: 'application/json' } }, 64 * 1024));
@@ -136,7 +120,6 @@ export const oauthProviders: Record<Exclude<DocumentKind, 'feishu'>, Provider> =
 export function oauthProvider(kind: DocumentKind): Provider | null {
   return kind === 'feishu' ? null : oauthProviders[kind];
 }
-/** The kinds this server offers sign-in for: those whose app the operator configured. */
 export function configuredOAuth(env: Env): DocumentKind[] {
   return oauthKinds.filter(kind => { const provider = oauthProvider(kind); return Boolean(provider?.clientId(env) && provider.clientSecret(env)); });
 }
@@ -145,7 +128,6 @@ function redirectUri(env: Env, kind: DocumentKind): string {
   return `${env.APP_ORIGIN}/api/source-accounts/${kind}/oauth/callback`;
 }
 
-/** A token response as what Pikibun stores; refreshes keep the refresh token a provider doesn't repeat. */
 export function oauthSecret(tokens: Json, previous?: OAuthSecret): OAuthSecret {
   if (typeof tokens.access_token !== 'string' || !tokens.access_token) fail(502, 'invalid_source_response', 'The provider returned no access token.');
   const lifetime = typeof tokens.expires_in === 'number' ? tokens.expires_in : typeof tokens.expires_in === 'string' ? Number(tokens.expires_in) : NaN;
@@ -155,7 +137,6 @@ export function oauthSecret(tokens: Json, previous?: OAuthSecret): OAuthSecret {
     ...(Number.isFinite(lifetime) && lifetime > 0 ? { expiresAt: Date.now() + lifetime * 1000 } : {}), ...(openId ? { openId } : {}) };
 }
 
-/** A fresh secret from the refresh token, when the access token is (nearly) expired; null when still current. */
 export async function refreshedSecret(env: Env, kind: DocumentKind, secret: OAuthSecret): Promise<OAuthSecret | null> {
   if (!secret.expiresAt || secret.expiresAt > Date.now() + 60_000) return null;
   const provider = oauthProvider(kind);
@@ -168,7 +149,6 @@ function stateCookie(env: Env) {
   return { name: secure ? '__Host-source-oauth' : 'test-source-oauth', options: { secure, httpOnly: true, sameSite: 'Lax' as const, path: '/' } };
 }
 
-/** Back to the profile, with what happened for the page to show. */
 function finish(c: AppContext, kind: string, result: 'connected' | 'error', reason?: string): Response {
   const query = new URLSearchParams({ source_account: kind, result, ...(reason ? { reason } : {}) });
   return c.redirect(`${c.env.APP_ORIGIN}/?${query}#/settings/profile`);
@@ -208,7 +188,6 @@ export function registerSourceOAuth(app: Hono<AppEnv>): void {
     setCookie(c, cookie.name, '', { ...cookie.options, maxAge: 0, expires: new Date(0) });
     const states = c.req.queries('state');
     const state = states?.length === 1 ? states[0]! : '';
-    // The state must be the one this browser was given, for this member and provider, used once, within 10 minutes.
     if (!STATE.test(state) || !cookieState || !STATE.test(cookieState) || !constantTimeEqual(state, cookieState)) return finish(c, kind, 'error', 'invalid_state');
     const saved = await c.env.DB.query<{ verifier: string; expires_at: number; user_id: string; provider: string }>(
       'DELETE FROM source_oauth_states WHERE state_hash = ? RETURNING verifier, expires_at, user_id, provider').bind(await sha256(state)).first();

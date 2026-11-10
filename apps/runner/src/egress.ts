@@ -17,92 +17,44 @@ import { CA_BUNDLE, CA_BUNDLE_VARIABLES } from "./trust-store.js";
 import { ApiAccess, type ApiUpstream } from "./api-access.js";
 import type { InterceptionAuthority } from "./interception-ca.js";
 
-/** Where sandboxed commands reach the proxy: a loopback port the sandbox helper relays to this session's socket. */
 export const EGRESS_PORT = 41080;
-/** The proxy socket's path inside the sandbox. */
 export const EGRESS_SOCKET = "/run/pikibun/egress.sock";
-/** Git remotes are rewritten to this base (`url.<base>.insteadOf`), followed by the host and path of the original URL. */
 export const EGRESS_GIT_BASE = `http://127.0.0.1:${EGRESS_PORT}/git/`;
-/** SSH remotes of these hosts are rewritten too; other hosts' SSH remotes fail, as the sandbox has no SSH. */
 const SSH_HOSTS = ["github.com", "gitlab.com", "bitbucket.org"];
 
 const GRANT_TTL_MS = 60_000;
-/** Each address of a tunnel's host gets this long to accept the connection before the next is tried. */
 const CONNECT_TIMEOUT_MS = 10_000;
-/** A grant the control plane can't refresh stays in use this long, so a brief outage doesn't cut running commands off. */
 const GRANT_STALE_MS = 5 * 60_000;
 const UPLOAD_REQUEST_BYTES = 64 * 1024 * 1024;
-/** git-lfs's batch requests name up to 100 objects by default; this leaves room for whatever else it sends with them. */
 const LFS_BATCH_BYTES = 1024 * 1024;
 const LFS_TYPE = "application/vnd.git-lfs+json";
 const LOG_ENTRIES = 200;
-/** How often a clone waiting for a mirror hears from the proxy while Git reports nothing new: it never sits silent. */
 const MIRROR_HEARTBEAT_MS = 5_000;
-/** At most one progress line per interval to a clone waiting for a mirror, besides each change of phase. */
 const MIRROR_PROGRESS_MS = 1_000;
 
-/**
- * One Git request for the control plane's relay, which adds the credential: the session owner's for reads, the
- * workspace's push identity for a push of the session branch. A push's pack streams. The session may instead make it
- * at the forge itself, with a direct grant from the control plane (git-direct.ts).
- */
 export interface RelayRequest {
   bindingId: string; service: EgressGitService;
   userAgent?: string; gitProtocol?: string; contentType?: string; contentEncoding?: string;
   body?: Uint8Array<ArrayBuffer> | ReadableStream<Uint8Array>;
-  /** A push's one command, as the proxy read it: a direct grant names it, for the control plane's checks and audit. */
   command?: PushCommand;
 }
-/** How the answer reached the proxy, when the host made the request at the forge itself (git-direct.ts). */
 export const TRANSPORT_HEADER = "x-pikibun-transport";
-/** One decision of the proxy. `fetch` was the retired web_fetch tool's, which sessions from before it was retired may still list. */
 export interface EgressEntry { at: string; kind: "git" | "connect" | "http" | "api" | "fetch"; target: string; outcome: "allowed" | "refused"; reason?: string }
-/** How far a mirror's fill is, as a clone waiting for it hears: Git's numbers only (see RepositoryCacheProgress). */
 export interface MirrorProgress { phase: string; percent: number | null; done: number | null; total: number | null; bytes: number }
 export interface EgressOptions {
   socketPath: string;
-  /**
-   * Also listen on a loopback TCP port, for sandboxes that share the host's network instead of having their own (macOS
-   * Seatbelt, native Windows): every request there must carry `token` (see EgressEndpoint), so neither another
-   * session nor another program on the host can use this session's proxy.
-   */
   tcp?: { token: string };
-  /** The session's current grant from the control plane. */
   grant: () => Promise<EgressGrant>;
-  /**
-   * Forwards one Git request to the control plane's relay, or makes it at the forge with a direct grant; refusals throw a
-   * RunnerError with the control plane's (or the forge's) credential-free reason.
-   */
   relay: (request: RelayRequest) => Promise<Response>;
-  /** Overridable for tests: DNS resolution and outbound TCP. */
   lookup?: (host: string) => Promise<{ address: string; family: number }[]>;
   connect?: (port: number, address: string) => Duplex;
-  /**
-   * Makes the host's mirror of a workspace repository ready to borrow from, telling `onProgress` how its fill goes, and
-   * returns where the sandbox sees it; set only where the host keeps a repository cache. The `git` shim asks for it before
-   * a clone, and waits for it.
-   */
   mirror?: (repository: EgressRepository, onProgress: (progress: MirrorProgress) => void) => Promise<string>;
-  /**
-   * The branch this session may push without approval (a clone session's own branch, see sessionBranch); pushes of it are
-   * relayed to the control plane, which pushes with the workspace's push identity. Without it, every push is refused.
-   */
   sessionBranch?: string;
-  /**
-   * Asks the control plane for the session's credential for a credentialed API host (an ApiCredentialGrant, see
-   * api-access.ts). Without it, the proxy answers for no API itself and tunnels them like any other host.
-   */
   apiCredential?: (host: string, access: ApiAccessKind) => Promise<unknown>;
-  /** Overridable for tests: the authority the proxy answers credentialed APIs with, and its requests to them. */
   apiAuthority?: InterceptionAuthority;
   apiUpstream?: ApiUpstream;
 }
 
-/**
- * Environment for sandboxed shell commands: every HTTPS client goes through the proxy, and Git's https remotes (and
- * SSH remotes of the common hosts) go to its Git endpoint, which relays the workspace's repositories with the owner's
- * credential. None of this is a boundary: the sandbox has no other network, so bypassing it only fails.
- */
 export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpoint, caBundle = CA_BUNDLE): Record<string, string> {
   const proxy = endpoint ? endpointUrl(endpoint) : `http://127.0.0.1:${EGRESS_PORT}`;
   const base = `${proxy}/git/`;
@@ -117,29 +69,20 @@ export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpo
     HTTPS_PROXY: proxy, https_proxy: proxy, HTTP_PROXY: proxy, http_proxy: proxy,
     NO_PROXY: "localhost,127.0.0.1,::1", no_proxy: "localhost,127.0.0.1,::1",
     NODE_USE_ENV_PROXY: "1",
-    // The host's trusted certificates, mounted read-only at CA_BUNDLE, for HTTPS through the proxy's tunnels.
     ...Object.fromEntries(CA_BUNDLE_VARIABLES.map(name => [name, caBundle])),
     PIKIBUN_EGRESS_STATUS: `${proxy}/__pikibun/status`,
-    // gh and GitHub's SDKs send this to api.github.com, glab to gitlab.com and az devops to dev.azure.com, where the proxy
-    // puts the session's own credential in its place.
     GH_TOKEN: API_TOKEN_PLACEHOLDER, GITHUB_TOKEN: API_TOKEN_PLACEHOLDER, GITLAB_TOKEN: API_TOKEN_PLACEHOLDER, AZURE_DEVOPS_EXT_PAT: API_TOKEN_PLACEHOLDER,
     ...(sessionBranch ? { PIKIBUN_SESSION_BRANCH: sessionBranch } : {}),
     ...config,
   };
 }
 
-/**
- * Where a sandbox that shares the host's network reaches its session's proxy: a loopback port and the session's token,
- * which clients send as Basic credentials (`pikibun:<token>`), named in the proxy URL so curl, Git, Node and Python
- * send them as they are.
- */
 export interface EgressEndpoint { port: number; token: string }
 export const EGRESS_USER = "pikibun";
 export function endpointUrl(endpoint: EgressEndpoint): string {
   return `http://${EGRESS_USER}:${endpoint.token}@127.0.0.1:${endpoint.port}`;
 }
 
-/** Whether `header` (Authorization or Proxy-Authorization) carries this session's token. */
 export function egressAuthorized(header: string | undefined, token: string): boolean {
   const match = /^Basic\s+([A-Za-z0-9+/=]{1,512})$/i.exec(header ?? "");
   if (!match) return false;
@@ -149,7 +92,6 @@ export function egressAuthorized(header: string | undefined, token: string): boo
 }
 
 let directory: string | undefined;
-/** Unix socket paths are limited to about 100 bytes, so sockets live in one short private directory per process. */
 export function egressSocketPath(sessionId: string, dataDir: string): string {
   directory ??= mkdtempSync(join(tmpdir().length < 40 ? tmpdir() : "/tmp", "pikibun-egress-"));
   return join(directory, `${createHash("sha256").update(`${dataDir}\0${sessionId}`).digest("hex").slice(0, 24)}.sock`);
@@ -162,7 +104,6 @@ for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0",
 for (const [network, prefix] of [["::", 128], ["::1", 128], ["64:ff9b::", 96], ["100::", 64], ["2001:db8::", 32], ["fc00::", 7],
   ["fe80::", 10], ["ff00::", 8]] as const) blocked.addSubnet(network, prefix, "ipv6");
 
-/** Whether an address is on the public internet: never the host itself, its networks, or link-local metadata services. */
 export function publicAddress(address: string): boolean {
   const family = isIP(address);
   if (family === 4) return !blocked.check(address, "ipv4");
@@ -174,18 +115,12 @@ export function publicAddress(address: string): boolean {
 
 const fakeIp = new BlockList();
 fakeIp.addSubnet("198.18.0.0", 15, "ipv4");
-/**
- * Whether an address is in RFC 2544's benchmarking network (198.18.0.0/15), which is never routed on the internet and
- * where the fake-IP DNS of local proxies (Clash, mihomo, sing-box, Surge, a TUN mode) answers for every name they route:
- * the host connects there and the proxy passes the connection on to the name it answered for.
- */
 export function fakeIpAddress(address: string): boolean {
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
   const plain = mapped ? mapped[1]! : address;
   return isIP(plain) === 4 && fakeIp.check(plain, "ipv4");
 }
 
-/** `host[:port]` of a CONNECT request, with a lowercase host and IPv6 brackets removed. */
 function authority(value: string | undefined): { host: string; port: number } | undefined {
   const match = /^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]{1,253}):(\d{1,5})$/.exec(value ?? "");
   if (!match) return undefined;
@@ -194,17 +129,15 @@ function authority(value: string | undefined): { host: string; port: number } | 
   return { host: match[1]!.replace(/^\[|\]$/g, "").toLowerCase(), port };
 }
 
-/** A repository's identity as a Git URL path names it: host/path, decoded, lowercase, without ".git". */
 function repositoryKey(hostAndPath: string): string {
   let value = hostAndPath;
-  try { value = decodeURIComponent(value); } catch { /* compared as written */ }
+  try { value = decodeURIComponent(value); } catch { }
   return value.toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "");
 }
 
-/** A plain Git server's repository as its path names it exactly: the host lowercase, the path as written, ".git" kept. */
 function exactRepositoryKey(hostAndPath: string): string {
   let value = hostAndPath;
-  try { value = decodeURIComponent(value); } catch { /* compared as written */ }
+  try { value = decodeURIComponent(value); } catch { }
   const slash = value.indexOf("/");
   const host = slash < 0 ? value : value.slice(0, slash);
   return `${host.toLowerCase()}${slash < 0 ? "" : value.slice(slash)}`.replace(/\/+$/, "");
@@ -212,11 +145,6 @@ function exactRepositoryKey(hostAndPath: string): string {
 
 const remoteKeyPath = (repository: EgressRepository) => bindingRemote(repository).replace(/^https:\/\//, "");
 
-/**
- * The workspace repository `target` (host/path) names. A forge's paths are case-insensitive and ".git" is optional; a
- * plain Git server's path is exact, so `team/app` and `team/app.git` there are two repositories. For a Git LFS request,
- * git-lfs asks `<remote>.git/info/lfs` of a remote without ".git", which names that remote when no binding is exactly it.
- */
 export function findRepository(repositories: readonly EgressRepository[], target: string, lfs = false): EgressRepository | undefined {
   const exact = exactRepositoryKey(target);
   const servers = repositories.filter(repository => repository.provider === "git");
@@ -227,11 +155,6 @@ export function findRepository(repositories: readonly EgressRepository[], target
   return repositories.find(repository => repository.provider !== "git" && repositoryKey(remoteKeyPath(repository)) === key);
 }
 
-/**
- * A git-lfs request: its endpoint for a remote is `<remote>/info/lfs` (git-lfs adds `.git` first where the remote has
- * none), so the proxy sees the batch API below a rewritten remote, and object downloads where its own batch answers
- * point them. Anything else there (locks, uploads' verify) is `other`.
- */
 function lfsRequest(path: string): { target: string; kind: "batch" | "object" | "other"; oid?: string } | undefined {
   const match = /^(.+)\/info\/lfs((?:\/(?:objects|locks)(?:\/[^/]*)*)?)$/.exec(path);
   if (!match) return undefined;
@@ -246,18 +169,15 @@ function json(value: unknown): Uint8Array<ArrayBuffer> {
   return new Uint8Array(Buffer.from(JSON.stringify(value), "utf8"));
 }
 
-/** How an answer reached the proxy, for its log: " (direct …)" when the host made the request at the forge itself. */
 function transport(response: Response): string {
   const value = response.headers.get(TRANSPORT_HEADER);
   return value && /^direct [a-z-]{1,40}$/.test(value) ? ` (${value})` : "";
 }
 
-/** The status a relay refusal is passed on with: the control plane's own, else a gateway error. */
 function relayStatus(error: unknown): number {
   return error instanceof RunnerError && error.status >= 400 && error.status < 600 ? error.status : 502;
 }
 
-/** The control plane's answer to an `lfs-batch` of `count` objects; anything else is refused. */
 export function parseLfsBatchResult(value: unknown, count: number): LfsBatchResult {
   const objects = (value as { objects?: unknown } | null)?.objects;
   if (!Array.isArray(objects) || objects.length !== count) throw new RunnerError(502, "Invalid Git LFS answer from the control plane");
@@ -275,7 +195,6 @@ export function parseLfsBatchResult(value: unknown, count: number): LfsBatchResu
   };
 }
 
-/** git-lfs shows a JSON error's message to the user. */
 function refuseLfs(response: ServerResponse, status: number, message: string): void {
   if (response.headersSent) { response.destroy(); return; }
   response.writeHead(status, { "Content-Type": LFS_TYPE, "Cache-Control": "no-store", Connection: "close" });
@@ -310,22 +229,10 @@ async function boundedBody(request: IncomingMessage, limit: number): Promise<Uin
 
 function refuse(response: ServerResponse, status: number, message: string): void {
   if (response.headersSent) { response.destroy(); return; }
-  // Git shows a text/plain error body to the user as "remote: …".
   response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", Connection: "close" });
   response.end(`${message}\n`);
 }
 
-/**
- * One session's way out of its sandbox. It listens on a Unix socket that only that session's sandbox can reach, so every
- * request it serves is that session's, and it:
- * - sends Git reads of the workspace's repositories, and pushes of the session branch, through `relay`: to the control
- *   plane, which adds the credential (the session owner's for reads, the workspace's push identity for pushes) and
- *   re-checks the session's authority, or, where the control plane grants it, to the forge directly from this host
- *   (git-direct.ts) with a credential limited as the control plane decides;
- * - opens HTTPS tunnels (CONNECT, port 443) to hosts the workspace's network policy allows, never to private,
- *   loopback or link-local addresses, without looking inside them;
- * - refuses everything else with a reason, and answers `/__pikibun/status` with the policy and recent decisions.
- */
 export class EgressProxy {
   readonly socketPath: string;
   readonly #options: EgressOptions;
@@ -351,13 +258,8 @@ export class EgressProxy {
     });
   }
 
-  /**
-   * A write lease for one approved call of a Pikibun extension's command (see ApiAccess.lease): undefined where the
-   * proxy answers no API itself.
-   */
   apiLease(): { token: string; release(): void } | undefined { return this.#api?.lease(); }
 
-  /** The credentialed API the grant names for `host`, for which the control plane gives this session a credential. */
   #credentialedApi(grant: EgressGrant, host: string): EgressApi | undefined {
     if (!this.#api?.handles(host)) return undefined;
     return grant.apis?.find(api => api.host === host);
@@ -366,7 +268,6 @@ export class EgressProxy {
   async start(): Promise<void> {
     if (this.#server || this.#tcpServer) return;
     const tcp = this.#options.tcp;
-    // A sandbox with its own network reaches the proxy through its socket; one sharing the host's, only through its port.
     if (!tcp) {
       await rm(this.socketPath, { force: true });
       const server = this.#createServer(undefined);
@@ -380,7 +281,6 @@ export class EgressProxy {
       try {
         await new Promise<void>((resolve, reject) => {
           listener.once("error", reject);
-          // An ephemeral port on loopback only; the sandbox is told which (endpoint).
           listener.listen({ host: "127.0.0.1", port: 0 }, () => { listener.off("error", reject); resolve(); });
         });
       } catch (error) {
@@ -392,16 +292,13 @@ export class EgressProxy {
     }
   }
 
-  /** The loopback endpoint of a proxy started with `tcp`, once it listens. */
   get endpoint(): EgressEndpoint | undefined {
     return this.#port !== undefined && this.#options.tcp ? { port: this.#port, token: this.#options.tcp.token } : undefined;
   }
 
-  /** A server for the session's socket (`token` undefined: only its sandbox can reach it) or its loopback port. */
   #createServer(token: string | undefined): Server {
     const server = createServer((request, response) => {
       if (token !== undefined && !egressAuthorized(request.headers.authorization ?? request.headers["proxy-authorization"], token)) {
-        // Absolute-form (proxy) requests ask for proxy credentials; Git asks for the /git/ endpoint's like a forge's.
         const proxied = /^[a-z]+:/i.test(request.url ?? "");
         response.writeHead(proxied ? 407 : 401, { [proxied ? "Proxy-Authenticate" : "WWW-Authenticate"]: 'Basic realm="Pikibun egress"',
           "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", Connection: "close" });
@@ -419,9 +316,7 @@ export class EgressProxy {
       void this.#tunnel(request, socket, head);
     });
     server.on("clientError", (_error, socket) => socket.destroy());
-    // A push's request is its whole pack, which may take longer to send than Node's default allows.
     server.requestTimeout = 60 * 60 * 1000;
-    // Open connections keep the process alive while they last; an idle proxy never does.
     server.unref();
     return server;
   }
@@ -433,8 +328,6 @@ export class EgressProxy {
     this.#tcpServer = undefined;
     this.#port = undefined;
     const tcpClosed = tcp && new Promise<void>(resolve => tcp.close(() => resolve()));
-    // No new requests; a push under way finishes before its connection goes, as the forge may take it and Git must hear
-    // how it went. The relay's own time limit bounds the wait.
     const closed = server && new Promise<void>(resolve => server.close(() => resolve()));
     await Promise.allSettled([...this.#pushes]);
     for (const socket of this.#sockets) socket.destroy();
@@ -443,13 +336,10 @@ export class EgressProxy {
     if (!this.#options.tcp) await rm(this.socketPath, { force: true });
   }
 
-  /** The session's current grant, as the proxy enforces it. */
   grant(): Promise<EgressGrant> { return this.#currentGrant(); }
 
-  /** The most recent decisions, newest last. */
   entries(): EgressEntry[] { return [...this.#log]; }
 
-  /** Records why a Git request the host meant to make at the forge itself went to the relay instead (DirectGit). */
   noteFallback(bindingId: string, reason: string): void {
     const repository = this.#grant?.value.repositories.find(item => item.bindingId === bindingId);
     const target = repository ? repositoryKey(bindingRemote(repository).replace(/^https:\/\//, "")) : bindingId;
@@ -470,8 +360,6 @@ export class EgressProxy {
     }).finally(() => { this.#refresh = undefined; });
     try { return await this.#refresh; }
     catch (error) {
-      // A refusal (the session was archived, the host lost the workspace) ends access at once; only an unreachable
-      // control plane falls back to the last grant.
       const refused = error instanceof RunnerError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status);
       if (refused) this.#grant = undefined;
       else if (cached && Date.now() - cached.at < GRANT_STALE_MS) return cached.value;
@@ -482,12 +370,10 @@ export class EgressProxy {
   async #addresses(host: string): Promise<string[]> {
     if (isIP(host)) return publicAddress(host) ? [host] : [];
     const results = await (this.#options.lookup ?? (name => dnsLookup(name, { all: true, verbatim: true })))(host);
-    // Every address must be public: a name that also points inside the host's networks is refused outright.
     if (!results.length || results.some(result => !publicAddress(result.address))) return [];
     return results.map(result => result.address);
   }
 
-  /** The first of `addresses` that accepts a connection in time; IPv6 first on an IPv4-only host just falls through. */
   async #open(port: number, addresses: string[]): Promise<Duplex> {
     let failure: unknown = new Error("No address");
     for (const address of addresses.slice(0, 8)) {
@@ -509,8 +395,6 @@ export class EgressProxy {
   }
 
   async #tunnel(request: IncomingMessage, client: Duplex, head: Buffer): Promise<void> {
-    // Node hands the socket over without its own error handling: a client that drops while the tunnel is being set up
-    // must not take the runner down.
     client.on("error", () => client.destroy());
     const target = authority(request.url);
     const name = request.url ?? "";
@@ -522,9 +406,6 @@ export class EgressProxy {
       if (!target) return deny(403, "Invalid tunnel target");
       if (target.port !== 443) return deny(403, `Only HTTPS on port 443 is allowed, not port ${target.port}`);
       const grant = await this.#currentGrant();
-      // A credentialed API is answered here, whatever the policy: each request is checked and logged (kind "api"). Also
-      // where the grant gives no credential for it (a pinned session, an older control plane): the sandbox's placeholder
-      // token must never reach the API, and requests go on without one where the policy allows the host.
       if (this.#api?.handles(target.host)) {
         if (client.destroyed) return;
         this.#sockets.add(client);
@@ -553,7 +434,6 @@ export class EgressProxy {
         socket.once("error", cleanup);
         socket.once("close", cleanup);
       }
-      // The client may have left while the connection was being opened.
       if (client.destroyed) return cleanup();
       this.#record({ kind: "connect", target: `${target.host}:${target.port}`, outcome: "allowed" });
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
@@ -570,7 +450,6 @@ export class EgressProxy {
       let url: URL;
       try { url = new URL(request.url ?? "/", "http://127.0.0.1"); }
       catch { return refuse(response, 400, "Invalid request"); }
-      // Absolute-form requests are plain-HTTP proxying, except to the proxy's own address (a client that ignored NO_PROXY).
       const port = this.#port ?? EGRESS_PORT;
       if (/^[a-z]+:/i.test(request.url ?? "") && url.host !== `127.0.0.1:${port}` && url.host !== `localhost:${port}`) {
         this.#record({ kind: "http", target: `${url.protocol}//${url.host}`.slice(0, 300), outcome: "refused", reason: "plain HTTP" });
@@ -609,12 +488,6 @@ export class EgressProxy {
     }, null, 2)}\n`);
   }
 
-  /**
-   * The host's mirror of a workspace repository, for the `git` shim before a clone. One JSON object per line: `progress`
-   * while the mirror fills (Git's numbers only, repeated as a heartbeat while Git reports nothing new), then the mirror's
-   * `path` in the sandbox, or the `error` that kept it from being filled, with `retry` when another attempt may get past
-   * it (a RunnerError with status 503). However long the fill takes, the shim waits; it goes on if the shim stops listening.
-   */
   async #mirror(response: ServerResponse, remote: string): Promise<void> {
     if (!this.#options.mirror) return refuse(response, 404, "This host keeps no repository cache");
     const repository = repositoryForRemote((await this.#currentGrant()).repositories, remote.slice(0, 2048));
@@ -644,7 +517,6 @@ export class EgressProxy {
     }
   }
 
-  /** Whether clones of `remote` should download Git LFS objects: asked by the `git` shim before a clone. */
   async #lfsEnabled(response: ServerResponse, remote: string): Promise<void> {
     const repository = repositoryForRemote((await this.#currentGrant()).repositories, remote.slice(0, 2048));
     response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -658,7 +530,6 @@ export class EgressProxy {
       if (lfs) return this.#lfs(request, response, url, lfs);
       return refuse(response, 404, "Not a Git smart-HTTP request");
     }
-    // https://user@host/... remotes (as Azure DevOps and Bitbucket show them) name the same repository.
     const target = parsed.target.replace(/^[^@/]*@/, "");
     const key = repositoryKey(target);
     const label = key.slice(0, 300);
@@ -674,8 +545,6 @@ export class EgressProxy {
       this.#record({ kind: "git", target: label, outcome: "refused", reason: "push: not a workspace repository" });
       return refuse(response, 403, `${target.slice(0, 300)} is not one of this workspace's repositories; pushes go only to them`);
     }
-    // Any other repository is fetched directly, without credentials, if the network policy allows its host: the client
-    // follows the redirect through its HTTPS proxy, where the tunnel enforces the policy again.
     const host = key.split("/")[0]!;
     if (parsed.service === "info-refs" && hostAllowed(grant.policy, host)) {
       this.#record({ kind: "git", target: label, outcome: "allowed", reason: "not a workspace repository: fetched directly, without credentials" });
@@ -688,10 +557,6 @@ export class EgressProxy {
       : `${target.slice(0, 300)} is not one of this workspace's repositories, and its network policy doesn't allow ${host.slice(0, 253)}`);
   }
 
-  /**
-   * A push of the session branch: its commands are checked here, so a push of anything else is refused before its pack
-   * is sent, and checked again by the control plane. Git's probe before a chunked upload is answered here.
-   */
   async #push(request: IncomingMessage, response: ServerResponse, repository: EgressRepository, service: EgressGitService, label: string): Promise<void> {
     const branch = this.#options.sessionBranch!;
     if (service === "receive-refs") return this.#relay(request, response, repository, service, label);
@@ -704,7 +569,6 @@ export class EgressProxy {
       if (error instanceof PushRequestError) return refuse(response, 400, error.message);
       throw error;
     }
-    // Answers here come once the request is read: Git reads them only after sending it, and the connection must stay up.
     if (!parsed.commands.length) {
       if (!await drainStream(parsed.body, PUSH_REQUEST_BYTES)) return refuse(response, 413, "The push is too large");
       response.writeHead(200, { "Content-Type": "application/x-git-receive-pack-result", "Cache-Control": "no-store" });
@@ -724,13 +588,6 @@ export class EgressProxy {
     try { await pushed; } finally { this.#pushes.delete(pushed); }
   }
 
-  /**
-   * git-lfs downloads of a workspace repository whose workspace turned LFS on. The batch request goes to the control
-   * plane, which asks the provider with the session owner's credential and answers only which objects exist; the proxy
-   * then points each download at itself, and relays it to the control plane, which downloads the object. With a direct
-   * grant, the host makes both requests at the provider itself instead. Either way the provider's download URLs and the
-   * tokens in their headers never reach the sandbox, and uploads are refused.
-   */
   async #lfs(request: IncomingMessage, response: ServerResponse, url: URL, lfs: NonNullable<ReturnType<typeof lfsRequest>>): Promise<void> {
     const target = lfs.target.replace(/^[^@/]*@/, "");
     const label = repositoryKey(target).slice(0, 300);
@@ -769,7 +626,6 @@ export class EgressProxy {
     try {
       batch = parseLfsBatchRequest({
         objects: Array.isArray(input.objects) ? input.objects.map(item => ({ oid: (item as { oid?: unknown })?.oid, size: (item as { size?: unknown })?.size })) : input.objects,
-        // The ref only scopes the provider's answer; one the relay wouldn't accept is left out.
         ...(typeof ref === "string" && /^refs\/[\x21-\x7e]{1,250}$/.test(ref) ? { ref } : {}),
       });
     } catch (error) {
@@ -782,7 +638,6 @@ export class EgressProxy {
     let result: LfsBatchResult;
     try { result = parseLfsBatchResult(await upstream.json(), batch.objects.length); }
     catch { return deny(502, "The control plane returned an invalid Git LFS answer"); }
-    // Downloads come back to this proxy, under the same path, so they are the same repository's and checked again.
     const base = `${EGRESS_GIT_BASE}${target}/info/lfs/objects/`;
     this.#record({ kind: "git", target: label, outcome: "allowed", reason: `lfs batch (${result.objects.length} objects)${transport(upstream)}` });
     response.writeHead(200, { "Content-Type": LFS_TYPE, "Cache-Control": "no-store" });
@@ -824,7 +679,6 @@ export class EgressProxy {
     return this.#stream(response, upstream, upstream.headers.get("content-type") ?? "application/octet-stream");
   }
 
-  /** Streams the control plane's answer to the sandbox, as fast as the sandbox reads it. */
   async #stream(response: ServerResponse, upstream: Response, contentType: string): Promise<void> {
     response.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-store" });
     if (!upstream.body) return void response.end();
@@ -848,10 +702,6 @@ export class EgressProxy {
   }
 }
 
-/**
- * The workspace repository a clone's remote URL names: https://host/path, git@host:path, ssh://git@host/path, or the
- * proxy's own rewritten form. Undefined for anything else.
- */
 export function repositoryForRemote(repositories: readonly EgressRepository[], url: string): EgressRepository | undefined {
   let target: string | undefined;
   if (url.startsWith(EGRESS_GIT_BASE)) target = url.slice(EGRESS_GIT_BASE.length);
@@ -866,7 +716,6 @@ export function repositoryForRemote(repositories: readonly EgressRepository[], u
 
 const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/;
 
-/** A grant as the control plane sends it; anything else is refused rather than half-applied. */
 export function parseEgressGrant(value: unknown): EgressGrant {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RunnerError(502, "Invalid network policy from the control plane");
   const input = value as Record<string, unknown>;
@@ -883,7 +732,6 @@ export function parseEgressGrant(value: unknown): EgressGrant {
     return { bindingId: repository.bindingId, provider: repository.provider!, host: repository.host, fullName: repository.fullName,
       ...(repository.repositoryId !== undefined ? { repositoryId: repository.repositoryId } : {}), ...(repository.lfs ? { lfs: true } : {}) };
   });
-  // Document sources (Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark, Tencent Docs) the agent reads through the control plane; absent from older control planes.
   if (input.sources !== undefined && (!Array.isArray(input.sources) || input.sources.length > 100)) throw new RunnerError(502, "Invalid sources from the control plane");
   const sources = (input.sources as unknown[] | undefined)?.map((item): GrantSource => {
     const source = item as Partial<GrantSource> | null;
@@ -893,8 +741,6 @@ export function parseEgressGrant(value: unknown): EgressGrant {
     }
     return { id: source.id, kind: source.kind, type: source.type!, title: source.title };
   });
-  // Credentialed APIs this connector knows; a newer control plane's others are left out, as it may name hosts this proxy
-  // has no rules for.
   if (input.apis !== undefined && (!Array.isArray(input.apis) || input.apis.length > 10)) throw new RunnerError(502, "Invalid APIs from the control plane");
   const apis = ((input.apis ?? []) as unknown[]).flatMap((item): EgressApi[] => {
     const api = item as Partial<EgressApi> | null;
@@ -904,17 +750,12 @@ export function parseEgressGrant(value: unknown): EgressGrant {
   return { policy, repositories, ...(apis.length ? { apis } : {}), ...(sources ? { sources } : {}) };
 }
 
-/**
- * Sends one Git read to the control plane's relay at `url` (connector or internal route) and returns its streaming
- * answer; a refusal throws a RunnerError carrying the control plane's credential-free reason.
- */
 export async function relayGitRequest(fetchImpl: typeof fetch, url: string, authorization: Record<string, string>, request: RelayRequest, signal: AbortSignal): Promise<Response> {
   const headers: Record<string, string> = { ...authorization };
   if (request.userAgent) headers["user-agent"] = request.userAgent;
   if (request.gitProtocol) headers["git-protocol"] = request.gitProtocol;
   if (request.contentType) headers["content-type"] = request.contentType;
   if (request.contentEncoding) headers["content-encoding"] = request.contentEncoding;
-  // A push's pack streams through as the sandbox sends it.
   const response = await fetchImpl(url, { method: "POST", redirect: "error", credentials: "omit", headers, body: request.body ?? new Uint8Array(),
     ...(request.body instanceof ReadableStream ? { duplex: "half" } : {}), signal } as RequestInit);
   if (response.ok) return response;
@@ -924,11 +765,6 @@ export async function relayGitRequest(fetchImpl: typeof fetch, url: string, auth
   throw new RunnerError(response.status, typeof error === "string" && /^[\x20-\x7e -￿]{1,500}$/.test(error) ? error : "The control plane refused the Git request");
 }
 
-/**
- * A `fetch` for GitRemote that sends its Git reads of one workspace repository through the control plane's relay, with
- * the session owner's access: how the host confirms that a session may borrow a mirror. Anything else is refused. The
- * caller's signal is honoured, so its time limit holds.
- */
 export function relayFetch(bindingId: string, relay: (request: RelayRequest) => Promise<Response>): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -945,17 +781,12 @@ export function relayFetch(bindingId: string, relay: (request: RelayRequest) => 
         contentType: headers.get("content-type") ?? undefined, contentEncoding: headers.get("content-encoding") ?? undefined, ...(body ? { body } : {}) });
       return await (signal ? abandonable(answer, signal) : answer);
     } catch (error) {
-      // GitRemote reports a status as a failed request; the control plane's reason stays with the caller's own log.
       if (error instanceof RunnerError) return new Response(null, { status: error.status >= 400 && error.status < 600 ? error.status : 502 });
       throw error;
     }
   }) as typeof fetch;
 }
 
-/**
- * `answer`, unless `signal` aborts first. A relayed request can't be called back once sent, so an answer that comes after
- * its caller gave up is closed unread.
- */
 function abandonable(answer: Promise<Response>, signal: AbortSignal): Promise<Response> {
   return new Promise<Response>((resolve, reject) => {
     const abort = () => {
@@ -969,7 +800,6 @@ function abandonable(answer: Promise<Response>, signal: AbortSignal): Promise<Re
   });
 }
 
-/** The relay route for one Git read, below the connector or internal prefix. */
 export function relayPath(prefix: string, sessionId: string, request: RelayRequest): string {
   return `${prefix}/git/relay/${encodeURIComponent(request.bindingId)}/${request.service}?sessionId=${encodeURIComponent(sessionId)}`;
 }

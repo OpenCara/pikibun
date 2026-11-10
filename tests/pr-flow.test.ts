@@ -22,7 +22,6 @@ async function directory(t: test.TestContext): Promise<string> {
 
 const settings = (reviewMinutes = 30, more: Partial<PrFlowSettings> = {}): PrFlowSettings => ({ reviewMinutes, mergeMethod: "squash", waitForChecks: true, ...more });
 const isClone = (directory: string) => directory === "app" || directory === "libs/core";
-/** An approved operation's tool result, as the session's tools answer. */
 const executed = (result: string) => [{ type: "text", text: JSON.stringify({ id: "a1", status: "executed", result }) }];
 const call = (toolName: string, input: Record<string, unknown>, content: ObservedCall["content"] = [{ type: "text", text: "{}" }], isError = false): ObservedCall =>
   ({ toolName, input, content, isError });
@@ -72,26 +71,22 @@ test("the flow, step by step: a draft at the first change, ready once done, a re
   const at = Date.parse("2026-11-09T19:00:00Z");
   const observe = (item: ObservedCall, minutes = 30, now = at) => state.observe(item, settings(minutes), "/w", isClone, now);
 
-  // Changes outside a clone, failed calls and reads say nothing.
   assert.equal(observe(call("write_file", { path: "notes.md" })), undefined);
   assert.equal(observe(call("write_file", { path: "app/x.ts" }, [], true)), undefined);
   assert.equal(observe(call("read_file", { path: "app/x.ts" })), undefined);
 
-  // The first change in a clone: open the draft now. Said once.
   const first = observe(call("edit_file", { path: "app/src/x.ts" }))!;
   assert.match(first, /first change in app/);
   assert.match(first, /git_push \{directory: "app", branch: <the session branch>, pull_request: \{title, body, draft: true\}\}/);
   assert.equal(observe(call("write_file", { path: "app/src/y.ts" })), undefined);
   assert.equal(observe(call("git", { directory: "app", args: ["commit", "-m", "x"] }, executed("ok"))), undefined);
 
-  // The draft opens: keep pushing, make it ready when done. A later push to the draft says nothing more.
   const draft = observe(call("git_push", { directory: "app", branch: "pikibun/s", pull_request: { title: "T", body: "B", draft: true } }, pushed({ created: true, draft: true })))!;
   assert.match(draft, /Draft #12 is open: https:\/\/github\.com\/acme\/app\/pull\/12/);
   assert.match(draft, /draft: false/);
   assert.equal(observe(call("git_push", { directory: "app", branch: "pikibun/s", pull_request: { title: "T", body: "B", draft: true } }, pushed({ created: false, draft: true }))), undefined);
   assert.match(prFlowPrompt(settings(), state.flows, at), /- app: draft #12 .*make it ready for review once the change is done/);
 
-  // Ready for review: the window's end, as a time, and how to wait and merge on GitHub.
   const ready = observe(call("git_push", { directory: "app", branch: "pikibun/s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: false, draft: false })))!;
   assert.match(ready, /#12 is ready for review: wait for reviews until 2026-11-09T19:30:00Z \(30 minutes\)/);
   assert.match(ready, /github_read \{repository: "acme\/app", issue: 12, wait: "change", timeout_seconds: 1800\}/);
@@ -100,20 +95,15 @@ test("the flow, step by step: a draft at the first change, ready once done, a re
   assert.match(prFlowPrompt(settings(), state.flows, at + 60_000), /#12 .* is ready for review; its review window ends at 2026-11-09T19:30:00Z/);
   assert.match(prFlowPrompt(settings(), state.flows, at + 31 * 60_000), /its review window ended at 2026-11-09T19:30:00Z: address what reviews came in, or merge/);
 
-  // A fix pushed with plain git: a new window, for the re-review.
   const later = at + 20 * 60_000;
   const again = observe(call("git", { directory: "app", args: ["push", "origin", "HEAD:pikibun/s"] }, executed("ok")), 30, later)!;
   assert.match(again, /#12 has new commits, so its re-review window starts again: wait for reviews until 2026-11-09T19:50:00Z/);
-  // And with git_push without a pull request.
   assert.match(observe(call("git_push", { directory: "app", branch: "pikibun/s" }, pushed()), 30, later)!, /re-review window starts again/);
-  // A push that failed says nothing.
   assert.equal(observe(call("git", { directory: "app", args: ["push"] }, [{ type: "text", text: JSON.stringify({ status: "failed", result: "rejected" }) }])), undefined);
 
-  // The merge.
   assert.equal(observe(call("github_merge", { repository: "acme/other", pull: 12, sha: "a".repeat(40), method: "squash" }, executed("Merged"))), undefined);
   assert.match(observe(call("github_merge", { repository: "acme/app", pull: 12, sha: "a".repeat(40), method: "squash" }, executed("Merged")))!, /#12 is merged/);
   assert.match(prFlowPrompt(settings(), state.flows, at), /- app: #12 .* is merged\./);
-  // No more windows once merged; a new change is new work, with its own draft.
   assert.equal(observe(call("git", { directory: "app", args: ["push"] }, executed("ok"))), undefined);
   assert.match(observe(call("write_file", { path: "app/z.ts" }))!, /first change in app/);
 });
@@ -125,19 +115,15 @@ test("only a push that moves the pull request's own branch starts a new review w
   observe(call("write_file", { path: "app/x.ts" }));
   observe(call("git_push", { directory: "app", branch: "pikibun/s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: true, draft: false })));
   const later = at + 10 * 60_000;
-  // Nothing moved.
   assert.equal(observe(call("git", { directory: "app", args: ["push", "origin", "HEAD:pikibun/s"] }, executed("Everything up-to-date")), later), undefined);
   assert.equal(observe(call("git_push", { directory: "app", branch: "pikibun/s" }, executed("Branch pikibun/s is already up to date at abc.")), later), undefined);
-  // Other branches.
   assert.equal(observe(call("git", { directory: "app", args: ["push", "origin", "HEAD:experiment"] }, executed("ok")), later), undefined);
   assert.equal(observe(call("git_push", { directory: "app", branch: "release" }, pushed()), later), undefined);
   assert.match(prFlowPrompt(settings(30), state.flows, later), /review window ends at 2026-11-09T19:30:00Z/, "the window didn't move");
-  // Its own branch, by refspec, by name, or the upstream.
   for (const args of [["push", "origin", "+HEAD:refs/heads/pikibun/s"], ["push", "origin", "pikibun/s"], ["push", "--force-with-lease"]]) {
     assert.match(observe(call("git", { directory: "app", args }, executed("ok")), later)!, /re-review window starts again/, args.join(" "));
   }
   assert.deepEqual(pushedBranches(["push", "-u", "origin", "a:b", "c"]), ["b", "c"]);
-  // HEAD is the checked-out branch, which may be its branch: it counts.
   assert.deepEqual(pushedBranches(["push", "origin", "@"]), ["HEAD"]);
   assert.match(observe(call("git", { directory: "app", args: ["push", "origin", "HEAD"] }, executed("ok")), later)!, /re-review window starts again/);
 });
@@ -158,7 +144,6 @@ test("each forge tool's own flags: glab's -d is --description, not a draft, and 
   assert.equal(forgeOwns("gh", "https://gitlab.com/g/p/-/merge_requests/4"), false);
   assert.equal(forgeOwns("gh", "https://github.com/acme/app/pull/4"), true);
 
-  // A merge request opened with -d (a description) is ready: its window starts, and it records the branch it names.
   const state = new PrFlowState();
   const mr = "https://gitlab.com/g/p/-/merge_requests/4";
   const note = state.observe(call("glab", { directory: "app", args: ["mr", "create", "-d", "Fixes", "-s", "pikibun/s"] }, [{ type: "text", text: mr }]), settings(), "/w", isClone, 0)!;
@@ -170,17 +155,13 @@ test("each forge tool's own flags: glab's -d is --description, not a draft, and 
 test("a ready or merge call means its own clone's pull request, of its own forge, never another clone's of the same number", () => {
   const state = new PrFlowState();
   const observe = (item: ObservedCall) => state.observe(item, settings(30), "/w", isClone, 0);
-  // GitHub #4 in app, GitLab !4 in libs/core.
   observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: false } },
     executed(pullRequestLine({ url: "https://github.com/acme/app/pull/4", number: 4, created: true, draft: false }))));
   observe(call("glab", { directory: "libs/core", args: ["mr", "create"] }, [{ type: "text", text: "https://gitlab.com/g/p/-/merge_requests/4" }]));
-  // gh in libs/core: that clone's pull request is GitLab's, so nothing.
   assert.equal(observe(call("gh", { directory: "libs/core", args: ["pr", "merge", "4"] }, [{ type: "text", text: "Merged" }])), undefined);
-  // glab anywhere: only GitLab's !4.
   assert.match(observe(call("glab", { args: ["mr", "merge", "4"] }, [{ type: "text", text: "Merged!" }]))!, /merge_requests\/4/);
   const [app, core] = [state.flows.find(item => item.directory === "app")!, state.flows.find(item => item.directory === "libs/core")!];
   assert.deepEqual([app.merged, core.merged], [undefined, true]);
-  // gh in app: app's #4.
   assert.match(observe(call("gh", { directory: "app", args: ["pr", "merge", "4", "--squash"] }, [{ type: "text", text: "Merged" }]))!, /github\.com\/acme\/app\/pull\/4/);
 });
 
@@ -199,7 +180,6 @@ test("github_read of a pull request merged or closed some other way ends its flo
   closing.observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: true } }, pushed({ created: true, draft: true })), settings(), "/w", isClone, 0);
   assert.match(closing.observe(read(url, "closed", false), settings(), "/w", isClone, 0)!, /#12 was closed without merging/);
   assert.match(prFlowPrompt(settings(), closing.flows, 0), /- app: #12 .* was closed without merging\./);
-  // New work in it is a new pull request.
   assert.match(closing.observe(call("write_file", { path: "app/x.ts" }), settings(), "/w", isClone, 0)!, /first change in app/);
 });
 
@@ -223,11 +203,9 @@ test("a pull request opened, readied or merged with the forge's own tool (gh, gl
   const ready = observe(call("glab", { directory: "app", args: ["mr", "update", "4", "--ready"] }, [{ type: "text", text: "Updated" }]))!;
   assert.match(ready, /#4 is ready for review/);
   assert.match(ready, /glab mr merge/);
-  // A merge glab only scheduled isn't one yet; one it made is.
   assert.equal(observe(call("glab", { directory: "app", args: ["mr", "merge", "4"] }, [{ type: "text", text: "Will merge when pipeline succeeds" }])), undefined);
   assert.match(observe(call("glab", { directory: "app", args: ["mr", "merge"] }, [{ type: "text", text: "Merged!" }]))!, /#4 is merged/, "the only open one");
   assert.match(prFlowPrompt(settings(30), state.flows, 0), /- app: #4 .* is merged\./);
-  // A failed call is no step.
   assert.equal(observe(call("gh", { args: ["pr", "merge", "4"] }, [{ type: "text", text: "x" }], true)), undefined);
 });
 
@@ -251,7 +229,6 @@ test("a review window of 0 minutes merges as soon as the pull request is ready, 
   const ready = observe(call("git_push", { directory: "app", branch: "s", pull_request: { title: "T", body: "B", draft: false } }, pushed({ created: true, draft: false })))!;
   assert.match(ready, /review window is 0 minutes: merge it now, without waiting for reviews, with github_merge/);
   assert.doesNotMatch(ready, /github_read \{repository/);
-  // Nothing to wait for after a push either.
   assert.equal(observe(call("git", { directory: "app", args: ["push"] }, executed("ok"))), undefined);
 
   const prompt = prFlowPrompt(settings(0, { waitForChecks: false, mergeMethod: "rebase" }), state.flows, 0);

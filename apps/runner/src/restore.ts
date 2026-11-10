@@ -22,18 +22,12 @@ const OID = /^[0-9a-f]{40}$/;
 
 export interface RestoreConfig {
   dataDir: string;
-  /** Trusted transport must enforce the size bound while downloading from its fixed control-plane endpoint. */
   readBackup?: (descriptor: RestoreDescriptor, targetSessionId: string) => Promise<Uint8Array>;
-  /**
-   * The control plane's tool definitions (tool-definitions.ts), read before the backup's approvals are checked: one may
-   * name a tool only the control plane defines, which this connector knows only once it has read them (review of #205).
-   */
   toolDefinitions?: () => Promise<readonly ToolDefinition[]>;
 }
 
 export interface RestoreManifest {
   binding: RunnerBinding;
-  /** A shared conversation someone went back from is `superseded` by the fork that replaced it (RunnerSession.revert). */
   branches: { id: number; mode: "write" | "ask"; actorId?: string; superseded?: true }[];
   runs: Record<string, unknown>;
   approvals: Record<string, unknown>;
@@ -42,12 +36,9 @@ export interface RestoreManifest {
   [key: string]: unknown;
 }
 
-/** Open only the staged SQLite with the supported pi API, paused; verify idle tasks,
- * rebind app metadata, reset authority, and checkpoint/close before returning. */
 export type PrepareRestore = (stage: string, manifest: RestoreManifest, options: { conversationOnly: boolean }) => Promise<void>;
 
 export type SnapshotFile = { path: string; bytes: Buffer; mode: number };
-/** `conversationOnly`: the backup kept only the conversation, so the restored session starts with an empty worktree. */
 type Snapshot = { manifest: RestoreManifest; sqlite: Buffer; files: SnapshotFile[]; conversationOnly: boolean };
 type PublicationFence = { publish(stage: string, dev: string, ino: string): Promise<void>; close(): Promise<void> };
 
@@ -106,7 +97,6 @@ function snapshot(bytes: Uint8Array, descriptor: RestoreDescriptor, target: Runn
   if (text !== JSON.stringify(value)) invalid("Backup JSON is not canonical");
   if (!record(value) || value.format !== "pi-runner-backup-v1" || !Array.isArray(value.files)
     || value.files.length > MAX_FILES || typeof value.createdAt !== "string" || !Number.isFinite(Date.parse(value.createdAt))) invalid("Invalid backup format");
-  // A conversation-only backup carries no files and no clones.
   const conversationOnly = value.conversationOnly === true;
   if ((value.conversationOnly !== undefined && !conversationOnly)
     || (conversationOnly && (value.files.length || value.clones !== undefined))) invalid("Invalid conversation-only backup");
@@ -114,7 +104,6 @@ function snapshot(bytes: Uint8Array, descriptor: RestoreDescriptor, target: Runn
   if (source.session.id === target.session.id || source.owner.id !== target.owner.id
     || source.session.workspaceId !== target.session.workspaceId) invalid("Backup source, owner, agent, model, or connector mismatch");
   if (descriptor.migration) {
-    // A session moved from another host keeps its owner, workspace and pins, and runs this host's agent and model.
     if (!source.session.connectorId || !target.session.connectorId || source.session.connectorId === target.session.connectorId)
       invalid("A host migration must come from another connected host");
   } else if (source.session.agentVersionId !== target.session.agentVersionId
@@ -138,12 +127,9 @@ function snapshot(bytes: Uint8Array, descriptor: RestoreDescriptor, target: Runn
       || branches.has(branch.id as number)) invalid("Invalid backup branches");
     branches.add(branch.id as number);
   }
-  // One shared conversation is current; the ones people went back from are kept beside it.
   if (manifest.branches.filter(branch => branch.mode === "write" && !branch.superseded).length !== 1) invalid("Invalid backup branches");
   for (const [key, run] of Object.entries(manifest.runs)) {
     if (!record(run) || !["settled", "interrupted"].includes(run.status as string)) invalid("Backup requires idle runs");
-    // A message with images can be images alone, and its hash binds them too (messageHash). The backup has no images to
-    // recompute it from (Pi's transcript holds them), so that hash is only checked for its form.
     const images = run.images;
     if (images !== undefined && (!record(images) || Object.keys(images).sort().join(",") !== "bytes,count"
       || !Number.isSafeInteger(images.count) || (images.count as number) < 1 || (images.count as number) > chatImageLimits.count
@@ -160,13 +146,11 @@ function snapshot(bytes: Uint8Array, descriptor: RestoreDescriptor, target: Runn
       || (run.ordinal !== undefined && (!Number.isSafeInteger(run.ordinal) || (run.ordinal as number) < 0))
       || (run.admissionId !== undefined && (run.mode !== "write" || typeof run.admissionId !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(run.admissionId)))
       || (run.started !== undefined && typeof run.started !== "boolean")
-      // A backup is taken only once a stop has ended its work, so none is still pending.
       || (run.stopped !== undefined && (!record(run.stopped) || Object.keys(run.stopped).join(",") !== "by"
         || typeof run.stopped.by !== "string" || !run.stopped.by || run.stopped.by.length > 256))) invalid("Invalid backup run binding or receipt");
   }
   for (const [id, approval] of Object.entries(manifest.approvals)) {
     if (!record(approval)) invalid("Backup requires idle approvals");
-    // An allowed permission request is settled as well: its tool call went ahead, and nothing runs from the record.
     if (!["pending", "denied", "executed", "interrupted"].includes(approval.status as string)
       && !(approval.status === "approved" && record(approval.operation) && approval.operation.kind === "permission")) invalid("Backup requires idle approvals");
     if (approval.id !== id || !id || approval.sessionId !== source.session.id
@@ -191,11 +175,6 @@ function snapshot(bytes: Uint8Array, descriptor: RestoreDescriptor, target: Runn
   return { manifest: manifest as unknown as RestoreManifest, sqlite, files, conversationOnly };
 }
 
-/**
- * The sandbox files of a backup, or of a packed session (pack.ts): `value.files` and `value.clones` checked and turned
- * into the files to write below the session's `sandbox` directory, the clones as bundles and the list of what is pending.
- * `total` is what the rest of the backup already counts against its size bound.
- */
 export function sandboxContent(value: Record<string, unknown>, target: RunnerBinding, total = 0): SnapshotFile[] {
   if (!Array.isArray(value.files) || value.files.length > MAX_FILES) invalid("Invalid backup format");
   const paths = new Set<string>();
@@ -213,7 +192,6 @@ export function sandboxContent(value: Record<string, unknown>, target: RunnerBin
       || (parts[0] === "worktree" && parts[1] === ".git")
       || (parts[0] === "home" && parts[1] === ".tmp" && parts.length === 2)
       || (parts[0] === "git" && ["objects", "refs"].includes(parts[1]!) && parts.length === 2)
-      // Written from the backup's clones below, never as files.
       || (parts[0] === "git" && parts[1] === "pikibun-clones")) invalid("Unsafe or reserved snapshot path");
     if (paths.has(file.path)) invalid("Duplicate snapshot path");
     paths.add(file.path);
@@ -224,15 +202,12 @@ export function sandboxContent(value: Record<string, unknown>, target: RunnerBin
     const data = base64(file.data);
     total += data.length;
     if (data.length > MAX_BYTES || total > MAX_BYTES) invalid("Decoded snapshot exceeds size limit");
-    // This is generated from the NEW owner binding by Sandbox.initialize, never imported.
     if (file.path !== "owner.gitconfig") files.push({ path: file.path, bytes: data, mode: 0o600 | ((file.mode as number) & 0o100) });
   }
   for (const path of paths) {
     const parts = path.split("/");
     for (let i = 1; i < parts.length; i++) if (paths.has(parts.slice(0, i).join("/"))) invalid("Snapshot file is also a parent directory");
   }
-  // A clone session's clones come as bundles of their local work, to be cloned again when the session opens: they are
-  // staged, with the list of what is pending, in the worktree's .git, which the session's shell commands see read-only.
   const clones = value.clones ?? [];
   if (!Array.isArray(clones) || clones.length > MAX_CLONES || (clones.length && target.session.repositoryMode !== "clone")) invalid("Invalid backup clones");
   const pending: Record<string, unknown>[] = [];
@@ -247,8 +222,6 @@ export function sandboxContent(value: Record<string, unknown>, target: RunnerBin
       || !Array.isArray(clone.branches) || clone.branches.length > 200
       || !clone.branches.every((branch: unknown) => Array.isArray(branch) && branch.length === 2 && validPushBranch(branch[0]) && typeof branch[1] === "string" && OID.test(branch[1]))
       || (clone.bundle !== null && typeof clone.bundle !== "string")) invalid("Invalid backup clone");
-    // Clones may nest (a clone inside a clone is restored after it), and a clone still pending may share its path with
-    // files: a restore never clones over anything, so it stays pending there.
     const path = clone.path as string;
     if (clonePaths.includes(path)) invalid("Backup clones overlap");
     clonePaths.push(path);
@@ -264,8 +237,6 @@ export function sandboxContent(value: Record<string, unknown>, target: RunnerBin
     pending.push({ path, origin: clone.origin, branch: clone.branch, head: clone.head, worktree: clone.worktree, branches: clone.branches, bundle });
   });
   if (pending.length) files.push({ path: "git/pikibun-clones/manifest.json", bytes: Buffer.from(JSON.stringify({ version: 1, clones: pending })), mode: 0o600 });
-  // Sessions checked out from the host repository cache keep their objects there, not in the snapshot. Their backups
-  // are refused when taken; one that exists anyway must not restore into a session missing its history.
   const marker = files.find(file => file.path === "git/repository-cache.json");
   let markerVersion: unknown;
   try { markerVersion = marker ? (JSON.parse(marker.bytes.toString("utf8")) as { version?: unknown } | null)?.version : undefined; }
@@ -316,8 +287,6 @@ async function syncTree(path: string, mountId: string, budget = { files: 0, byte
     const info = await handle.stat();
     if (info.dev !== before.dev || info.ino !== before.ino || info.uid !== process.getuid?.()
       || await mountIdentity(handle) !== mountId) throw new RunnerError(403, "Unsafe prepared restore entry");
-    // Overlayfs can report different st_dev values within one mount. Compare mount
-    // identities instead; this also rejects same-device bind mounts and submounts.
     if (info.isDirectory()) {
       if (info.mode & 0o077) throw new RunnerError(403, "Restore storage must be private and runner-owned");
       const pinned = `/proc/self/fd/${handle.fd}`;
@@ -331,8 +300,6 @@ async function syncTree(path: string, mountId: string, budget = { files: 0, byte
   } finally { await handle.close(); }
 }
 
-// A kernel lock outlives JS exceptions but not process death. Publication uses the
-// pinned parent and Linux RENAME_NOREPLACE; unsupported kernels/libcs fail closed.
 const PUBLICATION = String.raw`
 import ctypes, errno, fcntl, json, os, stat, sys
 parent, path, target, lockname = 3, sys.argv[1], sys.argv[2], sys.argv[3]
@@ -389,7 +356,7 @@ async function publicationFence(parent: FileHandle, path: string, target: string
       if (!ready && stdout === "ready\n") { ready = true; resolveReady(); }
     });
     child.stderr!.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(0, 2048); });
-    child.stdin!.on("error", () => { /* Process exit below determines publication success. */ });
+    child.stdin!.on("error", () => { });
     child.once("error", () => { const error = new RunnerError(503, "Linux restore publication helper unavailable"); rejectReady(error); reject(error); });
     child.once("close", (exit, signal) => {
       if (exit === 0 && !signal && ready) resolveResult();
@@ -415,7 +382,6 @@ export async function restoreSession(config: RestoreConfig, input: RunnerBinding
   if (process.platform !== "linux") throw new RunnerError(503, "Restore requires Linux no-replace directory publication");
   if (typeof config.readBackup !== "function") throw new RunnerError(503, "Trusted backup reader is not configured");
   if (typeof prepare !== "function") throw new RunnerError(503, "Paused restore preparation is required");
-  // Where it can't be asked, the backup is checked against the program tools this connector knows already.
   if (config.toolDefinitions) rememberToolDefinitions(await config.toolDefinitions().catch(() => []));
   const descriptor = descriptorCopy(requested);
   if (!input?.session || typeof input.session.id !== "string") invalid("Invalid restore target binding");
@@ -467,7 +433,6 @@ export async function restoreSession(config: RestoreConfig, input: RunnerBinding
     }
     await prepare(stage, backup.manifest, { conversationOnly: backup.conversationOnly });
     if (stableJson(JSON.parse(await readPrivate(join(stage, "binding.json"), MAX_BYTES))) !== stableJson(binding)) throw new RunnerError(409, "Preparation changed the target binding");
-    // Initialized only to settle its layout: it runs no commands, so it needs no browser (the session writes its driver when it opens).
     const sandbox = new Sandbox(binding, join(stage, "sandbox"), undefined, { browser: null });
     try { await sandbox.initialize(); } finally { await sandbox.close(); }
     await writePrivate(join(stage, MARKER), JSON.stringify(receipt));

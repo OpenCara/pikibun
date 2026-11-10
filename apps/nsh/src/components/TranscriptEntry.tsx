@@ -9,10 +9,6 @@ import { Icon, type IconName } from "../icons";
 import { monospace, palette, radius, text } from "../theme";
 import { Banner } from "../ui";
 
-/**
- * " · Auto-approved" for an entry whose tool calls ran their commands under auto-approve, which have no approval card,
- * with any outcome other than the usual "executed" (still running, failed, interrupted).
- */
 function autoApprovedSuffix(calls: EntryView["autoApproved"]): string {
   if (!Array.isArray(calls) || !calls.length) return "";
   const notes = calls.filter(call => call.status !== "executed").map(call => calls.length > 1 ? `${call.tool}: ${call.status}` : call.status);
@@ -27,12 +23,10 @@ const toolIcons: Record<string, IconName> = {
 };
 const toolIcon = (name: string): IconName => toolIcons[name] ?? "terminal";
 
-/** What a tool call works on, from its JSON arguments: the command, path or address it names, on one line. */
 function callSummary(line: string): string {
   const open = line.indexOf("(");
   try {
     const args = JSON.parse(line.slice(open + 1, -1)) as Record<string, unknown>;
-    // Program tools (node, git, python…): the program and its arguments, as the command line they make.
     if (typeof args.program === "string" && Array.isArray(args.args)) {
       return [args.program, ...args.args.map(arg => (/^[\w./:=@%+-]+$/.test(String(arg)) ? String(arg) : JSON.stringify(String(arg))))].join(" ").replace(/\s+/g, " ");
     }
@@ -53,10 +47,6 @@ type Shown =
   | { kind: "user"; text: string; meta: string }
   | { kind: "assistant"; prose: string; tool: { icon: IconName; name: string; summary: string; meta: string; text: string } | null; meta: string };
 
-/**
- * What an entry shows, as the Expo app's TranscriptEntry decided it. `shared`: a share link's, whose readers get no advice.
- * `images`: how many of its images show as thumbnails, whose `[image <type>]` lines don't.
- */
 function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string, shared = false, images = 0): Shown {
   const actor = entry.actorId ? name(entry.actorId, true) : "";
   if (images) entry = { ...entry, text: textBesideImages(entry.text, images) };
@@ -68,7 +58,6 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
   }
   if ((calls.length && !prose.trim()) || entry.role === "system" || entry.role === "toolResult") {
     const result = entry.role === "toolResult";
-    // A tool call row would show the model's time, not the tool's, so only results carry a duration.
     const took = result && entry.durationMs !== undefined ? formatDuration(entry.durationMs) : "";
     const firstLine = entry.text.trim().split("\n")[0] ?? "";
     return {
@@ -93,10 +82,6 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
   };
 }
 
-/**
- * One quiet line for a tool call, its output or a system note (the web's .entry-tool): its icon, what it is and what
- * it works on, muted, and a chevron that turns as pressing it shows the exact text.
- */
 function ToolRow(props: { icon: IconName; name: string; summary: string; meta: string; text: string; trimmed?: EntryView["trimmed"]; open: boolean; onToggle: () => void; result?: boolean; images?: JSX.Element }) {
   return (
     <View style={{ gap: 8 }}>
@@ -128,21 +113,11 @@ function ToolRow(props: { icon: IconName; name: string; summary: string; meta: s
   );
 }
 
-/** One of a message's actions, where its viewer may take it now. */
 export type MessageAction = { label: string; run: () => void; disabled?: boolean };
-/**
- * A message's actions besides copying it, which every message with text offers: going back to it and forking a new
- * session from it, where the viewer may (see messageCut). Read in a binding, as rows are recycled.
- */
 export type MessageActions = (entry: EntryView) => { revert?: MessageAction; fork?: MessageAction };
 
-/** Whether a pointer is how the person points (desktops, browsers), rather than a finger. */
 const pointer = platform.desktop || platform.os === "web";
 
-/**
- * A small icon button of a message's footer, its label the tooltip on the desktop and what screen readers say: quiet
- * beside the message where a pointer brings each up; at full strength on touch screens, with room for a finger.
- */
 function ActionButton(props: { icon: IconName; label: string; onPress: () => void; disabled?: boolean; testID?: string }) {
   const size = pointer ? 24 : 32;
   return (
@@ -157,11 +132,9 @@ function ActionButton(props: { icon: IconName; label: string; onPress: () => voi
   );
 }
 
-/** Who sent a message and how long it took, then its actions as small icons: copy, go back, fork. */
 function Footer(props: { entry: EntryView; meta: string; actions?: MessageActions; onCopy?: (entry: EntryView) => Promise<void>; end?: boolean }) {
   const copyable = () => Boolean(props.onCopy) && copyText(props.entry) !== "";
   const offered = computed((): ReturnType<MessageActions> => (props.actions ? props.actions(props.entry) : {}));
-  // The copy icon turns to a check for a moment once the message is copied; by entry id, as rows are recycled.
   const copied = signal<string | null>(null);
   effect(() => {
     if (!copied()) return;
@@ -169,7 +142,6 @@ function Footer(props: { entry: EntryView; meta: string; actions?: MessageAction
     return () => clearTimeout(timer);
   });
   const justCopied = () => copied() === props.entry.id;
-  // Test IDs name the entry: `message-copy-0-12` for entry `0:12`.
   const testID = (action: string) => `message-${action}-${props.entry.id.replace(/[^\w-]/g, "-")}`;
   function copy() {
     const id = props.entry.id;
@@ -195,18 +167,10 @@ function Footer(props: { entry: EntryView; meta: string; actions?: MessageAction
   );
 }
 
-/**
- * User messages are bubbles; assistant text is Markdown, shown by NSH's native TextView; tool calls, results and system
- * entries are one quiet line each. List rows are recycled, so `entry` changes under a row: everything here reads it in
- * bindings, and what is expanded is kept by entry id outside the row.
- */
 export function TranscriptEntry(props: {
   entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; shared?: boolean;
-  /** Copies a message: without it, messages show no copy icon. It rejects when the message wasn't copied. */
   onCopy?: (entry: EntryView) => Promise<void>;
-  /** Going back to a message and forking from it, where offered. */
   actions?: MessageActions;
-  /** The session whose transcript images this person sees (seesEntryImages): shown as thumbnails in place of their lines. */
   imagesOf?: string;
 }) {
   const name = createUsername();
@@ -219,7 +183,6 @@ export function TranscriptEntry(props: {
   );
   const open = () => props.expanded(props.entry.id);
   const toggle = () => props.toggle(props.entry.id);
-  // Every entry sits 16 points from the next, as the web app's transcript spaces them; consecutive tool lines closer.
   const gapAfter = () => (shown().kind === "tool" ? 8 : 16);
   return (
     <View style={{ gap: 6, paddingBottom: gapAfter() }}>
@@ -266,7 +229,6 @@ export function TranscriptEntry(props: {
         {assistant => (
           <>
             <If when={assistant().prose.trim()}>
-              {/* TextView only reports a link's press; opening it is the app's. */}
               <TextView markdown={assistant().prose} selectable options={{ streaming: true }} onLinkPress={event => openMessageLink(event.url)} />
             </If>
             <If when={assistant().tool}>

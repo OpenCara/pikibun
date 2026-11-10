@@ -2,20 +2,16 @@ import type { GitPushOperation, PushCredential } from "../../../packages/shared/
 import { GitRemote, GitRemoteError, ZERO_OID } from "./git-remote.js";
 import type { SandboxAuthorize } from "./sandbox.js";
 
-/** A clone's side of a push: the advertised tips it has, whether the branch fast-forwards, and the commits that are new. */
 export interface ClonePushPreparation {
   present: string[]; ancestor: boolean | null;
-  /** The newest of the commits the remote lacks, at most 100; `total` counts them all. */
   commits: { source: string; subject: string }[]; total: number;
 }
 
-/** Clone pushes run only in the sandbox: unsandboxed sessions push with their own Git. */
 export interface ClonePushWorkspace {
   clonePushPrepare(path: string, input: { commit: string; old: string | null; tips: string[] }, authorize: SandboxAuthorize): Promise<ClonePushPreparation>;
   clonePushPack(path: string, input: { commit: string; exclude: string[] }, authorize: SandboxAuthorize): Promise<AsyncIterable<Uint8Array>>;
 }
 
-/** A definite failure: no ref changed. Messages are fixed and credential-free. */
 export class PushError extends Error {
   constructor(message: string) { super(message); this.name = "PushError"; }
 }
@@ -23,29 +19,21 @@ export class PushError extends Error {
 export interface PushResult {
   outcome: "pushed" | "up-to-date";
   branch: string;
-  /** Tag pushes: the tag created at `tip`, a commit on `branch`. */
   tag?: string;
   tip: string;
   base: string;
   previous: string | null;
   commits: { source: string; rewritten: string; subject: string }[];
-  /** How many commits the push carries, when `commits` lists only the newest of them. */
   total?: number;
 }
 
 const OID = /^[0-9a-f]{40}$/;
 
-/** Workspace failures carry fixed "sandbox: ..." reasons; anything else stays local. */
 function workspaceReason(error: unknown): string {
   const reason = error instanceof Error ? /sandbox: ([a-z0-9 ,.'()-]{1,160})$/i.exec(error.message.trim())?.[1] : undefined;
   return reason ? `: ${reason}` : "";
 }
 
-/**
- * Pushes a clone's commit, as it is, to a branch of the repository the clone came from: fast-forward only, sending the
- * objects the remote's advertised tips don't already reach. Throws PushError for definite failures; any other error
- * happened during or after upload and is ambiguous.
- */
 export async function performClonePush(options: {
   workspace: ClonePushWorkspace; operation: GitPushOperation; credential: Pick<PushCredential, "remote" | "authorization">;
   authorize: SandboxAuthorize; fetch?: typeof fetch; signal?: AbortSignal;
@@ -67,7 +55,6 @@ export async function performClonePush(options: {
   try {
     advertised = await remote.receivePackAdvertisement();
     previous = advertised.refs.get(ref) ?? ZERO_OID;
-    // The branch's tip first, then the others: the clone needs no objects that any of them reaches.
     const tips = [...new Set([previous, ...advertised.refs.values()])].filter(tip => tip !== ZERO_OID && OID.test(tip)).slice(0, 1024);
     try {
       prepared = await workspace.clonePushPrepare(directory, { commit: operation.commit, old: previous === ZERO_OID ? null : previous, tips }, authorize);
@@ -99,10 +86,6 @@ export async function performClonePush(options: {
   return { outcome: "pushed", ...result };
 }
 
-/**
- * Creates refs/tags/<tag> at the operation's commit, which the remote's branch must already reach, so no branch moves and
- * the pack carries no objects. A tag is never moved: one at another object is refused, one at this commit is up to date.
- */
 async function performTagPush(options: {
   workspace: ClonePushWorkspace; operation: GitPushOperation; authorize: SandboxAuthorize; remote: GitRemote; directory: string; tag: string;
 }): Promise<PushResult> {
@@ -121,7 +104,6 @@ async function performTagPush(options: {
     if (existing !== undefined && existing !== operation.commit) {
       throw new PushError(`Tag ${tag} already exists at ${existing.slice(0, 12)}; tags are never moved or replaced`);
     }
-    // Only the branch's tip as a tip: the commits the clone counts are then exactly those the branch doesn't reach.
     try {
       prepared = await workspace.clonePushPrepare(directory, { commit: operation.commit, old: null, tips: [base] }, authorize);
     } catch (error) {
@@ -142,17 +124,14 @@ async function performTagPush(options: {
   }
   let pack: AsyncIterable<Uint8Array>;
   try {
-    // Everything the tag names is already on the remote: the pack is empty.
     pack = await workspace.clonePushPack(directory, { commit: operation.commit, exclude: [base] }, authorize);
   } catch (error) {
     throw new PushError(`Push pack could not be created${workspaceReason(error)}`);
   }
   const report = await remote.push({ ref, old: ZERO_OID, new: operation.commit }, pack, advertised.capabilities);
   if (report.status !== "ok") {
-    // The tag may have been created at this very commit since the advertisement (another push of the same release):
-    // that is the outcome asked for, so it is up to date rather than refused.
     let now: string | undefined;
-    try { now = (await remote.receivePackAdvertisement()).refs.get(ref); } catch { /* report the rejection */ }
+    try { now = (await remote.receivePackAdvertisement()).refs.get(ref); } catch { }
     if (now === operation.commit) return { outcome: "up-to-date", ...result };
     const reason = (report.reason ?? "").replace(/[^\x20-\x7e]/g, " ").trim().slice(0, 200);
     throw new PushError(`Git remote rejected the tag${reason ? ` (${reason})` : ""}`);
@@ -160,16 +139,11 @@ async function performTagPush(options: {
   return { outcome: "pushed", ...result };
 }
 
-/**
- * The pull request a push opened or found, in words. `draft` is given only for a push that asked about it: then it says
- * whether the pull request is a draft or ready for review now.
- */
 export function pullRequestLine(pull: { url: string; number: number; created: boolean; draft?: boolean }): string {
   const state = pull.draft === undefined ? "" : pull.draft ? ", a draft" : ", ready for review";
   return `Pull request #${pull.number} ${pull.created ? "opened" : "already open"}${state}: ${pull.url}`;
 }
 
-/** Human- and agent-readable outcome; never includes credentials. */
 export function pushSummary(result: PushResult, pullRequest?: { url: string; number: number; created: boolean; draft?: boolean }): string {
   if (result.tag !== undefined) {
     return result.outcome === "up-to-date"

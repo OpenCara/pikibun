@@ -15,13 +15,11 @@ import { fakeHub, testDatabase } from './helpers/control-plane.js';
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
 
 test('Web Push messages are encrypted as RFC 8291 says, to its own test vector', () => {
-  // RFC 8291, Appendix A.
   const body = encryptPushPayload(new TextEncoder().encode('When I grow up, I want to be a watermelon'),
     'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', 'BTBZMqHH6r4Tts7J_aSIgg',
     { salt: Buffer.from('DGv6ra1nlYgDCS1FRnbzlw', 'base64url'), serverPrivateKey: Buffer.from('yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw', 'base64url') });
   assert.equal(b64(body), 'DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6c'
     + 'VPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN');
-  // And a fresh key and salt each time otherwise, which the browser decrypts.
   const browser = subscriber();
   const message = JSON.stringify({ title: 'Ünïcode ✓', body: 'x'.repeat(2000) });
   const one = encryptPushPayload(new TextEncoder().encode(message), browser.p256dh, browser.auth);
@@ -56,7 +54,6 @@ test('only changes the agent made notify: waiting for an approval, and finishing
   const cases: [SessionActivity | null, SessionActivity, string | null][] = [
     ['working', 'waiting', 'approval'], ['idle', 'waiting', 'approval'], [null, 'waiting', 'approval'], ['waiting', 'waiting', null],
     ['working', 'done', 'finished'], ['waiting', 'done', 'finished'], ['working', 'failed', 'failed'], ['waiting', 'failed', 'failed'],
-    // A host that comes back reports a session it had settled before: nothing new happened.
     [null, 'done', null], ['idle', 'done', null], ['done', 'failed', null], ['failed', 'done', null],
     ['working', 'idle', null], ['done', 'working', null], ['working', 'working', null],
   ];
@@ -66,7 +63,6 @@ test('only changes the agent made notify: waiting for an approval, and finishing
   assert.equal(notificationText('failed', true, { title: '', workspace: 'Team' }).title, 'Untitled session');
 });
 
-// A browser's push subscription: its keys, and decryption as the browser does it.
 function subscriber(endpoint = `https://fcm.googleapis.com/fcm/send/${randomBytes(8).toString('hex')}`) {
   const ecdh: ECDH = createECDH('prime256v1');
   ecdh.generateKeys();
@@ -145,7 +141,6 @@ async function fixture(t: TestContext) {
   sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   const { models } = await json<{ models: ModelDefinition[] }>(await alice.request('GET', `/api/workspaces/${workspace.id}/models`));
   const { session } = await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: models[0]!.id, title: 'Fix the build', visibility: 'private' }), 201);
-  // Bob can follow and write to it; Carol, a member too, can't read Alice's private session.
   await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: bob.user.id, role: 'collaborator' }));
 
   const report = (activity: SessionActivity) => request('POST', '/api/connectors/self/activity', { sessionId: session.id, activity },
@@ -156,7 +151,6 @@ async function fixture(t: TestContext) {
   }
   async function cursor(client: Client) { return (await json<NotificationFeed>(await client.request('GET', '/api/notifications/feed'))).cursor; }
   async function feed(client: Client, after: string) { return json<NotificationFeed>(await client.request('GET', `/api/notifications/feed?after=${encodeURIComponent(after)}`)); }
-  /** The latest message: one `sender` sent, as its run admission records. */
   let sentAt = Date.now() - 60_000;
   function sent(sender: Client) {
     sentAt += 1000;
@@ -177,7 +171,6 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   assert.equal(config.devices.length, 1);
   assert.ok(config.webPushKey && Buffer.from(config.webPushKey, 'base64url').length === 65);
   assert.deepEqual(config.preferences, { approvals: true, finished: true, failed: true, details: true });
-  // The same key every time: browsers subscribed with it.
   assert.equal((await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'))).webPushKey, config.webPushKey);
 
   const [aliceFrom, bobFrom, carolFrom] = [await f.cursor(f.alice), await f.cursor(f.bob), await f.cursor(f.carol)];
@@ -189,7 +182,6 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   assert.deepEqual(aliceFeed.notifications.map(n => [n.kind, n.title, n.body, n.sessionId]), [['approval', 'Fix the build', 'Waiting for an approval · Team', f.session.id]]);
   assert.equal(aliceFeed.cursor, aliceFeed.notifications[0]!.id);
   assert.deepEqual((await f.feed(f.alice, aliceFeed.cursor)).notifications, [], 'nothing twice');
-  // Carol sent the latest message here, but can't read the session: nothing for her. Bob's earlier one doesn't count.
   assert.deepEqual((await f.feed(f.carol, carolFrom)).notifications, []);
   assert.deepEqual((await f.feed(f.bob, bobFrom)).notifications, []);
 
@@ -201,7 +193,6 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   assert.deepEqual({ kind: payload.kind, title: payload.title, sessionId: payload.sessionId, origin: payload.origin, path: payload.path },
     { kind: 'approval', title: 'Fix the build', sessionId: f.session.id, origin, path: `/#/s/${f.session.id}` });
 
-  // Bob sends the next message: he hears how it ends, as Alice does.
   f.sent(f.bob);
   f.pushes.length = 0;
   await f.reportAll('working', 'done');
@@ -253,9 +244,7 @@ test('devices are checked, belong to their sign-in, and go when the push service
     assert.equal((await response.json() as { code: string }).code, code, JSON.stringify(body));
   }
   const { device } = await json<{ device: NotificationDevice }>(await register(f.alice, valid), 201);
-  // Someone else can't remove it.
   assert.equal((await f.bob.request('DELETE', `/api/notifications/devices/${device.id}`)).status, 404);
-  // The same browser, signed in as Bob now, gets Bob's notifications, not Alice's.
   const moved = await json<{ device: NotificationDevice }>(await register(f.bob, valid), 201);
   assert.equal(moved.device.id, device.id);
   assert.deepEqual((await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'))).devices, []);
@@ -269,7 +258,6 @@ test('devices are checked, belong to their sign-in, and go when the push service
   assert.deepEqual((await json<{ delivered: { web: number } }>(await f.alice.request('POST', '/api/notifications/test'))).delivered, { web: 0 });
   assert.deepEqual((await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'))).devices, []);
 
-  // Signing out takes the sign-in's devices with it.
   f.setAnswer(() => new Response(null, { status: 201 }));
   await json(await register(f.alice, valid), 201);
   await json(await f.alice.request('POST', '/api/auth/logout'));
@@ -287,7 +275,6 @@ test('the feed starts where a page opens and keeps a day of notifications', asyn
   await f.reportAll('working', 'waiting');
   const later = await f.cursor(f.alice);
   assert.deepEqual((await f.feed(f.alice, later)).notifications, [], 'a page opened after it sees nothing old');
-  // Old notifications go as new ones come.
   f.sqlite.prepare('UPDATE notifications SET created_at = ?').run(new Date(Date.now() - 2 * 86400000).toISOString());
   await f.reportAll('working', 'done');
   assert.deepEqual((await f.feed(f.alice, start)).notifications.map(n => n.kind), ['finished']);

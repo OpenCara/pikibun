@@ -1,14 +1,6 @@
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-/*
- * A stand-in for cloudflared (piki:tunnel), since the real one can't reach Cloudflare from a test sandbox: run as
- * `cloudflared tunnel --no-autoupdate --config <file> --url http://127.0.0.1:<port>`, it logs as cloudflared does (an
- * error naming api.trycloudflare.com first, which is never the address), prints a quick tunnel's address in its box,
- * says it registered a connection, and proxies HTTP from a loopback port of its own (printed as FAKE_EDGE=<port>) to
- * `--url`, as Cloudflare's edge would. It records its arguments and environment in calls.jsonl beside itself.
- * `mode`: "address" behaves; "exit" exits before any address; "silent" never gives one.
- */
 export async function fakeCloudflared(directory: string, mode: "address" | "exit" | "silent" = "address", name = "fake-quick-tunnel"): Promise<string> {
   const path = join(directory, "cloudflared");
   const script = `#!${process.execPath}

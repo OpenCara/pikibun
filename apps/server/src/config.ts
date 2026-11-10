@@ -11,14 +11,10 @@ export interface ServerConfig {
   env: Env;
   host: string;
   port: number;
-  /** Honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a TLS-terminating proxy. */
   trustProxy: boolean;
-  /** The web client's build: the Native Shell client, `dist/client` by default. */
   staticDir: string;
-  /** Optional, exact origin serving the NSH preview, with the same API and separate host-only cookies. */
   preview?: { origin: string; staticDir: string };
   databaseUrl: string;
-  /** `STORAGE_URL`, or null when it is unset: the server then stores no session backups. */
   storageUrl: string | null;
 }
 
@@ -50,11 +46,6 @@ function clientBuildDirectory(configured: string | undefined): string {
   return namesMovedBuild ? resolve(CLIENT_BUILD) : directory;
 }
 
-/**
- * Builds `Env` from process environment variables: opens the database named by `DATABASE_URL` and, only when it is set,
- * the backup storage named by `STORAGE_URL`, creates the connector hub and copies the documented string settings.
- * Throws `ConfigurationError` naming the offending variable; values are never included.
- */
 export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): Promise<ServerConfig> {
   const env = { APP_ORIGIN: '' } as Env;
   for (const name of stringVars) {
@@ -83,7 +74,6 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     throw new ConfigurationError('SIGNUP must be "open", "invite" or "off" (unset: GitHub sign-ups are open and password sign-ups need an invite).');
   }
   const listenHost = processEnv.HOST || (env.LOCAL_MODE === 'true' ? '127.0.0.1' : '0.0.0.0');
-  // A local server is reachable from this machine only, and admits only the GitHub account that claimed it.
   if (env.LOCAL_MODE !== undefined) {
     if (!['true', 'false'].includes(env.LOCAL_MODE)) throw new ConfigurationError('LOCAL_MODE must be "true" or "false".');
     if (env.LOCAL_MODE === 'true') {
@@ -94,7 +84,6 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     }
   }
   const staticDir = clientBuildDirectory(processEnv.STATIC_DIR);
-  // The React web client is gone: a server still set to serve it says so rather than serving its build as NSH.
   if (processEnv.STATIC_CLIENT && processEnv.STATIC_CLIENT !== 'nsh') {
     throw new ConfigurationError('STATIC_CLIENT: the React web client was removed. Remove STATIC_CLIENT, and STATIC_DIR if it names dist/web, to serve the Native Shell client.');
   }
@@ -121,17 +110,12 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new ConfigurationError('PORT must be a TCP port number.');
   const trustProxyValue = processEnv.TRUST_PROXY ?? 'false';
   if (!['true', 'false'].includes(trustProxyValue)) throw new ConfigurationError('TRUST_PROXY must be "true" or "false".');
-  // Workspace owners may connect their own Postgres for session backups only when the operator opts in: the server then
-  // opens connections to hosts they choose, public ones unless private hosts are allowed as well.
   const workspaceDatabases = flag(processEnv, 'WORKSPACE_DATABASES');
   const workspaceDatabasePrivateHosts = flag(processEnv, 'WORKSPACE_DATABASE_PRIVATE_HOSTS');
   const databaseUrl = processEnv.DATABASE_URL || defaultDatabaseUrl;
-  // A backup holds a whole session, its owner's personal environment values included, so none is stored anywhere unless
-  // the operator names the store. Without one, only workspaces whose owner connected a database can keep backups.
   const storageUrl = processEnv.STORAGE_URL || null;
   if (storageUrl) env.BUCKET = openStorage(storageUrl, processEnv);
   env.DB = await openDatabase(databaseUrl);
-  // Loaded only when enabled, so a server without them (a local one, say) needs no Postgres driver installed.
   if (workspaceDatabases) {
     const { PostgresWorkspaceDatabases } = await import('./workspace-databases/postgres.js');
     env.WORKSPACE_DATABASES = new PostgresWorkspaceDatabases({ privateHosts: workspaceDatabasePrivateHosts });

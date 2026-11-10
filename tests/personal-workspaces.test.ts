@@ -8,7 +8,6 @@ import { cloneRepositories } from '../apps/server/src/authority/index.js';
 import { testDatabase } from './helpers/control-plane.js';
 import type { Workspace } from '../packages/shared/src/types.js';
 
-// Every user's private workspace: made on their first list, pinned first, and theirs alone.
 const origin = 'http://localhost:8787';
 const testSecret = 'personal-workspaces-test-secret-not-for-deployment';
 
@@ -54,10 +53,8 @@ test('every user gets one private workspace, listed first, the first time they l
   const f = await fixture(t);
   const alice = await f.client('alice');
   const bob = await f.client('bob');
-  // Nothing exists before the first list.
   assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM personal_workspaces').get() as { n: number }).n, 0);
 
-  // Two lists at once still make one.
   const [first, second] = await Promise.all([list(alice), list(alice)]);
   assert.deepEqual(first, second);
   assert.equal(first.length, 1);
@@ -66,20 +63,17 @@ test('every user gets one private workspace, listed first, the first time they l
   assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM personal_workspaces WHERE user_id = ?').get(alice.user.id) as { n: number }).n, 1);
   assert.equal((f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.create' AND workspace_id = ?").get(own.id) as { n: number }).n, 1);
 
-  // Workspaces made, or joined, later follow it: the private one stays pinned first.
   const team = (await json<{ workspace: Workspace }>(await bob.request('POST', '/api/workspaces', { name: 'Team' }), 201)).workspace;
   assert.equal(team.personal, false);
   await json(await bob.request('POST', `/api/workspaces/${team.id}/members`, { userId: alice.user.id, role: 'member' }));
   const later = (await json<{ workspace: Workspace }>(await alice.request('POST', '/api/workspaces', { name: 'Later' }), 201)).workspace;
   assert.deepEqual((await list(alice)).map(item => [item.id, item.personal]), [[own.id, true], [team.id, false], [later.id, false]]);
 
-  // Bob's own is his, not Alice's, and Alice's never shows to him.
   const bobs = await list(bob);
   assert.deepEqual(bobs.map(item => [item.name, item.personal, item.ownerId]), [['Private', true, bob.user.id], ['Team', false, bob.user.id]]);
   assert.ok(!bobs.some(item => item.id === own.id));
   await denied(await bob.request('GET', `/api/workspaces/${own.id}/members`), 404, 'not_found');
 
-  // Asking again finds the same one.
   await ensurePersonalWorkspace(f.env, alice.user.id);
   assert.equal((await list(alice))[0]!.id, own.id);
 });
@@ -100,19 +94,16 @@ test('a private workspace takes no members and no invite link', async t => {
   await denied(await alice.request('PUT', `${path}/invite-link`), 409, 'personal_workspace');
   assert.equal((await json<{ link: null }>(await alice.request('GET', `${path}/invite-link`))).link, null);
   assert.equal((f.sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_invite_links').get() as { n: number }).n, 0);
-  // Nor is a request to join it accepted, even one put there by hand.
   f.sqlite.prepare("INSERT INTO workspace_join_requests (workspace_id, user_id, created_at) VALUES (?, ?, '2026-01-01')").run(own!.id, bob.user.id);
   await denied(await alice.request('POST', `${path}/join-requests/${encodeURIComponent(bob.user.id)}/accept`, { role: 'member' }), 409, 'personal_workspace');
   assert.ok(!(await list(bob)).some(item => item.id === own!.id));
 
-  // Any other workspace still takes members as before.
   const team = (await json<{ workspace: Workspace }>(await alice.request('POST', '/api/workspaces', { name: 'Team' }), 201)).workspace;
   await json(await alice.request('POST', `/api/workspaces/${team.id}/members`, { userId: bob.user.id, role: 'member' }));
 });
 
 test('a session in a private workspace needs no source; elsewhere it still does', async t => {
   const f = await fixture(t);
-  // A GitHub account: test accounts start sessions without sources anyway.
   const insert = f.sqlite.prepare(`INSERT INTO users (id, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
     VALUES (?, ?, ?, ?, ?, ?, '{}', 'github', '2026-01-01')`);
   insert.run('github:1', '1', 'carol', 'Carol', 'Carol', 'carol@example.test');
@@ -124,10 +115,8 @@ test('a session in a private workspace needs no source; elsewhere it still does'
   const resolved = await cloneRepositories(f.env, personal('github:1'), 'github:1');
   assert.equal(resolved.sourceIds, '[]');
   assert.equal(resolved.sourcesOptional, true);
-  // Someone else's private workspace isn't theirs to use.
   await assert.rejects(cloneRepositories(f.env, personal('github:2'), 'github:1'), (error: Error & { status?: number }) => error.status === 404);
 
-  // A shared workspace without sources is refused as before.
   f.sqlite.prepare("INSERT INTO workspaces (id, name, owner_id, created_at) VALUES ('team', 'Team', 'github:1', '2026-01-01')").run();
   f.sqlite.prepare("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ('team', 'github:1', 'owner', '2026-01-01')").run();
   await assert.rejects(cloneRepositories(f.env, 'team', 'github:1'), (error: Error & { status?: number }) => error.status === 409);

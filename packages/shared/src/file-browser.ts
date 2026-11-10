@@ -1,9 +1,5 @@
 import { fileBrowserLimits, type FileEntry, type SessionFiles } from "./types.js";
 
-/**
- * The checks every file browser answer passes, on the runner that reads it and again on the control plane that relays it
- * from a host it doesn't trust: the shape, the limits in fileBrowserLimits, and a listing that agrees with itself.
- */
 export type BrowseResult = { [K in SessionFiles["type"]]: Omit<Extract<SessionFiles, { type: K }>, "path" | "redacted"> }[SessionFiles["type"]];
 
 export const fileImageTypes: readonly string[] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -17,13 +13,11 @@ export class InvalidBrowseResult extends Error {
 
 function invalid(): never { throw new InvalidBrowseResult(); }
 
-/** A directory entry's name: one path component, as a directory listing can hold it. */
 export function validEntryName(name: unknown): name is string {
   return typeof name === "string" && name.length > 0 && name.length <= 1024 && name !== "." && name !== ".."
     && !name.includes("/") && !name.includes("\0");
 }
 
-/** `value` as a browse result, or InvalidBrowseResult. Unknown keys are dropped. */
 export function checkBrowseResult(value: unknown): BrowseResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const result = value as Record<string, unknown>;
@@ -46,7 +40,6 @@ export function checkBrowseResult(value: unknown): BrowseResult {
     return { ...base, binary: true };
   }
   if (result.text !== undefined) {
-    // Checked before any redaction: the limit is what the host may send.
     if (typeof result.text !== "string" || result.text.length > fileBrowserLimits.textBytes
       || encoder.encode(result.text).length > fileBrowserLimits.textBytes) invalid();
     return { ...base, text: result.text };

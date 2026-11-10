@@ -46,7 +46,6 @@ describe("on a device", () => {
     await app.waitFor("id:appearance-scheme");
     await app.press("text:Dark");
     expect(app.storage()["pikibun.appearance"]).toBe("dark");
-    // The web app's night theme, in the character's colors: kept, and back at the next start.
     await app.press("text:Pikibun");
     expect(app.storage()["pikibun.appearance"]).toBe("pikibun");
     app.dispose();

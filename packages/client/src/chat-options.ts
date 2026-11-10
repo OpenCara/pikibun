@@ -1,9 +1,7 @@
 import type { ConnectorInfo, LocalModelSummary } from "../../shared/src/connector";
-// Declares the host command capability on ConnectorCapabilities.
 import type {} from "../../shared/src/host-operations";
 import { thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type ThinkingLevel } from "../../shared/src/types";
 
-/** What the user picked in the chat box. Unset model/reasoning means "the conversation's current one". */
 export interface ChatSelection {
   model?: { provider: string; modelId: string };
   thinkingLevel?: ThinkingLevel;
@@ -20,12 +18,10 @@ export const accessLabels: Record<AccessMode, { label: string; hint: string }> =
   auto: { label: "Auto-approve", hint: "Commands, commits, pushes, GitHub comments, issues and merges run immediately as the owner, without asking" },
 };
 
-/** Whether Auto-approve on `host` merges pull requests without asking too: older connectors ask before every GitHub effect. */
 export function autoApproveMerges(host: Pick<ConnectorInfo, "capabilities"> | undefined): boolean {
   return host?.capabilities.automaticGitHub === true;
 }
 
-/** What turning on Auto-approve means on `host`, confirmed before it applies. */
 export function autoApproveWarning(host: Pick<ConnectorInfo, "name" | "capabilities" | "hostCommandAccess">, unsandboxed: boolean): string {
   const github = autoApproveMerges(host)
     ? " GitHub comments and new issues are posted, and pull requests merged, as you without asking too: the agent can merge any pull request of this workspace's github.com repositories that GitHub lets you merge, into its base branch. Branch protection and required checks on GitHub still apply."
@@ -36,13 +32,11 @@ export function autoApproveWarning(host: Pick<ConnectorInfo, "name" | "capabilit
     + github + hostCommandsWarning(host);
 }
 
-/** What Auto-approve means for host_bash on `host`, by the viewer's authority there when the listing says it. */
 function hostCommandsWarning(host: Pick<ConnectorInfo, "name" | "capabilities" | "hostCommandAccess">): string {
   if (!host.capabilities.hostCommands) return "";
   if (host.hostCommandAccess === "auto") {
     return ` Its owner granted you automatic host commands, so host commands, such as its extensions' tools, also run OUTSIDE the sandbox on ${host.name} without asking, with access to the owner's host files, credentials and network.`;
   }
-  // Older connectors honor no grants: only the owner's own sessions run host commands without asking.
   if (host.hostCommandAccess === "owner" || !host.capabilities.hostGrants) {
     return " On your own host, host commands, such as its extensions' tools, also run OUTSIDE the sandbox without asking, with access to your host files, credentials and network. On someone else's host they still need their approval.";
   }
@@ -57,13 +51,11 @@ export function findModel(host: ConnectorInfo | undefined, model: ChatSelection[
   return model && host?.models.find(item => item.provider === model.provider && item.modelId === model.modelId);
 }
 
-/** Reasoning levels worth offering: none when the model advertises nothing beyond "off". */
 export function offeredLevels(model: LocalModelSummary | undefined): ThinkingLevel[] {
   const levels = model?.thinkingLevels ?? [];
   return levels.some(level => level !== "off") ? levels : [];
 }
 
-/** Keeps the level if supported, else the highest supported level below it, else "off" or the first one. */
 export function clampLevel(levels: ThinkingLevel[] | undefined, level: ThinkingLevel | undefined): ThinkingLevel | undefined {
   if (!level || !levels?.length || levels.includes(level)) return level;
   const rank = thinkingLevels.indexOf(level);
@@ -71,11 +63,6 @@ export function clampLevel(levels: ThinkingLevel[] | undefined, level: ThinkingL
   return lower ?? (levels.includes("off") ? "off" : levels[0]);
 }
 
-/**
- * The reasoning level that applies to `model`: the picked one when the model supports it, else the level the host's Pi
- * starts that model at, else the nearest supported level. The picker shows it and the request sends it, so the two
- * always match the model.
- */
 export function effectiveLevel(model: LocalModelSummary | undefined, level: ThinkingLevel | undefined): ThinkingLevel | undefined {
   const levels = model?.thinkingLevels;
   if (!model || !levels?.length) return undefined;
@@ -84,24 +71,17 @@ export function effectiveLevel(model: LocalModelSummary | undefined, level: Thin
   return clampLevel(levels, level);
 }
 
-/** The selection after picking `next`: a model brings its own level on the host's Pi; older connectors report none, so the current level is kept. */
 export function selectModel(selection: ChatSelection, next: LocalModelSummary): ChatSelection {
   return { ...selection, model: { provider: next.provider, modelId: next.modelId }, thinkingLevel: next.thinkingLevel ?? clampLevel(next.thinkingLevels, selection.thinkingLevel) };
 }
 
-/** The model and reasoning last chatted with, remembered so the next new chat starts from them. */
 export interface ChatPreference {
-  /** The host it ran on. */
   connectorId: string;
   provider: string;
   modelId: string;
   thinkingLevel?: ThinkingLevel;
 }
 
-/**
- * What to remember after a message goes to `host` with `selection`: the model and the reasoning it actually ran at.
- * Unset picks keep the conversation's `current` model and reasoning, so those are what it ran with.
- */
 export function chatPreference(
   host: ConnectorInfo | undefined,
   selection: ChatSelection,
@@ -113,7 +93,6 @@ export function chatPreference(
   return { connectorId: host.id, provider: model.provider, modelId: model.modelId, ...(thinkingLevel ? { thinkingLevel } : {}) };
 }
 
-/** A stored preference, or undefined when it is missing or not one. */
 export function parseChatPreference(raw: string | null | undefined): ChatPreference | undefined {
   if (!raw) return undefined;
   try {
@@ -126,11 +105,6 @@ export function parseChatPreference(raw: string | null | undefined): ChatPrefere
   }
 }
 
-/**
- * Starting selection for a new chat on `host`: the remembered model when the host offers it (`usable` says whether this
- * workspace may use a model there), else `fallback`; at the remembered reasoning when that model supports it, else at
- * the level the host's Pi starts the model at.
- */
 export function preferredSelection(
   host: ConnectorInfo | undefined,
   preference: ChatPreference | undefined,
@@ -139,17 +113,11 @@ export function preferredSelection(
 ): ChatSelection {
   const remembered = preference && findModel(host, preference);
   const model = remembered && usable(remembered) ? remembered : findModel(host, fallback);
-  // A new chat is its owner's, so it starts on Auto-approve.
   if (!model) return { access: "auto" };
   const thinkingLevel = model.thinkingLevels?.length ? effectiveLevel(model, preference?.thinkingLevel) : model.thinkingLevel;
   return { model: { provider: model.provider, modelId: model.modelId }, thinkingLevel, access: "auto" };
 }
 
-/**
- * Starting selection for an existing session: its current model, reasoning and shared-run access. Before its first
- * message, the owner starts on Auto-approve and everyone else on "Ask before acting". Older runners leave the
- * access out after a message that asked before acting too, so a conversation with messages but none says "approval".
- */
 export function initialSelection(view: SessionView, owner: boolean): ChatSelection {
   const fresh = !view.entries?.some(entry => entry.role === "user");
   const access = view.access ?? (owner && fresh ? "auto" : "approval");
@@ -160,22 +128,11 @@ export function initialSelection(view: SessionView, owner: boolean): ChatSelecti
   };
 }
 
-/**
- * Why a shared message can't be sent with `selection` yet, if it can't: until the host is known its options can't go
- * with the message, which would then run as "Ask before acting" instead of the access shown.
- */
 export function accessUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): string | undefined {
   if (mode !== "submit" || host || selection.access === "approval") return undefined;
   return `Still checking this session's host, so "${accessLabels[selection.access].label}" can't be applied yet. Try again in a moment.`;
 }
 
-/**
- * Why a message can't be sent with `selection`'s model, if it can't. On a host that switches models, a message runs on
- * the model it names, and only on one the host offers: one its owner or an admin disabled is no longer listed, so a
- * conversation still on it, or a pick made before, must choose another. A host that offers none runs no message (the
- * server refuses them too), whether Pi on it offers none or each one is disabled. The listing a chat box reads doesn't
- * say which, so the reason names neither.
- */
 export function modelUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection): string | undefined {
   if (!host?.capabilities.chatOptions) return undefined;
   if (!host.models.length) return `${host.name} offers no models right now.`;
@@ -183,12 +140,6 @@ export function modelUnavailable(host: ConnectorInfo | undefined, selection: Cha
   return undefined;
 }
 
-/**
- * Request options for a selection, or undefined when the host's connector cannot apply them.
- * Only choices the host advertises are sent; access only applies to the shared conversation. Auto-approve covers merges
- * too: hosts that run GitHub effects automatically, and the control plane, merge without asking only in a message that
- * says so (`autoMerge`), so each Auto-approve message to one does.
- */
 export function chatOptionsBody(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): ChatOptions | undefined {
   if (!host?.capabilities.chatOptions) return undefined;
   const model = findModel(host, selection.model);
@@ -201,15 +152,8 @@ export function chatOptionsBody(host: ConnectorInfo | undefined, selection: Chat
   return options;
 }
 
-/** Where a device remembers that its user confirmed the Auto-approve warning that names merges (see mustConfirmAutoApprove). */
 export const AUTO_APPROVE_CONFIRMED_KEY = "pikibun.autoApproveConfirmed";
 
-/**
- * Whether a message going with `options` must wait for its owner to confirm Auto-approve first: one that would merge
- * without asking, from a device where they haven't confirmed the warning that says so (`confirmed`). Choosing
- * Auto-approve from the access menu asks every time, but the owner's chat box also starts on it by default, which never
- * asked; their first such message asks instead, once per device.
- */
 export function mustConfirmAutoApprove(options: ChatOptions | undefined, confirmed: boolean): boolean {
   return options?.autoMerge === true && !confirmed;
 }

@@ -29,7 +29,6 @@ async function directory(t: test.TestContext): Promise<string> {
   return path;
 }
 
-/** A store whose npm "installs" copy a package from `packages`, by name. */
 async function storeWith(t: test.TestContext, packages: Record<string, Record<string, string>> = {}): Promise<{ store: ExtensionStore; root: string }> {
   const root = await directory(t);
   const store = new ExtensionStore(join(root, "state", "extensions"), async (args, cwd) => {
@@ -116,10 +115,8 @@ test("Pi extensions load through Pi's own loader, and the host reports what each
   assert.equal(dev!.dev, true);
   assert.deepEqual(dev!.modules[0]!.events, ["session_start"]);
   assert.match(broken!.modules[0]!.error!, /broken on purpose/);
-  // What the control plane accepts is what the connector reports.
   const report = { installed: loaded.map(item => item.summary), remoteInstalls: true };
   assert.deepEqual(parseHostExtensionsReport(report), report);
-  // Versions sit side by side; removing names one.
   await assert.rejects(store.add(parseExtensionSource("npm:missing@1.0.0")), /no package missing/);
   assert.equal((await store.list()).length, 4, "a failed install leaves nothing behind");
   await store.remove("pi-search");
@@ -139,7 +136,6 @@ test("the workspace page reads a host's real report: a tool named like one of Pi
   });
   await store.add(parseExtensionSource("npm:pi-shell-helpers@1.0.0"));
   const [summary] = (await loadInstalled(store, [])).map(item => item.summary);
-  // The connector reports only lint as a tool, and the others among what it ignores.
   assert.deepEqual(summary!.modules[0]!.tools.map(tool => tool.name), ["lint"]);
   const offer = extensionOffer("npm:pi-shell-helpers@1.0.0", [summary!]);
   assert.equal(offer?.description, "Shell helpers.");
@@ -155,7 +151,6 @@ test("the workspace page reads a host's real report: a tool named like one of Pi
 test("a directory a package names loads as Pi loads it: its index alone, if it has one, else every module in it", async t => {
   const exits = `process.exit(3);`;
   const { store } = await storeWith(t, {
-    // pi-web-access ships a CLI (`dist/mcp-cli.js`, which exits) next to its extension (`dist/index.js`).
     "pi-bundled": {
       "package.json": JSON.stringify({ name: "pi-bundled", version: "1.0.0", pi: { extensions: ["./dist"] } }),
       "dist/index.js": `export default function (pi) { pi.on("session_start", () => {}); }`,
@@ -181,7 +176,6 @@ test("system prompt changes become the text they add", () => {
   assert.equal(addedPrompt("Same", "Same"), "");
 });
 
-/** A session's extensions on a faux model that calls `tool` with the user's text, then answers with the tool's result. */
 async function session(t: test.TestContext, source: string, root: string, options: { tool: string; settings?: ExtensionSettings; active?: () => boolean }) {
   const store = new ExtensionStore(join(root, "state"));
   await store.add(parseExtensionSource(source));
@@ -228,7 +222,6 @@ async function session(t: test.TestContext, source: string, root: string, option
     extensions: [workspace, ...selected.map(item => item.extension)], tools: selected.flatMap(item => item.tools) } });
   await extensions.sessionStart();
   const answer = async (content: string) => {
-    // As Session.applyOptions does when a message starts.
     const added = await extensions.beforeAgentStart(content, undefined);
     await root_.commit(async tx => { (await tx.doc(ExtensionPrompts, root_.id)).prompts = added; }, context);
     const settled = await (await root_.submit({ type: "input", content }, context)).wait(context);
@@ -297,7 +290,6 @@ test("an extension hears tool_result only of calls that ran, and tool_execution_
   assert.match(JSON.stringify(await s.answer("forbidden")), /Not that\./);
   assert.deepEqual(events.splice(0), ["start forbidden", "call forbidden", 'end true [{"type":"text","text":"Tool call blocked: Not that."}]'],
     "a blocked call never ran: its end says why, and no tool_result handler sees it");
-  // A model calling a tool no extension or session offers: Pi writes its error result, and the extension hears nothing of it.
   const other = await directory(t);
   await writeFile(join(other, "echo.ts"), listener("echo"));
   const missing = await session(t, join(other, "echo.ts"), other, { tool: "missing" });
@@ -369,7 +361,6 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   const store = new ExtensionStore(join(root, "state"));
   await store.add(parseExtensionSource(join(root, "shout.ts")));
   const [dev] = await loadInstalled(store, []);
-  // The same code, as an npm extension the workspace chose.
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
   let answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
@@ -415,7 +406,6 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   for (let count = 0; count < 500 && !card; count++) { card = (await session.view()).approvals.find(item => item.status === "pending"); await delay(20); }
   assert.deepEqual(card!.operation, { kind: "extension.tool", source: "npm:shout@1.0.0", tool: "shout", arguments: '{"text":"hello"}',
     digest: createHash("sha256").update('{"text":"hello"}').digest("hex") });
-  // Decided like a host command: the session's owner can't, the host's owner can.
   await assert.rejects(session.decide(await claims("approve"), card!.id, { decision: "approve", operation: card!.operation }), /host owner/);
   await session.decide(await claims("approve", "test:bob"), card!.id, { decision: "approve", operation: card!.operation });
   await idle();
@@ -429,7 +419,6 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   await idle();
   assert.match((await results()).at(-1)!, /Read-only message doesn't run it/);
 
-  // The workspace runs its tools automatically, but the host's owner hasn't allowed that: still a card.
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0", tools: "automatic" }]), automaticTools: false };
   await send("again", "approval");
   card = undefined;
@@ -445,21 +434,17 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   const automatic = (await session.view()).approvals.at(-1)!;
   assert.deepEqual([automatic.status, automatic.automatic, automatic.result], ["executed", true, "NOW!"]);
 
-  // A version the host doesn't have: the session runs without it, and says so.
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0" }]), automaticTools: true };
   assert.deepEqual((await session.view()).extensions, { running: [], missing: ["npm:shout@2.0.0"], builtin: ["pi:codemode"],
     unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
-  // Once the host has that version too, the open session runs it, tools and all, in place of the first.
   installed.push({ ...dev!, summary: { ...dev!.summary, source: "npm:shout@2.0.0", dev: false } });
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0", tools: "automatic" }]), automaticTools: true };
-  // The view shows what the next message gets, before it is sent.
   assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@2.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
     unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   await send("upgraded", "approval");
   await idle();
   const upgraded = (await session.view()).approvals.at(-1)!;
   assert.deepEqual([upgraded.operation.kind === "extension.tool" && upgraded.operation.source, upgraded.status, upgraded.result], ["npm:shout@2.0.0", "executed", "UPGRADED!"]);
-  // Turned off: its tool is no longer offered.
   answer = { extensions: [], automaticTools: true };
   await send("gone", "approval");
   await idle();
@@ -468,7 +453,6 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
 
 test("a Pikibun extension's command runs with the host's own sign-in only where the session itself runs on its host", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
   const root = await realpath(await directory(t));
-  // A fake gh first on PATH, which says it ran.
   await mkdir(join(root, "bin"));
   await writeFile(join(root, "bin", "gh"), "#!/bin/sh\necho \"gh ran: $*\"\n", { mode: 0o755 });
   const path = process.env.PATH;
@@ -508,7 +492,6 @@ test("a Pikibun extension's command runs with the host's own sign-in only where 
   await session.submit(await claims("submit"), { content: "list them", requestId: "list", admissionId: await sha256("list"), options: { access: "approval" } }, "write");
   for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
   const card = (await session.view()).approvals.at(-1)!;
-  // The session runs on its host, so it has no sandbox to run gh in: the host's own gh runs, as every command there does.
   assert.deepEqual([card.operation.kind, card.status, card.result], ["extension.tool", "executed", "gh ran: pr list"]);
 });
 
@@ -536,11 +519,9 @@ test("tool name clashes are settled per selection: another version of an extensi
   const names = (selection: ReturnType<SessionExtensions["select"]>) => selection.selected.map(item => [item.source, item.tools.map(tool => tool.name)]);
   const first = extensions.select([one!]);
   assert.deepEqual(names(first), [[one, ["shout"]]], "Pikibun's own bash stays reserved");
-  // Both at once: the first keeps shout, the second runs without it, as another Extension.
   const both = extensions.select([one!, two!]);
   assert.deepEqual(names(both), [[one, ["shout"]], [two, []]]);
   assert.notEqual(both.selected[1]!.extension.name, first.selected[0]!.extension.name);
-  // The workspace moves to the second version: it gets shout, though the first had it before in this session.
   const upgraded = extensions.select([two!]);
   assert.deepEqual(names(upgraded), [[two, ["shout"]]]);
   assert.deepEqual(upgraded.created.map(item => item.name), [upgraded.selected[0]!.extension.name], "its whole Extension is new to the registry");
@@ -573,7 +554,6 @@ test("an extension sees the model and reasoning level the running message uses, 
   };
   faux.setResponses([respond]);
   const models = createModels(); models.setProvider(faux.provider);
-  // The host's Pi model registry, as far as extensions read it here.
   const modelRegistry = { find: (provider: string, id: string) => ({ provider, id }) } as unknown as ModelRegistry;
   const target: RunnerBinding = {
     session: { id: "model-session", workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Models", policyVersion: 1, status: "ready",
@@ -597,7 +577,6 @@ test("an extension sees the model and reasoning level the running message uses, 
       jti: randomUUID(), bodyHash: await sha256(""), connectorId: "host-connector" };
   };
   const session = await service.provision(target, await claims("create"));
-  // The host owner's own Auto-approve messages run their dev extension's tools without a card.
   const ask = async (content: string, options: Record<string, unknown>) => {
     await session.submit(await claims("submit"), { content, requestId: content, admissionId: await sha256(content), options: { access: "auto", ...options } }, "write");
     for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);

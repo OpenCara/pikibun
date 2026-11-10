@@ -13,9 +13,6 @@ import { palette, text, weight } from "../theme";
 import { Field, Select, TextField } from "../form";
 import { Badge, Button, CardBody, confirm, Feedback, FormSheet, Note, ResourceState, Row, Section } from "../ui";
 
-// Settings → Profile → Connected accounts, as the web app's (sources.tsx, settings/GitAccounts.tsx): the Git accounts
-// sessions read and push with, and the document providers they read with.
-
 const tokenProviders = gitProviders.filter((provider): provider is TokenGitProvider => provider !== "github");
 
 const tokenScopes: Record<TokenGitProvider, string> = {
@@ -27,22 +24,18 @@ const tokenScopes: Record<TokenGitProvider, string> = {
   git: "read access to the repositories; pushing with your account needs write access",
 };
 
-/** What the Git accounts are for, as part of the Connected accounts section's info. */
 export const gitAccountsInfo = "Repositories you bind or pin are read with your Git accounts, and the pull requests your agents ask for are opened with them. Their tokens are encrypted on the server and never sent to other people's hosts. Where a workspace's push access uses the session owner's account, your own host receives yours in memory for each push in your sessions; Pikibun resets your GitHub token when the push ends, so that copy stops working.";
 
-/** Where a provider's accounts live: its fixed host, its default one, or self-hosted. */
 function providerHost(provider: TokenGitProvider): string {
   if (provider === "git") return "Any server over HTTPS, without pull requests";
   const hosts = gitProviderHosts[provider];
   return hosts.fixed ?? (hosts.default ? `${hosts.default} or self-managed` : "Self-hosted");
 }
 
-/** Provider name with host and organization, for naming one connected account. */
 export function gitAccountLabel(account: GitAccount): string {
   return `${gitProviderNames[account.provider]} · ${account.host}${account.organization ? `/${account.organization}` : ""}`;
 }
 
-/** A sub-heading inside a bare section: Git, Documents. */
 export function GroupTitle(props: { children: string; action?: JSX.Element }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 28, paddingHorizontal: 2 }}>
@@ -52,7 +45,6 @@ export function GroupTitle(props: { children: string; action?: JSX.Element }) {
   );
 }
 
-/** A card of rows without a section title of its own. */
 export function Card(props: { children?: JSX.Element; testID?: string }) {
   return (
     <View testID={props.testID} style={{ overflow: "hidden", borderRadius: 12, borderWidth: 1, borderColor: palette().border, backgroundColor: palette().surface }}>
@@ -61,7 +53,6 @@ export function Card(props: { children?: JSX.Element; testID?: string }) {
   );
 }
 
-/** The Git group of Connected accounts: GitHub (the sign-in account), then each token provider and its accounts. */
 function GitAccountsGroup() {
   const user = () => session().user;
   const accounts = createResource<{ accounts: GitAccount[] }>(() => "/api/git/accounts");
@@ -82,7 +73,6 @@ function GitAccountsGroup() {
       message: `Disconnect ${user().githubLogin ? `@${user().githubLogin}` : "your GitHub account"}? Its token is deleted from the server and revoked with GitHub. You stay signed in, but sessions you own can't read github.com repositories, open pull requests or push with your account until you sign in with GitHub again.` })) return;
     void action.run(async () => {
       await session().api("/api/git/accounts/github", { method: "DELETE" });
-      // Disconnected either way: without the reloaded profile, the row still stops saying Connected.
       updateUser(await session().api<{ user: UserProfile }>("/api/me").then(result => result.user, () => ({ ...user(), githubConnected: false })));
       accounts.refresh();
     }, "GitHub disconnected.");
@@ -134,10 +124,6 @@ function GitAccountsGroup() {
   );
 }
 
-/**
- * Connects a token account for one provider: the member's own, or with `save` another holder's (a workspace's
- * connection), which gets the same verified body. `initial` keeps a replaced connection's host and organization.
- */
 export function ConnectGitAccountSheet(props: {
   provider: TokenGitProvider | null; close: () => void; added: () => void; save?: (body: Record<string, unknown>) => Promise<void>;
   initial?: { host: string; organization: string; username?: string } | null;
@@ -147,7 +133,6 @@ export function ConnectGitAccountSheet(props: {
   const username = signal("");
   const token = signal("");
   const action = createAction();
-  // Each opening starts from the provider's defaults.
   effect(() => {
     const provider = props.provider;
     const initial = props.initial;
@@ -244,7 +229,6 @@ const setup: Record<DocumentKind, string> = {
   "tencent-docs": "Sign in to Tencent Docs. Sessions read the folders and documents under the workspace's Tencent Docs sources that you can open.",
 };
 
-/** The Documents group of Connected accounts: one row per provider, connected by signing in or by a pasted secret. */
 function DocumentAccountsGroup() {
   const resource = createResource<SourceAccountList>(() => "/api/source-accounts");
   const accounts = () => resource.data()?.accounts ?? null;
@@ -302,7 +286,6 @@ function DocumentAccountsGroup() {
   );
 }
 
-/** Connects a document provider with a pasted secret: the member's own account, or with `save` a workspace's connection. */
 export function ConnectDocumentSheet(props: {
   provider: DocumentKind | null; close: () => void; connected: () => void; save?: (provider: DocumentKind, body: Record<string, unknown>) => Promise<void>;
 }) {
@@ -369,7 +352,6 @@ export function ConnectDocumentSheet(props: {
   );
 }
 
-/** Profile section: the accounts sessions you own work with, your Git accounts first, then one per document provider. */
 export function ConnectedAccountsSection() {
   return (
     <Section bare title="Connected accounts" testID="connected-accounts"

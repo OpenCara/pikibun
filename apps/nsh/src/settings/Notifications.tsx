@@ -21,18 +21,12 @@ const supportHints = {
   page: "This browser shows notifications while a Pikibun tab is open.",
 };
 
-/**
- * Settings › Notifications, as the web app's: this device, what to be told about, and the devices that get them. In a
- * browser, this device's notifications turn on here; NSH's own platforms can't receive them yet (longbridge/nsh#1058),
- * so there the device stays off, and the rest is the account's and works from here.
- */
 export function Notifications(_props: SectionProps) {
   const { user } = untracked(session);
   const config = createResource<NotificationConfig>(() => "/api/notifications/config");
   const preferences = createAction();
   const devices = createAction();
   const device = createAction();
-  // How this device shows notifications, once the server says whether it pushes.
   const support = signal<DeviceSupport | null>(null);
   effect(() => {
     const loaded = config.data();
@@ -49,7 +43,6 @@ export function Notifications(_props: SectionProps) {
       config.refresh();
     }, next ? "Notifications are on for this device." : "Notifications are off for this device.");
   }
-  // What was last saved here is the newest there is.
   const saved = signal<NotificationPreferences | null>(null);
   const current = () => saved() ?? config.data()?.preferences;
   function savePreference(key: keyof NotificationPreferences, value: boolean) {

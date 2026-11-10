@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStaticHandler, pageContentSecurityPolicy, webBuild } from "../apps/server/src/static.ts";
 
-// The NSH client, built by `pnpm build`: an inline loader and content-named files.
 const page = `<!doctype html>\n<html lang="en">\n<head>\n<script>const fetches = new Map();</script><script type="module">import { createPlayer } from "./nsh.89070fe10a.js";</script><script src="./x.js"></script>\n</head><body></body></html>`;
 
 async function site(t: test.TestContext) {
@@ -23,7 +22,6 @@ const directive = (policy: string, name: string) => policy.split("; ").find(item
 
 test("the page's policy lets Native Shell's web runtime start, and no more", () => {
   const policy = pageContentSecurityPolicy();
-  // Its blob modules, the import map it inserts (no hash or nonce: they would turn 'unsafe-inline' off) and WebAssembly.
   assert.equal(directive(policy, "script-src"), "script-src 'self' blob: 'unsafe-inline' 'wasm-unsafe-eval'");
   assert.doesNotMatch(policy, /'unsafe-eval'|'sha256-|'nonce-|\*/, "no eval, no hashes or nonces, no wildcard");
   assert.equal(directive(policy, "connect-src"), "connect-src 'self' blob: data:", "requests go to this server only");
@@ -49,7 +47,6 @@ test("serves the client at the root: files as they are, everything else as its p
   assert.equal((await serve(get("/app.0123456789.css"))).headers.get("content-type"), "text/css; charset=utf-8");
   assert.equal((await serve(get("/manifest.webmanifest"))).headers.get("cache-control"), "no-cache");
 
-  // Other paths are the page; nothing outside the build is reachable.
   assert.equal(await (await serve(get("/settings/hosts"))).text(), html);
   assert.equal(await (await serve(get("/..%2f..%2fetc%2fpasswd"))).text(), html);
   assert.equal(await (await serve(get("/index.html"))).text(), html, "index.html itself gets the page's treatment too");

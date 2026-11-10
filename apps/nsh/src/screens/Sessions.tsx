@@ -12,11 +12,6 @@ import { Card } from "../settings/accounts";
 
 const PAGE_SIZE = 50;
 
-/**
- * Every session the person can read, by workspace, newest first, as the web app's SessionsScreen: searchable, archived
- * ones on request, a workspace's longer list in pages. A right click on a session (a finger held on it on touch
- * screens) opens what can be done to it, as in the sidebar.
- */
 export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () => void; onNew: () => void }) {
   const data = useAppData();
   const { user } = untracked(session);

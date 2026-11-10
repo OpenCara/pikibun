@@ -13,7 +13,6 @@ import { connectorLimits, type ConnectorRpcRequest } from '../packages/shared/sr
 import { sha256 } from '../packages/shared/src/crypto.js';
 import type { RunnerAction } from '../packages/shared/src/types.js';
 
-/** A connector-side client: records relayed requests and the server's close code. */
 class RelaySocket {
   readonly requests: ConnectorRpcRequest[] = [];
   readonly messages: string[] = [];
@@ -34,7 +33,7 @@ class RelaySocket {
   }
   get readyState(): number { return this.ws.readyState; }
   send(raw: string | Buffer): void {
-    try { this.ws.send(raw); } catch { /* A closed socket cannot answer; the assertions check the outcome. */ }
+    try { this.ws.send(raw); } catch { }
   }
   async nextRequest(): Promise<ConnectorRpcRequest> {
     const existing = this.requests.shift();
@@ -78,7 +77,6 @@ async function fixture(t: TestContext) {
     'session', 'workspace', 'owner', 'version', 'Session', 1, 'ready', created, 'connector', 'host');
   await run('INSERT INTO session_grants VALUES (?, ?, ?, ?)', 'session', 'guest', '["read","manage"]', created);
   let beforeQuery: ((sql: string) => Promise<void>) | undefined;
-  // The hub sees a provider whose statements can be held mid-flight to reproduce admission races.
   const hooked: Database = {
     provider: db.provider,
     batch: statements => db.batch(statements),
@@ -158,7 +156,6 @@ async function fixture(t: TestContext) {
     setBeforeQuery(hook?: (sql: string) => Promise<void>) { beforeQuery = hook; } };
 }
 
-/** Lets in-flight frames land; used only to prove that nothing was sent. */
 const settled = () => delay(30);
 
 test('connector handshake stores only the connection hash, negotiates the protocol and answers heartbeats', async t => {
@@ -387,7 +384,6 @@ test('malformed, binary, oversized and over-limit frames close the generation an
     if (kind === 'frame') socket.send(Buffer.alloc(connectorLimits.frameBytes + 1, 0x20));
     const response = await pending;
     assert.equal(response.status, 502, `${kind}: ${response.status}`);
-    // ws itself refuses frames above maxPayload with 1009 before the relay sees them.
     assert.equal((await socket.closed).code, kind === 'frame' ? 1009 : 1008, kind);
     assert.equal(await f.connectionHash(), null, `${kind} clears the generation`);
   }
@@ -438,7 +434,6 @@ test('a missed deadline answers only that request; its late reply frees its slot
   assert.match((await timedOut.json() as { error: string }).error, /timed out; inspect the session before retrying/);
   t.mock.timers.reset();
   assert.equal(f.initial.socket.readyState, WebSocket.OPEN, 'one slow request must not end every session\'s requests');
-  // The host still owes that reply, so the request keeps its slot until it comes.
   const others: Promise<Response>[] = [];
   const otherWires: ConnectorRpcRequest[] = [];
   for (let i = 1; i < connectorLimits.pendingRequests; i++) {
@@ -446,14 +441,11 @@ test('a missed deadline answers only that request; its late reply frees its slot
     otherWires.push(await f.initial.socket.nextRequest());
   }
   assert.equal((await f.rpc(await f.envelope())).status, 429);
-  // Late, it goes nowhere: it is never replayed as an effect, and the connection goes on. Frames keep their order, so
-  // once the reply sent after it is through, the relay has read the late one too.
   f.reply(f.initial.socket, wire, '{"late":true}');
   f.reply(f.initial.socket, otherWires[0]!);
   const answered = await others[0]!;
   assert.equal(answered.status, 200);
   await answered.body!.cancel();
-  // Both slots are free again: exactly two more requests fit.
   const more = [f.rpc(await f.envelope()), f.rpc(await f.envelope())];
   const moreWires = [await f.initial.socket.nextRequest(), await f.initial.socket.nextRequest()];
   assert.equal((await f.rpc(await f.envelope())).status, 429);
@@ -462,7 +454,6 @@ test('a missed deadline answers only that request; its late reply frees its slot
   for (const other of [...otherWires.slice(1), moreWires[1]!]) f.reply(f.initial.socket, other);
   for (const response of await Promise.all([...others.slice(1), more[1]!])) { assert.equal(response.status, 200); await response.body!.cancel(); }
   assert.equal(f.initial.socket.readyState, WebSocket.OPEN);
-  // A second answer to it is unsolicited, as for any finished request.
   f.reply(f.initial.socket, wire, '{"again":true}');
   assert.deepEqual(await f.initial.socket.closed, { code: 1008, reason: 'Unsolicited connector response' });
 });
@@ -612,7 +603,6 @@ for (const mutation of ['privacy', 'membership'] as const) {
       const value = await f.envelope('view', '', 'guest');
       const sql = mutation === 'privacy' ? "UPDATE sessions SET visibility = 'private'"
         : "DELETE FROM workspace_members WHERE user_id = 'guest'";
-      // Do not bump policy_version: live access must be sufficient even with an unchanged ticket.
       if (stage === 'dispatch') {
         await f.exec(sql);
         assert.equal((await f.rpc(value)).status, 403);

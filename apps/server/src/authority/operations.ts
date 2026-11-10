@@ -6,16 +6,9 @@ import { GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, githubMergeMethods, 
 import { validCloneDirectory, validPushBranch, validPushTag } from '../../../../packages/shared/src/repositories.js';
 import { fail, text } from '../http.js';
 
-/**
- * The program tools a call may name: Pikibun's own, and those this server defines as data (tool-definitions.ts) and
- * serves to connectors. A definition is never taken back by name, so a call of a tool a connector read from this server
- * before is still one of these.
- */
 const programTools: ReadonlySet<string> = new Set([...programToolNames, ...bundledToolDefinitions.filter(item => item.kind === 'program').map(item => item.name)]);
-/** The tools a permission request may name: Pikibun's own, and every tool this server defines as data. */
 const knownTools: ReadonlySet<string> = new Set([...toolNames, ...bundledToolDefinitions.map(item => item.name)]);
 
-/** A pinned repository's worktree path, as produced by repositoryPath(): 2-64 safe segments. */
 export function validRepositoryPath(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 512 && /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){1,63}$/.test(value)
     && !value.split('/').some(part => ['.', '..', '.git'].includes(part.toLowerCase()));
@@ -30,12 +23,10 @@ function pullRequest(value: unknown): PullRequestRequest {
   const body = text(input.body, 'pull request body', 60000, 0);
   if (input.base !== undefined && !validPushBranch(input.base)) fail(400, 'invalid_operation', 'Invalid pull request base branch.');
   if (input.draft !== undefined && typeof input.draft !== 'boolean') fail(400, 'invalid_operation', 'Invalid pull request draft flag.');
-  // Canonical key order (title, body, base, draft): approval review and broker hashes are computed over JSON.stringify.
   return { title, body, ...(input.base === undefined ? {} : { base: input.base as string }),
     ...(input.draft === undefined ? {} : { draft: input.draft as boolean }) };
 }
 
-/** A github.com repository as owner/name, never a URL or a path. */
 export function githubRepositoryName(value: unknown): string {
   const repository = text(value, 'repository', 200);
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/.test(repository) || repository.endsWith('/.') || repository.endsWith('/..')) {
@@ -54,13 +45,11 @@ export function parseOperation(input: unknown): Operation {
   switch (value.kind) {
     case 'host.bash':
     case 'git.repin':
-      // The same exact keys and bounds as the runner's validation, so approvals compare equal on both sides.
       if (!validHostOperation(input)) fail(400, 'invalid_operation', 'Invalid host command or repin request.');
       return input.kind === 'host.bash'
         ? { kind: input.kind, command: input.command, timeoutSeconds: input.timeoutSeconds }
         : { kind: input.kind, repository: input.repository, ref: input.ref };
     case 'extension.tool':
-      // The same exact keys and bounds as the runner's validation, so approvals compare equal on both sides.
       if (!validExtensionToolOperation(input)) fail(400, 'invalid_operation', 'Invalid extension tool call.');
       return { kind: input.kind, source: input.source, tool: input.tool, arguments: input.arguments, digest: input.digest };
     case 'git.commit': return { kind: value.kind, message: text(value.message, 'commit message', 4000) };
@@ -75,14 +64,12 @@ export function parseOperation(input: unknown): Operation {
       if (!Number.isSafeInteger(value.pull) || Number(value.pull) < 1) fail(400, 'invalid_operation', 'Invalid pull request number.');
       if (typeof value.sha !== 'string' || !/^[0-9a-f]{40}$/.test(value.sha)) fail(400, 'invalid_operation', 'Expected the 40-character head commit to merge.');
       if (!githubMergeMethods.includes(value.method as GitHubMergeMethod)) fail(400, 'invalid_operation', 'Expected the merge, squash or rebase method.');
-      // Canonical key order: approval review and broker hashes are computed over JSON.stringify of this value.
       return { kind: value.kind, repository, pull: Number(value.pull), sha: value.sha, method: value.method as GitHubMergeMethod };
     }
     case 'github.issue': {
       const repository = githubRepositoryName(value.repository);
       const title = text(value.title, 'issue title', GITHUB_ISSUE_TITLE_LIMIT);
       if (!title.trim() || /[\r\n]/.test(title)) fail(400, 'invalid_operation', 'Expected a one-line issue title.');
-      // Canonical key order: approval review and broker hashes are computed over JSON.stringify of this value.
       return { kind: value.kind, repository, title, body: text(value.body, 'issue body', GITHUB_ISSUE_BODY_LIMIT, 0) };
     }
     case 'git.push': {
@@ -92,7 +79,6 @@ export function parseOperation(input: unknown): Operation {
       if (value.directory !== undefined && !validCloneDirectory(value.directory)) fail(400, 'invalid_operation', 'Invalid clone directory.');
       if (value.tag !== undefined && !validPushTag(value.tag)) fail(400, 'invalid_operation', 'Invalid tag name.');
       if (value.tag !== undefined && value.pullRequest !== undefined) fail(400, 'invalid_operation', 'A tag push opens no pull request.');
-      // Canonical key order: approval review and broker hashes are computed over JSON.stringify of this value.
       return { kind: value.kind, repository: value.repository, ...(value.directory === undefined ? {} : { directory: value.directory as string }),
         branch: value.branch, ...(value.tag === undefined ? {} : { tag: value.tag as string }), commit: value.commit,
         ...(value.pullRequest === undefined ? {} : { pullRequest: pullRequest(value.pullRequest) }) };
@@ -100,7 +86,6 @@ export function parseOperation(input: unknown): Operation {
     case 'permission': {
       const needs = value.needs;
       if (typeof value.tool !== 'string' || !knownTools.has(value.tool)) fail(400, 'invalid_operation', 'Unknown tool.');
-      // Unique and in permissionNeeds order, so equal requests hash equally.
       if (!Array.isArray(needs) || !needs.length || needs.join() !== permissionNeeds.filter(need => needs.includes(need)).join()) {
         fail(400, 'invalid_operation', 'Invalid permission needs.');
       }

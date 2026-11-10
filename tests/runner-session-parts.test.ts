@@ -14,11 +14,6 @@ import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "../apps/runner/src/s
 import { MAX_STAGED_UPLOADS, SessionUploads, STALE_UPLOAD_MS } from "../apps/runner/src/session/uploads.js";
 import type { Run } from "../apps/runner/src/session.js";
 
-/*
- * RunnerSession's collaborators (apps/runner/src/session/), each with its own state, on their own: what the session's
- * own tests cover only through a whole session, and on Linux with bubblewrap.
- */
-
 async function directory(t: TestContext): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), "session-parts-"));
   t.after(() => rm(path, { recursive: true, force: true }));
@@ -41,18 +36,15 @@ test("uploads: chunks in order make the file, imported once whole; out of order,
   assert.deepEqual(imported, [{ directory: "attachments", name: "notes.txt", data: "hello world" }]);
   assert.deepEqual(await readdir(join(root, "uploads")), [], "the staged file is gone once imported");
 
-  // Another actor's chunk of the same upload id is another upload, which never started.
   await uploads.receive("alice", chunk("u2", "abc", 0, 6), allow);
   await assert.rejects(uploads.receive("bob", chunk("u2", "def", 3, 6), allow), /no longer on the host/);
   await assert.rejects(uploads.receive("alice", chunk("u2", "def", 4, 6), allow), /out of order/);
 
-  // Chunks of one session are taken one at a time, in the order they came.
   const order: string[] = [];
   const slow = new SessionUploads(join(root, "slow"), { importFile: async (_directory, name) => { order.push(name); return name; } });
   await Promise.all([slow.receive("alice", chunk("a", "x", 0, 1, "a.txt"), allow), slow.receive("alice", chunk("b", "y", 0, 1, "b.txt"), allow)]);
   assert.deepEqual(order, ["a.txt", "b.txt"]);
 
-  // Unfinished uploads count against the session's limit; an hour-old one is abandoned and swept.
   const limited = new SessionUploads(join(root, "limited"), { importFile: async () => "x" });
   for (let index = 0; index < MAX_STAGED_UPLOADS; index++) await limited.receive("alice", chunk(`p${index}`, "a", 0, 2), allow);
   await assert.rejects(limited.receive("alice", chunk("one-more", "a", 0, 2), allow), (error: unknown) => error instanceof RunnerError && error.status === 429);
@@ -148,19 +140,16 @@ test("mirrors: borrowed only while the grant names the repository and the relay 
   });
   await mirrors.restore([repository, { ...repository, bindingId: "b2", repositoryId: undefined }]);
   assert.deepEqual(prepared, ["acme/app"], "a repository the control plane names no id for has no mirror");
-  // Listed, but not confirmed in this open: the relay is asked first, and a refusal ends borrowing for the open.
   assert.deepEqual(await mirrors.mounts(), []);
   assert.equal(relayed, 1);
   assert.deepEqual(await mirrors.mounts(), []);
   assert.equal(relayed, 1, "a refused repository isn't asked about again");
 
-  // A failure that may pass only skips the step: the next one asks again.
   await mirrors.restore([repository]);
   answer = async () => { throw new RunnerError(503, "busy"); };
   assert.deepEqual(await mirrors.mounts(), []);
   assert.deepEqual(await mirrors.mounts(), []);
   assert.equal(relayed, 3);
-  // The grant no longer naming it, or refusing altogether, drops it without asking the relay.
   grant = async () => ({ policy: { mode: "off", domains: [], packageRegistries: false }, repositories: [] });
   assert.deepEqual(await mirrors.mounts(), []);
   assert.equal(relayed, 3);
@@ -168,7 +157,6 @@ test("mirrors: borrowed only while the grant names the repository and the relay 
   grant = async () => { throw new RunnerError(403, "archived"); };
   assert.deepEqual(await mirrors.mounts(), []);
   assert.equal(relayed, 3);
-  // A refused Git read through the relay forgets it too (RunnerSession.relay).
   await mirrors.restore([repository]);
   mirrors.forget("b1");
   grant = async () => ({ policy: { mode: "off", domains: [], packageRegistries: false }, repositories: [repository] });

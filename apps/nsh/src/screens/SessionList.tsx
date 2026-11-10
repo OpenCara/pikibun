@@ -13,10 +13,8 @@ import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, Identit
 type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; canCreate: boolean }
   | { kind: "session"; key: string; session: SessionRecord; depth: number }
-  /** A workspace without sessions yet: a row that starts one there. */
   | { kind: "start"; key: string; workspaceId: string };
 
-/** "3m", "2h", "5d", "6 Nov": a session's age, as short as a sidebar has room for. */
 export function shortAge(value: string, now = Date.now()): string {
   const time = new Date(value).getTime();
   if (Number.isNaN(time)) return "";
@@ -29,16 +27,6 @@ export function shortAge(value: string, now = Date.now()): string {
   return `${date.getDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][date.getMonth()]}`;
 }
 
-/**
- * Sessions by workspace, as the web app's sidebar lists them (Sidebar.tsx): each workspace a row with its identity
- * badge that folds its sessions away, each session one step in under it, newest first; sessions another session's agent
- * started follow it, one more step in. Archived ones only on request. Every workspace has its row, one without sessions
- * a row that starts one there; a workspace's row starts a session in it and opens its settings (`onNewIn`,
- * `onWorkspaceSettings`), and `onNewWorkspace` creates another. `selectedId` marks the open one. `compact` is the
- * desktop sidebar's density; the phone's list has bigger rows to tap. A right click on a row (a finger held on it on
- * touch screens) opens its menu: a workspace's options, or what can be done to a session (createSessionMenu), whose
- * outcome shows under the search box.
- */
 export function SessionList(props: {
   selectedId?: string | null; onOpen: (id: string) => void; onNew: () => void; compact?: boolean;
   onNewIn?: (workspaceId: string) => void; onWorkspaceSettings?: (workspaceId: string) => void; onNewWorkspace?: () => void;
@@ -47,10 +35,8 @@ export function SessionList(props: {
   const menu = createSessionMenu();
   const query = signal("");
   const showArchived = signal(false);
-  /** Workspaces folded away, by ID. */
   const collapsed = signal<readonly string[]>([]);
   const archivedCount = () => data.sessions().filter(item => item.status === "archived").length;
-  // One list of rows, workspace rows before their sessions: NSH's List is one virtualized column.
   const rows = computed<Row[]>(() => {
     const needle = query().trim().toLowerCase();
     const byWorkspace = new Map<string, SessionRecord[]>();
@@ -61,7 +47,6 @@ export function SessionList(props: {
       if (list) list.push(item);
       else byWorkspace.set(item.workspaceId, [item]);
     }
-    // Every workspace, those without sessions too (unless searching), then any a session names that isn't listed.
     if (!needle) for (const workspace of data.workspaces()) if (!byWorkspace.has(workspace.id)) byWorkspace.set(workspace.id, []);
     const order = data.workspaces().map(workspace => workspace.id);
     const rank = (id: string) => { const index = order.indexOf(id); return index < 0 ? order.length : index; };
@@ -77,10 +62,7 @@ export function SessionList(props: {
     });
   });
   const toggle = (id: string) => collapsed.update(current => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]));
-  // The pull-to-refresh spinner shows while the reload a pull started runs, and only then: background reloads
-  // (polling, opening or leaving a session) keep the list where it is rather than pushing it down under a spinner.
   const refreshing = signal(false);
-  /** The latest pull: an earlier one's reloads finishing don't hide the spinner of a later one still loading. */
   let pulls = 0;
   function pullToRefresh() {
     const pull = ++pulls;
@@ -175,11 +157,6 @@ export function SessionList(props: {
   );
 }
 
-/**
- * A workspace's row (.workspace-row): its badge and name, pressing which folds its sessions away or back, then a new
- * session there and its options (a new session, folding it, its ID and its settings), as the web app's sidebar has
- * them; a right click on the row opens the same options.
- */
 function WorkspaceRow(props: {
   row: Extract<Row, { kind: "workspace" }>; collapsed: boolean; onToggle: (id: string) => void; compact?: boolean;
   onNewIn?: (workspaceId: string) => void; onSettings?: (workspaceId: string) => void; action: Action;
@@ -213,17 +190,11 @@ function WorkspaceRow(props: {
   );
 }
 
-/** Its status label's color: only while under way or needing attention (.session-status). */
 const statusColors: Partial<Record<Tone, Tone>> = { running: "info", info: "info", warning: "warning", danger: "danger" };
 
-/**
- * A session's row (.nav-item.session-item): its status dot, title and what to know about it, and its age; a right click
- * on it opens what can be done to it (`menu`).
- */
 function SessionRow(props: { item: SessionRecord; depth: number; selected: boolean; onOpen: (id: string) => void; compact?: boolean; menu: SessionMenu }) {
   const data = useAppData();
   const { user } = untracked(session);
-  // The session on screen shows what its live view shows, not what the list last fetched.
   const status = () => {
     const live = data.liveActivity();
     return sessionStatus(props.item, live?.sessionId === props.item.id ? live.activity : undefined);

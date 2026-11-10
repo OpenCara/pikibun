@@ -12,11 +12,6 @@ import { pushTarget, type PushTarget } from './targets.js';
 
 const pushTypes = { 'receive-refs': gitServiceTypes['receive-refs'], 'receive-pack': gitServiceTypes['receive-pack'] } as const;
 
-/**
- * What a push of a clone session's own branch needs before any credential: no restore or move pending, the binding
- * still configured, the owner able to push the repository themselves (whichever identity pushes for them), and the
- * binding's default-branch policy. Shared by the relay and the direct grant.
- */
 export async function sessionBranchTarget(c: AppContext, session: SessionRow, binding: RepositoryRow, access: RepositoryAccess)
   : Promise<{ branch: string; pin: SessionRepository; target: PushTarget }> {
   const branch = sessionBranch(session);
@@ -32,7 +27,6 @@ export async function sessionBranchTarget(c: AppContext, session: SessionRow, bi
   return { branch, pin, target };
 }
 
-/** `body`, calling `done` once when it ends, fails, or its reader goes away. */
 function settled(body: ReadableStream<Uint8Array>, done: () => void): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   return new ReadableStream<Uint8Array>({
@@ -53,12 +47,6 @@ function settled(body: ReadableStream<Uint8Array>, done: () => void): ReadableSt
   });
 }
 
-/**
- * A clone session's push of its own branch (its `branch`, or `pikibun/<session-id>`) through its host's egress proxy, without approval:
- * the ref advertisement (`receive-refs`) and the push itself (`receive-pack`), whose commands may only create or move
- * that branch. The workspace's push identity is minted here and used here; it never reaches the host. The caller has
- * checked the session's authority, its connector and the repository binding, and loaded the owner's account.
- */
 export async function sessionBranchPush(c: AppContext, input: {
   session: SessionRow; binding: RepositoryRow; access: RepositoryAccess; service: 'receive-refs' | 'receive-pack';
   authorize: () => Promise<unknown>;
@@ -80,14 +68,12 @@ export async function sessionBranchPush(c: AppContext, input: {
       if (error instanceof PushRequestError) fail(400, 'invalid_push_request', error.message);
       throw error;
     }
-    // Git's probe before a chunked upload changes nothing: it is answered without a credential, once read.
     if (!parsed.commands.length) {
       if (!await drainStream(parsed.body, PUSH_REQUEST_BYTES)) fail(413, 'body_too_large', 'The push is too large.');
       return new Response(null, { headers: { 'Content-Type': pushTypes[service], 'Cache-Control': 'private, no-store' } });
     }
     const refusal = sessionBranchRefusal(parsed.commands, branch);
     if (refusal) {
-      // Read to its end first, as for the probe: the connection must stay up for the answer.
       if (!await drainStream(parsed.body, PUSH_REQUEST_BYTES)) fail(413, 'body_too_large', 'The push is too large.');
       fail(403, 'session_branch_only', refusal);
     }

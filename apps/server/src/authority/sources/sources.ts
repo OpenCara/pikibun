@@ -24,13 +24,6 @@ import { configuredOAuth, refreshedSecret, type OAuthSecret } from './source-oau
 import { recheckWorkspaceDocument, sourceReadAs, workspaceDocumentAccount, type WorkspaceDocumentAccount } from '../workspace-connections.js';
 import { workspaceDocumentProviders, type SourceReadAs } from '../../../../../packages/shared/src/workspace-connections.js';
 
-/**
- * Workspace sources other than Git repositories (docs/design/external-sources.md): Notion pages and databases, Google
- * Drive folders and files, Feishu/Lark folders, documents and wiki pages. Owners and admins bind them; every session in
- * the workspace reads them, each with its owner's own connected account of that kind, or where an owner or admin chose
- * that, with the workspace's own connection (workspace-connections.ts), through the control plane (source_read). Secrets
- * never reach a host.
- */
 export const documentAdapters: Record<DocumentKind, DocumentAdapter> = {
   notion: notionAdapter, 'google-drive': googleDriveAdapter, feishu: feishuAdapter, dropbox: dropboxAdapter, onedrive: onedriveAdapter, 'tencent-docs': tencentDocsAdapter,
 };
@@ -51,7 +44,6 @@ export async function workspaceDocumentSources(env: Env, workspaceId: string): P
   return rows.map(publicSource);
 }
 
-/** The workspace's document sources as a session's grant lists them. */
 export async function grantSources(env: Env, workspaceId: string): Promise<GrantSource[]> {
   return (await workspaceDocumentSources(env, workspaceId)).map(source => ({ id: source.id, kind: source.kind, type: source.itemType, title: source.title }));
 }
@@ -63,11 +55,6 @@ async function loadAccount(env: Env, userId: string, provider: DocumentKind): Pr
   return row ? { secret: await decryptToken(env, userId, row.ciphertext), ciphertext: row.ciphertext, userId, provider, method: row.method } : null;
 }
 
-/**
- * What an adapter gets: a pasted secret as it is, or for a sign-in only a current access token (refreshed here, and
- * stored again, when it is about to expire). The refresh token never reaches an adapter. A refresh that races another
- * keeps whichever was stored first, so the account the read uses is always the stored one.
- */
 async function adapterSecret(env: Env, account: LoadedAccount): Promise<{ account: LoadedAccount; secret: string }> {
   if (account.method !== 'oauth') return { account, secret: account.secret };
   let stored = JSON.parse(account.secret) as OAuthSecret;
@@ -88,7 +75,6 @@ async function adapterSecret(env: Env, account: LoadedAccount): Promise<{ accoun
   return { account, secret: JSON.stringify({ mode: 'oauth', accessToken: stored.accessToken, ...(stored.openId ? { openId: stored.openId } : {}), ...(clientId ? { clientId } : {}) }) };
 }
 
-/** The account that was used must still be the connected one before its result leaves the control plane. */
 async function recheckAccount(env: Env, account: LoadedAccount): Promise<void> {
   const current = await env.DB.query<{ ciphertext: string }>('SELECT ciphertext FROM source_accounts WHERE user_id = ? AND provider = ?')
     .bind(account.userId, account.provider).first('ciphertext');
@@ -99,10 +85,6 @@ function providerParam(value: string | undefined): DocumentKind {
   return documentKind(value) ? value : fail(404, 'not_found', 'No such kind of connected account.');
 }
 
-/**
- * source_read: an item of one of the session's workspace sources, read with the session OWNER's account of that kind,
- * within the requester's current write message, like github_read. The item must be the bound one or lie under it.
- */
 export async function sourceRead(c: AppContext, connectorId: string | null): Promise<Response> {
   const input = await jsonObject(c, 8192);
   if (Object.keys(input).some(key => !['sessionId', 'actorId', 'admissionId', 'callId', 'source', 'item'].includes(key))) {
@@ -127,12 +109,9 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
       || admission.expires_at <= Math.floor(Date.now() / 1000)) {
       fail(403, 'source_read_not_admitted', 'Source reads need a write message from the requester sent within the last hour.');
     }
-    // The target a one-call permission card showed: the source and the item exactly as the agent passed it.
     await requireToolCall(c.env, access.row, 'source_read', { id: callId, requestedBy: actorId, admission, target: item === null ? sourceId : `${sourceId}: ${item}` });
     const source = await c.env.DB.query<DocumentSourceRow>(`${documentSourceSelect} WHERE d.source_id = ? AND d.workspace_id = ?`).bind(sourceId, access.row.workspace_id).first();
     if (!source) fail(404, 'source_not_found', 'This workspace has no such source, or it is a repository (clone those with Git).');
-    // Each kind of source has its own switch (piki:notion, ...): one the workspace turned off isn't read, whichever
-    // connector asks, older ones that offer source_read for every kind included. Checked again after the read.
     if (documentKindsOff(await workspaceExtensions(c.env, access.row.workspace_id)).has(source.kind)) {
       fail(403, 'source_kind_off', `Reading ${documentKindNames[source.kind]} sources is turned off in this workspace (${documentSourceExtensionOf(source.kind)?.source ?? 'its extension'}). `
         + 'Its owners and admins turn it on under Settings → Workspaces → Extensions.');
@@ -141,7 +120,6 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
   };
   const { row, source } = await authorize();
   const adapter = documentAdapters[source.kind];
-  // The identity the source reads with: the session owner's own account, or where an admin chose it, the workspace's.
   const readAs = await sourceReadAs(c.env, row.workspace_id, source.source_id);
   let secret: string;
   let recheck: () => Promise<void>;
@@ -160,7 +138,6 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
   const view = fit<SourceReadView>({ source: source.title, kind: source.kind, ...read });
   await recheck();
   await authorize();
-  // Nothing read with an identity the source no longer reads with leaves the control plane.
   if (await sourceReadAs(c.env, row.workspace_id, source.source_id) !== readAs) {
     fail(409, 'source_read_as_changed', 'The account this source reads with changed; retry with the current one.');
   }
@@ -179,7 +156,6 @@ export function registerSources(app: Hono<AppEnv>): void {
     const provider = providerParam(c.req.param('provider'));
     if (!secretKinds.includes(provider)) fail(400, 'oauth_required', `Connect ${documentKindNames[provider]} by signing in to it.`);
     const input = await jsonObject(c, 16384);
-    // The adapter verifies what was pasted with its provider and keeps only what reads need.
     const { secret, name } = await documentAdapters[provider].connect(input);
     const ciphertext = await encryptToken(c.env, actor, secret);
     const created = now();
@@ -216,8 +192,6 @@ export function registerSources(app: Hono<AppEnv>): void {
     if (!documentKind(input.kind)) fail(400, 'invalid_source', 'Add Git repositories under Repositories; other sources are documents: Notion, Google Drive, Feishu/Lark, Dropbox, OneDrive or Tencent Docs.');
     const kind = input.kind;
     const adapter = documentAdapters[kind];
-    // The identity the source will read with checks the item and names it: the admin's own account for a source members
-    // read with their own, or the workspace's connection.
     let item;
     if (readAs === 'workspace') {
       if (!workspaceDocumentProviders.includes(kind)) fail(409, 'workspace_connection_unsupported', `${adapter.name} sources read with members' own sign-ins.`);
@@ -232,7 +206,6 @@ export function registerSources(app: Hono<AppEnv>): void {
     }
     const sourceId = id(); const created = now();
     const limit = () => fail(409, 'source_limit', `A workspace has at most ${sourceLimits.documents} sources besides its repositories.`);
-    // The count below keeps a lone admin within the limit; the database's trigger keeps concurrent adds within it too.
     const results = await c.env.DB.batch([
       c.env.DB.query(`INSERT INTO workspace_sources (id, workspace_id, kind, repository_binding_id, created_at)
         SELECT ?, ?, ?, NULL, ? WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))
@@ -242,7 +215,6 @@ export function registerSources(app: Hono<AppEnv>): void {
       c.env.DB.query(`INSERT INTO document_sources (source_id, workspace_id, kind, item_id, item_type, title, url, created_by)
         SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM workspace_sources WHERE id = ?)`)
         .bind(sourceId, workspaceId, kind, item.id, item.type, item.title, item.url, actor, sourceId),
-      // In the same write: a source never reads, even once, with an identity other than the one it was added with.
       c.env.DB.query(`INSERT INTO source_read_settings (source_id, workspace_id, read_as, updated_by, updated_at)
         SELECT ?, ?, 'workspace', ?, ? WHERE ? = 'workspace' AND EXISTS (SELECT 1 FROM workspace_sources WHERE id = ?)`)
         .bind(sourceId, workspaceId, actor, created, readAs, sourceId),

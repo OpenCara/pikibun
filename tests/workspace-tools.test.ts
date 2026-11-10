@@ -7,14 +7,9 @@ import { pikiSessionToolExtensions } from "../packages/shared/src/piki-extension
 import { descriptionSummary, extensionLabel, extensionOffer, PIKIBUN, pikibunToolDescriptions, workspaceTools } from "../packages/shared/src/workspace-tools.js";
 
 const own = pikiSessionToolExtensions().filter(item => !item.retired);
-/** The session's own tools, as the workspace page lists them: the file tools, which every session has, first. */
 const sessionTools = [...new Set([...own.filter(item => item.core), ...own.filter(item => !item.core)].flatMap(item => item.sessionTools ?? []))];
 const enabled = (source: string, tools: WorkspaceExtension["tools"] = "approval"): WorkspaceExtension => ({ source, enabled: true, tools, settings: {} });
 const disabled = (source: string): WorkspaceExtension => ({ source, enabled: false, tools: "approval", settings: {} });
-/**
- * A host's report of `source`, whose module registered `tools`, in the shape the connector reports it (summarizeModules):
- * one named like one of Pikibun's own is left out of `tools` and listed among what it ignores.
- */
 const installed = (source: string, tools: string[], extra: Partial<InstalledExtension> = {}): InstalledExtension => ({
   source, dev: false, modules: [{ path: "index.js", tools: tools.filter(name => !sessionTools.includes(name)).map(name => ({ name, description: `${name} does things.` })),
     events: [], flags: [], noops: [], ignored: tools.filter(name => sessionTools.includes(name)).map(name => `tool ${name} (one of Pikibun's own)`) }], ...extra,
@@ -38,7 +33,6 @@ test("a workspace that chose nothing gives its sessions every tool of Pikibun's 
   assert.ok(workspaceTools([enabled("piki:tunnel")], []).tools.some(tool => tool.name === "tunnel" && tool.source === "piki:tunnel"));
   assert.deepEqual(usable.shadowed, []);
   assert.deepEqual(usable.unreported, []);
-  // Retired switches (bash, host_bash) list nothing, whatever the workspace chose.
   assert.ok(!usable.tools.some(tool => tool.name === "bash" || tool.name === "host_bash"));
 });
 
@@ -55,10 +49,8 @@ test("source_read comes with one extension per kind of document source: on while
   const notionOff = workspaceTools([disabled("piki:notion")], []);
   assert.equal(notionOff.tools.find(tool => tool.name === "source_read")?.source, "piki:google-drive", "listed with the first kind that has it on");
   assert.equal(notionOff.tools.filter(tool => tool.name === "source_read").length, 1, "listed once");
-  // (The opt-in tunnel is off too, until a workspace turns it on.)
   const sourcesOff = (extensions: WorkspaceExtension[]) => workspaceTools(extensions, []).off.filter(item => item.name === "source_read");
   assert.deepEqual(sourcesOff(kinds.map(disabled)), [{ name: "source_read", source: "piki:notion" }]);
-  // A workspace that turned off piki:sources, before the split, has every kind it hasn't chosen since off.
   assert.deepEqual(sourcesOff([disabled("piki:sources")]), [{ name: "source_read", source: "piki:notion" }]);
   assert.equal(workspaceTools([disabled("piki:sources"), enabled("piki:feishu")], []).tools.find(tool => tool.name === "source_read")?.source, "piki:feishu");
 });
@@ -102,13 +94,11 @@ test("names are settled as sessions settle them: Pikibun's own first, even turne
     { name: "web_search", source: "npm:third@1.0.0", by: "npm:first@1.0.0", kind: "extension" },
     { name: "codemode", source: "pi:codemode", by: "npm:modes@1.0.0", kind: "builtin" },
   ]);
-  // An extension's tool named like one of Pikibun's own shows among its tools, as one sessions leave out.
   assert.deepEqual(extensionOffer("npm:first@1.0.0", reports)?.tools, [
     { name: "web_search", description: "web_search does things." }, { name: "read_file", description: "", own: true }, { name: "node", description: "", own: true }]);
   assert.deepEqual(usable.tools.filter(tool => tool.origin !== "session").map(tool => `${tool.source} ${tool.name}`),
     ["npm:first@1.0.0 web_search", "npm:second@1.0.0 fetch", "npm:modes@1.0.0 codemode"]);
   assert.ok(!usable.tools.some(tool => tool.name === "node"));
-  // The runner's own rule, which sessions apply, keeps the same tools.
   const settled = settleToolNames(reports.map(report => ({ source: report.source, tools: report.modules.flatMap(module => module.tools.map(tool => tool.name)) })), sessionTools);
   assert.deepEqual(settled.flatMap(item => item.kept.map(name => `${item.source} ${name}`)),
     usable.tools.filter(tool => tool.origin === "extension").map(tool => `${tool.source} ${tool.name}`));
@@ -138,7 +128,6 @@ test("Pikibun's own extensions describe themselves without a host's report, and 
   assert.match(gh!.description!, /GitHub CLI/);
   assert.deepEqual(extensionOffer("piki:prompt-audit", [])?.tools, []);
   assert.deepEqual(extensionOffer("piki:github", [])?.tools.map(tool => tool.name), ["github_read", "github_comment", "github_issue", "github_merge"]);
-  // A host's report gives the tool's own description, the catalogue the extension's.
   const reported = extensionOffer("piki:gh", [installed("piki:gh", ["gh"], { description: "Reported." })]);
   assert.equal(reported?.tools[0]?.description, "gh does things.");
   assert.match(reported!.description!, /GitHub CLI/);

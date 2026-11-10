@@ -46,8 +46,6 @@ function runtimeFixture(entries: readonly CatalogEntry[] = [nativeModel]) {
       return state.missingLookup || !entry ? undefined : { ...template, ...entry };
     },
   });
-  // Preserve the full Models shape and exact identity, but fail if this boundary
-  // reads auth, refreshes, streams, serializes, or enumerates non-chat models.
   const runtime: LocalPiRuntime = new Proxy(api, {
     get(target, property, receiver): unknown {
       if (property === 'then') return undefined;
@@ -208,7 +206,6 @@ test('Pi enabledModels picks the advertised subset like Pi model cycling; explic
   fixture.state.configured.delete('locked');
   const enabledModels = ['relay/*', '*/claude-opus-5-5*', '*/no-such-model*'];
   const local = await loadLocalPiModels({ runtimeFactory: fixture.runtimeFactory, enabledModels });
-  // Unauthenticated providers stay hidden even when a pattern matches their model.
   assert.deepEqual((await local.manifest()).map(model => `${model.provider}/${model.modelId}`), ['anthropic/claude-opus-5-5', 'relay/gpt-6-sol']);
   await assert.rejects(local.resolve(definition('anthropic', 'claude-haiku-4-5')), /unavailable/);
   const explicit = await loadLocalPiModels({ runtimeFactory: fixture.runtimeFactory, enabledModels, models: [{ provider: 'anthropic', modelId: 'claude-haiku-4-5' }] });
@@ -222,16 +219,12 @@ test('each model starts at the reasoning level Pi gives it: pattern, then per-mo
   ]);
   const levels = async (options: Omit<LocalPiOptions, 'runtimeFactory'>) => Object.fromEntries((await (await loadLocalPiModels({ runtimeFactory: fixture.runtimeFactory, ...options }))
     .manifest()).map(model => [model.modelId, `${model.thinkingLevel} of ${model.thinkingLevels?.join(',')}`]));
-  // Pi's own default is medium; a model without reasoning stays off.
   assert.deepEqual(await levels({}), { plain: 'off of off', thinker: 'medium of low,medium,high,xhigh,max' });
-  // A level the model lacks moves to the nearest one it has, upwards first.
   assert.deepEqual(await levels({ defaultThinkingLevel: 'off' }), { plain: 'off of off', thinker: 'low of low,medium,high,xhigh,max' });
-  // The model's own setting beats the default, and a level in an enabledModels pattern beats both.
   const modelThinkingLevels = new Map([['native.fixture/thinker', 'max' as const]]);
   assert.deepEqual(await levels({ defaultThinkingLevel: 'low', modelThinkingLevels }), { plain: 'off of off', thinker: 'max of low,medium,high,xhigh,max' });
   assert.deepEqual(await levels({ defaultThinkingLevel: 'low', modelThinkingLevels, enabledModels: ['native.fixture/thinker:high', 'native.fixture/plain'] }),
     { plain: 'off of off', thinker: 'high of low,medium,high,xhigh,max' });
-  // A session on the model starts at the same level.
   const local = await loadLocalPiModels({ runtimeFactory: fixture.runtimeFactory, modelThinkingLevels });
   assert.equal((await local.resolve(definition('native.fixture', 'thinker'))).thinkingLevel, 'max');
 });
@@ -277,7 +270,6 @@ test('Pi compaction and attribution settings are read as Pi reads them, and offe
   const settings = await readPiSettings(agentDir, {});
   assert.deepEqual(settings, { compaction: { enabled: true, reserveTokens: 8192, keepRecentTokens: 10000,
     modelOverrides: { 'relay/small-32k': { reserveTokens: 4096, keepRecentTokens: 0 }, 'relay/large': {} } } });
-  // Pi attributes its requests unless its install telemetry is off; PI_TELEMETRY overrides the setting either way.
   await write({ enableInstallTelemetry: false });
   assert.deepEqual(await readPiSettings(agentDir, {}), { attribution: false });
   assert.deepEqual(await readPiSettings(agentDir, { PI_TELEMETRY: 'yes' }), {});
@@ -336,8 +328,6 @@ test('pinned ModelRuntime discovers selected configured models without catalog n
   await writeFile(join(agentDir, 'models.json'), JSON.stringify({
     providers: {
       [provider]: providerConfig,
-      // Pi's custom-provider auth contract requires explicit configuration even
-      // for a keyless compatible server: a non-secret local placeholder suffices.
       [keyless]: { ...providerConfig, apiKey: 'local-keyless-placeholder', authHeader: false },
       [missing]: { ...providerConfig, authHeader: false },
     },

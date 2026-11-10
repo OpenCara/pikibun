@@ -27,12 +27,10 @@ function binding(id: string): RunnerBinding {
 
 type Browser = { worktree: string; browse(path: string, authorize: SandboxAuthorize): ReturnType<Sandbox["browse"]> };
 
-/** Lays out the same files in a worktree, and checks what the file browser makes of them. */
 async function exercise(browser: Browser, outside: string): Promise<void> {
   const work = browser.worktree;
   await mkdir(join(work, "src", "deep"), { recursive: true });
   await writeFile(join(work, "src", "a.txt"), "hello\nworld\n");
-  // The preview ends inside a two-byte character: it is cut before it.
   await writeFile(join(work, "src", "big.txt"), Buffer.concat([Buffer.alloc(fileBrowserLimits.textBytes - 1, "x"), Buffer.from("é")]));
   await writeFile(join(work, "src", "nul.bin"), Buffer.from("abc\0def"));
   await writeFile(join(work, "src", "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9]));
@@ -44,7 +42,6 @@ async function exercise(browser: Browser, outside: string): Promise<void> {
 
   const root = await browser.browse(".", authorize);
   assert.equal(root.type, "directory");
-  // Directories first, then by name; symlinks are listed, not followed.
   assert.deepEqual(root.type === "directory" && root.entries.map(entry => [entry.name, entry.type]),
     [[".git", "directory"], ["src", "directory"], ["escape", "symlink"], ["inside", "symlink"]]);
   const src = await browser.browse("src", authorize);
@@ -78,7 +75,6 @@ test("the sandboxed file browser lists and previews the worktree, read-only and 
   const sandbox = new Sandbox(binding("files-sandbox"), join(base, "session"));
   t.after(() => sandbox.close());
   await sandbox.initialize();
-  // The worktree as the host sees it, where the fixture files go; browse reads it inside the sandbox.
   await exercise({ worktree: join(base, "session", "worktree"), browse: (path, check) => sandbox.browse(path, check) }, await directory(t));
 });
 
@@ -99,7 +95,6 @@ test("a directory is listed through what was opened, never through a symlink swa
   await symlink(join(base, "outside"), join(base, "swapped"));
   const listing = await browseDirectory(join(base, "real"));
   assert.deepEqual(listing.type === "directory" && listing.entries, [{ name: "inside.txt", type: "file", size: 1 }]);
-  // A path that is a symlink by the time it is opened isn't followed.
   await assert.rejects(browseDirectory(join(base, "swapped")));
 });
 

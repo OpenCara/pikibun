@@ -1,19 +1,3 @@
-/**
- * Measures what the NSH desktop client waits for when it opens a session, against a real server and a real connector host
- * on this machine (as `pnpm dev:native` runs them, the host offering the deterministic fixture model): the requests it
- * made in order before (GET /api/sessions/:id, GET /view, then the first event of /events: shownMs), and at once now
- * (the metadata beside /events, whose first event is the whole view: atOnceShownMs), with its bearer token, as the
- * session's transcript grows.
- *
- *   node --import tsx scripts/perf/session-load-server.ts [--port 8799] [--turns 25,125] [--cold]
- *
- * Each turn adds 4 entries (the message, the tool call, a 4 KB tool result, the reply), until the host compacts the
- * conversation: views hold only the transcript since the last compaction. --cold also measures a first open after the
- * server dropped the session's feed (nobody read it for a minute), which costs a minute's wait per size.
- *
- * Everything runs on this machine, so this is the server's and the host's own work without network; see
- * nsh-session-load.test.tsx for the client's, with network delays.
- */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
@@ -51,7 +35,6 @@ try {
     if (Date.now() > deadline) throw new Error("The server did not start");
     await delay(200);
   }
-  // The desktop app's sign-in: a native bearer token.
   const native = await fetch(`${origin}/api/auth/test`, { method: "POST", body: JSON.stringify({ id: "dev", client: "native", deviceName: "Perf" }),
     headers: { Authorization: `Bearer ${testSecret}`, "Content-Type": "application/json" } }).then(response => response.json() as Promise<{ token: string }>);
   const api = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
@@ -84,12 +67,10 @@ try {
     }
   };
   await idle();
-  // A 4 KB file each turn reads: its output is the tool result, and the fixture model echoes it in its reply.
   const content = Array.from({ length: 50 }, (_, line) => `src/module-${line}.ts:${line + 1}: export function step${line}(input) { return input.trim(); }`).join("\n");
   await api("POST", `${base}/submit`, { content: `TEST_WRITE notes.txt\n${content}`, requestId: randomBytes(8).toString("hex") });
   await idle();
 
-  /** One open of the session, as the client does it: metadata, then the view, then the stream's first event. */
   async function openOnce() {
     const started = performance.now();
     await api("GET", base);
@@ -115,7 +96,6 @@ try {
     return { entries: view.entries.length, viewKB: Math.round(text.length / 1024), meta, viewMs, shown, firstEvent };
   }
 
-  /** One open as the client does it now: the metadata and the stream at once, the stream's first snapshot the whole view. */
   async function openAtOnce() {
     const started = performance.now();
     const controller = new AbortController();
@@ -139,7 +119,6 @@ try {
   let turns = 0;
   const round = (value: number) => Math.round(value);
   for (const target of values.turns.split(",").map(Number)) {
-    // Many at a time: the host queues them, and each runs in turn.
     while (turns < target) {
       const batch = Math.min(25, target - turns);
       for (let index = 0; index < batch; index++) await api("POST", `${base}/submit`, { content: "TEST_READ notes.txt", requestId: randomBytes(8).toString("hex") });
@@ -172,7 +151,7 @@ try {
 } finally {
   await stopHost().catch(() => {});
   if (server?.pid && server.exitCode === null) {
-    try { process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ }
+    try { process.kill(-server.pid, "SIGTERM"); } catch { }
     await delay(500);
   }
   await rm(temporary, { recursive: true, force: true });

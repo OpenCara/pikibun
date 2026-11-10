@@ -47,7 +47,6 @@ function send(socketPath: string, path: string, init: { method?: string; headers
   });
 }
 
-/** A git-lfs batch request, as git-lfs sends it. */
 function batch(socketPath: string, path: string, body: unknown) {
   return send(socketPath, path, { method: "POST", headers: { "content-type": "application/vnd.git-lfs+json; charset=utf-8", accept: "application/vnd.git-lfs+json" }, body: JSON.stringify(body) });
 }
@@ -64,7 +63,6 @@ function relayedBody(request: RelayRequest): unknown {
 test("grants carry each repository's Git LFS setting, as a boolean only", () => {
   const policy = { mode: "off", domains: [], packageRegistries: true } as const;
   assert.deepEqual(parseEgressGrant({ policy, repositories: [lfsRepository] }).repositories[0], lfsRepository);
-  // Off, and a control plane from before the setting, are the same: no LFS.
   assert.equal(parseEgressGrant({ policy, repositories: [{ ...repository, lfs: false }] }).repositories[0]!.lfs, undefined);
   assert.equal(parseEgressGrant({ policy, repositories: [repository] }).repositories[0]!.lfs, undefined);
   assert.throws(() => parseEgressGrant({ policy, repositories: [{ ...repository, lfs: "yes" }] }), /Invalid repositories/);
@@ -88,7 +86,6 @@ test("Git LFS downloads go through the relay, and git-lfs is pointed back at the
       ? Response.json({ objects: [{ oid, size: 3, download: true }, { oid: missing, size: 5, download: false, error: { code: 404, message: "Object does not exist on the server" } }] })
       : new Response("big", { headers: { "content-type": "application/octet-stream" } }),
   });
-  // The git shim asks before a clone, with the remote in whichever form the agent wrote it.
   for (const remote of ["https://github.com/acme/app.git", "git@github.com:acme/app.git", "http://127.0.0.1:41080/git/github.com/ACME/app"]) {
     assert.deepEqual(await lfsQuery(instance.socketPath, remote), { lfs: true }, remote);
   }
@@ -108,7 +105,6 @@ test("Git LFS downloads go through the relay, and git-lfs is pointed back at the
     ],
   });
   assert.deepEqual([relayed[0]!.bindingId, relayed[0]!.service, relayed[0]!.contentType], ["binding-app", "lfs-batch", "application/json"]);
-  // Only what the relay checks goes on: each object's id and size, and the ref.
   assert.deepEqual(relayedBody(relayed[0]!), { objects: [{ oid, size: 3 }, { oid: missing, size: 5 }], ref: "refs/heads/main" });
 
   const object = await send(instance.socketPath, `/git/github.com/acme/app.git/info/lfs/objects/${oid}?size=3`);
@@ -164,7 +160,6 @@ test("the relay's refusal of an LFS request reaches git-lfs as its message", asy
 test("an invalid answer from the control plane is refused rather than passed to git-lfs", async t => {
   const { instance } = await proxy(t, {
     grant: async () => grant([lfsRepository]),
-    // One object asked for, two answered: never trusted.
     relay: async () => Response.json({ objects: [{ oid, size: 3, download: true }, { oid: missing, size: 5, download: true }] }),
   });
   const refused = await batch(instance.socketPath, batchPath, { operation: "download", objects: [{ oid, size: 3 }] });

@@ -5,88 +5,46 @@ import type {
   HostEvent, HostInspection, HostRequest, HostState, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
 } from "../../../runner/src/app-host-protocol";
 
-// This computer as a host, in the desktop builds (Settings › This Mac, or This Computer): the app runs `pikibun host
-// --stdio` (apps/runner/src/host-cli.ts) and talks to it with JSON lines on its stdin and framed events on its stdout
-// (app-host-protocol.ts). The host's connector state is the CLI's own, so a computer paired with `pikibun connect` (or
-// the former Electron app's primary server) is adopted as it is; only one of them runs at a time. Hosting lasts while
-// the app is open, and resumes when it opens again if it was running when it quit.
-//
-// NSH runs a command without a shell and with the app's own PATH, which on a Mac opened from Finder lacks Homebrew's,
-// nvm's and npm's directories. So on macOS and Linux the owner's login shell starts the command, as Terminal would
-// (`$SHELL -ilc`); on Windows cmd.exe does, which finds npm's `pikibun.cmd`. The command line is fixed: pairing codes
-// travel only on the host's stdin.
-//
-// The Install button puts the command in a folder of the app's own data directory (`npm install --prefix`), not in npm's
-// global one: no permission to ask for, no PATH to fix, and the copy is the app's to update. The host starts that copy
-// where there is one, else a `pikibun` installed from a terminal (`npm install -g`), found on the shell's PATH.
-
-/** The desktops that can host: NSH runs processes on these only. */
 export const hostsHere = platform.os === "macos" || platform.os === "windows" || platform.os === "linux";
 export const computerTitle = platform.os === "macos" ? "This Mac" : "This Computer";
-/** "this Mac" or "this computer", within a sentence. */
 export const computerName = platform.os === "macos" ? "this Mac" : "this computer";
 
-/** app-host-protocol.ts's STDIO_FRAME: the host's own lines on its stdout start with it; anything else is output. */
 const STDIO_FRAME = "\u001epikibun ";
-/**
- * The login shells the app may start the command with, and cmd on Windows: bare names, as nsh.json grants them, which
- * NSH finds through the app's PATH (launchd's /usr/bin:/bin on a Mac, System32 on Windows). nsh.json is every target's,
- * and an absolute path of one platform isn't one on another, so no paths. Another shell falls back to the platform's.
- */
 const SHELLS = ["zsh", "bash", "sh"];
 const CMD = "cmd";
-/** What gets the command from a terminal, with Node.js 24 or newer, where the Install button didn't. */
 export const APP_CLI_VERSION = "0.27.0";
 const CLI_PACKAGE = `pikibun@${APP_CLI_VERSION}`;
 export const INSTALL_COMMAND = `npm install -g ${CLI_PACKAGE}`;
-/**
- * The app's own copy of the command: this folder of its data directory, which is also where it runs npm and the host
- * (their working directory, NSH's default), so on Windows it is named relative to it and needs no quoting through cmd.
- */
 const CLI_FOLDER = "cli";
-/** How long npm may take before the install is given up on. */
 const INSTALL_TIMEOUT_MS = 5 * 60_000;
 const LOG_LIMIT = 200;
 const NOTICES = 20;
 
-/** The owner's login shell by name, if the app is granted it, else the platform's. */
 function loginShell(os: string, shell: string | undefined): string {
   const name = shell?.split("/").pop();
   return name && SHELLS.includes(name) ? name : os === "macos" ? "zsh" : "bash";
 }
 
-/** `text` as one word of a POSIX shell's command line, whatever it holds. */
 const shellWord = (text: string) => `'${text.replace(/'/g, "'\\''")}'`;
 
-/** The folder the app keeps its own copy of the command in, in `dataDir`; none without a data directory. */
 export function appCliFolder(os: string, dataDir: string | null | undefined): string | null {
   if (!dataDir) return null;
   const separator = os === "windows" ? "\\" : "/";
   return `${dataDir.replace(/[\\/]+$/, "")}${separator}${CLI_FOLDER}`;
 }
 
-/**
- * How the app starts the host on this desktop: a login shell (macOS, Linux) or cmd.exe (Windows), running the app's own
- * copy of the command in `cli` (appCliFolder's) where there is one, else `pikibun` from PATH.
- */
 export function hostCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[] } {
   if (os === "windows") {
     if (!cli) return { command: CMD, args: ["/d", "/c", "pikibun", "host", "--stdio"] };
     const own = `${CLI_FOLDER}\\node_modules\\.bin\\pikibun.cmd`;
     return { command: CMD, args: ["/d", "/c", "if", "exist", own, "(", own, "host", "--stdio", ")", "else", "pikibun", "host", "--stdio"] };
   }
-  // Its bin folder first on PATH: it wins over a global one, which still runs where it's absent.
   const path = cli ? `PATH=${shellWord(`${cli}/node_modules/.bin`)}:"$PATH"; export PATH; ` : "";
   return { command: loginShell(os, shell), args: ["-ilc", `${path}exec pikibun host --stdio`] };
 }
 
-/**
- * How the app installs or updates the command: npm, started as the host is, so it is the npm Terminal would use, into
- * the app's own folder `cli` (appCliFolder's), or, without one, npm's global folder. The command line is fixed.
- */
 export function installCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[]; line: string } {
   const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", CLI_PACKAGE];
-  // `line` is exactly what runs (the folder quoted as the shell takes it), so the activity's copy runs as it reads.
   if (os === "windows") {
     const words = cli ? own : INSTALL_COMMAND.split(" ");
     return { command: CMD, args: ["/d", "/c", ...words], line: words.join(" ") };
@@ -95,27 +53,19 @@ export function installCommand(os: string, shell: string | undefined, cli?: stri
   return { command: loginShell(os, shell), args: ["-ilc", line], line };
 }
 
-/** One running host process, however it was started: the real command, or a test's stand-in. */
 export interface HostLink {
-  /** A request, as one JSON line on its stdin. */
   send(message: object): void;
-  /** Its protocol messages, parsed. */
   onMessage(listener: (value: unknown) => void): void;
-  /** What it printed outside the protocol (a shell's banner, a library's warning, why it can't start). */
   onOutput(listener: (line: string) => void): void;
   onExit(listener: (result: { code?: number | null; error?: string | null }) => void): void;
-  /** Ends its stdin: the host stops its connector and exits. */
   end(): void;
   kill(): void;
 }
 
 export type HostLauncher = () => HostLink;
 
-/** Starts `pikibun host --stdio` with NSH's process API. */
 export const spawnHost: HostLauncher = () => {
   const { command, args } = hostCommand(platform.os, nshProcess.env.SHELL, appCliFolder(platform.os, nshProcess.dataDir));
-  // It runs in the app's data directory; a host without one (headless tests) names the home folder instead, which only
-  // an app granted to write there may.
   let cwd: string | undefined;
   if (!nshProcess.dataDir) { try { cwd = homedir(); } catch { cwd = undefined; } }
   const child = nshProcess.spawn(command, args, { stdin: "pipe", lines: true, ...(cwd ? { cwd } : {}) });
@@ -130,24 +80,20 @@ export const spawnHost: HostLauncher = () => {
   });
   child.on("stderr", say);
   return {
-    send: message => { try { child.write(`${JSON.stringify(message)}\n`); } catch { /* The host has gone; its exit follows. */ } },
+    send: message => { try { child.write(`${JSON.stringify(message)}\n`); } catch { } },
     onMessage: listener => { messages.push(listener); },
     onOutput: listener => { output.push(listener); },
     onExit: listener => { child.on("exit", result => listener(result)); },
-    end: () => { try { child.end(); } catch { /* Already gone. */ } },
-    kill: () => { try { child.kill(); } catch { /* Already gone. */ } },
+    end: () => { try { child.end(); } catch { } },
+    kill: () => { try { child.kill(); } catch { } },
   };
 };
 
 let launcher: HostLauncher = spawnHost;
-/** Tests run a stand-in host instead of the command. Call before anything starts one. */
 export function setHostLauncher(next: HostLauncher): void { launcher = next; }
 
-/** One run of npm installing the command: its output lines, then how it ended. */
 export interface InstallRun {
-  /** Its command line, as the activity shows it. */
   line: string;
-  /** Where it installs: the app's own folder, or npm's global one. */
   where: "app" | "global";
   onOutput(listener: (line: string) => void): void;
   onExit(listener: (result: { code?: number | null; error?: string | null }) => void): void;
@@ -155,7 +101,6 @@ export interface InstallRun {
 
 export type Installer = () => InstallRun;
 
-/** Runs npm with NSH's process API, as the owner's shell would, into the app's own folder where it has one. */
 export const spawnInstall: Installer = () => {
   const cli = appCliFolder(platform.os, nshProcess.dataDir);
   const { command, args, line } = installCommand(platform.os, nshProcess.env.SHELL, cli);
@@ -171,10 +116,8 @@ export const spawnInstall: Installer = () => {
 };
 
 let installer: Installer = spawnInstall;
-/** Tests run a stand-in for npm instead. */
 export function setInstaller(next: Installer): void { installer = next; }
 
-/** Why npm couldn't install the command, as the owner can fix it, from what it printed and how it ended. */
 export function installFailure(lines: readonly string[], result: { code?: number | null; error?: string | null }): string {
   const text = lines.join("\n");
   const node = `Node.js 24 or newer (from nodejs.org${platform.os === "macos" ? ", or brew install node" : ""})`;
@@ -182,7 +125,6 @@ export function installFailure(lines: readonly string[], result: { code?: number
     return `npm isn't installed on ${computerName}. Install ${node}, then choose Install again.`;
   }
   if (/\bEACCES\b|\bEPERM\b|permission denied/i.test(text)) {
-    // Most often npm's own cache, left owned by root by an earlier sudo npm: npm says how to give it back.
     const chown = /sudo chown -R [^\s"]+ "[^"\n]+"/.exec(text)?.[0];
     if (chown) return `npm's cache on ${computerName} has files it can't write, left by an earlier sudo npm. Fix them in a terminal with ${chown}, then choose Install again.`;
     return `npm couldn't write a folder it needs on ${computerName}: permission denied. Run the command below in a terminal${platform.os === "windows" ? " as administrator" : " with sudo in front"}, then choose Refresh.`;
@@ -192,13 +134,11 @@ export function installFailure(lines: readonly string[], result: { code?: number
   return last ? `npm couldn't install pikibun: ${last}` : `npm couldn't install pikibun (exit code ${result.code ?? "unknown"}).`;
 }
 
-/** Why the command couldn't start the host, as the owner can fix it. */
 export type LaunchProblem =
   | { kind: "missing" }
   | { kind: "outdated" }
   | { kind: "failed"; message: string };
 
-/** What the lines a host printed before it exited say about why it never got ready. */
 export function launchProblem(lines: readonly string[], code: number | null | undefined): LaunchProblem {
   const text = lines.join("\n");
   if (/Unknown command: host/.test(text)) return { kind: "outdated" };
@@ -215,10 +155,6 @@ const eventTypes = new Set(["ready", "result", "status", "log", "failed", "login
 const isHostEvent = (value: unknown): value is HostEvent => typeof value === "object" && value !== null
   && "type" in value && typeof value.type === "string" && eventTypes.has(value.type);
 
-/**
- * The host process, started on the first request and never restarted by itself: an exit is reported, and the next
- * request starts a fresh one.
- */
 class HostChannel {
   private link?: HostLink;
   private ready?: Promise<void>;
@@ -247,11 +183,8 @@ class HostChannel {
     this.stopping = false;
     let isReady = false;
     let settled = false;
-    /** What it printed before it got ready: why it never did, if it doesn't. */
     const early: string[] = [];
     return new Promise<void>((resolve, reject) => {
-      // Until it is ready, what it prints is the login shell's (bash's job-control warnings, a banner) or why it can't
-      // start, which becomes its launch problem; once ready, the host's own output goes to its activity.
       link.onOutput(line => {
         if (isReady) { this.handlers.onOutput(line); return; }
         early.push(line);
@@ -278,10 +211,8 @@ class HostChannel {
     });
   }
 
-  /** Why the latest start failed, if it did. */
   get launchFailure(): LaunchProblem | undefined { return this.problem; }
 
-  /** Sends `message` once the host is ready; `sent` learns its id first (a sign-in's, which its answers name). */
   async request(message: Request, sent?: (id: number) => void): Promise<HostResult> {
     this.ready ??= this.spawn();
     const starting = this.ready;
@@ -299,7 +230,6 @@ class HostChannel {
     return result;
   }
 
-  /** Stops the connector, then ends the process; one that doesn't exit in time is killed. */
   async shutdown(timeoutMs = 10_000): Promise<void> {
     const link = this.link;
     if (!link) { this.ready = undefined; return; }
@@ -314,7 +244,6 @@ class HostChannel {
 
 export interface LogLine { time: number; level: "info" | "warning" | "error"; message: string }
 export interface ModelChoice { provider: string; modelId: string }
-/** macOS's choice: its own Seatbelt sandbox (experimental), or none, after consent at each start. */
 export type MacSandbox = "none" | "seatbelt";
 
 export interface SignInView {
@@ -327,12 +256,9 @@ export interface SignInView {
   notices: Exclude<LoginEvent, { kind: "prompt" | "prompt-closed" }>[];
 }
 
-/** What the owner chose here, kept in the app's storage. */
 interface Saved {
   sandbox?: MacSandbox;
-  /** The models to offer; none: Pi chooses, as `pikibun connect` without --model. */
   models?: ModelChoice[];
-  /** The host was running when the app quit: start it again for this server, with the consent given then. */
   resume?: { server: string; unsandboxedConsent: boolean };
 }
 
@@ -348,21 +274,13 @@ const isLoopbackHttp = (origin: string) => {
 };
 const isHttps = (url: string) => { try { return new URL(url).protocol === "https:"; } catch { return false; } };
 
-/**
- * This computer's host as the app sees it: what the host process reports, the owner's settings, and the start flow with
- * the unsandboxed consent. One per app: the host outlives the settings page that shows it.
- */
 export class ThisComputerHost {
   readonly state = signal<HostState>("stopped");
-  /** The server it runs for, and how, while it runs. */
   readonly running = signal<{ server: string; unsandboxed: boolean; sandbox?: HostInspection["sandbox"] } | null>(null);
   readonly inspection = signal<HostInspection | null>(null);
   readonly inspecting = signal(false);
-  /** Why the command couldn't start the host: not installed, too old, or what it said. */
   readonly problem = signal<LaunchProblem | null>(null);
-  /** npm is installing or updating the command. */
   readonly installing = signal(false);
-  /** Why the latest install didn't give this computer a command the host starts with. */
   readonly installError = signal("");
   readonly error = signal("");
   readonly logs = signal<LogLine[]>([]);
@@ -373,9 +291,7 @@ export class ThisComputerHost {
   readonly models = signal<ModelChoice[] | null>(null);
   private resume: Saved["resume"];
   private loaded?: Promise<void>;
-  /** The server the page or the host last named: refreshes of their own keep its loopback allowance. */
   private server?: string;
-  /** Whether `error` is an inspection's, which the next good one clears; a failure's stays until the next start. */
   private inspectError = false;
   private readonly channel = new HostChannel({
     onEvent: event => this.handleEvent(event),
@@ -385,7 +301,6 @@ export class ThisComputerHost {
 
   constructor(private readonly confirmUnsandboxed: (warning: string, server: string, missing: string[]) => Promise<boolean>) {}
 
-  /** The owner's choices, read once from storage. */
   load(): Promise<void> {
     this.loaded ??= Storage.getItem(SAVED_KEY).then(raw => {
       if (!raw) return;
@@ -426,11 +341,9 @@ export class ThisComputerHost {
     }
     if (event.server !== undefined) this.server = event.server;
     if (event.state === "connected") this.error.set("");
-    // A first connection may have just saved a pairing: show it.
     if (event.state === "connected" && previous !== "connected") void this.refresh(event.server);
   }
 
-  /** A started host failed or stopped by itself: the next launch must not resume it. */
   private fail(message: string): void {
     if (this.resume) this.setResume(undefined);
     this.inspectError = false;
@@ -445,15 +358,10 @@ export class ThisComputerHost {
     if (!expected) this.fail(`The host process exited unexpectedly (code ${code ?? "unknown"})${wasRunning ? "; the host is offline" : ""}. Start it again when ready.`);
   }
 
-  /** macOS in Seatbelt, and native Windows always (its only sandbox here), ask for the platform's own sandbox. */
   private isolation(): { experimentalSandbox?: true } {
     return platform.os === "windows" || (platform.os === "macos" && untracked(this.sandbox) === "seatbelt") ? { experimentalSandbox: true } : {};
   }
 
-  /**
-   * Looks at what this computer would run, without starting anything. `server`, else the one last named, decides
-   * whether a pairing with plain HTTP on loopback (a development server) reads as one.
-   */
   async refresh(server?: string): Promise<HostInspection | undefined> {
     if (server) this.server = server;
     const origin = server ?? this.server;
@@ -462,7 +370,6 @@ export class ThisComputerHost {
       const result = await this.channel.request({ type: "inspect", ...this.isolation(), ...(origin && isLoopbackHttp(origin) ? { allowInsecureLoopback: true } : {}) });
       const problem = this.channel.launchFailure;
       this.problem.set(!result.ok && problem ? problem : null);
-      // An install's failure belongs to the command being missing or too old: once it isn't, it is stale.
       if (untracked(this.problem)?.kind !== "missing" && untracked(this.problem)?.kind !== "outdated") this.installError.set("");
       if (result.ok && result.inspection) {
         this.inspection.set(result.inspection);
@@ -475,11 +382,6 @@ export class ThisComputerHost {
     }
   }
 
-  /**
-   * The owner's start: refuses early what the host would refuse, asks for unsandboxed consent, then hands the request
-   * to the host. `resume` replays the consent given at the last start instead of asking again. A pairing is made only
-   * once everything else is settled (`pairing.create`), so a refusal leaves no unused code on the server.
-   */
   async start(server: string, pairing?: { create: () => Promise<{ id: string; code: string }>; replace: boolean }, resume?: { unsandboxedConsent: boolean }): Promise<Outcome> {
     if (untracked(this.state) !== "stopped") return { ok: false, error: "The host is already running." };
     this.inspectError = false;
@@ -488,7 +390,6 @@ export class ThisComputerHost {
     const offered = this.offeredModels(inspection);
     const failure = inspection.unsupported ?? inspection.prerequisitesError
       ?? (!pairing && inspection.pairedServer !== server ? `${computerTitle} is not paired with ${server} yet.` : undefined)
-      // Checked here, before a pairing is made: the host would refuse to start without a model to offer.
       ?? (!inspection.models.length ? `${inspection.modelsError ?? "Pi has no models to offer on this computer."} Sign Pi in to a provider below first.`
         : !offered.length ? "None of the models chosen to offer is configured in Pi any more. Check some under Models offered, or let Pi choose." : undefined);
     if (failure) return this.refuse(failure);
@@ -518,11 +419,6 @@ export class ThisComputerHost {
     return { ok: true };
   }
 
-  /**
-   * Installs or updates the command with npm, into the app's own folder (else npm's global one), then looks at this
-   * computer again for `server`: once the command is there, the page carries on to pairing. Its output goes to the
-   * activity.
-   */
   async install(server?: string): Promise<Outcome> {
     if (untracked(this.installing)) return { ok: false, error: "pikibun is already being installed." };
     if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first." };
@@ -530,7 +426,6 @@ export class ThisComputerHost {
     this.installError.set("");
     const lines: string[] = [];
     let failure: string | undefined;
-    // Widened: set in the promise's callback, which narrowing can't see.
     let where = "global" as InstallRun["where"];
     try {
       const result = await new Promise<{ code?: number | null; error?: string | null }>(resolve => {
@@ -558,8 +453,6 @@ export class ThisComputerHost {
     }
     this.log("info", where === "app" ? "npm installed pikibun in Pikibun's own folder." : "npm installed pikibun.");
     await this.refresh(server);
-    // Installed, yet still not found: in the app's folder, something removed it; globally, npm's global folder isn't on
-    // the login shell's PATH.
     if (untracked(this.problem)?.kind === "missing") {
       const message = where === "app"
         ? `npm installed pikibun, but ${computerName} still can't start it. Install it in a terminal with the command below, then choose Refresh.`
@@ -576,14 +469,12 @@ export class ThisComputerHost {
   }
 
   async stop(): Promise<Outcome> {
-    // The owner's stop also ends resuming: the next launch leaves the host stopped.
     this.setResume(undefined);
     if (!this.channel.running || untracked(this.state) === "stopped") return { ok: true };
     const result = await this.channel.request({ type: "stop" });
     return result.ok ? { ok: true } : this.refuse(result.error.message);
   }
 
-  /** At launch: start again if the owner left the host running, without asking for consent they already gave. */
   async resumeHosting(): Promise<void> {
     await this.load();
     const resume = this.resume;
@@ -592,14 +483,12 @@ export class ThisComputerHost {
     if (!outcome.ok) this.setResume(undefined);
   }
 
-  /** macOS: its own sandbox or none, from the host's next start; only while it is stopped. */
   async setSandbox(choice: MacSandbox): Promise<Outcome> {
     if (platform.os !== "macos") return { ok: false, error: "Only macOS offers a choice of sandbox here." };
     if (untracked(this.state) !== "stopped") return { ok: false, error: "Stop the host first: its sandbox changes from its next start." };
     if (untracked(this.signIn)?.state === "running") return { ok: false, error: "Finish or cancel the sign-in first." };
     if (choice === untracked(this.sandbox)) return { ok: true };
     this.sandbox.set(choice);
-    // Its consent was for the other choice.
     this.resume = undefined;
     this.save();
     this.inspection.set(null);
@@ -610,10 +499,6 @@ export class ThisComputerHost {
     return { ok: true };
   }
 
-  /**
-   * The models to offer from the next start; null leaves the choice to Pi. An empty list is refused: the host offers
-   * Pi's whole set without one, the opposite of what it would say.
-   */
   setModels(models: ModelChoice[] | null): Outcome {
     if (models && !models.length) return { ok: false, error: "Check at least one model, or let Pi choose." };
     this.models.set(models);
@@ -622,14 +507,12 @@ export class ThisComputerHost {
     return { ok: true };
   }
 
-  /** What a start would offer: the chosen models Pi still has, or, with no choice, Pi's own. */
   private offeredModels(inspection: HostInspection): ModelChoice[] {
     const chosen = untracked(this.models);
     const available = inspection.models.map(model => ({ provider: model.provider, modelId: model.modelId }));
     return chosen ? chosen.filter(model => available.some(entry => entry.provider === model.provider && entry.modelId === model.modelId)) : available;
   }
 
-  /** Lists Pi's providers this host can sign in to. */
   async loadProviders(): Promise<Outcome> {
     const result = await this.channel.request({ type: "providers" });
     if (result.ok) { this.providers.set(result.providers ?? []); this.providersError.set(""); }
@@ -637,10 +520,6 @@ export class ThisComputerHost {
     return result.ok ? { ok: true } : { ok: false, error: result.error.message };
   }
 
-  /**
-   * Signs Pi in to a provider on this computer, as `pi`'s /login does; settles once it ends. Its page opens in the
-   * browser; its questions wait in `signIn` for answers. Afterwards the models are listed again.
-   */
   async startSignIn(provider: string, method: LoginMethodType, openBrowser: (url: string) => void): Promise<Outcome> {
     if (untracked(this.signIn)?.state === "running") return { ok: false, error: "A sign-in is under way: finish or cancel it first." };
     const name = untracked(this.providers)?.find(entry => entry.id === provider)?.name ?? provider;
@@ -663,7 +542,6 @@ export class ThisComputerHost {
 
   private current?: SignInView & { login?: number; openBrowser?: (url: string) => void };
 
-  /** What the running sign-in shows or asks; events of an earlier one are ignored. */
   private handleLogin(login: number, event: LoginEvent): void {
     const current = this.current;
     if (!current || current.state !== "running" || current.login !== login) return;
@@ -671,7 +549,6 @@ export class ThisComputerHost {
     else if (event.kind === "prompt-closed") { if (current.prompt?.id === event.prompt) current.prompt = undefined; }
     else {
       current.notices = [...current.notices, event].slice(-NOTICES);
-      // As `pi` does: the page to sign in on opens in the browser by itself.
       const page = event.kind === "auth-url" ? event.url : event.kind === "device-code" ? event.verificationUri : undefined;
       if (page && isHttps(page)) current.openBrowser?.(page);
     }
@@ -695,23 +572,19 @@ export class ThisComputerHost {
     return result.ok ? { ok: true } : { ok: false, error: result.error.message };
   }
 
-  /** Ends the host process (the app is going away, or a test is done). */
   shutdown(): Promise<void> { return this.channel.shutdown(); }
 }
 
 let shared: ThisComputerHost | undefined;
 let consent: (warning: string, server: string, missing: string[]) => Promise<boolean> = async () => false;
 
-/** How the app asks for unsandboxed consent: a dialog, set once by the UI. */
 export function setUnsandboxedConsent(ask: typeof consent): void { consent = ask; }
 
-/** The app's one host. */
 export function thisComputer(): ThisComputerHost {
   shared ??= new ThisComputerHost((warning, server, missing) => consent(warning, server, missing));
   return shared;
 }
 
-/** At launch, on the desktops: hosting starts again if it was running when the app quit. */
 export function resumeThisComputer(): void {
   if (!hostsHere) return;
   void thisComputer().resumeHosting();

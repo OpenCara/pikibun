@@ -6,8 +6,6 @@ import test, { type TestContext } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ConstraintError, InstanceLockedError, lockInstance, openDatabase, sqliteHandle, type Database } from '../apps/server/src/db/index.js';
 
-// Conformance suite: every provider must give application code the same observable behaviour.
-
 const postgresUrl = process.env.TEST_DATABASE_URL;
 const providers: { name: 'sqlite' | 'postgres'; url: string | undefined }[] = [
   { name: 'sqlite', url: 'sqlite::memory:' },
@@ -18,7 +16,6 @@ async function open(t: TestContext, url: string): Promise<Database> {
   const db = await openDatabase(url);
   t.after(() => db.close());
   if (db.provider === 'postgres') {
-    // The test database is disposable: start every test from an empty schema.
     await db.query('DROP SCHEMA public CASCADE').run();
     await db.query('CREATE SCHEMA public').run();
   }
@@ -64,7 +61,6 @@ for (const provider of providers) {
       assert.ok(applied.every(row => !Number.isNaN(Date.parse(row.applied_at))));
       await db.migrate();
       assert.equal(await db.query('SELECT COUNT(*) AS n FROM schema_migrations').first('n'), files.length);
-      // The final schema is reachable: the last migration's table and the first one's trigger both exist.
       assert.deepEqual(await db.query('SELECT * FROM push_credentials').all(), []);
       await seed(db);
       await db.query(insertVersion).bind(...versionValues('v1', 1)).run();
@@ -83,14 +79,12 @@ for (const provider of providers) {
       assert.equal(await db.query<{ github_id: string | null }>('SELECT github_id FROM users WHERE id = ?').bind('u1').first('github_id'), null);
       assert.deepEqual(await db.query('SELECT * FROM workspace_members ORDER BY user_id').all(), [{ workspace_id: 'w1', user_id: 'u1', role: 'owner', created_at: at }]);
       assert.deepEqual(await db.query('SELECT id FROM users WHERE id = ?').bind('nobody').all(), []);
-      // run(): changes counts written rows and is 0 for reads.
       assert.deepEqual(await db.query('SELECT * FROM users').run(), { changes: 0 });
       assert.deepEqual(await db.query('UPDATE users SET display_name = ? WHERE id = ?').bind('Grace', 'u1').run(), { changes: 1 });
       assert.deepEqual(await db.query('UPDATE users SET display_name = ? WHERE id = ?').bind('Grace', 'nobody').run(), { changes: 0 });
       const expiresAt = Date.now() + 60_000;
       await db.query('INSERT INTO oauth_states (state_hash, verifier, expires_at, created_at) VALUES (?, ?, ?, ?)').bind('s1', 'v', expiresAt, at).run();
       await db.query('INSERT INTO oauth_states (state_hash, verifier, expires_at, created_at) VALUES (?, ?, ?, ?)').bind('s2', 'v', expiresAt, at).run();
-      // RETURNING statements work through run() (changes reported) and through first().
       assert.deepEqual(await db.query('DELETE FROM oauth_states WHERE state_hash = ? RETURNING verifier').bind('s1').run(), { changes: 1 });
       assert.deepEqual(await db.query<{ verifier: string; expires_at: number }>('DELETE FROM oauth_states WHERE state_hash = ? RETURNING verifier, expires_at').bind('s2').first(),
         { verifier: 'v', expires_at: expiresAt });
@@ -122,7 +116,6 @@ for (const provider of providers) {
         { results: [{ id: 'v1', version: 1 }], changes: 0 },
         { results: [], changes: 1 },
       ]);
-      // A CHECK failure in the second statement rolls back the first.
       const error = await constraintError(db.batch([
         db.query(insertVersion).bind(...versionValues('v2', 2)),
         db.query('INSERT INTO users (id, display_name, git_name, git_email, auth_kind, created_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -131,7 +124,6 @@ for (const provider of providers) {
       assert.match(error.constraint, /auth_kind/);
       assert.deepEqual(await db.query<{ id: string }>('SELECT id FROM agent_versions ORDER BY id').all(), [{ id: 'v1' }]);
       assert.equal(await db.query('SELECT COUNT(*) AS n FROM users').first('n'), 1);
-      // The database stays usable after a rolled-back batch.
       assert.deepEqual(await db.query('UPDATE users SET display_name = ? WHERE id = ?').bind('Ada', 'u1').run(), { changes: 1 });
     });
 
@@ -179,7 +171,6 @@ for (const provider of providers) {
       await seed(db);
       await db.query(insertVersion).bind(...versionValues('v1', 1)).run();
       const unique = await constraintError(db.query(insertVersion).bind(...versionValues('v2', 1)).run());
-      // Both providers' texts match the pattern catalog.ts uses to report a version conflict.
       assert.match(unique.constraint, /agent_versions\.agent_id,\s*agent_versions\.version|agent_versions_agent_id_version_key/);
       assert.ok(unique.cause instanceof Error);
       const trigger = await constraintError(db.query('UPDATE agent_versions SET name = ? WHERE id = ?').bind('Renamed', 'v1').run());
@@ -214,7 +205,6 @@ for (const provider of providers) {
         '[{"provider":"openai","modelId":"gpt","name":"GPT"},{"provider":"anthropic","modelId":"claude","name":"Claude"}]',
         '{"platform":"linux","sandbox":true,"gitPush":true}').run();
       await db.query('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?, ?, ?)').bind('c1', 'w1', at).run();
-      // json_each over a column with json_extract on each element (connectors.ts model sync, with randomblob ids).
       const synced = await db.query(`INSERT INTO models
         (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id, available)
         SELECT lower(hex(randomblob(16))), cw.workspace_id, json_extract(local.value, '$.name'),
@@ -230,15 +220,12 @@ for (const provider of providers) {
       assert.deepEqual(models.map(({ name, provider, model_id }) => ({ name, provider, model_id })),
         [{ name: 'Claude', provider: 'anthropic', model_id: 'claude' }, { name: 'GPT', provider: 'openai', model_id: 'gpt' }]);
       assert.ok(models.every(model => /^[0-9a-f]{32}$/.test(model.id)));
-      // json_each over a bound JSON array of strings.
       assert.deepEqual(await db.query<{ id: string }>('SELECT id FROM users WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').bind('["u1","zz"]').all(), [{ id: 'u1' }]);
-      // IS ? with null and with a value; ? IS NULL guards.
       assert.deepEqual(await db.query('UPDATE connectors SET connection_hash = ? WHERE id = ? AND connection_hash IS ?').bind('h1', 'c1', null).run(), { changes: 1 });
       assert.deepEqual(await db.query('UPDATE connectors SET connection_hash = ? WHERE id = ? AND connection_hash IS ?').bind('h2', 'c1', null).run(), { changes: 0 });
       assert.deepEqual(await db.query('UPDATE connectors SET connection_hash = ? WHERE id = ? AND connection_hash IS ?').bind('h2', 'c1', 'h1').run(), { changes: 1 });
       assert.equal(await db.query('SELECT COUNT(*) AS n FROM connectors WHERE (? IS NULL OR id = ?)').bind(null, 'other').first('n'), 1);
       assert.equal(await db.query('SELECT COUNT(*) AS n FROM connectors WHERE (? IS NULL OR id = ?)').bind('x', 'other').first('n'), 0);
-      // json_type on capabilities (sessions.ts) and the canonical json() comparison of an ordered aggregate.
       assert.equal(await db.query("SELECT COUNT(*) AS n FROM connectors WHERE json_type(capabilities_json, '$.gitPush') = 'true'").first('n'), 1);
       assert.equal(await db.query("SELECT COUNT(*) AS n FROM connectors WHERE json_type(capabilities_json, '$.gitProviders') = 'true'").first('n'), 0);
       await db.query(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at)
@@ -251,7 +238,6 @@ for (const provider of providers) {
       assert.equal(await same(['r2', 'r1']), 0);
       assert.equal(await same([]), 0);
       assert.equal(await db.query('SELECT COUNT(*) AS n FROM users WHERE (SELECT json_group_array(id ORDER BY id) FROM workspace_repositories WHERE workspace_id = ?) = json(?)').bind('none', '[]').first('n'), 1);
-      // COLLATE NOCASE equality and uniqueness; GLOB-derived CHECKs.
       assert.equal(await db.query('SELECT id FROM workspace_repositories WHERE workspace_id = ? AND full_name = ? COLLATE NOCASE').bind('w1', 'acme/one').first('id'), 'r1');
       const duplicate = await constraintError(db.query(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind('r3', 'w1', 'github', 'github.com', '3', 'ACME/ONE', 'main', 0, at).run());
@@ -259,7 +245,6 @@ for (const provider of providers) {
       const leadingZero = await constraintError(db.query(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind('r4', 'w1', 'github', 'github.com', '01', 'Acme/Four', 'main', 0, at).run());
       assert.match(leadingZero.constraint, /repository_id/);
-      // json_array / json_group_array columns parse as JSON arrays; json_set updates one key.
       const arrays = await db.query<{ one: string; none: string; every: string }>(`SELECT json_array(id) AS one, json_array() AS none,
         (SELECT json_group_array(id ORDER BY id) FROM workspace_repositories) AS every FROM workspaces WHERE id = ?`).bind('w1').first();
       assert.deepEqual({ one: JSON.parse(arrays!.one), none: JSON.parse(arrays!.none), every: JSON.parse(arrays!.every) }, { one: ['w1'], none: [], every: ['r1', 'r2'] });
@@ -268,9 +253,7 @@ for (const provider of providers) {
       await db.query("UPDATE push_identities SET config_json = json_set(config_json, '$.login', ?) WHERE id = ?").bind('octo', 'p1').run();
       assert.deepEqual(JSON.parse((await db.query<{ config_json: string }>('SELECT config_json FROM push_identities WHERE id = ?').bind('p1').first('config_json'))!),
         { clientId: 'abc', login: 'octo' });
-      // Mixed-case aliases keep their case.
       assert.deepEqual(await db.query('SELECT user_id AS userId, role AS memberRole FROM workspace_members').all(), [{ userId: 'u1', memberRole: 'owner' }]);
-      // The workspace repository cap trigger fires with the SQLite message.
       for (const n of [5, 6, 7]) {
         await db.query(`INSERT INTO workspace_repositories (id, workspace_id, provider, host, repository_id, full_name, ref, private, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(`r${n}`, 'w1', 'github', 'github.com', String(n), `Acme/${n}`, 'main', 0, at).run();
@@ -290,7 +273,6 @@ for (const provider of providers) {
         throw new Error('abort');
       });
       await sleep(5);
-      // Issued while the failing transaction is open: a plain statement, a second transaction, and a batch.
       const outside = insert('outside').run();
       const second = db.transaction(async tx => {
         await tx.query('INSERT INTO workspaces (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)').bind('in-second', 'x', 'u1', at).run();
@@ -305,7 +287,6 @@ for (const provider of providers) {
       assert.deepEqual(await db.query<{ id: string }>('SELECT id FROM workspaces WHERE id <> ? ORDER BY id').bind('w1').all(),
         [{ id: 'in-batch' }, { id: 'in-second' }, { id: 'outside' }]);
       if (db.provider === 'sqlite') {
-        // Read-modify-write transactions are serialized on the single connection: no lost update.
         await db.query('UPDATE workspaces SET name = ? WHERE id = ?').bind('0', 'w1').run();
         await Promise.all([1, 2, 3].map(() => db.transaction(async tx => {
           const name = await tx.query<{ name: string }>('SELECT name FROM workspaces WHERE id = ?').bind('w1').first('name');

@@ -5,8 +5,6 @@ import type { Env, AppEnv } from '../apps/server/src/types.js';
 import { exportSession, exportWorkspace, registerDataExports, type SessionExport, type WorkspaceExport } from '../apps/server/src/data-export.js';
 import { testDatabase } from './helpers/control-plane.js';
 
-// Values that must never leave the database in any export: credentials, credential digests, ciphertexts, personal
-// environment (also inside restore bindings), storage keys, and the data of other members' sessions.
 const secrets = ['REVOCATION-CIPHERTEXT', 'BROKER-TOKEN-HASH', 'DATABASE-PASSWORD-CIPHERTEXT', 'IDENTITY-SECRET-CIPHERTEXT',
   'PERSONAL-ENVIRONMENT-VALUE', 'OBJECT-KEY-SERVER', 'OBJECT-KEY-DATABASE', 'D'.repeat(43), 'GITHUB-TOKEN-CIPHERTEXT'];
 const memberPrivate = 'MEMBER PRIVATE TITLE';
@@ -71,7 +69,6 @@ async function fixture(t: TestContext) {
       ('audit-other','other',NULL,'test:outsider','workspace.create','{}','2026-01-01');
   `);
   const app = new Hono<AppEnv>();
-  // Cookie/CSRF are covered by control-plane tests; this seam supplies an authenticated actor.
   app.use('/api/*', async (c, next) => {
     c.set('auth', { userId: c.req.header('x-test-user') ?? 'test:owner', tokenHash: 'test', csrfToken: 'test', client: 'browser' });
     await next();
@@ -115,11 +112,9 @@ test('a session export is its owner\'s, archived sessions included, with every r
   assert.deepEqual(exported.pushes[0]!.operation, { kind: 'git.push', branch: 'feature' });
   assert.deepEqual(exported.audit.map(event => event.id), ['audit-session']);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'session.exported' AND session_id = 'owner-private'").get()!.n, 1);
-  // The restore target lists the same receipt.
   const restored = await (await f.get('/api/sessions/owner-restored/export', 'test:owner')).json() as SessionExport;
   assert.deepEqual(restored.restores.map(restore => restore.id), ['restore']);
 
-  // Read access is not ownership; without access the session doesn't exist.
   const granted = await f.get('/api/sessions/owner-private/export', 'test:admin');
   assert.equal(granted.status, 403);
   assert.equal((await granted.json() as { code: string }).code, 'owner_required');
@@ -161,20 +156,15 @@ test('a workspace export covers its settings, the exporter\'s own sessions in fu
   assert.deepEqual(exported.pushIdentities.map(identity => [identity.id, identity.config]), [['identity', { appId: '1', slug: 'app' }]]);
   assert.equal(exported.database?.host, 'db.example.com');
   assert.equal(exported.database?.user, 'pikibun_app');
-  // Only workspace events: session events are in each session, and other workspaces' are never included.
   assert.deepEqual(exported.audit.map(event => event.id), ['audit-workspace']);
   assert.deepEqual(exported.sessions.map(session => session.session.id), ['owner-private', 'owner-shared', 'owner-restored']);
   assert.deepEqual(exported.sessions[0]!.backups.map(backup => backup.location), ['server', 'workspace-database']);
-  // The workspace's owner manages every session there, private ones included, so every other member's session comes
-  // as its record, with what they hold on it; its activity, grants and approvals stay in its owner's own export.
   const managed = ['read', 'ask', 'write', 'manage'];
   assert.deepEqual(exported.otherSessions.map(session => [session.id, session.permissions]),
     [['member-private', managed], ['member-shared', managed], ['member-granted', managed]]);
   assert.equal(exported.otherSessions[0]!.title, memberPrivate);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.exported'").get()!.n, 1);
 
-  // An admin gets the same settings; every session is someone else's, so they come as records only, with what the
-  // admin holds on each: what managing it gives, and what a grant adds.
   const admin = await f.get('/api/workspaces/workspace/export', 'test:admin');
   assert.equal(admin.status, 200);
   const adminText = await admin.text();
@@ -202,6 +192,5 @@ test('the operator dump holds every session of the workspace in full, still with
   assert.deepEqual(session.audit.map(event => event.id), ['audit-private']);
   assert.equal(await exportSession(f.env.DB, 'missing', null), null);
   assert.equal(await exportWorkspace(f.env.DB, 'missing', null), null);
-  // Dumps read only: nothing is recorded in the audit log.
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action LIKE '%.exported'").get()!.n, 0);
 });

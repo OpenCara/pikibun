@@ -17,17 +17,13 @@ import { workspaceGitAccess } from './workspace-connections.js';
 import { addPikiExtensions } from './extension-policy.js';
 
 export interface GitHubAccess { token: string; ciphertext: string; userId: string; githubId: string }
-/** The acting user's credential for one provider/host: the sign-in OAuth token for github.com, a token account otherwise. */
 export type RepositoryAccess = { provider: 'github'; github: GitHubAccess } | { provider: TokenGitProvider; account: LoadedCredential };
 interface ExpectedRepository { repositoryId: string; fullName: string }
 interface RepositoryResolution {
   repositories: SessionRepository[];
-  /** The workspace's sources (workspace_sources ids, as a sorted JSON array); the session insert requires them unchanged. */
   sourceIds: string;
   githubAuthority: Pick<GitHubAccess, 'ciphertext' | 'githubId'> | null;
-  /** Token accounts that resolved the pins; session admission requires each to be unchanged. */
   credentials: { id: string; ciphertext: string }[];
-  /** The session may start with no source: the workspace is its owner's private one. */
   sourcesOptional?: boolean;
 }
 const apiOrigin = 'https://api.github.com';
@@ -59,9 +55,7 @@ function bindingRepositoryId(provider: GitProvider, value: unknown): string {
   } else if (!validRepositoryId(value)) fail(400, 'invalid_repository', `A ${gitProviderNames[provider]} repository identity is required.`);
   return value;
 }
-/** A binding with the settings that live beside it (bindings are immutable): its push policy and Git LFS switch. */
 export type RepositorySettingsRow = RepositoryRow & { forbid_default_branch?: number | null; lfs_enabled?: number | null; read_as?: string | null };
-/** Selects `r.*` with its settings; callers add their WHERE and ORDER BY on `r`. */
 export const repositorySettingsSelect = `SELECT r.*, p.forbid_default_branch, l.enabled AS lfs_enabled, s.read_as FROM workspace_repositories r
   LEFT JOIN repository_push_policies p ON p.binding_id = r.id AND p.workspace_id = r.workspace_id
   LEFT JOIN repository_lfs_settings l ON l.binding_id = r.id AND l.workspace_id = r.workspace_id
@@ -79,23 +73,19 @@ export async function workspaceRepositories(env: Env, workspaceId: string): Prom
 export async function legacyRepositoryFixture(env: Env, userId: string): Promise<boolean> {
   return testMode(env) && (await getUser(env, userId))?.auth_kind === 'test';
 }
-/** The ids of a workspace's sources (a Git repository is one kind), sorted. Every session in the workspace gets them all. */
 export async function workspaceSourceIds(env: Env, workspaceId: string): Promise<string[]> {
   const rows = await env.DB.query<{ id: string }>('SELECT id FROM workspace_sources WHERE workspace_id = ? ORDER BY id').bind(workspaceId).all();
   return rows.map(row => row.id);
 }
-/** SQL true when workspace `workspaceId` (a placeholder or column) has at least one source. */
 export function workspaceHasSourceSQL(workspaceId: string): string {
   return `EXISTS (SELECT 1 FROM workspace_sources WHERE workspace_id = ${workspaceId})`;
 }
-// The code keeps its name (workspace_repositories_required) for API callers that match on it.
 const sourcesRequired = 'workspace_repositories_required';
 export async function requireConfiguredWorkspace(env: Env, workspaceId: string, userId: string): Promise<void> {
   await requireMember(env, workspaceId, userId);
   if (!await env.DB.query(`SELECT 1 WHERE ${workspaceHasSourceSQL('?')}`).bind(workspaceId).first() &&
       !await legacyRepositoryFixture(env, userId)) fail(409, sourcesRequired, 'Add at least one source, such as a repository, to this workspace first.');
 }
-/** Worktree paths must be distinct and never nest, ignoring case (macOS and Windows hosts). */
 function conflictingPaths(paths: string[]): boolean {
   const lower = paths.map(path => path.toLowerCase());
   return lower.some((path, index) => lower.some((other, otherIndex) => index !== otherIndex && (path === other || other.startsWith(`${path}/`))));
@@ -178,7 +168,6 @@ function githubRepository(value: unknown): ProviderRepository {
   return { id: String(item.id), fullName: repositoryName('github', item.full_name),
     defaultBranch: repositoryRef(item.default_branch), private: item.private };
 }
-/** Every repository the sign-in account (account id "github") can read, up to repositoryLimits.pickerRepositories. */
 export async function githubRepositories(env: Env, userId: string): Promise<ProviderRepositoryList> {
   const access = await githubAccess(env, userId);
   const listing = await collectRepositories(listPageSize, async page => {
@@ -189,7 +178,6 @@ export async function githubRepositories(env: Env, userId: string): Promise<Prov
   await recheckGitHubAccess(env, access);
   return listing;
 }
-/** Current metadata must still carry the bound identity and exact canonical name (renames and transfers fail closed). */
 export async function verifyRepository(access: RepositoryAccess, expected: ExpectedRepository): Promise<ProviderRepository> {
   const name = repositoryName(access.provider, expected.fullName);
   const metadata = access.provider === 'github'
@@ -200,11 +188,6 @@ export async function verifyRepository(access: RepositoryAccess, expected: Expec
   }
   return metadata;
 }
-/**
- * In a clone session, the workspace repository a broker request names (`matches`), shaped like a pin so the push and
- * GitHub brokers treat both kinds of session alike. Its commit is a placeholder: no broker uses a pin's commit. Null when
- * the session pins its repositories or no binding matches.
- */
 export async function cloneSessionRepository(env: Env, row: SessionRow, matches: (binding: RepositoryRow) => boolean): Promise<SessionRepository | null> {
   if (row.repository_mode !== 'clone') return null;
   const bindings = await env.DB.query<RepositoryRow>('SELECT * FROM workspace_repositories WHERE workspace_id = ? ORDER BY id').bind(row.workspace_id).all();
@@ -216,11 +199,6 @@ export async function cloneSessionRepository(env: Env, row: SessionRow, matches:
     : { bindingId: binding.id, provider: binding.provider, host: binding.host, repositoryId: binding.repository_id, fullName: binding.full_name,
       ref: binding.ref, commit, path: repositoryPath({ provider: binding.provider, host: binding.host, fullName: binding.full_name }) };
 }
-/**
- * A clone session pins nothing and borrows no owner credential at creation: the egress relay checks the owner's own
- * access on every read. The workspace still needs a source (a repository, say), unless it is the owner's private
- * workspace, and its sources must not change before the insert.
- */
 export async function cloneRepositories(env: Env, workspaceId: string, ownerId: string): Promise<RepositoryResolution> {
   await requireMember(env, workspaceId, ownerId);
   const sources = await workspaceSourceIds(env, workspaceId);
@@ -232,7 +210,6 @@ export function registerRepositories(app: Hono<AppEnv>): void {
   app.get('/api/workspaces/:id/repositories', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor);
-    // A private workspace's sessions need no source; every other's do.
     const required = !await isPersonalWorkspace(c.env, workspaceId, actor) && !await legacyRepositoryFixture(c.env, actor);
     return c.json({ repositories: await workspaceRepositories(c.env, workspaceId), required,
       sources: (await workspaceSourceIds(c.env, workspaceId)).length } satisfies WorkspaceRepositoryList);
@@ -243,7 +220,6 @@ export function registerRepositories(app: Hono<AppEnv>): void {
     const input = await jsonObject(c, 4096);
     if (Object.keys(input).some(key => !['provider', 'host', 'repositoryId', 'fullName', 'ref', 'readAs'].includes(key))) fail(400, 'invalid_repository', 'Only repository provider, host, identity, ref and readAs may be configured.');
     if (input.readAs !== undefined && input.readAs !== 'members' && input.readAs !== 'workspace') fail(400, 'invalid_read_as', 'Set readAs to members or workspace.');
-    // A repository members read with their own accounts is checked with the admin's own; one the workspace reads, with its connection.
     const readsAsWorkspace = input.readAs === 'workspace';
     if (!(gitProviders as readonly unknown[]).includes(input.provider)) fail(400, 'invalid_repository', 'Choose a supported Git provider.');
     const provider = input.provider as GitProvider;
@@ -261,7 +237,6 @@ export function registerRepositories(app: Hono<AppEnv>): void {
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
     const row: RepositoryRow = { id: id(), workspace_id: workspaceId, provider, host, repository_id: expected.repositoryId, full_name: metadata.fullName,
       ref, private: metadata.private ? 1 : 0, created_at: now() };
-    // The exact credential that verified the repository must still be current in the same write.
     const authority = access.provider === 'github'
       ? { sql: `EXISTS (SELECT 1 FROM github_tokens t JOIN users u ON u.id = t.user_id
           WHERE t.user_id = ? AND t.ciphertext = ? AND u.auth_kind = 'github' AND u.github_id = ?)`,
@@ -281,18 +256,14 @@ export function registerRepositories(app: Hono<AppEnv>): void {
         AND (repository_id = ? OR full_name = ? COLLATE NOCASE)) RETURNING id`)
         .bind(row.id, workspaceId, row.provider, row.host, row.repository_id, row.full_name, row.ref, row.private, row.created_at, workspaceId, actor,
           ...authority.values, workspaceId, workspaceId, row.provider, row.host, row.repository_id, row.full_name),
-      // In the same write: a repository never reads, even once, with an identity other than the one it was added with.
       c.env.DB.query(`INSERT INTO source_read_settings (source_id, workspace_id, read_as, updated_by, updated_at)
         SELECT ?, ?, 'workspace', ?, ? WHERE ? = 1 AND EXISTS (SELECT 1 FROM workspace_sources WHERE id = ?)`)
         .bind(row.id, workspaceId, actor, row.created_at, readsAsWorkspace ? 1 : 0, row.id),
     ]);
     if (!results[0]!.results[0]) fail(409, 'repository_binding_conflict', 'Repository already configured, limit reached, or workspace authority changed.');
-    // Its first repository on a forge brings that forge's command-line tool to the workspace's sessions (piki:gh, say).
     const extensions = await addPikiExtensions(c.env, workspaceId, provider, actor);
     return c.json({ repository: publicRepository({ ...row, read_as: readsAsWorkspace ? 'workspace' : null }), ...(extensions.length ? { extensions } : {}) }, 201);
   });
-  // Whether sandboxed sessions may download the repository's Git LFS objects. Changes reach running sessions with their
-  // next grant (within a minute), and the relay checks the setting again on every LFS request.
   app.put('/api/workspaces/:id/repositories/:bindingId/lfs', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     const bindingId = identifier(c.req.param('bindingId'), 'bindingId');

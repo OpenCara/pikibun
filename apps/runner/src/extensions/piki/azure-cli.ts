@@ -1,20 +1,9 @@
 import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
 import { commandWords, positionals, type CliSpec } from "./command.js";
 
-/*
- * piki:azure-cli, the Azure CLI (docs/design/piki-extensions.md), with its azure-devops extension where the host
- * has it: Azure DevOps repositories, pull requests, pipelines and boards.
- */
-
-/** Verbs that read. */
 const READ_VERB = /^(?:list|show|query|version|(?:list|show)-[a-z-]+)$/;
-/** Words of commands that show secrets, or that read where secrets are, even when their verb only reads. */
 const SECRET_WORD = /key|secret|password|credential|token|connection-string|sas|publish|appsettings|kubeconfig/i;
 
-/**
- * Whether `arg` is the long option `name` or an abbreviation of it, as Python's argparse takes them, with or without
- * `=value`; or, for a short `name`, that option with its value joined.
- */
 function isOption(arg: string, name: string): boolean {
   if (name.startsWith("--")) {
     const given = arg.split("=")[0]!;
@@ -23,7 +12,6 @@ function isOption(arg: string, name: string): boolean {
   return arg === name || (arg.startsWith(name) && arg.length > name.length);
 }
 
-/** The values `args` give an option, by any of `names` (abbreviated long ones too). */
 function values(args: readonly string[], names: readonly string[]): string[] {
   const found: string[] = [];
   for (let index = 0; index < args.length; index++) {
@@ -39,17 +27,14 @@ function values(args: readonly string[], names: readonly string[]): string[] {
 
 const has = (args: readonly string[], names: readonly string[]) => args.some(arg => names.some(name => isOption(arg, name)));
 
-/** Options that write a file, as given or abbreviated past what they share with others (`--output` is not `--output-file`). */
 const FILE_OPTIONS = [{ name: "--output-file", shortest: "--output-" }, { name: "--file", shortest: "--fil" }, { name: "--path", shortest: "--pat" }];
 const writesFile = (args: readonly string[]) => args.some(arg => {
   const given = arg.split("=")[0]!;
   return FILE_OPTIONS.some(option => option.name.startsWith(given) && given.startsWith(option.shortest));
 });
 
-/** az matches its command words and options without regard to case. */
 const lower = (args: readonly string[]) => args.map(arg => arg.toLowerCase());
 
-/** Why a request az sends itself (`az rest`, `az devops invoke`) may change something. */
 function requestWrites(args: readonly string[], method: readonly string[], body: readonly string[]): string | undefined {
   if (has(args, body)) return "it sends a request body";
   const methods = values(args, method).map(value => value.toUpperCase());
@@ -73,11 +58,8 @@ export const azureCliSpec: CliSpec = {
   tokenEnv: ["AZURE_DEVOPS_EXT_PAT"],
   setEnv: { AZURE_CORE_NO_COLOR: "true", AZURE_CORE_ONLY_SHOW_ERRORS: "true", AZURE_CORE_DISABLE_PROGRESS_BAR: "true", AZURE_CORE_SURVEY_MESSAGE: "false",
     PYTHONIOENCODING: "utf-8" },
-  // Options may sit anywhere among the command's words, abbreviated, in any case: these look at every argument.
   refused(original) {
     const args = lower(original);
-    // az runs a command named by a unique prefix of its words: `acc get` is `account get-access-token`. Refused where the
-    // words could be prefixes of those two, which may refuse a harmless call (a value `get` beside a value `a`).
     const words = positionals(args);
     const prefixOf = (word: string) => words.some(candidate => candidate.length > 0 && word.startsWith(candidate));
     if (prefixOf("account") && prefixOf("get-access-token")) return "az account get-access-token would show a token";
@@ -88,7 +70,6 @@ export const azureCliSpec: CliSpec = {
   writes(original) {
     const args = lower(original);
     if (args.length === 1 && args[0] === "--version") return undefined;
-    // az reads an argument starting with @ from that file on the host.
     if (args.some(arg => arg.startsWith("@") || /^-[^=]*=@/.test(arg))) return "an argument reads a host file (@file)";
     const words = commandWords(args);
     if (!words.length) return `az ${args.join(" ")} is not a command that only reads`;

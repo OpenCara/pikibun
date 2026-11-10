@@ -10,10 +10,6 @@ import { createAction, createResource, type Action } from "../lib/resource";
 import { Checkbox, CheckControl, Field, Select, TextField } from "../form";
 import { Badge, Button, CardBody, Feedback, Note, ResourceState, Row, Section, Segmented } from "../ui";
 
-// A workspace's switches, as the web app's settings (TranscriptSettings, ApprovalSettings, ChildSessionSettings,
-// AttachmentSettings, NetworkAccess): one row each, a check box for owners and admins, its state for everyone else.
-
-/** A workspace setting's PUT, refreshing what it shows. */
 function put(path: string, action: Action, refresh: () => void, body: Record<string, unknown>, notice: string) {
   void action.run(async () => {
     await session().api(path, { method: "PUT", body });
@@ -21,7 +17,6 @@ function put(path: string, action: Action, refresh: () => void, body: Record<str
   }, notice);
 }
 
-/** An on/off setting's row: a check box for owners and admins, its state for everyone else. */
 function Toggle(props: { title: string; hint: string; label: string; value: boolean; admin: boolean; busy: boolean; onChange: (value: boolean) => void; testID?: string }) {
   return (
     <Row title={props.title} hint={props.hint}
@@ -151,7 +146,6 @@ const modeHint: Record<NetworkMode, string> = {
   open: "The workspace's repositories, plus any public host",
 };
 
-/** What sandboxed sessions may reach through their host's egress proxy, besides the workspace's repositories. */
 export function NetworkAccess(props: { workspace: Workspace; admin: boolean }) {
   const path = () => `/api/workspaces/${segment(props.workspace.id)}/network-policy`;
   const resource = createResource<{ policy: NetworkPolicy; packageRegistryDomains: string[] }>(path);

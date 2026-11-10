@@ -1,14 +1,8 @@
-/** One `edit_file` replacement: `oldText` must occur exactly once in the file as it is before the call. */
 export interface TextEdit {
   oldText: string;
   newText: string;
 }
 
-/**
- * Applies `edits` together, each matched against the original content, so their order does not matter. Errors name the
- * edit and the path for the model to fix its next call. A file that uses CRLF throughout is matched and written with
- * LF/CRLF translated, since models write LF; a file that mixes endings must be matched exactly.
- */
 export function applyEdits(content: string, edits: readonly TextEdit[], path: string): string {
   const crlf = content.includes("\r\n") && !/(?<!\r)\n/.test(content);
   const lf = (value: string) => crlf ? value.replaceAll("\r\n", "\n") : value;
@@ -36,11 +30,6 @@ export function applyEdits(content: string, edits: readonly TextEdit[], path: st
   return crlf ? result.replaceAll("\n", "\r\n") : result;
 }
 
-/**
- * Lines `offset` (from 1) to `offset + limit - 1` of `content`, for read_file: what sessions read with sed -n and head
- * (#163). Line endings stay as they are, so the text can be quoted in edit_file as it is; a range past the end holds no
- * lines, and says how many the file has.
- */
 export function lineRange(content: string, offset = 1, limit?: number): { content: string; lines: { from: number; to: number; total: number } } {
   const lines = content === "" ? [] : content.split(/(?<=\n)/);
   const total = lines.length;

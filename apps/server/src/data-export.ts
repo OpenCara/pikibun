@@ -14,27 +14,15 @@ import { agentVersion, modelDefinition, sessionRecord } from './db.js';
 import { fail, identifier, now } from './http.js';
 import { publicWorkspaceDatabase, type WorkspaceDatabaseRow } from './workspace-databases/store.js';
 
-/*
- * Exports ("dumps") of what the control plane's database holds about a session or a workspace, as JSON. Columns are
- * chosen one by one: tokens, ciphertexts, credential digests, restore bindings (with the owner's personal environment)
- * and storage keys never appear. Session owners and workspace owners/admins download them from the web app; the
- * operator dumps from the database with `--dump-session` / `--dump-workspace` (main.ts).
- */
-
 export const sessionExportFormat = 'pikibun-session-export-v1';
 export const workspaceExportFormat = 'pikibun-workspace-export-v1';
 
 export interface AuditEntry { id: string; actorId: string | null; action: string; detail: unknown; createdAt: string }
 
-/** Everything the control plane keeps about one session. Its conversation lives on the host and in its backups. */
 export interface SessionData {
   session: SessionRecord & { archivedStatus: string | null };
   grants: { userId: string; permissions: unknown; createdAt: string }[];
   toolGrants: { tool: string; callId: string; approvalId: string; grantedBy: string; createdAt: string }[];
-  /**
-   * The members whose requests the owner chose to auto-approve, from the card `approvalId` (requester-auto-approve.ts),
-   * stopped ones included with when they stopped.
-   */
   autoApprovedRequesters: { userId: string; approvalId: string; grantedBy: string; createdAt: string; revokedAt: string | null }[];
   backups: { id: string; size: number; sha256: string; createdAt: string; location: BackupLocation; conversationOnly?: true }[];
   restores: {
@@ -52,40 +40,31 @@ export interface SessionData {
 export interface SessionExport extends SessionData {
   format: typeof sessionExportFormat;
   exportedAt: string;
-  /** null when the operator dumped it from the database. */
   exportedBy: string | null;
 }
 
 export interface WorkspaceExport {
   format: typeof workspaceExportFormat;
   exportedAt: string;
-  /** null when the operator dumped it from the database. */
   exportedBy: string | null;
   workspace: { id: string; name: string; ownerId: string; createdAt: string };
   members: { userId: string; displayName: string; githubLogin: string | null; role: WorkspaceRole; createdAt: string }[];
   models: (ModelDefinition & { available: boolean; createdAt: string })[];
-  /** Agent versions published to the workspace. */
   agents: AgentVersion[];
   repositories: WorkspaceRepository[];
   pushIdentities: PushIdentity[];
   networkPolicy: NetworkPolicy;
-  /** Whether session owners may auto-approve other members' requests (requester-auto-approve.ts). */
   approvalSettings: WorkspaceApprovalSettings;
   database: WorkspaceDatabase | null;
-  /** Workspace activity not tied to a session; each session's activity is in its own entry. */
   audit: AuditEntry[];
-  /** Sessions exported in full: the exporter's own, or every session of the workspace in the operator's dump. */
   sessions: SessionData[];
-  /** The other sessions the exporter can view, as their records with the exporter's permissions. */
   otherSessions: SessionRecord[];
 }
 
-/** Stored JSON columns are written by the server; anything unreadable is kept as its text rather than dropped. */
 function parsed(json: string): unknown {
   try { return JSON.parse(json); } catch { return json; }
 }
 
-/** A backup with a workspace_database_backups row was saved in the workspace's database. */
 function backupLocation(storedIn: string | null): BackupLocation {
   return storedIn === null ? 'server' : 'workspace-database';
 }
@@ -145,16 +124,11 @@ async function sessionExport(db: Database, row: SessionRow, exportedBy: string |
   return { format: sessionExportFormat, exportedAt: now(), exportedBy, ...await sessionData(db, row) };
 }
 
-/** One session in full, or null when it does not exist. */
 export async function exportSession(db: Database, sessionId: string, exportedBy: string | null): Promise<SessionExport | null> {
   const row = await db.query<SessionRow>('SELECT * FROM sessions WHERE id = ?').bind(sessionId).first();
   return row ? sessionExport(db, row, exportedBy) : null;
 }
 
-/**
- * One workspace, or null when it does not exist. `exporter` names a member and the sessions their export covers; without
- * one (the operator's dump) every session of the workspace is exported in full.
- */
 export async function exportWorkspace(db: Database, workspaceId: string,
   exporter: { userId: string; sessions: SessionRow[]; otherSessions: SessionRecord[] } | null): Promise<WorkspaceExport | null> {
   const workspace = await db.query<WorkspaceRow>('SELECT * FROM workspaces WHERE id = ?').bind(workspaceId).first();
@@ -200,7 +174,6 @@ function attachment(document: unknown, filename: string): Response {
 }
 
 export function registerDataExports(app: Hono<AppEnv>): void {
-  // The session owner's copy of the session's records, also while it is archived.
   app.get('/api/sessions/:id/export', async c => {
     const actor = c.get('auth').userId;
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');
@@ -210,14 +183,10 @@ export function registerDataExports(app: Hono<AppEnv>): void {
     return attachment(document, `pikibun-session-${row.id}.json`);
   });
 
-  // Owners and admins: the workspace's settings and activity, their own sessions in full and the records of the other
-  // sessions they can view, which is every session there since they manage them all. Each other session's full data
-  // stays with its owner's own export.
   app.get('/api/workspaces/:id/export', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    // Oldest first, like the operator's dump.
     const accessible = (await workspaceSessionAccess(c.env, workspaceId, actor)).reverse();
     const document = await exportWorkspace(c.env.DB, workspaceId, {
       userId: actor,

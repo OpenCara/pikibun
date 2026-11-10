@@ -59,10 +59,8 @@ test("the host's own compaction settings win over the reasoning default", () => 
   ];
   assert.deepEqual(hostCompaction(undefined, models), { modelOverrides: { "anthropic/opus": { reserveTokens: 65_536 }, "anthropic/sonnet": { reserveTokens: 20_000 } } });
   assert.equal(hostCompaction(undefined, [models[2]!]), undefined, "nothing to change for a host without reasoning models");
-  // A harness-wide reserveTokens is the owner's choice for every model.
   const overall = { reserveTokens: 16_384 };
   assert.equal(hostCompaction(overall, models), overall);
-  // A model's own override keeps its reserveTokens; its other fields join the default.
   assert.deepEqual(hostCompaction({ enabled: true, modelOverrides: { "anthropic/opus": { reserveTokens: 16_384 }, "anthropic/sonnet": { keepRecentTokens: 1000 } } }, models), {
     enabled: true,
     modelOverrides: { "anthropic/opus": { reserveTokens: 16_384 }, "anthropic/sonnet": { reserveTokens: 20_000, keepRecentTokens: 1000 } },
@@ -79,7 +77,6 @@ test("token counts set in Pikibun replace the host's Pi settings, count by count
     modelOverrides: { "anthropic/opus": { reserveTokens: 65_536, keepRecentTokens: 5000 }, "openai/gpt-5": { keepRecentTokens: 1000 } },
   });
   assert.deepEqual(configuredCompaction(undefined, { keepRecentTokens: 0 }), { keepRecentTokens: 0 });
-  // Through the reasoning default: a count for every model set in Pikibun turns it off, as one in Pi's settings does.
   const models = [{ provider: "anthropic", id: "sonnet", reasoning: true, contextWindow: 200_000 }];
   assert.deepEqual(hostCompaction(configuredCompaction(undefined, { reserveTokens: 16_384 }), models), { reserveTokens: 16_384 });
   assert.deepEqual(hostCompaction(configuredCompaction(undefined, { modelOverrides: { "anthropic/sonnet": { reserveTokens: 50_000 } } }), models),

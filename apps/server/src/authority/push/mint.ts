@@ -15,36 +15,23 @@ import { ownerGitAuthorization } from './targets.js';
 export interface MintTarget {
   workspaceId: string; sessionId: string;
   provider: GitProvider; host: string; fullName: string; repositoryId: string; branch: string;
-  /** A tag push: the token is for creating refs/tags/<tag>, not for moving `branch`. */
   tag?: string;
-  /** The session owner, and the host running the session with its owner; both null on the control plane's own runner. */
   ownerId: string; connectorId: string | null; hostOwnerId: string | null;
-  /** The session owner's own account for the repository, already checked for push permission. */
   owner: RepositoryAccess;
-  /**
-   * The control plane pushes with the credential itself (the egress relay), so it never reaches the host: the owner's
-   * token needs no reset afterwards, and the host's own Git credentials can't serve.
-   */
   relay?: boolean;
 }
 export interface MintedToken {
-  kind: PushIdentityKind;            // 'github-app' for the operator app too
-  identityId: string | null;         // null = operator GitHub App
-  authorization: string | null;      // full Authorization header value for git smart HTTP; null = the host's own Git credentials
-  expiresAt: number;                 // unix seconds
+  kind: PushIdentityKind;
+  identityId: string | null;
+  authorization: string | null;
+  expiresAt: number;
   revocation?: PushRevocation;
 }
-/**
- * Undoing a credential once its push is over: an installation token is revoked; the owner's GitHub sign-in token is
- * reset, so the host's copy stops working while the vault (which held it as `ciphertext`) gets the replacement.
- */
 export type PushRevocation = { kind: 'github-installation'; apiBase: string; token: string }
   | { kind: 'github-owner'; userId: string; token: string; ciphertext: string };
-/** Vault-encrypted oauth-refresh secret; the current access token is cached so concurrent pushes reuse it (GitLab revokes it on refresh). */
 export interface OAuthSecret { clientSecret: string; refreshToken?: string; accessToken?: string; accessExpiresAt?: number }
 interface GitHubApp { appId: string; slug: string; privateKey: string }
 interface Upstream { status: number; body: Record<string, unknown> | null }
-/** Minting failures are 502s; save-time verification reports rejected settings as 400s. */
 type Purpose = 'mint' | 'verify';
 
 const remoteTimeout = 20_000;
@@ -53,21 +40,17 @@ const userAgent = 'OpenCara-Agent-Workspace';
 const formType = 'application/x-www-form-urlencoded';
 const entraScope = '499b84ac-1321-427f-aa17-267ca6975798/.default';
 const tokenPattern = /^[\x21-\x7e]{1,16384}$/;
-// oauth-refresh rotation: a lease outlives one 20 s refresh; waiters retry for about 10 s.
 const leaseSeconds = 60;
 const leaseAttempts = 40;
 const leaseRetryMs = 250;
-// A cached access token (expiry in epoch seconds) is handed out only while it outlives the longest push by a wide margin.
 const accessReuseSeconds = 15 * 60;
 
-/** Vault associated data for a push identity's secret. */
 export function identitySecretContext(identityId: string): string {
   return `push-identity:${identityId}`;
 }
 export function oauthRedirectUri(env: Env): string {
   return `${appOrigin(env)}/api/push-identities/oauth/callback`;
 }
-/** GitLab and Gitea OAuth2 endpoints and the narrowest scopes that allow pushing and reading the bot's login. */
 export function oauthEndpoints(provider: GitProvider, host: string): { authorize: string; token: string; scope: string } {
   return provider === 'gitlab'
     ? { authorize: `https://${host}/oauth/authorize`, token: `https://${host}/oauth/token`, scope: 'write_repository read_user' }
@@ -114,13 +97,11 @@ function token(purpose: Purpose, value: unknown): string {
   if (typeof value !== 'string' || !tokenPattern.test(value)) unavailable(purpose);
   return value;
 }
-/** Provider-reported lifetime, bounded by the documented maximum. */
 function expiresAt(expiresIn: unknown, maximum: number): number {
   const seconds = typeof expiresIn === 'number' && Number.isSafeInteger(expiresIn) && expiresIn > 0 ? Math.min(expiresIn, maximum) : maximum;
   return Math.floor(Date.now() / 1000) + seconds;
 }
 
-/** Every upstream call: no redirects, bounded time and body, fixed errors; upstream bodies are never surfaced. */
 async function upstream(purpose: Purpose, url: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<Upstream> {
   let response: Response;
   try {
@@ -148,7 +129,7 @@ async function upstream(purpose: Purpose, url: string, init: { method?: string; 
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   let body: unknown = null;
-  try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { /* Non-JSON bodies are treated as absent. */ }
+  try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { }
   return { status: response.status, body: body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null };
 }
 
@@ -156,7 +137,6 @@ function identityRequired(target: MintTarget, scope: string): never {
   return fail(409, 'push_identity_required', `No push identity is configured for ${gitProviderNames[target.provider]} (${target.host}${scope ? `, ${scope}` : ''}). ` +
     'A workspace owner or admin can add one in Settings → Workspaces → Push access: an app or bot identity, the session owner\'s account, or the host\'s Git credentials.');
 }
-/** The owner's account and the host's Git credentials only serve sessions on the session owner's own host. */
 function requireOwnHost(target: MintTarget, kind: 'owner-account' | 'host-credentials'): void {
   if (target.connectorId && target.hostOwnerId === target.ownerId) return;
   fail(409, 'push_identity_own_host_required', `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use ${kind === 'owner-account'
@@ -226,7 +206,6 @@ async function bitbucketToken(purpose: Purpose, key: string, secret: string): Pr
   return { token: token(purpose, body.access_token), expiresAt: expiresAt(body.expires_in, 7200) };
 }
 
-/** Takes the rotation lease, waiting about 10 s for a concurrent refresh to finish. */
 async function acquireLease(env: Env, row: PushIdentityRow): Promise<PushIdentityRow> {
   for (let attempt = 0; ; attempt++) {
     const time = Math.floor(Date.now() / 1000);
@@ -258,7 +237,6 @@ async function mintOAuth(env: Env, row: PushIdentityRow): Promise<MintedToken> {
   try {
     const config = JSON.parse(leased.config_json) as Record<string, string>;
     const secret = oauthSecret(await identitySecret(env, leased));
-    // A concurrent request may have refreshed while this one waited for the lease.
     const cached = cachedAccess(leased, secret);
     if (cached) return cached;
     const response = secret.refreshToken === undefined ? null : await upstream('mint', oauthEndpoints(leased.provider, leased.host).token, {
@@ -267,7 +245,6 @@ async function mintOAuth(env: Env, row: PushIdentityRow): Promise<MintedToken> {
         grant_type: 'refresh_token', redirect_uri: oauthRedirectUri(env) }).toString(),
     });
     if (!response || response.status === 400 || response.status === 401 || response.body?.error === 'invalid_grant') {
-      // The refresh token is dead: drop it and require a new authorization by the bot account.
       const cleared = await encryptToken(env, identitySecretContext(leased.id), JSON.stringify({ clientSecret: secret.clientSecret }));
       await env.DB.query(`UPDATE push_identities SET status = 'authorization_required', secret_ciphertext = ?, lease_until = NULL, updated_at = ?
         WHERE id = ? AND secret_ciphertext = ?`).bind(cleared, now(), leased.id, leased.secret_ciphertext).run();
@@ -280,7 +257,6 @@ async function mintOAuth(env: Env, row: PushIdentityRow): Promise<MintedToken> {
     const accessExpiresAt = expiresAt(body.expires_in, leased.provider === 'gitlab' ? 7200 : 3600);
     const rotated = await encryptToken(env, identitySecretContext(leased.id),
       JSON.stringify({ clientSecret: secret.clientSecret, refreshToken, accessToken, accessExpiresAt } satisfies OAuthSecret));
-    // Store the new tokens and release the lease together; a replaced identity keeps its own secret.
     await env.DB.query('UPDATE push_identities SET secret_ciphertext = ?, lease_until = NULL, updated_at = ? WHERE id = ? AND secret_ciphertext = ?')
       .bind(rotated, now(), leased.id, leased.secret_ciphertext).run();
     released = true;
@@ -290,12 +266,7 @@ async function mintOAuth(env: Env, row: PushIdentityRow): Promise<MintedToken> {
   }
 }
 
-/**
- * Finds the identity (or operator app) for the target and issues its push credential: a minted token, the owner's own
- * token, or none when the host pushes with its own Git credentials. Fails with fixed messages.
- */
 export async function mintPushToken(env: Env, target: MintTarget): Promise<MintedToken> {
-  // Azure DevOps identities are per organization and Bitbucket identities per workspace; others cover the host.
   const scope = target.provider === 'azure-devops' || target.provider === 'bitbucket' ? target.fullName.split('/')[0]!.toLowerCase() : '';
   const row = await env.DB.query<PushIdentityRow>('SELECT * FROM push_identities WHERE workspace_id = ? AND provider = ? AND host = ? AND scope = ?')
     .bind(target.workspaceId, target.provider, target.host, scope).first();
@@ -327,11 +298,9 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
       return { kind: row.kind, identityId: row.id, authorization: `Bearer ${jwt}`, expiresAt: expiry };
     }
     case 'owner-account': {
-      // The owner's token goes only to the owner's own host, for this one push.
       requireOwnHost(target, row.kind);
       const minted = { kind: row.kind, identityId: row.id, authorization: ownerGitAuthorization(target.owner), expiresAt: expiresAt(undefined, 3600) };
       if (target.owner.provider !== 'github' || target.relay) return minted;
-      // The GitHub sign-in token is reset after the push, which needs Pikibun's OAuth app.
       if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
         fail(409, 'owner_token_reset_unavailable', 'Pushes with the session owner\'s GitHub account need Pikibun\'s GitHub sign-in app to reset the token afterwards, and it is not configured.');
       }
@@ -348,8 +317,6 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
         FROM connectors c LEFT JOIN connector_configs cfg ON cfg.connector_id = c.id WHERE c.id = ? AND c.owner_id = ?`)
         .bind(target.connectorId, target.ownerId).first();
       const capabilities = parseCapabilities(host?.capabilities_json);
-      // A connector configured in Pikibun offers them once its owner turned them on there; an older one, once started with
-      // --git-credentials.
       const offered = capabilities.hostConfig ? Number(host?.git_credentials ?? 0) === 1 : capabilities.gitCredentials === true;
       if (!offered) {
         fail(409, 'host_git_credentials_disabled', `Pushes to ${gitProviderNames[target.provider]} (${target.host}) use the host's Git credentials, which this host doesn't offer. ` +
@@ -360,18 +327,9 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
   }
 }
 
-/** A repository read token handed out again while it outlives the longest Git command by a wide margin. */
 const readReuseSeconds = 20 * 60;
 const readTokens = new Map<string, MintedToken>();
 
-/**
- * A token that can only read one repository, for a host's direct Git reads (GitDirectGrant): a GitHub App installation
- * token limited to the repository and to `contents: read`, from the workspace's GitHub App push identity for the host or
- * the operator's app on github.com. Null when there is none, the app isn't installed on the repository, or the provider
- * has no such tokens; the read is then relayed, or made with the owner's account on their own host. Tokens are shared
- * by the sessions that read the same repository with the same app, for as long as they last; the caller has checked
- * the session's authority for this request.
- */
 export async function mintRepositoryReadToken(env: Env, target: { workspaceId: string; provider: GitProvider; host: string; fullName: string; repositoryId: string })
   : Promise<MintedToken | null> {
   const found = await readApp(env, target.workspaceId, target.provider, target.host);
@@ -384,14 +342,12 @@ export async function mintRepositoryReadToken(env: Env, target: { workspaceId: s
   let minted: MintedToken;
   try { minted = await mintGitHub(target, app, identityId, { contents: 'read' }); }
   catch { return null; }
-  // Shared tokens are never revoked by one session's request; they expire within the hour.
   const token: MintedToken = { kind: minted.kind, identityId: minted.identityId, authorization: minted.authorization, expiresAt: minted.expiresAt };
   if (readTokens.size >= 1000) readTokens.clear();
   readTokens.set(key, token);
   return token;
 }
 
-/** The GitHub App that mints read tokens for a workspace's repositories on `host`: its own push identity's, else the operator's. */
 async function readApp(env: Env, workspaceId: string, provider: GitProvider, host: string): Promise<{ app: GitHubApp; identityId: string | null } | null> {
   if (provider !== 'github' && provider !== 'github-enterprise') return null;
   const row = await env.DB.query<PushIdentityRow>("SELECT * FROM push_identities WHERE workspace_id = ? AND provider = ? AND host = ? AND scope = ''")
@@ -406,24 +362,11 @@ async function readApp(env: Env, workspaceId: string, provider: GitProvider, hos
   return null;
 }
 
-/**
- * The repository permissions a sandbox's API token may read, of those its installation was granted: what `gh` reads
- * (code, issues, pull requests, Actions runs and logs, checks, statuses, deployments, discussions, Pages), never
- * secrets, administration or anything about the organization.
- */
 const apiReadPermissions = ['actions', 'checks', 'contents', 'deployments', 'discussions', 'issues', 'metadata', 'pages', 'pull_requests', 'statuses'];
 export interface ApiReadToken { account: string; token: string; expiresAt: number; repositories: string[] }
-/** A result some of whose repositories the app couldn't reach is asked again this soon, so installing it there shows. */
 const incompleteReuseSeconds = 60;
 const apiTokens = new Map<string, { tokens: ApiReadToken[]; notInstalled: string[]; until: number }>();
 
-/**
- * Tokens for sandboxed reads of the GitHub API (see `credentialedApiHosts`): one per installation of the workspace's
- * GitHub App (as for mintRepositoryReadToken) that the repositories belong to, limited to those repositories and to
- * reading them. `notInstalled` names the repositories the app can't reach. Null when there's no app. Shared, as read
- * tokens are, by the sessions that read the same repositories, for as long as they last; the caller has checked the
- * session's authority and that its owner can read each repository.
- */
 export async function mintGitHubApiReadTokens(env: Env, target: { workspaceId: string; repositories: { fullName: string; repositoryId: string }[] })
   : Promise<{ tokens: ApiReadToken[]; notInstalled: string[] } | null> {
   const found = await readApp(env, target.workspaceId, 'github', 'github.com');
@@ -477,16 +420,11 @@ export async function mintGitHubApiReadTokens(env: Env, target: { workspaceId: s
   return { tokens, notInstalled };
 }
 
-/** Forgets the shared read tokens (tests). */
 export function forgetRepositoryReadTokens(): void {
   readTokens.clear();
   apiTokens.clear();
 }
 
-/**
- * Never throws. Returns false only when the owner's token could not be reset yet and the revocation should be retried;
- * installation tokens are revoked best effort, as they expire within an hour anyway.
- */
 export async function revokePushToken(env: Env, revocation: PushRevocation): Promise<boolean> {
   try {
     if (revocation.kind === 'github-owner') return await resetGitHubToken(env, revocation.userId, revocation.token, revocation.ciphertext);
@@ -499,7 +437,6 @@ export async function revokePushToken(env: Env, revocation: PushRevocation): Pro
   }
 }
 
-/** Live check of new identity settings before they are stored; returns the config to store (with the bot login when known). */
 export async function verifyIdentity(env: Env, input: {
   workspaceId: string; provider: GitProvider; host: string; kind: PushIdentityKind; config: Record<string, string>; secret: string | null;
 }): Promise<Record<string, string>> {
@@ -518,11 +455,9 @@ export async function verifyIdentity(env: Env, input: {
       await bitbucketToken('verify', config.key!, input.secret ?? '');
       return config;
     case 'oauth-refresh':
-      // Verified when the bot account authorizes the OAuth app.
       return config;
     case 'owner-account':
     case 'host-credentials':
-      // Nothing to verify: each push checks the owner's account, or the host, when it runs.
       return config;
     case 'forgejo-integration': {
       const jwt = await issuerAssertion(env, { subject: workspaceSubject(input.workspaceId), audience: config.audience!, ttlSeconds: 600 });
@@ -537,7 +472,6 @@ function botLogin(value: unknown): string {
   return value;
 }
 
-/** Exchanges a bot account's authorization code (PKCE) for its refresh token and reads the bot's login. */
 export async function exchangeAuthorizationCode(env: Env, identity: { provider: GitProvider; host: string; clientId: string; clientSecret: string },
   code: string, verifier: string): Promise<{ refreshToken: string; login: string }> {
   const body = expectStatus('verify', await upstream('verify', oauthEndpoints(identity.provider, identity.host).token, {

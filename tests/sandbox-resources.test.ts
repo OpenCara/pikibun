@@ -74,15 +74,6 @@ test("bare Sandbox never executes production bash without verified resources", {
   }
 });
 
-/* Explicitly provisioned fixture only; these tests NEVER mount filesystems, enable
- * ancestor controllers, move existing processes, or create a root-owned shell.
- * RUNNER_RESOURCE_TEST_FIXTURE names a private JSON file containing:
- * { resources: ResourceConfig, storageRoot: <dedicated mounted empty session root> }.
- * Use an isolated runner uid with an unlimited leaf, delegated sibling subtree,
- * ext4/tmpfs rw,nosuid,nodev <=16MiB, <=4096 inodes, <=128MiB RAM and <=24 pids.
- * The operator owns fixture provisioning/removal; the suite leaves session data.
- * A supplied but invalid fixture FAILS rather than silently skipping enforcement.
- */
 const fixturePath = process.env.RUNNER_RESOURCE_TEST_FIXTURE;
 test("real delegated kernel resource boundary", {
   skip: !fixturePath ? "No explicitly provisioned RUNNER_RESOURCE_TEST_FIXTURE; cgroup/storage enforcement NOT exercised" : false,
@@ -191,8 +182,6 @@ test("real delegated kernel resource boundary", {
     const handles = await Promise.all(["home", "worktree", "git", "owner.gitconfig", ""].map((path) =>
       open(join(fixture.storageRoot, path), constants.O_RDONLY | constants.O_NOFOLLOW | (path === "owner.gitconfig" ? 0 : constants.O_DIRECTORY))));
     try {
-      // Deliberately omit die-with-parent for this benign bounded sleep so the
-      // recovery test proves cgroup.kill, rather than bwrap's parent-death guard.
       const args = ["--unshare-all", "--unshare-user", "--disable-userns", "--cap-drop", "ALL",
         "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64",
         "--symlink", "usr/bin", "/bin", "--proc", "/proc", "--dev", "/dev",

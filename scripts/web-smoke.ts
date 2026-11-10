@@ -1,13 +1,3 @@
-/**
- * Runs the web client (apps/nsh built for the web, as the server ships it) in a real headless Chrome against a test-mode
- * server on this machine: signed out, signed in with the browser's own session cookie, Settings and Back, Back between
- * typed addresses, a settings page opened from its address, and signing out; then a new account made with a
- * password, its first workspace, and a file attached through the browser's own file chooser. Fails on any page error, any
- * Content-Security-Policy violation and any console error but the expected 401 of a signed-out page and the 404 of the
- * made-up sessions whose addresses it types. Native Shell's headless engine can't catch these: it is not a browser, and
- * it has APIs the web runtime lacks. Uses the Chrome or Chromium CHROME_BIN names, or the first on PATH, over the
- * DevTools protocol (Node's own WebSocket; no browser library). Run it with `pnpm test:client-web`.
- */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -40,12 +30,10 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-/** A page of a headless Chrome, over the DevTools protocol. */
 class Page {
   private next = 1;
   private readonly pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
   private readonly listeners = new Map<string, ((params: any) => void)[]>();
-  /** What went wrong on the page: errors, refused resources, console errors. */
   readonly problems: string[] = [];
 
   private constructor(private readonly socket: WebSocket) {
@@ -66,9 +54,7 @@ class Page {
         this.problems.push(`console error: ${params.args.map((arg: any) => arg.value ?? arg.description).join(" ")}`);
       } else if (method === "Log.entryAdded" && params.entry.level === "error") {
         const { text, url } = params.entry;
-        // A signed-out page asks /api/me and is told 401: that is how it learns it is signed out.
         const signedOut = /status of 401/.test(text) && /\/api\/me$/.test(url ?? "");
-        // The sessions the address test types don't exist: the page asks for them and is told 404, and says so.
         const madeUp = /status of 404/.test(text) && /\/api\/sessions\/smoke-(first|second)(\/|$)/.test(url ?? "");
         if (!signedOut && !madeUp) this.problems.push(`${params.entry.source}: ${text} ${url ?? ""}`.trim());
       }
@@ -83,12 +69,10 @@ class Page {
     return page;
   }
 
-  /** Hears the protocol's event `method` from now on. */
   on(method: string, listener: (params: any) => void) {
     this.listeners.set(method, [...(this.listeners.get(method) ?? []), listener]);
   }
 
-  /** Types `text` into the input labelled `label`, as a person would: a click to focus it, then the text. */
   async type(label: string, text: string) {
     await this.click(label);
     await this.send("Input.insertText", { text });
@@ -114,10 +98,6 @@ class Page {
     await this.send("Page.navigate", { url });
   }
 
-  /**
-   * Clicks `label` until `wanted` shows: a page sliding in or a list still scrolling can take a press elsewhere, as it
-   * can a person's, who presses again.
-   */
   async clickUntil(label: string, wanted: string, options: { scroll?: boolean } = {}) {
     for (let attempt = 1; ; attempt++) {
       await this.click(label, options);
@@ -139,16 +119,10 @@ class Page {
     throw new Error(`"${wanted}" never showed. The page says:\n${await this.text().catch(() => "")}\n${this.problems.join("\n")}`);
   }
 
-  /**
-   * Clicks, as a person would, the last element on screen labelled `label`, or saying it besides an icon (a dialog's
-   * button comes after the page's). Pages the navigation keeps beside the visible one don't count: the browser's own hit
-   * test must land on the element, so a page still sliding in is waited for.
-   */
   async click(label: string, options: { scroll?: boolean } = {}) {
     const deadline = Date.now() + TIMEOUT_MS;
     let point = await this.onScreen(label);
     while (!point && Date.now() < deadline) {
-      // With `scroll`, what is below the fold is scrolled to with the wheel, as a person would, whatever the page scrolls with.
       if (options.scroll) await this.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 640, y: 400, deltaX: 0, deltaY: 400 });
       await new Promise(done => setTimeout(done, 200));
       point = await this.onScreen(label);
@@ -202,8 +176,6 @@ async function launchChrome(profile: string): Promise<{ chrome: ChildProcess; pa
   return { chrome, page: await Page.open(target.webSocketDebuggerUrl) };
 }
 
-// Absolute, whatever TMPDIR says: a short relative one keeps Chrome's socket paths within their limit on hosts whose
-// temporary directory is deep.
 const work = resolve(await mkdtemp(join(tmpdir(), "pikibun-web-smoke-")));
 const port = await freePort();
 const origin = `http://127.0.0.1:${port}`;
@@ -213,7 +185,6 @@ let failed = false;
 try {
   console.log("Building the client for the web…");
   await buildWeb(join(work, "web"));
-  /** A test-mode server of the built client on `serverPort`, with a database of its own named `name`. */
   const serve = async (serverPort: number, name: string, extra: Record<string, string> = {}) => {
     const started = await startServer(await loadConfig({
       APP_ORIGIN: `http://127.0.0.1:${serverPort}`, HOST: "127.0.0.1", PORT: String(serverPort), DATABASE_URL: `sqlite://${join(work, `${name}.sqlite`)}`,
@@ -228,7 +199,6 @@ try {
   await serve(port, "pikibun");
 
   const { chrome, page } = await launchChrome(join(work, "chrome"));
-  // Chrome writes its profile until it has exited, so it must be gone before the profile is removed.
   cleanups.unshift(async () => {
     page.close();
     if (chrome.exitCode !== null || chrome.signalCode !== null) return;
@@ -242,7 +212,6 @@ try {
   await page.waitForText("Continue with GitHub");
   console.log("✓ signed out, the page offers sign-in");
 
-  // A browser sign-in: the server's session cookie, as GitHub's callback would set it.
   const login = await fetch(`${origin}/api/auth/test`, {
     method: "POST", headers: { Authorization: `Bearer ${secret}`, Origin: origin, "Content-Type": "application/json" },
     body: JSON.stringify({ id: "web-smoke", displayName: "Ada Lovelace" }),
@@ -253,12 +222,9 @@ try {
   await page.send("Network.setCookie", { name, value: value.join("="), url: origin });
 
   await page.goto(`${origin}/`);
-  // Everyone has a private workspace, pinned first, so the client opens on a new session there.
   await page.waitForText("What should we work on?");
   console.log("✓ signed in with the browser's session, the session list shows");
 
-  // Settings opened in the app and left with Back: the address follows each page, and Back stays back. The address was
-  // once set on the entry of the page underneath before Native Shell pushed its own, so Back reopened Settings.
   const waitForAddress = async (wanted: string) => {
     const deadline = Date.now() + TIMEOUT_MS;
     let hash = "";
@@ -270,12 +236,10 @@ try {
     throw new Error(`The address is ${hash}, not ${wanted}.`);
   };
   await page.click("Settings");
-  // As a person would, once Settings has slid in: a press on a section while it still moves can miss it.
   await page.waitForText("Appearance");
   await new Promise(done => setTimeout(done, 600));
   await page.clickUntil("Appearance", "System follows");
   await waitForAddress("#/settings/appearance");
-  // As a person would, once Settings has slid in: Native Shell lets a press go while its button still moves under it.
   await new Promise(done => setTimeout(done, 600));
   await page.click("Back");
   await waitForAddress("#/");
@@ -285,9 +249,6 @@ try {
   }
   console.log("✓ settings opened in the app follow the address, and Back leaves them");
 
-  // Two sessions' addresses typed one after the other, then the browser's Back: it goes to the first. Wide windows show
-  // a session beside the list, without a page of its own, and Back between two once did nothing. (A session the server
-  // doesn't have opens all the same, saying so.)
   await page.evaluate("location.hash = '#/s/smoke-first'");
   await waitForAddress("#/s/smoke-first");
   await page.evaluate("location.hash = '#/s/smoke-second'");
@@ -298,11 +259,9 @@ try {
   if (await page.evaluate<string>("location.hash") !== "#/s/smoke-first") throw new Error("Back from a typed session address didn't stay on the one before.");
   console.log("✓ Back goes to the session address typed before");
 
-  // An address the page is opened at goes where it points.
   await page.goto(`${origin}/#/settings/profile`);
   await page.waitForText("Ada Lovelace");
   console.log("✓ a settings address opens that section");
-  // Profile ends with the Account section: bring its Sign out button up from below the fold.
   await page.waitForText("Sign out");
   await page.evaluate(`[...document.querySelectorAll('#app [aria-label="Sign out"]')].at(-1)?.scrollIntoView({ block: 'center' })`);
 
@@ -313,7 +272,6 @@ try {
   if (after !== 401) throw new Error(`the browser is still signed in after signing out (${after})`);
   console.log("✓ signing out ended the browser's session on the server");
 
-  // A new account with a username and password, on a server of its own that takes them and new accounts.
   const passwordPort = await freePort();
   await serve(passwordPort, "passwords", { PASSWORD_AUTH: "true", SIGNUP: "open" });
   await page.goto(`http://127.0.0.1:${passwordPort}/#/`);
@@ -322,12 +280,9 @@ try {
   await page.type("Password", "correct horse battery staple");
   await page.type("Confirm password", "correct horse battery staple");
   await page.click("Create account");
-  // A new account starts in its own private workspace, made for it, where a session needs no source.
   await page.waitForText("What should we work on?");
   console.log("✓ a new account made with a password, signed in, starts a session in its private workspace");
 
-  // A file attached through the browser's own file chooser (the page's host), as NSH's picker takes only photos; then
-  // an image, which shows as a thumbnail (a blob: URL the page's policy allows).
   const file = join(work, "notes.txt");
   const image = join(work, "pixel.png");
   await writeFile(file, "hello from the smoke test\n");
@@ -346,7 +301,6 @@ try {
   }
   console.log("✓ a file and an image picked in the browser's own chooser are attached to the first message");
 
-  // Notifications on this device: this browser can take pushes, through the service worker the build ships.
   await page.evaluate("location.hash = '#/settings/notifications'");
   await page.waitForText("This browser shows notifications even when no Pikibun tab is open.");
   const worker = await page.evaluate<{ status: number; type: string; text: string }>(
@@ -363,7 +317,6 @@ try {
   console.error(error instanceof Error ? error.message : error);
 } finally {
   for (const cleanup of cleanups) await cleanup();
-  // Leftovers in the temporary directory fail nothing.
   await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(error => console.warn(`Could not remove ${work}: ${error}`));
 }
 process.exit(failed ? 1 : 0);

@@ -26,7 +26,6 @@ type RunnerChild = {
 };
 
 async function bounded<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
-  // Real child processes and sockets cannot share the test runner's fake clock.
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
@@ -41,7 +40,6 @@ async function bounded<T>(promise: Promise<T>, milliseconds: number, message: st
 function isolationUnavailable(directory: string): string | undefined {
   const descriptor = openSync(directory, "r");
   try {
-    // Exercise the actual namespace and fd-mount features, not just `which bwrap`.
     const probe = spawnSync("/usr/bin/bwrap", [
       "--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
       "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
@@ -71,7 +69,6 @@ function isolationUnavailable(directory: string): string | undefined {
 function launchRunner(dataDir: string, controlPlaneUrl: string, secret: string, home: string): RunnerChild {
   const child = spawn(process.execPath, ["--import", "tsx", "apps/runner/src/index.ts"], {
     cwd: repository,
-    // Never inherit developer credentials, NODE_OPTIONS, proxies, or provider configuration.
     env: {
       PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, TMPDIR: home,
       LANG: "C.UTF-8", TZ: "UTC", NODE_ENV: "test",
@@ -156,7 +153,7 @@ function identityResult(view: SessionView): Record<string, unknown> {
     try {
       const value: unknown = JSON.parse(entry.text);
       if (value && typeof value === "object" && "ownerId" in value) return value as Record<string, unknown>;
-    } catch { /* Other tool results are not identity records. */ }
+    } catch { }
   }
   assert.fail(`Missing actual identity tool result: ${JSON.stringify(view.entries)}`);
 }
@@ -264,7 +261,6 @@ test("SIGKILL runner reopens pi SQLite, resumes pending generation, and preserve
         assert.ok(active && active.process.exitCode === null && active.process.signalCode === null, `Runner exited: ${active?.output()}`);
         last = await view();
         if (predicate(last)) return last;
-        // Bounded HTTP polling observes the separate process; no guessed hold-start sleep.
         await delay(40, undefined, { signal: t.signal });
       } while (Date.now() < deadline);
       assert.fail(`${description}; last view=${JSON.stringify(last)}\n${active?.output()}`);
@@ -346,8 +342,6 @@ test("SIGKILL runner reopens pi SQLite, resumes pending generation, and preserve
     const sqlitePath = join(dataDir, "sessions", binding.session.id, "session.sqlite");
     const sqliteBytes = await readFile(sqlitePath);
     assert.equal(new TextDecoder().decode(sqliteBytes.subarray(0, 16)), "SQLite format 3\0");
-    // Open read-only: do not checkpoint, repair, or rewrite the crashed pi store before restart.
-    // Conditional platform import lets older Node installations report the explicit skip above.
     const { DatabaseSync } = await import("node:sqlite");
     const database = new DatabaseSync(sqlitePath, { readOnly: true });
     try {
@@ -359,7 +353,6 @@ test("SIGKILL runner reopens pi SQLite, resumes pending generation, and preserve
 
     baseUrl = await start();
     assert.notEqual(active!.process.pid, crashed.process.pid);
-    // GET lazily opens the saved Harness. No resubmit or graceful restart endpoint may drive recovery.
     const recovered = await waitForView("Pending replay-safe generation failed to resume/reconcile after SIGKILL", value =>
       !value.busy && value.entries.some(entry => entry.role === "assistant" && entry.text === heldText));
     assert.deepEqual(recovered.owner, baseline.owner);

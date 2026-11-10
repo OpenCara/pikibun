@@ -11,35 +11,17 @@ import {
 } from '../../../packages/shared/src/notifications.js';
 import type { SessionActivity } from '../../../packages/shared/src/types.js';
 
-/**
- * Notifications (docs/notifications.md). When a host reports that a session's agent started waiting for an approval,
- * or finished or failed the work it was doing, the session's owner and whoever sent it its latest message (while they
- * can still read the session) are notified, as each of them chose (NotificationPreferences):
- *
- * - in their notification feed, which open web pages and desktop windows poll and show as system notifications;
- * - through Web Push, to each browser they turned notifications on in.
- *
- * A device belongs to the sign-in that registered it (`auth_token_hash`): signing out, the sign-in expiring, or signing
- * an app out from the web stops its notifications. Push endpoints are the client's to give, so the server sends Web
- * Push only to the browsers' own push services (web-push.ts allowedPushEndpoint).
- */
-
-/** A person's devices beyond this many: the oldest registrations go. */
 const MAX_DEVICES = 20;
 const FEED_LIMIT = 50;
-/** Who sent a session its latest message is only worth notifying while that message can still be the one at work. */
 const SENDER_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PUSH_TIMEOUT_MS = 10_000;
 const MAX_CONCURRENT_PUSHES = 16;
 const VAPID_KEY_NAME = 'web-push-vapid';
 const VAPID_VAULT_IDENTITY = 'server:web-push';
 
-/** The notification an activity change brings, if any: only a change the agent made, not one a host merely restated. */
 export function activityNotification(previous: SessionActivity | null | undefined, next: SessionActivity): Exclude<NotificationKind, 'test'> | null {
   if (previous === next) return null;
   if (next === 'waiting') return 'approval';
-  // Done or failed after the agent worked (or waited on a card): what it was doing ended. A host that comes back and
-  // reports a session it had settled before (from idle or nothing) tells nothing new.
   if (previous !== 'working' && previous !== 'waiting') return null;
   if (next === 'done') return 'finished';
   if (next === 'failed') return 'failed';
@@ -48,7 +30,6 @@ export function activityNotification(previous: SessionActivity | null | undefine
 
 const preferenceOf: Record<Exclude<NotificationKind, 'test'>, keyof NotificationPreferences> = { approval: 'approvals', finished: 'finished', failed: 'failed' };
 
-/** What a notification says: the session's title and workspace where the person shows them, else only what happened. */
 export function notificationText(kind: NotificationKind, details: boolean, session?: { title: string; workspace: string }): { title: string; body: string } {
   if (kind === 'test') return { title: 'Pikibun', body: 'Notifications work on this device.' };
   const event = { approval: 'Waiting for an approval', finished: 'Finished', failed: 'Stopped on an error' }[kind];
@@ -63,7 +44,6 @@ const oneLine = (value: string, max: number) => {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
-/** Notification ids sort by when they were made, so the feed's cursor is the last id a page has seen. */
 function notificationId(at: number): string {
   return `${feedTime(at)}-${randomToken().slice(0, 12)}`;
 }
@@ -77,17 +57,13 @@ export async function notificationPreferences(env: Env, userId: string): Promise
   return { approvals: Number(row.approvals) === 1, finished: Number(row.finished) === 1, failed: Number(row.failed) === 1, details: Number(row.details) === 1 };
 }
 
-// The server's Web Push key pair, made once and kept with its private half sealed by the vault; per database, since a
-// process may serve several in tests.
 const vapidCache = new WeakMap<object, Promise<VapidKeys | null>>();
 
-/** The VAPID keys, or null where the server can't keep them (no usable VAULT_KEY), and so sends no Web Push. */
 export function webPushKeys(env: Env): Promise<VapidKeys | null> {
   let keys = vapidCache.get(env.DB);
   if (!keys) {
     keys = loadVapidKeys(env).catch(() => null);
     vapidCache.set(env.DB, keys);
-    // A failure isn't kept: the vault may be configured by the next request.
     void keys.then(value => { if (!value) vapidCache.delete(env.DB); });
   }
   return keys;
@@ -99,7 +75,6 @@ async function loadVapidKeys(env: Env): Promise<VapidKeys> {
   if (!stored) {
     const fresh = generateVapidKeys();
     const sealed = JSON.stringify({ publicKey: fresh.publicKey, privateKey: await encryptToken(env, VAPID_VAULT_IDENTITY, fresh.privateKey) });
-    // Two servers starting at once make one pair between them.
     await env.DB.query('INSERT INTO server_keys (name, value, created_at) VALUES (?, ?, ?) ON CONFLICT (name) DO NOTHING').bind(VAPID_KEY_NAME, sealed, now()).run();
     stored = await read();
   }
@@ -115,7 +90,6 @@ function webPushContact(env: Env): string {
 
 interface DeviceRow { id: string; user_id: string; endpoint: string; p256dh: string; auth: string }
 
-/** The devices of `userIds` whose sign-ins are still valid. */
 async function liveDevices(env: Env, userIds: readonly string[]): Promise<DeviceRow[]> {
   if (!userIds.length) return [];
   return env.DB.query<DeviceRow>(`SELECT d.id, d.user_id, d.endpoint, d.p256dh, d.auth FROM notification_devices d
@@ -123,7 +97,6 @@ async function liveDevices(env: Env, userIds: readonly string[]): Promise<Device
     WHERE d.kind = 'web' AND d.user_id IN (SELECT value FROM json_each(?)) AND a.expires_at > ?`).bind(JSON.stringify([...new Set(userIds)]), Date.now()).all();
 }
 
-// Pushes still on their way, so tests (and a server shutting down) can wait for them: activity reports don't.
 const inFlight = new Set<Promise<unknown>>();
 export async function settleNotificationDeliveries(withinMs = Infinity): Promise<void> {
   const deadline = Date.now() + withinMs;
@@ -151,10 +124,6 @@ function background(work: Promise<unknown>): void {
 
 export interface DeliveryCount { web: number }
 
-/**
- * Records `notification` in each person's feed and pushes it to their devices. Pushes go on in the background unless
- * `wait`; what comes back counts the devices a push service accepted it for.
- */
 async function notify(env: Env, items: { userId: string; notification: PikibunNotification }[], options: { wait?: boolean } = {}): Promise<DeliveryCount> {
   if (!items.length) return { web: 0 };
   const cutoff = new Date(Date.now() - NOTIFICATION_FEED_RETENTION_MS).toISOString();
@@ -183,7 +152,6 @@ async function forgetDevices(env: Env, ids: string[]): Promise<void> {
   if (ids.length) await env.DB.query('DELETE FROM notification_devices WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).run();
 }
 
-/** Web Push to each browser; a push service that no longer knows a subscription (404, 410) has it removed. */
 async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: NotificationPayload }[]): Promise<number> {
   const keys = await webPushKeys(env);
   if (!keys) return 0;
@@ -196,9 +164,7 @@ async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: Not
       method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(PUSH_TIMEOUT_MS), body,
       headers: {
         Authorization: vapidAuthorization(device.endpoint, contact, keys), 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream',
-        // An approval waits for someone; a result can wait a little and is stale after a few hours.
         TTL: payload.kind === 'approval' ? '86400' : '14400', Urgency: payload.kind === 'approval' ? 'high' : 'normal',
-        // A newer notification about the same session replaces one the browser hasn't fetched yet.
         ...(payload.sessionId ? { Topic: createHash('sha256').update(payload.sessionId).digest('base64url').slice(0, 32) } : {}),
       },
     });
@@ -210,10 +176,6 @@ async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: Not
   return results.filter(result => result.status === 'fulfilled' && result.value).length;
 }
 
-/**
- * A host reported `activity` for `row`, whose activity was `previous`: notifies the people it concerns, if it is a
- * change worth telling (activityNotification). Pushes go on in the background; the report doesn't wait for them.
- */
 export async function notifySessionActivity(env: Env, row: Pick<SessionRow, 'id' | 'title' | 'owner_id' | 'workspace_id'>, previous: SessionActivity | null | undefined,
   activity: SessionActivity): Promise<void> {
   const kind = activityNotification(previous, activity);
@@ -225,7 +187,6 @@ export async function notifySessionActivity(env: Env, row: Pick<SessionRow, 'id'
   const items: { userId: string; notification: PikibunNotification }[] = [];
   const at = Date.now();
   for (const userId of candidates) {
-    // Only people who can still read the session hear about it, as its title is in the notification.
     if (!await sessionAccess(env, row.id, userId)) continue;
     const preferences = await notificationPreferences(env, userId);
     if (!preferences[preferenceOf[kind]]) continue;
@@ -287,8 +248,6 @@ export function registerNotifications(app: Hono<AppEnv>): void {
     return c.json({ preferences: next });
   });
 
-  // Registering a device again (the page loads, the app starts) moves it to this sign-in, and to this person: a browser
-  // or phone gets the notifications of whoever signed in on it last.
   app.post('/api/notifications/devices', async c => {
     const auth = c.get('auth');
     const device = deviceInput(await jsonObject(c, 4096));
@@ -298,7 +257,6 @@ export function registerNotifications(app: Hono<AppEnv>): void {
       ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, auth_token_hash = excluded.auth_token_hash, kind = excluded.kind,
         p256dh = excluded.p256dh, auth = excluded.auth, name = excluded.name, created_at = excluded.created_at`)
       .bind(randomToken().slice(0, 24), auth.userId, auth.tokenHash, 'web', device.endpoint, device.p256dh, device.auth, device.name, now()).run();
-    // The oldest go beyond MAX_DEVICES.
     await c.env.DB.query(`DELETE FROM notification_devices WHERE user_id = ? AND id NOT IN (
       SELECT id FROM notification_devices WHERE user_id = ? ORDER BY created_at DESC, id LIMIT ?)`).bind(auth.userId, auth.userId, MAX_DEVICES).run();
     const id = await c.env.DB.query<{ id: string }>('SELECT id FROM notification_devices WHERE endpoint = ? AND user_id = ?').bind(device.endpoint, auth.userId).first('id');
@@ -314,7 +272,6 @@ export function registerNotifications(app: Hono<AppEnv>): void {
     return c.json({ ok: true });
   });
 
-  // A notification to every device of the person who asks, to check that they arrive.
   app.post('/api/notifications/test', async c => {
     const userId = c.get('auth').userId;
     const at = Date.now();
@@ -323,13 +280,10 @@ export function registerNotifications(app: Hono<AppEnv>): void {
     return c.json({ notification, delivered });
   });
 
-  // The notifications after `after`, for open pages and windows to show. Without `after`: none, and the cursor to start
-  // from, so a page that opens doesn't show what came before it.
   app.get('/api/notifications/feed', async c => {
     const userId = c.get('auth').userId;
     const after = c.req.query('after');
     if (after === undefined) {
-      // After their latest notification; with none, after now.
       const latest = await c.env.DB.query<{ id: string }>('SELECT id FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 1').bind(userId).first('id');
       const feed: NotificationFeed = { notifications: [], cursor: latest ?? `${feedTime(Date.now())}-` };
       return c.json(feed);
@@ -345,10 +299,6 @@ export function registerNotifications(app: Hono<AppEnv>): void {
   });
 }
 
-/**
- * For the activity report, which must not fail because a notification did: logs nothing either, since what went wrong
- * may name a session.
- */
 export function notifySessionActivityQuietly(env: Env, row: Pick<SessionRow, 'id' | 'title' | 'owner_id' | 'workspace_id'>, previous: SessionActivity | null | undefined,
   activity: SessionActivity): Promise<void> {
   return notifySessionActivity(env, row, previous, activity).catch(() => {});

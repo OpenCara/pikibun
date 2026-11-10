@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { headBranch, originUrl, readCloneBranches, reportedBranches } from "../apps/runner/src/clone-branches.js";
 import type { EgressRepository } from "../packages/shared/src/network.js";
 
-/** A clone's Git metadata as git clone leaves it, on `branch`, with origin `url` whose default branch is `remoteHead`. */
 async function clone(root: string, path: string, options: { branch?: string; detached?: boolean; url?: string; remoteHead?: string | null }): Promise<void> {
   const git = join(root, path, ".git");
   await mkdir(join(git, "refs", "remotes", "origin"), { recursive: true });
@@ -24,7 +23,6 @@ test("a clone's branch, origin and default branch are read from its Git files", 
   assert.equal(originUrl('[remote "origin"]\n\turl = git@github.com:owner/repo.git\n\turl = https://second.example/repo\n'), "git@github.com:owner/repo.git");
   assert.equal(originUrl('[remote "upstream"]\n\turl = https://github.com/a/b\n'), undefined);
   assert.equal(originUrl('[Remote "origin"] \n  URL = "https://github.com/owner/repo"\n'), "https://github.com/owner/repo");
-  // Values as Git writes and reads them: Git for Windows writes a local path's backslashes escaped; comments end a value.
   assert.equal(originUrl('[remote "origin"]\n\turl = C:\\\\Users\\\\me\\\\upstream\n'), "C:\\Users\\me\\upstream");
   assert.equal(originUrl('[remote "origin"]\n\turl = "https://x.example/a b" ; a comment\n'), "https://x.example/a b");
   assert.equal(originUrl('[remote "origin"]\n\turl = git@github.com:owner/repo.git # a comment\n'), "git@github.com:owner/repo.git");
@@ -33,7 +31,6 @@ test("a clone's branch, origin and default branch are read from its Git files", 
 test("the worktree's clones report their checked-out branches of the workspace's github.com repositories", async t => {
   const root = await mkdtemp(join(tmpdir(), "clone-branches-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  // The worktree's own repository is Pikibun's, not a clone.
   await mkdir(join(root, ".git"), { recursive: true });
   await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/session\n");
   await clone(root, "app", { branch: "fix/login", url: "https://github.com/Owner/Repo.git" });
@@ -46,9 +43,7 @@ test("the worktree's clones report their checked-out branches of the workspace's
   await clone(root, "no-origin", { branch: "feature" });
   await clone(root, "node_modules/dependency", { branch: "feature", url: "https://github.com/owner/repo" });
   await clone(root, "elsewhere", { branch: "x", url: "https://gitlab.com/owner/repo.git" });
-  // A clone's own directories are its work, and symlinks are not followed.
   await clone(root, "app/nested", { branch: "inner", url: "https://github.com/owner/repo" });
-  // A linked worktree or submodule has a .git file: neither it nor what's under it is reported.
   await mkdir(join(root, "linked-worktree"), { recursive: true });
   await writeFile(join(root, "linked-worktree", ".git"), "gitdir: /elsewhere/.git/worktrees/linked\n");
   await clone(root, "linked-worktree/inner", { branch: "inner", url: "https://github.com/owner/repo" });

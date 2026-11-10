@@ -18,8 +18,6 @@ import { Checkbox, CheckControl, Field, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, Feedback, FormSheet, Note, ResourceState, Row, Section, Segmented, Small, Value } from "../ui";
 import { ExtensionSettingsFields } from "./extension-fields";
 
-// A host's extensions, as the web app's (settings/HostExtensions.tsx; docs/design/host-extensions.md).
-
 interface HostRequest { id: string; action: "install" | "remove"; source: string; status: "pending" | "done" | "failed"; error?: string; requestedAt: string; finishedAt?: string }
 interface HostExtensionsResponse {
   role: "owner" | "admin";
@@ -72,10 +70,6 @@ const tunnelSources: { value: TunnelSource; label: string; hint: string }[] = [
   { value: "off", label: "Off", hint: "Sessions on this host put nothing online, whatever their workspace chose" },
 ];
 
-/**
- * Where a host's piki:browser Chromium or piki:tunnel cloudflared comes from: found there, at a path its owner gives,
- * downloaded by its connector, or none; with how it stands, as the connector last reported.
- */
 export function ToolSetup<S extends "auto" | "path" | "download" | "off">(props: {
   kind: "browser" | "tunnel"; saved: { source: S; path?: string }; status?: { state: ToolState; source: S; executable?: string; version?: string; error?: string; downloadable?: boolean };
   owner: boolean; busy: boolean; revoked: boolean; sources: { value: S; label: string; hint: string }[]; save: (value: { source: S; path?: string }) => void;
@@ -83,8 +77,6 @@ export function ToolSetup<S extends "auto" | "path" | "download" | "off">(props:
   const browser = props.kind === "browser";
   const source = signal<S>(untracked(() => props.saved.source));
   const path = signal(untracked(() => props.saved.path ?? ""));
-  // Only a saved choice that changed replaces the draft: the host's status refreshes every 10 seconds with a new config
-  // object, whose values are mostly the same, and that must not undo what is being typed.
   const savedSource = computed(() => props.saved.source);
   const savedPath = computed(() => props.saved.path ?? "");
   effect(() => {
@@ -139,7 +131,6 @@ export function ToolSetup<S extends "auto" | "path" | "download" | "off">(props:
   );
 }
 
-/** What an installed extension's modules offer, ignore or do nothing with. */
 function ModuleDetails(props: { extension: InstalledExtension }) {
   return (
     <If when={!props.extension.error} else={<Small tone="danger">{`Doesn't load: ${props.extension.error}`}</Small>}>
@@ -181,7 +172,6 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
   const pending = () => data()?.requests.filter(request => request.status === "pending") ?? [];
   const config = () => props.connector.config;
   const report = () => data()?.report;
-  // While requests wait for the host, or it applies a browser or tunnel choice or downloads one, look again every few seconds.
   const changing = () => pending().length > 0
     || Boolean(report()?.browser && config() && (report()!.browser!.source !== config()!.browser.source || report()!.browser!.state === "downloading"))
     || Boolean(report()?.tunnel && config()?.tunnel && (report()!.tunnel!.source !== config()!.tunnel!.source || report()!.tunnel!.state === "downloading"));

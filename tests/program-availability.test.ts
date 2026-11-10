@@ -16,14 +16,10 @@ test("the sandbox finds a program in the connector's Node.js, /usr/bin or the to
   const host = new Set(["/usr/bin/npm", "/usr/bin/npx", "/usr/bin/node", "/usr/local/go/bin/go", "/usr/local/bin/uv"]);
   const executable = (path: string) => host.has(path);
   const node = { programs: ["node", "npm", "npx", "pnpm", "yarn", "corepack"], path: ["/usr/local/bin"], toolchain: "node" as const };
-  // The connector's Node.js in /usr: its bin is checked as the host has it.
   assert.deepEqual(sandboxMissingPrograms(node, { bin: "/usr/bin" }, executable), ["pnpm", "yarn", "corepack"]);
-  // Mounted from elsewhere (~/.nvm): only what was mounted counts, a global pnpm included.
   assert.deepEqual(sandboxMissingPrograms(node, { bin: "/opt/pikibun/node/bin", programs: ["node", "npm", "npx", "pnpm"] }, () => false), ["yarn", "corepack"]);
-  // No toolchain of the connector's: /usr/bin and the tool's directories only.
   assert.deepEqual(sandboxMissingPrograms(node, undefined, executable), ["pnpm", "yarn", "corepack"]);
   assert.deepEqual(sandboxMissingPrograms({ programs: ["go", "gofmt"], path: ["/usr/local/go/bin", "/usr/lib/go/bin"] }, undefined, executable), ["gofmt"]);
-  // A toolchain's directory counts only for a node toolchain.
   assert.deepEqual(sandboxMissingPrograms({ programs: ["uv", "poetry"], path: "/usr/local/bin" }, { bin: "/usr/local/bin", programs: ["poetry"] }, executable), ["poetry"]);
 });
 
@@ -31,7 +27,6 @@ test("only an executable whose real path stays in /usr counts, as the sandbox mo
   assert.equal(sandboxExecutable("/home/someone/.local/bin/uv"), false);
   assert.equal(sandboxExecutable("/usr/bin/no-such-program-here"), false);
   if (existsSync("/usr/bin/env")) assert.equal(sandboxExecutable("/usr/bin/env"), true);
-  // A directory isn't a program.
   assert.equal(sandboxExecutable("/usr/bin"), false);
 });
 

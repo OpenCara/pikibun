@@ -34,10 +34,8 @@ test("commands that act on a package registry as an account are refused, through
     ["cargo", ["--color", "never", "publish", "--dry-run"], "cargo publish"],
     ["cargo", ["-Z", "unstable-options", "publish"], "cargo publish"],
     ["rustup", ["run", "stable", "cargo", "publish"], "cargo publish"],
-    // --install takes no value: the toolchain still comes before the program (review of #194).
     ["rustup", ["run", "--install", "stable", "cargo", "publish"], "cargo publish"],
     ["rustup", ["run", "stable", "--install", "cargo", "+nightly", "login"], "cargo login"],
-    // A -- before the toolchain or the program, and rustup's own +toolchain (review of #194).
     ["rustup", ["run", "stable", "--", "cargo", "publish"], "cargo publish"],
     ["rustup", ["run", "--", "stable", "cargo", "publish"], "cargo publish"],
     ["rustup", ["+nightly", "run", "stable", "cargo", "publish"], "cargo publish"],
@@ -78,7 +76,6 @@ test("with a system-wide rustup, rust calls use its toolchains unless the sessio
   assert.doesNotMatch(ecosystemShellCommand(cargo, { rustupHome: false }), /RUSTUP_HOME/);
   assert.doesNotMatch(ecosystemShellCommand(ecosystemRequest("go", { program: "go", args: ["test"] }), { rustupHome: true }), /RUSTUP_HOME/);
   assert.doesNotMatch(ecosystemShellCommand(cargo, { rustupHome: true }), /CARGO_HOME/, "the session keeps its own cargo home");
-  // Left out, it is whether the host has one (review of #194).
   assert.equal(/RUSTUP_HOME/.test(ecosystemShellCommand(cargo, {})), existsSync("/usr/local/rustup"));
   assert.equal(ecosystemShellCommand(cargo), ecosystemShellCommand(cargo, {}));
 });
@@ -90,7 +87,6 @@ test("a rustup proxy finds the system toolchain through RUSTUP_HOME, and the ses
   const { execFileSync } = await import("node:child_process");
   const root = await mkdtemp(join(tmpdir(), "pikibun-rustup-"));
   try {
-    // A stand-in for a rustup proxy: it says which RUSTUP_HOME it would read.
     const bin = join(root, "bin");
     await mkdir(bin);
     await writeFile(join(bin, "cargo"), "#!/bin/sh\necho \"rustup-home=${RUSTUP_HOME:-$HOME/.rustup}\"\n");
@@ -109,7 +105,6 @@ test("the macOS sandbox may read and run every toolchain directory below /usr/lo
   for (const path of local) {
     assert.ok(SEATBELT_LOCAL_ROOTS.some(root => path === root || path.startsWith(`${root}/`)), `${path} is under a root the sandbox reads`);
   }
-  // Go's installer puts the whole toolchain there (bin, pkg/tool, src), not only links in /usr/local/bin (review of #194).
   assert.ok(SEATBELT_LOCAL_ROOTS.includes("/usr/local/go"));
 });
 

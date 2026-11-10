@@ -22,7 +22,6 @@ test("the node tool refuses package manager commands that act on a registry as a
     ["yarn", ["workspace", "web", "publish"]], ["npm", ["owner", "add", "eve", "pkg"]], ["npm", ["dist-tag", "add", "pkg@1", "latest"]],
     ["npm", ["tag", "pkg@1", "latest"]], ["yarn", ["npm", "tag", "add", "pkg@1", "latest"]],
     ["npm", ["-w", "packages/a", "publish"]], ["pnpm", ["-w", "publish"]],
-    // Through what launches a package manager by name.
     ["corepack", ["pnpm", "publish"]], ["corepack", ["pnpm@9.1.0", "publish"]], ["corepack", ["yarn", "npm", "publish"]],
     ["npx", ["npm", "publish"]], ["npx", ["-y", "pnpm@9", "publish"]], ["npx", ["--package", "x", "npm", "login"]], ["npx", ["--", "npm", "publish"]],
     ["pnpm", ["dlx", "npm", "publish"]], ["pnpm", ["exec", "npm", "token", "list"]], ["npm", ["exec", "--", "pnpm", "publish"]], ["npm", ["x", "yarn", "npm", "publish"]],
@@ -56,7 +55,6 @@ test("the node tool's calls fit a bash operation's 8192 characters, or are refus
 test("the node tool looks first where the session's commands find the connector's own Node.js", () => {
   assert.equal(nodeShellCommand({ program: "pnpm", directory: ".", args: ["test"] }, "/opt/pikibun/node/bin"),
     "PATH='/opt/pikibun/node/bin':\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true pnpm 'test' </dev/null 2>&1");
-  // A path with spaces (a macOS home, say) is quoted, not refused.
   assert.match(nodeShellCommand({ program: "node", directory: ".", args: [] }, "/Users/Jo Doe/.nvm/versions/node/v24.11.0/bin"),
     /^PATH='\/Users\/Jo Doe\/\.nvm\/versions\/node\/v24\.11\.0\/bin':"\$\{PATH:-\/usr\/bin:\/bin\}":'\/usr\/local\/bin' /);
 });
@@ -69,7 +67,6 @@ test("the connector's own Node.js: only its node, package managers and headers, 
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-node-toolchain-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const versions = { ...process.versions, node: "24.11.0" };
-  /** An installation at `prefix` as the Node.js tarball, nvm or Volta lay it out, with what `extra` adds. */
   const install = async (prefix: string) => {
     await mkdir(join(prefix, "bin"), { recursive: true });
     await writeFile(join(prefix, "bin", "node"), "");
@@ -81,10 +78,8 @@ test("the connector's own Node.js: only its node, package managers and headers, 
     await mkdir(join(prefix, "include", "node"), { recursive: true });
   };
 
-  // nvm's layout, found through a shim's link.
   const nvm = join(root, "home", ".nvm", "versions", "node", "v24.11.0");
   await install(nvm);
-  // Global packages that aren't package managers, and a link out of the installation, are never given.
   await mkdir(join(nvm, "lib", "node_modules", "secret-tool"), { recursive: true });
   await symlink("../lib/node_modules/secret-tool/cli.js", join(nvm, "bin", "secret-tool"));
   await symlink(join(root, "home", ".ssh", "id_ed25519"), join(nvm, "bin", "yarn"));
@@ -110,7 +105,6 @@ test("the connector's own Node.js: only its node, package managers and headers, 
     ],
   } });
 
-  // corepack enable links pnpm and yarn to corepack's own shims: given with corepack, while a link into another package isn't.
   const enabled = join(root, "volta", "node", "24.11.0");
   await install(enabled);
   await writeFile(join(enabled, "lib", "node_modules", "corepack", "dist", "pnpm.js"), "");
@@ -121,7 +115,6 @@ test("the connector's own Node.js: only its node, package managers and headers, 
   assert.deepEqual(shims.links.map(link => link.name), ["npm", "npx", "corepack", "pnpm"]);
   assert.ok(sandboxNodeMount(shims)!.mount!.links.some(link => link.path === `${SANDBOX_NODE_DIRECTORY}/bin/pnpm` && link.target === "../lib/node_modules/corepack/dist/pnpm.js"));
 
-  // A node in a home's own bin, or in ~/.local/bin: the home and ~/.local are never what is given.
   for (const prefix of [join(root, "alice"), join(root, "alice", ".local")]) {
     await mkdir(join(prefix, "bin"), { recursive: true });
     await writeFile(join(prefix, "bin", "node"), "");
@@ -130,7 +123,6 @@ test("the connector's own Node.js: only its node, package managers and headers, 
     assert.deepEqual(toolchainPaths(bare), [join(prefix, "bin", "node")], prefix);
     assert.deepEqual(sandboxNodeMount(bare)!.mount!.binds, [{ source: join(prefix, "bin", "node"), target: `${SANDBOX_NODE_DIRECTORY}/bin/node` }]);
   }
-  // Not an installation's bin/node: none.
   await mkdir(join(root, "loose"));
   await writeFile(join(root, "loose", "node"), "");
   await writeFile(join(root, "alice", "bin", "nodejs"), "");
@@ -152,12 +144,10 @@ test("the Linux sandbox gives shell commands the connector's own Node.js, read-o
   const { Sandbox } = await import("../apps/runner/src/sandbox.js");
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-node-mount-")));
   t.after(() => rm(root, { recursive: true, force: true }));
-  // An installation outside /usr, as nvm, Volta or a tarball leave it, beside something of the host's.
   const prefix = join(root, "node-v24");
   await mkdir(join(prefix, "bin"), { recursive: true });
   await writeFile(join(prefix, "bin", "node"), "#!/bin/sh\necho \"connector-node $*\"\n", { mode: 0o755 });
   await writeFile(join(prefix, "bin", "other"), "not given");
-  // npm as installations link it, here a script that says where it runs from.
   await mkdir(join(prefix, "lib", "node_modules", "npm", "bin"), { recursive: true });
   await writeFile(join(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js"), "#!/bin/sh\necho \"connector-npm $*\"\n", { mode: 0o755 });
   await writeFile(join(prefix, "lib", "node_modules", "kept-out.txt"), "not given");
@@ -182,9 +172,7 @@ test("the Linux sandbox gives shell commands the connector's own Node.js, read-o
     { allowTestShell: true });
   assert.equal(npm.trim(), "connector-npm test");
   await assert.rejects(sandbox.execute({ kind: "bash", command: "cat /opt/pikibun/node/lib/node_modules/kept-out.txt" }, false, authorize, { allowTestShell: true }));
-  // Only node: nothing else beside it.
   await assert.rejects(sandbox.execute({ kind: "bash", command: "cat /opt/pikibun/node/bin/other" }, false, authorize, { allowTestShell: true }));
-  // Read-only: a command can't change the host's installation.
   await assert.rejects(sandbox.execute({ kind: "bash", command: "echo changed > /opt/pikibun/node/bin/node" }, false, authorize, { allowTestShell: true }));
   const { readFile } = await import("node:fs/promises");
   assert.match(await readFile(join(prefix, "bin", "node"), "utf8"), /connector-node/);

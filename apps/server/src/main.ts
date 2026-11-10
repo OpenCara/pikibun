@@ -15,10 +15,6 @@ if (process.argv.includes('--migrate-only')) {
   process.exit(0);
 }
 
-/**
- * `--dump-session ID` or `--dump-workspace ID` (also `--dump-session=ID`): the export to write to stdout, or null.
- * `--dump` alone (as `pnpm db:dump` passes it) never starts the server.
- */
 function dumpRequest(argv: readonly string[]): { kind: 'session' | 'workspace'; id: string } | null {
   const requests: { kind: 'session' | 'workspace'; id: string | undefined }[] = [];
   argv.forEach((argument, index) => {
@@ -37,7 +33,6 @@ function dumpRequest(argv: readonly string[]): { kind: 'session' | 'workspace'; 
   return { kind: request.kind, id: request.id };
 }
 
-/** `--import-dump FILE` (also `--import-dump=FILE`; `-` reads standard input): the dump to import, or null. */
 function importRequest(argv: readonly string[]): string | null {
   const positions = argv.flatMap((argument, index) => argument === '--import-dump' || argument.startsWith('--import-dump=') ? [index] : []);
   if (!positions.length) return null;
@@ -50,7 +45,6 @@ function importRequest(argv: readonly string[]): string | null {
   return file;
 }
 
-/** A dump from a file or standard input, bounded: the command line takes larger dumps than the web app uploads. */
 async function readDump(file: string): Promise<string> {
   const limit = 256 * 1024 * 1024;
   const chunks: Buffer[] = [];
@@ -64,7 +58,6 @@ async function readDump(file: string): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** stdout is asynchronous on pipes: resolves once `text` is written, so exiting next loses nothing. */
 function writeOut(text: string): Promise<void> {
   return new Promise((resolve, reject) => { process.stdout.write(text, error => (error ? reject(error) : resolve())); });
 }
@@ -83,8 +76,6 @@ if ([dump, importFile, accountCommand].filter(Boolean).length > 1) {
   process.exit(2);
 }
 
-// The operator creates an administrator's password account, or sets a new password, in the server's database
-// (password-accounts-cli.ts). Migrations are applied first, as at start-up.
 if (accountCommand) {
   const db = await openDatabase(process.env.DATABASE_URL || defaultDatabaseUrl);
   let failure: string | null = null;
@@ -106,8 +97,6 @@ if (accountCommand) {
   process.exit(0);
 }
 
-// The operator's dump of one session or workspace from the database, as JSON on stdout: every session in full, without
-// secrets (see data-export.ts). Pending migrations are applied first, as at start-up, so the current schema is read.
 if (dump) {
   const db = await openDatabase(process.env.DATABASE_URL || defaultDatabaseUrl);
   let output: string | null = null;
@@ -126,8 +115,6 @@ if (dump) {
   process.exit(0);
 }
 
-// The operator's import of a dump into the database its workspace's owner connected (see workspace-databases/import.ts),
-// with this server's WORKSPACE_DATABASES, WORKSPACE_DATABASE_PRIVATE_HOSTS and VAULT_KEY. Migrations are applied first.
 if (importFile) {
   let document: unknown;
   try {

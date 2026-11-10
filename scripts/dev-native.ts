@@ -1,12 +1,3 @@
-/**
- * A local Pikibun for developing the native apps: a test-mode server on 127.0.0.1, a test user with a native app token,
- * a workspace and, unless --no-host, this machine as a host offering the deterministic fixture model (not an LLM), with
- * one session on it. --pairing also creates a pairing code for the desktop app to pair this machine itself.
- *
- *   pnpm dev:native [--port 8787] [--no-host] [--pairing]
- *
- * Everything lives in a temporary directory that is removed on Ctrl-C; .local/dev-native.json has what the apps need.
- */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -25,7 +16,6 @@ const repository = fileURLToPath(new URL("../", import.meta.url));
 const origin = `http://127.0.0.1:${Number(values.port)}`;
 const secret = () => Buffer.from(randomBytes(32)).toString("base64url");
 const testSecret = secret();
-// The connector refuses state under a symlink, and macOS's temporary directory lives behind /var -> /private/var.
 const temporary = await realpath(await mkdtemp(join(tmpdir(), "pikibun-dev-native-")));
 let server: ChildProcess | undefined;
 let stopHost = async () => {};
@@ -34,13 +24,12 @@ async function shutdown(): Promise<void> {
   await stopHost().catch(() => {});
   if (server?.pid && server.exitCode === null) {
     const exited = new Promise<void>(resolve => server!.once("exit", () => resolve()));
-    try { process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ }
+    try { process.kill(-server.pid, "SIGTERM"); } catch { }
     await Promise.race([exited, delay(5_000)]);
   }
   await rm(temporary, { recursive: true, force: true });
 }
 
-/** A test user's browser-style client: the session cookie plus a CSRF token for every change. */
 async function signIn(id: string) {
   const login = await fetch(`${origin}/api/auth/test`, { method: "POST", body: JSON.stringify({ id, displayName: "Dev", gitName: "Dev", gitEmail: "dev@example.test" }),
     headers: { Authorization: `Bearer ${testSecret}`, "Content-Type": "application/json", Origin: origin } });
@@ -83,7 +72,6 @@ try {
     const host = createConnector({
       server: origin, dataDir: join(temporary, "connector"), pairing: { id: pairing.id, code: pairing.code },
       localModels: createFauxLocalModels("faux-1"), allowFaux: true, allowTestShell: true, allowInsecureLoopback: true,
-      // macOS has no sandbox: the fixture's approved commands run directly on this machine, as `pikibun connect --unsafe-no-sandbox`.
       unsandboxed: process.platform !== "linux", capabilities: { platform: process.platform, sandbox: false, productionShell: false },
     });
     stopHost = () => host.stop();

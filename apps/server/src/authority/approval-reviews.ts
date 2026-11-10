@@ -13,7 +13,6 @@ type ReviewRow = {
   source: 'explicit' | 'model'; admission_id: string | null; review_hash: string; created_at: string;
 };
 type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; auto_merge?: number; expires_at: number };
-/** What decides whether an admission is the session owner's Auto-approve message. */
 type AdmissionAccess = Pick<AdmissionRow, 'session_id' | 'actor_id' | 'mode' | 'access'>;
 const operationTools: Record<Exclude<Operation['kind'], 'permission' | 'extension.tool' | 'program'>, ToolName> = {
   'github.comment': 'github_comment', 'github.merge': 'github_merge', 'github.issue': 'github_issue', 'git.commit': 'git_commit', bash: 'bash', 'git.push': 'git_push', 'git.repin': 'git_repin', 'host.bash': 'host_bash',
@@ -25,45 +24,24 @@ async function toolsFor(env: Env, row: SessionRow): Promise<string[]> {
   if (!agent) fail(409, 'invalid_binding', 'The pinned agent is unavailable.');
   return JSON.parse(agent.tools_json) as string[];
 }
-/** The tool call a permission request `permission-<call>` waits in; its operation's approval is `tool-<call>`. */
 export function permissionCall(approvalId: string): string | undefined {
   return /^permission-([A-Za-z0-9_-]+)$/.exec(approvalId)?.[1];
 }
-/**
- * The sessions tool call a permission request waits in: `permission-<call>` for its tool and write needs, and
- * `permission-<call>_audience` for the second card a call may raise, once the control plane said what it would share
- * (cross-session.ts).
- */
 export function crossSessionCall(approvalId: string): string | undefined {
   return permissionCall(approvalId)?.replace(/_audience$/, '');
 }
-/**
- * Whether `admission` is a message the session owner sent with Auto-approve access. Its tool calls use any tool without
- * a permission card, as the runner lets them; what those calls do still follows its own rules (a merge waits for a
- * human unless the admission is marked `auto_merge`, a command without limits runs only on the owner's host).
- */
 function ownerAuto(row: SessionRow, admission: AdmissionAccess | undefined): boolean {
   return admission?.access === 'auto' && admission.mode === 'write' && admission.actor_id === row.owner_id && admission.session_id === row.id;
 }
-/**
- * Whether a session may use an operation's tool: its pinned agent's, one the owner allowed through a permission
- * request, for the session or for the one call whose approval is `tool-<call>`, or any tool for a call of the owner's
- * Auto-approve message (`admission`). A permission request asks for the tool itself, so it is presented whenever it
- * names its call (a one-call grant must never become a session one); only the owner can decide it.
- */
 async function sessionTools(env: Env, row: SessionRow): Promise<(operation: Operation, approvalId: string, admission?: AdmissionAccess) => boolean> {
   const agentTools = await toolsFor(env, row);
   const grants = await env.DB.query<{ tool: string; call_id: string }>('SELECT tool, call_id FROM session_tool_grants WHERE session_id = ?').bind(row.id).all();
   const extensions = await sessionExtensionSources(env, row);
   return (operation, approvalId, admission) => {
     if (operation.kind === 'permission') return permissionCall(approvalId) !== undefined;
-    // An extension's tool comes from the session's extensions, never from the pinned agent: an enabled one of its
-    // workspace, or its host owner's dev extension in their own session. Each card is its own call's.
     if (operation.kind === 'extension.tool') return approvalId.startsWith('tool-') && extensions(operation.source);
-    // A program tool's call is its own tool's (git, node, python), never bash's.
     const tool = operation.kind === 'program' ? operation.tool : operationTools[operation.kind];
     const call = approvalId.startsWith('tool-') ? approvalId.slice('tool-'.length) : undefined;
-    // Host commands never take a session grant: each one is allowed for its own call.
     return agentTools.includes(tool) || grants.some(grant => grant.tool === tool && ((grant.call_id === '' && tool !== 'host_bash') || grant.call_id === call))
       || (call !== undefined && ownerAuto(row, admission));
   };
@@ -71,13 +49,6 @@ async function sessionTools(env: Env, row: SessionRow): Promise<(operation: Oper
 export async function requireOperationTool(env: Env, row: SessionRow, operation: Operation, approvalId = '', admission?: AdmissionAccess): Promise<void> {
   if (!(await sessionTools(env, row))(operation, approvalId, admission)) fail(403, 'tool_not_allowed', 'The pinned agent does not allow this operation.');
 }
-/**
- * Whether a tool call that reaches the control plane without an approval (github_read) may use `tool`: the pinned
- * agent's, any tool in the owner's Auto-approve message (`call.admission`, already checked as the requester's current
- * write admission), one the owner allowed for the session, or one the owner allowed for this call. A one-call grant
- * covers only the call its permission card showed: the same requester, message and target, so the call id can't be
- * reused for another target or a later message.
- */
 export async function requireToolCall(env: Env, row: SessionRow, tool: ToolName,
   call: { id: string; requestedBy: string; admission: AdmissionRow; target: string }): Promise<void> {
   if ((await toolsFor(env, row)).includes(tool) || ownerAuto(row, call.admission)) return;
@@ -92,12 +63,6 @@ export async function requireToolCall(env: Env, row: SessionRow, tool: ToolName,
     fail(403, 'tool_not_allowed', 'The pinned agent does not include this tool and the session owner has not allowed this call.');
   }
 }
-/**
- * Whether the session owner let a sessions tool call do what its message alone can't (`need`): change another session in
- * a Read-only message (`write`), or exchange transcript content with a session whose readers differ (`audience`). The
- * owner's own Auto-approve message may; otherwise a permission they allowed for the session, or for this one call, as its
- * card showed it (`call.target`), for the same requester and message, as `requireToolCall` checks a tool.
- */
 export async function sessionsNeedGranted(env: Env, row: SessionRow, need: 'write' | 'audience',
   call: { id: string; requestedBy: string; admission: AdmissionRow; target: string }): Promise<boolean> {
   if (ownerAuto(row, call.admission)) return true;
@@ -116,7 +81,6 @@ export async function reviewCommitment(sessionId: string, approvalId: string, re
   return sha256(JSON.stringify({ sessionId, approvalId, requestedBy, operation }));
 }
 function unavailable(approval: ApprovalRecord): ApprovalRecord {
-  // A decided permission request is final: its tool call already went ahead or failed, and nothing runs from it.
   if (!['pending', 'approved', 'executing'].includes(approval.status) || (approval.operation.kind === 'permission' && approval.status !== 'pending')) return approval;
   return { ...approval, status: 'interrupted', result: 'This approval has no current authorized write admission. Submit a new write request.' };
 }
@@ -124,7 +88,6 @@ function activeAdmission(admission: AdmissionRow | undefined, row: SessionRow, a
   return !!admission && admission.session_id === row.id && admission.actor_id === actorId && admission.mode === 'write' &&
     admission.expires_at > Math.floor(Date.now() / 1000);
 }
-/** The approval's write admission, current and its requester's; explicit operations have none. */
 async function requireProvenance(env: Env, row: SessionRow, review: ReviewRow): Promise<AdmissionRow | undefined> {
   if (review.source === 'explicit' && review.admission_id === null) return undefined;
   if (review.source !== 'model' || !review.admission_id) fail(403, 'invalid_approval_provenance', 'The approval has no authorized write admission.');
@@ -134,8 +97,6 @@ async function requireProvenance(env: Env, row: SessionRow, review: ReviewRow): 
   return admission!;
 }
 
-// Only this function may create review rows. Explicit operations use the authenticated request,
-// while model candidates must carry an opaque admission minted by a real write submission.
 export async function presentApprovals(c: AppContext, row: SessionRow, input: ApprovalRecord[], explicit?: { operation: Operation; requestedBy: string }): Promise<ApprovalRecord[]> {
   if (!Array.isArray(input) || input.length > 512 || (explicit && input.length !== 1)) fail(502, 'invalid_runner_response', 'The runtime returned invalid approvals.');
   if (!input.length) return [];
@@ -151,13 +112,6 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       createdAt: text(raw.createdAt, 'createdAt', 64),
       ...(raw.decidedBy === undefined ? {} : { decidedBy: userIdentifier(raw.decidedBy, 'decidedBy') }),
       ...(raw.result === undefined ? {} : { result: text(raw.result, 'result', 8192, 0) }) };
-    // Only the owner's own operations may auto-approve, and those of a member whose requests the owner chose to
-    // auto-approve, as far as requesterAutoApproves goes (checked below against that choice). GitHub comments, issues and
-    // merges only from the owner's Auto-approve message (merges only when its admission is marked `auto_merge`), or a
-    // comment or issue from such a member's message, checked below with the message's admission. A host command runs
-    // automatically only where the control plane told the host its owner may (see hostCommandAuthority); a grant or
-    // choice can lapse later, so the records it left are not judged by today's grants. Another member's extension tool
-    // call runs automatically where its workspace and its host's owner let it (checked below, when it is first reviewed).
     if (raw.automatic !== undefined) {
       const memberMay = operation.kind === 'extension.tool' || requesterAutoApproves(operation, hostCommandSession(row), raw.unbounded === true);
       if (raw.automatic !== true || explicit || approval.decidedBy !== row.owner_id || approval.status === 'pending' || operation.kind === 'permission'
@@ -166,18 +120,16 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       }
       approval.automatic = true;
     }
-    // An allowed permission request says how far it reaches; only a command can run without resource limits.
     if (raw.scope !== undefined) {
       if ((raw.scope !== 'call' && raw.scope !== 'session') || operation.kind !== 'permission' || approval.status !== 'approved') fail(502, 'invalid_runner_response', 'The runtime returned an invalid permission scope.');
       approval.scope = raw.scope;
     }
-    // The permission its tool call was given, folded into the operation's card; a host lists it as its own card otherwise.
     if (raw.permission !== undefined) {
       const permission = raw.permission as unknown;
       if (!permission || typeof permission !== 'object' || operation.kind === 'permission' || explicit) fail(502, 'invalid_runner_response', 'The runtime returned an invalid permission.');
       const { decidedBy, scope, ...rest } = permission as Record<string, unknown>;
       let decider: string | undefined;
-      try { decider = userIdentifier(decidedBy, 'decidedBy'); } catch { /* Refused below as the host's error, not the caller's. */ }
+      try { decider = userIdentifier(decidedBy, 'decidedBy'); } catch { }
       if (!decider || Object.keys(rest).length || (scope !== undefined && scope !== 'call' && scope !== 'session')) fail(502, 'invalid_runner_response', 'The runtime returned an invalid permission.');
       approval.permission = { decidedBy: decider, ...(scope ? { scope } : {}) };
     }
@@ -201,10 +153,6 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       WHERE session_id = ? AND id IN (SELECT value FROM json_each(?))`).bind(row.id, JSON.stringify(admissionIds)).all();
     for (const admission of result) admissions.set(admission.id, admission);
   }
-  // Another member's automatic operations need their own message's admission, and the owner to have chosen to
-  // auto-approve their requests; or, for an extension's tool call, the workspace to run that extension's tools
-  // automatically where its host's owner allows it, as it does when the call is first reviewed (a setting can change
-  // later, so the records it left are not judged by today's).
   const members = normalized.filter(item => item.approval.automatic && item.approval.requestedBy !== row.owner_id);
   const chosen = await everAutoApproved(c.env.DB, row.id, members.filter(item => item.approval.operation.kind !== 'extension.tool').map(item => item.approval.requestedBy));
   const unconfirmed = new Set<string>();
@@ -221,9 +169,6 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       || !admission || admission.actor_id !== approval.requestedBy || admission.mode !== 'write' || admission.session_id !== row.id) {
       fail(502, 'invalid_runner_response', 'The runtime returned an invalid automatic approval.');
     }
-    // One whose leave can't be confirmed the first time it is seen (the setting changed since it ran, say) is shown as a
-    // plain record, never as automatic, and never reviewed: the control plane remembers it, so a setting that allows it
-    // later doesn't vouch for it.
     if (operation.kind === 'extension.tool' && !stored.has(approval.id) && (shownUnconfirmed.has(approval.id) || !automaticSources.has(operation.source))) {
       unconfirmed.add(approval.id);
       delete approval.automatic;
@@ -237,7 +182,6 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
   for (const { approval, admissionId } of normalized) {
     const kind = approval.operation.kind;
     if (!approval.automatic || approval.requestedBy !== row.owner_id || (kind !== 'github.comment' && kind !== 'github.issue' && kind !== 'github.merge')) continue;
-    // The admission its review recorded, as for every other check here; a changed one is refused below anyway.
     const reviewed = stored.get(approval.id)?.admission_id ?? admissionId;
     const admission = reviewed ? admissions.get(reviewed) : undefined;
     if (!ownerAuto(row, admission) || (kind === 'github.merge' && admission!.auto_merge !== 1)) {

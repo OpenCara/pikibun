@@ -3,11 +3,6 @@ import { fail } from '../../http.js';
 import { accountRejected, clean, json, notFound, outsideSource, rateLimited, textBody, upstream, type BoundItem, type DocumentAdapter, type ItemView, type Upstream } from './document-http.js';
 import { docxFile, docxText, textFile } from './office.js';
 
-/**
- * OneDrive and SharePoint through Microsoft Graph, signed in as the member (Files.Read.All, Sites.Read.All). Items are
- * named `DRIVE~ITEM`; links resolve through Graph's /shares. "Under" follows parentReference up within the same drive.
- * Downloads follow Graph's redirect to a pre-authenticated URL on a Microsoft download host, without the token.
- */
 export const graphApi = 'https://graph.microsoft.com/v1.0';
 const share = 'your Microsoft account';
 const fields = 'id,name,folder,file,parentReference,webUrl,lastModifiedDateTime,package';
@@ -68,7 +63,6 @@ async function requireUnder(secret: string, root: Item, target: Item): Promise<v
   outsideSource();
 }
 
-/** The file's bytes: Graph answers /content with a redirect to a pre-authenticated download URL. */
 async function download(secret: string, target: Item): Promise<Upstream> {
   const first = await upstream('Microsoft', `${graphApi}${path(target.driveId, target.itemId)}/content`, { headers: { Authorization: `Bearer ${token(secret)}` } }, textLimit);
   if (first.status !== 302 && first.status !== 301 && first.status !== 307) { refused(first); return first; }
@@ -111,7 +105,6 @@ export const onedriveAdapter: DocumentAdapter = {
           entries.push({ id: child.id, type: child.type, title: child.title, url: child.url, ...(child.lastEdited ? { lastEdited: child.lastEdited } : {}) });
         }
         const link = page['@odata.nextLink'];
-        // Only Graph's own next page; never a link elsewhere with the token.
         next = typeof link === 'string' && link.startsWith(`${graphApi}/`) ? link : null;
       }
       return { ...base, entries: entries.slice(0, sourceReadLimits.entries), truncated: Boolean(next) || entries.length > sourceReadLimits.entries };

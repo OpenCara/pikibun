@@ -10,7 +10,6 @@ import { testDatabase } from "./helpers/control-plane.js";
 const origin = "http://localhost:8787";
 const password = "correct horse battery";
 
-/** A server with GitHub and passwords on, whose GitHub answers as whichever account a sign-in names. */
 async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
   const { db, sqlite } = await testDatabase();
   t.after(() => db.close());
@@ -30,7 +29,6 @@ async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
       body: init.body === undefined ? undefined : JSON.stringify(init.body) }, env);
   const cookieOf = (response: Response, name = "test-auth") => (response.headers.get("set-cookie") ?? "").split(/,(?=\s*[\w-]+=)/)
     .map(part => part.trim().split(";")[0]!).find(part => part.startsWith(`${name}=`) && part.length > name.length + 1) ?? "";
-  /** A browser signed in with GitHub as `as`: its cookie. */
   async function github(as: { id: number; login: string }) {
     account = as;
     const start = await request("GET", "/api/auth/github");
@@ -51,7 +49,6 @@ async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
   const setPassword = async (cookie: string, body: Record<string, unknown>) => request("POST", "/api/me/password", { headers: await browser(cookie), body });
   const removePassword = async (cookie: string, body: Record<string, unknown>) => request("DELETE", "/api/me/password", { headers: await browser(cookie), body });
   const signIn = (username: string, typed: string) => request("POST", "/api/auth/password/login", { headers: { Origin: origin }, body: { username, password: typed } });
-  /** Makes every sign-in of `userId` older than a recent one. */
   const age = (userId: string) => sqlite.prepare("UPDATE auth_sessions SET created_at = ? WHERE user_id = ?")
     .run(new Date(Date.now() - RECENT_SIGN_IN_MS - 60_000).toISOString(), userId);
   return { env, sqlite, request, cookieOf, github, browser, me, choose, setPassword, removePassword, signIn, age };
@@ -74,7 +71,6 @@ test("a new GitHub account must choose a username, which is unique across every 
     assert.equal(await errorCode(refused), code, username);
   }
   assert.equal(await errorCode(await f.choose(cookie, { username: "newcomer", extra: true })), "invalid_input");
-  // A password account's username is taken for GitHub accounts too, and the other way round.
   assert.equal((await f.request("POST", "/api/auth/password/signup", { headers: { Origin: origin }, body: { username: "alice", password } })).status, 201);
   assert.equal(await errorCode(await f.choose(cookie, { username: "Alice" })), "username_taken");
 
@@ -95,7 +91,6 @@ test("a new GitHub account must choose a username, which is unique across every 
   assert.deepEqual(f.sqlite.prepare("SELECT id, username FROM users ORDER BY id").all().map(row => ({ ...row })),
     [{ id: "github:1001", username: "newcomer" }, { id: "github:1002", username: null }, { id: "password:alice", username: "alice" }]);
 
-  // Teammates see it in the workspace's member list.
   const created = await f.request("POST", "/api/workspaces", { headers: await f.browser(cookie), body: { name: "Team" } });
   const { workspace } = await created.json() as { workspace: { id: string } };
   const members = await (await f.request("GET", `/api/workspaces/${workspace.id}/members`, { headers: { Cookie: cookie } })).json() as { members: { userId: string; username: string | null }[] };
@@ -120,7 +115,6 @@ test("a username chosen with a password signs the GitHub account in with either,
   const viaPassword = f.cookieOf(signedIn);
   assert.equal((await f.me(viaPassword))?.id, "github:1001");
   assert.equal((await f.signIn("newcomer", "not the password at all")).status, 401);
-  // A native app too, for a bearer token: still the GitHub account.
   const native = await f.request("POST", "/api/auth/native/password", { body: { username: "newcomer", password, deviceName: "Newcomer's Android" } });
   assert.equal(native.status, 200);
   const { token, user: nativeUser } = await native.json() as { token: string; user: UserProfile };
@@ -139,7 +133,6 @@ test("setting, changing and replacing a GitHub account's password takes its curr
   const f = await fixture(t);
   const first = await f.github({ id: 1001, login: "Newcomer" });
   assert.equal(await errorCode(await f.setPassword(first, { newPassword: password })), "username_required");
-  // Choosing a password needs a recent GitHub sign-in, and nothing is saved without one.
   f.age("github:1001");
   const stale = await f.choose(first, { username: "newcomer", password });
   assert.equal(stale.status, 403);
@@ -156,7 +149,6 @@ test("setting, changing and replacing a GitHub account's password takes its curr
   assert.equal((await f.me(first))?.id, "github:1001", "setting the first password signs nobody out");
   const viaPassword = f.cookieOf(await f.signIn("newcomer", password));
 
-  // Changing it later: the current password, or a recent GitHub sign-in for a forgotten one.
   f.age("github:1001");
   assert.equal(await errorCode(await f.setPassword(fresh, { newPassword: "a brand new passphrase" })), "recent_sign_in_required");
   assert.equal(await errorCode(await f.setPassword(fresh, { currentPassword: "not my password!", newPassword: "a brand new passphrase" })), "invalid_credentials");
@@ -179,20 +171,16 @@ test("failed sign-ins lock only the password: a recent GitHub sign-in still repl
   const f = await fixture(t);
   const first = await f.github({ id: 1001, login: "Newcomer" });
   assert.equal((await f.choose(first, { username: "newcomer", password })).status, 200);
-  // Anyone who knows the username locks the password.
   for (let attempt = 0; attempt < 6; attempt++) await f.signIn("newcomer", "someone guessing " + attempt);
   assert.equal(await errorCode(await f.signIn("newcomer", password)), "sign_in_locked");
-  // The current password, typed, is refused while locked...
   const fresh = await f.github({ id: 1001, login: "Newcomer" });
   assert.equal(await errorCode(await f.setPassword(fresh, { currentPassword: password, newPassword: "a brand new passphrase" })), "sign_in_locked");
   assert.equal(await errorCode(await f.removePassword(fresh, { currentPassword: password })), "sign_in_locked");
-  // ...and so is a stale sign-in without it, but the owner's fresh GitHub sign-in replaces it, clearing the lock.
   f.age("github:1001");
   assert.equal(await errorCode(await f.setPassword(fresh, { newPassword: "a brand new passphrase" })), "recent_sign_in_required");
   const again = await f.github({ id: 1001, login: "Newcomer" });
   assert.equal((await f.setPassword(again, { newPassword: "a brand new passphrase" })).status, 200);
   assert.equal((await f.signIn("newcomer", "a brand new passphrase")).status, 200);
-  // Locked again, it can be removed the same way.
   for (let attempt = 0; attempt < 6; attempt++) await f.signIn("newcomer", "someone guessing " + attempt);
   const last = await f.github({ id: 1001, login: "Newcomer" });
   const removed = await f.removePassword(last, {});
@@ -220,7 +208,6 @@ test("a GitHub account can remove its password; a password account can't", async
 
   const account = f.cookieOf(await f.request("POST", "/api/auth/password/signup", { headers: { Origin: origin }, body: { username: "alice", password } }));
   assert.equal(await errorCode(await f.removePassword(account, { currentPassword: password })), "password_required");
-  // A password account still changes its own with the current one only.
   assert.equal(await errorCode(await f.setPassword(account, { newPassword: "a brand new passphrase" })), "invalid_credentials");
 });
 
@@ -231,7 +218,6 @@ test("without passwords a username is still chosen, alone; a local server's owne
   assert.equal(await errorCode(await f.choose(cookie, { username: "newcomer", password })), "password_auth_off");
   assert.equal((await f.choose(cookie, { username: "newcomer" })).status, 200);
   assert.equal((await f.me(cookie))?.usernameRequired, undefined);
-  // A password account's username was there from the start.
   const local = await fixture(t, { PASSWORD_AUTH: "false" });
   const owner = await local.github({ id: 2001, login: "owner" });
   local.env.LOCAL_MODE = "true";

@@ -4,40 +4,17 @@ import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import type { ImageLimits, ImageProcessor, PreparedImage } from "@earendil-works/pi-durable/tools";
 import { entryImageLimits } from "../../../packages/shared/src/entry-images.js";
 
-/**
- * Largest image file `read_file` reads; text keeps `MAX_FILE_BYTES`. It covers full-resolution camera photos and
- * high-DPI screenshots. The file only passes through memory on its way to the processor; the transcript keeps the
- * prepared image, bounded by `IMAGE_LIMITS`.
- */
 export const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
-/**
- * What the model gets of an image. Images stay base64 in the session's SQLite transcript, and every backup carries
- * that database base64 again, under the 24 MiB restore bound (`pullBackup` in server.ts): at Pi's 4.5 MiB default
- * about four images would exhaust a session's backup, at 512 KiB a few dozen fit. 1568 pixels is the longest edge
- * Anthropic takes without scaling the image down itself, so larger images only cost bytes; at that size a JPEG within
- * 512 KiB of base64 keeps screenshot text legible.
- */
 export const IMAGE_LIMITS: ImageLimits = { maxWidth: 1568, maxHeight: 1568, maxBytes: 512 * 1024 };
 
-/**
- * Decoding runs in this process, in a worker's WebAssembly memory that never shrinks while the worker lives: the
- * pixels at their source depth plus Photon's two RGBA copies. The header decides that size, not the file, so a few
- * hundred KB can declare tens of megapixels. 512 MiB admits 40-megapixel 8-bit photos and 8K screenshots.
- */
 const MAX_DECODE_BYTES = 512 * 1024 * 1024;
-/** How long one image may take to prepare; a worker that takes longer is replaced, since its decode cannot be stopped. */
 const PREPARE_TIMEOUT_MS = 30_000;
-/** Reads that may wait their turn: the whole process prepares one image at a time. */
 const MAX_WAITING = 8;
 
 export const IMAGE_ERROR = "The image cannot be decoded or fitted to the model's image limits";
 export const IMAGE_BUSY = "Too many images are being prepared at once; read this file again shortly";
 
-/**
- * File signatures of the formats every provider takes inline: byte strings at offsets that must all match. The Linux
- * sandbox helper mirrors this table.
- */
 const IMAGE_SIGNATURES: readonly (readonly [string, readonly (readonly [number, Buffer])[]])[] = [
   ["image/png", [[0, Buffer.from("89504e470d0a1a0a", "hex")]]],
   ["image/jpeg", [[0, Buffer.from("ffd8ff", "hex")]]],
@@ -46,27 +23,19 @@ const IMAGE_SIGNATURES: readonly (readonly [string, readonly (readonly [number, 
   ["image/webp", [[0, Buffer.from("RIFF")], [8, Buffer.from("WEBP")]]],
 ];
 
-/** The image type `bytes` starts with, by signature: the name of a file says nothing about its content. */
 export function imageType(bytes: Uint8Array): string | undefined {
   const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return IMAGE_SIGNATURES.find(([, parts]) => parts.every(([offset, expected]) => data.subarray(offset, offset + expected.length).equals(expected)))?.[0];
 }
 
-/** A confined file as `read_file` returns it: an image as its bytes, anything else as text. */
 export type FileContent = { readonly text: string } | { readonly image: Uint8Array; readonly mimeType: string };
 
 export type ModelImage = { readonly data: string; readonly mimeType: string; readonly width: number; readonly height: number };
 
-/** What an image's header declares: its size, the bytes per pixel it decodes to, and whether it has several frames. */
 type ImageHeader = { readonly width: number; readonly height: number; readonly bytesPerPixel: number; readonly animated: boolean };
 
 let processor: Promise<ImageProcessor> | undefined;
 
-/**
- * The process's processor. Importing it loads only Photon's JavaScript bindings: its WebAssembly loads in the worker
- * the processor starts for an image. That worker ends as soon as no image waits (`idleMs: 0`), so the memory a decode
- * leaves behind, which Photon never returns, goes with it; a new worker costs tens of milliseconds.
- */
 function imageProcessor(): Promise<ImageProcessor> {
   processor ??= createNodePhotonImages({ idleMs: 0 }).catch((error: unknown) => { processor = undefined; throw error; });
   return processor;
@@ -74,27 +43,15 @@ function imageProcessor(): Promise<ImageProcessor> {
 
 const BUSY = Symbol("busy");
 
-/**
- * Who an image is prepared for: the model (a read, a pasted image), or a person's client (a transcript thumbnail).
- * Each waits in a line of its own, so a transcript full of screenshots never has the model's reads refused as busy.
- */
 export type ImageTurn = "model" | "thumbnail";
-/** How many may wait in each line; more are refused as busy. */
 const WAITING_LIMITS: Record<ImageTurn, number> = { model: MAX_WAITING, thumbnail: 32 };
 
 let preparing = false;
 const waiting: Record<ImageTurn, (() => void)[]> = { model: [], thumbnail: [] };
 
-/**
- * Runs `work` once no other image is being prepared, or gives up when too many already wait in `turn`'s line. The whole
- * process prepares one image at a time, whoever it is for: decoding takes its memory once, and the processor's worker
- * answers in order anyway. The model's line goes first, so a read waits for at most the one thumbnail under way.
- * Exported for tests.
- */
 export async function inTurn<T>(turn: ImageTurn, work: () => Promise<T>): Promise<T | typeof BUSY> {
   if (preparing) {
     if (waiting[turn].length >= WAITING_LIMITS[turn]) return BUSY;
-    // The work that finishes hands its turn over directly, so a newcomer cannot slip in between.
     await new Promise<void>(resolve => waiting[turn].push(resolve));
   } else preparing = true;
   try { return await work(); }
@@ -105,10 +62,6 @@ export async function inTurn<T>(turn: ImageTurn, work: () => Promise<T>): Promis
   }
 }
 
-/**
- * `prepare` with a deadline. Photon cannot free the input of a decode that failed, and a slow decode cannot be
- * stopped, so after either the worker is replaced instead of reused.
- */
 async function prepareWithin(bytes: Uint8Array, mimeType: string, limits: ImageLimits = IMAGE_LIMITS): Promise<PreparedImage | undefined> {
   const current = imageProcessor();
   let timer: NodeJS.Timeout | undefined;
@@ -125,41 +78,24 @@ async function prepareWithin(bytes: Uint8Array, mimeType: string, limits: ImageL
   }
 }
 
-/** `bytes` fitted to `IMAGE_LIMITS` with the size the model sees, or the fixed error for the model when it cannot be. */
 export async function prepareImage(bytes: Uint8Array, mimeType: string): Promise<{ readonly image: ModelImage } | { readonly error: string }> {
   const header = imageHeader(bytes, mimeType);
-  // Only the first frame is used, and an animated WebP may be decoded frame by frame up front.
   if (!header || (header.animated && mimeType === "image/webp")) return { error: IMAGE_ERROR };
   if (header.width * header.height * (header.bytesPerPixel + 8) > MAX_DECODE_BYTES) return { error: IMAGE_ERROR };
-  // A plain view of the same memory: the processor transfers a `slice()` to its worker, and a Node Buffer's `slice()`
-  // shares its (untransferable) pool instead of copying.
   const view = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // Under a type providers do not take inline, Photon re-encodes an animated GIF's first frame as a still image:
-  // OpenAI accepts only still GIFs, and a rejected image would fail every later turn of the conversation.
   const prepared = await inTurn("model", () => prepareWithin(view, header.animated ? "image/x-animated-gif" : mimeType));
   if (prepared === BUSY) return { error: IMAGE_BUSY };
-  // Read from the result: a passed-through image keeps its size, an EXIF-rotated one swaps it.
   const size = prepared && imageHeader(Buffer.from(prepared.data, "base64"), prepared.mimeType);
   if (!prepared || !size) return { error: IMAGE_ERROR };
   return { image: { data: prepared.data, mimeType: prepared.mimeType, width: size.width, height: size.height } };
 }
 
-/**
- * Limits of a transcript image's thumbnail: small enough that a transcript of screenshots loads quickly on a phone. As in
- * `IMAGE_LIMITS`, `maxBytes` bounds the base64 (Photon compares it with `base64Length`), which `checkEntryImage` checks.
- */
 const THUMBNAIL_LIMITS: ImageLimits = { maxWidth: entryImageLimits.thumbnailEdge, maxHeight: entryImageLimits.thumbnailEdge, maxBytes: entryImageLimits.thumbnailBytes };
 
 type Thumbnail = { readonly data: string; readonly mimeType: string };
-/** Thumbnails made recently, by their image's digest, least recently asked for first: at most 128 of 64 KiB. */
 const thumbnails = new Map<string, Promise<Thumbnail | "busy" | undefined>>();
 const THUMBNAILS_KEPT = 128;
 
-/**
- * A small copy of an image the transcript keeps (base64, already prepared for the model), for people's clients:
- * `undefined` when it cannot be made, or `busy` when too many already wait. An image already within the limits comes
- * back as it is. The process keeps the latest it made, and people asking for one being made wait for it together.
- */
 export function thumbnailImage(data: string, mimeType: string): Promise<Thumbnail | "busy" | undefined> {
   const key = createHash("sha256").update(mimeType).update("\0").update(data).digest("hex");
   const kept = thumbnails.get(key);
@@ -171,7 +107,6 @@ export function thumbnailImage(data: string, mimeType: string): Promise<Thumbnai
   const made = makeThumbnail(data, mimeType);
   thumbnails.set(key, made);
   while (thumbnails.size > THUMBNAILS_KEPT) thumbnails.delete(thumbnails.keys().next().value!);
-  // Only thumbnails are kept: one refused as busy, or that failed, is tried again when next asked for.
   void made.then(result => { if (typeof result !== "object" && thumbnails.get(key) === made) thumbnails.delete(key); });
   return made;
 }
@@ -181,23 +116,17 @@ async function makeThumbnail(data: string, mimeType: string): Promise<Thumbnail 
   const header = imageHeader(bytes, mimeType);
   if (!header || header.width * header.height * (header.bytesPerPixel + 8) > MAX_DECODE_BYTES) return undefined;
   const view = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // A GIF's first frame, as for the model; a WebP that animates is never decoded frame by frame.
   if (header.animated && mimeType === "image/webp") return undefined;
   const prepared = await inTurn("thumbnail", () => prepareWithin(view, header.animated ? "image/x-animated-gif" : mimeType, THUMBNAIL_LIMITS));
   if (prepared === BUSY) return "busy";
   return prepared ? { data: prepared.data, mimeType: prepared.mimeType } : undefined;
 }
 
-/**
- * What an image declares in its header (PNG IHDR, GIF screen and frames, WebP VP8/VP8L/VP8X, JPEG SOF), or
- * `undefined` when it has none.
- */
 function imageHeader(bytes: Uint8Array, mimeType: string): ImageHeader | undefined {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const header = (width: number, height: number, bytesPerPixel = 4, animated = false) =>
     width > 0 && height > 0 ? { width, height, bytesPerPixel, animated } : undefined;
   switch (mimeType) {
-    // A 16-bit PNG decodes to twice the bytes per pixel.
     case "image/png": return bytes.length >= 26 ? header(view.getUint32(16), view.getUint32(20), bytes[24] === 16 ? 8 : 4) : undefined;
     case "image/gif": return gifHeader(bytes, view);
     case "image/webp": {
@@ -209,7 +138,6 @@ function imageHeader(bytes: Uint8Array, mimeType: string): ImageHeader | undefin
         return header((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1);
       }
       const uint24 = (offset: number) => view.getUint16(offset, true) + (view.getUint8(offset + 2) << 16);
-      // Bit 0x02 of the VP8X flags marks an animation.
       return chunk === "VP8X" ? header(uint24(24) + 1, uint24(27) + 1, 4, (bytes[20]! & 0x02) !== 0) : undefined;
     }
     case "image/jpeg":
@@ -217,7 +145,6 @@ function imageHeader(bytes: Uint8Array, mimeType: string): ImageHeader | undefin
         if (bytes[offset] !== 0xff) return undefined;
         const marker = bytes[offset + 1]!;
         if (marker === 0xff) { offset++; continue; }
-        // SOF0 to SOF15, except DHT (C4), JPG (C8) and DAC (CC), which share the range.
         if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
           return header(view.getUint16(offset + 7), view.getUint16(offset + 5));
         }
@@ -228,17 +155,12 @@ function imageHeader(bytes: Uint8Array, mimeType: string): ImageHeader | undefin
   }
 }
 
-/**
- * A GIF's size is its logical screen grown to cover every frame, because the decoder allocates a frame at the frame's
- * own size; the blocks are walked to find them.
- */
 function gifHeader(bytes: Uint8Array, view: DataView): ImageHeader | undefined {
   if (bytes.length < 13) return undefined;
   let width = view.getUint16(6, true);
   let height = view.getUint16(8, true);
   let frames = 0;
   const colourTable = (packed: number) => packed & 0x80 ? 3 * 2 ** ((packed & 7) + 1) : 0;
-  // After a block's fixed part come data sub-blocks, each prefixed with its length, ending with a zero length.
   const skipSubBlocks = (from: number) => {
     let offset = from;
     while (offset < bytes.length && bytes[offset] !== 0) offset += bytes[offset]! + 1;
@@ -254,7 +176,6 @@ function gifHeader(bytes: Uint8Array, view: DataView): ImageHeader | undefined {
     frames++;
     width = Math.max(width, view.getUint16(offset + 1, true) + view.getUint16(offset + 5, true));
     height = Math.max(height, view.getUint16(offset + 3, true) + view.getUint16(offset + 7, true));
-    // The descriptor, its local colour table and the LZW minimum code size, then the image data.
     offset = skipSubBlocks(offset + 10 + colourTable(bytes[offset + 9]!) + 1);
   }
   return frames && width > 0 && height > 0 ? { width, height, bytesPerPixel: 4, animated: frames > 1 } : undefined;

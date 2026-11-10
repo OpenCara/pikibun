@@ -2,7 +2,6 @@ import type { EntryView } from "../shared";
 
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)} ms`;
-  // Round first, so 9 951 ms is "10 s" like 10 000 ms rather than "10.0 s".
   const tenths = Math.round(ms / 100);
   if (tenths < 100) return `${(tenths / 10).toFixed(1)} s`;
   const seconds = Math.round(ms / 1000);
@@ -13,12 +12,10 @@ export function formatDuration(ms: number): string {
 const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** A date as "6 Nov 2026": QuickJS's Intl is minimal, so dates are formatted by hand on every platform alike. */
 export function dateLabel(date: Date): string {
   return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
 }
 
-/** Compact age of a past moment; older than a week shows the date. */
 export function relativeTime(value: string, now = Date.now()): string {
   const time = new Date(value).getTime();
   if (Number.isNaN(time)) return "";
@@ -35,10 +32,6 @@ export function timestamp(value: string): string {
   return Number.isNaN(date.getTime()) ? value : `${dateLabel(date)}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/**
- * Why a model request failed, from the only details that cross the host boundary: provider, model and HTTP status.
- * `advice: false` (a share link, whose readers can't act on it) gives the cause alone.
- */
 export function modelFailure({ provider, modelId, status }: NonNullable<EntryView["error"]>, { advice = true }: { advice?: boolean } = {}): string {
   const name = provider ?? "the provider";
   if (!advice) {
@@ -52,5 +45,4 @@ export function modelFailure({ provider, modelId, status }: NonNullable<EntryVie
   return `The request to ${[provider, modelId].filter(Boolean).join("/") || "the model"} failed${status ? ` (HTTP ${status})` : ""}`;
 }
 
-/** A random UUID (v4) for idempotency keys. */
 export const randomId = (): string => crypto.randomUUID();

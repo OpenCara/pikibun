@@ -2,8 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { statementShape, translateToPostgres } from '../apps/server/src/db/sql.js';
 
-// Statements below are copied from the application so the translation is exercised on real shapes.
-
 test('placeholders become $n and skip question marks inside string literals and comments', () => {
   const statement = translateToPostgres(`SELECT 'what?' AS q, "Odd?Name", id -- trailing ? comment
     FROM audit /* block ? */ WHERE action = ? AND detail_json <> 'it''s ?' AND id = ?`);
@@ -27,7 +25,6 @@ test('json_each and json_extract (connectors.ts model sync) use jsonb set-return
   assert.equal(placeholders, 5);
   assert.match(text, /SELECT replace\(gen_random_uuid\(\)::text, '-', ''\), cw\.workspace_id, \(\(local\.value\)::jsonb ->> 'name'\)/);
   assert.match(text, /\(\(local\.value\)::jsonb ->> 'modelId'\), \$1, c\.id/);
-  // A bare JOIN without ON is a cross join in SQLite; Postgres needs it spelled out.
   assert.match(text, /CROSS JOIN jsonb_array_elements_text\(\(c\.models_json\)::jsonb\) local\n/);
   assert.match(text, /\(\$4::text IS NULL OR cw\.workspace_id = \$5\)/);
   assert.match(text, /ON CONFLICT \(workspace_id, connector_id, provider, model_id\) DO UPDATE SET name = excluded\.name/);

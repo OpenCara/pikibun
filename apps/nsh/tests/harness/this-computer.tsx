@@ -4,16 +4,6 @@ import { appCliFolder, installCommand, setHostLauncher, setInstaller, thisComput
 import { Button } from "../../src/ui";
 import { ThisComputerPanel } from "../../src/settings/ThisComputer";
 
-// Settings › This Mac against a stand-in for `pikibun host --stdio`: it answers the desktop host's protocol as the real
-// one does, for a Mac without a sandbox. `host.params`: `command`, how the command fares ("ok", "missing": not
-// installed, "outdated": a CLI without `host`); `paired`, the server it is paired with; `piSignedIn` (true), whether Pi
-// has a provider yet; `server`, the one the page is signed in to; `npm`, how the Install button's npm fares
-// ("ok": it installs a current command in the app's folder, "missing": no npm, "denied": EACCES, "root-cache": EACCES
-// on a cache an earlier sudo npm left, "elsewhere": with no app folder, it installs globally where the shell doesn't
-// look). What the app sent is listed under the panel, secrets left out, for the tests to read; an install is listed as
-// `install`. Under it, `fake-terminal-install` installs the command as the owner would in a terminal, and the host's
-// install error is shown as `install error: …`.
-
 const params = embedder.params as { command?: unknown; paired?: unknown; piSignedIn?: unknown; server?: unknown; npm?: unknown };
 const SERVER = typeof params.server === "string" ? params.server : "https://pikibun.test";
 let command = String(params.command ?? "ok");
@@ -21,7 +11,6 @@ const npm = String(params.npm ?? "ok");
 const sent = signal<string[]>([]);
 let paired: string | undefined = typeof params.paired === "string" ? params.paired : undefined;
 let signedIn = params.piSignedIn !== false;
-/** As the real host: a pairing with plain HTTP reads only where loopback is allowed (connector.ts, controlPlaneOrigin). */
 const loopback = (origin: string) => origin.startsWith("http://");
 
 const model = { provider: "anthropic", modelId: "claude-sonnet", name: "Claude Sonnet" };
@@ -39,7 +28,6 @@ const inspection = (allowLoopback: boolean): HostInspection => ({
 });
 const providers = (): LoginProvider[] => [{ id: "anthropic", name: "Anthropic", signedIn, methods: [{ type: "api_key", name: "Anthropic API key" }] }];
 
-/** One stand-in host process. */
 function fakeHost(): HostLink {
   const messages: ((value: unknown) => void)[] = [];
   const output: ((line: string) => void)[] = [];
@@ -57,7 +45,6 @@ function fakeHost(): HostLink {
     send: message => {
       const request = message as { type: string; id: number; [key: string]: unknown };
       const { id: _id, ...shown } = request;
-      // Secrets are never shown, only that there were some: the pairing code, an answer (an API key).
       if (shown.pairing) shown.pairing = { id: (shown.pairing as { id: string }).id, code: "<code>" };
       if (typeof shown.value === "string") shown.value = `<${shown.value.length} characters>`;
       sent.update(list => [...list, JSON.stringify(shown)]);
@@ -91,7 +78,6 @@ function fakeHost(): HostLink {
   };
 }
 
-/** One stand-in npm run. */
 function fakeInstall(): InstallRun {
   sent.update(list => [...list, "install"]);
   const output: ((line: string) => void)[] = [];

@@ -11,38 +11,17 @@ import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 import type { AppContext, Env, UserRow, AppEnv } from '../types.js';
 import type { NativeSignIn } from '../../../../packages/shared/src/types.js';
 
-/**
- * Username and password accounts, for servers whose operator sets PASSWORD_AUTH=true: people sign up as
- * `password:<username>` and sign in with that username. Who may sign up is SIGNUP's choice (http.ts signupMode): by
- * default only someone holding a workspace's invite link, whose request to join that workspace is filed with the account.
- * The operator creates accounts from the command line as well (password-accounts-cli.ts). They are full accounts that
- * sign in with a cookie like GitHub's, but hold no GitHub token: github.com repositories need a GitHub sign-in, and other
- * providers work through personal access tokens under Settings → Profile → Connected accounts. Native apps sign in with
- * them too (POST /api/auth/native/password), for a bearer token instead of the cookie.
- *
- * Usernames are one namespace for every account (users.username). A GitHub account chooses its own once, right after
- * signing up (POST /api/me/username), optionally with a password; it can then sign in with either, and set, change or
- * remove that password under Settings → Password. Its GitHub sign-in stays the stronger proof: one from the last few
- * minutes stands in for the current password, so a forgotten one is replaced without the operator, while a stolen
- * browser session that is older can't add or replace a password to keep its way in.
- */
-
 const PASSWORD_MIN = 12;
 const PASSWORD_MAX = 256;
-/** The longest password accepted as typed (UTF-16 code units), before NFKC: room for composing characters. */
 const RAW_PASSWORD_MAX = PASSWORD_MAX * 4;
-/** scrypt with 32 MiB per hash (N=2^15, r=8): about 50-100 ms of one CPU, and too costly to try offline at scale. */
 const SCRYPT = { N: 32768, r: 8, p: 1, keyLength: 32, saltLength: 16 } as const;
 const SCRYPT_MAXMEM = 64 * 1024 * 1024;
-/** Failed sign-ins in a row before the account pauses, and how long the pause grows to. */
 const FREE_FAILURES = 5;
 const FIRST_LOCK_MS = 30_000;
 const MAX_LOCK_MS = 15 * 60_000;
-/** Hashes running at once, and waiting: a flood of sign-ins gets 429s instead of starving the server's thread pool. */
 const HASH_CONCURRENCY = 4;
 const HASH_QUEUE = 64;
 const FIELDS = ['username', 'password', 'displayName', 'inviteToken'] as const;
-/** How recent a GitHub sign-in stands in for a GitHub account's current password: to set its first, a forgotten one, or remove it. */
 export const RECENT_SIGN_IN_MS = 15 * 60_000;
 
 const INCORRECT = 'The username or password is incorrect.';
@@ -54,7 +33,6 @@ function scrypt(password: string, salt: Buffer, keyLength: number, options: Scry
 let hashing = 0;
 const waiting: (() => void)[] = [];
 
-/** Runs one scrypt through the bounded queue. */
 async function bounded<T>(work: () => Promise<T>): Promise<T> {
   if (hashing >= HASH_CONCURRENCY) {
     if (waiting.length >= HASH_QUEUE) fail(429, 'sign_in_busy', 'Too many sign-ins at once. Try again in a moment.');
@@ -65,13 +43,11 @@ async function bounded<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } finally {
-    // The slot passes straight to the next waiter, so the count only drops when nobody waits.
     const next = waiting.shift();
     if (next) next(); else hashing--;
   }
 }
 
-/** Passwords compare as Unicode NFKC, so the same password typed on another keyboard or system still matches. */
 function normalized(password: string): string {
   return password.normalize('NFKC');
 }
@@ -82,7 +58,6 @@ export async function hashPassword(password: string): Promise<string> {
   return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString('base64url')}$${key.toString('base64url')}`;
 }
 
-/** Whether `password` matches a stored hash. Stored parameters are bounded, so a corrupted row can't exhaust memory. */
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const parts = stored.split('$');
   if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
@@ -95,13 +70,11 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return timingSafeEqual(key, expected);
 }
 
-/** `make`'s result, made once it succeeds: a failure (a busy server, say) is forgotten, so the next call makes it again. */
 export function onceSucceeded<T>(make: () => Promise<T>): () => Promise<T> {
   let pending: Promise<T> | undefined;
   return () => pending ??= make().catch(error => { pending = undefined; throw error; });
 }
 
-/** Spends a hash's time on a sign-in with no account, so its answer doesn't say the username is free. */
 const decoyHash = onceSucceeded(() => hashPassword(randomBytes(32).toString('base64url')));
 async function decoyVerify(password: string): Promise<void> {
   await verifyPassword(password, await decoyHash());
@@ -115,7 +88,6 @@ function input(body: Record<string, unknown>, fields: readonly string[]): void {
   if (Object.keys(body).some(key => !fields.includes(key))) fail(400, 'invalid_input', `Only ${fields.join(', ')} are accepted.`);
 }
 
-/** A typed username: case and surrounding spaces don't matter. */
 export function passwordUsername(value: unknown): string {
   if (typeof value !== 'string') fail(400, 'invalid_username', 'Enter a username.');
   const result = value.trim().toLowerCase();
@@ -125,13 +97,8 @@ export function passwordUsername(value: unknown): string {
   return result;
 }
 
-/**
- * A new password: long enough, and not the username, both judged as it is hashed (NFKC), so a fullwidth copy of the
- * username or combining characters that compose into fewer don't pass. Any characters are allowed, spaces too.
- */
 export function newPassword(value: unknown, name: string): string {
   if (typeof value !== 'string') fail(400, 'invalid_password', 'Enter a password.');
-  // Bounded before normalizing, which can lengthen text.
   if (value.length > RAW_PASSWORD_MAX) fail(400, 'invalid_password', `Use a password of at most ${PASSWORD_MAX} characters.`);
   const password = normalized(value);
   const length = [...password].length;
@@ -141,7 +108,6 @@ export function newPassword(value: unknown, name: string): string {
   return password;
 }
 
-/** A password typed to sign in, bounded before it is hashed. */
 function typedPassword(value: unknown): string {
   if (typeof value !== 'string' || !value || value.length > RAW_PASSWORD_MAX) fail(401, 'invalid_credentials', INCORRECT);
   return value;
@@ -159,7 +125,6 @@ function failLocked(ms: number): never {
   fail(429, 'sign_in_locked', `Too many failed sign-ins. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`);
 }
 
-/** Counts a failed sign-in; from the sixth in a row the account pauses, 30 seconds at first and doubling to 15 minutes. */
 async function recordFailure(env: Env, userId: string): Promise<void> {
   const row = await dbResult(env.DB.query<{ failed_attempts: number }>(
     'UPDATE password_credentials SET failed_attempts = failed_attempts + 1 WHERE user_id = ? RETURNING failed_attempts').bind(userId).first());
@@ -169,15 +134,10 @@ async function recordFailure(env: Env, userId: string): Promise<void> {
   await dbResult(env.DB.query('UPDATE password_credentials SET locked_until = ? WHERE user_id = ?').bind(Date.now() + pause, userId).run());
 }
 
-/**
- * The statements that create a password account, in order: its user (with a placeholder Git email that can't be
- * delivered to; its owner sets their own under Profile) and its credential. A taken username fails with ConstraintError.
- */
 export function passwordAccountStatements(db: Pick<Database, 'query'>, name: string, displayName: string, hash: string) {
   const userId = `password:${name}`;
   const created = now();
   return [
-    // The username is the GitHub accounts' namespace too: one that took it fails here as well.
     db.query(`INSERT INTO users (id, username, github_id, github_login, display_name, git_name, git_email, env_json, auth_kind, created_at)
       VALUES (?, ?, NULL, NULL, ?, ?, ?, '{}', 'password', ?)`).bind(userId, name, displayName, displayName, `${name}@users.pikibun.invalid`, created),
     db.query('INSERT INTO password_credentials (user_id, password_hash, failed_attempts, locked_until, created_at, updated_at) VALUES (?, ?, 0, NULL, ?, ?)')
@@ -194,7 +154,6 @@ async function signUp(c: AppContext) {
   if (mode === 'off') fail(403, 'signup_closed', 'This server doesn\'t take new accounts. Ask its operator for one.');
   const body = await jsonObject(c, 4096);
   input(body, FIELDS);
-  // Signing up through an invite link files a request to join its workspace with the account, in any mode.
   if (mode === 'invite' && (body.inviteToken === undefined || body.inviteToken === null)) {
     fail(403, 'invite_required', 'New accounts need an invite link. Ask a workspace owner or admin for theirs, and open it to sign up.');
   }
@@ -204,7 +163,6 @@ async function signUp(c: AppContext) {
   const userId = `password:${name}`;
   const password = newPassword(body.password, name);
   const displayName = body.displayName === undefined || body.displayName === '' ? name : safeText(body.displayName, 'displayName', 200);
-  // An operator may list an account in ADMIN_USER_IDS before it exists: only they can create it then (see adminUserId).
   if (isInstanceAdmin(c.env, userId)) {
     fail(409, 'username_reserved', 'This username is reserved for an administrator of this server, whose operator creates it.');
   }
@@ -214,7 +172,6 @@ async function signUp(c: AppContext) {
     await c.env.DB.transaction(async tx => {
       for (const statement of passwordAccountStatements(tx, name, displayName, hash)) await statement.run();
       if (invited) {
-        // The account exists only with its request: a full queue or a link turned off meanwhile creates neither.
         const filed = await joinRequestStatement(tx, invited.workspace.id, invited.tokenHash, userId).run();
         if (filed.changes !== 1) throw new SignupRefused();
         await tx.query('INSERT INTO audit (id, workspace_id, session_id, actor_id, action, detail_json, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?)')
@@ -236,30 +193,18 @@ async function signUp(c: AppContext) {
   return c.json({ user: ownProfile(c.env, user!) }, 201);
 }
 
-/**
- * The account a username names, with `usernameMatch`'s values: the one that chose it, or the password account whose ID it
- * is, where a row predates the username column's backfill (an older dump, say). The migration gives them the same name,
- * and usernames are unique, so they are the same account; the password account wins if they ever weren't.
- */
 export const USERNAME_MATCH = 'WHERE u.id = ? OR u.username = ? ORDER BY CASE WHEN u.id = ? THEN 0 ELSE 1 END LIMIT 1';
 export function usernameMatch(name: string): string[] {
   return [`password:${name}`, name, `password:${name}`];
 }
 
-/** Whether an account with a password may sign in with it: a password account, or a GitHub account that set one. */
 function signsInWithPassword(row: { user_id: string; auth_kind: UserRow['auth_kind'] }): boolean {
   return row.auth_kind === 'password' ? row.user_id.startsWith('password:') : row.auth_kind === 'github';
 }
 
-/**
- * Checks a typed username and password and starts a sign-in for its account: a browser's (cookie) or, with `native`, a
- * native app's bearer session listed under its device name. Every wrong guess gets the same answer.
- */
 async function passwordSignIn(c: AppContext, body: Record<string, unknown>, native?: { deviceName: string | null }) {
-  // A malformed username can't name an account, so it gets the same answer as a wrong password.
   const typed = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
   const password = typedPassword(body.password);
-  // By username, whichever kind of account took it: a password account's is the name in its ID, a GitHub account's its own.
   const row = PASSWORD_USERNAME.test(typed) ? await dbResult(c.env.DB.query<CredentialRow & { auth_kind: UserRow['auth_kind']; suspended_at: string | null }>(
     `SELECT p.user_id, p.password_hash, p.failed_attempts, p.locked_until, u.auth_kind, u.suspended_at
     FROM users u JOIN password_credentials p ON p.user_id = u.id ${USERNAME_MATCH}`).bind(...usernameMatch(typed)).first()) : null;
@@ -273,11 +218,8 @@ async function passwordSignIn(c: AppContext, body: Record<string, unknown>, nati
     await recordFailure(c.env, row.user_id);
     fail(401, 'invalid_credentials', INCORRECT);
   }
-  // Only a correct password says the account is suspended.
   if (row.suspended_at) fail(403, 'account_suspended', SUSPENDED);
   const session = await newSession(c.env, row.user_id, 'password', native);
-  // Only while the password checked above is still the account's: a reset or change that landed while it was being
-  // hashed signs the account out everywhere, and this sign-in must not outlive it.
   const [cleared, created] = await dbResult(c.env.DB.batch([
     c.env.DB.query('UPDATE password_credentials SET failed_attempts = 0, locked_until = NULL WHERE user_id = ? AND password_hash = ?')
       .bind(row.user_id, row.password_hash),
@@ -299,11 +241,6 @@ async function signIn(c: AppContext) {
   return c.json({ user: ownProfile(c.env, user) });
 }
 
-/**
- * A native app's sign-in with a username and password: a bearer token in the answer, as /api/auth/native/token gives for
- * GitHub, never a cookie. Like that route it has no origin check: it sets nothing a browser would send by itself, and a
- * page of another site can't post its JSON without a CORS preflight the server never grants.
- */
 async function nativeSignIn(c: AppContext) {
   requireEnabled(c.env);
   const body = await jsonObject(c, 4096);
@@ -313,7 +250,6 @@ async function nativeSignIn(c: AppContext) {
   return c.json({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString(), user: ownProfile(c.env, user) } satisfies NativeSignIn);
 }
 
-/** The account's username: the one it chose, or a password account's from its ID (see USERNAME_MATCH). */
 function accountUsername(user: UserRow): string | null {
   return user.username ?? (user.auth_kind === 'password' && user.id.startsWith('password:') ? user.id.slice('password:'.length) : null);
 }
@@ -324,11 +260,6 @@ async function signedInUser(c: AppContext): Promise<UserRow> {
   return user;
 }
 
-/**
- * Whether this browser or app signed in to a GitHub account with GitHub itself, in the last RECENT_SIGN_IN_MS: proof of
- * the account's owner that stands in for its current password. A password account has no such proof, nor does a sign-in
- * made with the password; a test account's test sign-in counts, in test mode only, where it exists at all.
- */
 async function recentGitHubSignIn(env: Env, user: UserRow, tokenHash: string): Promise<boolean> {
   if (user.auth_kind !== 'github' && !(user.auth_kind === 'test' && testMode(env))) return false;
   const session = await dbResult(env.DB.query<{ created_at: string; method: string | null }>(
@@ -345,13 +276,6 @@ function credential(env: Env, userId: string) {
     .bind(userId).first());
 }
 
-/**
- * Checks what stands for the account's owner before its password changes or goes: the current password when one is typed
- * (and always for a password account, which has nothing else), or else a recent GitHub sign-in. A wrong password counts
- * as a failed sign-in, so a stolen browser session can't guess its way to the password either. Failed sign-ins lock only
- * the password: a recent GitHub sign-in still replaces or removes it, so nobody who knows the username can keep its owner
- * from getting rid of a password by locking it.
- */
 async function requireOwner(c: AppContext, user: UserRow, row: CredentialRow | null, current: unknown): Promise<void> {
   const typed = current !== undefined && current !== null && current !== '';
   if (typed || user.auth_kind === 'password') {
@@ -369,11 +293,6 @@ async function requireOwner(c: AppContext, user: UserRow, row: CredentialRow | n
   }
 }
 
-/**
- * Sets the signed-in account's password. A password account changes its own with its current password. A GitHub account
- * sets its first one, or changes it with the current one or a recent GitHub sign-in, once it has a username to sign in
- * with. Replacing a password signs out every other browser and app signed in as the account.
- */
 async function setPassword(c: AppContext) {
   requireEnabled(c.env);
   const auth = c.get('auth');
@@ -389,7 +308,6 @@ async function setPassword(c: AppContext) {
   const hash = await hashPassword(password);
   const timestamp = now();
   if (!row) {
-    // The first password, while this browser is still signed in and nothing set one meanwhile.
     const [created] = await dbResult(c.env.DB.batch([
       c.env.DB.query(`INSERT INTO password_credentials (user_id, password_hash, failed_attempts, locked_until, created_at, updated_at)
         SELECT ?, ?, 0, NULL, ?, ? WHERE EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ? AND user_id = ?)
@@ -399,14 +317,11 @@ async function setPassword(c: AppContext) {
     ]));
     if (created!.changes !== 1) fail(409, 'password_changed', 'A password was set meanwhile, or this browser was signed out. Reload and try again.');
   } else {
-    // Only from the password checked above, and while this browser is still signed in: a reset, another change or a
-    // sign-out that landed while hashing wins, rather than being overwritten.
     const [changed] = await dbResult(c.env.DB.batch([
       c.env.DB.query(`UPDATE password_credentials SET password_hash = ?, failed_attempts = 0, locked_until = NULL, updated_at = ?
         WHERE user_id = ? AND password_hash = ? AND EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ? AND user_id = ?)`)
         .bind(hash, timestamp, auth.userId, row.password_hash, auth.tokenHash, auth.userId),
       auditAfterChange(c.env, auth.userId, 'account.password.changed', null, {}),
-      // The new hash is salted, so it is there only if this change landed.
       c.env.DB.query(`DELETE FROM auth_sessions WHERE user_id = ? AND token_hash <> ?
         AND EXISTS (SELECT 1 FROM password_credentials WHERE user_id = ? AND password_hash = ?)`).bind(auth.userId, auth.tokenHash, auth.userId, hash),
     ]));
@@ -415,12 +330,6 @@ async function setPassword(c: AppContext) {
   return c.json({ ok: true, user: ownProfile(c.env, await signedInUser(c)) });
 }
 
-/**
- * Removes a GitHub account's password, with the current one or a recent GitHub sign-in: it signs in with GitHub only
- * again, and every browser and app that signed in with the password, other than this one, is signed out. Allowed with
- * PASSWORD_AUTH off as well, so nobody has to keep a password the server no longer takes. A password account has no
- * other way in, so it can't.
- */
 async function removePassword(c: AppContext) {
   const auth = c.get('auth');
   const body = await jsonObject(c, 4096);
@@ -443,12 +352,6 @@ async function removePassword(c: AppContext) {
 
 class UsernameRefused extends Error {}
 
-/**
- * A GitHub account chooses its username, once: the web app asks for it right after signing up, before anything else.
- * With PASSWORD_AUTH on it may set a password in the same step, to sign in with the username later; that takes a recent
- * GitHub sign-in, as setting one later does. The username can't be changed afterwards, so nobody else can take up a name
- * teammates know someone by.
- */
 async function chooseUsername(c: AppContext) {
   const auth = c.get('auth');
   const body = await jsonObject(c, 4096);
@@ -456,7 +359,6 @@ async function chooseUsername(c: AppContext) {
   const user = await signedInUser(c);
   if (accountUsername(user)) fail(409, 'username_set', 'Your username is set already, and can\'t be changed.');
   const name = passwordUsername(body.username);
-  // ADMIN_USER_IDS may list password:<name> before its operator creates it: the name is theirs.
   if (isInstanceAdmin(c.env, `password:${name}`)) {
     fail(409, 'username_reserved', 'This username is reserved for an administrator of this server. Choose another.');
   }
@@ -470,7 +372,6 @@ async function chooseUsername(c: AppContext) {
   const timestamp = now();
   try {
     await c.env.DB.transaction(async tx => {
-      // Only once, and only while this browser is still signed in.
       const chosen = await tx.query(`UPDATE users SET username = ? WHERE id = ? AND username IS NULL
         AND EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ? AND user_id = ?)`).bind(name, auth.userId, auth.tokenHash, auth.userId).run();
       if (chosen.changes !== 1) throw new UsernameRefused();
@@ -484,7 +385,6 @@ async function chooseUsername(c: AppContext) {
       }
     });
   } catch (error) {
-    // The username is taken (by any account), or a password was set meanwhile.
     if (error instanceof ConstraintError) fail(409, 'username_taken', 'That username is taken. Choose another.');
     if (error instanceof UsernameRefused) fail(409, 'username_set', 'Your username was set meanwhile, or this browser was signed out. Reload the page.');
     fail(503, 'auth_unavailable', 'Authentication storage is temporarily unavailable.');
@@ -492,7 +392,6 @@ async function chooseUsername(c: AppContext) {
   return c.json({ user: ownProfile(c.env, await signedInUser(c)) });
 }
 
-// Register before the /api/* authenticate + csrfGuard stack, like registerAuth: sign-up and sign-in have no session yet.
 export function registerPasswordAuth(app: Hono<AppEnv>): void {
   app.post('/api/auth/password/signup', privateResponse, signUp);
   app.post('/api/auth/password/login', privateResponse, signIn);

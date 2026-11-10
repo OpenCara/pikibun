@@ -9,7 +9,6 @@ const SQLITE_CONSTRAINT = 19;
 const SQLITE_BUSY = 5;
 const IN_MEMORY = ':memory:';
 
-/** `sqlite::memory:`, `sqlite:///abs/path.sqlite` or `sqlite:./relative.sqlite` → the path `DatabaseSync` opens. */
 export function sqlitePath(url: string): string {
   if (!url.startsWith('sqlite:')) throw new Error('SQLite URLs start with "sqlite:".');
   const rest = url.slice('sqlite:'.length);
@@ -28,7 +27,6 @@ function mapError(error: unknown): unknown {
 
 const noop = (): void => {};
 
-/** A migration's first line asks for SQLite's table-rebuild procedure, with foreign keys off while it runs. */
 const REBUILDS_REFERENCED_TABLE = /^-- pikibun: foreign-keys-off\r?\n/;
 
 export class SqliteDatabase implements Database {
@@ -36,9 +34,7 @@ export class SqliteDatabase implements Database {
   readonly handle: DatabaseSync;
   private readonly statements = new Map<string, StatementSync>();
   private readonly changesStatement: StatementSync;
-  /** Settles when every transaction started so far has finished. */
   private queue: Promise<void> = Promise.resolve();
-  /** True while a transaction owns the connection; statements outside it wait. */
   private locked = false;
   private closed = false;
 
@@ -98,9 +94,6 @@ export class SqliteDatabase implements Database {
         await this.transaction(async () => this.apply(file));
         continue;
       }
-      // SQLite's procedure for rebuilding a table others reference (https://sqlite.org/lang_altertable.html#otheralter):
-      // with foreign keys on, dropping the old table would run its ON DELETE actions on every referencing row. The
-      // pragma is a no-op inside a transaction, so it is switched around it, and every reference is checked before commit.
       this.handle.exec('PRAGMA foreign_keys = OFF');
       try {
         await this.transaction(async () => {
@@ -116,7 +109,6 @@ export class SqliteDatabase implements Database {
   }
 
   private apply(file: MigrationFile): void {
-    // PRAGMA foreign_keys inside a transaction is a no-op (already ON); PRAGMA defer_foreign_keys must run inside it.
     this.handle.exec(file.sql);
     this.handle.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(file.name, new Date().toISOString());
   }
@@ -143,7 +135,6 @@ export class SqliteDatabase implements Database {
     this.handle.close();
   }
 
-  /** Resolves once no transaction owns the connection (statements inside the transaction skip this). */
   async ready(inTransaction: boolean): Promise<void> {
     while (this.locked && !inTransaction) await this.queue;
   }
@@ -158,7 +149,6 @@ export class SqliteDatabase implements Database {
     return statement;
   }
 
-  /** Runs a statement to completion and reports its rows and `changes()` (0 for reads). */
   execute<T>(sql: string, values: SqlValue[]): { results: T[]; changes: number } {
     try {
       const rows = this.prepare(sql).all(...values) as object[];

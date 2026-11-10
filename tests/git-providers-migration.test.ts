@@ -63,7 +63,6 @@ test('rebuilt bindings keep the cap and immutability triggers and scope uniquene
   }
   assert.throws(() => insert.run('same-id', 'github', 'github.com', '123', 'Other/Name'), /UNIQUE/);
   assert.throws(() => insert.run('same-name', 'github', 'github.com', '456', 'owner/PROJECT'), /UNIQUE/);
-  // The same identity or name on another provider or host is a different repository.
   insert.run('gitlab', 'gitlab', 'gitlab.com', '123', 'owner/project');
   insert.run('gitea', 'gitea', 'git.acme.dev', '123', 'owner/project');
   assert.throws(() => insert.run('gitea-name', 'gitea', 'git.acme.dev', '124', 'OWNER/Project'), /UNIQUE/);

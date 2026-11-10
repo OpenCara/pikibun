@@ -8,15 +8,9 @@ import { validateOperation } from '../apps/runner/src/protocol.js';
 import { pullRequestLine, pushSummary } from '../apps/runner/src/push.js';
 import type { GitHubSessionRepository, ProviderSessionRepository } from '../packages/shared/src/repositories.js';
 
-/*
- * Draft pull requests through git_push (PullRequestRequest.draft): opened as drafts, and an open draft marked ready for
- * review, on each forge the broker opens pull requests on.
- */
-
 interface Call { method: string; url: string; body: unknown }
 type Route = (call: Call) => Response | undefined;
 
-/** Answers the forge's API from `route`; anything it doesn't answer fails the test. */
 function forge(t: TestContext, route: Route): Call[] {
   const calls: Call[] = [];
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -55,15 +49,12 @@ test('GitHub: draft: true opens a draft; an open one is left as it is, never tur
   assert.deepEqual(await openPullRequest(github, githubPin, { ...input, draft: true }),
     { url: 'https://github.com/owner/repo/pull/7', number: 7, created: true, draft: true });
   assert.deepEqual(calls[0]!.body, { title: 'Fix the parser', head: 'pikibun/session', base: 'main', body: 'Work in progress', draft: true });
-  // Pushed again as a draft: found, untouched.
   assert.deepEqual(await openPullRequest(github, githubPin, { ...input, draft: true }),
     { url: 'https://github.com/owner/repo/pull/7', number: 7, created: false, draft: true });
-  // A ready one stays ready.
   open = pull(7, false);
   assert.deepEqual(await openPullRequest(github, githubPin, { ...input, draft: true }),
     { url: 'https://github.com/owner/repo/pull/7', number: 7, created: false, draft: false });
   assert.ok(!calls.some(call => call.method === 'PATCH' || call.url.endsWith('/graphql')));
-  // Without draft, a new one is opened as before: no draft key at all.
   open = undefined;
   await openPullRequest(github, githubPin, input);
   assert.deepEqual(calls.at(-1)!.body, { title: 'Fix the parser', head: 'pikibun/session', base: 'main', body: 'Work in progress' });
@@ -86,13 +77,11 @@ test('GitHub: draft: false marks the open draft ready for review, with the appro
   assert.match(mutation.query, /markPullRequestReadyForReview/);
   assert.deepEqual(mutation.variables, { id: 'PR_kw7' });
 
-  // Already ready: nothing to change.
   draft = false;
   const before = calls.length;
   assert.equal((await openPullRequest(github, githubPin, input)).draft, false);
   assert.ok(!calls.slice(before).some(call => call.method === 'PATCH' || call.url.endsWith('/graphql')));
 
-  // GraphQL refuses with 200 and errors: the owner can't, so it fails as a permission, never as marked.
   draft = true;
   graphqlAnswer = { errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible' }] };
   assert.deepEqual(await failure(openPullRequest(github, githubPin, input)), { status: 403, code: 'push_permission_required' });
@@ -170,7 +159,6 @@ test('a forge that still says draft after being made ready fails, rather than th
     credential: { id: 'a', provider: 'gitea', host: 'git.acme.dev', organization: '', username: '', token: 't' } } };
   const pin: ProviderSessionRepository = { bindingId: 'b5', provider: 'gitea', host: 'git.acme.dev', repositoryId: '42', fullName: 'acme/tools',
     ref: 'main', commit: 'a'.repeat(40), path: 'git.acme.dev/acme/tools' };
-  // A Gitea whose work-in-progress prefix is its own ("[Do not merge]"): taking ours off leaves it a draft.
   const item = { number: 5, html_url: 'https://git.acme.dev/acme/tools/pulls/5', title: '[Do not merge] T', draft: true };
   const calls = forge(t, call => {
     if (call.method === 'POST' && call.url === 'https://git.acme.dev/api/v1/repos/acme/tools/pulls') return Response.json({}, { status: 409 });

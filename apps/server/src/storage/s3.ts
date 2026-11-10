@@ -4,18 +4,12 @@ import type { ObjectMetadata, ObjectStorage, StoredObject } from './types.js';
 
 export interface S3StorageOptions {
   bucket: string;
-  /** Key prefix without leading or trailing slash; empty for the bucket root. */
   prefix: string;
   region: string;
-  /** Custom endpoint (MinIO, R2, …); enables path-style addressing. */
   endpoint?: string;
   credentials?: { accessKeyId: string; secretAccessKey: string };
 }
 
-/**
- * Backups on any S3-compatible service. Metadata is stored as object user metadata next to `ContentType`. The SDK is
- * loaded at the first request, so servers that keep backups elsewhere (a local one, say) need it not installed.
- */
 export class S3Storage implements ObjectStorage {
   readonly provider = 's3' as const;
   private sdk?: Promise<{ client: S3Client; commands: typeof import('@aws-sdk/client-s3') }>;

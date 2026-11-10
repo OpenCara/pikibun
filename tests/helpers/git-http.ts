@@ -5,7 +5,6 @@ import { join } from "node:path";
 
 export interface GitHttpOptions { protocolV2?: boolean; authorization?: string }
 
-/** Serves `git http-backend` as CGI over node:http for repositories below `projectRoot`. */
 export async function startGitHttpServer(projectRoot: string, options: GitHttpOptions = {}): Promise<{ url(repo: string): string; close(): Promise<void> }> {
   const execPath = spawnSync("git", ["--exec-path"], { encoding: "utf8" }).stdout.trim();
   const backend = join(execPath, "git-http-backend");

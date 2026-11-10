@@ -25,7 +25,6 @@ import { writeFile } from "node:fs/promises";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
 import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensions/store.js";
 
-/** A program tool only a newer control plane defines: no code of this connector knows it by name. */
 const jvm: ProgramToolDefinition = {
   kind: "program", name: "jvm", extensions: ["piki:jvm"], description: "Run Maven or Gradle in the session worktree without a shell.",
   programs: ["mvn", "gradle"], example: '["test"]', environment: [["MAVEN_OPTS", "-Djava.awt.headless=true"], ["NO_COLOR", "1"]], path: ["/usr/share/maven/bin", "/opt/gradle/bin"],
@@ -36,7 +35,6 @@ const jvm: ProgramToolDefinition = {
   refusal: "acts on a package repository as an account, which sessions don't have", windowsSandbox: false,
   summary: { programs: "mvn and gradle", example: "jvm {program: \"mvn\", args: [\"test\"], directory: \"<name>\"}" },
 };
-/** A brokered tool only a newer control plane defines, with its own route there. */
 const notes: BrokeredToolDefinition = {
   kind: "brokered", name: "notes_read", extensions: ["piki:notes"], description: "Read one of the workspace's notes as the session owner.",
   parameters: { note: { type: "string", required: true, pattern: "^[a-z0-9-]{1,64}$", invalid: "note is a note's id" }, line: { type: "integer", minimum: 1, maximum: 1000 } },
@@ -78,7 +76,6 @@ test("a definition is checked as data: what could change what runs, or isn't a w
     ["a route out of its place", { route: "../internal/sources/read" }], ["an absolute route", { route: "/api/admin" }], ["a target it has no parameter for", { target: ["owner"] }],
     ["a parameter name colliding with the request's own", { parameters: { sessionId: { type: "string" } } }], ["a parameter of no known type", { parameters: { x: { type: "object" } } }],
   ] as const) assert.throws(brokered(change), /Invalid tool definition/, why);
-  // A list keeps what it can read: a newer kind, or a broken definition, costs only that tool; a name counts once.
   assert.deepEqual(parseToolDefinitions({ tools: [{ kind: "mcp", name: "x" }, { ...jvm, name: "bash" }, jvm, { ...jvm, description: "Again." }, notes] }).map(item => item.name), ["jvm", "notes_read"]);
   assert.throws(() => parseToolDefinitions({ tools: Array.from({ length: 65 }, () => jvm) }), /Invalid tool definitions/);
 });
@@ -95,7 +92,6 @@ test("a tool only the control plane defines runs with no code of the connector's
   assert.deepEqual(request, { tool: "jvm", program: "mvn", directory: "app", args: ["test", "$(rm -rf ~)"] });
   assert.equal(programCommand(jvm, request),
     "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/share/maven/bin':'/opt/gradle/bin' MAVEN_OPTS=-Djava.awt.headless=true NO_COLOR=1 mvn 'test' '$(rm -rf ~)' </dev/null 2>&1");
-  // Launchers and runners are followed only within the definition's own programs, and only so deep.
   const chain: ProgramToolDefinition = { ...jvm, grammar: { ...jvm.grammar, wrap: { launcher: {} } } };
   assert.equal(refusedCommand(chain, "wrap", ["wrap", "wrap", "mvn", "deploy"]), "mvn deploy");
   assert.equal(refusedCommand(chain, "wrap", ["wrap", "wrap", "wrap", "wrap", "wrap", "mvn", "deploy"]), undefined);
@@ -141,20 +137,16 @@ test("operations name the tools this server defines, and connectors take the swi
   assert.throws(() => parseOperation({ kind: "program", tool: "jvm", command }), "not one this server defines");
   assert.throws(() => parseOperation({ kind: "permission", tool: "notes_read", target: "x", needs: ["tool"] }));
   assert.deepEqual(parseOperation({ kind: "permission", tool: "source_read", target: "x", needs: ["tool"] }), { kind: "permission", tool: "source_read", target: "x", needs: ["tool"] });
-  // A connector validates the program tools it read from the control plane, and only those.
   assert.throws(() => validateOperation({ kind: "program", tool: "jvm", command }), /Invalid operation/);
   assert.equal(knownDefinedProgramTool("rust"), true);
-  // The switches of the extensions definitions name reach a connector that runs them, though it doesn't report having them.
   const off = (source: string) => ({ source, enabled: false, tools: "approval" as const, settings: {} });
   const installed = [{ source: "piki:gh" }];
   assert.deepEqual(connectorWorkspaceExtensions([off("piki:rust")], installed), [], "an older connector doesn't take it");
   assert.deepEqual(connectorWorkspaceExtensions([off("piki:rust")], installed, { toolDefinitions: true }), [off("piki:rust")]);
   assert.deepEqual(connectorWorkspaceExtensions([off("piki:rust")], undefined, { toolDefinitions: true }), [], "nor one that never reported");
-  // A connector takes a switch it doesn't know by name, and it takes no place among the workspace's 32.
   const regular = Array.from({ length: 32 }, (_, index) => ({ source: `npm:extension-${index}@1.0.0` }));
   assert.equal(parseWorkspaceExtensions([...regular, off("piki:jvm")]).length, 33);
   assert.throws(() => parseWorkspaceExtensions([...regular, { source: "npm:one-too-many@1.0.0" }]), /Invalid extensions/);
-  // Every switch this version knows as well, and a newer control plane's on top: the cap adds them up (review of #205).
   const known = pikiSessionToolExtensions().map(item => off(item.source));
   assert.equal(parseWorkspaceExtensions([...regular, ...known, off("piki:jvm"), off("piki:notes")]).length, 32 + known.length + 2);
 });
@@ -211,7 +203,6 @@ test("a session runs tools the control plane defines that its connector never kn
   ] as never);
   const models = createModels();
   models.setProvider(faux.provider);
-  // The connector's answer: this version's bundled tools, one of each kind it never knew, and one named like its own git.
   const shadow: ProgramToolDefinition = { ...jvm, name: "git", programs: ["sh"], grammar: {} };
   let definitions: ToolDefinition[] = [...bundledToolDefinitions, jvm, notes, shadow];
   let answer: WorkspaceExtensionsAnswer = { extensions: [], automaticTools: false };
@@ -235,12 +226,10 @@ test("a session runs tools the control plane defines that its connector never kn
     if (!approval) await delay(20);
   }
   assert.ok(approval, "the jvm call asks for approval");
-  // Offered as the session's own: the new program and brokered tools, never a definition named like its git.
   for (const tool of ["jvm", "notes_read", "node", "rust", "source_read", "git"]) assert.ok(offered[0]!.includes(tool), `${tool}: ${offered[0]!.join()}`);
   assert.equal(offered[0]!.filter(tool => tool === "git").length, 1);
   assert.match(prompts[0]!, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet, make, mvn and gradle with the rust, go, dotnet, make, jvm tools/);
   assert.match(prompts[0]!, /Read the workspace's notes with notes_read \{note\}\./);
-  // The program call: one exact command, as its definition says.
   assert.deepEqual(approval!.operation, { kind: "program", tool: "jvm",
     command: "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/share/maven/bin':'/opt/gradle/bin' MAVEN_OPTS=-Djava.awt.headless=true NO_COLOR=1 mvn 'test' </dev/null 2>&1" });
   assert.deepEqual(validateOperation(approval!.operation), approval!.operation, "a tool it read from the control plane is one it validates");
@@ -250,19 +239,16 @@ test("a session runs tools the control plane defines that its connector never kn
   assert.match(transcript, /mvn deploy acts on a package repository as an account, which sessions don't have: the jvm tool doesn't run it/);
   assert.match(transcript, /note is a note's id/);
   assert.match(transcript, /Ship it\./);
-  // The brokered call went to its route, within the message's admission, with its checked arguments.
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.route, "notes/read");
   assert.deepEqual({ ...calls[0]!.request, callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId: await sha256("defined first"), callId: undefined, note: "standup", line: 2 });
 
-  // The workspace turns its extension off: neither offered nor described; a tool the control plane added since joins.
   definitions = [...definitions, { ...jvm, name: "lint", extensions: ["piki:lint"], programs: ["eslint"], grammar: {}, summary: undefined }];
   answer = { extensions: [{ source: "piki:jvm", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Test.", requestId: "second", admissionId: await sha256("defined second") }, "write");
   await idle(session);
   assert.ok(!offered[1]!.includes("jvm"), offered[1]!.join());
   assert.ok(offered[1]!.includes("lint"), offered[1]!.join());
-  // The conversation keeps the first message's instructions; the second's add none for jvm.
   const count = (text: string, part: string) => text.split(part).length - 1;
   assert.equal(count(prompts[1]!, "mvn and gradle"), count(prompts[0]!, "mvn and gradle"));
   assert.ok(count(prompts[0]!, "mvn and gradle") >= 1);
@@ -305,14 +291,11 @@ test("a tool the control plane defines after the session opened never takes the 
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Hello.", requestId: "first", admissionId: await sha256("clash first") }, "write");
   await idle(session);
-  // The control plane now defines a program tool named like the extension's.
   definitions = [...definitions, { ...jvm, name: "shout", extensions: ["piki:shout"], programs: ["sh"], grammar: {}, summary: undefined }];
   await session.submit(await ticket(id, "submit"), { content: "Shout.", requestId: "second", admissionId: await sha256("clash second") }, "write");
   await idle(session);
-  // The call is the extension's, never a program command of the definition's.
   const view = await session.view();
   assert.ok(!view.approvals.some(approval => approval.operation.kind === "program"), JSON.stringify(view.approvals));
-  // Decided as an extension's tool is, as a host command: this runner has no connected host to ask, so it says so.
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Host commands require a connected host/);
 });
 
@@ -353,11 +336,9 @@ test("a name a defined tool took up after the session opened stays its own when 
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Hello.", requestId: "first", admissionId: await sha256("first first") }, "write");
   await idle(session);
-  // The control plane defines shout while no extension offers it: the session takes it up.
   definitions = [...definitions, { ...jvm, name: "shout", extensions: ["piki:shout"], programs: ["echo"], grammar: {}, summary: undefined }];
   await session.submit(await ticket(id, "submit"), { content: "Define.", requestId: "second", admissionId: await sha256("first second") }, "write");
   await idle(session);
-  // Then the workspace turns on an extension that offers shout too: the session's own keeps it.
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Shout.", requestId: "third", admissionId: await sha256("first third") }, "write");
   let card;
@@ -368,8 +349,6 @@ test("a name a defined tool took up after the session opened stays its own when 
     if (!card) await delay(20);
   }
   assert.ok(card, (await session.view()).entries.map(entry => entry.text).join("\n"));
-  // The definition's program tool, which this session's agent doesn't list, so it asks for the tool first: never the
-  // extension's call, which would be an extension.tool card.
   assert.deepEqual(card!.operation, { kind: "permission", tool: "shout", target: ".: echo hi", needs: ["tool"] });
   await session.decide(await ticket(id, "approve"), card!.id, { decision: "deny", operation: card!.operation });
   await idle(session);

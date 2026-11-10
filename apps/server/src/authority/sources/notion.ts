@@ -2,19 +2,16 @@ import { notionId, notionReadLimits, sourceLimits, sourceReadLimits, type Source
 import { fail } from '../../http.js';
 import { accountRejected, clean, json, notFound, outsideSource, rateLimited, upstream, type BoundItem, type DocumentAdapter, type ItemView } from './document-http.js';
 
-/** Notion's REST API with an internal integration secret, which Notion scopes to the pages shared with the integration. */
 export const notionApi = 'https://api.notion.com/v1';
 export const notionVersion = '2022-06-28';
 const share = 'the Notion integration';
 
 type Json = Record<string, unknown>;
 
-/** The token to call Notion with: an integration secret as pasted, or a signed-in connection's access token. */
 function bearer(secret: string): string {
   return secret.startsWith('{') ? (JSON.parse(secret) as { accessToken: string }).accessToken : secret;
 }
 
-/** One Notion call; `missing: 'null'` answers null for an id Notion doesn't have (or one of the other kind). */
 async function call(token: string, path: string, init: { method?: 'GET' | 'POST'; body?: unknown } = {}, missing: 'fail' | 'null' = 'fail'): Promise<Json | null> {
   const answer = await upstream('Notion', `${notionApi}${path}`, {
     method: init.method ?? 'GET',
@@ -24,7 +21,6 @@ async function call(token: string, path: string, init: { method?: 'GET' | 'POST'
   });
   if (answer.status === 401) accountRejected('Notion');
   if (answer.status === 429) rateLimited('Notion');
-  // 404 for pages the integration can't see, 400 for an id of the other kind (a database read as a page).
   if (answer.status === 404 || answer.status === 400 || answer.status === 403) return missing === 'null' ? null : notFound('Notion', share);
   if (answer.status !== 200) fail(502, 'source_unavailable', 'Notion could not complete the request. Try again later.');
   return json('Notion', answer);
@@ -58,7 +54,6 @@ async function object(token: string, id: string): Promise<NotionObject> {
   return notFound('Notion', share);
 }
 
-/** Requires `target` to be `root` or under it, following Notion's parents (pages, databases, blocks) a bounded way up. */
 async function requireUnder(token: string, root: string, target: NotionObject): Promise<void> {
   if (target.id === root) return;
   let parent = target.parent;
@@ -101,7 +96,6 @@ function push(walk: Walk, line: string): boolean {
   return true;
 }
 
-/** One block as Markdown, at `indent`; null for a block with nothing to show of its own. */
 function blockLine(block: Json, indent: string, number: number): string | null {
   const type = typeof block.type === 'string' ? block.type : '';
   const value = (block[type] && typeof block[type] === 'object' ? block[type] : {}) as Json;
@@ -121,7 +115,6 @@ function blockLine(block: Json, indent: string, number: number): string | null {
     case 'bookmark': case 'embed': case 'link_preview': return typeof value.url === 'string' ? `${indent}<${value.url}>` : null;
     case 'image': case 'file': case 'pdf': case 'video': case 'audio': {
       const caption = richText(value.caption);
-      // Notion-hosted files come as short-lived signed links; only external links are shown.
       const external = value.type === 'external' && value.external && typeof (value.external as Json).url === 'string' ? (value.external as Json).url as string : null;
       return `${indent}[${type}${caption ? `: ${caption}` : ''}]${external ? `(${external})` : ''}`;
     }
@@ -153,7 +146,6 @@ async function walkChildren(token: string, id: string, depth: number, walk: Walk
         walk.entries.push({ id: String(block.id), type: block.type === 'child_page' ? 'page' : 'database', title: clean(value.title, sourceLimits.title) || 'Untitled' });
       }
       if (line !== null && !push(walk, line)) return;
-      // Child pages and databases are read on their own; other blocks' children are part of this page.
       if (block.has_children === true && typeof block.id === 'string' && block.type !== 'child_page' && block.type !== 'child_database') {
         if (depth + 1 >= notionReadLimits.depth) { walk.truncated = true; continue; }
         await walkChildren(token, block.id, depth + 1, walk);

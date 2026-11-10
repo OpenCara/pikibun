@@ -19,7 +19,6 @@ function binding(id: string): RunnerBinding {
   return {
     session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Schedules", policyVersion: 1, status: "ready", createdAt: "2026-01-01T00:00:00Z", repositories: [], repositoryMode: "clone" },
     owner: { id: "test:alice", githubId: null, githubLogin: "alice", displayName: "Alice", gitName: "Alice Owner", gitEmail: "alice@example.test", env: {}, githubConnected: false },
-    // A session from before the schedule tool: its agent lacks it.
     agent: { id: "version-1", agentId: "agent", authorId: "test:alice", workspaceId: "workspace", version: 1, name: "Agent", description: "", instructions: "Use tools.", tools: ["read_file"], modelId: "model-1", createdAt: "2026-01-01T00:00:00Z" },
     model: { id: "model-1", workspaceId: "workspace", name: "Model", provider: "faux", modelId: "faux-1" },
   };
@@ -79,7 +78,6 @@ test("the agent schedules prompts from the chat for the session owner, never add
   const admissionId = await sha256("schedule admission");
   const transcript = async () => (await session.view()).entries.map(entry => entry.text).join("\n");
 
-  // The agent lacks the tool, so the owner allows this one call, seeing exactly what it schedules.
   await session.submit(await ticket(id, "submit"), { content: "Every weekday at nine, check the build.", requestId: "create", admissionId }, "write");
   const permission = await pendingApproval(session);
   const fields = { cron: "0 9 * * 1-5", timeZone: "Europe/Berlin", content: "Check the build" };
@@ -93,17 +91,14 @@ test("the agent schedules prompts from the chat for the session owner, never add
   assert.match(requests[0]!.callId, /^[A-Za-z0-9_-]+$/);
   assert.match(await transcript(), /schedule-1/);
 
-  // Without the owner's Auto-approve, an auto-approved schedule is refused before it reaches the control plane.
   await session.submit(await ticket(id, "submit"), { content: "Schedule it with auto-approve.", requestId: "auto", admissionId }, "write");
   await idle(session);
   assert.match(await transcript(), /Only a message the session owner sent with auto-approve schedules an auto-approved prompt/);
-  // A collaborator's message schedules nothing: each run would be the owner's.
   await session.submit(await ticket(id, "submit", "test:bob"), { content: "What is scheduled?", requestId: "bob", admissionId: await sha256("bob admission") }, "write");
   await idle(session);
   assert.match(await transcript(), /Only the session owner's messages schedule prompts/);
   assert.equal(requests.length, 1);
 
-  // The owner's Auto-approve message needs no permission card.
   await session.submit(await ticket(id, "submit"), { content: "Pause it.", requestId: "pause", admissionId, options: { access: "auto" } }, "write");
   await idle(session);
   assert.equal(requests.length, 2);
@@ -116,9 +111,7 @@ test("piki:schedule: the workspace turns the schedule tool off, and a call by na
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests: ScheduleToolRequest[] = [];
   const offered: string[][] = [];
-  // Each message: the model notes the tools it was offered, then calls schedule anyway.
   const listing = (context: { messages: { role: string; toolsAdded?: { name: string }[]; toolsRemoved?: { name: string }[] }[] }) => {
-    // The tools offered now: those the transcript's system messages added, less those they removed since.
     const tools = new Set<string>();
     for (const message of context.messages) {
       if (message.role !== "system") continue;
@@ -153,21 +146,17 @@ test("piki:schedule: the workspace turns the schedule tool off, and a call by na
     await idle(session);
   };
 
-  // A workspace that never chose: on, as before it was switchable.
   await send("never-chose");
   assert.ok(offered[0]!.includes("schedule"));
   assert.equal(requests.length, 1);
 
-  // Turned off: not offered, and a call by name never reaches the control plane.
   answer = { extensions: [{ source: "piki:schedule", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
   await send("off");
   assert.ok(!offered[1]!.includes("schedule"), "the model isn't offered it");
   assert.ok(offered[1]!.includes("read_file"), "the session's other tools stay");
   assert.equal(requests.length, 1);
-  // The harness refuses a tool the message wasn't offered; the tool itself refuses too, for a code mode script's call.
   assert.match(await transcript(), /Tool schedule is not available/);
 
-  // The workspace's choice can't be read: its tools stay on rather than vanish.
   answer = new Error("control plane unreachable");
   await send("unreadable");
   assert.ok(offered[2]!.includes("schedule"));
@@ -175,7 +164,6 @@ test("piki:schedule: the workspace turns the schedule tool off, and a call by na
 });
 
 test("sessionToolsOff: only a session-tool extension the workspace lists turned off turns its tools off, but an opt-in one is off unless listed on", () => {
-  // piki:tunnel is opt-in: off until the workspace lists it enabled.
   assert.deepEqual([...sessionToolsOff([])], ["tunnel"]);
   assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: true }])], ["tunnel"]);
   assert.deepEqual([...sessionToolsOff([{ source: "piki:schedule", enabled: false }])], ["schedule", "tunnel"]);
@@ -195,11 +183,9 @@ test("document sources: each kind has its own switch, source_read is off only on
   const kinds = ["piki:notion", "piki:google-drive", "piki:dropbox", "piki:onedrive", "piki:feishu", "piki:tencent-docs"];
   assert.deepEqual([...documentKindsOff([])], []);
   assert.deepEqual([...documentKindsOff([off("piki:notion")])], ["notion"]);
-  // Whether source_read is off (the opt-in tunnel is off too, until a workspace turns it on).
   const sourcesOff = (workspace: { source: string; enabled: boolean }[]) => sessionToolsOff(workspace).has("source_read");
   assert.equal(sourcesOff([off("piki:notion")]), false, "source_read stays on for the other kinds");
   assert.equal(sourcesOff(kinds.map(off)), true);
-  // Before the split, one switch turned them all off: a workspace that hasn't chosen a kind since follows it.
   assert.equal(sourcesOff([off("piki:sources")]), true);
   assert.deepEqual([...documentKindsOff([off("piki:sources")])].sort(), ["dropbox", "feishu", "google-drive", "notion", "onedrive", "tencent-docs"]);
   assert.deepEqual([...documentKindsOff([off("piki:sources"), { source: "piki:notion", enabled: true }])].sort(), ["dropbox", "feishu", "google-drive", "onedrive", "tencent-docs"]);
@@ -236,18 +222,15 @@ test("bash and host_bash are retired: their switches turn nothing on or off, whi
   t.after(() => service.close());
   const id = "shell-session";
   const value = binding(id);
-  // A stored agent may still name them.
   value.agent.tools = ["bash", "host_bash", "node", "python", "read_file", "write_file", "move_file"];
   const session = await service.provision(value, await ticket(id, "create"));
   const send = async (requestId: string) => {
     await session.submit(await ticket(id, "submit"), { content: "Which tools?", requestId, admissionId: await sha256(requestId) }, "write");
     await idle(session);
   };
-  // Turned on, explicitly, as a workspace may have left them.
   const on = (source: string) => ({ source, enabled: true, tools: "approval" as const, settings: {} });
   current = { extensions: [on("piki:shell"), on("piki:host-shell")], automaticTools: false };
   await send("on");
-  // And off.
   current = { extensions: [{ ...on("piki:shell"), enabled: false }, { ...on("piki:host-shell"), enabled: false }], automaticTools: false };
   await send("off");
   for (const tools of offered) {
@@ -265,7 +248,6 @@ test("the brokered tools have their own switches; the file tools have none that 
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([((context: { systemPrompt?: string; messages: { role: string; content?: unknown; toolsAdded?: { name: string }[] }[] }) => {
     offered = context.messages.flatMap(message => message.role === "system" ? (message.toolsAdded ?? []).map(tool => tool.name) : []);
-    // All the model is given, instructions included, wherever the conversation puts them.
     instructions = JSON.stringify(context);
     return fauxAssistantMessage("Noted.");
   }) as never]);
@@ -289,7 +271,6 @@ test("the brokered tools have their own switches; the file tools have none that 
   await idle(session);
   for (const tool of ["github_read", "github_comment", "github_issue", "github_merge", "source_read", "sessions", "git", "git_push"]) assert.ok(!offered.includes(tool), tool);
   for (const tool of ["node", "read_file", "write_file", "move_file", "search"]) assert.ok(offered.includes(tool), `${tool}: ${offered.join()}`);
-  // Nor are they recommended to it while off (review of #189).
   assert.ok(instructions.includes("To find and read code"), "the instructions were read");
   assert.ok(!instructions.includes("github_read with wait"), "no github_read advice while piki:github is off");
   assert.ok(!instructions.includes("git_push publishes"), "no git_push advice while piki:git is off");

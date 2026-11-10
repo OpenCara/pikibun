@@ -69,11 +69,9 @@ function self(f: Fixture, connector: Connected, path: string, body: unknown) {
   return f.request('POST', `/api/connectors/self/${path}`, body, { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken });
 }
 
-/** Alice's workspace, where Bob is a member and Carol an admin, and Alice's host, shared there. */
 async function team(f: Fixture) {
   const alice = await f.client('alice'); const bob = await f.client('bob'); const carol = await f.client('carol');
   const { workspace } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'Team' }), 201);
-  // Without the extensions every workspace starts with (their own test below), so each test chooses its own.
   f.sqlite.prepare('DELETE FROM workspace_extensions WHERE workspace_id = ?').run(workspace.id);
   await json(await alice.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: bob.user.id, role: 'member' }));
   await json(await alice.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: carol.user.id, role: 'admin' }));
@@ -95,7 +93,6 @@ test('a workspace\'s owners and admins choose its extensions, one version of eac
   await denied(await s.alice.request('PUT', path, { source: 'npm:pi-memory@0.4.2', settings: { key: { nested: true } } }), 400, 'invalid_extension');
   await json(await s.alice.request('PUT', path, { source: 'npm:pi-memory@0.4.2' }));
   await json(await s.carol.request('PUT', path, { source: 'npm:cc-safety-net@2.7.2', tools: 'automatic', settings: { strict: true } }));
-  // A new version of a package takes its entry's place.
   const changed = await json<Listing>(await s.alice.request('PUT', path, { source: 'npm:pi-memory@0.5.0', enabled: false }));
   assert.deepEqual(changed.extensions, [
     { source: 'npm:pi-memory@0.5.0', enabled: false, tools: 'approval', settings: {} },
@@ -108,11 +105,8 @@ test('a workspace\'s owners and admins choose its extensions, one version of eac
     ['npm:cc-safety-net@2.7.2'], 'removing names the package, whatever the version');
   for (let index = 1; index < 32; index++) await json(await s.alice.request('PUT', path, { source: `npm:extension-${index}@1.0.0` }));
   await denied(await s.alice.request('PUT', path, { source: 'npm:one-too-many@1.0.0' }), 409, 'extension_limit');
-  // A session-tool extension switches the session's own tools: turning one off takes none of the workspace's places, and
-  // keeps no tool mode or settings, which mean nothing for it.
   const switched = await json<Listing>(await s.alice.request('PUT', path, { source: 'piki:schedule', enabled: false, tools: 'automatic', settings: { strict: true } }));
   assert.deepEqual(switched.extensions.find(item => item.source === 'piki:schedule'), { source: 'piki:schedule', enabled: false, tools: 'approval', settings: {} });
-  // piki:files offers the tools every session needs: it can't be turned off (#163).
   await denied(await s.alice.request('PUT', path, { source: 'piki:files', enabled: false }), 400, 'invalid_extension');
   await denied(await s.alice.request('PUT', path, { source: 'npm:one-too-many@1.0.0' }), 409, 'extension_limit');
   await json(await s.alice.request('PUT', path, { source: 'npm:extension-1@2.0.0' }), 200);
@@ -126,7 +120,6 @@ test('a host reports its extensions, its owner asks for installs it carries out 
   await json(await s.alice.request('PUT', `/api/workspaces/${s.workspaceId}/extensions`, { source: 'npm:pi-memory@0.4.2' }));
   await json(await s.alice.request('PUT', `/api/workspaces/${s.workspaceId}/extensions`, { source: 'npm:cc-safety-net@2.7.2' }));
   await json(await s.alice.request('PUT', `/api/workspaces/${s.workspaceId}/extensions`, { source: 'npm:pi-web-search@1.7.0', enabled: false }));
-  // The first sync: what it has, nothing asked for yet.
   assert.deepEqual(await json(await self(f, s.connector, 'extensions', { report: report([installed('npm:pi-memory@0.3.0'), installed('local:/home/alice/dev.ts', true)]), results: [] })), { requests: [] });
   await denied(await self(f, s.connector, 'extensions', { report: { installed: [{ source: 'npm:x@latest', dev: false, modules: [] }], remoteInstalls: true }, results: [] }), 400, 'invalid_extensions');
 
@@ -139,26 +132,21 @@ test('a host reports its extensions, its owner asks for installs it carries out 
     { source: 'npm:cc-safety-net@2.7.2', availability: { status: 'missing' } },
   ] }], 'only enabled ones, as the workspace uses them');
   assert.equal(page.report.installed.length, 2, 'its owner sees the dev extension');
-  // Members see where it stands, without its owner's dev paths.
   type Listing = { hosts: { id: string; report?: HostExtensionsReport; availability?: Record<string, ExtensionAvailability> }[] };
   const listed = (await json<Listing>(await s.bob.request('GET', `/api/workspaces/${s.workspaceId}/extensions`))).hosts[0]!;
   assert.deepEqual(listed.report!.installed.map(item => item.source), ['npm:pi-memory@0.3.0']);
   assert.deepEqual(listed.availability!['npm:cc-safety-net@2.7.2'], { status: 'missing' });
 
-  // Only its owner asks; an admin of the workspace can't, and nobody else sees the host's page.
   const requests = `/api/connectors/${id}/extensions/requests`;
   await denied(await s.carol.request('POST', requests, { action: 'install', source: 'npm:cc-safety-net@2.7.2' }), 404, 'not_found');
   await denied(await s.alice.request('POST', requests, { action: 'install', source: 'npm:cc-safety-net@latest' }), 400, 'invalid_extension_request');
   const install = (await json<{ request: { id: string } }>(await s.alice.request('POST', requests, { action: 'install', source: 'npm:cc-safety-net@2.7.2' }), 201)).request;
   assert.equal((await json<{ request: { id: string } }>(await s.alice.request('POST', requests, { action: 'install', source: 'npm:cc-safety-net@2.7.2' }))).request.id, install.id,
     'asking again while it waits is the same request');
-  // Requests wait in the order asked (requested_at, to the millisecond, then their random ids): ask the next one in a
-  // later millisecond, or the two can tie and come back in either order.
   await new Promise(resolve => setTimeout(resolve, 2));
   const update = (await json<{ request: { id: string } }>(await s.alice.request('POST', requests, { action: 'install', source: 'npm:pi-memory@0.4.2' }), 201)).request;
   const answer = await json<{ requests: { id: string; action: string; source: string }[] }>(await self(f, s.connector, 'extensions', { report: page.report, results: [] }));
   assert.deepEqual(answer.requests, [{ id: install.id, action: 'install', source: 'npm:cc-safety-net@2.7.2' }, { id: update.id, action: 'install', source: 'npm:pi-memory@0.4.2' }]);
-  // It reports how they went: one done, one failed, and an id it never got is ignored.
   assert.deepEqual(await json(await self(f, s.connector, 'extensions', {
     report: report([installed('npm:pi-memory@0.3.0'), installed('npm:cc-safety-net@2.7.2')]),
     results: [{ id: install.id, ok: true }, { id: update.id, ok: false, error: 'npm install failed' }, { id: 'someone-elses', ok: true }],
@@ -170,7 +158,6 @@ test('a host reports its extensions, its owner asks for installs it carries out 
   assert.deepEqual(f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'connector.extension.%' ORDER BY created_at, action").all().map(row => row.action).sort(),
     ['connector.extension.failed', 'connector.extension.installed', 'connector.extension.requested', 'connector.extension.requested']);
 
-  // A connector that refuses remote installs isn't asked.
   await json(await self(f, s.connector, 'extensions', { report: report([], false), results: [] }));
   await denied(await s.alice.request('POST', requests, { action: 'remove', source: 'npm:cc-safety-net@2.7.2' }), 409, 'remote_installs_off');
 });
@@ -185,13 +172,11 @@ test('a host reports how its browser stands: its owner sees where it is on the h
   type Listing = { hosts: { id: string; report?: HostExtensionsReport }[] };
   assert.deepEqual((await json<Listing>(await s.bob.request('GET', `/api/workspaces/${s.workspaceId}/extensions`))).hosts[0]!.report!.browser,
     { source: 'path', state: 'ready', downloadable: true });
-  // Nor what went wrong, which names a path its owner gave.
   const missing = { source: 'path', state: 'missing', error: 'Nothing is at /home/alice/clients/acme/chrome', downloadable: true } as const;
   await json(await self(f, s.connector, 'extensions', { report: { ...report([]), browser: missing }, results: [] }));
   assert.deepEqual((await json<HostPage>(await s.alice.request('GET', `/api/connectors/${id}/extensions`))).report.browser, missing);
   assert.deepEqual((await json<Listing>(await s.bob.request('GET', `/api/workspaces/${s.workspaceId}/extensions`))).hosts[0]!.report!.browser,
     { source: 'path', state: 'missing', downloadable: true });
-  // Within bounds, or the whole report is refused; a connector that predates it reports none.
   for (const invalid of [{ ...browser, state: 'broken' }, { ...browser, error: 'x'.repeat(1025) }, { ...browser, extra: true }]) {
     await denied(await self(f, s.connector, 'extensions', { report: { ...report([]), browser: invalid }, results: [] }), 400, 'invalid_extensions');
   }
@@ -209,11 +194,9 @@ test('a host\'s sessions get their workspace\'s extensions and its owner\'s swit
     { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'automatic', settings: {} },
     { source: 'npm:off@1.0.0', enabled: false, tools: 'approval', settings: {} },
   ], automaticTools: false });
-  // Only the host's owner turns the switch.
   await denied(await s.carol.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }), 404, 'not_found');
   await json(await s.alice.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }));
   assert.equal((await json<Answer>(await ask(s.workspaceId))).automaticTools, true);
-  // A workspace the host isn't connected to isn't its to ask.
   const dave = await f.client('dave');
   const { workspace: other } = await json<{ workspace: { id: string } }>(await dave.request('POST', '/api/workspaces', { name: 'Other' }), 201);
   await denied(await ask(other.id), 404, 'not_found');
@@ -252,11 +235,9 @@ test('every workspace starts with popular extensions, turned off, and existing o
   const { workspace } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'New' }), 201);
   const path = `/api/workspaces/${workspace.id}/extensions`;
   assert.deepEqual((await json<{ extensions: WorkspaceExtension[] }>(await alice.request('GET', path))).extensions, expected.map(off));
-  // Turned off, sessions don't run them.
   const sources = await sessionExtensionSources(f.env, { workspace_id: workspace.id, owner_id: alice.user.id, connector_owner_id: alice.user.id });
   assert.deepEqual(expected.map(sources), [false, false, false]);
 
-  // The migration, as it ran on workspaces made before: theirs come first, and a package they use keeps their version.
   const { workspace: older } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'Older' }), 201);
   const { workspace: full } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'Full' }), 201);
   f.sqlite.prepare('DELETE FROM workspace_extensions WHERE workspace_id IN (?, ?)').run(older.id, full.id);
@@ -284,14 +265,11 @@ test('piki:sources, split into one extension per kind of document source, reache
   const kinds = ['piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs'];
   const older = [{ source: 'piki:gh' }, { source: 'piki:sources' }];
   const current = [...older, ...kinds.map(source => ({ source }))];
-  // A connector of this release gets the workspace's choices as they are.
   assert.deepEqual(connectorWorkspaceExtensions([entry('piki:notion', false)], current), [entry('piki:notion', false)]);
-  // An older one: on while any kind is on, as it is for a workspace that never chose.
   assert.deepEqual(connectorWorkspaceExtensions([entry('piki:notion', false)], older), []);
   assert.deepEqual(connectorWorkspaceExtensions([entry('piki:sources', false), entry('piki:notion', true)], older), []);
   assert.deepEqual(connectorWorkspaceExtensions(kinds.map(source => entry(source, false)), older), [entry('piki:sources', false)]);
   assert.deepEqual(connectorWorkspaceExtensions([entry('piki:gh', true), entry('piki:sources', false)], older), [entry('piki:gh', true), entry('piki:sources', false)]);
-  // One that predates session tools gets no switch it can't read.
   assert.deepEqual(connectorWorkspaceExtensions(kinds.map(source => entry(source, false)), [{ source: 'piki:gh' }]), []);
 });
 
@@ -302,16 +280,12 @@ test('a workspace at its 32 extensions that turned a session tool off: connector
   const off = { source: 'piki:schedule', enabled: false, tools: 'approval' as const, settings: {} };
   const gh = { source: 'piki:gh', enabled: true, tools: 'approval' as const, settings: {} };
   const all = [...regular, off];
-  // A connector of this release reports piki:schedule, and its parser takes the 33 entries.
   const current = connectorWorkspaceExtensions(all, [{ source: 'piki:gh' }, { source: 'piki:schedule' }]);
   assert.equal(current.length, 33);
   assert.equal(parseWorkspaceExtensionsAnswer({ extensions: current, automaticTools: false }).extensions.length, 33);
-  // One that knows Pikibun extensions but predates session tools gets the 32 its parser takes.
   assert.deepEqual(connectorWorkspaceExtensions(all, [{ source: 'piki:gh' }]).map(item => item.source), regular.map(item => item.source));
-  // One that predates Pikibun extensions gets none of them.
   assert.deepEqual(connectorWorkspaceExtensions([...regular.slice(0, 31), gh, off], [{ source: 'npm:extension-0@1.0.0' }]).map(item => item.source), regular.slice(0, 31).map(item => item.source));
   assert.deepEqual(connectorWorkspaceExtensions([gh, off], undefined), [], 'a connector that never reported');
-  // Session tools take no place, but regular extensions are still at most 32.
   assert.throws(() => parseWorkspaceExtensions([...regular, { source: 'npm:one-too-many@1.0.0' }]), /Invalid extensions/);
   assert.throws(() => parseWorkspaceExtensions([...regular.slice(1), { source: 'npm:one-too-many@1.0.0' }, { source: 'npm:two-too-many@1.0.0' }, off]), /Invalid extensions/,
     'a session tool\'s place isn\'t one a regular extension can take');
