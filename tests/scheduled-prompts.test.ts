@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { MAX_SCHEDULED_CHILDREN, runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
+import { MAX_SCHEDULED_CHILDREN, archiveFinishedOneShots, runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
 import type { SessionConnections } from '../packages/shared/src/cross-session.js';
 import { CronError, nextCronTime, parseCron } from '../packages/shared/src/cron.js';
 import { sessionStatus } from '../packages/client/src/session-status.js';
@@ -289,6 +289,74 @@ test('a schedule that runs in a new child session starts one each run, as the ow
   assert.equal(f.sqlite.prepare("SELECT status FROM sessions WHERE id = 'filler-race'").get()!.status, 'ready');
 });
 
+test('a child session is one-shot by default: archived once its run is done, unless it failed, someone took it over, or the schedule keeps it open', async t => {
+  const f = await fixture(t);
+  const bad = await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Triage', runIn: 'child', oneShot: 'yes' });
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json() as { code: string }).code, 'invalid_input');
+  const { schedule } = await (await f.owner.request('POST', base, { cron: '0 9 * * *', name: 'Triage', content: 'Triage the new issues', runIn: 'child' })).json() as { schedule: SessionSchedule };
+  assert.equal(schedule.oneShot, true);
+  const run = async () => {
+    const ran = await f.owner.request('POST', `${base}/${schedule.id}/run`);
+    assert.equal(ran.status, 202, await ran.clone().text());
+    return (await ran.json() as { sessionId: string }).sessionId;
+  };
+  const state = (id: string) => f.sqlite.prepare('SELECT status, one_shot FROM sessions WHERE id = ?').get(id)! as { status: string; one_shot: number };
+  const report = (id: string, activity: string) => f.sqlite.prepare('UPDATE sessions SET activity = ? WHERE id = ?').run(activity, id);
+
+  const done = await run();
+  assert.deepEqual({ ...state(done) }, { status: 'ready', one_shot: 1 });
+  assert.deepEqual(await archiveFinishedOneShots(f.env), [], 'not before its run is reported');
+  report(done, 'working');
+  assert.deepEqual(await archiveFinishedOneShots(f.env), []);
+  report(done, 'done');
+  assert.deepEqual(await archiveFinishedOneShots(f.env), [{ sessionId: done, archived: true }]);
+  assert.equal(state(done).status, 'archived');
+  const archived = f.sqlite.prepare("SELECT actor_id, detail_json FROM audit WHERE action = 'session.archived' AND session_id = ?").get(done)!;
+  assert.equal(archived.actor_id, f.owner.user.id);
+  assert.deepEqual((({ oneShot, scheduleId }) => ({ oneShot, scheduleId }))(JSON.parse(String(archived.detail_json)) as { oneShot: boolean; scheduleId: string }),
+    { oneShot: true, scheduleId: schedule.id });
+
+  const failed = await run();
+  report(failed, 'failed');
+  const takenOver = await run();
+  const host = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ error: 'offline', code: 'connector_relay_error' }, { status: 503 });
+  const refusedByHost = await f.owner.request('POST', `/api/sessions/${takenOver}/submit`, { content: 'Also look at the flaky test', requestId: 'by-hand-1' });
+  assert.ok(refusedByHost.status >= 400, String(refusedByHost.status));
+  assert.equal(state(takenOver).one_shot, 1, 'a message its host never took takes nothing over');
+  globalThis.fetch = host;
+  const sent = await f.owner.request('POST', `/api/sessions/${takenOver}/submit`, { content: 'Also look at the flaky test', requestId: 'by-hand' });
+  assert.equal(sent.status, 202, await sent.clone().text());
+  assert.equal(state(takenOver).one_shot, 0, 'a message of someone\'s own takes it over');
+  report(takenOver, 'done');
+  assert.deepEqual(await archiveFinishedOneShots(f.env), []);
+  assert.deepEqual([state(failed).status, state(takenOver).status], ['ready', 'ready'], 'a failed run, and one taken over, stay open');
+
+  const raced = await run();
+  report(raced, 'done');
+  f.setBeforeQuery(sql => {
+    if (!sql.startsWith('UPDATE sessions SET one_shot = 0 WHERE id = ? AND one_shot = 1 AND activity')) return;
+    f.setBeforeQuery(undefined);
+    f.sqlite.prepare('UPDATE sessions SET one_shot = 0 WHERE id = ?').run(raced);
+  });
+  assert.deepEqual(await archiveFinishedOneShots(f.env), [{ sessionId: raced, skipped: true }], 'taken over as the sweep came to it');
+  assert.equal(state(raced).status, 'ready');
+
+  const unarchived = await f.owner.request('POST', `/api/sessions/${done}/unarchive`);
+  assert.equal(unarchived.status, 200, await unarchived.clone().text());
+  assert.deepEqual({ ...state(done) }, { status: 'ready', one_shot: 0 });
+  assert.deepEqual(await archiveFinishedOneShots(f.env), [], 'unarchived, it stays open');
+
+  const kept = await f.owner.request('PATCH', `${base}/${schedule.id}`, { oneShot: false });
+  assert.equal((await kept.json() as { schedule: SessionSchedule }).schedule.oneShot, false);
+  const open = await run();
+  assert.equal(state(open).one_shot, 0);
+  report(open, 'done');
+  assert.deepEqual(await archiveFinishedOneShots(f.env), []);
+  assert.equal(state(open).status, 'ready');
+});
+
 test('schedules due together for one session send one message; the rest find it busy', async t => {
   const f = await fixture(t);
   const first = (await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'One' })).json() as { schedule: SessionSchedule }).schedule;
@@ -358,7 +426,7 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   }
   for (const [bad, code] of [[{ ...create, cron: '* * * * *' }, 'invalid_cron'], [{ ...create, timeZone: 'Mars/Olympus' }, 'invalid_time_zone'],
     [{ ...create, extra: 1 }, 'invalid_input'], [{ ...create, action: 'run' }, 'invalid_input'], [{ action: 'update' }, 'invalid_input'],
-    [{ action: 'list', cron: '0 9 * * *' }, 'invalid_input'], [{ ...create, enabled: 'yes' }, 'invalid_input'], [{ ...create, runIn: 'elsewhere' }, 'invalid_input'],
+    [{ action: 'list', cron: '0 9 * * *' }, 'invalid_input'], [{ ...create, enabled: 'yes' }, 'invalid_input'], [{ ...create, runIn: 'elsewhere' }, 'invalid_input'], [{ ...create, oneShot: 'yes' }, 'invalid_input'],
     [{ ...create, runIn: 1 }, 'invalid_input']] as const) {
     await refused(tool(write, bad), 400, code);
   }

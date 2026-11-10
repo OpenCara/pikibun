@@ -122,6 +122,7 @@ export interface SessionSchedule {
   content: string;
   access: AccessMode;
   runIn?: ScheduleRunIn;
+  oneShot?: boolean;
   enabled: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
@@ -320,6 +321,7 @@ export interface ScheduleToolRequest {
   content?: string;
   access?: AccessMode;
   runIn?: ScheduleRunIn;
+  oneShot?: boolean;
   enabled?: boolean;
 }
 export type ScheduleToolResult = { schedules: SessionSchedule[] } | { schedule: SessionSchedule } | { deleted: string };
