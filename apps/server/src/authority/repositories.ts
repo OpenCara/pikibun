@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from './access.js';
 import type { Hono } from 'hono';
 import type { GitProvider, ProviderRepository, ProviderRepositoryList, SessionRepository, TokenGitProvider, WorkspaceRepository, WorkspaceRepositoryList } from '../../../../packages/shared/src/repositories.js';
 import { gitProviderNames, gitProviders, repositoryLimits, repositoryPath, validRepositoryId, validRepositoryName } from '../../../../packages/shared/src/repositories.js';
@@ -249,7 +250,7 @@ export function registerRepositories(app: Hono<AppEnv>): void {
         values: [access.account.credential.id, actor, access.account.ciphertext, testMode(c.env) ? 1 : 0] };
     const results = await c.env.DB.batch([
       c.env.DB.query(`INSERT INTO workspace_repositories (id,workspace_id,provider,host,repository_id,full_name,ref,private,created_at)
-      SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))
+      SELECT ?,?,?,?,?,?,?,?,? WHERE ${workspaceAdminSQL}
       AND ${authority.sql}
       AND (SELECT COUNT(*) FROM workspace_repositories WHERE workspace_id = ?) < 5
       AND NOT EXISTS (SELECT 1 FROM workspace_repositories WHERE workspace_id = ? AND provider = ? AND host = ?
@@ -272,7 +273,7 @@ export function registerRepositories(app: Hono<AppEnv>): void {
     if (Object.keys(input).some(key => key !== 'enabled') || typeof input.enabled !== 'boolean') fail(400, 'invalid_lfs_setting', 'Set enabled to true or false.');
     const saved = await c.env.DB.query(`INSERT INTO repository_lfs_settings (binding_id, workspace_id, enabled, updated_by, updated_at)
       SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM workspace_repositories WHERE id = ? AND workspace_id = ?)
-      AND EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))
+      AND ${workspaceAdminSQL}
       ON CONFLICT (binding_id) DO UPDATE SET enabled = excluded.enabled, updated_by = excluded.updated_by, updated_at = excluded.updated_at
         WHERE repository_lfs_settings.workspace_id = excluded.workspace_id
       RETURNING binding_id`)
@@ -288,7 +289,7 @@ export function registerRepositories(app: Hono<AppEnv>): void {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
     await c.env.DB.query(`DELETE FROM workspace_repositories WHERE id = ? AND workspace_id = ?
-      AND EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`)
+      AND ${workspaceAdminSQL}`)
       .bind(identifier(c.req.param('repositoryId')), workspaceId, workspaceId, actor).run();
     return c.body(null, 204);
   });

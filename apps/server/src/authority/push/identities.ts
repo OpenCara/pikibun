@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from '../access.js';
 import type { Hono } from 'hono';
 import type { GitProvider } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviders, pushIdentityKindsByProvider } from '../../../../../packages/shared/src/repositories.js';
@@ -21,7 +22,7 @@ const stateTtl = 10 * 60 * 1000;
 const opaqueToken = /^[A-Za-z0-9_-]{43}$/;
 const printable = /^[\x21-\x7e]{1,255}$/;
 const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 const configFields: Record<PushIdentityKind, readonly (readonly [string, RegExp, boolean])[]> = {
   'github-app': [['appId', /^[1-9]\d{0,15}$/, false], ['slug', /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/, false]],
   'entra-federation': [['tenantId', guid, true], ['clientId', guid, true]],

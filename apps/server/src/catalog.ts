@@ -1,3 +1,4 @@
+import { workspaceManagerRolesSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import { assignableWorkspaceRoles, retiredToolNames, toolNames } from '../../../packages/shared/src/types.js';
 import type { AnyToolName, AssignableWorkspaceRole, Workspace, WorkspaceRole } from '../../../packages/shared/src/types.js';
@@ -266,7 +267,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     const result = await c.env.DB.batch<Omit<Workspace, 'personal'> & { personal: number }>([
       c.env.DB.query<never>(`UPDATE workspaces SET name = ?
         WHERE id = ? AND EXISTS (SELECT 1 FROM workspace_members actor
-          WHERE actor.workspace_id = workspaces.id AND actor.user_id = ? AND actor.role IN ('owner', 'admin'))`)
+          WHERE actor.workspace_id = workspaces.id AND actor.user_id = ? AND actor.role IN (${workspaceManagerRolesSQL}))`)
         .bind(name, workspaceId, actorId),
       auditAfterChange(c.env, actorId, 'workspace.renamed', workspaceId, {}),
       c.env.DB.query<Omit<Workspace, 'personal'> & { personal: number }>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
@@ -424,7 +425,7 @@ export function registerCatalog(app: Hono<AppEnv>): void {
     const result = await c.env.DB.batch<ModelRow>([
       c.env.DB.query<ModelRow>(`INSERT INTO models (id, workspace_id, name, provider, model_id, created_at)
         SELECT ?, member.workspace_id, ?, ?, ?, ? FROM workspace_members member
-        WHERE member.workspace_id = ? AND member.user_id = ? AND member.role IN ('owner', 'admin')
+        WHERE member.workspace_id = ? AND member.user_id = ? AND member.role IN (${workspaceManagerRolesSQL})
         RETURNING *`).bind(modelId, name, provider, providerModelId, now(), workspaceId, actorId),
       auditAfterChange(c.env, actorId, 'model.create', workspaceId, { modelId, provider }),
     ]);

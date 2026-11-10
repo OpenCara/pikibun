@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from './access.js';
 import type { Hono } from 'hono';
 import { hostCapabilities } from './hosts.js';
 import { bindingRemote, gitProviderNames } from '../../../../packages/shared/src/repositories.js';
@@ -23,7 +24,7 @@ import { mintPushToken, mintRepositoryReadToken, type MintedToken } from './push
 import { sessionApis } from './api-access.js';
 import { sourceReadAs, workspaceAccess, workspaceGitAccess } from './workspace-connections.js';
 
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 const uploadRequestBytes = 64 * 1024 * 1024;
 
 interface PolicyRow { mode: NetworkPolicy['mode']; domains_json: string; package_registries: number }

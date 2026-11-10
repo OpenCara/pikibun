@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import { hostCapabilities } from './authority/index.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
@@ -17,7 +18,7 @@ export interface AttachmentSettings {
   maxFileBytes: number;
 }
 
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 
 function settingsOf(row: { max_file_bytes: number | string } | null | undefined): AttachmentSettings {
   const value = Number(row?.max_file_bytes ?? fileUploadLimits.defaultBytes);

@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from '../access.js';
 import type { Hono } from 'hono';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import {
@@ -208,7 +209,7 @@ export function registerSources(app: Hono<AppEnv>): void {
     const limit = () => fail(409, 'source_limit', `A workspace has at most ${sourceLimits.documents} sources besides its repositories.`);
     const results = await c.env.DB.batch([
       c.env.DB.query(`INSERT INTO workspace_sources (id, workspace_id, kind, repository_binding_id, created_at)
-        SELECT ?, ?, ?, NULL, ? WHERE EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))
+        SELECT ?, ?, ?, NULL, ? WHERE ${workspaceAdminSQL}
         AND (SELECT COUNT(*) FROM document_sources WHERE workspace_id = ?) < ?
         AND NOT EXISTS (SELECT 1 FROM document_sources WHERE workspace_id = ? AND kind = ? AND item_id = ?) RETURNING id`)
         .bind(sourceId, workspaceId, kind, created, workspaceId, actor, workspaceId, sourceLimits.documents, workspaceId, kind, item.id),
@@ -238,7 +239,7 @@ export function registerSources(app: Hono<AppEnv>): void {
     if (source.kind === 'git') fail(409, 'invalid_source', 'Remove repositories under Repositories.');
     await c.env.DB.batch([
       c.env.DB.query(`DELETE FROM workspace_sources WHERE id = ? AND workspace_id = ? AND kind <> 'git'
-        AND EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`).bind(sourceId, workspaceId, workspaceId, actor),
+        AND ${workspaceAdminSQL}`).bind(sourceId, workspaceId, workspaceId, actor),
       auditStatement(c.env, actor, 'workspace.source.removed', workspaceId, null, { source: sourceId, kind: source.kind }),
     ]);
     return c.json({ ok: true });

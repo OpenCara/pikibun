@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import type { Database } from './db/types.js';
 import type { AppEnv } from './types.js';
@@ -10,7 +11,7 @@ export interface TranscriptSettings {
   toolOutput: ToolOutput;
 }
 
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 
 interface SettingsRow { paging: number; tool_output: string }
 

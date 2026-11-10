@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from './access.js';
 import type { Hono } from 'hono';
 import type { Database } from '../db/types.js';
 import type { Env, SessionRow, AppEnv } from '../types.js';
@@ -11,7 +12,7 @@ export interface WorkspaceApprovalSettings {
   requesterAutoApprove: boolean;
 }
 
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 
 export async function workspaceApprovalSettings(db: Database, workspaceId: string): Promise<WorkspaceApprovalSettings> {
   const row = await db.query<{ requester_auto_approve: number }>('SELECT requester_auto_approve FROM workspace_approval_settings WHERE workspace_id = ?')

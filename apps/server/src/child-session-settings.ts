@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import type { ChildSessionSettings } from '../../../packages/shared/src/cross-session.js';
 import type { Database } from './db/types.js';
@@ -5,7 +6,7 @@ import type { AppEnv } from './types.js';
 import { auditStatement, requireMember } from './authority/index.js';
 import { fail, identifier, jsonObject, now } from './http.js';
 
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 
 export async function workspaceChildSessionSettings(db: Database, workspaceId: string): Promise<ChildSessionSettings> {
   const row = await db.query<{ child_models: number }>('SELECT child_models FROM workspace_child_session_settings WHERE workspace_id = ?')

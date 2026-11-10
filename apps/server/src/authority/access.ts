@@ -20,11 +20,12 @@ export function sessionCreatorSQL(workspace: string): string {
   return `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ${workspace} AND user_id = ?
     AND role IN (${sessionCreatorRoles.map(role => `'${role}'`).join(', ')}))`;
 }
-const sessionManagerRolesSQL = workspaceManagerRoles.map(role => `'${role}'`).join(', ');
+export const workspaceManagerRolesSQL = workspaceManagerRoles.map(role => `'${role}'`).join(', ');
+export const workspaceAdminSQL = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN (${workspaceManagerRolesSQL}))`;
 export function sessionManagerSQL(session: string): string {
   return `EXISTS (SELECT 1 FROM workspace_members manager JOIN users manager_user ON manager_user.id = manager.user_id
     WHERE manager.workspace_id = ${session}.workspace_id AND manager.user_id = ? AND manager_user.suspended_at IS NULL
-      AND (manager.user_id = ${session}.owner_id OR manager.role IN (${sessionManagerRolesSQL})))`;
+      AND (manager.user_id = ${session}.owner_id OR manager.role IN (${workspaceManagerRolesSQL})))`;
 }
 type SessionPolicyRow = SessionRow & { grants_json: string | null; actor_role: WorkspaceRole };
 
@@ -78,7 +79,7 @@ export async function sessionReaders(env: Env, sessionId: string): Promise<Set<s
   return readers;
 }
 
-const LISTED_SESSIONS_SQL = `(s.owner_id = ? OR s.visibility = 'workspace' OR g.user_id IS NOT NULL OR actor.role IN (${sessionManagerRolesSQL}))`;
+const LISTED_SESSIONS_SQL = `(s.owner_id = ? OR s.visibility = 'workspace' OR g.user_id IS NOT NULL OR actor.role IN (${workspaceManagerRolesSQL}))`;
 
 export async function listSessionAccess(env: Env, actorId: string): Promise<SessionAccess[]> {
   const snapshots = await env.DB.query<SessionPolicyRow>(`${SESSION_ACCESS_SQL}

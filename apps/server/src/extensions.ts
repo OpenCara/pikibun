@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import { pikiExtensionOn, pikiExtensions, pikiSessionToolExtensions } from '../../../packages/shared/src/piki-extensions.js';
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
@@ -34,7 +35,7 @@ function shownReport(report: HostExtensionsReport, ownerView: boolean): HostExte
 
 const coreSources: readonly string[] = pikiSessionToolExtensions().filter(item => item.core).map(item => item.source);
 
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 
 export function connectorWorkspaceExtensions(extensions: readonly WorkspaceExtension[], installed: readonly { source: string }[] | undefined,
   options: { toolDefinitions?: boolean } = {}): WorkspaceExtension[] {

@@ -1,3 +1,4 @@
+import { workspaceAdminSQL } from './access.js';
 import type { Hono } from 'hono';
 import { gitProviderHasForge, gitProviderNames, plainRepositoryPath, repositoryLimits, type GitProvider, type ProviderRepositoryList, type TokenGitProvider } from '../../../../packages/shared/src/repositories.js';
 import { documentKindNames, type DocumentItemType, type DocumentKind } from '../../../../packages/shared/src/sources.js';
@@ -22,7 +23,7 @@ interface ConnectionRow {
 }
 
 const aad = (connectionId: string) => `workspace-connection:${connectionId}`;
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 
 function connectionLabel(family: WorkspaceConnectionFamily, provider: string, host: string): string {
   return family === 'git' ? `${gitProviderNames[provider as GitProvider]} (${host})` : documentKindNames[provider as DocumentKind];
