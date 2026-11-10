@@ -58,33 +58,6 @@ export function TranscriptSettings(props: { workspace: Workspace; admin: boolean
   );
 }
 
-export function ApprovalSettings(props: { workspace: Workspace; admin: boolean }) {
-  const path = () => `/api/workspaces/${segment(props.workspace.id)}/approvals`;
-  const resource = createResource<{ settings: { requesterAutoApprove: boolean } }>(path);
-  const action = createAction();
-  return (
-    <Section title="Approvals" info={<View style={{ gap: 8 }}>
-      <If when={!props.admin}>{adminOnly}</If>
-      <Note>Approved operations run as the session's owner, with their Git and GitHub access. With this on, a session's owner can choose Always approve on an approval card from another member, and that member's later commands, pushes, and GitHub comments and issues in that session run without asking.</Note>
-      <Note>Each owner decides for their own sessions and members, and can stop it in the session panel. Merges, host commands, commands without the host's resource limits, and anything the session doesn't allow yet still ask.</Note>
-      <Note>Turning this off makes those requests ask again in every session; owners' choices are kept and apply again if it's turned back on.</Note>
-    </View>}>
-      <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>
-        <If when={resource.data()}>
-          {data => (
-            <Toggle title="Auto-approve other members' requests" label="Let session owners auto-approve other members' requests" admin={props.admin} busy={action.busy()}
-              value={data().settings.requesterAutoApprove}
-              hint={data().settings.requesterAutoApprove ? "Session owners can choose to always approve another member's requests" : "Only each session's owner can run things without asking, in their own messages"}
-              onChange={next => put(path(), action, resource.refresh, { requesterAutoApprove: next }, next ? "Session owners can now choose Always approve on other members' approval cards."
-                : "Other members' requests ask again everywhere. Session owners' choices are kept for when this is turned back on.")} />
-          )}
-        </If>
-      </ResourceState>
-      <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
-    </Section>
-  );
-}
-
 export function ChildSessionSettings(props: { workspace: Workspace; admin: boolean }) {
   const path = () => `/api/workspaces/${segment(props.workspace.id)}/child-sessions`;
   const resource = createResource<{ settings: ChildSettings }>(path);

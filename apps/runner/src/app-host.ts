@@ -128,7 +128,7 @@ async function start(request: StartRequest): Promise<void> {
   running = current;
   status("starting", { server, unsandboxed, ...(sandbox ? { sandbox } : {}) });
   log("info", unsandboxed
-    ? "Running unsandboxed: approved commands execute directly on this machine."
+    ? "Running unsandboxed: commands execute directly on this machine."
     : backend ? `Experimental ${backend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.`
     : "Sandbox capability is verified per session; production shell stays disabled without provisioned, verified limits.");
   log("info", "Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings › Hosts › this host.");

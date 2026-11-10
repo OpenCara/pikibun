@@ -18,7 +18,7 @@ const origin = 'http://localhost:8787';
 const testSecret = 'extensions-test-secret-not-for-deployment';
 const manifest = {
   models: [{ provider: 'local-native', modelId: 'local/model-v1', name: 'Local model' }],
-  capabilities: { platform: 'linux', sandbox: true, productionShell: false, plainGit: true, extensions: true },
+  capabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, plainGit: true, extensions: true },
 };
 const token = () => Buffer.from(randomBytes(32)).toString('base64url');
 

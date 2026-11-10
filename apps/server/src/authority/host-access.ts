@@ -66,22 +66,12 @@ export function hostCommandSession(row: Pick<SessionRow, 'owner_id' | 'connector
   return { ownerId: row.owner_id, connectorOwnerId: row.connector_owner_id, hostEnvironment: Number(row.host_environment ?? 0) === 1 };
 }
 
-export async function mayDecideHostCommands(env: Env, row: SessionRow, userId: string): Promise<boolean> {
-  return (await hostCommandAuthority(env, row, userId)) !== undefined;
-}
-
 export function ownsSessionHost(row: Pick<SessionRow, 'connector_id' | 'connector_owner_id'>, userId: string): boolean {
   return !!row.connector_id && !!row.connector_owner_id && row.connector_owner_id === userId;
 }
 
-export async function hostOwnerDecides(env: Env, row: Pick<SessionRow, 'connector_id' | 'connector_owner_id'>, userId: string): Promise<boolean> {
-  if (!row.connector_id || !ownsSessionHost(row, userId)) return false;
-  return (await hostCapabilities(env, row.connector_id))?.hostOwnerDecides === true;
-}
-
-export async function mayRequestAction(env: Env, access: SessionAccess, actorId: string, action: RunnerAction, permission: Permission): Promise<boolean> {
-  if (hasPermission(access.permissions, permission)) return true;
-  return action === 'approve' && await hostOwnerDecides(env, access.row, actorId);
+export async function mayRequestAction(_env: Env, access: SessionAccess, _actorId: string, _action: RunnerAction, permission: Permission): Promise<boolean> {
+  return hasPermission(access.permissions, permission);
 }
 
 export async function connectorAdmins(env: Env, connectorId: string): Promise<ConnectorAdmin[]> {

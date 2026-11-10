@@ -23,7 +23,7 @@ const hostOf = (origin: string) => { try { return new URL(origin).host; } catch 
 
 setUnsandboxedConsent((warning, server, missing) => confirm({
   title: `Run ${hostOf(server)}'s agent work directly on ${computerName}?`,
-  message: `${missing.length ? `The isolated sandbox needs ${missing.join(", ")}, so the host would run unsandboxed.\n\n` : ""}${warning || "Approved commands run as you, with access to your files, credentials and network, and no resource limits."}`,
+  message: `${missing.length ? `The isolated sandbox needs ${missing.join(", ")}, so the host would run unsandboxed.\n\n` : ""}${warning || "Commands run as you, as soon as the agent calls them, with access to your files, credentials and network, and no resource limits."}`,
   confirmLabel: "Run unsandboxed",
   destructive: true,
 }));
@@ -192,7 +192,7 @@ function SandboxSection(props: { host: ThisComputerHost; server: string }) {
             options={[{ value: "none", label: "None" }, { value: "seatbelt", label: "macOS sandbox" }]} />
           <Small>{host.sandbox() === "seatbelt"
             ? "Sessions run in macOS's own Seatbelt sandbox, which is experimental (macOS 15 or later with the developer tools: xcode-select --install), or without one, after your consent, while it isn't ready. Each session sees only its own files and reaches the network only through its egress proxy. macOS can't limit a session's memory or processes, so shell commands run only in your own sessions on this host."
-            : "Sessions run directly as you on this Mac, after your consent at each start: approved commands can read and change anything you can. Choose macOS sandbox to isolate them."}</Small>
+            : "Sessions run directly as you on this Mac, after your consent at each start: its commands can read and change anything you can. Choose macOS sandbox to isolate them."}</Small>
           <If when={!stopped()}><Small>Stop the host to change where its sessions run.</Small></If>
           <Feedback error={action.error()} />
         </CardBody>

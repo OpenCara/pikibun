@@ -65,7 +65,7 @@ export function ToolGroups(props: { workspace: Workspace; owner: boolean }) {
   return (
     <>
       <Section title="Tool groups" testID="workspace-tool-groups" info={<View style={{ gap: 8 }}>
-        <Note>A session has the tools of its owner's group, whoever writes in it and whatever access their messages use, Auto-approve included. A tool outside the group is neither offered to the agent nor run.</Note>
+        <Note>A session has the tools of its owner's group, whoever writes in it and whatever access their messages use. A tool outside the group is neither offered to the agent nor run.</Note>
         <Note>Each member's sessions get the tools of their role, unless a workspace owner or admin puts them in a group of the workspace's own. Admins choose the group of collaborators, members and viewers; the owner also chooses admins'. The workspace's owner always has every tool.</Note>
         <Note>These are Pikibun's own tools. The tools of other extensions are switched under Extensions.</Note>
       </View>} action={admin() ? <Button small variant="outline" icon="plus" label="New group" testID="new-tool-group" onPress={() => editing.set("new")} /> : undefined}>

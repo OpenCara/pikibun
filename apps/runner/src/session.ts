@@ -10,7 +10,7 @@ import { getSupportedThinkingLevels, StringEnum, type ClientIdentity, type Messa
 import { arr, bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 import { createRegistry, defineDoc, defineExtension, defineTool, Harness, InboxDoc, type AgentChange, type CompactionSettings, type Cursor, type Conversation, type ConversationId, type EntryId, type EntryRecord, type Extension, type Registry, type Storage, type SubmissionId, type ToolExecutionApi, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, PermissionNeed, PermissionRequest, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, HostCommandLevel, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
+import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOptions, GitHubCommentRequest, GitHubIssueRequest, GitHubIssueResult, GitHubIssueView, GitHubMergeRequest, GitHubMergeResult, GitHubReadRequest, GitPushOperation, HostPushCredential, ModelDefinition, Operation, Permission, PushCompleteRequest, PushCompletionResult, PushCredential, PushCredentialRequest, PushOutcome, HostCommandLevel, RunnerBinding, RunnerTicket, ScheduleToolRequest, ScheduleToolResult, SessionActivity, SessionBranch, SessionFiles, SessionView, SubmitInput, SubmitResult, ThinkingLevel, AnyToolName, WithdrawResult } from "../../../packages/shared/src/types.js";
 import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleRunIns, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../../../packages/shared/src/cron.js";
 import { crossSessionLimits, sessionsToolActions, sessionsToolTarget, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
@@ -59,7 +59,7 @@ import { HelperWorkspace } from "./helper-workspace.js";
 import { SeatbeltBackend } from "./seatbelt.js";
 import { WindowsBackend } from "./windows-sandbox.js";
 import { reportedBranches } from "./clone-branches.js";
-import { answered, ApprovalWaits } from "./session/approval-waits.js";
+import { ApprovalWaits } from "./session/approval-waits.js";
 import { endView, entryImages, entryView, refusedView } from "./session/entries.js";
 import { checkEntryImage, entryIdParts, entryImageRequest, type EntryImage } from "../../../packages/shared/src/entry-images.js";
 import { MessageInputs, prepareMessageImages, type InputImage } from "./session/inputs.js";
@@ -81,7 +81,7 @@ import { applyEdits } from "./edits.js";
 import { compactionFailure, compactionThreshold, configuredCompaction, hostCompaction } from "./compaction.js";
 import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "./model-failure.js";
 import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
-import { autoApprovedCalls, viewApprovals, type StoredApproval } from "./approval-view.js";
+import type { StoredApproval } from "./approval-view.js";
 import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
 import { DirectGit } from "./git-direct.js";
 import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRepository, type GitDirectRequest } from "../../../packages/shared/src/network.js";
@@ -89,7 +89,7 @@ import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import { documentKindNames, type DocumentKind, type GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
-import { memberAutoApproves, requesterAutoApproves, decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
+import { runsOnHost, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
 
 export type Run = {
   key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
@@ -122,7 +122,6 @@ export function messageInput(input: unknown): string {
     || typeof value.entryId !== "string" || value.entryId.length > 64) throw new RunnerError(400, "Invalid message");
   return value.entryId;
 }
-type Grants = { tools: AnyToolName[]; write: boolean; unboundedShell: boolean; audience?: boolean };
 interface RunnerBackup {
   format: "pi-runner-backup-v1";
   binding: RunnerBinding;
@@ -133,27 +132,28 @@ interface RunnerBackup {
   conversationOnly?: true;
   createdAt: string;
 }
-type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Record<string, Run>; approvals: Record<string, StoredApproval>; toolActors: Record<string, { initiatedBy: string; ownerId: string; runKey: string; callId?: string }>; usedTickets?: Record<string, number>; nextSequence?: number; grants?: Grants;
+type Metadata = { binding: RunnerBinding; branches: Branch[]; runs: Record<string, Run>; approvals: Record<string, StoredApproval>; toolActors: Record<string, { initiatedBy: string; ownerId: string; runKey: string; callId?: string }>; usedTickets?: Record<string, number>; nextSequence?: number;
+  /** Session-wide permission grants from before approvals were removed; restores drop them. */
+  grants?: unknown;
   conversationOnlyRestore?: true;
   forkedFrom?: { sessionId: string; entryId: string } };
 const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", version: 1, scope: "session", initial: () => ({ json: "" }), checkpointWhen: () => true });
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
 const readOnlyTools = ["identity", "read_file", "list_files", "search"];
 const WAIT_POLL_MS = 3000;
+const HOST_COMMANDS_RULE = "runs on the host's own machine, outside the sandbox: only in sessions of the host's owner and of members they granted host "
+  + "commands (Settings → Hosts → the host → Host command access), for messages of theirs. Nothing ran.";
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
   + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
-  + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells) and pending approvals; with message_id, also the outcome of a message this session sent it (status, done, reply). "
+  + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells); with message_id, also the outcome of a message this session sent it (status, done, reply). "
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
-  + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access left out, the default: auto where this message is the session owner's own auto-approve one and that session is theirs and sandboxed, else approval; approval: its commands wait for people there; read: inspect only; auto: only in a message the session owner sent with auto-approve, to a session they own); refused while it is busy. "
+  + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access read: inspect only; left out, it acts as that session's tools allow); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
   + "create {message?, title?, model?, thinking?, visibility?, access?, notify?}: start a new session for a sub-task, as the same person, and send it message. Where childModels allows, pick the model (one list returns) and thinking level (for its opening message, which its conversation keeps) to suit the sub-task: a capable model with more thinking for hard work, a fast one with less for simple work; what you leave out, and everything where childModels is off, is this session's current model and thinking level. "
   + "stop {session}: stop that session's current work. archive {session}: archive a session they own or, as the workspace's owner or an admin, any of its sessions. "
   + "With notify, Pikibun sends this session the outcome as a new message once the other session finishes. Delivered messages start with a line naming this session and the sender; "
-  + "chains of messages stop after 3 hops and never loop back to a session they came from; approvals in another session are decided only by people there. "
+  + "chains of messages stop after 3 hops and never loop back to a session they came from. "
   + "Involve other sessions only when the user asked for it or clearly expects it.";
-const DECISION_WAIT_MS = 60 * 60 * 1000;
-const GRANTED_SHELL_DECIDERS = "This command runs without the resource limits its host lacks, on the strength of a host command grant: "
-  + "only the host owner, or a member granted host commands on this host, can decide it";
 function tellsActivity(run: Run): boolean {
   return !run.reverted && !run.withdrawn;
 }
@@ -561,7 +561,7 @@ export class RunnerSession {
       instructions += "\n\nTrusted runtime repository context:\n"
         + "The execution root is the session worktree, which starts empty; file-tool paths are relative to it. This host runs without a sandbox: "
         + "clone the repositories you need into the worktree with plain Git (for example git clone https://github.com/<owner>/<name>), "
-        + "and fetch, switch, commit and push as usual. Git uses this host's own network and credentials, and each command waits for approval."
+        + "and fetch, switch, commit and push as usual. Git uses this host's own network and credentials."
         + (this.#cloneRepositories.length ? `\nThis workspace's repositories: ${this.#cloneRepositories.join(", ")}.` : "");
     } else if (this.#clone) {
       const branch = sessionBranch(this.binding.session);
@@ -571,7 +571,7 @@ export class RunnerSession {
         + "and fetch, switch and create branches as usual. Git reaches this workspace's repositories through the session's egress proxy "
         + "with the session owner's own access; no credentials are needed or available. Commit with Git. "
         + `This session's own branch is ${branch} (also in $PIKIBUN_SESSION_BRANCH): push your work to it with plain git, for example `
-        + `git push origin HEAD:${branch}, in any of the workspace's repositories, without approval. Pushes of other branches are refused there.`
+        + `git push origin HEAD:${branch}, in any of the workspace's repositories. Pushes of other branches are refused there.`
         + (this.#cloneRepositories.length ? `\nThis workspace's repositories: ${this.#cloneRepositories.join(", ")}.` : "")
         + this.lfsInstructions()
         + (this.#cloneFailures.length ? "\nThis session was restored from a backup or moved, and these clones could not be cloned again: "
@@ -580,7 +580,7 @@ export class RunnerSession {
           + "manifest.json; Pikibun tries again when the session next opens, as long as nothing else is at their paths." : "");
       if (this.binding.agent.tools.includes("git_push") && !off.has("git_push"))
         instructions += "\ngit_push publishes a clone's checked-out commit, as it is, to another branch of the workspace repository it was cloned from, "
-          + "with approval: git_push {directory, branch}, where directory is the clone's path in the worktree. Pushes are fast-forward only (never forced); "
+          + "git_push {directory, branch}, where directory is the clone's path in the worktree. Pushes are fast-forward only (never forced); "
           + "if the branch moved, fetch and merge or rebase first. Optionally request a pull request with pull_request {title, body, base?, draft?}; "
           + `to open one from the session branch once you pushed it, call git_push with branch ${branch}. `
           + "With draft: true it opens as a draft; with draft: false it opens ready for review, or marks the branch's open draft ready for review, "
@@ -602,13 +602,13 @@ export class RunnerSession {
       + "missing unless they were made again since. Clone the repositories you need again, and check that a file exists before relying on it.";
     if (this.tools.some(tool => tool.name === "search")) instructions += "\n\nTo find and read code, use search (a regular expression or text across the worktree's files, "
       + "with path, glob and context) and read_file with offset and limit (just the lines around a match) rather than reading whole files: "
-      + "they need no approval and their output is already bounded.";
+      + "their output is already bounded.";
     if (mode !== "ask" && this.tools.some(tool => tool.name === "move_file")) instructions += "\n\nTo move, copy or delete files and directories, "
-      + "use move_file, copy_file and delete_file (write_file makes the directories it needs): they need no approval.";
+      + "use move_file, copy_file and delete_file (write_file makes the directories it needs).";
     if (mode !== "ask" && this.tools.some(tool => tool.name === "git") && !off.has("git")) instructions += "\n\nRun Git with the git tool: "
       + "its arguments as a list, with directory naming the clone, such as git {args: [\"clone\", \"https://github.com/<owner>/<name>\"]}, "
       + "git {args: [\"status\"], directory: \"<name>\"} or git {args: [\"commit\", \"-am\", \"Fix the parser\"], directory: \"<name>\"}. "
-      + "It needs no quoting, and its approval card shows exactly the Git command it runs.";
+      + "It needs no quoting.";
     const missing = mode !== "ask" ? this.missingPrograms(off) : [];
     if (mode !== "ask") for (const definition of defined) {
       if (definition.kind !== "program" || !definition.instructions) continue;
@@ -638,7 +638,7 @@ export class RunnerSession {
       + "browser {url: \"https://example.com/\"}, or for the web app you work on, serve it in the same call, as each call is its own sandboxed command: "
       + "browser {serve: {program: \"pnpm\", args: [\"dev\", \"--port\", \"5173\"], directory: \"<name>\", port: 5173}, url: \"http://localhost:5173/\", "
       + "actions: [{action: \"click\", selector: \"text=Sign in\"}, {action: \"type\", selector: \"#email\", text: \"a@example.com\", submit: true}]}. "
-      + "Use the selectors its answer lists. Its approval card shows exactly the command it runs.";
+      + "Use the selectors its answer lists.";
     else if (mode !== "ask" && browserUnavailable) instructions += `\n\nThis session has no browser tool: ${browserUnavailableText(browserUnavailable)} `
       + "If you're asked to look at or test a web page, say so, and use what you have instead (fetching it, or running its tests).";
     if (mode === "write" && this.tools.some(tool => tool.name === "tunnel") && !off.has("tunnel")) instructions += "\n\nTo put the web app you work on online "
@@ -646,7 +646,7 @@ export class RunnerSession {
       + "tunnel {action: \"start\", serve: {program: \"pnpm\", args: [\"preview\", \"--port\", \"4173\"], directory: \"<name>\", port: 4173}} runs the server "
       + "in the sandbox as a service that keeps running after the call, and answers with its address once Cloudflare gave it one. "
       + "Have the server listen on that port on localhost and accept any Host header (Vite: --host and server.allowedHosts). "
-      + "Each start waits for the approval of the host's owner, and replaces the one online. tunnel {action: \"status\"} gives the address, "
+      + "It starts only for the host's owner or a member they granted host commands, and replaces the one online. tunnel {action: \"status\"} gives the address, "
       + "whether it is connected and the server's last output; tunnel {action: \"stop\"} takes it offline. Stop it once it isn't needed.";
     else if (mode === "write" && tunnelUnavailable) instructions += `\n\nThis session has no tunnel tool: ${tunnelUnavailableText(tunnelUnavailable)} `
       + "If you're asked to put a web app online, say so.";
@@ -844,48 +844,13 @@ export class RunnerSession {
   }
 
   private async mutate(change: (state: Metadata) => void): Promise<void> {
-    let committed: Metadata | undefined;
     await this.root.commit(async tx => {
       const doc = await tx.doc(RunnerState);
       const state = JSON.parse(doc.json) as Metadata;
       change(state);
       doc.json = JSON.stringify(state);
-      committed = state;
     }, context);
     this.#activity?.changed();
-    if (committed) this.#waits.settle(committed.approvals);
-  }
-
-  private async awaitCard(id: string, waiting: Context, deadline: number): Promise<ApprovalRecord> {
-    const waiter = this.#waits.waiter(id);
-    const current = (await this.metadata()).approvals[id];
-    if (current && answered(current)) {
-      this.#waits.forget(id);
-      return current;
-    }
-    const interrupt = (result: string) => this.mutate(meta => {
-      const pending = meta.approvals[id];
-      if (pending?.status === "pending") Object.assign(pending, { status: "interrupted", result });
-    });
-    const expiry = setTimeout(() => void interrupt("The session owner did not answer within an hour of the message.").catch(() => {}), Math.max(0, deadline - Date.now()));
-    expiry.unref();
-    try { return await awaitWithContext(waiter.promise, waiting); }
-    catch (error) {
-      this.#waits.forget(id);
-      await interrupt("The tool call stopped before a decision.").catch(() => {});
-      throw error;
-    } finally { clearTimeout(expiry); }
-  }
-
-  private async operationOutcome(approval: ApprovalRecord, waiting: Context): Promise<ApprovalRecord> {
-    if (answered(approval)) {
-      this.#waits.forget(approval.id);
-      return this.#waits.whole(approval);
-    }
-    const state = await this.metadata();
-    const actor = state.toolActors[approval.id.slice("tool-".length)];
-    const run = actor && state.runs[actor.runKey];
-    return this.#waits.whole(await this.awaitCard(approval.id, waiting, (run?.submittedAt ?? Date.now()) + DECISION_WAIT_MS));
   }
 
   private reportBranches(): void {
@@ -1196,7 +1161,7 @@ export class RunnerSession {
 
   /**
    * The tool group of the session's owner, where it leaves out some of Pikibun's tools: a ceiling on the session's tools, for
-   * every message, Auto-approve included. It follows the last answer the connector read, however old, so a failed fetch
+   * every message. It follows the last answer the connector read, however old, so a failed fetch
    * lifts nothing; and until the connector has read one, the session only reads its files.
    */
   private async ownerToolGroup(): Promise<MemberToolGroup | undefined> {
@@ -1341,17 +1306,17 @@ export class RunnerSession {
     const operation: ExtensionToolOperation = { kind: "extension.tool", source: call.source, tool: call.tool,
       arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
       digest: createHash("sha256").update(json).digest("hex") };
-    let approval = await this.createApproval(attribution.initiatedBy, operation, String(call.api.taskId),
-      { permitted: true, automatic: item.workspace?.tools === "automatic" && automaticTools });
-    if (approval.status === "pending") approval = await this.operationOutcome(approval, call.context);
-    if (approval.status === "denied") throw new RunnerError(403, `${call.tool} wasn't approved. Nothing ran.`);
-    if (approval.status !== "approved" && approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
+    // Extension tools run on the host's own machine: for its owner and members they granted host commands, with their API
+    // credentials; for anyone else only where the host's owner lets every session run them (automatic tools), without.
+    const trusted = await this.hostCommandsAllowed(attribution.initiatedBy);
+    if (!trusted && !automaticTools) throw new RunnerError(403, `${call.tool} comes from an extension, which ${HOST_COMMANDS_RULE}`);
+    const approval = await this.runOperation(attribution.initiatedBy, operation, String(call.api.taskId), { hostChecked: true });
+    if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? `${call.tool} didn't run.`);
     const id = approval.id;
-    await this.mutate(meta => { const card = meta.approvals[id]; if (card?.status === "approved") card.status = "executing"; });
     await this.recheckTool(attribution);
     const limits = commandLimits((await this.hostConfig()).commandTimeoutSeconds);
     const callId = String(call.api.callId);
-    this.#pikiCalls.set(callId, { write: !(item.workspace?.tools === "automatic" && automaticTools), attribution });
+    this.#pikiCalls.set(callId, { write: trusted, attribution });
     try {
       const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
       const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
@@ -1396,17 +1361,9 @@ export class RunnerSession {
     }
     if (value.access !== undefined) {
       if (!accessModes.includes(value.access as never) || mode !== "write") throw invalid();
-      if (value.access === "auto" && actorId !== this.binding.owner.id
-        && (await this.authorize(actorId, "write", undefined, false, false, false, false, true)).memberAutoApprove !== true) {
-        throw new RunnerError(403, "Only the session owner, or a workspace owner, admin or collaborator who can write to the session, can auto-approve");
-      }
-      options.access = value.access as ChatOptions["access"];
+      if (value.access === "read") options.access = "read";
     }
-    if (value.autoMerge !== undefined) {
-      if (typeof value.autoMerge !== "boolean" || (value.autoMerge && options.access !== "auto")) throw invalid("Auto-merge needs Auto-approve");
-      if (value.autoMerge && actorId !== this.binding.owner.id) throw invalid("Only the session owner's Auto-approve merges without asking");
-      if (value.autoMerge) options.autoMerge = true;
-    }
+    if (value.autoMerge !== undefined && typeof value.autoMerge !== "boolean") throw invalid();
     return Object.keys(options).length ? options : undefined;
   }
 
@@ -1631,13 +1588,6 @@ export class RunnerSession {
       const runs = Object.values((await this.metadata()).runs).filter(run => ["queued", "admitting", "running"].includes(run.status));
       await this.mutate(meta => {
         for (const run of runs) Object.assign(meta.runs[run.key]!, { status: "interrupted", stopped: { by: ticket.actorId, ...(run.status === "queued" ? {} : { pending: true }) } });
-        const keys = new Set(runs.map(run => run.key));
-        for (const [taskId, actor] of Object.entries(meta.toolActors)) {
-          if (!keys.has(actor.runKey)) continue;
-          for (const card of [meta.approvals[`tool-${taskId}`], meta.approvals[`permission-${taskId}`], meta.approvals[`permission-${taskId}_audience`]]) {
-            if (card?.status === "pending") Object.assign(card, { status: "interrupted", result: "The tool call stopped before a decision." });
-          }
-        }
       });
       await this.#inputs.discard(runs.filter(run => run.images && run.submissionId === undefined).map(run => run.key));
       return runs;
@@ -1714,7 +1664,7 @@ export class RunnerSession {
     return (!!this.config.resources && !this.config.sandboxBackend) || (!this.#onHost && this.config.sandboxBackend?.kind === "windows") || this.#onHost || (this.binding.model.provider === "faux" && this.config.allowFaux && this.config.allowTestShell === true);
   }
 
-  private async requireHostEnvironment(automatic = false): Promise<void> {
+  private async requireHostEnvironment(): Promise<void> {
     if (!this.#hostSession) return;
     if (this.binding.session.connectorOwnerId === this.binding.owner.id) return;
     if (!(await this.hostConfig()).hostSessions) {
@@ -1725,9 +1675,6 @@ export class RunnerSession {
     if (result.hostSessions !== true) {
       throw new RunnerError(403, "The session's owner may no longer run sessions directly on this host: the grant that let them has ended. "
         + "Nothing ran. Start a new session to work in the sandbox.");
-    }
-    if (automatic && result.hostCommands !== "auto") {
-      throw new RunnerError(403, "This session runs directly on its host, and its owner no longer holds automatic host commands there: commands need approval. Nothing ran.");
     }
   }
 
@@ -1752,64 +1699,33 @@ export class RunnerSession {
     return { ownerId: this.binding.owner.id, connectorOwnerId: this.binding.session.connectorOwnerId, hostEnvironment: this.#hostSession };
   }
 
-  private async requireHostDecider(actorId: string, approval: Pick<StoredApproval, "operation" | "unbounded">): Promise<void> {
-    if (!decidedAsHostCommand(approval.operation, this.hostCommandSession(), approval.unbounded === true)) return;
-    if (await this.hostCommandLevel(actorId, "approve")) return;
-    throw new RunnerError(403, approval.operation.kind === "host.bash" ? "Only the host owner, or a member granted host commands on this host, can decide a host command"
-      : this.#hostSession ? "This session runs directly on its host: only the host owner, or a member granted host commands on this host, can decide its commands"
-      : GRANTED_SHELL_DECIDERS);
+  /**
+   * Whether this person may run what runs on the host's own machine, outside the sandbox (extension tools, the commands of a
+   * session run directly on its host, commands on a host without resource limits): the host's owner, and members they
+   * granted host commands. Both the session's owner and the message's sender must be, as it runs as the one for the other.
+   */
+  private async hostCommandsAllowed(actorId: string): Promise<boolean> {
+    for (const id of new Set([this.binding.owner.id, actorId])) if (!await this.hostCommandLevel(id, "write")) return false;
+    return true;
   }
 
-  private async requireShellGrant(automatic = false): Promise<void> {
-    const level = this.binding.session.connectorOwnerId ? await this.hostCommandLevel(this.binding.owner.id, "write") : undefined;
-    if (!level) {
-      throw new RunnerError(403, "This host has no resource limits for commands, so it runs them only in sessions of its owner and of members they granted "
-        + "host commands (Settings → Hosts → the host → Host command access). Nothing ran.");
-    }
-    if (automatic && level !== "auto") {
-      throw new RunnerError(403, "This host has no resource limits for commands, and the session's owner no longer holds automatic host commands there: "
-        + "commands need approval. Nothing ran.");
-    }
+  private async requireHostCommands(actorId: string, what: string): Promise<void> {
+    if (!await this.hostCommandsAllowed(actorId)) throw new RunnerError(403, `${what} ${HOST_COMMANDS_RULE}`);
   }
 
-  private async permit(api: ToolExecutionApi, waiting: Context, tool: AnyToolName, target: string, effect: { write?: boolean; shell?: boolean; audience?: boolean } = {}): Promise<{ unbounded: boolean }> {
+  /**
+   * Whether a tool call may go on, before it acts: never once its message's sender may no longer write, and never what changes
+   * anything in a Read-only message. Nobody is asked: a call either runs or is refused.
+   */
+  private async checkCall(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean } = {}): Promise<{ unbounded: boolean }> {
     const state = await this.metadata();
     const actor = state.toolActors[String(api.taskId)];
     const run = actor && state.runs[actor.runKey];
     if (!run) throw new RunnerError(403, "Tool has no authorized writable submission");
-    const grants = state.grants;
-    const needs: PermissionNeed[] = [];
-    if (effect.audience) {
-      if (!grants?.audience) needs.push("audience");
-    } else {
-      if (!this.binding.agent.tools.includes(tool) && !(tool !== "host_bash" && grants?.tools.includes(tool))) needs.push("tool");
-      if (effect.write && run.options?.access === "read" && !grants?.write) needs.push("write");
+    if (effect.write && run.options?.access === "read") {
+      throw new RunnerError(403, `${tool} changes things, which a Read-only message doesn't do: ask in a message that may act. Nothing ran.`);
     }
-    const unbounded = effect.shell === true && !this.shellAllowed();
-    if (unbounded) {
-      if (grantedShell(this.hostCommandSession())) await this.requireShellGrant();
-      if (!grants?.unboundedShell) needs.push("unbounded-shell");
-    }
-    if (!needs.length) return { unbounded };
-    if (run.options?.access === "auto" && run.mode === "write" && run.initiatedBy === this.binding.owner.id) return { unbounded };
-    if (this.config.connectorId && !run.admissionId) throw new RunnerError(403, "Approval lacks Worker write admission");
-    const deadline = (run.submittedAt ?? Date.now()) + DECISION_WAIT_MS;
-    if (deadline <= Date.now()) throw new Error("This message is over an hour old, so the session owner can no longer allow this call. Ask them to send a new message.");
-    const id = `permission-${api.taskId}${effect.audience ? "_audience" : ""}`;
-    const shown = target.replaceAll("\0", "");
-    const operation = validateOperation({ kind: "permission", tool, target: shown.length > 8192 ? `${shown.slice(0, 8191)}…` : shown, needs });
-    const request: ApprovalRecord = { id, sessionId: this.binding.session.id, requestedBy: run.initiatedBy, createdAt: new Date().toISOString(), status: "pending", operation,
-      ...(run.admissionId !== undefined ? { admissionId: run.admissionId } : {}) };
-    await this.mutate(meta => { meta.approvals[id] ??= request; });
-    const decided = await this.awaitCard(id, waiting, deadline);
-    if (decided.status === "denied") throw new Error(`The session owner did not allow ${tool}${target ? ` on ${target}` : ""}.`);
-    if (decided.status !== "approved") throw new Error(decided.result ?? "The permission request ended before the session owner answered.");
-    return { unbounded };
-  }
-
-  private coveredBy(request: PermissionRequest, grants: Grants): boolean {
-    return request.needs.every(need => need === "tool" ? this.binding.agent.tools.includes(request.tool) || (request.tool !== "host_bash" && grants.tools.includes(request.tool))
-      : need === "write" ? grants.write : need === "audience" ? grants.audience === true : grants.unboundedShell);
+    return { unbounded: effect.shell === true && !this.shellAllowed() };
   }
 
   private buildTools(): ToolRegistration[] {
@@ -1819,13 +1735,13 @@ export class RunnerSession {
 
   private clonePushTool(): ToolRegistration {
     const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
-    return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. pull_request.draft true opens it as a draft; false opens it ready for review, or marks the branch's open draft ready for review with this title and body. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first. Waits for an exact human approval unless the owner enabled auto-approve for this request.", parameters: obj({
+    return defineTool({ name: "git_push", description: "Push the checked-out commit of a clone in the worktree (its directory, such as app) as it is to a branch of the workspace repository it was cloned from, fast-forward only, optionally opening a pull request as the owner. pull_request.draft true opens it as a draft; false opens it ready for review, or marks the branch's open draft ready for review with this title and body. With tag, push no branch: create that tag at the checked-out commit, which must already be on the remote's branch (such as a release tag on main); tags are never moved. Commit with git first.", parameters: obj({
       directory: str(), branch: str(), tag: opt(str()),
       pull_request: opt(obj({ title: str(), body: str(), base: opt(str()), draft: opt(bool()) }, { open: true })),
     }, { open: true }), execute: async (args, api, call) => {
       await this.requireSessionTool("git_push");
       const attribution = await this.toolActor(api, true);
-      await this.permit(api, call, "git_push", args.tag === undefined ? `${args.directory} → ${args.branch}` : `${args.directory} → tag ${args.tag} on ${args.branch}`, { write: true });
+      await this.checkCall(api, "git_push", { write: true });
       if (!validCloneDirectory(args.directory)) throw new RunnerError(400, "directory must be a clone's path in the worktree, such as app or src/app");
       if (args.tag !== undefined && !validPushTag(args.tag)) throw new RunnerError(400, "tag must be a plain tag name, such as v1.2.3, not refs/tags/v1.2.3");
       if (args.tag !== undefined && args.pull_request) throw new RunnerError(400, "a tag push opens no pull request");
@@ -1838,7 +1754,7 @@ export class RunnerSession {
         ...(args.tag !== undefined ? { tag: args.tag } : {}), commit: head.commit,
         ...(request ? { pullRequest: { title: request.title, body: request.body, ...(request.base !== undefined ? { base: request.base } : {}),
           ...(request.draft !== undefined ? { draft: request.draft } : {}) } } : {}) };
-      const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, operation, String(api.taskId), { permitted: true }), call);
+      const approval = await this.runOperation(attribution.initiatedBy, operation, String(api.taskId));
       return text({ ...approval, admissionId: undefined });
     } });
   }
@@ -1850,7 +1766,7 @@ export class RunnerSession {
     return [
       defineTool({ name: "identity", description: "Return immutable session owner identity and sanitized session environment, not collaborator credentials.", parameters: obj({}, { open: true }), execute: async (_args, api, call) => {
         const attribution = await this.toolActor(api, false);
-        await this.permit(api, call, "identity", "");
+        await this.checkCall(api, "identity");
         const config = await this.hostConfig();
         const commands = { timeoutSeconds: commandLimits(config.commandTimeoutSeconds).seconds, gpu: config.gpu && !this.#onHost,
           ...(this.#onHost ? { onHost: true } : {}) };
@@ -1859,7 +1775,7 @@ export class RunnerSession {
       defineTool({ name: "read_file", description: "Read a confined worktree file. PNG, JPEG, GIF and WebP images are returned as images, scaled to fit. For a text file, offset (the first line, from 1) and limit (how many lines) read only part of it, and the result says which lines of how many it holds: use search to find where to look, then read around it.",
         parameters: obj({ path: str(), offset: opt(int({ minimum: 1 })), limit: opt(int({ minimum: 1 })) }, { open: true }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
-        await this.permit(api, call, "read_file", args.path);
+        await this.checkCall(api, "read_file");
         const file = await this.sandbox.readContent(args.path, () => this.recheckTool(attribution));
         if ("text" in file && (args.offset !== undefined || args.limit !== undefined)) return text({ ...attribution, ...lineRange(file.text, args.offset, args.limit) });
         if ("text" in file) return text({ ...attribution, content: file.text });
@@ -1873,7 +1789,7 @@ export class RunnerSession {
       } }),
       defineTool({ name: "list_files", description: "List confined worktree files.", parameters: obj({ path: opt(str()) }, { open: true }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, false);
-        await this.permit(api, call, "list_files", args.path ?? "");
+        await this.checkCall(api, "list_files");
         return text({ ...attribution, files: await this.sandbox.listFiles(args.path, () => this.recheckTool(attribution)) });
       } }),
       defineTool({ name: "search", description: "Search the worktree's text files for a regular expression (or, with literal, exact text), line by line, as grep -rn does, without a shell or approval. path narrows it to a directory or one file; glob to file names (*.ts) or paths (apps/**/*.ts); context adds up to 5 lines around each match; ignore_case; max_results (100 by default, at most 500). It skips .git directories as it walks, and node_modules unless all is true; links, binary and non-UTF-8 files and files over 1 MB are skipped. Results give each match's path, line number and text; truncated says it stopped early. Then read_file with offset and limit reads around a match.",
@@ -1884,12 +1800,12 @@ export class RunnerSession {
           let request: SearchRequest;
           try { request = searchRequest(args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid search"); }
           const attribution = await this.toolActor(api, false);
-          await this.permit(api, call, "search", `${request.path}: ${request.pattern}`.slice(0, 1200));
+          await this.checkCall(api, "search");
           return text({ ...attribution, ...await this.sandbox.search(request, () => this.recheckTool(attribution)) });
         } }),
       defineTool({ name: "write_file", description: "Write a confined worktree file. In a read-only request it waits for the session owner to allow it.", executionMode: "sequential", parameters: obj({ path: str(), content: str() }, { open: true }), execute: async (args, api, call) => {
         const attribution = await this.toolActor(api, true);
-        await this.permit(api, call, "write_file", args.path, { write: true });
+        await this.checkCall(api, "write_file", { write: true });
         await this.sandbox.writeFile(args.path, args.content, () => this.recheckTool(attribution));
         return text({ ...attribution, written: args.path });
       } }),
@@ -1898,7 +1814,7 @@ export class RunnerSession {
         parameters: obj({ path: str(), edits: arr(obj({ oldText: str(), newText: str() }, { open: true }), { minItems: 1 }) }, { open: true }),
         execute: async (args, api, call) => {
           const attribution = await this.toolActor(api, true);
-          await this.permit(api, call, "edit_file", args.path, { write: true });
+          await this.checkCall(api, "edit_file", { write: true });
           const recheck = () => this.recheckTool(attribution);
           await this.sandbox.writeFile(args.path, applyEdits(await this.sandbox.readFile(args.path, recheck), args.edits, args.path), recheck);
           return text({ ...attribution, edited: args.path, edits: args.edits.length });
@@ -1912,7 +1828,7 @@ export class RunnerSession {
           let request: FileOperationRequest;
           try { request = fileOperationRequest(name === "move_file" ? "move" : "copy", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
           const attribution = await this.toolActor(api, true);
-          await this.permit(api, call, name, `${args.from} → ${args.to}`.slice(0, 4096), { write: true });
+          await this.checkCall(api, name, { write: true });
           const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
           return text({ ...attribution, ...(name === "move_file" ? { moved: args.from, to: args.to } : { copied: args.from, to: args.to, ...result }) });
         } })),
@@ -1923,11 +1839,11 @@ export class RunnerSession {
           let request: FileOperationRequest;
           try { request = fileOperationRequest("delete", args); } catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : "Invalid file operation"); }
           const attribution = await this.toolActor(api, true);
-          await this.permit(api, call, "delete_file", `${args.path}${args.recursive ? " (recursive)" : ""}`.slice(0, 4096), { write: true });
+          await this.checkCall(api, "delete_file", { write: true });
           const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
           return text({ ...attribution, deleted: args.path, entries: result.entries });
         } }),
-      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: obj({ args: arr(str(), { minItems: 1, maxItems: gitLimits.arguments }), directory: opt(str()) }, { open: true }),
         execute: async (args, api, call) => {
@@ -1938,10 +1854,10 @@ export class RunnerSession {
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid git call"}. Nothing ran.`); }
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
-          const { unbounded } = await this.permit(api, call, "git", `${request.directory}: git ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-          return commandText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call), api, "git");
+          const { unbounded } = await this.checkCall(api, "git", { write: true, shell: true });
+          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { unbounded }, call.abortSignal), api, "git");
         } }),
-      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.`,
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It stops at the host's command time limit.`,
         executionMode: "sequential",
         parameters: obj({ program: StringEnum(pythonPrograms), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
           venv: opt(str()) }, { open: true }),
@@ -1955,8 +1871,8 @@ export class RunnerSession {
           if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
-          const { unbounded } = await this.permit(api, call, "python", `${request.directory}${request.venv ? ` (${request.venv})` : ""}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-          return commandText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call), api, "python");
+          const { unbounded } = await this.checkCall(api, "python", { write: true, shell: true });
+          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { unbounded }, call.abortSignal), api, "python");
         } })]),
       defineTool({ name: "browser", description: "Drive a headless Chromium in the session's sandbox. It opens url (http, https, file, or about:blank; "
         + "without one, the page the last call left), runs actions in order, and answers with the page as it ends: a screenshot, its URL, title, "
@@ -1969,7 +1885,7 @@ export class RunnerSession {
         + "localhost only within the call, so start the web app under test with serve {program, args, directory?, venv?, port}: one of the node and "
         + `python tools' programs (${servePrograms.join(", ")}), checked as those tools check them and started without a shell, which runs from before `
         + "the page opens until the call ends. Each call's screenshots and report are kept in browser-output/, which the session panel's Browser tab shows. "
-        + "It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.",
+        + "It stops at the host's command time limit.",
         executionMode: "sequential",
         parameters: obj({
           url: opt(str()),
@@ -1999,8 +1915,8 @@ export class RunnerSession {
           } catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid browser call"}. Nothing ran.`); }
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
-          const { unbounded } = await this.permit(api, call, "browser", browserTarget(request), { write: true, shell: true });
-          const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { permitted: true, unbounded }, call.abortSignal), call);
+          const { unbounded } = await this.checkCall(api, "browser", { write: true, shell: true });
+          const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "browser", command }, String(api.taskId), { unbounded }, call.abortSignal);
           return this.browserOutcome(approval, () => this.recheckTool(attribution), approvalText);
         } }),
       defineTool({ name: "tunnel", description: "Put the web server you work on online at a public https:// address, through a Cloudflare quick tunnel (https://<name>.trycloudflare.com). "
@@ -2009,7 +1925,7 @@ export class RunnerSession {
         + "listening on port on localhost; once the port answers (within timeout_seconds, 60 by default) cloudflared, on the host, puts it online, and the call answers with the address. "
         + "A start replaces the one online. status gives the address, whether cloudflared is connected, the uptime and the server's last lines of output; stop takes it offline. "
         + "It stays online until stopped, until someone stops the session's work, until the session closes or is archived, or for the host's service lifetime at most. "
-        + "Each start waits for the approval of the host's owner or a member granted host commands, never automatically, and isn't taken in a read-only request. "
+        + "It starts only for the host's owner or a member they granted host commands, and isn't taken in a read-only request. "
         + "Only the declared port is reachable through it, and it is public: anyone with the address can open it.",
         executionMode: "sequential",
         parameters: obj({
@@ -2043,12 +1959,10 @@ export class RunnerSession {
           const operation: ExtensionToolOperation = { kind: "extension.tool", source: "piki:tunnel", tool: "tunnel",
             arguments: json.length > EXTENSION_ARGUMENTS_SHOWN ? `${json.slice(0, EXTENSION_ARGUMENTS_SHOWN)}…` : json,
             digest: createHash("sha256").update(json).digest("hex") };
-          let approval = await this.createApproval(attribution.initiatedBy, operation, String(api.taskId), { permitted: true }, call.abortSignal);
-          if (approval.status === "pending") approval = await this.operationOutcome(approval, call);
-          if (approval.status === "denied") throw new RunnerError(403, "Putting the server online wasn't approved. Nothing ran.");
-          if (approval.status !== "approved") throw new RunnerError(409, approval.result ?? "The tunnel didn't start.");
+          await this.requireHostCommands(attribution.initiatedBy, "Putting a server online with cloudflared");
+          const approval = await this.runOperation(attribution.initiatedBy, operation, String(api.taskId), { hostChecked: true }, call.abortSignal);
+          if (approval.status !== "executing") throw new RunnerError(409, approval.result ?? "The tunnel didn't start.");
           const id = approval.id;
-          await this.mutate(meta => { const card = meta.approvals[id]; if (card?.status === "approved") card.status = "executing"; });
           try {
             await this.recheckTool(attribution);
             const started = await this.sessionTunnel().start(request.serve!, attribution.initiatedBy, call.abortSignal);
@@ -2068,7 +1982,7 @@ export class RunnerSession {
         await this.requireSessionTool("github_read");
         const attribution = await this.toolActor(api, false);
         const repository = this.githubRepository(args.repository);
-        await this.permit(api, call, "github_read", `${repository}#${args.issue}`);
+        await this.checkCall(api, "github_read");
         const state = await this.metadata();
         const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
         if (!run.admissionId) throw new RunnerError(403, "GitHub reads need a write message");
@@ -2083,31 +1997,31 @@ export class RunnerSession {
           pollMs: this.config.githubWaitPollMs ?? githubWaitLimits.pollSeconds * 1000, now: Date.now, sleep: ms => sleep(ms, undefined, { signal: call.abortSignal }) });
         return text({ ...attribution, ...view, waited });
       } }),
-      defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker, once a human approves it, or at once under the owner's auto-approve. Use this where the gh tool can't write (gh pr comment, gh issue comment). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, call) => {
+      defineTool({ name: "github_comment", description: "Post an exact GitHub comment as the session owner through the owner's broker. Use this where the gh tool can't write (gh pr comment, gh issue comment). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), issue: int({ minimum: 1 }), body: str() }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("github_comment");
         const attribution = await this.toolActor(api, true);
-        await this.permit(api, call, "github_comment", `${args.repository}#${args.issue}`, { write: true });
-        return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.comment", ...args }, String(api.taskId), { permitted: true }), call));
+        await this.checkCall(api, "github_comment", { write: true });
+        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.comment", ...args }, String(api.taskId)));
       } }),
-      defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase, once a human approves it, or at once under the owner's auto-approve. Use this where the gh tool can't write (gh pr merge --match-head-commit). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), pull: int({ minimum: 1 }), sha: str(), method: StringEnum(githubMergeMethods) }, { open: true }), execute: async (args, api, call) => {
+      defineTool({ name: "github_merge", description: "Merge a pull request of one of the workspace's github.com repositories (owner/name) as the session owner, through the owner's broker: only while its head is still commit sha, as github_read reports it, with method merge, squash or rebase. Use this where the gh tool can't write (gh pr merge --match-head-commit). The result carries the outcome; no credentials enter tools.", parameters: obj({ repository: str(), pull: int({ minimum: 1 }), sha: str(), method: StringEnum(githubMergeMethods) }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("github_merge");
         const attribution = await this.toolActor(api, true);
         const repository = this.githubRepository(args.repository);
         if (!/^[0-9a-f]{40}$/.test(args.sha)) throw new RunnerError(400, "sha must be the pull request's full 40-character head commit, as github_read reports it");
-        await this.permit(api, call, "github_merge", `${repository}#${args.pull}`, { write: true });
-        return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.merge", repository, pull: args.pull, sha: args.sha, method: args.method }, String(api.taskId), { permitted: true }), call));
+        await this.checkCall(api, "github_merge", { write: true });
+        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.merge", repository, pull: args.pull, sha: args.sha, method: args.method }, String(api.taskId)));
       } }),
-      defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker once a human approves it, or at once under the owner's auto-approve. Use this where the gh tool can't write (gh issue create): the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: obj({ repository: str(), title: str(), body: str() }, { open: true }), execute: async (args, api, call) => {
+      defineTool({ name: "github_issue", description: "Open a GitHub issue with exactly this title (one line) and body (Markdown) in one of the workspace's github.com repositories (owner/name), as the session owner, through the owner's broker. Use this where the gh tool can't write (gh issue create): the sandbox holds no GitHub credentials. The result carries the new issue's number and URL; no credentials enter tools.", parameters: obj({ repository: str(), title: str(), body: str() }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("github_issue");
         const attribution = await this.toolActor(api, true);
         const repository = this.githubRepository(args.repository);
         if (!args.title.trim() || /[\r\n]/.test(args.title) || args.title.length > GITHUB_ISSUE_TITLE_LIMIT) throw new RunnerError(400, `title must be one non-empty line of at most ${GITHUB_ISSUE_TITLE_LIMIT} characters`);
         if (args.body.length > GITHUB_ISSUE_BODY_LIMIT) throw new RunnerError(400, `body must be at most ${GITHUB_ISSUE_BODY_LIMIT} characters`);
         if (args.title.includes("\0") || args.body.includes("\0")) throw new RunnerError(400, "title and body must not contain NUL characters");
-        await this.permit(api, call, "github_issue", `${repository}: ${args.title}`, { write: true });
-        return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.issue", repository, title: args.title, body: args.body }, String(api.taskId), { permitted: true }), call));
+        await this.checkCall(api, "github_issue", { write: true });
+        return approvalText(await this.runOperation(attribution.initiatedBy, { kind: "github.issue", repository, title: args.title, body: args.body }, String(api.taskId)));
       } }),
-      defineTool({ name: "schedule", description: "Manage this session's scheduled prompts: messages Pikibun sends this session's agent on a cron schedule, as the session owner, so the session wakes up and works on its own (a nightly check, a weekly report). Use it when the user asks to do something every hour, day or week, or at a later time. action list takes nothing; create takes message (what the agent is told each time) and cron (five fields: minute hour day-of-month month day-of-week, such as '0 9 * * 1-5'; runs at least 5 minutes apart), and optionally name, time_zone (IANA, such as Europe/Berlin; UTC otherwise, so ask the user for theirs when the time of day matters), access (approval, the default: commands wait for a human; read; auto, only in a message the owner sent with auto-approve), run_in (session, the default: each run prompts this session's agent, and is skipped while it is busy; child: each run starts a new session under this one, on its model and host, with the message as its opening message, so this session is never prompted and its own work goes on), one_shot (for child runs: true, the default, archives each child once its run is done, unless someone sent it a message of their own; false keeps it open) and enabled; update takes id and only the fields to change (an auto-approved schedule is changed, other than paused or lowered in access, only in a message the owner sent with auto-approve); delete takes id. Only the session owner's messages can use it. A run due while the agent is busy is skipped, unless it runs in a child session. The owner sees and edits them in the session panel's Schedules tab.", parameters: obj({
+      defineTool({ name: "schedule", description: "Manage this session's scheduled prompts: messages Pikibun sends this session's agent on a cron schedule, as the session owner, so the session wakes up and works on its own (a nightly check, a weekly report). Use it when the user asks to do something every hour, day or week, or at a later time. action list takes nothing; create takes message (what the agent is told each time) and cron (five fields: minute hour day-of-month month day-of-week, such as '0 9 * * 1-5'; runs at least 5 minutes apart), and optionally name, time_zone (IANA, such as Europe/Berlin; UTC otherwise, so ask the user for theirs when the time of day matters), access (auto, the default: each run acts with the session's tools; read: each run only inspects), run_in (session, the default: each run prompts this session's agent, and is skipped while it is busy; child: each run starts a new session under this one, on its model and host, with the message as its opening message, so this session is never prompted and its own work goes on), one_shot (for child runs: true, the default, archives each child once its run is done, unless someone sent it a message of their own; false keeps it open) and enabled; update takes id and only the fields to change; delete takes id. Only the session owner's messages can use it. A run due while the agent is busy is skipped, unless it runs in a child session. The owner sees and edits them in the session panel's Schedules tab.", parameters: obj({
         action: StringEnum(scheduleToolActions), id: opt(str()), message: opt(str()), cron: opt(str()),
         time_zone: opt(str()), name: opt(str()), access: opt(StringEnum(accessModes)), run_in: opt(StringEnum(scheduleRunIns)), one_shot: opt(bool()), enabled: opt(bool()),
       }, { open: true }), execute: async (args, api, call) => {
@@ -2119,11 +2033,8 @@ export class RunnerSession {
         const state = await this.metadata();
         const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
         if (run.initiatedBy !== this.binding.owner.id) throw new RunnerError(403, "Only the session owner's messages schedule prompts. Ask the owner to send this request, or to add it in the Schedules tab.");
-        if (args.access === "auto" && run.options?.access !== "auto") {
-          throw new RunnerError(403, "Only a message the session owner sent with auto-approve schedules an auto-approved prompt. Use access approval, or ask the owner to set it in the Schedules tab.");
-        }
         if (!run.admissionId) throw new RunnerError(403, "Scheduling needs a write message");
-        await this.permit(api, call, "schedule", scheduleToolTarget({ action: args.action, ...fields }), { write: args.action !== "list" });
+        await this.checkCall(api, "schedule", { write: args.action !== "list" });
         await this.authorize(run.initiatedBy, "write");
         const request: ScheduleToolRequest = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId),
           action: args.action, ...fields };
@@ -2150,21 +2061,14 @@ export class RunnerSession {
         const state = await this.metadata();
         const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
         if (!run.admissionId) throw new RunnerError(403, "The sessions tool needs a write message");
-        if (args.access === "auto" && (run.options?.access !== "auto" || run.initiatedBy !== this.binding.owner.id)) {
-          throw new RunnerError(403, "Only a message the session owner sent with auto-approve sends an auto-approved message. Use access approval, which leaves the other session's commands to its people.");
-        }
         const request = { action: wait ? "read" as const : args.action as Exclude<typeof args.action, "wait">, ...(wait ? { targetSessionId: fields.targetSessionId, messageId: fields.messageId, limit: 1 } : fields) };
-        await this.permit(api, call, "sessions", sessionsToolTarget(request), { write: sessionsWriteActions.includes(args.action) });
+        await this.checkCall(api, "sessions", { write: sessionsWriteActions.includes(args.action) });
         await this.authorize(run.initiatedBy, "write");
         const base = { sessionId: this.binding.session.id, actorId: run.initiatedBy, admissionId: run.admissionId, callId: String(api.taskId) };
         const broker = async (): Promise<SessionsToolResult> => {
           const result = this.config.crossSessions ? await this.config.crossSessions({ ...base, ...request }) : await this.internalBroker("sessions", { ...base, ...request }) as SessionsToolResult;
           if (!("consent" in result)) return result;
-          await this.permit(api, call, "sessions", result.target, { audience: true });
-          await this.authorize(run.initiatedBy, "write");
-          const retried = this.config.crossSessions ? await this.config.crossSessions({ ...base, ...request }) : await this.internalBroker("sessions", { ...base, ...request }) as SessionsToolResult;
-          if ("consent" in retried) throw new RunnerError(409, "The control plane did not see the session owner's decision yet; call again.");
-          return retried;
+          throw new RunnerError(403, `${result.reason} The session's owner can let content pass between sessions whose readers differ under the session's Details. Nothing was sent or read.`);
         };
         if (!wait) return text({ ...attribution, ...await broker() });
         const deadline = Date.now() + (args.timeout_seconds ?? crossSessionLimits.defaultWaitSeconds) * 1000;
@@ -2179,35 +2083,6 @@ export class RunnerSession {
         }
       } }),
     ];
-  }
-
-  private startHostOperation(id: string, operation: HostCommandOperation,
-    auth: { actorId: string; capability?: string; admissionId?: string }, recheck: SandboxAuthorize): Promise<void> {
-    const entry = { controller: new AbortController(), done: Promise.resolve() };
-    const generation = this.generation;
-    entry.done = (async () => {
-      let status: "executed" | "failed" | "interrupted" = "executed";
-      let result: string;
-      try {
-        await recheck();
-        entry.controller.signal.throwIfAborted();
-        const automatic = auth.capability === undefined && auth.admissionId !== undefined;
-        const level = await this.hostCommandLevel(auth.actorId, automatic ? "write" : "approve");
-        if (!level || (automatic && level !== "auto")) throw new RunnerError(403, "Only the host owner, or a member granted host commands on this host, can execute host commands");
-        result = await this.sandbox.executeHost(operation, recheck, entry.controller.signal);
-      } catch (error) {
-        const refused = error instanceof RunnerError && error.status < 500;
-        status = error instanceof SandboxProcessError || refused ? "failed" : "interrupted";
-        result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
-          : refused ? (error as RunnerError).message : "Effect interrupted or outcome unknown. Inspect the session list or host before requesting another operation.";
-      }
-      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
-    })().catch(() => { }).finally(() => {
-      this.pushes.delete(entry);
-      if (generation === this.generation && !this.closing) this.drainQueue();
-    });
-    this.pushes.add(entry);
-    return entry.done;
   }
 
   readonly #definitionNotes = new Set<string>();
@@ -2269,9 +2144,8 @@ export class RunnerSession {
           if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
           const attribution = await this.toolActor(api, true);
           await this.requireHostEnvironment();
-          const { unbounded } = await this.permit(api, call, definition.name, `${request.directory}: ${request.program} ${request.args.join(" ")}`.slice(0, 8192), { write: true, shell: true });
-          const approval = await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId),
-            { permitted: true, unbounded }, call.abortSignal), call);
+          const { unbounded } = await this.checkCall(api, definition.name, { write: true, shell: true });
+          const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId), { unbounded }, call.abortSignal);
           return text(await this.shownApproval(approval, api, definition.name));
         } });
     }
@@ -2289,7 +2163,7 @@ export class RunnerSession {
         let args: Record<string, unknown>;
         try { args = brokeredArguments(definition, input as Record<string, unknown>); }
         catch (error) { throw new RunnerError(400, error instanceof Error ? error.message : `Invalid ${definition.name} call`); }
-        await this.permit(api, call, definition.name, brokeredTarget(definition, args), definition.write ? { write: true } : {});
+        await this.checkCall(api, definition.name, definition.write ? { write: true } : {});
         const state = await this.metadata();
         const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
         if (!run.admissionId) throw new RunnerError(403, `${definition.name} needs a write message`);
@@ -2298,33 +2172,6 @@ export class RunnerSession {
         const result = this.config.brokered ? await this.config.brokered(definition.route, request) : await this.internalBroker(definition.route, request);
         return text({ ...attribution, ...(result && typeof result === "object" && !Array.isArray(result) ? result : { result }) });
       } });
-  }
-
-  private startShellOperation(id: string, operation: Extract<Operation, { kind: "bash" | "program" }>, unbounded: boolean, recheck: SandboxAuthorize): Promise<void> {
-    const entry = { controller: new AbortController(), done: Promise.resolve() };
-    const generation = this.generation;
-    entry.done = (async () => {
-      let status: "executed" | "failed" | "interrupted";
-      let result: string;
-      try {
-        result = await this.sandbox.execute(operation, false, recheck, {
-          allowTestShell: this.binding.model.provider === "faux" && this.config.allowFaux && this.config.allowTestShell === true, unbounded,
-          ...await this.commandOptions(), signal: entry.controller.signal,
-        });
-        status = "executed";
-      } catch (error) {
-        const refused = error instanceof RunnerError && error.status < 500;
-        status = error instanceof SandboxProcessError || refused ? "failed" : "interrupted";
-        result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
-          : refused ? (error as RunnerError).message : "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited.";
-      }
-      if (generation === this.generation) await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
-    })().catch(() => { }).finally(() => {
-      this.pushes.delete(entry);
-      if (generation === this.generation && !this.closing) this.drainQueue();
-    });
-    this.pushes.add(entry);
-    return entry.done;
   }
 
   private githubRepository(name: string): string {
@@ -2369,10 +2216,16 @@ export class RunnerSession {
     return value;
   }
 
-  async createApproval(actorId: string, input: Operation, toolTaskId?: string, consent: { permitted?: boolean; unbounded?: boolean; automatic?: boolean } = {}, signal?: AbortSignal): Promise<ApprovalRecord> {
+  /**
+   * Runs a tool call's operation at once, as the session owner, where the rules let it: nobody is asked. What runs on the host's
+   * own machine (the commands of a session run directly on its host, commands on a host without resource limits in someone
+   * else's session, extension tools) runs only for the host's owner and members they granted host commands (hostCommandsAllowed);
+   * callers that checked that themselves pass hostChecked. Its record keeps the outcome, which the tool call returns.
+   */
+  async runOperation(actorId: string, input: Operation, toolTaskId: string, consent: { unbounded?: boolean; hostChecked?: boolean } = {}, signal?: AbortSignal): Promise<StoredApproval> {
     this.requireUnfrozen();
     const operation = validateOperation(input);
-    if (operation.kind === "permission") throw new RunnerError(400, "Permission requests come only from tool calls");
+    if (operation.kind === "permission") throw new RunnerError(400, "Permission requests were removed: a session runs its tools or refuses them");
     if (operation.kind === "git.commit" || operation.kind === "git.repin" || (operation.kind === "git.push" && operation.directory === undefined)) {
       throw new RunnerError(400, "Commit and switch branches with the git tool; a push names a clone's directory");
     }
@@ -2381,73 +2234,40 @@ export class RunnerSession {
     if (operation.kind === "extension.tool" && (!this.config.connectorId || !this.binding.session.connectorOwnerId)) {
       throw new RunnerError(403, "Host commands require a connected host with a known owner");
     }
-    if (operation.kind === "extension.tool" && (!consent.permitted || toolTaskId === undefined)) throw new RunnerError(400, "Extension tool calls come only from their tools");
     if (operation.kind === "git.push" && !this.#clone) throw new RunnerError(400, "Only clone sessions push a clone's directory");
     if (operation.kind === "git.push" && !this.#egress) throw new RunnerError(400, "On a host without the sandbox, push with the git tool");
-    const toolName = operation.kind === "extension.tool" ? undefined : operation.kind === "program" ? operation.tool : ({ "git.commit": "git_commit", bash: "bash", "github.comment": "github_comment", "github.merge": "github_merge", "github.issue": "github_issue", "git.push": "git_push", "git.repin": "git_repin", "host.bash": "host_bash" } as const)[operation.kind];
-    if (!consent.permitted && (toolName === undefined || (!this.binding.agent.tools.includes(toolName)
-      && !(await this.metadata()).grants?.tools.includes(toolName)))) {
-      throw new RunnerError(403, "Operation not enabled by pinned agent version");
-    }
     await this.authorize(actorId, "write");
-    let admissionId: string | undefined;
-    let callId: string | undefined;
-    let automatic = false;
-    let memberAuto = false;
-    if (toolTaskId !== undefined) {
-      const state = await this.metadata();
-      const attribution = state.toolActors[toolTaskId];
-      callId = attribution?.callId;
-      const run = attribution && state.runs[attribution.runKey];
-      if (!run || run.initiatedBy !== actorId || run.ownerId !== this.binding.owner.id || run.mode !== "write"
-        || !["admitting", "running"].includes(run.status)) throw new RunnerError(403, "Approval has no active originating write");
-      admissionId = run.admissionId;
-      if (this.config.connectorId && !admissionId) throw new RunnerError(403, "Approval lacks Worker write admission");
-      const github = operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
-      const sessionGranted = toolName !== undefined && !github
-        && state.grants?.tools.includes(toolName) === true;
-      automatic = (run.options?.access === "auto" || sessionGranted) && run.initiatedBy === this.binding.owner.id
-        && (!github || (admissionId !== undefined && (operation.kind !== "github.merge" || run.options?.autoMerge === true)))
-        && (operation.kind !== "git.push" || admissionId !== undefined)
-        && (!decidedAsHostCommand(operation, this.hostCommandSession(), consent.unbounded === true)
-          || await this.hostCommandLevel(this.binding.owner.id, "write") === "auto");
-      if (operation.kind === "extension.tool" && consent.automatic === true) automatic = true;
-      if (operation.kind === "extension.tool" && operation.source === "piki:tunnel") automatic = false;
-      if (!automatic && run.initiatedBy !== this.binding.owner.id && run.options?.access === "auto" && admissionId !== undefined && !this.#onHost
-        && memberAutoApproves(operation, this.hostCommandSession(), consent.unbounded === true)) {
-        memberAuto = automatic = (await this.authorize(actorId, "write", undefined, false, false, false, false, true)).memberAutoApprove === true;
-      }
-      if (!automatic && run.initiatedBy !== this.binding.owner.id && admissionId !== undefined
-        && requesterAutoApproves(operation, this.hostCommandSession(), consent.unbounded === true)) {
-        automatic = (await this.authorize(actorId, "write", undefined, false, false, false, true)).autoApprove === true;
-      }
-    }
-    const id = toolTaskId ? `tool-${toolTaskId}` : randomUUID();
-    const approval: StoredApproval = { id, sessionId: this.binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)), createdAt: new Date().toISOString(),
-      ...(automatic ? { status: "executing", decidedBy: this.binding.owner.id, automatic: true } : { status: "pending" }),
-      ...(consent.unbounded && (operation.kind === "bash" || operation.kind === "program") ? { unbounded: true } : {}), ...(callId ? { callId } : {}) };
-    if (admissionId !== undefined) approval.admissionId = admissionId;
+    const state = await this.metadata();
+    const attribution = state.toolActors[toolTaskId];
+    const run = attribution && state.runs[attribution.runKey];
+    if (!run || run.initiatedBy !== actorId || run.ownerId !== this.binding.owner.id || run.mode !== "write"
+      || !["admitting", "running"].includes(run.status)) throw new RunnerError(403, "The operation has no active originating write");
+    const admissionId = run.admissionId;
+    if (this.config.connectorId && !admissionId) throw new RunnerError(403, "The operation lacks Worker write admission");
+    const brokered = operation.kind === "git.push" || operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue";
+    if (brokered && admissionId === undefined) throw new RunnerError(403, "Pushes and GitHub effects need a write message");
+    if (!consent.hostChecked && runsOnHost(operation, this.hostCommandSession(), consent.unbounded === true)) await this.requireHostCommands(actorId, this.onHostMachine());
+    const id = `tool-${toolTaskId}`;
+    const record: StoredApproval = { id, sessionId: this.binding.session.id, requestedBy: actorId, operation: JSON.parse(JSON.stringify(operation)),
+      createdAt: new Date().toISOString(), status: "executing",
+      ...(consent.unbounded && (operation.kind === "bash" || operation.kind === "program") ? { unbounded: true } : {}),
+      ...(attribution.callId ? { callId: attribution.callId } : {}), ...(admissionId !== undefined ? { admissionId } : {}) };
     let created = false;
-    if (toolTaskId !== undefined && !automatic) this.#waits.waiter(id);
-    try { await this.mutate(meta => { if (!meta.approvals[id]) { meta.approvals[id] = approval; created = true; } }); }
-    catch (error) {
-      this.#waits.forget(id);
-      throw error;
-    }
-    if (automatic && created) return this.executeAutomatically(id, actorId, signal, memberAuto);
-    return (await this.metadata()).approvals[id]!;
+    await this.mutate(meta => { if (!meta.approvals[id]) { meta.approvals[id] = record; created = true; } });
+    if (!created) return this.#waits.whole((await this.metadata()).approvals[id]!);
+    if (operation.kind === "extension.tool") return record;
+    return this.#waits.whole(await this.execute(id, actorId, signal));
   }
 
-  private async executeAutomatically(id: string, actorId: string, signal?: AbortSignal, memberAuto = false): Promise<ApprovalRecord> {
+  private onHostMachine(): string {
+    return this.#hostSession ? "This session runs directly on its host, so its commands run" : "This host has no resource limits for commands, so they run";
+  }
+
+  private async execute(id: string, actorId: string, signal?: AbortSignal): Promise<StoredApproval> {
     const approval = (await this.metadata()).approvals[id]!;
     const operation = approval.operation;
     let status: ApprovalRecord["status"];
     let result: string;
-    if (operation.kind === "extension.tool") return approval;
-    if (operation.kind === "host.bash") {
-      await this.startHostOperation(id, operation, { actorId, admissionId: approval.admissionId }, async () => { await this.authorize(actorId, "write"); });
-      return (await this.metadata()).approvals[id]!;
-    }
     if (operation.kind === "github.comment" || operation.kind === "github.merge" || operation.kind === "github.issue") {
       try {
         await this.authorize(actorId, "write");
@@ -2472,154 +2292,25 @@ export class RunnerSession {
       finally { this.pushes.delete(entry); }
       return (await this.metadata()).approvals[id]!;
     }
+    if (operation.kind !== "bash" && operation.kind !== "program") throw new RunnerError(400, "Unsupported operation");
+    const onHost = runsOnHost(operation, this.hostCommandSession(), approval.unbounded === true);
     try {
       result = await this.sandbox.execute(operation, false, async () => {
         this.requireShellCapability(operation, approval.unbounded === true);
-        await this.requireHostEnvironment(true);
-        if (approval.unbounded === true && grantedShell(this.hostCommandSession())) await this.requireShellGrant(true);
-        if (actorId !== this.binding.owner.id && memberAuto) {
-          if ((await this.authorize(actorId, "write", undefined, false, false, false, false, true)).memberAutoApprove !== true) {
-            throw new RunnerError(403, "This member can no longer auto-approve their commands here: commands need approval. Nothing ran.");
-          }
-        } else if (actorId !== this.binding.owner.id) {
-          if ((await this.authorize(actorId, "write", undefined, false, false, false, true)).autoApprove !== true) {
-            throw new RunnerError(403, "The session owner no longer auto-approves this member's requests: commands need approval. Nothing ran.");
-          }
-        } else await this.authorize(actorId, "write");
+        await this.requireHostEnvironment();
+        if (onHost) await this.requireHostCommands(actorId, this.onHostMachine());
+        await this.authorize(actorId, "write");
       }, { allowTestShell: this.binding.model.provider === "faux" && this.config.allowFaux && this.config.allowTestShell === true, unbounded: approval.unbounded === true,
         ...await this.commandOptions(), signal });
       status = "executed";
     } catch (error) {
-      if (error instanceof SandboxProcessError) { status = "failed"; result = `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`; }
-      else { status = "interrupted"; result = "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."; }
+      const refused = error instanceof RunnerError && error.status < 500;
+      status = error instanceof SandboxProcessError || refused ? "failed" : "interrupted";
+      result = error instanceof SandboxProcessError ? `${error.message}${error.stdout ? `\n${error.stdout}` : ""}`
+        : refused ? (error as RunnerError).message : "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited.";
     }
     await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status, result: this.#waits.kept(id, result) }); });
     return (await this.metadata()).approvals[id]!;
-  }
-
-  private decisionPermission(actorId: string, operation: Pick<Operation, "kind"> | undefined): Permission {
-    const hostOwner = this.binding.session.connectorOwnerId;
-    return (operation?.kind === "host.bash" || operation?.kind === "extension.tool") && !!hostOwner && actorId === hostOwner ? "read" : "approve";
-  }
-
-  async decide(ticket: RunnerTicket, id: string, input: { decision: "approve" | "deny"; operation: Operation; brokerCapability?: string; scope?: "call" | "session" }): Promise<ApprovalRecord> {
-    this.requireUnfrozen();
-    this.assertTicket(ticket);
-    if (input.decision !== "approve" && input.decision !== "deny") throw new RunnerError(400, "Invalid approval decision");
-    if (input.scope !== undefined && input.scope !== "call" && input.scope !== "session") throw new RunnerError(400, "Invalid approval scope");
-    return this.exclusive(async () => {
-      const permission = this.decisionPermission(ticket.actorId, input.operation);
-      await this.authorize(ticket.actorId, permission, ticket.policyVersion);
-      const state = await this.metadata();
-      const approval = state.approvals[id];
-      if (!approval) throw new RunnerError(404, "Approval not found");
-      if (stableJson(validateOperation(input.operation)) !== stableJson(approval.operation)) throw new RunnerError(409, "Approval operation mismatch");
-      const decided = () => new RunnerError(409, "Approval has already been decided; unsafe effects are never retried");
-      if (approval.status !== "pending") throw decided();
-      const record = (meta: Metadata, decision: Partial<ApprovalRecord>) => {
-        const card = meta.approvals[id]!;
-        if (card.status !== "pending") throw decided();
-        Object.assign(card, decision);
-      };
-      await this.requireHostDecider(ticket.actorId, approval);
-      const granted = (approval.operation.kind === "bash" || approval.operation.kind === "program") && approval.unbounded === true && grantedShell(this.hostCommandSession());
-      if (approval.operation.kind === "git.repin" && ticket.actorId !== this.binding.owner.id) {
-        throw new RunnerError(403, "Only the session owner can decide a repin");
-      }
-      if (approval.operation.kind === "permission") {
-        const request = approval.operation;
-        if (ticket.actorId !== this.binding.owner.id) throw new RunnerError(403, "Only the session owner can allow more than the session allows");
-        if (request.needs.includes("unbounded-shell") && grantedShell(this.hostCommandSession()) && !await this.hostCommandLevel(ticket.actorId, "approve")) {
-          throw new RunnerError(403, "Only the host's owner, or a member granted host commands on this host, can allow a shell without resource limits");
-        }
-        const scope = input.scope ?? "call";
-        if (scope === "session" && request.tool === "host_bash") throw new RunnerError(400, "Host commands can only be allowed once");
-        await this.mutate(meta => {
-          record(meta, input.decision === "approve" ? { status: "approved", decidedBy: ticket.actorId, scope } : { status: "denied", decidedBy: ticket.actorId });
-          if (input.decision !== "approve" || scope !== "session") return;
-          const grants = meta.grants ??= { tools: [], write: false, unboundedShell: false };
-          if (request.needs.includes("tool") && !grants.tools.includes(request.tool)) grants.tools.push(request.tool);
-          if (request.needs.includes("write")) grants.write = true;
-          if (request.needs.includes("unbounded-shell")) grants.unboundedShell = true;
-          if (request.needs.includes("audience")) grants.audience = true;
-          for (const other of Object.values(meta.approvals)) {
-            if (other.id === id || other.status !== "pending" || other.operation.kind !== "permission" || !this.coveredBy(other.operation, grants)) continue;
-            Object.assign(other, { status: "approved", decidedBy: ticket.actorId, scope });
-          }
-        });
-        return (await this.metadata()).approvals[id]!;
-      }
-      if (input.decision === "deny") {
-        await this.mutate(meta => { record(meta, { status: "denied", decidedBy: ticket.actorId }); });
-        return (await this.metadata()).approvals[id]!;
-      }
-      if (approval.operation.kind === "extension.tool") {
-        await this.authorize(approval.requestedBy, "write");
-        await this.mutate(meta => { record(meta, { status: "approved", decidedBy: ticket.actorId }); });
-        return (await this.metadata()).approvals[id]!;
-      }
-      this.requireRepositoriesReady();
-      this.requireShellCapability(approval.operation, approval.unbounded === true);
-      await this.authorize(approval.requestedBy, "write");
-      if (!this.#waits.waiting(id) && Object.values(state.runs).some(holdsQueue))
-        throw new RunnerError(409, "Wait for the session queue to finish before approval execution");
-      if (["github.comment", "github.merge", "github.issue", "git.push"].includes(approval.operation.kind) && !input.brokerCapability) throw new RunnerError(403, "Missing owner-bound single-use broker capability");
-      await this.mutate(meta => { record(meta, { status: "executing", decidedBy: ticket.actorId }); });
-      if (approval.operation.kind === "host.bash") {
-        void this.startHostOperation(id, approval.operation, { actorId: ticket.actorId, capability: input.brokerCapability }, async () => {
-          await this.authorize(approval.requestedBy, "write");
-          await this.authorize(ticket.actorId, permission);
-        });
-        return (await this.metadata()).approvals[id]!;
-      }
-      if (approval.operation.kind === "bash" || approval.operation.kind === "program") {
-        const operation = approval.operation;
-        void this.startShellOperation(id, operation, approval.unbounded === true, async () => {
-          this.requireShellCapability(operation, approval.unbounded === true);
-          await this.requireHostEnvironment();
-          await this.authorize(approval.requestedBy, "write");
-          await this.authorize(ticket.actorId, "approve");
-          await this.requireHostDecider(ticket.actorId, approval);
-          if (granted) await this.requireShellGrant();
-        });
-        return (await this.metadata()).approvals[id]!;
-      }
-      if (approval.operation.kind === "git.push") {
-        const operation = approval.operation;
-        const controller = new AbortController();
-        const generation = this.generation;
-        const entry = { controller, done: Promise.resolve() };
-        entry.done = (async () => {
-          const outcome = await this.runPush(id, operation, { actorId: ticket.actorId, capability: input.brokerCapability! }, async () => {
-            await this.authorize(approval.requestedBy, "write");
-            await this.authorize(ticket.actorId, "approve");
-          }, controller.signal);
-          if (generation !== this.generation) return;
-          await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: outcome.status, result: this.#waits.kept(id, outcome.result) }); });
-        })().catch(() => { })
-          .finally(() => {
-            this.pushes.delete(entry);
-            if (generation === this.generation && !this.closing) this.drainQueue();
-          });
-        this.pushes.add(entry);
-        return (await this.metadata()).approvals[id]!;
-      }
-      try {
-        let result: string;
-        if (approval.operation.kind === "github.comment" || approval.operation.kind === "github.merge" || approval.operation.kind === "github.issue") {
-          await this.authorize(approval.requestedBy, "write");
-          await this.authorize(ticket.actorId, "approve");
-          result = await this.githubEffect(approval.operation, { sessionId: this.binding.session.id, actorId: ticket.actorId, approvalId: id, capability: input.brokerCapability! });
-        } else throw new RunnerError(400, "Unsupported approval operation");
-        await this.mutate(meta => { Object.assign(meta.approvals[id]!, { status: "executed", result: this.#waits.kept(id, result) }); });
-      } catch (error) {
-        const outcome = error instanceof RunnerError && error.status === 422 && (approval.operation.kind === "github.merge" || approval.operation.kind === "github.issue")
-          ? { status: "failed" as const, result: this.#waits.kept(id, error.message) }
-          : { status: "interrupted" as const, result: "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited." };
-        await this.mutate(meta => { Object.assign(meta.approvals[id]!, outcome); });
-      }
-      return (await this.metadata()).approvals[id]!;
-    });
   }
 
   private async cutPoint(conversation: Conversation, entryId: string): Promise<{ at: EntryId | undefined; last: boolean }> {
@@ -2748,8 +2439,6 @@ export class RunnerSession {
       snapshots.push({ branch, entries: active.entries, messages: active.messages });
     }
     const state = await this.metadata();
-    const stored = Object.values(state.approvals);
-    const autoApproved = autoApprovedCalls(stored);
     const entries: SessionView["entries"] = [];
     for (const snapshot of snapshots) {
       let previous: Run | undefined;
@@ -2764,7 +2453,7 @@ export class RunnerSession {
         const ending = run !== previous && previous && endView(previous, snapshot.branch.id);
         if (ending) entries.push(ending);
         previous = run;
-        entries.push(entryView(entry, snapshot.branch.id, run?.initiatedBy, autoApproved));
+        entries.push(entryView(entry, snapshot.branch.id, run?.initiatedBy));
         const next = snapshot.entries[snapshot.entries.indexOf(entry) + 1];
         refusedAt(run => run.startEntry >= entry.id && (!next || run.startEntry < next.id));
       }
@@ -2775,12 +2464,11 @@ export class RunnerSession {
     const shared = snapshots.find(snapshot => snapshot.branch.mode === "write");
     const usage = shared && this.contextView(shared.messages, agent.model);
     const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
-    const access = latestWrite && (latestWrite.options?.access ?? "approval");
+    const access = latestWrite && (latestWrite.options?.access === "read" ? "read" : "auto");
     const repositories = this.repositoryView();
     const { id, displayName, gitName, gitEmail, githubLogin } = this.binding.owner;
-    const { approvals, olderApprovals } = viewApprovals(stored);
     return { sessionId: this.binding.session.id, owner: { id, displayName, gitName, gitEmail, githubLogin }, entries,
-      approvals, ...(olderApprovals ? { olderApprovals } : {}),
+      approvals: [],
       conversations: state.branches.filter(branch => !branch.superseded).map(({ id, mode, actorId }) => ({ id: String(id), mode, ...(actorId ? { actorId } : {}) })),
       busy: Object.values(state.runs).some(holdsQueue)
         || Object.values(state.approvals).some(approval => approval.status === "executing") || repositories?.status === "preparing",
@@ -2980,7 +2668,6 @@ export class RunnerSession {
     const extensions = this.#hostExtensions;
     this.#hostExtensions = undefined;
     await extensions?.shutdown().catch(() => {});
-    this.#waits.dropWaiters();
     const failed = this.#failed;
     const builtins = this.#builtins;
     this.#builtins = undefined;

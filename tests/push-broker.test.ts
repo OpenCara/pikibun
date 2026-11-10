@@ -56,7 +56,7 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   if (host) {
     sqlite.prepare('INSERT INTO connectors (id,owner_id,name,credential_hash,created_at,connection_hash,models_json,capabilities_json) VALUES (?,?,?,?,?,?,?,?)')
       .run('connector', host.owner, 'Host', await sha256(connectorToken), createdAt, await sha256(connectionToken), JSON.stringify([{ provider: 'faux', modelId: 'faux-1', name: 'faux' }]),
-        JSON.stringify({ platform: 'linux', sandbox: true, productionShell: false, chatOptions: true, gitProviders: true, gitPush: true, ...(host.gitCredentials ? { gitCredentials: true } : {}) }));
+        JSON.stringify({ platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, chatOptions: true, gitProviders: true, gitPush: true, ...(host.gitCredentials ? { gitCredentials: true } : {}) }));
     sqlite.prepare('INSERT INTO connector_workspaces (connector_id,workspace_id,created_at) VALUES (?,?,?)').run('connector', 'workspace', createdAt);
     if (host.owner !== owner) sqlite.prepare('INSERT INTO connector_shares (connector_id,workspace_id,created_at) VALUES (?,?,?)').run('connector', 'workspace', createdAt);
   }
@@ -200,15 +200,6 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   }
   const operation = (extra: Record<string, unknown> = {}, repository = githubPin.path) =>
     ({ kind: 'git.push', repository, directory: 'app', branch: 'feature', commit: sessionCommit, ...extra });
-  async function approve(approvalId: string, op: Record<string, unknown>, actor = owner, requestedBy = owner): Promise<string> {
-    const capability = `capability-${approvalId}`;
-    sqlite.prepare(`INSERT INTO approval_reviews (session_id,approval_id,requested_by,operation_json,source,admission_id,review_hash,created_at)
-      VALUES (?,?,?,?, 'explicit', NULL,?,?)`).run('session', approvalId, requestedBy, JSON.stringify(op),
-      await sha256(JSON.stringify({ sessionId: 'session', approvalId, requestedBy, operation: op })), createdAt);
-    sqlite.prepare('INSERT INTO broker_capabilities (token_hash,session_id,approval_id,actor_id,requested_by,operation_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)')
-      .run(await sha256(capability), 'session', approvalId, actor, requestedBy, await sha256(JSON.stringify(op)), Math.floor(Date.now() / 1000) + 60, createdAt);
-    return capability;
-  }
   let admissions = 0;
   function admit(access: string | null, actor = owner): string {
     const admissionId = `admission-${String(++admissions).padStart(4, '0')}`.padEnd(43, 'x');
@@ -218,21 +209,19 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   }
   const ledger = () => sqlite.prepare('SELECT * FROM push_credentials ORDER BY created_at').all() as Record<string, unknown>[];
   const audits = (action: string) => sqlite.prepare('SELECT * FROM audit WHERE action = ?').all(action);
-  return { sqlite, env, calls, state, post, operation, approve, admit, ledger, audits, pushIdentity };
+  return { sqlite, env, calls, state, post, operation, admit, ledger, audits, pushIdentity };
 }
 
 const credential = '/api/internal/git/push/credential';
 const complete = '/api/internal/git/push/complete';
 async function code(response: Response): Promise<string> { return (await response.json() as { code: string }).code; }
 
-test('explicit pushes need a matching capability, consume it once, and mint a GitHub App credential', async t => {
+test('a message that may act mints a GitHub App credential for its push, once per tool call', async t => {
   const f = await fixture(t);
   const op = f.operation();
-  const capability = await f.approve('approval-1', op);
-  const request = { sessionId: 'session', approvalId: 'approval-1', actorId: owner, operation: op, capability };
-  assert.equal((await f.post(credential, { ...request, operation: { ...op, branch: 'other' } })).status, 403, 'operation must match the capability');
-  assert.equal((await f.post(credential, { ...request, capability: 'forged' })).status, 403);
-  assert.equal((await f.post(credential, { ...request, admissionId: f.admit('auto') })).status, 400, 'capability and admission are exclusive');
+  const request = { sessionId: 'session', approvalId: 'tool-1', actorId: owner, operation: op, admissionId: f.admit('auto') };
+  assert.equal(await code(await f.post(credential, { ...request, capability: 'forged' })), 'approvals_removed', 'connectors that still ask are told to update');
+  assert.equal(await code(await f.post(credential, { ...request, approvalId: 'approval-1' })), 'invalid_push_request', 'a push names its tool call');
   const issued = await f.post(credential, request);
   assert.equal(issued.status, 200);
   const result = await issued.json() as { credentialId: string; remote: string; authorization: string; expiresAt: string };
@@ -246,7 +235,7 @@ test('explicit pushes need a matching capability, consume it once, and mint a Gi
   assert.deepEqual(minted.body, { repository_ids: [101], permissions: { contents: 'write' } });
   const [row] = f.ledger();
   assert.equal(row!.id, result.credentialId);
-  assert.equal(row!.automatic, 0);
+  assert.equal(row!.automatic, 1);
   assert.equal(row!.kind, 'github-app');
   assert.equal(row!.identity_id, null);
   assert.equal(row!.binding_id, 'binding-gh');
@@ -255,63 +244,50 @@ test('explicit pushes need a matching capability, consume it once, and mint a Gi
   assert.equal(f.audits('git.push.credential_issued').length, 1);
   const replay = await f.post(credential, request);
   assert.equal(replay.status, 409);
-  assert.equal(await code(replay), 'capability_consumed');
+  assert.equal(await code(replay), 'push_attempt_exists');
   assert.equal(f.calls.filter(call => call.url.endsWith('/access_tokens')).length, 1);
 });
 
-test('explicit pushes require an approving approver and a writing requester', async t => {
+test('pushes need a requester who may still write to the session', async t => {
   const f = await fixture(t);
   const op = f.operation();
-  const noApprove = await f.approve('approval-a', op, viewer, owner);
-  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'approval-a', actorId: viewer, operation: op, capability: noApprove })).status, 403);
-  const noWrite = await f.approve('approval-b', op, approver, viewer);
-  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'approval-b', actorId: approver, operation: op, capability: noWrite })).status, 403);
+  for (const [actor, approvalId] of [[viewer, 'tool-viewer'], [approver, 'tool-approver']] as const) {
+    const refused = await f.post(credential, { sessionId: 'session', approvalId, actorId: actor, operation: op, admissionId: f.admit('auto', actor) });
+    assert.equal(refused.status, 403, actor);
+    assert.equal(await code(refused), 'permission_revoked');
+  }
   assert.equal(f.ledger().length, 0);
   assert.equal(f.calls.length, 0);
 });
 
-test('allowing git_push for the session lets the owner\'s messages push automatically, and only theirs', async t => {
-  const f = await fixture(t, { tools: ['bash'] });
-  const op = f.operation();
-  const grant = (callId: string) => f.sqlite.prepare('INSERT INTO session_tool_grants (session_id,tool,call_id,approval_id,granted_by,created_at) VALUES (?,?,?,?,?,?)')
-    .run('session', 'git_push', callId, `permission-${callId || 'all'}`, owner, new Date().toISOString());
-  grant('grant-once');
-  assert.equal(await code(await f.post(credential, { sessionId: 'session', approvalId: 'tool-grant-once', actorId: owner, operation: op, admissionId: f.admit('approval') })), 'automatic_push_not_admitted');
-  grant('');
-  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'tool-grant-1', actorId: approver, operation: op, admissionId: f.admit('approval', approver) })).status, 403,
-    'non-owners cannot push automatically');
-  const issued = await f.post(credential, { sessionId: 'session', approvalId: 'tool-grant-2', actorId: owner, operation: op, admissionId: f.admit('approval') });
-  assert.equal(issued.status, 200);
-  assert.equal(f.ledger()[0]!.automatic, 1);
-});
 
-test('automatic pushes require an unexpired auto-approve admission from the owner', async t => {
+test('pushes need an unexpired admission of a message that may act, from its sender', async t => {
   const f = await fixture(t);
   const op = f.operation();
-  const approvalAccess = await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-1', actorId: owner, operation: op, admissionId: f.admit('approval') });
-  assert.equal(approvalAccess.status, 403);
-  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-2', actorId: owner, operation: op, admissionId: f.admit(null) })).status, 403);
-  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-3', actorId: approver, operation: op, admissionId: f.admit('auto', approver) })).status, 403,
-    'non-owners cannot push automatically');
+  const reading = await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-1', actorId: owner, operation: op, admissionId: f.admit('read') });
+  assert.equal(reading.status, 403);
+  assert.equal(await code(reading), 'automatic_push_not_admitted');
+  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-2', actorId: owner, operation: op, admissionId: f.admit('auto', approver) })).status, 403,
+    'a message pushes only for its own sender');
+  for (const [approvalId, access] of [['tool-auto-3', null], ['tool-auto-4', 'approval']] as const) {
+    assert.equal((await f.post(credential, { sessionId: 'session', approvalId, actorId: owner, operation: op, admissionId: f.admit(access) })).status, 200,
+      `a message of access ${access} acts`);
+  }
   const admissionId = f.admit('auto');
-  const issued = await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-4', actorId: owner, operation: op, admissionId });
+  const issued = await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-5', actorId: owner, operation: op, admissionId });
   assert.equal(issued.status, 200);
   assert.equal(f.ledger()[0]!.automatic, 1);
-  const duplicate = await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-4', actorId: owner, operation: op, admissionId });
+  const duplicate = await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto-5', actorId: owner, operation: op, admissionId });
   assert.equal(duplicate.status, 409);
   assert.equal(await code(duplicate), 'push_attempt_exists');
-  assert.equal(f.ledger().length, 1);
+  assert.equal(f.ledger().length, 3);
 });
 
-test('the owner\'s auto-approve admission covers git_push even when the agent lacks it; an explicit push still needs the tool', async t => {
+test('a push runs whatever tools the session\'s agent was pinned with: the owner\'s tool group decides', async t => {
   const f = await fixture(t, { tools: [] });
   const op = f.operation();
   const issued = await f.post(credential, { sessionId: 'session', approvalId: 'tool-auto', actorId: owner, operation: op, admissionId: f.admit('auto') });
   assert.equal(issued.status, 200);
-  assert.equal(f.ledger()[0]!.automatic, 1);
-  const explicit = await f.post(credential, { sessionId: 'session', approvalId: 'explicit', actorId: owner, operation: op, capability: await f.approve('explicit', op) });
-  assert.equal(explicit.status, 403);
-  assert.equal(await code(explicit), 'tool_not_allowed');
   assert.equal(f.ledger().length, 1);
 });
 
@@ -348,8 +324,7 @@ test('a tag push creates a tag for a commit on the default branch: no branch che
   assert.equal(f.ledger()[0]!.operation_json, JSON.stringify(op));
   assert.ok(JSON.stringify(f.audits('git.push.credential_issued')).includes('cli-v1.2.0'));
   const reordered = { kind: 'git.push', repository: githubPin.path, directory: 'app', branch: 'main', commit: sessionCommit, tag: 'cli-v1.2.0' };
-  const capability = await f.approve('approval-tag', op);
-  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'approval-tag', actorId: owner, operation: reordered, capability })).status, 200);
+  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'tool-tag-reordered', actorId: owner, operation: reordered, admissionId: f.admit('auto') })).status, 200);
 
   const refused = async (approvalId: string, operation: Record<string, unknown>, status: number, expected?: string) => {
     const before = f.ledger().length;
@@ -639,9 +614,7 @@ test('automatic credentials need a tool-call approval id and stop at 20 per admi
   assert.equal(f.ledger().length, 20);
   assert.equal(f.calls.filter(call => call.url.endsWith('/access_tokens')).length, 1);
   assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'tool-limit-other', actorId: owner, operation: op, admissionId: f.admit('auto') })).status, 200);
-  const capability = await f.approve('approval-explicit', op);
-  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'approval-explicit', actorId: owner, operation: op, capability })).status, 200);
-  assert.equal((f.sqlite.prepare("SELECT admission_id FROM push_credentials WHERE approval_id = 'approval-explicit'").get() as { admission_id: null }).admission_id, null);
+  assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'tool-explicit', actorId: owner, operation: op, admissionId: f.admit('auto') })).status, 200);
 });
 
 test('a failing step after minting revokes the GitHub token and closes the ledger row', async t => {
@@ -836,8 +809,7 @@ test('a clone session pushes to the workspace repository at the operation path, 
   const f = await fixture(t);
   const op = f.operation({ directory: 'repo' });
   const reordered = { kind: 'git.push', repository: op.repository, directory: 'repo', branch: op.branch, commit: op.commit };
-  const capability = await f.approve('approval-clone', reordered);
-  const issued = await f.post(credential, { sessionId: 'session', approvalId: 'approval-clone', actorId: owner, operation: reordered, capability });
+  const issued = await f.post(credential, { sessionId: 'session', approvalId: 'tool-clone', actorId: owner, operation: reordered, admissionId: f.admit('auto') });
   assert.equal(issued.status, 200);
   assert.equal((await issued.json() as { remote: string }).remote, 'https://github.com/owner/repo.git');
   assert.equal(f.ledger()[0]!.binding_id, 'binding-gh');

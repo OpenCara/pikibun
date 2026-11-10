@@ -2,7 +2,7 @@ import type { GitHubSessionRepository } from '../../../../packages/shared/src/re
 import type {
   GitHubCommentView, GitHubIssueResult, GitHubIssueView, GitHubMergeResult, GitHubPullRequestView, GitHubReviewCommentView, GitHubReviewView, Operation,
 } from '../../../../packages/shared/src/types.js';
-import { constantTimeEqual, sha256 } from '../../../../packages/shared/src/crypto.js';
+import { sha256 } from '../../../../packages/shared/src/crypto.js';
 import { hasPermission } from '../../../../packages/shared/src/policy.js';
 import type { AppContext, Env, SessionRow } from '../types.js';
 import { auditStatement } from './audit.js';
@@ -12,10 +12,9 @@ import { fail, identifier, jsonObject, now, text, userIdentifier } from '../http
 import { githubRepositoryName, issueNumber, parseOperation } from './operations.js';
 import { decryptToken } from './vault.js';
 import { requireCallbackScope } from './hosts.js';
-import { requireBrokerReview, requireOperationTool, requireToolCall } from './approval-reviews.js';
+import { requireOperationTool, requireToolCall } from './tool-checks.js';
 import { cloneSessionRepository, recheckAccess, verifyRepository, type GitHubAccess } from './repositories.js';
 import { requireBinding, requireNoRestore } from './push/broker.js';
-import { autoApprovesRequester } from './requester-auto-approve.js';
 
 const githubApi = 'https://api.github.com';
 const remoteTimeout = 20000;
@@ -52,40 +51,44 @@ async function verifyPin(env: Env, github: GitHubAccess, pin: GitHubSessionRepos
   await recheckAccess(env, { provider: 'github', github });
 }
 
-type ApprovalInput = { sessionId: string; actorId: string; approvalId: string } & ({ capability: string; admissionId?: undefined } | { admissionId: string; capability?: undefined });
+type ApprovalInput = { sessionId: string; actorId: string; approvalId: string; admissionId: string };
 const automaticEffectsPerAdmission = 20;
 
 function approvalInput(input: Record<string, unknown>): ApprovalInput {
   const base = { sessionId: identifier(input.sessionId, 'sessionId'), actorId: userIdentifier(input.actorId, 'actorId'), approvalId: identifier(input.approvalId, 'approvalId') };
-  if ((input.capability === undefined) === (input.admissionId === undefined)) fail(400, 'invalid_input', 'Provide exactly one of capability or admissionId.');
-  return input.capability !== undefined ? { ...base, capability: text(input.capability, 'capability', 128) } : { ...base, admissionId: text(input.admissionId, 'admissionId', 128) };
+  if (input.capability !== undefined) fail(410, 'approvals_removed', 'Approvals were removed: GitHub effects run for the message that asks for them. Update the host\'s connector (npx pikibun@latest connect).');
+  return { ...base, admissionId: text(input.admissionId, 'admissionId', 128) };
 }
 
-async function automaticEffect<T>(c: AppContext, connectorId: string | null, approval: ApprovalInput & { admissionId: string }, operation: Operation,
+/**
+ * A GitHub comment, issue or merge of a tool call runs for the message that asked for it, once: for anyone who may still write
+ * to the session, as its owner, with a tool of the owner's group. Nobody is asked.
+ */
+async function approvedEffect<T>(c: AppContext, connectorId: string | null, approval: ApprovalInput, operation: Operation,
   action: 'github.comment' | 'github.merge' | 'github.issue', prepare: (row: SessionRow, github: GitHubAccess) => Promise<T>): Promise<{ row: SessionRow; github: GitHubAccess; prepared: T }> {
   const { sessionId, actorId, approvalId, admissionId } = approval;
   if (!approvalId.startsWith('tool-')) fail(400, 'invalid_input', 'Automatic GitHub effects must name a tool-call approval.');
   const authorize = async (): Promise<SessionRow> => {
     const owner = await sessionAccess(c.env, sessionId, actorId);
-    const member = !!owner && owner.row.owner_id !== actorId;
-    if (!owner || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write')
-      || (member && (action === 'github.merge' || !await autoApprovesRequester(c.env, owner.row, actorId)))) {
-      fail(403, 'permission_revoked', 'Automatic GitHub effects require the session owner, or for comments and issues a member whose requests the owner auto-approves.');
+    if (!owner || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write')) {
+      fail(403, 'permission_revoked', 'GitHub effects need someone who may still write to the session.');
     }
     requireUnfrozen(owner.row);
-    const admission = await c.env.DB.query<{ id: string; session_id: string; actor_id: string; mode: string; access: string | null; auto_merge: number; expires_at: number }>(
-      'SELECT id, session_id, actor_id, mode, access, auto_merge, expires_at FROM run_admissions WHERE id = ?').bind(admissionId).first();
-    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || (!member && admission.access !== 'auto')
+    const admission = await c.env.DB.query<{ id: string; session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>(
+      'SELECT id, session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?').bind(admissionId).first();
+    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || admission.access === 'read'
       || admission.expires_at <= Math.floor(Date.now() / 1000)) {
-      fail(403, 'automatic_github_not_admitted', 'GitHub effects run without asking only for an unexpired message the session owner sent with Auto-approve, or one from a member whose requests the owner auto-approves.');
+      fail(403, 'automatic_github_not_admitted', 'GitHub effects run only for an unexpired message that may act, from the person who sent it.');
     }
-    if (action === 'github.merge' && admission.auto_merge !== 1) fail(403, 'automatic_merge_not_admitted', 'Merges run without asking only for an Auto-approve message admitted to merge.');
     await requireCallbackScope(c, owner.row, connectorId);
-    await requireOperationTool(c.env, owner.row, operation, approvalId, admission);
+    await requireOperationTool(c.env, owner.row, operation);
     return owner.row;
   };
   const row = await authorize();
   await requireNoRestore(c, sessionId);
+  if (await c.env.DB.query('SELECT 1 FROM automatic_github_effects WHERE session_id = ? AND approval_id = ?').bind(sessionId, approvalId).first()) {
+    fail(409, 'capability_consumed', 'This operation has already been attempted; do not retry the external effect.');
+  }
   const github = await ownerGitHub(c.env, row.owner_id);
   const prepared = await prepare(row, github);
   const checked = await authorize();
@@ -106,55 +109,6 @@ async function automaticEffect<T>(c: AppContext, connectorId: string | null, app
   const fresh = await authorize();
   if (fresh.policy_version !== row.policy_version) fail(403, 'permission_revoked', 'Operation authority changed. The attempt remains consumed.');
   return { row, github, prepared };
-}
-
-async function approvedEffect<T>(c: AppContext, connectorId: string | null, approval: ApprovalInput, operation: Operation,
-  action: 'github.comment' | 'github.merge' | 'github.issue', prepare: (row: SessionRow, github: GitHubAccess) => Promise<T>): Promise<{ row: SessionRow; github: GitHubAccess; prepared: T }> {
-  if (approval.admissionId !== undefined) return automaticEffect(c, connectorId, approval, operation, action, prepare);
-  const { sessionId, actorId, approvalId } = approval;
-  const tokenHash = await sha256(approval.capability);
-  const stored = await c.env.DB.query<{
-      session_id: string; approval_id: string; actor_id: string; requested_by: string; operation_hash: string; expires_at: number; consumed_at: string | null;
-    }>(`SELECT session_id, approval_id, actor_id, requested_by, operation_hash, expires_at, consumed_at
-    FROM broker_capabilities WHERE token_hash = ?`).bind(tokenHash).first();
-  if (!stored || stored.session_id !== sessionId || stored.approval_id !== approvalId || stored.actor_id !== actorId ||
-      !constantTimeEqual(stored.operation_hash, await sha256(JSON.stringify(operation)))) {
-    fail(403, 'invalid_capability', 'This operation does not match its approval capability.');
-  }
-  if (stored.consumed_at) fail(409, 'capability_consumed', 'This approved operation has already been attempted; do not retry the external effect.');
-  if (stored.expires_at <= Math.floor(Date.now() / 1000)) fail(403, 'capability_expired', 'The approval capability has expired.');
-  const [approver, writer] = await Promise.all([
-    sessionAccess(c.env, sessionId, actorId), sessionAccess(c.env, sessionId, stored.requested_by),
-  ]);
-  if (!approver || !writer || approver.row.owner_id !== writer.row.owner_id || approver.row.policy_version !== writer.row.policy_version ||
-      approver.row.status === 'archived' || !hasPermission(approver.permissions, 'approve') || !hasPermission(writer.permissions, 'write')) {
-    fail(403, 'permission_revoked', 'The operation requester or approver is no longer authorized.');
-  }
-  requireUnfrozen(approver.row);
-  await requireCallbackScope(c, approver.row, connectorId);
-  await requireBrokerReview(c.env, approver.row, approvalId, stored.requested_by, operation);
-  await requireNoRestore(c, sessionId);
-  const github = await ownerGitHub(c.env, approver.row.owner_id);
-  const prepared = await prepare(approver.row, github);
-  await requireCallbackScope(c, approver.row, connectorId);
-  const consumed = await c.env.DB.query(`UPDATE broker_capabilities SET consumed_at = ?
-    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?
-    AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND owner_id = ? AND policy_version = ? AND status <> ?)
-    RETURNING token_hash`).bind(now(), tokenHash, Math.floor(Date.now() / 1000), sessionId, github.userId, approver.row.policy_version, 'archived').first();
-  if (!consumed) fail(409, 'capability_consumed', 'This capability was consumed, expired, or revoked. Do not retry the external effect.');
-  await auditStatement(c.env, actorId, `${action}.attempted`, approver.row.workspace_id, sessionId, { approvalId, requestedBy: stored.requested_by, actingAs: github.userId }).run();
-  const [freshApprover, freshWriter] = await Promise.all([
-    sessionAccess(c.env, sessionId, actorId), sessionAccess(c.env, sessionId, stored.requested_by),
-  ]);
-  if (!freshApprover || !freshWriter || freshApprover.row.status === 'archived' ||
-      freshApprover.row.policy_version !== approver.row.policy_version ||
-      freshWriter.row.policy_version !== approver.row.policy_version ||
-      !hasPermission(freshApprover.permissions, 'approve') || !hasPermission(freshWriter.permissions, 'write')) {
-    fail(403, 'permission_revoked', 'Operation authority changed. The capability remains consumed.');
-  }
-  await requireCallbackScope(c, freshApprover.row, connectorId);
-  await requireBrokerReview(c.env, freshApprover.row, approvalId, stored.requested_by, operation);
-  return { row: approver.row, github, prepared };
 }
 
 export async function boundedJson(response: Response, limit: number): Promise<unknown> {
@@ -485,7 +439,7 @@ export async function githubRead(c: AppContext, connectorId: string | null): Pro
       || admission.expires_at <= Math.floor(Date.now() / 1000)) {
       fail(403, 'github_read_not_admitted', 'GitHub reads need a write message from the requester sent within the last hour.');
     }
-    await requireToolCall(c.env, access.row, 'github_read', { id: callId, requestedBy: actorId, admission, target: `${repository}#${number}` });
+    await requireToolCall(c.env, access.row, 'github_read');
     return access.row;
   };
   const row = await authorize();

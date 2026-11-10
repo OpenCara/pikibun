@@ -252,7 +252,7 @@ export function definedToolOn(definition: ToolDefinition, isOn: (extension: stri
   return definition.extensions.some(isOn);
 }
 
-const approvalSentence = "It waits for an exact human approval unless the owner enabled auto-approve for this request, and stops at the host's command time limit.";
+const approvalSentence = "It stops at the host's command time limit.";
 
 const registryAccountWords = ["publish", "unpublish", "deprecate", "undeprecate", "adduser", "login", "logout", "owner", "access", "token", "dist-tag", "tag",
   "team", "profile", "org"];
@@ -278,7 +278,7 @@ const nodeTool: ProgramToolDefinition = {
   refusal: "acts on a package registry as an account, which sessions don't have", windowsSandbox: true,
   instructions: "Run Node.js, npm, npx, pnpm, yarn and corepack with the node tool: "
     + "node {program: \"pnpm\", args: [\"install\"], directory: \"<name>\"}, node {program: \"pnpm\", args: [\"test\"], directory: \"<name>\"}, "
-    + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}. Its approval card shows exactly the command it runs.",
+    + "or node {program: \"node\", args: [\"-e\", \"console.log(process.version)\"]}.",
 };
 
 function ecosystemTool(name: string, extension: string, what: string, programs: string[], examples: string, example: string,
@@ -288,7 +288,7 @@ function ecosystemTool(name: string, extension: string, what: string, programs: 
     kind: "program", name, extensions: [extension],
     description: `Run ${what} in the session worktree without a shell: program is one of ${programs.join(", ")}; `
       + `args is its arguments as a list, such as ${examples}; directory is where it runs, a path in the worktree such as a clone (app), the worktree by default. `
-      + "It runs exactly that program there, as the approval card shows it: each call is approved as a command is, waiting for a human unless the owner enabled auto-approve for this request. "
+      + "It runs exactly that program there. "
       + "Commands that act on a package registry as an account are refused: sessions have none. "
       + "In the Linux sandbox, its programs are those the host installed for the whole system (the sandbox sees only its /usr): a call to one it lacks is refused, saying how the host's owner installs it.",
     programs, example, environment, path, ...(systemDefaults ? { systemDefaults } : {}), grammar,

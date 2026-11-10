@@ -21,13 +21,13 @@ Owners and admins bind a repository under **Settings → Workspaces →** the wo
 Sessions **clone on demand**: every new session starts with an empty worktree and pins nothing.
 
 - On a sandboxed host, the agent clones the repositories it needs with plain Git (`git clone https://github.com/acme/app`), and fetches, switches and creates branches as usual. Git reaches the workspace's repositories through the session's [egress proxy](hosts.md#network-access), which reads them with the **session owner's own** account; the account never reaches the host.
-- The agent commits with Git and pushes its work to the session's own branch, named for its work (`pikibun/<title-slug>-<short id>`, for example `pikibun/add-dark-mode-1a2b3c4d5e6f`), with plain `git push`, without approval. Other branches, and pull requests, go through `git_push` (see [Commits, pushes and pull requests](pushes.md)).
-- On a host its owner runs [without the sandbox](hosts.md#running-without-the-sandbox), the agent clones, commits and pushes with the host's own Git, network and credentials (its Git credential helpers, such as `gh auth setup-git`), each command with approval. Such a session can't be backed up once it has a clone in its worktree.
+- The agent commits with Git and pushes its work to the session's own branch, named for its work (`pikibun/<title-slug>-<short id>`, for example `pikibun/add-dark-mode-1a2b3c4d5e6f`), with plain `git push`. Other branches, and pull requests, go through `git_push` (see [Commits, pushes and pull requests](pushes.md)).
+- On a host its owner runs [without the sandbox](hosts.md#running-without-the-sandbox), the agent clones, commits and pushes with the host's own Git, network and credentials (its Git credential helpers, such as `gh auth setup-git`). Such a session can't be backed up once it has a clone in its worktree.
 - Cloning needs commands: an agent without the `git` tool (a session started from a model has it), or another member's session on a host without [resource limits](hosts.md#the-sandbox) whose owner hasn't [granted them host commands](hosts.md#host-admins-and-host-command-grants), works in an empty worktree, and the session says so.
 - Removing a repository from the workspace stops new reads and pushes of it at once, in running sessions too.
 - The host needs connector 0.9.0 or newer: one from before sessions cloned their repositories can't start new sessions.
 
-Sessions started before this change pinned their repositories to exact commits. They stay **read-only**: their conversation, approvals, backups (to download) and exports remain, but they no longer run messages, approvals, backups, restores or moves. Start a new session to continue their work.
+Sessions started before this change pinned their repositories to exact commits. They stay **read-only**: their conversation, backups (to download) and exports remain, but they no longer run messages, backups, restores or moves. Start a new session to continue their work.
 
 ## Document sources
 

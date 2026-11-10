@@ -56,7 +56,9 @@ test("sources are pinned and normalized; a workspace uses one version of each pa
     `git:https://user:token@github.com/acme/search@${commit}`, "http://example.com/x", "./local.ts"]) {
     assert.throws(() => normalizeExtensionSource(bad), /./, bad);
   }
-  assert.deepEqual(parseWorkspaceExtensions([{ source: "npm:a@1.0.0" }]), [{ source: "npm:a@1.0.0", enabled: true, tools: "approval", settings: {} }]);
+  assert.deepEqual(parseWorkspaceExtensions([{ source: "npm:a@1.0.0" }]), [{ source: "npm:a@1.0.0", enabled: true, tools: "automatic", settings: {} }]);
+  assert.deepEqual(parseWorkspaceExtensions([{ source: "npm:a@1.0.0", tools: "approval" }]), [{ source: "npm:a@1.0.0", enabled: true, tools: "automatic", settings: {} }],
+    "a setting from before approvals were removed runs alike");
   assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0" }, { source: "npm:a@2.0.0" }]), /one version/);
   assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0", settings: { key: { nested: true } } }]), /true, false or text/);
   assert.throws(() => parseWorkspaceExtensions([{ source: "npm:a@1.0.0", secret: "x" }]), /Invalid extension/);
@@ -351,7 +353,7 @@ test("a host carries out the installs its owner asks for in Pikibun, unless it r
   assert.deepEqual(cached.lastKnown("w"), { extensions: [], automaticTools: false }, "a new answer replaces it");
 });
 
-test("an extension's tool waits for the host owner's decision, never runs in a Read-only message, and runs at once where the workspace and host allow it", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+test("an extension's tool runs only where the host's owner lets it, never in a Read-only message, and asks nobody", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
   const root = await realpath(await directory(t));
   await writeFile(join(root, "shout.ts"), `import { Type } from "typebox";
     export default function (pi) {
@@ -401,38 +403,27 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
   };
   const results = async () => (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
 
-  await send("hello", "approval");
-  let card: ApprovalRecord | undefined;
-  for (let count = 0; count < 500 && !card; count++) { card = (await session.view()).approvals.find(item => item.status === "pending"); await delay(20); }
-  assert.deepEqual(card!.operation, { kind: "extension.tool", source: "npm:shout@1.0.0", tool: "shout", arguments: '{"text":"hello"}',
-    digest: createHash("sha256").update('{"text":"hello"}').digest("hex") });
-  await assert.rejects(session.decide(await claims("approve"), card!.id, { decision: "approve", operation: card!.operation }), /host owner/);
-  await session.decide(await claims("approve", "test:bob"), card!.id, { decision: "approve", operation: card!.operation });
+  const records = async () => Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+  await send("hello", "auto");
   await idle();
-  const decided = (await session.view()).approvals.find(item => item.id === card!.id)!;
-  assert.deepEqual([decided.status, decided.decidedBy, decided.result], ["executed", "test:bob", "HELLO!"]);
+  assert.match((await results()).at(-1)!, /shout comes from an extension, which runs on the host's own machine/, "the session's owner has no host command grant");
+  assert.deepEqual(await records(), []);
   assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
     unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
-  assert.match((await results()).at(-1)!, /HELLO!/);
 
+  answer = { ...answer, automaticTools: true };
+  await new Promise(resolve => setTimeout(resolve, 10));
   await send("quietly", "read");
   await idle();
   assert.match((await results()).at(-1)!, /Read-only message doesn't run it/);
 
-  answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0", tools: "automatic" }]), automaticTools: false };
-  await send("again", "approval");
-  card = undefined;
-  for (let count = 0; count < 500 && !card; count++) { card = (await session.view()).approvals.find(item => item.status === "pending"); await delay(20); }
-  await session.decide(await claims("approve", "test:bob"), card!.id, { decision: "deny", operation: card!.operation });
-  await idle();
-  assert.match((await results()).at(-1)!, /wasn't approved/);
-
-  answer = { ...answer, automaticTools: true };
-  await new Promise(resolve => setTimeout(resolve, 10));
   await send("now", "approval");
   await idle();
-  const automatic = (await session.view()).approvals.at(-1)!;
-  assert.deepEqual([automatic.status, automatic.automatic, automatic.result], ["executed", true, "NOW!"]);
+  const automatic = (await records()).at(-1)!;
+  assert.deepEqual(automatic.operation, { kind: "extension.tool", source: "npm:shout@1.0.0", tool: "shout", arguments: '{"text":"now"}',
+    digest: createHash("sha256").update('{"text":"now"}').digest("hex") });
+  assert.match((await results()).at(-1)!, /NOW!/);
+  assert.deepEqual((await session.view()).approvals, []);
 
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@2.0.0" }]), automaticTools: true };
   assert.deepEqual((await session.view()).extensions, { running: [], missing: ["npm:shout@2.0.0"], builtin: ["pi:codemode"],
@@ -443,8 +434,9 @@ test("an extension's tool waits for the host owner's decision, never runs in a R
     unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   await send("upgraded", "approval");
   await idle();
-  const upgraded = (await session.view()).approvals.at(-1)!;
-  assert.deepEqual([upgraded.operation.kind === "extension.tool" && upgraded.operation.source, upgraded.status, upgraded.result], ["npm:shout@2.0.0", "executed", "UPGRADED!"]);
+  const upgraded = (await records()).at(-1)!;
+  assert.equal(upgraded.operation.kind === "extension.tool" && upgraded.operation.source, "npm:shout@2.0.0");
+  assert.match((await results()).at(-1)!, /UPGRADED!/);
   answer = { extensions: [], automaticTools: true };
   await send("gone", "approval");
   await idle();
@@ -491,7 +483,7 @@ test("a Pikibun extension's command runs with the host's own sign-in only where 
   const session = await service.provision(target, await claims("create"));
   await session.submit(await claims("submit"), { content: "list them", requestId: "list", admissionId: await sha256("list"), options: { access: "approval" } }, "write");
   for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
-  const card = (await session.view()).approvals.at(-1)!;
+  const card = Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals).at(-1)!;
   assert.deepEqual([card.operation.kind, card.status, card.result], ["extension.tool", "executed", "gh ran: pr list"]);
 });
 

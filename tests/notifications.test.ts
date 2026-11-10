@@ -92,7 +92,7 @@ const origin = 'http://localhost:8787';
 const testSecret = 'notifications-test-secret-not-for-deployment';
 const manifest = {
   models: [{ provider: 'local-native', modelId: 'local/model-v1', name: 'Local model' }],
-  capabilities: { platform: 'linux', sandbox: true, productionShell: false, plainGit: true },
+  capabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, plainGit: true },
 };
 type ApiRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<Response>;
 interface Client { user: { id: string }; cookie: string; request: ApiRequest }

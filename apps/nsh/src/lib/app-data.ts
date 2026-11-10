@@ -1,6 +1,6 @@
 import { computed, context, signal, Storage, type Accessor } from "nsh";
 import {
-  AUTO_APPROVE_CONFIRMED_KEY, chatPreference, parseChatPreference, type ChatPreference, type ChatSelection, type ConnectorInfo, type SessionActivity,
+  chatPreference, parseChatPreference, type ChatPreference, type ChatSelection, type ConnectorInfo, type SessionActivity,
   type SessionRecord, type Workspace,
 } from "../shared";
 import { createResource } from "./resource";
@@ -25,8 +25,6 @@ export interface AppData {
   setLastWorkspaceId: (id: string) => void;
   lastChat: Accessor<ChatPreference | undefined>;
   rememberChat: (host: ConnectorInfo | undefined, selection: ChatSelection, current?: Parameters<typeof chatPreference>[2]) => void;
-  autoApproveConfirmed: Accessor<boolean>;
-  rememberAutoApproveConfirmed: () => void;
   liveActivity: Accessor<LiveActivity | null>;
   setLiveActivity: (value: LiveActivity | null) => void;
 }
@@ -43,9 +41,7 @@ export function createAppData(): AppData {
     || sorted().some(session => session.status !== "archived" && session.activity === "working"));
   const lastWorkspaceId = signal("");
   const lastChat = signal<ChatPreference | undefined>(undefined);
-  const autoApproveConfirmed = signal(false);
   Storage.getItem(LAST_CHAT_KEY).then(raw => { if (!lastChat()) lastChat.set(parseChatPreference(raw)); }, () => undefined);
-  Storage.getItem(AUTO_APPROVE_CONFIRMED_KEY).then(raw => { if (raw === "1") autoApproveConfirmed.set(true); }, () => undefined);
   return {
     sessions: sorted,
     sessionsLoading: () => sessions.loading() && !sessions.data(),
@@ -63,11 +59,6 @@ export function createAppData(): AppData {
       if (!preference) return;
       lastChat.set(preference);
       Storage.setItem(LAST_CHAT_KEY, JSON.stringify(preference)).catch(() => undefined);
-    },
-    autoApproveConfirmed,
-    rememberAutoApproveConfirmed() {
-      autoApproveConfirmed.set(true);
-      Storage.setItem(AUTO_APPROVE_CONFIRMED_KEY, "1").catch(() => undefined);
     },
     liveActivity,
     setLiveActivity: value => liveActivity.set(value),

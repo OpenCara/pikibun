@@ -213,7 +213,7 @@ function newWorkspaceStatements(env: Env, workspace: { id: string; name: string;
     auditStatement(env, workspace.ownerId, 'workspace.create', workspace.id, null, detail),
     ...defaultWorkspaceExtensions.map((source, index) => env.DB.query<never>(`INSERT INTO workspace_extensions
         (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
-        VALUES (?, ?, ?, ?, 0, 'approval', '{}', ?, ?)`)
+        VALUES (?, ?, ?, ?, 0, 'automatic', '{}', ?, ?)`)
       .bind(workspace.id, extensionPackageKey(source), source, index + 1, workspace.ownerId, createdAt)),
     ...ownerHostStatements(env, workspace.ownerId, workspace.id),
   ];

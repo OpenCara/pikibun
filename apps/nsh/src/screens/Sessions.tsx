@@ -40,7 +40,7 @@ export function Sessions(props: { onOpen: (id: string) => void; onOpenById: () =
         <InfoTip label="Who can see a session">
           <View style={{ gap: 8 }}>
             <Note>Private sessions are visible to their owner, the workspace's owner and admins, and people with an explicit grant. Workspace-visible sessions can be viewed by every workspace member.</Note>
-            <Note>Viewing never allows asking, writing, approving or managing; those need separate grants. The workspace's owner and admins manage every session in it, but approve only with a grant. Opening a session keeps its original owner identity and history.</Note>
+            <Note>Viewing never allows asking, writing or managing; those need separate grants. The workspace's owner and admins manage every session in it. Opening a session keeps its original owner identity and history.</Note>
             <Note>Only the owner, or the workspace's owner or an admin, can change visibility, which is separate from sharing a host.</Note>
           </View>
         </InfoTip>

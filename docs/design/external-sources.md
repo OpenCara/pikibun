@@ -1,5 +1,7 @@
 # Investigation: cloud drives, Obsidian, Notion, Tencent Docs and other document sources
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 Status: investigation. Nothing here is implemented yet. Claims about third-party APIs (scopes, limits, export formats)
 were written from memory and are marked **(verify)** where they decide a design choice. Check them against the
 vendors' current docs before building.

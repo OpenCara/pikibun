@@ -19,7 +19,7 @@ import { bundledToolDefinitions, parseToolDefinition, parseToolDefinitions, rese
 import { pikiExtension, pikiSessionToolExtensions } from "../packages/shared/src/piki-extensions.js";
 import { pikibunToolDescriptions } from "../packages/shared/src/workspace-tools.js";
 import { parseWorkspaceExtensions, type WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
-import { toolNames, type AuthorizationRequest, type RunnerAction, type RunnerBinding, type RunnerTicket } from "../packages/shared/src/types.js";
+import { toolNames, type ApprovalRecord, type AuthorizationRequest, type RunnerAction, type RunnerBinding, type RunnerTicket } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { writeFile } from "node:fs/promises";
 import { loadInstalled } from "../apps/runner/src/extensions/load.js";
@@ -40,6 +40,11 @@ const notes: BrokeredToolDefinition = {
   parameters: { note: { type: "string", required: true, pattern: "^[a-z0-9-]{1,64}$", invalid: "note is a note's id" }, line: { type: "integer", minimum: 1, maximum: 1000 } },
   target: ["note", "line"], route: "notes/read", write: false, instructions: "Read the workspace's notes with notes_read {note}.",
 };
+
+/** What the session's tools ran, as the session records it. */
+async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+}
 
 test("the bundled definitions are data: they round-trip through the parser a connector reads them with", () => {
   const sent = JSON.parse(JSON.stringify({ tools: bundledToolDefinitions }));
@@ -139,7 +144,7 @@ test("operations name the tools this server defines, and connectors take the swi
   assert.deepEqual(parseOperation({ kind: "permission", tool: "source_read", target: "x", needs: ["tool"] }), { kind: "permission", tool: "source_read", target: "x", needs: ["tool"] });
   assert.throws(() => validateOperation({ kind: "program", tool: "jvm", command }), /Invalid operation/);
   assert.equal(knownDefinedProgramTool("rust"), true);
-  const off = (source: string) => ({ source, enabled: false, tools: "approval" as const, settings: {} });
+  const off = (source: string) => ({ source, enabled: false, tools: "automatic" as const, settings: {} });
   const installed = [{ source: "piki:gh" }];
   assert.deepEqual(connectorWorkspaceExtensions([off("piki:rust")], installed), [], "an older connector doesn't take it");
   assert.deepEqual(connectorWorkspaceExtensions([off("piki:rust")], installed, { toolDefinitions: true }), [off("piki:rust")]);
@@ -220,12 +225,9 @@ test("a session runs tools the control plane defines that its connector never kn
   const id = "defined-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Deploy.", requestId: "first", admissionId: await sha256("defined first") }, "write");
-  let approval;
-  for (let count = 0; count < 1000 && !approval; count++) {
-    approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
-    if (!approval) await delay(20);
-  }
-  assert.ok(approval, "the jvm call asks for approval");
+  await idle(session);
+  const approval = (await records(session)).find(record => record.operation.kind === "program" && record.operation.tool === "jvm");
+  assert.ok(approval, "the jvm call ran, asking nobody");
   for (const tool of ["jvm", "notes_read", "node", "rust", "source_read", "git"]) assert.ok(offered[0]!.includes(tool), `${tool}: ${offered[0]!.join()}`);
   assert.equal(offered[0]!.filter(tool => tool === "git").length, 1);
   assert.match(prompts[0]!, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet, make, mvn and gradle with the rust, go, dotnet, make, jvm tools/);
@@ -233,8 +235,6 @@ test("a session runs tools the control plane defines that its connector never kn
   assert.deepEqual(approval!.operation, { kind: "program", tool: "jvm",
     command: "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/share/maven/bin':'/opt/gradle/bin' MAVEN_OPTS=-Djava.awt.headless=true NO_COLOR=1 mvn 'test' </dev/null 2>&1" });
   assert.deepEqual(validateOperation(approval!.operation), approval!.operation, "a tool it read from the control plane is one it validates");
-  await session.decide(await ticket(id, "approve"), approval!.id, { decision: "deny", operation: approval!.operation });
-  await idle(session);
   const transcript = (await session.view()).entries.map(entry => entry.text).join("\n");
   assert.match(transcript, /mvn deploy acts on a package repository as an account, which sessions don't have: the jvm tool doesn't run it/);
   assert.match(transcript, /note is a note's id/);
@@ -244,7 +244,7 @@ test("a session runs tools the control plane defines that its connector never kn
   assert.deepEqual({ ...calls[0]!.request, callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId: await sha256("defined first"), callId: undefined, note: "standup", line: 2 });
 
   definitions = [...definitions, { ...jvm, name: "lint", extensions: ["piki:lint"], programs: ["eslint"], grammar: {}, summary: undefined }];
-  answer = { extensions: [{ source: "piki:jvm", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:jvm", enabled: false, tools: "automatic", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Test.", requestId: "second", admissionId: await sha256("defined second") }, "write");
   await idle(session);
   assert.ok(!offered[1]!.includes("jvm"), offered[1]!.join());
@@ -295,8 +295,8 @@ test("a tool the control plane defines after the session opened never takes the 
   await session.submit(await ticket(id, "submit"), { content: "Shout.", requestId: "second", admissionId: await sha256("clash second") }, "write");
   await idle(session);
   const view = await session.view();
-  assert.ok(!view.approvals.some(approval => approval.operation.kind === "program"), JSON.stringify(view.approvals));
-  assert.match(view.entries.map(entry => entry.text).join("\n"), /Host commands require a connected host/);
+  assert.ok(!(await records(session)).some(approval => approval.operation.kind === "program"), JSON.stringify(await records(session)));
+  assert.match(view.entries.map(entry => entry.text).join("\n"), /shout comes from an extension, which runs on the host's own machine/);
 });
 
 test("a name a defined tool took up after the session opened stays its own when an extension that offers it is turned on later (review of #205)",
@@ -341,15 +341,8 @@ test("a name a defined tool took up after the session opened stays its own when 
   await idle(session);
   answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Shout.", requestId: "third", admissionId: await sha256("first third") }, "write");
-  let card;
-  for (let count = 0; count < 1000 && !card; count++) {
-    const view = await session.view();
-    card = view.approvals.find(candidate => candidate.status === "pending");
-    if (!card && !view.busy) break;
-    if (!card) await delay(20);
-  }
-  assert.ok(card, (await session.view()).entries.map(entry => entry.text).join("\n"));
-  assert.deepEqual(card!.operation, { kind: "permission", tool: "shout", target: ".: echo hi", needs: ["tool"] });
-  await session.decide(await ticket(id, "approve"), card!.id, { decision: "deny", operation: card!.operation });
   await idle(session);
+  const ran = (await records(session)).at(-1);
+  assert.ok(ran, (await session.view()).entries.map(entry => entry.text).join("\n"));
+  assert.equal(ran.operation.kind === "program" && ran.operation.tool, "shout", "the defined tool kept its name; the extension's never ran");
 });

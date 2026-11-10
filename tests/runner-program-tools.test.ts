@@ -9,7 +9,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerSession } from "../apps/runner/src/session.js";
-import type { AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
+import type { ApprovalRecord, AuthorizationRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 import { toolNames } from "../packages/shared/src/types.js";
 import type { WorkspaceExtensionsAnswer } from "../packages/shared/src/host-extensions.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
@@ -40,13 +40,17 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-async function pendingApproval(session: RunnerSession) {
-  for (let count = 0; count < 1000; count++) {
-    const approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
-    if (approval) return approval;
-    await delay(20);
-  }
-  assert.fail("no pending approval");
+/** What the session's tools ran, as the session records it: nobody decides any of it. */
+async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+}
+
+/** The program call the session ran last, once its message settled. */
+async function ranLast(session: RunnerSession): Promise<ApprovalRecord> {
+  await idle(session);
+  const ran = (await records(session)).at(-1);
+  assert.ok(ran, "a program call ran");
+  return ran;
 }
 
 test("the git tool runs Git without a shell: refused calls ask nobody, others get one exact command card; piki:git turns it off", { skip: process.platform === "win32" }, async t => {
@@ -76,29 +80,28 @@ test("the git tool runs Git without a shell: refused calls ask nobody, others ge
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Make a repository.", requestId: "init", admissionId: await sha256("git admission") }, "write");
 
-  const approval = await pendingApproval(session);
+  const approval = await ranLast(session);
   assert.deepEqual(approval.operation, { kind: "program", tool: "git", command: "GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_TERMINAL_PROMPT=0 git --no-pager 'init' '-q' 'my repo' </dev/null 2>&1" });
-  await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
   let view = await session.view();
   assert.match(await session.sandbox.readFile("my repo/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
-  assert.equal(view.approvals.length, 1, "the refused calls left no card");
-  assert.equal(view.approvals[0]!.status, "executed");
+  assert.equal((await records(session)).length, 1, "the refused calls left no card");
+  assert.equal((await records(session))[0]!.status, "executed");
   let transcript = view.entries.map(entry => entry.text).join("\n");
   assert.match(transcript, /git config isn't one the git tool runs/);
   assert.match(transcript, /within the session's worktree/);
   assert.match(transcript, /Initialized\./);
 
-  answer = { extensions: [{ source: "piki:git", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:git", enabled: false, tools: "automatic", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Status?", requestId: "off", admissionId: await sha256("git admission off") }, "write");
   await idle(session);
   view = await session.view();
   transcript = view.entries.map(entry => entry.text).join("\n");
   assert.match(transcript, /Tool git is not available/);
-  assert.equal(view.approvals.length, 1);
+  assert.equal((await records(session)).length, 1);
 });
 
-test("in a session from before the git tool, allowing git for the session runs the owner's git commands without asking, as allowing bash does", { skip: process.platform === "win32" }, async t => {
+test("in a session from before the git tool, git runs the owner's commands at once, as any tool does", { skip: process.platform === "win32" }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-git-grant-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
@@ -121,14 +124,8 @@ test("in a session from before the git tool, allowing git for the session runs t
   old.agent.tools = ["read_file", "bash"];
   const session = await service.provision(old, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Make two repositories.", requestId: "grant", admissionId: await sha256("git grant admission") }, "write");
-  const permission = await pendingApproval(session);
-  assert.equal(permission.operation.kind, "permission");
-  assert.equal(permission.operation.kind === "permission" && permission.operation.tool, "git");
-  await session.decide(await ticket(id, "approve"), permission.id, { decision: "approve", operation: permission.operation, scope: "session" });
   await idle(session);
-  const view = await session.view();
-  assert.deepEqual(view.approvals.filter(approval => approval.operation.kind !== "permission"), [], "no command card");
-  assert.deepEqual(view.entries.flatMap(entry => (entry.autoApproved ?? []).map(({ callId: _, ...mark }) => mark)), [{ tool: "git", status: "executed" }, { tool: "git", status: "executed" }]);
+  assert.deepEqual((await records(session)).map(record => [record.operation.kind === "program" && record.operation.tool, record.status]), [["git", "executed"], ["git", "executed"]]);
   assert.match(await session.sandbox.readFile("first/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
   assert.match(await session.sandbox.readFile("second/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
 });
@@ -158,23 +155,22 @@ test("the node tool runs Node.js without a shell, as one exact command card; pik
   const id = "node-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Run it.", requestId: "run", admissionId: await sha256("node admission") }, "write");
-  const approval = await pendingApproval(session);
+  const approval = await ranLast(session);
   assert.deepEqual(approval.operation, { kind: "program", tool: "node",
     command: "PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true node '-e' 'console.log('\\''node-tool-'\\'' + (6 * 7))' </dev/null 2>&1" });
-  await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
   let view = await session.view();
-  assert.equal(view.approvals.length, 1, "the refused call left no card");
-  assert.equal(view.approvals[0]!.status, "executed");
-  assert.match(view.approvals[0]!.result!, /node-tool-42/);
+  assert.equal((await records(session)).length, 1, "the refused call left no card");
+  assert.equal((await records(session))[0]!.status, "executed");
+  assert.match((await records(session))[0]!.result!, /node-tool-42/);
   assert.match(view.entries.map(entry => entry.text).join("\n"), /npm publish acts on a package registry as an account/);
 
-  answer = { extensions: [{ source: "piki:node", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:node", enabled: false, tools: "automatic", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("node admission off") }, "write");
   await idle(session);
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool node is not available/);
-  assert.equal(view.approvals.length, 1);
+  assert.equal((await records(session)).length, 1);
 });
 
 test("the python tool runs Python without a shell, in a virtual environment it names; piki:python turns it off", { skip: process.platform === "win32" }, async t => {
@@ -206,17 +202,17 @@ test("the python tool runs Python without a shell, in a virtual environment it n
   await session.submit(await ticket(id, "submit"), { content: "Run it.", requestId: "run", admissionId: await sha256("python admission"), options: { access: "auto" } }, "write");
   await idle(session);
   let view = await session.view();
-  assert.deepEqual(view.entries.flatMap(entry => (entry.autoApproved ?? []).map(({ callId: _, ...mark }) => mark)), [{ tool: "python", status: "executed" }, { tool: "python", status: "executed" }],
-    "the refused call ran nothing; the others ran under Auto-approve");
+  assert.deepEqual((await records(session)).map(record => [record.operation.kind === "program" && record.operation.tool, record.status]), [["python", "executed"], ["python", "executed"]],
+    "the refused call ran nothing; the others ran at once");
   assert.match(view.entries.map(entry => entry.text).join("\n"), /venv-python True True/);
   assert.match(view.entries.map(entry => entry.text).join("\n"), /uv publish acts on a package index as an account/);
 
-  answer = { extensions: [{ source: "piki:python", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:python", enabled: false, tools: "automatic", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("python admission off") }, "write");
   await idle(session);
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool python is not available/);
-  assert.equal(view.entries.flatMap(entry => entry.autoApproved ?? []).length, 2);
+  assert.equal((await records(session)).length, 2);
 });
 
 test("the rust, go and dotnet tools run their programs without a shell, as one exact command card; their switches turn them off", { skip: process.platform === "win32" }, async t => {
@@ -253,25 +249,23 @@ test("the rust, go and dotnet tools run their programs without a shell, as one e
   const id = "ecosystem-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("ecosystem admission") }, "write");
-  const approval = await pendingApproval(session);
+  const approval = await ranLast(session);
   assert.deepEqual(approval.operation, { kind: "program", tool: "go",
     command: "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/go/bin':'/usr/lib/go/bin':'/usr/local/bin' NO_COLOR=1 go 'test' './...' </dev/null 2>&1" });
-  await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
   await idle(session);
   let view = await session.view();
-  assert.equal(view.approvals.length, 1, "the refused calls left no card");
-  assert.equal(view.approvals[0]!.status, "denied");
+  assert.equal((await records(session)).length, 1, "the refused calls left no card");
   const said = view.entries.map(entry => entry.text).join("\n");
   assert.match(said, /cargo publish acts on a package registry as an account/);
   assert.match(said, /dotnet nuget push acts on a package registry as an account/);
   assert.match(instructions, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet, make with the rust, go, dotnet, make tools: .*such as rust \{program/, "the agent is told how to use them");
 
-  answer = { extensions: [{ source: "piki:rust", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:rust", enabled: false, tools: "automatic", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("ecosystem admission off") }, "write");
   await idle(session);
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool rust is not available/);
-  assert.equal(view.approvals.length, 1);
+  assert.equal((await records(session)).length, 1);
   assert.match(offInstructions, /Run go and gofmt, dotnet, make with the go, dotnet, make tools: .*such as go \{program/);
 });
 
@@ -310,17 +304,16 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   delete sandboxed.session.repositoryMode;
   const session = await service.provision(sandboxed, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Look at the app.", requestId: "look", admissionId: await sha256("browser admission") }, "write");
-  const approval = await pendingApproval(session);
+  const approval = await ranLast(session);
   assert.equal(approval.operation.kind, "program");
   assert.equal(approval.operation.kind === "program" && approval.operation.tool, "browser");
   const command = approval.operation.kind === "program" ? approval.operation.command : "";
   assert.equal(session.sandbox.browser!.driver, SANDBOX_BROWSER_DRIVER);
   assert.ok(command.startsWith(`'${SANDBOX_BROWSER_DRIVER}' '--chrome' '${session.sandbox.browser!.chromium}' '--time-limit' '30' '{"url":"http://127.0.0.1:${port}/"`), command);
-  await session.decide(await ticket(id, "approve"), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
   let view = await session.view();
-  assert.equal(view.approvals.length, 1, "the refused call left no card");
-  assert.equal(view.approvals[0]!.status, "executed", view.approvals[0]!.result?.slice(0, 4000));
+  assert.equal((await records(session)).length, 1, "the refused call left no card");
+  assert.equal((await records(session))[0]!.status, "executed", (await records(session))[0]!.result?.slice(0, 4000));
   const transcript = view.entries.map(entry => entry.text).join("\n");
   assert.match(transcript, /url is an http, https or file URL, or about:blank\. Nothing ran\./);
   assert.match(transcript, /Seen\./);
@@ -337,12 +330,12 @@ test("the browser tool drives the host's Chromium in the session's sandbox as on
   assert.equal(listing.type, "directory");
   assert.ok(listing.type === "directory" && listing.entries.some(entry => entry.name === answerText.report.screenshot.split("/").at(-1)));
 
-  answer = { extensions: [{ source: "piki:browser", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:browser", enabled: false, tools: "automatic", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Again?", requestId: "off", admissionId: await sha256("browser admission off") }, "write");
   await idle(session);
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
-  assert.equal(view.approvals.length, 1);
+  assert.equal((await records(session)).length, 1);
 });
 
 test("a session on the host is never offered the browser tool, even where the host has a Chromium: it runs only in the session's sandbox", { skip: process.platform === "win32" }, async t => {
@@ -375,7 +368,7 @@ test("a session on the host is never offered the browser tool, even where the ho
   await idle(session);
   const view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool browser is not available/);
-  assert.equal(view.approvals.length, 0, "nothing ran on the host");
+  assert.equal((await records(session)).length, 0, "nothing ran on the host");
   assert.deepEqual(view.extensions?.unavailable, [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }]);
   assert.match(instructions, /This session has no browser tool: The browser runs only in a session's sandbox, and this session runs on its host itself/);
 });
@@ -452,18 +445,17 @@ test("the make tool runs make without a shell of its own, as one exact command c
   const id = "make-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("make admission") }, "write");
-  const approval = await pendingApproval(session);
+  const approval = await ranLast(session);
   assert.deepEqual(approval.operation, { kind: "program", tool: "make", command: "cd -- './app' && PATH=\"${PATH:-/usr/bin:/bin}\":'/usr/local/bin' make '-j4' 'test' </dev/null 2>&1" });
-  await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
   await idle(session);
   assert.match(instructions, /Run cargo, rustc, rustup and rustfmt, go and gofmt, dotnet, make with the rust, go, dotnet, make tools/);
 
-  answer = { extensions: [{ source: "piki:make", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:make", enabled: false, tools: "automatic", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Version?", requestId: "off", admissionId: await sha256("make admission off") }, "write");
   await idle(session);
   const view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool make is not available/);
-  assert.equal(view.approvals.length, 1);
+  assert.equal((await records(session)).length, 1);
 });
 
 test("in the Linux sandbox, a program tool's program the host lacks is named with how its owner installs it, and a call to it is refused before anyone is asked", { skip: linuxSandboxMissing() }, async t => {
@@ -500,20 +492,12 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   assert.deepEqual((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"),
     { source: "piki:frob", tools: ["frob"], reason: "programs", programs: ["frob-not-installed-anywhere"] });
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("missing programs admission") }, "write");
-  let approval;
-  for (let count = 0; count < 1000 && !approval; count++) {
-    approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
-    if (!approval) await delay(20);
-  }
-  if (!approval) assert.fail(`no pending approval: ${(await session.view()).entries.map(entry => entry.text).join("\n").slice(-3000)}`);
-  assert.equal(approval.operation.kind === "program" && approval.operation.tool, "frob");
-  await session.decide(await ticket(id, "approve"), approval.id, { decision: "deny", operation: approval.operation });
   await idle(session);
   const view = await session.view();
-  assert.equal(view.approvals.length, 1, "the missing program's call left no card");
+  assert.ok((await records(session)).every(record => record.status !== "executed"), "the missing program's call ran nothing");
   assert.match(view.entries.map(entry => entry.text).join("\n"), /frob-not-installed-anywhere isn't installed on this host where the session's sandbox sees it[^]*Nothing ran\./);
   assert.match(instructions, /This host doesn't have the frob tool's frob-not-installed-anywhere[^.]* where the session's sandbox sees them/);
   assert.match(instructions, /Calls to them are refused before they run/);
-  answer = { extensions: [{ source: "piki:frob", enabled: false, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:frob", enabled: false, tools: "automatic", settings: {} }], automaticTools: false };
   assert.equal((await session.view()).extensions?.unavailable?.find(item => item.source === "piki:frob"), undefined);
 });

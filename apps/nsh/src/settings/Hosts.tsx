@@ -294,7 +294,7 @@ function ShareRow(props: { connector: ConnectorInfo; available: Workspace[]; bus
   async function share() {
     if (!configured() || props.busy) return;
     if (props.connector.capabilities.unsandboxed && !await confirm({ title: "Share an unsandboxed host?", confirmLabel: "Share host", destructive: true,
-      message: `Share an unsandboxed Pi with ${target().name}? Members' approved commands will run directly on your machine as your user, with access to your files, credentials and network, and no resource limits.` })) return;
+      message: `Share an unsandboxed Pi with ${target().name}? Commands of members you grant host commands will run directly on your machine as your user, with access to your files, credentials and network, and no resource limits.` })) return;
     await props.run(async () => {
       await session().api(`/api/connectors/${segment(props.connector.id)}/shares/${segment(target().id)}`, { method: "PUT", body: {} });
       props.refresh();

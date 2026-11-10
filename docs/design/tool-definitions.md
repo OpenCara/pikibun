@@ -1,5 +1,7 @@
 # Tools defined as data
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 Status: implemented for `node`, `rust`, `go`, `dotnet`, `make` (program tools) and `source_read` (brokered). `git`,
 `python`, `browser`, the file tools, `schedule`, `sessions`, the `github_*` tools and the `gh`/`glab`/`az` command
 extensions are still code in the connector.

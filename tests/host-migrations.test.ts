@@ -36,12 +36,12 @@ async function fixture(t: TestContext, options: { targetCapabilities?: Record<st
     INSERT INTO workspace_members VALUES ('workspace','test:owner','owner','2026-01-01'),('workspace','test:host','member','2026-01-01');
   `);
   sqlite.prepare(`INSERT INTO connectors (id,owner_id,name,credential_hash,connection_hash,models_json,capabilities_json,created_at)
-    VALUES ('old-host','test:host','Old host',?,?,?,'{"platform":"linux","sandbox":true,"productionShell":false}','2026-01-01')`)
+    VALUES ('old-host','test:host','Old host',?,?,?,'{"platform":"linux","sandbox":true,"productionShell":false,"approvalFree":true}','2026-01-01')`)
     .run(await sha256(sourceBearer), await sha256(sourceConnection), models);
   sqlite.prepare(`INSERT INTO connectors (id,owner_id,name,credential_hash,connection_hash,models_json,capabilities_json,created_at)
     VALUES ('new-host',?,'New host',?,?,?,?,'2026-01-01')`)
     .run(targetOwner, await sha256(targetBearer), await sha256(targetConnection), models,
-      JSON.stringify(options.targetCapabilities ?? { platform: 'linux', sandbox: true, productionShell: false, hostMigration: true }));
+      JSON.stringify(options.targetCapabilities ?? { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, hostMigration: true }));
   sqlite.exec(`
     INSERT INTO connector_workspaces VALUES ('old-host','workspace','2026-01-01'),('new-host','workspace','2026-01-01');
     INSERT INTO connector_shares VALUES ('old-host','workspace','2026-01-01');
@@ -131,7 +131,7 @@ test('a session moves to another connected host and the source is archived', asy
 });
 
 test('a move needs another host that accepts moved sessions', async t => {
-  const f = await fixture(t, { targetCapabilities: { platform: 'linux', sandbox: true, productionShell: false } });
+  const f = await fixture(t, { targetCapabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true } });
   f.hosts();
   assert.equal((await f.request(migratePath, { requestId: 'old', modelId: 'new-model' })).status, 409);
   const g = await fixture(t);
@@ -142,7 +142,7 @@ test('a move needs another host that accepts moved sessions', async t => {
 });
 
 test('a clone session moves only to a host that restores its clones', async t => {
-  const capabilities = { platform: 'linux', sandbox: false, productionShell: false, hostMigration: true, plainGit: true };
+  const capabilities = { platform: 'linux', sandbox: false, productionShell: false, approvalFree: true, hostMigration: true, plainGit: true };
   const clone = (s: { sqlite: { exec(sql: string): void } }) => s.sqlite.exec("PRAGMA defer_foreign_keys = ON; BEGIN; DROP TRIGGER sessions_repository_mode_immutable;"
     + " UPDATE sessions SET repository_mode = 'clone' WHERE id = 'source'; COMMIT;");
   const older = await fixture(t, { targetCapabilities: capabilities });
@@ -160,7 +160,7 @@ test('a clone session moves only to a host that restores its clones', async t =>
 });
 
 test('a clone session moves to another member\'s host without resource limits only with a host command grant there', async t => {
-  const f = await fixture(t, { targetOwner: 'test:host', targetCapabilities: { platform: 'linux', sandbox: false, productionShell: false, hostMigration: true,
+  const f = await fixture(t, { targetOwner: 'test:host', targetCapabilities: { platform: 'linux', sandbox: false, productionShell: false, approvalFree: true, hostMigration: true,
     plainGit: true, cloneBackups: true, hostCommands: true, hostGrants: true, unboundedShellGrants: true } });
   f.sqlite.exec("PRAGMA defer_foreign_keys = ON; BEGIN; DROP TRIGGER sessions_repository_mode_immutable;"
     + " UPDATE sessions SET repository_mode = 'clone' WHERE id = 'source'; COMMIT;"

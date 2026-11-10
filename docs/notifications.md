@@ -2,8 +2,6 @@
 
 Pikibun tells you when one of your sessions needs you or is done, in your browser:
 
-- **Needs approval**: a session's agent waits for someone to approve what it wants to do (see
-  [Approvals](approvals.md)).
 - **Finished**: the agent finished the message it was working on.
 - **Failed**: the agent stopped on an error.
 
@@ -23,9 +21,8 @@ device.
 Clicking or tapping a notification opens its session. A notification about the session you're looking at isn't shown
 again as a banner.
 
-Under **Notify me when**, choose which of the three you get, on every device. Turn off **Show session titles** to keep
-session titles off your lock screen. Notifications then only say what happened (*A session is waiting for an
-approval.*).
+Under **Notify me when**, choose which of the two you get, on every device. Turn off **Show session titles** to keep
+session titles off your lock screen. Notifications then only say what happened (*A session finished.*).
 
 **Devices** lists the browsers that get your notifications even when Pikibun isn't open. **Remove** stops
 one. **Send a test** sends a notification to all of them. Each one belongs to the sign-in that turned it on: signing

@@ -269,8 +269,8 @@ export function HostCompactionSection(props: { connector: ConnectorInfo; refresh
 }
 
 const levelLabels: Record<HostCommandLevel, { label: string; hint: string }> = {
-  approve: { label: "Approve host commands", hint: "Decides each host command in sessions they can approve" },
-  auto: { label: "Auto-approve host commands", hint: "Also runs the host commands of their own Auto-approve messages without asking" },
+  approve: { label: "Host commands", hint: "Their messages run host commands, such as extension tools, at once" },
+  auto: { label: "Host commands", hint: "Their messages run host commands, such as extension tools, at once" },
 };
 const expiries = [
   { value: "never", label: "No expiry", days: 0 }, { value: "1", label: "1 day", days: 1 }, { value: "7", label: "7 days", days: 7 }, { value: "30", label: "30 days", days: 30 },
@@ -359,7 +359,8 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
   const members = createMembers(() => target()?.id);
   const eligible = () => (members.data()?.members ?? []).filter(member => member.userId !== props.connector.ownerId && member.role !== "viewer");
   const grantee = signal(EVERYONE);
-  const level = signal<HostCommandLevel>("approve");
+  // Both levels of before approvals were removed grant the same; new grants take the one that ran commands without asking.
+  const level = (): HostCommandLevel => "auto";
   const expiry = signal<Expiry>("7");
   const capabilities = () => props.connector.capabilities;
   const accepting = () => props.connector.config?.hostSessions === true && !capabilities().unsandboxed;
@@ -375,19 +376,16 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
   async function grant() {
     const workspace = target();
     if (!workspace) return;
-    const auto = level() === "auto";
     const withSessions = owner() && sessions();
     const dropsSessions = owner() && !sessions() && existing()?.hostSessions === true;
     const name = props.connector.name;
     if (!await confirm({
-      title: withSessions ? "Grant sessions on the host?" : auto ? "Grant automatic host commands?" : "Grant host command approval?",
-      message: (auto
-        ? `${who()} will be able to run host commands on ${name}, such as its extensions' tools, OUTSIDE the sandbox without anyone approving each command, whenever they send a message with Auto-approve. Commands run on the owner's machine as its user, with its files, credentials and network, and no resource limits.`
-        : `${who()} will be able to approve host commands on ${name}, such as its extensions' tools, which run OUTSIDE the sandbox on the owner's machine with its files, credentials and network.`)
-        + (withSessions ? ` They will also be able to start their own sessions directly on ${name}, without the sandbox: every command of those sessions runs as its user${auto ? ", without asking under their Auto-approve" : ", once approved"}, and their clones use its Git and credentials.` : "")
-        + (lendsShell() ? ` As ${name} has no resource limits for commands, the shell commands of their own sandboxed sessions will run there without them too${auto ? ", without asking under their Auto-approve" : ", each once approved like a host command"}.` : "")
+      title: withSessions ? "Grant sessions on the host?" : "Grant host commands?",
+      message: `${who()} will be able to run host commands on ${name}, such as its extensions' tools, OUTSIDE the sandbox, as soon as their messages' agents call them; nobody approves each command. Commands run on the owner's machine as its user, with its files, credentials and network, and no resource limits.`
+        + (withSessions ? ` They will also be able to start their own sessions directly on ${name}, without the sandbox: every command of those sessions runs as its user, and their clones use its Git and credentials.` : "")
+        + (lendsShell() ? ` As ${name} has no resource limits for commands, the shell commands of their own sandboxed sessions will run there without them too.` : "")
         + (dropsSessions ? ` This replaces their current grant, which includes sessions on the host: they will no longer start sessions directly on ${name}, and the next command of any they have there will stop.` : ""),
-      confirmLabel: "Grant", destructive: auto || withSessions,
+      confirmLabel: "Grant", destructive: true,
     })) return;
     const days = expiries.find(item => item.value === expiry())!.days;
     await action.run(async () => {
@@ -407,14 +405,14 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
     }, "Host command access removed.");
   }
   return (
-    <Section title="Host command access" testID="host-grants" info="Host commands, such as the tools of this host's extensions, run OUTSIDE the sandbox, on this machine as its user. By default only the owner decides those commands. Grant members of a shared workspace the right to approve them, or to run their own without asking under Auto-approve. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run shell commands without them, decided like host commands. Grants end when they expire, when you remove them, or when the host stops being shared there.">
-      <If when={grants().length > 0} else={<Row title="Only the owner" hint="No one else decides host commands on this host" />}>
+    <Section title="Host command access" testID="host-grants" info="Host commands, such as the tools of this host's extensions, run OUTSIDE the sandbox, on this machine as its user. By default they run only in the owner's own sessions; anyone else's are refused. Grant members of a shared workspace the right to run them in their own sessions and messages. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run shell commands without them. Grants end when they expire, when you remove them, or when the host stops being shared there.">
+      <If when={grants().length > 0} else={<Row title="Only the owner" hint="No one else runs host commands on this host" />}>
         <Each of={grants()} key={item => `${item.workspaceId}:${item.userId ?? ""}`}>
           {item => (
             <Row title={`${item().userId ? item().userName ?? item().userId : "All members"} · ${names().get(item().workspaceId) ?? item().workspaceId}`}
               hint={`${levelLabels[item().level].hint}${item().hostSessions ? " · may start sessions on the host" : ""}${item().expiresAt ? ` · expires ${timestamp(item().expiresAt!)}` : " · no expiry"}`}
               trailing={<>
-                <Badge tone={item().level === "auto" ? "warning" : "neutral"}>{item().level === "auto" ? "Auto-approve" : "Approve"}</Badge>
+                <Badge tone="warning">{"Host commands"}</Badge>
                 <If when={item().hostSessions}><Badge tone="danger">Sessions on host</Badge></If>
                 <Button small variant="outline" label="Remove" disabled={action.busy()} onPress={() => revoke(item())} />
               </>} />
@@ -430,8 +428,6 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
             </If>
             <Select<string> compact label="Member" value={member() ? member()!.userId : EVERYONE} disabled={action.busy()} onChange={value => grantee.set(value)}
               options={[{ value: EVERYONE, label: "All members" }, ...eligible().map(item => ({ value: item.userId, label: usernameWithId(memberPerson(item)) }))]} />
-            <Select<HostCommandLevel> compact label="Access" value={level()} disabled={action.busy()} onChange={value => level.set(value)}
-              options={(["approve", "auto"] as const).map(value => ({ value, label: levelLabels[value].label }))} />
             <If when={owner() && !capabilities().unsandboxed}>
               <Checkbox label="Sessions on the host" checked={sessions()} disabled={action.busy()} onChange={value => sessionsChoice.set({ key: grantKey(), value })}
                 hint={accepting() ? undefined : "Applies once Configuration → Sessions on the host is on"} />

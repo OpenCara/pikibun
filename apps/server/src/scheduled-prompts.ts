@@ -56,9 +56,10 @@ function validTimeZone(value: unknown): string {
   return value;
 }
 
+/** A schedule's access: read, Read only; anything else (auto, or approval from before approvals were removed) acts. */
 function validAccess(value: unknown): AccessMode {
-  if (!accessModes.includes(value as AccessMode)) fail(400, 'invalid_input', 'Access is read, approval or auto.');
-  return value as AccessMode;
+  if (!accessModes.includes(value as AccessMode)) fail(400, 'invalid_input', 'Access is read or auto.');
+  return value === 'read' ? 'read' : 'auto';
 }
 
 function validRunIn(value: unknown): ScheduleRunIn {
@@ -84,12 +85,12 @@ async function ownSession(c: AppContext): Promise<SessionRow> {
 }
 
 async function requireAccessSupported(env: Env, row: SessionRow, access: AccessMode): Promise<void> {
-  if (access === 'approval') return;
-  if (!row.connector_id) fail(400, 'options_unsupported', 'This session\'s runner cannot change access; schedule it with approval.');
+  if (access !== 'read') return;
+  if (!row.connector_id) fail(400, 'options_unsupported', 'This session\'s runner cannot run read-only prompts; schedule it without Read only.');
   const capabilities = await hostCapabilities(env, row.connector_id, { active: true });
   if (!capabilities) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
   if (capabilities.chatOptions !== true) {
-    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to schedule read-only or auto-approved prompts.');
+    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to schedule read-only prompts.');
   }
 }
 
@@ -113,7 +114,7 @@ async function send(env: Env, schedule: ScheduleRow, ownerId: string, at: number
     return submitMessage(c, row, 'submit', {
       content: schedule.content,
       requestId: `schedule:${schedule.id}:${at}`,
-      ...(schedule.access === 'approval' ? {} : { options: { access: schedule.access } }),
+      ...(schedule.access === 'read' ? { options: { access: 'read' } } : {}),
     }, { scheduleId: schedule.id, trigger }, { currentModel: true });
   }, 'scheduled-prompt');
 }
@@ -154,7 +155,7 @@ async function startChild(c: AppContext, parent: SessionRow, schedule: ScheduleR
     await auditStatement(c.env, ownerId, 'session.schedule.child_started', parent.workspace_id, parent.id,
       { scheduleId: schedule.id, childSessionId: child.id, trigger }).run();
     if (Number(schedule.one_shot ?? 1) === 1) await c.env.DB.query('UPDATE sessions SET one_shot = 1 WHERE id = ?').bind(child.id).run();
-    const options: ChatOptions = { ...(schedule.access === 'approval' ? {} : { access: schedule.access }), ...(thinkingLevel ? { thinkingLevel } : {}) };
+    const options: ChatOptions = { ...(schedule.access === 'read' ? { access: 'read' } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
     const submission = await submitMessage(c, child, 'submit', {
       content: schedule.content,
       requestId: `schedule:${schedule.id}:${at}`,
@@ -248,7 +249,7 @@ async function createSchedule(env: Env, row: SessionRow, change: ScheduleChange,
   const timeZone = input.timeZone === undefined ? 'UTC' : validTimeZone(input.timeZone);
   const content = text(input.content, 'content', 60000);
   const name = input.name === undefined || input.name === '' ? content.trim().split('\n')[0]!.slice(0, 80) || 'Scheduled prompt' : text(input.name, 'name', 100);
-  const access = input.access === undefined ? 'approval' : validAccess(input.access);
+  const access = input.access === undefined ? 'auto' : validAccess(input.access);
   const runIn = input.runIn === undefined ? 'session' : validRunIn(input.runIn);
   const oneShot = input.oneShot === undefined ? true : validOneShot(input.oneShot);
   const enabled = input.enabled === undefined ? true : validEnabled(input.enabled);
@@ -354,20 +355,17 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
     || admission.expires_at <= Math.floor(Date.now() / 1000)) {
     fail(403, 'schedule_not_admitted', 'Scheduling needs a write message from the session owner sent within the last hour.');
   }
-  await requireToolCall(c.env, row, 'schedule', { id: callId, requestedBy: actorId, admission, target });
+  await requireToolCall(c.env, row, 'schedule');
   if (action === 'list') {
     const rows = await c.env.DB.query<ScheduleRow>('SELECT * FROM session_schedules WHERE session_id = ? ORDER BY created_at, id').bind(row.id).all();
     return c.json({ schedules: rows.map(scheduleRecord) } satisfies ScheduleToolResult);
   }
   requireUnfrozen(row);
+  if (admission.access === 'read') {
+    fail(403, 'read_only_message', 'A Read-only message changes nothing, schedules included: ask in a message that may act.');
+  }
   const change: ScheduleChange = { actorId, callId };
-  const requireAutomatic = () => {
-    if (admission.access !== 'auto') {
-      fail(403, 'automatic_schedule_not_admitted', 'Only a message the session owner sent with Auto-approve schedules an auto-approved prompt, or changes one and leaves it auto-approved. Pause it, lower its access, or have the owner change it in the Schedules tab.');
-    }
-  };
   if (action === 'create') {
-    if (fields.access === 'auto') requireAutomatic();
     return c.json({ schedule: scheduleRecord(await createSchedule(c.env, row, change, fields)) } satisfies ScheduleToolResult, 201);
   }
   const current = await findSchedule(c.env, row, scheduleId!);
@@ -375,8 +373,6 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
     await deleteSchedule(c.env, row, change, current);
     return c.json({ deleted: current.id } satisfies ScheduleToolResult);
   }
-  const pausing = Object.keys(fields).length === 1 && fields.enabled === false;
-  if ((fields.access ?? current.access) === 'auto' && !pausing) requireAutomatic();
   return c.json({ schedule: scheduleRecord(await updateSchedule(c.env, row, change, current, fields)) } satisfies ScheduleToolResult);
 }
 

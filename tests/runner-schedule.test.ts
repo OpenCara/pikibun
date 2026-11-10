@@ -37,16 +37,7 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-async function pendingApproval(session: RunnerSession) {
-  for (let count = 0; count < 1000; count++) {
-    const approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
-    if (approval) return approval;
-    await delay(20);
-  }
-  assert.fail("no pending approval");
-}
-
-test("the agent schedules prompts from the chat for the session owner, never adding access its message lacked", async t => {
+test("the agent schedules prompts from the chat for the session owner at once, never in a Read-only message", async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-schedule-tool-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests: ScheduleToolRequest[] = [];
@@ -58,6 +49,8 @@ test("the agent schedules prompts from the chat for the session owner, never add
     fauxAssistantMessage("Scheduled."),
     fauxAssistantMessage([fauxToolCall("schedule", { ...create, access: "auto" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Not allowed."),
+    fauxAssistantMessage([fauxToolCall("schedule", create)], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Scheduled again."),
     fauxAssistantMessage([fauxToolCall("schedule", { action: "list" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Not allowed."),
     fauxAssistantMessage([fauxToolCall("schedule", { action: "update", id: "schedule-1", enabled: false })], { stopReason: "toolUse" }),
@@ -79,32 +72,31 @@ test("the agent schedules prompts from the chat for the session owner, never add
   const transcript = async () => (await session.view()).entries.map(entry => entry.text).join("\n");
 
   await session.submit(await ticket(id, "submit"), { content: "Every weekday at nine, check the build.", requestId: "create", admissionId }, "write");
-  const permission = await pendingApproval(session);
-  const fields = { cron: "0 9 * * 1-5", timeZone: "Europe/Berlin", content: "Check the build", runIn: "child" as const, oneShot: false };
-  assert.equal((permission.operation as PermissionRequest).tool, "schedule");
-  assert.equal((permission.operation as PermissionRequest).target, scheduleToolTarget({ action: "create", ...fields }));
-  assert.match((permission.operation as PermissionRequest).target, /each run in a new child session each child kept open/, "the card says where its runs go, and that they stay open");
-  assert.equal(requests.length, 0, "nothing is scheduled before the owner allows it");
-  await session.decide(await ticket(id, "approve"), permission.id, { decision: "approve", operation: permission.operation });
   await idle(session);
+  const fields = { cron: "0 9 * * 1-5", timeZone: "Europe/Berlin", content: "Check the build", runIn: "child" as const, oneShot: false };
+  assert.match(scheduleToolTarget({ action: "create", ...fields }), /each run in a new child session each child kept open/, "its record says where its runs go, and that they stay open");
   assert.equal(requests.length, 1);
   assert.deepEqual({ ...requests[0], callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "create", ...fields });
   assert.match(requests[0]!.callId, /^[A-Za-z0-9_-]+$/);
   assert.match(await transcript(), /schedule-1/);
 
-  await session.submit(await ticket(id, "submit"), { content: "Schedule it with auto-approve.", requestId: "auto", admissionId }, "write");
+  await session.submit(await ticket(id, "submit"), { content: "Schedule it, acting.", requestId: "auto", admissionId }, "write");
   await idle(session);
-  assert.match(await transcript(), /Only a message the session owner sent with auto-approve schedules an auto-approved prompt/);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1]!.access, "auto", "a schedule that acts, as every message that may act does");
+  await session.submit(await ticket(id, "submit"), { content: "Only look.", requestId: "read", admissionId, options: { access: "read" } }, "write");
+  await idle(session);
+  assert.match(await transcript(), /which a Read-only message doesn't do/);
   await session.submit(await ticket(id, "submit", "test:bob"), { content: "What is scheduled?", requestId: "bob", admissionId: await sha256("bob admission") }, "write");
   await idle(session);
   assert.match(await transcript(), /Only the session owner's messages schedule prompts/);
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
 
   await session.submit(await ticket(id, "submit"), { content: "Pause it.", requestId: "pause", admissionId, options: { access: "auto" } }, "write");
   await idle(session);
-  assert.equal(requests.length, 2);
-  assert.deepEqual({ ...requests[1], callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "update", scheduleId: "schedule-1", enabled: false });
-  assert.equal((await session.view()).approvals.filter(approval => approval.status === "pending").length, 0);
+  assert.equal(requests.length, 3);
+  assert.deepEqual({ ...requests[2], callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "update", scheduleId: "schedule-1", enabled: false });
+  assert.deepEqual((await session.view()).approvals, []);
 });
 
 test("piki:schedule: the workspace turns the schedule tool off, and a call by name is refused; it stays on where the workspace never chose or can't be read", async t => {

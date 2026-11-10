@@ -1,18 +1,13 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { entryImageLimits } from "../../../../packages/shared/src/entry-images.js";
 import type { SessionView } from "../../../../packages/shared/src/types.js";
-import type { autoApprovedCalls } from "../approval-view.js";
 import { modelFailureCause } from "../model-failure.js";
 import type { Run } from "../session.js";
 
 export const CRASHED_TEXT = "Stopped: the host crashed repeatedly while working on this message. Send it again to retry.";
 
-export function entryView(entry: EntryRecord, branch: number, actorId?: string, autoApproved?: ReturnType<typeof autoApprovedCalls>): SessionView["entries"][number] {
+export function entryView(entry: EntryRecord, branch: number, actorId?: string): SessionView["entries"][number] {
   const messages = entry.model ?? [];
-  const marks = messages.flatMap(message => message.role !== "assistant" ? [] : message.content.flatMap(block => {
-    const mark = block.type === "toolCall" ? autoApproved?.get(block.id) : undefined;
-    return mark && block.type === "toolCall" ? [{ tool: block.name, callId: callId(block.id), ...mark }] : [];
-  }));
   const calls = messages.flatMap(message => message.role !== "assistant" ? []
     : message.content.flatMap(block => block.type === "toolCall" ? [{ id: callId(block.id), name: block.name }] : []));
   const result = toolResultOf(messages);
@@ -31,7 +26,7 @@ export function entryView(entry: EntryRecord, branch: number, actorId?: string, 
   const durations = messages.flatMap(message => (message.role === "assistant" || message.role === "toolResult") && message.durationMs !== undefined ? [message.durationMs] : []);
   const durationMs = durations.length ? durations.reduce((total, value) => total + value, 0) : undefined;
   return { id: `${branch}:${entry.id}`, kind: entry.kind, role: messages[0]?.role ?? "system", text, ...(actorId ? { actorId } : {}), conversationId: String(branch),
-    ...(error ? { error } : {}), ...(durationMs !== undefined ? { durationMs } : {}), ...(marks.length ? { autoApproved: marks } : {}),
+    ...(error ? { error } : {}), ...(durationMs !== undefined ? { durationMs } : {}),
     ...(images.length ? { images } : {}), ...(calls.length ? { toolCalls: calls } : {}), ...(result ? { toolResult: result } : {}) };
 }
 

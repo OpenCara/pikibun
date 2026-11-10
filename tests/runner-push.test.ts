@@ -16,7 +16,7 @@ import { hostGitAuthorization, HostCredentialError } from "../apps/runner/src/gi
 import { RunnerService } from "../apps/runner/src/server.js";
 import type { RunnerConfig, RunnerSession } from "../apps/runner/src/session.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
-import type { AuthorizationRequest, Permission, PushCompleteRequest, PushCredential, PushCredentialRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
+import type { ApprovalRecord, AuthorizationRequest, Permission, PushCompleteRequest, PushCredential, PushCredentialRequest, RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { startGitHttpServer } from "./helpers/git-http.js";
 
@@ -90,16 +90,12 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-async function pendingApproval(session: RunnerSession) {
-  for (let count = 0; count < 1000; count++) {
-    const approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
-    if (approval) return approval;
-    await delay(20);
-  }
-  assert.fail("no pending approval");
+/** What the session's tools ran, as the session records it. */
+async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
 }
 
-test("sessions run approved clone pushes in the background, auto-push only with an admission, and always report completion", sandboxMode, async t => {
+test("sessions push a clone at once for a message that may act, with its admission, and always report completion", sandboxMode, async t => {
   const { bare, credential } = await upstream(t);
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-push-session-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -134,11 +130,10 @@ test("sessions run approved clone pushes in the background, auto-push only with 
   const tip = commitToClone(session, bare, "from the agent\n", "Agent change");
 
   const admissionId = await sha256("push admission");
-  await session.submit(await ticket(id, "submit"), { content: "Push.", requestId: "auto", admissionId, options: { access: "auto" } }, "write");
+  await session.submit(await ticket(id, "submit"), { content: "Push.", requestId: "auto", admissionId }, "write");
   await idle(session);
-  const automatic = (await session.view()).approvals.find(approval => approval.operation.kind === "git.push")!;
+  const automatic = (await records(session)).find(approval => approval.operation.kind === "git.push")!;
   assert.equal(automatic.status, "executed");
-  assert.equal(automatic.automatic, true);
   assert.match(automatic.result ?? "", /Pushed 1 commit to auto/);
   assert.equal(credentialRequests[0]!.admissionId, admissionId);
   assert.equal(credentialRequests[0]!.capability, undefined);
@@ -147,30 +142,26 @@ test("sessions run approved clone pushes in the background, auto-push only with 
   assert.deepEqual(completions[0], { sessionId: id, approvalId: automatic.id, credentialId: "credential-1", outcome: "pushed", tip });
 
   commitToClone(session, bare, "for review\n", "Review change");
-  await session.submit(await ticket(id, "submit"), { content: "Push for review.", requestId: "review", options: { access: "auto" } }, "write");
-  const reviewed = await pendingApproval(session);
-  assert.equal(reviewed.operation.kind === "git.push" && reviewed.operation.branch, "reviewed");
-  assert.deepEqual(Object.keys(reviewed.operation), ["kind", "repository", "directory", "branch", "commit", "pullRequest"]);
-  await assert.rejects(session.decide(await ticket(id, "approve"), reviewed.id, { decision: "approve", operation: reviewed.operation }), /broker capability/);
-  const decided = await session.decide(await ticket(id, "approve"), reviewed.id, { decision: "approve", operation: reviewed.operation, brokerCapability: "capability-1" });
-  assert.equal(decided.status, "executing");
+  const reviewAdmission = await sha256("review admission");
+  await session.submit(await ticket(id, "submit"), { content: "Push for review.", requestId: "review", admissionId: reviewAdmission }, "write");
   await idle(session);
-  const settled = (await session.view()).approvals.find(approval => approval.id === reviewed.id)!;
+  const settled = (await records(session)).at(-1)!;
+  assert.equal(settled.operation.kind === "git.push" && settled.operation.branch, "reviewed");
+  assert.deepEqual(Object.keys(settled.operation), ["kind", "repository", "directory", "branch", "commit", "pullRequest"]);
   assert.equal(settled.status, "executed");
   assert.match(settled.result ?? "", /Pushed 1 commit to reviewed/);
   assert.match(settled.result ?? "", /https:\/\/forge\.example\/acme\/alpha\/pull\/7/);
-  assert.equal(credentialRequests[1]!.capability, "capability-1");
-  assert.equal(credentialRequests[1]!.admissionId, undefined);
+  assert.equal(credentialRequests[1]!.capability, undefined);
+  assert.equal(credentialRequests[1]!.admissionId, reviewAdmission);
   assert.ok((await session.view()).entries.some(entry => entry.role === "toolResult" && entry.text.includes("Pushed 1 commit to reviewed")), "the agent learns the push went through");
 
   const base = git(["--git-dir", bare, "rev-parse", "refs/heads/main"]).trim();
   const other = git(["--git-dir", bare, "commit-tree", `${base}^{tree}`, "-p", base, "-m", "elsewhere"], { env: IDENTITY }).trim();
   git(["--git-dir", bare, "update-ref", "refs/heads/moved", other]);
-  await session.submit(await ticket(id, "submit"), { content: "Push to a moved branch.", requestId: "moved" }, "write");
-  const moved = await pendingApproval(session);
-  assert.equal((await session.decide(await ticket(id, "approve"), moved.id, { decision: "approve", operation: moved.operation, brokerCapability: "capability-2" })).status, "executing");
+  await session.submit(await ticket(id, "submit"), { content: "Push to a moved branch.", requestId: "moved", admissionId: await sha256("moved admission") }, "write");
   await idle(session);
-  const failed = (await session.view()).approvals.find(approval => approval.id === moved.id)!;
+  const failed = (await records(session)).at(-1)!;
+  const moved = failed;
   assert.equal(failed.status, "failed");
   assert.match(failed.result ?? "", /fast-forward only/);
   assert.deepEqual(completions.at(-1), { sessionId: id, approvalId: moved.id, credentialId: "credential-3", outcome: "failed" });
@@ -272,7 +263,7 @@ test("pushes with the host's Git credentials run only in its owner's sessions wh
     commitToClone(session, bare, `${id} change\n`, `${id} change`);
     await session.submit({ ...await ticket(id, "submit"), connectorId }, { content: "Push.", requestId: id, admissionId: await sha256(id), options: { access: "auto" } }, "write");
     await idle(session);
-    return (await session.view()).approvals.find(approval => approval.operation.kind === "git.push")!;
+    return (await records(session)).find(approval => approval.operation.kind === "git.push")!;
   };
 
   const own = await run("host-own", "test:alice");

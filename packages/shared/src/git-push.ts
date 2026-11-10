@@ -129,9 +129,9 @@ export function sessionBranchRefusal(commands: readonly PushCommand[], branch: s
   const ref = `refs/heads/${branch}`;
   const other = commands.find(command => command.ref !== ref);
   if (other?.ref.startsWith("refs/tags/")) {
-    return `Tags can't be pushed without approval, not ${other.ref.slice("refs/tags/".length, 200)}; use the git_push tool with a tag for a commit already on its branch`;
+    return `Tags can't be pushed with plain git, not ${other.ref.slice("refs/tags/".length, 200)}; use the git_push tool with a tag for a commit already on its branch`;
   }
-  if (other) return `Only this session's branch ${branch} can be pushed without approval, not ${other.ref.replace(/^refs\/heads\//, "").slice(0, 200)}; use the git_push tool for other branches`;
+  if (other) return `Only this session's branch ${branch} can be pushed with plain git, not ${other.ref.replace(/^refs\/heads\//, "").slice(0, 200)}; use the git_push tool for other branches`;
   if (commands.length > 1) return `Push ${branch} once per push`;
   if (commands.some(command => ZERO_OBJECT.test(command.new))) return `The session branch ${branch} can't be deleted`;
   return undefined;

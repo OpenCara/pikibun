@@ -1,14 +1,13 @@
 import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, windowSize, type Accessor, type JSX, type ListRef } from "nsh";
 import { Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
-  accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
-  defaultAccess, initialSelection, isHostCommand, optionsBeforeHost, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, offersMemberAutoApprove, pairToolResults, preparingRepositories,
-  REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ApprovalRecord, type ChatSelection, type ConnectorInfo, type EntryView,
+  accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText,
+  initialSelection, managesSession, messageCut, modelUnavailable, pairToolResults, preparingRepositories,
+  REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
 } from "../shared";
-import { ApprovalCard } from "../components/ApprovalCard";
 import { RenameSheet } from "../components/SessionMenu";
-import { ChatOptionsBar, confirmAutoApprove } from "../components/ChatOptionsBar";
+import { ChatOptionsBar } from "../components/ChatOptionsBar";
 import { Composer } from "../components/Composer";
 import { PullRequestLink } from "../components/PullRequest";
 import { RepositoryPreparationCard } from "../components/RepositoryPreparation";
@@ -37,12 +36,10 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   const { user } = untracked(session);
   const data = useAppData();
   const live = createLiveSession(props.id);
-  const approvalsOpen = signal(false);
   const panelOpen = signal(false);
   const permissions = () => live.session()?.permissions ?? [];
   const archived = () => live.session()?.status === "archived";
   const readOnly = () => archived() || live.session()?.frozen === true;
-  const canApprove = () => permissions().includes("approve") && !readOnly();
   const isOwner = () => live.session()?.ownerId === user.id;
   const hosts = createResource<{ connectors: ConnectorInfo[] }>(() => {
     const current = live.session();
@@ -56,7 +53,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     previousOnline = online;
   });
   const action = createAction();
-  const approvalAction = createAction();
   const known = () => live.session() ?? data.sessions().find(item => item.id === props.id);
   const people = createWorkspacePeople(() => known()?.workspaceId ?? null);
   const title = () => known()?.title ?? "Session";
@@ -101,8 +97,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     if (workspaceId) items.push("separator", { label: "Open in workspace settings", icon: "settings", onSelect: () => props.go({ name: "settings", section: "workspaces", id: workspaceId }) });
     return items;
   };
-  const approvals = () => live.view()?.approvals ?? [];
-  const pending = computed(() => approvals().filter(approval => approval.status === "pending"));
   const browserWarning = () => (readOnly() ? undefined
     : live.view()?.extensions?.unavailable?.find(item => item.source === "piki:browser" && ["missing", "failed", "downloading"].includes(item.reason)));
   const dismissedBrowser = signal(false);
@@ -112,27 +106,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     data.setLiveActivity(activity ? { sessionId: props.id, activity } : null);
   });
   cleanup(() => { data.setLiveActivity(null); data.refreshSessions(); });
-
-  function decides(approval: ApprovalRecord): boolean {
-    const current = live.session() ?? {};
-    if (readOnly()) return false;
-    if (decidedAsHostCommand(approval.operation, current, approval.unbounded)) return decidesHostCommand(approval.operation, current, host(), user.id, permissions().includes("approve"));
-    const ownerOnly = approval.operation.kind === "permission" || approval.operation.kind === "git.repin";
-    return canApprove() && (!ownerOnly || isOwner());
-  }
-
-  async function decide(approval: ApprovalRecord, decision: "approve" | "deny", scope?: "call" | "session", always = false) {
-    if (!decides(approval) || approvalAction.busy() || !approval.reviewHash || approval.status !== "pending") return;
-    const name = (id: string) => username(people().person(id));
-    const notice = approval.operation.kind === "permission"
-      ? decision === "deny" ? "Not allowed" : scope === "session" ? "Allowed for the rest of the session" : "Allowed for this call"
-      : always ? `Approved. ${name(approval.requestedBy)}'s requests here now run without asking; stop it under Approvals.`
-      : decision === "approve" ? "Approval decision recorded" : "Operation denied";
-    await approvalAction.run(async () => {
-      await session().api(`/api/sessions/${segment(props.id)}/approvals/${segment(approval.id)}`, { method: "POST", body: { decision, reviewHash: approval.reviewHash, ...(scope ? { scope } : {}), ...(always ? { alwaysApprove: true } : {}) } });
-      live.refresh();
-    }, notice);
-  }
 
   function unarchive() {
     const packed = Boolean(live.session()?.packed);
@@ -174,8 +147,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       <If when={live.session() ? pullRequest() : undefined}>
         {pull => <View style={{ paddingRight: 4 }}><PullRequestLink pull={pull()} compact={props.page} /></View>}
       </If>
-      <IconButton testID="session-approvals" icon="shield-check" label={pending().length ? `Approvals, ${pending().length} pending` : "Approvals"} badge={pending().length}
-        tone={pending().length ? "warning" : undefined} onPress={() => approvalsOpen.set(true)} disabled={!live.view()} />
       <DropdownMenu label="Session actions" testID="session-actions" items={menu()} />
       <IconButton testID="session-details" icon="panel-right" label="Session details" onPress={() => panelOpen.set(true)} active={panelOpen()} />
     </View>
@@ -190,53 +161,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
     return parts.filter(Boolean).join(" · ");
   };
 
-  const pendingApprovalCard = (approval: Accessor<ApprovalRecord>) => {
-    const permission = () => approval().operation.kind === "permission";
-    const hostCommand = () => isHostCommand(approval().operation, live.session() ?? {});
-    const hostDecided = () => decidedAsHostCommand(approval().operation, live.session() ?? {}, approval().unbounded);
-    const ownerOnly = () => permission() || approval().operation.kind === "git.repin";
-    const disabled = () => approvalAction.busy() || !approval().reviewHash;
-    const always = () => {
-      const current = live.session();
-      return Boolean(current && offersAlwaysApprove(approval(), current, host(), user.id));
-    };
-    return (
-      <ApprovalCard approval={approval()}>
-        <If when={decides(approval())}
-          else={<Small>{hostDecided() ? hostCommandWaiting(approval().operation, host()) : ownerOnly() ? "Waiting for the session owner" : "Waiting for an authorized approver"}</Small>}>
-          <If when={!approval().reviewHash}>
-            <Banner tone="warning" title="No verified review commitment" actions={<Button small variant="outline" label="Refresh approval" disabled={approvalAction.busy()} onPress={live.refresh} />}>
-              Refresh before deciding; the server must bind the displayed operation and requester.
-            </Banner>
-          </If>
-          <If when={permission()}
-            else={
-              <>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                  <Button testID="approval-approve" small variant="primary" label="Approve" disabled={disabled()} onPress={() => void decide(approval(), "approve")} />
-                  <If when={always()}>
-                    <Button testID="approval-always" small variant="outline" label={`Always approve ${username(people().person(approval().requestedBy))}`} disabled={disabled()}
-                      onPress={() => void decide(approval(), "approve", undefined, true)} />
-                  </If>
-                  <Button testID="approval-deny" small variant="outline" label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
-                </View>
-                <Small testID="approval-hint">
-                  {`Runs as ${hostCommand() ? "the host OS user (outside the sandbox)" : live.view()?.owner.displayName ?? ""} · each approval covers one exact operation and its arguments`}
-                </Small>
-              </>
-            }>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              <Button small variant="primary" label="Allow once" disabled={disabled()} onPress={() => void decide(approval(), "approve", "call")} />
-              <If when={!(approval().operation.kind === "permission" && (approval().operation as { tool?: string }).tool === "host_bash")}>
-                <Button small variant="outline" label="Allow for this session" disabled={disabled()} onPress={() => void decide(approval(), "approve", "session")} />
-              </If>
-              <Button small variant="outline" label="Deny" disabled={disabled()} onPress={() => void decide(approval(), "deny")} />
-            </View>
-          </If>
-        </If>
-      </ApprovalCard>
-    );
-  };
 
   const pinned = (
     <View style={{ gap: 10, paddingTop: 4 }}>
@@ -254,22 +178,13 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
           </Banner>
         )}
       </If>
-      <If when={live.session()?.hostUnsandboxed && (permissions().includes("write") || canApprove())}>
+      <If when={live.session()?.hostUnsandboxed && permissions().includes("write")}>
         <If when={live.session()?.hostEnvironment}
-          else={<Banner tone="danger" title="Unsandboxed host">This session's host runs without a sandbox. Approved commands and commits execute directly on the host owner's machine with their full user permissions, network access and no resource limits.</Banner>}>
-          <Banner tone="danger" title="Runs on the host">This session runs directly on its host, without the sandbox. Approved commands and commits execute on the host owner's machine with their full user permissions, network access and no resource limits; only the host owner, or members they granted host commands, decide them.</Banner>
+          else={<Banner tone="danger" title="Unsandboxed host">This session's host runs without a sandbox. Its commands and commits run directly on the host owner's machine with their full user permissions, network access and no resource limits.</Banner>}>
+          <Banner tone="danger" title="Runs on the host">This session runs directly on its host, without the sandbox. Its commands and commits run on the host owner's machine with their full user permissions, network access and no resource limits, for the host owner and members they granted host commands only.</Banner>
         </If>
       </If>
     </View>
-  );
-
-  const approvalDock = (
-    <If when={pending().length > 0 || approvalAction.error() || approvalAction.notice()}>
-      <Scroll testID="approval-dock" onTouchStart={releaseChatBox} style={{ flexShrink: 1, maxHeight: "55%" }} contentStyle={{ gap: 10, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
-        <Each of={pending()} key={approval => approval.id}>{approval => pendingApprovalCard(approval)}</Each>
-        <Feedback error={approvalAction.error()} notice={approvalAction.notice()} />
-      </Scroll>
-    </If>
   );
 
   const content = (
@@ -288,7 +203,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
           <View style={{ gap: 8, paddingHorizontal: 16, paddingTop: 10, width: "100%", maxWidth: 800, alignSelf: "center" }}>
             <If when={live.session()?.frozen && !archived()}>
               <Banner testID="session-frozen" title="Read-only">
-                This session pinned its repositories when it started, which sessions no longer do. Its conversation, approvals and backups stay viewable, but it no longer runs. Start a new session to continue the work.
+                This session pinned its repositories when it started, which sessions no longer do. Its conversation and backups stay viewable, but it no longer runs. Start a new session to continue the work.
               </Banner>
             </If>
             <If when={!live.session()?.frozen ? live.session()?.cloneUnavailable : undefined}>
@@ -315,7 +230,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               </If>
             </If>
           }>
-          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={approvalDock}
+          <Conversation id={props.id} live={live} host={host} pinned={pinned} dock={null}
             openSession={target => { data.refreshSessions(); props.openSession(target); }} />
         </If>
         <SessionPanel open={panelOpen()} onClose={() => panelOpen.set(false)} sessionId={props.id} session={live.session} view={live.view}
@@ -323,8 +238,6 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
           actions={actions} hosts={() => hosts.data()?.connectors ?? null} hostsLoading={hosts.loading} />
         <RenameSheet open={renaming()} title={live.session()?.title ?? ""} busy={actions.action.busy()} error={actions.action.error()} onClose={() => renaming.set(false)}
           onSave={title => void actions.rename(title).then(saved => { if (saved) renaming.set(false); })} />
-        <ApprovalsSheet open={approvalsOpen()} approvals={approvals()} olderApprovals={live.view()?.olderApprovals} onClose={() => approvalsOpen.set(false)}
-          onOpenSession={target => { approvalsOpen.set(false); data.refreshSessions(); props.openSession(target); }} session={live.session()} onChanged={live.refresh} />
       </View>
     </PeopleContext.Provider>
   );
@@ -338,85 +251,18 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   );
 }
 
-function ApprovalsSheet(props: {
-  open: boolean; approvals: ApprovalRecord[]; olderApprovals?: number; onClose: () => void; onOpenSession: (id: string) => void;
-  session: SessionRecord | null; onChanged: () => void;
-}) {
-  const { user } = untracked(session);
-  const name = createUsername();
-  const stopping = createAction();
-  const always = () => props.session?.autoApprovedRequesters ?? [];
-  function stop(requester: string) {
-    const current = props.session;
-    if (!current || stopping.busy()) return;
-    void stopping.run(async () => {
-      await session().api(`/api/sessions/${segment(current.id)}/auto-approved-requesters/${segment(requester)}`, { method: "DELETE" });
-      props.onChanged();
-    }, `${name(requester)}'s requests ask again.`);
-  }
-  const sorted = () => [...props.approvals].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending"));
-  return (
-    <Sheet open={props.open} side={windowSize().width >= 700 ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
-      backdropStyle={{ backgroundColor: palette().backdrop }}
-      popupStyle={windowSize().width >= 700
-        ? { width: 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background, borderLeftWidth: 1, borderColor: palette().border }
-        : { height: "90%", borderTopLeftRadius: radius.large, borderTopRightRadius: radius.large, backgroundColor: palette().background }}>
-      <View testID="approvals-sheet" style={{ flex: 1 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, minHeight: 48, borderBottomWidth: 1, borderColor: palette().border }}>
-          <Text style={{ flex: 1, fontSize: text.body, fontWeight: "500", color: palette().text }}>Approvals</Text>
-          <Button small variant="ghost" label="Done" onPress={props.onClose} />
-        </View>
-        <Scroll style={{ flex: 1 }} contentStyle={{ gap: 12, padding: 16 }}>
-          <If when={props.session && always().length > 0}>
-            <Banner title="Auto-approved requesters">
-              {`Requests from ${always().map(id => name(id)).join(", ")} run without asking.`}
-            </Banner>
-            <If when={props.session?.ownerId === user.id}>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                <Each of={always()}>{requester => <Button small variant="outline" label={`Stop for ${name(requester())}`} disabled={stopping.busy()} onPress={() => stop(requester())} />}</Each>
-              </View>
-            </If>
-            <Feedback error={stopping.error()} notice={stopping.notice()} />
-          </If>
-          <Small>Commands that ran under auto-approve are marked on their tool calls in the conversation.</Small>
-          <If when={sorted().length > 0} else={<EmptyState title="No approvals yet">Commands, commits and pushes that need a decision appear here.</EmptyState>}>
-            <Each of={sorted()} key={approval => approval.id}>
-              {approval => <ApprovalCard approval={approval()} onOpenSession={props.onOpenSession} />}
-            </Each>
-          </If>
-          <If when={(props.olderApprovals ?? 0) > 0}>
-            <Small>{`${props.olderApprovals} older approvals are on the web app's session page.`}</Small>
-          </If>
-        </Scroll>
-      </View>
-    </Sheet>
-  );
-}
-
 function Conversation(props: { id: string; live: LiveSessionState; host: Accessor<ConnectorInfo | undefined>; pinned: JSX.Element; dock: JSX.Element; openSession: (id: string) => void }) {
   const { user } = untracked(session);
   const data = useAppData();
-  const askAutoApprove = confirmAutoApprove(data);
   const current = () => props.live.session()!;
   const view = () => props.live.view()!;
   const owner = () => current().ownerId === user.id;
-  const role = () => data.workspaces().find(item => item.id === current().workspaceId)?.role;
-  const memberAutoApprove = () => offersMemberAutoApprove(current(), props.host(), user.id, role(), canWrite(), unsandboxed());
-  // The session record says whether its host is unsandboxed, so the default is right before the host listing loads: until
-  // then a member's role decides whether they may auto-approve here (the host's support for it is checked once it loads,
-  // and by the server on each message).
-  const accessContext = () => {
-    const sandboxed = !(current().hostUnsandboxed || props.host()?.capabilities.unsandboxed);
-    const host = props.host() ?? { capabilities: { memberAutoApprove: true } } as Pick<ConnectorInfo, "capabilities">;
-    return { sandboxed, memberAutoApprove: offersMemberAutoApprove(current(), host, user.id, role(), (current().permissions ?? []).includes("write"), !sandboxed) };
-  };
-  const selection = signal<ChatSelection>(untracked(() => initialSelection(view(), owner(), accessContext())));
+  const selection = signal<ChatSelection>(untracked(() => initialSelection(view())));
   const mode = signal<"write" | "ask">("write");
   const content = createDraft(props.id);
   const conversationId = signal("");
   const queueOpen = signal(false);
   let request: { key: string; id: string; images?: ChatImage[] } | null = null;
-  let confirming = false;
   const submission = createAction();
   const stopping = createAction();
   const rewinding = createAction();
@@ -436,18 +282,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const readOnly = () => current().status === "archived" || current().frozen === true;
   const permitted = () => !readOnly() && (actualMode() === "write" ? canWrite() : canAsk());
   const unsandboxed = () => Boolean(current().hostUnsandboxed || props.host()?.capabilities.unsandboxed);
-  // Until the person picks an access themselves, the chat box follows the default as messages arrive and the host loads:
-  // Auto-approve in a sandboxed session for its owner, or for a member the host and workspace let auto-approve there. The
-  // owner's message sent on it before the host loads goes without its access, which the server applies (optionsBeforeHost).
-  let accessPicked = false;
-  const chooseSelection = (value: ChatSelection) => {
-    if (value.access !== untracked(selection).access) accessPicked = true;
-    selection.set(value);
-  };
-  effect(() => {
-    const access = defaultAccess(view(), owner(), accessContext());
-    untracked(() => { if (!accessPicked && selection().access !== access) selection.set({ ...selection(), access }); });
-  });
   const queue = () => view().queue ?? [];
   const activeQueue = computed(() => queue().filter(item => activeStatuses.includes(item.status)));
   const recentSubmissions = () => queue().filter(item => !activeStatuses.includes(item.status)).slice(-5).reverse();
@@ -486,17 +320,11 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     const text = content();
     const pasted = untracked(attachments.images);
     const attached = untracked(attachments.files);
-    if (!permitted() || (!text.trim() && !pasted.length && !attached.length) || submission.busy() || confirming) return;
+    if (!permitted() || (!text.trim() && !pasted.length && !attached.length) || submission.busy()) return;
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
-    const beforeHost = { sandboxed: accessContext().sandboxed, owner: owner(), picked: accessPicked, mergeConfirmed: data.autoApproveConfirmed() };
-    const options = host || kind !== "submit" ? chatOptionsBody(host, selection(), kind, owner()) : optionsBeforeHost(selection(), beforeHost)?.options;
-    const unavailable = accessUnavailable(host, selection(), kind, beforeHost) ?? modelUnavailable(host, selection());
-    if (!unavailable && host && mustConfirmAutoApprove(options, data.autoApproveConfirmed())) {
-      confirming = true;
-      const confirmed = await askAutoApprove(host, unsandboxed()).finally(() => { confirming = false; });
-      if (!confirmed) { chooseSelection({ ...untracked(selection), access: "approval" }); return; }
-    }
+    const options = chatOptionsBody(host, selection(), kind);
+    const unavailable = accessUnavailable(host, selection(), kind) ?? modelUnavailable(host, selection());
     receipt.set(null);
     withdrawNotice.set("");
     const sent = text;
@@ -727,8 +555,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                     options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
                 </If>
                 <If when={permitted()}>
-                  <ChatOptionsBar host={props.host()} value={selection()} onChange={chooseSelection} owner={owner()} memberAutoApprove={memberAutoApprove()} showAccess={actualMode() === "write"}
-                    unsandboxed={unsandboxed()} data={data} />
+                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} showAccess={actualMode() === "write"} />
                 </If>
               </If>
             } />

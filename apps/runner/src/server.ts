@@ -287,10 +287,9 @@ export function createRunnerApp(service: RunnerService): Hono {
     const prefix = `/v1/sessions/${id}/`;
     if (!url.pathname.startsWith(prefix) || url.search) throw new RunnerError(400, "Invalid path");
     const route = url.pathname.slice(prefix.length);
-    const approval = /^approvals\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(route);
     const since = /^view\/([0-9a-f]{32})$/.exec(route)?.[1];
-    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", operations: "operations", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image" };
-    const action = approval ? "approve" : since ? "view" : actions[route];
+    const actions: Record<string, RunnerAction> = { submit: "submit", ask: "ask", view: "view", events: "events", restart: "restart", backup: "backup", restore: "restore", stop: "stop", files: "files", revert: "revert", fork: "fork", pack: "pack", unpack: "unpack", withdraw: "withdraw", upload: "upload", tunnel: "tunnel", image: "image" };
+    const action = since ? "view" : actions[route];
     if (!action) throw new RunnerError(404, "Unknown runner endpoint");
     if (c.req.method !== (action === "view" || action === "events" ? "GET" : "POST")) throw new RunnerError(405, "Method not allowed");
     const body = await c.req.text();
@@ -311,8 +310,8 @@ export function createRunnerApp(service: RunnerService): Hono {
     const session = await service.get(id);
     if (ticket.ownerId !== session.binding.owner.id) throw new RunnerError(403, "Ticket owner mismatch");
     if (session.packed && action !== "view" && action !== "events") throw new RunnerError(409, "This session's files are packed. Unarchive it to use them");
-    await session.authorize(ticket.actorId, action === "approve" ? "read" : permissionFor(action), ticket.policyVersion);
-    if (action === "operations" || action === "restart" || action === "backup" || action === "upload") await session.consumeTicket(ticket);
+    await session.authorize(ticket.actorId, permissionFor(action), ticket.policyVersion);
+    if (action === "restart" || action === "backup" || action === "upload") await session.consumeTicket(ticket);
     if (action === "view") {
       let views = revisions.get(session);
       if (!views) revisions.set(session, views = new ViewRevisions());
@@ -343,7 +342,6 @@ export function createRunnerApp(service: RunnerService): Hono {
     });
     const input = body ? JSON.parse(body) : {};
     if (action === "submit" || action === "ask") return c.json(await session.submit(ticket, input as SubmitInput, action === "ask" ? "ask" : "write"));
-    if (action === "operations") return c.json({ approval: await session.createApproval(ticket.actorId, input.operation as Operation) }, 201);
     if (action === "stop") return c.json(await session.stop(ticket));
     if (action === "withdraw") return c.json(await session.withdraw(ticket, input));
     if (action === "tunnel") return c.json(await session.tunnelAction(ticket, input));
@@ -356,10 +354,6 @@ export function createRunnerApp(service: RunnerService): Hono {
     }
     if (action === "upload") return c.json(await session.upload(ticket, input));
     if (action === "image") return c.json(await session.entryImage(ticket, input));
-    if (action === "approve") {
-      if (input.approvalId !== approval![1]) throw new RunnerError(403, "Approval ticket path mismatch");
-      return c.json({ approval: await session.decide(ticket, approval![1]!, input) });
-    }
     if (action === "restart") {
       if (ticket.actorId !== session.binding.owner.id) throw new RunnerError(403, "Only the owner can restart a session");
       await session.restart();

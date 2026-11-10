@@ -163,10 +163,11 @@ export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
   if (typeof value.source !== "string") throw new Error("Invalid extension source");
   const source = normalizeExtensionSource(value.source);
   const enabled = value.enabled ?? true;
-  const tools = value.tools ?? "approval";
+  const tools = value.tools ?? "automatic";
   if (typeof enabled !== "boolean") throw new Error("Invalid extension setting");
-  if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("An extension's tools run with approval or automatically");
-  return { source, enabled, tools: tools as ExtensionToolMode, settings: parseExtensionSettings(value.settings ?? {}) };
+  if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("Invalid extension tools mode");
+  // "approval" is still read, from clients and backups of before approvals were removed; every extension's tools now run alike.
+  return { source, enabled, tools: "automatic", settings: parseExtensionSettings(value.settings ?? {}) };
 }
 
 export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {

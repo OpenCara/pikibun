@@ -47,7 +47,7 @@ needs a decision stand out:
   stack the session list, then the session.
 - **Session**: a header with where the session lives and runs and its connection; the transcript in one readable column,
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
-  pending approvals docked above the chat box; the chat box's pickers (shared or side ask, model, reasoning, access)
+  the chat box's pickers (shared or side ask, model, reasoning, access)
   along its bottom edge. Details (owner, host, visibility, ID) are in the session's panel.
 - **Kit**: first drawn as the React web client's. `src/tokens.ts` has its three themes (light, dark and Pikibun's night
   theme) under its CSS variables' names; `src/theme.ts` builds the palettes from
@@ -56,7 +56,7 @@ needs a decision stand out:
   a sheet on phones; right-click menus on `ContextMenu` (`RowMenu`), which a finger held on the row opens as a sheet on
   touch screens); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
   it differs from the React client on purpose: the sidebar keeps a search box, tool rows
-  name what they work on, approval cards say what they ask in words, and message actions open a sheet rather than
+  name what they work on, and message actions open a sheet rather than
   appear on hover.
 
 ## Test it
@@ -122,7 +122,7 @@ didn't finish by the next launch says so then.
 ## What the React client had that this client doesn't
 
 Every page of the React client is here: sign-in, the sidebar and Sessions, a new session, a
-session with its header menu and its panel (Details, Approvals, Files, Browser, Schedules, Activity), a share link, an
+session with its header menu and its panel (Details, Files, Browser, Schedules, Activity), a share link, an
 invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
 Administration). What is left out, and why:
 
@@ -210,5 +210,5 @@ when the app quit, with the consent given then (`src/lib/this-computer.ts`).
 - `src/screens`: sign-in, the session list, a session, new session, open by ID, a shared session, joining a workspace.
 - `src/settings`: one file per section (`index.tsx` lists them); `src/session-panel`: one file per tab of a session's
   panel (`index.tsx` lists them).
-- `src/components`, `src/ui.tsx`, `src/theme.ts`: the transcript, approval cards, the chat box and the UI kit.
+- `src/components`, `src/ui.tsx`, `src/theme.ts`: the transcript, the chat box and the UI kit.
 - `web/host.js`: the page's host on the web.

@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { AppEnv } from './types.js';
 import {
   assertVaultConfigured, authenticate, csrfGuard, localOwner, registerAdmin, registerAuth, registerGitAccounts, registerHostAccess,
-  registerNetworkPolicies, registerOidc, registerPasswordAuth, registerPushIdentities, registerRepositories, registerRequesterAutoApprove,
+  registerNetworkPolicies, registerOidc, registerPasswordAuth, registerPushIdentities, registerRepositories, registerAudienceSharing,
   registerSourceOAuth, registerSources, registerWorkspaceConnections,
 } from './authority/index.js';
 import { registerCatalog } from './catalog.js';
@@ -107,7 +107,7 @@ registerWorkspaceDatabases(app);
 registerDataExports(app);
 registerNetworkPolicies(app);
 registerTranscriptSettings(app);
-registerRequesterAutoApprove(app);
+registerAudienceSharing(app);
 registerAdmin(app);
 registerNotifications(app);
 app.all('/api/*', () => fail(404, 'not_found', 'API route not found.'));

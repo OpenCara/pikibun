@@ -156,7 +156,7 @@ const info = (
     <Note>Pi extensions this host runs for the sessions on it: those a workspace chose that it has installed at the same version. They run in its connector, as your OS user, outside the sandbox.</Note>
     <Note>Install what your workspaces use here, or on the host with pikibun extensions add. A dev extension, installed there from a local path, runs only in your own sessions on this host.</Note>
     <Note>Pikibun's own built-in extensions come with the connector too: piki:gh, piki:glab and piki:azure-cli run the GitHub, GitLab and Azure CLIs where your workspaces use them, as you are signed in to them on this host.</Note>
-    <Note>Extension tool calls need the approval of you or a member granted host commands, unless a workspace sets an extension's tools to automatic and you let workspaces do that here.</Note>
+    <Note>Extension tool calls run for you and members granted host commands; for everyone else only if you let every session run them here. Nobody approves each call.</Note>
     <Note>Require an extension of every session to run it on this host whatever each workspace chose, yours included, with the settings you give it here. While this host can't run one you require, its sessions take no messages.</Note>
   </View>
 );
@@ -197,7 +197,7 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
     void action.run(async () => {
       await session().api(path(), { method: "PATCH", body: { automaticTools } });
       resource.refresh();
-    }, automaticTools ? "Workspaces may now run extension tools without approval on this host, where they set them to automatic." : "Extension tools on this host need approval again.");
+    }, automaticTools ? "Every session on this host may now run its workspace's extension tools." : "Extension tools on this host run only for you and members you granted host commands again.");
   }
   const builtin = () => config()?.builtinExtensions ?? [];
   function setBuiltin(name: BuiltinExtensionName, on: boolean) {
@@ -333,9 +333,9 @@ export function HostExtensionsSection(props: { connector: ConnectorInfo; refresh
           )}
         </Each>
         <If when={data()}>
-          <If when={owner()} else={<Row title="Extension tools without approval" trailing={<Badge tone={data()?.automaticTools ? "warning" : "neutral"}>{data()?.automaticTools ? "Allowed" : "Off"}</Badge>} />}>
-            <Row title="Let workspaces run extension tools without approval" hint="Only where a workspace sets an extension's tools to automatic. Off: each call waits for you, or a member granted host commands"
-              trailing={<CheckControl label="Let workspaces run extension tools without approval" checked={Boolean(data()?.automaticTools)} disabled={action.busy()} onChange={setAutomatic} />} />
+          <If when={owner()} else={<Row title="Extension tools for every session" trailing={<Badge tone={data()?.automaticTools ? "warning" : "neutral"}>{data()?.automaticTools ? "Allowed" : "Off"}</Badge>} />}>
+            <Row title="Let every session run extension tools" hint="They run on this machine, outside the sandbox. Off: only your sessions, and those of members you granted host commands, run them; everyone else's are refused"
+              trailing={<CheckControl label="Let every session run extension tools" checked={Boolean(data()?.automaticTools)} disabled={action.busy()} onChange={setAutomatic} />} />
           </If>
         </If>
         <If when={data()?.requests.length}>

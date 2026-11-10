@@ -56,7 +56,7 @@ function withReplacedSwitches(shown: readonly WorkspaceExtension[], extensions: 
     const own = result.find(item => item.source === source);
     if (on) result = result.filter(item => item.source !== source);
     else if (own) result = result.map(item => item.source === source ? { ...item, enabled: false } : item);
-    else result.push({ source, enabled: false, tools: 'approval', settings: {} });
+    else result.push({ source, enabled: false, tools: 'automatic', settings: {} });
   }
   return result;
 }
@@ -138,7 +138,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     catch (error) { return fail(400, 'invalid_extension', error instanceof Error ? error.message : 'Invalid extension.'); }
     const key = extensionPackageKey(extension.source);
     const sessionTool = sessionToolSources.includes(key);
-    if (sessionTool) extension = { ...extension, tools: 'approval', settings: {} };
+    if (sessionTool) extension = { ...extension, tools: 'automatic', settings: {} };
     if (coreSources.includes(key) && !extension.enabled) fail(400, 'invalid_extension', `${key} offers the tools every session needs; it can't be turned off.`);
     const saved = await c.env.DB.query(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
       SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), ?, ?, ?, ?, ?
@@ -230,7 +230,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
 
   app.patch('/api/connectors/:id/extensions', async c => {
     const row = await managedConnector(c);
-    if (row.role !== 'owner') fail(403, 'host_owner_required', 'Only the host\'s owner decides whether extension tools run on it without approval.');
+    if (row.role !== 'owner') fail(403, 'host_owner_required', 'Only the host\'s owner decides whether extension tools run on it for every session.');
     if (row.revoked_at) fail(409, 'connector_revoked', 'Connector is revoked.');
     const input = await jsonObject(c, 1024);
     if (Object.keys(input).join() !== 'automaticTools' || typeof input.automaticTools !== 'boolean') fail(400, 'invalid_input', 'Set automaticTools to true or false.');

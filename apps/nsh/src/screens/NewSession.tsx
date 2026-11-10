@@ -1,10 +1,10 @@
 import { computed, effect, Scroll, signal, Text, untracked, View, type JSX } from "nsh";
 import { Switch } from "nsh/base";
 import {
-  canCreateSessions, chatOptionsBody, mustConfirmAutoApprove, preferredSelection, segment, type ChatSelection, type ConnectorInfo, type ModelDefinition,
+  canCreateSessions, chatOptionsBody, preferredSelection, segment, type ChatSelection, type ConnectorInfo, type ModelDefinition,
   type SessionRecord, type Workspace, type WorkspaceRepositoryList,
 } from "../shared";
-import { ChatOptionsBar, confirmAutoApprove } from "../components/ChatOptionsBar";
+import { ChatOptionsBar } from "../components/ChatOptionsBar";
 import { Composer } from "../components/Composer";
 import { NewWorkspaceSheet } from "../components/NewWorkspaceSheet";
 import { HostDetails, UnsandboxedHost } from "../hosts";
@@ -83,8 +83,6 @@ export function NewSessionForm(props: { onStarted: (sessionId: string) => void; 
 function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => void; home?: boolean; workspacePicker: JSX.Element; go?: (route: PageRoute) => void }) {
   const { user } = untracked(session);
   const data = useAppData();
-  const askAutoApprove = confirmAutoApprove(data);
-  let confirming = false;
   const workspacePath = `/api/workspaces/${segment(props.workspace.id)}`;
   const models = createResource<{ models: ModelDefinition[] }>(() => `${workspacePath}/models`);
   const connections = createResource<{ connectors: ConnectorInfo[] }>(() => `${workspacePath}/connectors`, 10_000);
@@ -133,7 +131,6 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
   const hostSessions = () => Boolean(host()?.hostSessions);
   const runOnHost = () => hostSessions() && (onHost() ?? personal());
-  const unsandboxed = () => Boolean(host()?.capabilities.unsandboxed || runOnHost());
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
   let trustKey: string | undefined;
@@ -152,17 +149,12 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   async function start() {
     const current = host();
     const picked = model();
-    if (!canStart() || !picked || !current || confirming) return;
+    if (!canStart() || !picked || !current) return;
     const typed = content();
     const message = typed.trim();
     const pasted = untracked(attachments.images);
     const attached = untracked(attachments.files);
     const options = chatOptionsBody(current, selection(), "submit");
-    if (mustConfirmAutoApprove(options, data.autoApproveConfirmed())) {
-      confirming = true;
-      const confirmed = await askAutoApprove(current, unsandboxed()).finally(() => { confirming = false; });
-      if (!confirmed) { chat.set({ key: current.id, value: { ...selection(), access: "approval" } }); return; }
-    }
     const hostEnvironment = runOnHost();
     void action.run(async () => {
       const { api } = session();
@@ -249,7 +241,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     <Picker<"workspace" | "private"> title="Who can see it" value={visibility()} onSelect={value => visibility.set(value)} placement="bottom"
       trigger={<Chip small testID="new-visibility" icon={visibility() === "workspace" ? "users" : "lock"} label={visibility() === "workspace" ? "Workspace" : "Private"} disabled={action.busy()} />}
       options={[
-        { value: "workspace", label: "Workspace", icon: "users", hint: "Members can view the transcript; collaborators can message it. Approving tool calls needs an explicit grant." },
+        { value: "workspace", label: "Workspace", icon: "users", hint: "Members can view the transcript; collaborators can message it." },
         { value: "private", label: "Private", icon: "lock", hint: "Only you, the workspace's owner and admins, and people you give a session role." },
       ]} />
   );
@@ -269,7 +261,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
           hint=""
           tools={
             <ChatOptionsBar host={host()} value={selection()} onChange={value => { const current = host(); if (current) chat.set({ key: current.id, value }); }}
-              owner showAccess unsandboxed={unsandboxed()} data={data} />
+              showAccess />
           } />
         <View testID="new-context" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", rowGap: 4, columnGap: 2, paddingHorizontal: 4 }}>
           {props.workspacePicker}

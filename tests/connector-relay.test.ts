@@ -65,7 +65,7 @@ async function fixture(t: TestContext) {
   for (const user of ['owner', 'host', 'guest']) await run('INSERT INTO workspace_members VALUES (?, ?, ?, ?)', 'workspace', user, user === 'owner' ? 'owner' : 'member', created);
   const credentialHash = await sha256('fixture-connector-bearer-not-a-global-secret');
   await run('INSERT INTO connectors (id, owner_id, name, credential_hash, created_at, models_json, capabilities_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    'connector', 'host', 'Local host', credentialHash, created, JSON.stringify([{ provider: 'openai', modelId: 'local-model', name: 'Local model' }]), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: false }));
+    'connector', 'host', 'Local host', credentialHash, created, JSON.stringify([{ provider: 'openai', modelId: 'local-model', name: 'Local model' }]), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: false, approvalFree: true }));
   await run('INSERT INTO connector_shares VALUES (?, ?, ?)', 'connector', 'workspace', created);
   await run('INSERT INTO connector_workspaces VALUES (?, ?, ?)', 'connector', 'workspace', created);
   await run('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -143,7 +143,7 @@ async function fixture(t: TestContext) {
     const requestId = crypto.randomUUID();
     return { connectorId: 'connector', credentialHash, connectionHash: connectionHash!,
       request: { type: 'request', id: requestId, method: action === 'view' || action === 'events' ? 'GET' : 'POST',
-        path: connectorPath(action, 'session', action === 'approve' ? 'approval' : ''), body,
+        path: connectorPath(action, 'session', ''), body,
         ticket: { aud: 'runner', connectorId: 'connector', sessionId: 'session', actorId, ownerId: 'owner', action,
           policyVersion: 1, iat: issuedAt, exp: issuedAt + 60, jti: requestId, bodyHash: await sha256(body) } } };
   }
@@ -588,7 +588,7 @@ test('workspace visibility authorizes relay reads without granting any mutation 
   assert.equal(wire.ticket.ownerId, 'owner');
   f.reply(f.initial.socket, wire, '{"view":"workspace-readable"}');
   assert.deepEqual(await (await pending).json(), { view: 'workspace-readable' });
-  for (const action of ['ask', 'submit', 'operations', 'approve', 'backup', 'restore', 'restart', 'create'] as const) {
+  for (const action of ['ask', 'submit', 'backup', 'restore', 'restart', 'create'] as const) {
     assert.equal((await f.rpc(await f.envelope(action, '{}', 'guest'))).status, 403, action);
   }
   await settled();

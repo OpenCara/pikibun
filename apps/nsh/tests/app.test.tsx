@@ -219,15 +219,13 @@ describe("on a phone", () => {
     await app.waitFor("text:Old spike");
   });
 
-  test("opens a session with its transcript and pending approval, and approves it", async () => {
+  test("opens a session with its transcript, and nothing in it waits for anyone to approve", async () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn });
     await app.press("id:session-row-s1");
     await app.waitFor("text:Why does the login test fail on CI?");
-    await app.waitFor("id:approval-approve");
-    expect(app.texts().join(" ")).toContain("OpenCara/pikibun");
-    await app.press("id:approval-approve");
-    await app.waitFor("text:Approval decision recorded");
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/approvals/ap1`)).toEqual({ decision: "approve", reviewHash: approval.reviewHash });
+    await app.waitFor("id:composer-input");
+    expect(app.shows("id:approval-approve")).toBe(false);
+    expect(app.shows("id:session-approvals")).toBe(false);
   });
 
   test("sends a message with the session's model", async () => {
@@ -243,19 +241,20 @@ describe("on a phone", () => {
     await app.waitUntil(() => app.value("id:composer-input") === "");
   });
 
-  test("a sandboxed session an agent started asking before acting opens on Auto-approve, and its messages go with it", async () => {
+  test("a session's chat box starts on a message that acts, whatever its last message was, and its messages name no access", async () => {
     const app = await open("../App.tsx", {
       network: server({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, access: "approval" }, revision: "r1" } } }),
       storage: signedIn,
     });
     await app.press("id:session-row-s1");
     await app.waitFor("id:chat-access");
-    expect(app.texts().join(" ")).toContain("Auto-approve");
+    expect(app.texts().join(" ")).toContain("Act");
+    expect(app.texts().join(" ")).not.toContain("Auto-approve");
     expect(app.texts().join(" ")).not.toContain("Ask before acting");
     await app.type("id:composer-input", "Carry on");
     await app.press("id:composer-send");
     await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/submit`) !== undefined);
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/submit`).options).toMatchObject({ access: "auto" });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/submit`).options?.access).toBeUndefined();
   });
 
   test("starts a new session with a first message", async () => {
@@ -331,7 +330,7 @@ describe("on a desktop", () => {
     const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1280, height: 820 });
     await app.waitFor("text:What should we work on?");
     await app.press("id:session-row-s1");
-    await app.waitFor("id:approval-approve");
+    await app.waitFor("id:composer-input");
     await app.setColorScheme("dark");
     expect(app.shows("id:session-row-s1")).toBe(true);
     expect(app.shows("id:header-back")).toBe(false);

@@ -46,11 +46,6 @@ export function managesSession(userId: string, ownerId: string, role: WorkspaceR
   return userId === ownerId || (role !== undefined && workspaceManagerRoles.includes(role));
 }
 export const sharedSessionWriterRoles: readonly WorkspaceRole[] = ["owner", "admin", "collaborator"];
-export const memberAutoApproveRoles: readonly WorkspaceRole[] = ["owner", "admin", "collaborator"];
-
-export function mayAutoApprove(userId: string, ownerId: string, role: WorkspaceRole | undefined): boolean {
-  return userId === ownerId || (role !== undefined && memberAutoApproveRoles.includes(role));
-}
 export const readOnlyRoles: readonly WorkspaceRole[] = ["viewer"];
 
 export function roleSessionCeiling(role: WorkspaceRole): readonly Permission[] | null {

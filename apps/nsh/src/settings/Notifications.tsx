@@ -10,7 +10,6 @@ import { Badge, Button, CardBody, Feedback, Note, ResourceState, Row, Section } 
 import { SectionPage, type SectionProps } from "./parts";
 
 const events: { key: keyof NotificationPreferences; title: string; hint: string }[] = [
-  { key: "approvals", title: "Needs approval", hint: "A session's agent waits for someone to approve what it wants to do" },
   { key: "finished", title: "Finished", hint: "A session's agent finished the message it was working on" },
   { key: "failed", title: "Failed", hint: "A session's agent stopped on an error" },
   { key: "details", title: "Show session titles", hint: "Off, notifications only say what happened, not which session or workspace" },
@@ -69,7 +68,7 @@ export function Notifications(_props: SectionProps) {
   return (
     <SectionPage testID="settings-notifications">
       <Section title="This device" info={<View style={{ gap: 8 }}>
-        <Note>Pikibun tells you when one of your sessions waits for an approval, finishes or fails: sessions you own, and those you sent the latest message to.</Note>
+        <Note>Pikibun tells you when one of your sessions finishes or fails: sessions you own, and those you sent the latest message to.</Note>
         <Note>Turn notifications on in each browser where you want them. They come through its push service (Google's, Mozilla's, Apple's or Microsoft's), encrypted so that only your browser can read them.</Note>
       </View>}>
         <ResourceState inline loading={config.loading() && !config.data()} error={config.error()} retry={config.refresh}>

@@ -71,11 +71,14 @@ function seedLegacySchema(sqlite: DatabaseSync) {
       VALUES ('schema-session', 'schema-host', '["read"]', '2026-01-01');
     INSERT INTO backups (id, session_id, owner_id, object_key, sha256, size, created_at)
       VALUES ('schema-backup', 'schema-session', 'schema-owner', 'schema-object', 'schema-digest', 1, '2026-01-01');
-    INSERT INTO broker_capabilities (token_hash, session_id, approval_id, actor_id, requested_by, operation_hash, expires_at, created_at)
-      VALUES ('schema-token', 'schema-session', 'schema-approval', 'schema-owner', 'schema-owner', 'schema-operation', 1, '2026-01-01');
     INSERT INTO audit (id, workspace_id, session_id, actor_id, action, created_at)
       VALUES ('schema-audit', 'schema-workspace', 'schema-session', 'schema-owner', 'created', '2026-01-01');
   `);
+  // Approval capabilities were dropped with approvals (0063_approvals_removed); a legacy database still has them.
+  if (sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'broker_capabilities'").get()) {
+    sqlite.exec(`INSERT INTO broker_capabilities (token_hash, session_id, approval_id, actor_id, requested_by, operation_hash, expires_at, created_at)
+      VALUES ('schema-token', 'schema-session', 'schema-approval', 'schema-owner', 'schema-owner', 'schema-operation', 1, '2026-01-01')`);
+  }
 }
 
 test('connector migration preserves populated legacy rows, foreign keys, and immutable bindings', t => {
@@ -83,7 +86,7 @@ test('connector migration preserves populated legacy rows, foreign keys, and imm
   assert.equal(migrationFiles[0], '0001_control_plane.sql');
   migrate(sqlite, migrationFiles.slice(0, 1));
   seedLegacySchema(sqlite);
-  const tables = ['users', 'workspaces', 'workspace_members', 'models', 'agents', 'agent_versions', 'sessions', 'session_grants', 'backups', 'broker_capabilities', 'audit'];
+  const tables = ['users', 'workspaces', 'workspace_members', 'models', 'agents', 'agent_versions', 'sessions', 'session_grants', 'backups', 'audit'];
   const original = tables.map(table => ({ table, rows: sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all() }));
   migrate(sqlite, migrationFiles.slice(1));
   for (const { table, rows } of original) {
@@ -298,7 +301,7 @@ test('AES-GCM vault binds ciphertext to the account and rejects tampering', asyn
   await assert.rejects(encryptToken({ VAULT_KEY: 'invalid' } as Env, 'github:7', 'token'));
 });
 
-test('internal broker rejects wrong operations and consumes exact approval capability before GitHub', async t => {
+test('internal broker rejects wrong operations and posts once per tool call of an admitted message', async t => {
   const f = await fixture(t);
   const ownerId = 'github:7'; const createdAt = new Date().toISOString();
   f.sqlite.prepare('INSERT INTO users (id,github_id,github_login,display_name,git_name,git_email,auth_kind,created_at) VALUES (?,?,?,?,?,?,?,?)')
@@ -327,18 +330,15 @@ test('internal broker rejects wrong operations and consumes exact approval capab
   f.env.TEST_AUTH_EXPIRES_AT = expiry;
   f.sqlite.prepare('INSERT INTO github_tokens (user_id,ciphertext,updated_at) VALUES (?,?,?)').run(ownerId, await encryptToken(f.env, ownerId, 'vault-only-token'), createdAt);
   const operation = { kind: 'github.comment', repository: 'owner/repo', issue: 3, body: 'Approved text' };
-  const capability = 'one-time-capability';
-  f.sqlite.prepare('INSERT INTO broker_capabilities (token_hash,session_id,approval_id,actor_id,requested_by,operation_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run(await sha256(capability), 'session', 'approval', ownerId, ownerId, await sha256(JSON.stringify(operation)), Math.floor(Date.now() / 1000) + 60, createdAt);
-  f.sqlite.prepare(`INSERT INTO approval_reviews (session_id,approval_id,requested_by,operation_json,source,admission_id,review_hash,created_at)
-    VALUES (?,?,?,?, 'explicit', NULL,?,?)`).run('session', 'approval', ownerId, JSON.stringify(operation),
-      await sha256(JSON.stringify({ sessionId: 'session', approvalId: 'approval', requestedBy: ownerId, operation })), createdAt);
+  const admissionId = 'a'.repeat(43);
+  f.sqlite.prepare('INSERT INTO run_admissions (id,session_id,actor_id,mode,request_id,content_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(admissionId, 'session', ownerId, 'write', 'request', 'h'.repeat(43), Math.floor(Date.now() / 1000) + 600, createdAt);
   const request = (body: unknown, authorization = `Bearer ${internalSecret}`) => app.request('/api/internal/github/comment', {
     method: 'POST', headers: { Authorization: authorization, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }, f.env);
-  const payload = { sessionId: 'session', actorId: ownerId, approvalId: 'approval', capability, repository: operation.repository, issue: operation.issue, body: operation.body };
+  const payload = { sessionId: 'session', actorId: ownerId, approvalId: 'tool-call-1', admissionId, repository: operation.repository, issue: operation.issue, body: operation.body };
   assert.equal((await request(payload, 'Bearer wrong')).status, 401);
-  assert.equal((await request({ ...payload, body: 'Different text' })).status, 403);
+  assert.equal((await request({ ...payload, approvalId: 'approval' })).status, 400, 'a GitHub effect names its tool call');
   assert.equal((await request({ ...payload, repository: 'https://attacker.invalid' })).status, 400);
   const previousFetch = globalThis.fetch;
   let writes = 0;

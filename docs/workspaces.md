@@ -32,7 +32,7 @@ Owners and admins add people with **Members → Add member**, entering the perso
 
 ## Tool groups
 
-A session has the tools of its owner's **tool group**, whoever writes in it and whatever access their messages use. That includes Auto-approve and permission requests. A tool outside the group isn't offered to the agent, and a call to it is refused, on the host and for the actions Pikibun brokers (pushes, GitHub comments, issues and merges, schedules, other sessions, document sources). Changes take effect on a session's next tool call, within half a minute.
+A session has the tools of its owner's **tool group**, whoever writes in it and whatever access their messages use. A tool outside the group isn't offered to the agent, and a call to it is refused, on the host and for the actions Pikibun brokers (pushes, GitHub comments, issues and merges, schedules, other sessions, document sources). Changes take effect on a session's next tool call, within half a minute.
 
 Each member's sessions get the tools of their role, unless an owner or admin puts them in a group of the workspace's own:
 
@@ -49,7 +49,7 @@ The API is `GET /api/workspaces/:id/tool-groups` (every member), `POST /api/work
 
 Tool groups cover Pikibun's own tools. The tools of other extensions are switched for everyone under **Extensions**. A host learns each member's group with the workspace's extensions and keeps the last answer it read, so a failed fetch lifts nothing; until it has read one, its sessions only read their files. A connector from before tool groups doesn't hide the left-out tools from the agent or refuse them in the sandbox (files and commands); Pikibun still refuses the actions it brokers (pushes, GitHub, schedules, other sessions, document sources), so update connectors (`npx pikibun@latest connect`) before relying on groups for sandboxed tools.
 
-Approving tool calls still takes an explicit grant from the session's owner, whatever the role. For collaborators, members and viewers, so does opening or managing someone else's private session.
+For collaborators, members and viewers, opening or managing someone else's private session takes an explicit grant from its owner.
 
 ## Your private workspace
 
@@ -71,7 +71,7 @@ The workspace's owner and admins manage every session in it, private ones includ
 - give workspace members session roles up to **Collaborator** and remove anyone's, under **Details → People → Session roles**;
 - **Turn off** its share link.
 
-Everything that acts as the session's owner, or takes their work out of the session, stays theirs. Approving its tool calls takes a session role that allows it, since an approved operation runs as the owner with their Git accounts; the owner, or a session admin, gives that. Only the owner uses **Auto-approve** for everything it covers (the workspace's owner, admins and collaborators use it only for their own [sandboxed commands](approvals.md#auto-approve-in-someone-elses-session)) chooses whether to [always approve another member](approvals.md#always-approving-another-member), decides permission requests, schedules prompts, restarts, backs up, restores, exports or moves the session, and creates or copies its share link. Every change a manager makes is recorded in the session's activity under their own name. Demoting an admin, or removing them, takes all of this away at once.
+Everything that acts as the session's owner, or takes their work out of the session, stays theirs. Its tools run as the owner, with their Git accounts, within their tool group, for whoever may send it messages. Only the owner lets content pass between it and sessions other people read, schedules prompts, restarts, backs up, restores, exports or moves the session, and creates or copies its share link. Every change a manager makes is recorded in the session's activity under their own name. Demoting an admin, or removing them, takes all of this away at once.
 
 ## Invite links and pending members
 

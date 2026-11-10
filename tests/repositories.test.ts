@@ -29,7 +29,7 @@ const repositoryInput = { provider: 'github', host: 'github.com', repositoryId: 
 const githubPicker = '/api/git/accounts/github/repositories';
 const manifest = {
   models: [{ provider: 'local-native', modelId: 'local/model-v1', name: 'Local model' }],
-  capabilities: { platform: 'linux', sandbox: true, productionShell: false, plainGit: true },
+  capabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, plainGit: true },
 };
 const archiveBytes = new Uint8Array(gzipSync(Buffer.alloc(1024)));
 const token = () => Buffer.from(randomBytes(32)).toString('base64url');
@@ -267,8 +267,8 @@ test('a workspace\'s first GitHub repository adds piki:gh, piki:git and piki:git
   const bind = async () => json<{ repository: WorkspaceRepository; extensions?: string[] }>(await owner.request('POST', path, repositoryInput), 201);
   const first = await bind();
   assert.deepEqual(first.extensions, ['piki:gh', 'piki:git', 'piki:github']);
-  const on = (source: string) => ({ source, enabled: true, tools: 'approval' as const, settings: {} });
-  assert.deepEqual(await extensions(), withSessionToolsListed([...defaultWorkspaceExtensions.map(source => ({ source, enabled: false, tools: 'approval' as const, settings: {} })),
+  const on = (source: string) => ({ source, enabled: true, tools: 'automatic' as const, settings: {} });
+  assert.deepEqual(await extensions(), withSessionToolsListed([...defaultWorkspaceExtensions.map(source => ({ source, enabled: false, tools: 'automatic' as const, settings: {} })),
     on('piki:gh'), on('piki:git'), on('piki:github')]));
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.extension.updated'").get()!.n, 3);
   await json(await owner.request('PUT', `/api/workspaces/${team.id}/extensions`, { source: 'piki:gh', enabled: false }));
@@ -1071,7 +1071,8 @@ test('egress grants name plain Git server repositories only to connectors that a
   const capabilities = JSON.parse(String(f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(connector.connectorId)!.capabilities_json));
   f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify({ ...capabilities, gitServers: true }), connector.connectorId);
   assert.deepEqual(await grant(), [repository.id, 'server-binding'].sort());
-  assert.equal(parseManifest({ ...manifest, capabilities: { ...manifest.capabilities, gitServers: true } }, f.env).capabilities.gitServers, true);
+  const { approvalFree: _approvalFree, ...parsed } = manifest.capabilities;
+  assert.equal(parseManifest({ ...manifest, capabilities: { ...parsed, gitServers: true } }, f.env).capabilities.gitServers, true);
 });
 
 test('egress grants and the Git relay serve only the connector running the session, with the owner credential', async t => {
@@ -1328,7 +1329,7 @@ test('a member granted host commands clones on a host without resource limits, o
   assert.match((await json<{ session: SessionRecord }>(await member_.request('GET', `/api/sessions/${session.id}`))).session.cloneUnavailable ?? '', /only for its owner/);
 });
 
-test('a session that pinned its repositories is read-only: it shows, and nothing runs or is approved in it', async t => {
+test('a session that pinned its repositories is read-only: it shows, and nothing runs in it', async t => {
   const s = await connectedSetup(t); const source = await s.start();
   const columns = (s.f.sqlite.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]).map(column => column.name);
   const pins: SessionRepository[] = [{ bindingId: s.repository.id, repositoryId: metadata.id, fullName: metadata.full_name, ref: 'main', commit: commitA, path: metadata.full_name }];
@@ -1341,7 +1342,6 @@ test('a session that pinned its repositories is read-only: it shows, and nothing
   assert.equal(source.frozen, undefined);
   const provisions = s.provisions.length;
   await denied(await s.owner.request('POST', '/api/sessions/pinned-session/submit', { content: 'hello', requestId: 'frozen' }), 409, 'session_frozen');
-  await denied(await s.owner.request('POST', '/api/sessions/pinned-session/approvals/approval', { decision: 'approve' }), 409, 'session_frozen');
   assert.equal(s.f.sqlite.prepare("SELECT COUNT(*) AS n FROM run_admissions WHERE session_id = 'pinned-session'").get()!.n, 0);
   for (const action of ['stop', 'restart']) {
     const response = await s.owner.request('POST', `/api/sessions/pinned-session/${action}`, {});

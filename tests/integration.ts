@@ -135,7 +135,7 @@ async function connectFixture(client: Client): Promise<ConnectorFixture> {
   const replay = await fetch(`${base}/api/connectors/pairings/${pairing.id}/claim`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ code: pairing.code, models: [{ provider: "faux", modelId: "faux-1", name: "Fixture" }],
-      capabilities: { platform: process.platform, sandbox: true, productionShell: false, plainGit: true } }),
+      capabilities: { platform: process.platform, sandbox: true, productionShell: false, approvalFree: true, plainGit: true } }),
     signal: AbortSignal.timeout(10_000),
   });
   assert.ok([400, 401, 403, 409].includes(replay.status), "pairing code must be single-use");

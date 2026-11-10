@@ -12,7 +12,7 @@ Just for yourself, on one computer? `npx pikibun@latest serve` runs all of it th
    ```
 
 5. **Start a session**: select the workspace in the sidebar, choose your host in **Host**, describe the task and press Enter.
-6. **Approve** commands and commits as their cards appear above the transcript.
+6. Watch the agent's commands and commits run in the transcript; choose **Read only** in the chat box for a message that should change nothing.
 
 To try your host on your own first, skip steps 2 and 3: every account has a **Private** workspace, pinned at the top of the sidebar, where sessions need no source and nobody else can join (see [Your private workspace](workspaces.md#your-private-workspace)). Pair a host and start a session there.
 
