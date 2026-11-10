@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { COMPACTION_FAILURES, type EntryView, type SessionView } from '../../../packages/shared/src/types.js';
+import { COMPACTION_FAILURES, MODEL_FAILURE_CAUSES, type EntryView, type SessionView } from '../../../packages/shared/src/types.js';
 import type { SessionLink, SharedSession, SharedSessionView } from '../../../packages/shared/src/sharing.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
@@ -72,16 +72,26 @@ async function requireLinkedSession(c: AppContext, token: string | undefined): P
   return row;
 }
 
+/**
+ * An entry's model failure with only the fields a transcript shows, for a reader outside the session's own screen (a
+ * share link, another session's `sessions` read): its codes only when they are known fixed ones, so a newer or
+ * misbehaving runner can't put text there.
+ */
+export function entryError(error: NonNullable<EntryView['error']>): NonNullable<EntryView['error']> {
+  return {
+    ...(error.provider !== undefined ? { provider: error.provider } : {}),
+    ...(error.modelId !== undefined ? { modelId: error.modelId } : {}),
+    ...(error.status !== undefined ? { status: error.status } : {}),
+    ...(error.compaction !== undefined && COMPACTION_FAILURES.includes(error.compaction) ? { compaction: error.compaction } : {}),
+    ...(error.cause !== undefined && MODEL_FAILURE_CAUSES.includes(error.cause) ? { cause: error.cause } : {}),
+    ...(error.compacting === true ? { compacting: true as const } : {}),
+  };
+}
+
 function sharedEntry(entry: EntryView): EntryView {
   const { id, kind, role, text, error, durationMs } = entry;
   return { id, kind, role, text: redactSecrets(text),
-    ...(error ? { error: {
-      ...(error.provider !== undefined ? { provider: error.provider } : {}),
-      ...(error.modelId !== undefined ? { modelId: error.modelId } : {}),
-      ...(error.status !== undefined ? { status: error.status } : {}),
-      // Only a known fixed code: a newer or misbehaving runner can't put text here.
-      ...(error.compaction !== undefined && COMPACTION_FAILURES.includes(error.compaction) ? { compaction: error.compaction } : {}),
-    } } : {}),
+    ...(error ? { error: entryError(error) } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}) };
 }
 

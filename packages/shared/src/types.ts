@@ -788,6 +788,13 @@ export interface AutoApprovedCall {
  */
 export type CompactionFailure = "token_limit" | "tool_call" | "no_text" | "aborted";
 export const COMPACTION_FAILURES: readonly CompactionFailure[] = ["token_limit", "tool_call", "no_text", "aborted"];
+/**
+ * Why a model request failed, from Pi's own fixed messages, never provider text: `incomplete_stream`, the provider's
+ * response stream closed before it said why it ended (no stop or finish reason), as when a gateway or proxy between the
+ * host and the provider drops it without passing on an error.
+ */
+export type ModelFailureCause = "incomplete_stream";
+export const MODEL_FAILURE_CAUSES: readonly ModelFailureCause[] = ["incomplete_stream"];
 export interface EntryView {
   id: string;
   kind: string;
@@ -796,10 +803,12 @@ export interface EntryView {
   actorId?: string;
   conversationId?: string;
   /**
-   * The model request behind this entry failed. Only the provider/model, HTTP status and, when Pi could not compact the
-   * context first, which fixed compaction failure it was cross the boundary, never provider text.
+   * The model request behind this entry failed. Only the provider/model, HTTP status, which fixed cause it was when Pi's
+   * own message says (`cause`), and, when Pi could not compact the context first, which fixed compaction failure it was
+   * cross the boundary, never provider text. `compacting`: the run failed so on a long conversation that the host started
+   * compacting its context, so the next message sends less (a run failure's only).
    */
-  error?: { provider?: string; modelId?: string; status?: number; compaction?: CompactionFailure };
+  error?: { provider?: string; modelId?: string; status?: number; compaction?: CompactionFailure; cause?: ModelFailureCause; compacting?: true };
   /** How long the model took to write this reply, or the tool to run; absent for entries recorded before Pi 1.1.0. */
   durationMs?: number;
   /** This entry's tool calls whose commands ran under auto-approve, in call order; absent from older runners. */

@@ -82,7 +82,8 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
   if (entry.error) {
     return entry.error.compaction
       ? { kind: "error", title: COMPACTION_FAILED_TITLE, text: compactionFailureText(entry.error.compaction, { advice: !shared }), by: actor }
-      : { kind: "error", title: "Model request failed", text: modelFailure(entry.error, { advice: !shared }), by: actor };
+      : { kind: "error", title: entry.error.cause === "incomplete_stream" ? "Model response cut off" : "Model request failed",
+        text: modelFailure(entry.error, { advice: !shared }), by: actor };
   }
   if (entry.role === "user") return { kind: "user", text: entry.text, meta: actor && entry.actorId !== userId ? actor : "" };
   const took = entry.durationMs !== undefined && entry.durationMs >= 1000 ? formatDuration(entry.durationMs) : "";

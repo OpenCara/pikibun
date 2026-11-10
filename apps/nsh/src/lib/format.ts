@@ -36,11 +36,20 @@ export function timestamp(value: string): string {
 }
 
 /**
- * Why a model request failed, from the only details that cross the host boundary: provider, model and HTTP status.
- * `advice: false` (a share link, whose readers can't act on it) gives the cause alone.
+ * Why a model request failed, from the only details that cross the host boundary: provider, model, HTTP status and the
+ * fixed cause Pi's own message gave. `advice: false` (a share link, whose readers can't act on it) gives the cause alone.
  */
-export function modelFailure({ provider, modelId, status }: NonNullable<EntryView["error"]>, { advice = true }: { advice?: boolean } = {}): string {
+export function modelFailure({ provider, modelId, status, cause, compacting }: NonNullable<EntryView["error"]>, { advice = true }: { advice?: boolean } = {}): string {
   const name = provider ?? "the provider";
+  if (cause === "incomplete_stream") {
+    const model = [provider, modelId].filter(Boolean).join("/") || "the model";
+    const cut = `The response from ${model} stopped before it finished: the connection closed without an error.`;
+    if (!advice) return compacting ? `${cut} The host started compacting the conversation's context.` : cut;
+    const why = " A gateway or proxy between the host and the provider usually does this, and a very long conversation makes it more likely.";
+    return compacting
+      ? `${cut}${why} The host started compacting this conversation's context so the next request is smaller: send the message again once the summary appears.`
+      : `${cut}${why} Send the message again to retry. If it keeps failing, continue in a new session.`;
+  }
   if (!advice) {
     if (status === 401 || status === 403) return `The host's Pi credentials for ${name} were rejected.`;
     if (status === 429) return `Rate limited by ${name}.`;

@@ -151,7 +151,7 @@ export type SessionsToolResult =
    * session runs on this session's current model and reasoning level. `thinkingLevels`: those a model's host offers it at.
    */
   | { sessions: CrossSessionSummary[]; models: { id: string; name: string; provider: string; modelId: string; thinkingLevels?: ThinkingLevel[] }[]; childModels: boolean }
-  | { session: CrossSessionSummary; busy: boolean; entries: Pick<EntryView, "id" | "role" | "kind" | "actorId" | "text">[];
+  | { session: CrossSessionSummary; busy: boolean; entries: Pick<EntryView, "id" | "role" | "kind" | "actorId" | "text" | "error">[];
     pendingApprovals: { id: string; kind: string; tool?: string; requestedBy: string }[]; message?: CrossSessionMessage; outcome?: CrossSessionOutcome }
   | { message: CrossSessionMessage }
   /** create: the new session, the model it runs on and the reasoning level its opening message runs at (none: its host's own). */
