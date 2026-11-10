@@ -127,7 +127,8 @@ export function Schedules(props: PanelTabProps) {
                   {schedule => (
                     <Card testID={`schedule-${schedule().id}`}>
                       <Row leading={<Icon name="clock" size={16} color={palette().muted} />} title={schedule().name}
-                        hint={`${schedule().cron} · ${schedule().timeZone} · ${accessLabels[schedule().access]}${schedule().runIn === "child" ? ` · ${runInLabels.child}` : ""}`}
+                        hint={`${schedule().cron} · ${schedule().timeZone} · ${accessLabels[schedule().access]}${schedule().runIn === "child"
+                          ? ` · ${runInLabels.child}${schedule().oneShot === false ? ", kept open" : ", archived when done"}` : ""}`}
                         trailing={schedule().enabled ? schedule().nextRunAt ? <Badge tone="info">{`Next ${untilText(schedule().nextRunAt!)}`}</Badge> : <Badge tone="warning">Never runs</Badge>
                           : <Badge>Paused</Badge>} />
                       <CardBody>
@@ -175,6 +176,7 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
   const content = signal(existing?.content ?? "");
   const access = signal<AccessMode>(existing?.access ?? "approval");
   const runIn = signal<ScheduleRunIn>(existing?.runIn ?? "session");
+  const oneShot = signal<boolean>(existing?.oneShot ?? true);
   const next = computed(() => preview(cron(), timeZone()));
   const preset = () => presets.find(item => item.cron === cron().trim())?.cron ?? "";
   const ready = () => props.isOwner && content().trim().length > 0 && "runs" in next();
@@ -182,7 +184,8 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
     if (!ready() || form.busy()) return;
     void form.run(async () => {
       const body = { name: name().trim(), cron: cron(), timeZone: timeZone(), content: content(), access: access(),
-        ...(runIn() !== "session" || existing?.runIn !== undefined ? { runIn: runIn() } : {}) };
+        ...(runIn() !== "session" || existing?.runIn !== undefined ? { runIn: runIn() } : {}),
+        ...(runIn() === "child" && (!oneShot() || existing?.oneShot !== undefined) ? { oneShot: oneShot() } : {}) };
       if (existing) await session().api(`${props.base}/${segment(existing.id)}`, { method: "PATCH", body: { ...body, ...(body.name ? {} : { name: existing.name }) } });
       else await session().api(props.base, { method: "POST", body });
       props.onDone(true);
@@ -217,6 +220,14 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
           <Select<ScheduleRunIn> label="Runs in" value={runIn()} disabled={form.busy()} onChange={value => runIn.set(value)} testID="schedule-run-in"
             options={(["session", "child"] as const).map(mode => ({ value: mode, label: runInLabels[mode] }))} />
         </Field>
+        <If when={runIn() === "child"}>
+          <Field label="When its run is done" hint={oneShot()
+            ? "Each new session is archived once its run is done; you can still open it. One that fails, or that you send a message of your own, stays open"
+            : "Each new session stays open until you archive it"}>
+            <Select<string> label="When its run is done" value={oneShot() ? "archive" : "keep"} disabled={form.busy()} onChange={value => oneShot.set(value === "archive")}
+              testID="schedule-one-shot" options={[{ value: "archive", label: "Archive the session" }, { value: "keep", label: "Keep it open" }]} />
+          </Field>
+        </If>
         <Field label="Access" hint={accessHints[access()]}>
           <Select<AccessMode> label="Access" value={access()} disabled={form.busy()} onChange={value => access.set(value)}
             options={(["approval", "read", "auto"] as const).map(mode => ({ value: mode, label: accessLabels[mode] }))} />

@@ -17,16 +17,17 @@ import type { AppContext, Env, ModelRow, SessionRow, AppEnv } from './types.js';
 export const MAX_SCHEDULES_PER_SESSION = 20;
 export const MAX_SCHEDULED_CHILDREN = 20;
 const sweepLimit = 20;
+const oneShotSweepLimit = 50;
 
 interface ScheduleRow {
   id: string; session_id: string; created_by: string; name: string; cron: string; time_zone: string; content: string;
-  access: AccessMode; run_in: ScheduleRunIn; enabled: number; next_run_at: string | null; last_run_at: string | null; last_submission_id: string | null;
+  access: AccessMode; run_in: ScheduleRunIn; one_shot: number; enabled: number; next_run_at: string | null; last_run_at: string | null; last_submission_id: string | null;
   last_session_id: string | null; last_error: string | null; created_at: string; updated_at: string;
 }
 
 export function scheduleRecord(row: ScheduleRow): SessionSchedule {
   return { id: row.id, sessionId: row.session_id, name: row.name, cron: row.cron, timeZone: row.time_zone, content: row.content,
-    access: row.access, runIn: row.run_in ?? 'session', enabled: Number(row.enabled) === 1, nextRunAt: row.next_run_at, lastRunAt: row.last_run_at,
+    access: row.access, runIn: row.run_in ?? 'session', oneShot: Number(row.one_shot ?? 1) === 1, enabled: Number(row.enabled) === 1, nextRunAt: row.next_run_at, lastRunAt: row.last_run_at,
     lastSubmissionId: row.last_submission_id, lastSessionId: row.last_session_id ?? null, lastError: row.last_error, createdBy: row.created_by,
     createdAt: row.created_at, updatedAt: row.updated_at };
 }
@@ -70,6 +71,11 @@ function validEnabled(value: unknown): boolean {
   return value;
 }
 
+function validOneShot(value: unknown): boolean {
+  if (typeof value !== 'boolean') fail(400, 'invalid_input', 'One-shot is true or false.');
+  return value;
+}
+
 async function ownSession(c: AppContext): Promise<SessionRow> {
   const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
   if (row.owner_id !== c.get('auth').userId) fail(403, 'owner_required', 'Only the session owner can schedule prompts.');
@@ -95,7 +101,7 @@ async function findSchedule(env: Env, row: SessionRow, scheduleId: string): Prom
   const schedule = await env.DB.query<ScheduleRow>('SELECT * FROM session_schedules WHERE id = ? AND session_id = ?')
     .bind(scheduleId, row.id).first();
   if (!schedule) fail(404, 'not_found', 'Schedule not found.');
-  return { ...schedule, enabled: Number(schedule.enabled) };
+  return { ...schedule, enabled: Number(schedule.enabled), one_shot: Number(schedule.one_shot ?? 1) };
 }
 
 type Sent = SubmitResult & { childSessionId?: string };
@@ -153,11 +159,34 @@ async function startChild(c: AppContext, parent: SessionRow, schedule: ScheduleR
       requestId: `schedule:${schedule.id}:${at}`,
       ...(Object.keys(options).length ? { options } : {}),
     }, { scheduleId: schedule.id, trigger, parentSessionId: parent.id }, { currentModel: true });
+    if (Number(schedule.one_shot ?? 1) === 1) await c.env.DB.query('UPDATE sessions SET one_shot = 1 WHERE id = ?').bind(child.id).run();
     return { ...submission, childSessionId: child.id };
   } catch (error) {
     if (started.id) await archiveSession(c, started.id, { scheduleId: schedule.id }).catch(() => undefined);
     throw error;
   }
+}
+
+export type OneShotOutcome = { sessionId: string; archived: true } | { sessionId: string; error: string };
+
+export async function archiveFinishedOneShots(env: Env): Promise<OneShotOutcome[]> {
+  const finished = await env.DB.query<{ id: string; owner_id: string; schedule_id: string | null }>(
+    "SELECT id, owner_id, schedule_id FROM sessions WHERE one_shot = 1 AND activity = 'done' AND status = 'ready' ORDER BY id LIMIT ?").bind(oneShotSweepLimit).all();
+  const outcomes: OneShotOutcome[] = [];
+  for (const session of finished) {
+    try {
+      await asSessionOwner(env, session, async c => {
+        const fresh = await c.env.DB.query<{ one_shot: number; activity: string | null }>('SELECT one_shot, activity FROM sessions WHERE id = ?').bind(session.id).first();
+        if (Number(fresh?.one_shot) !== 1 || fresh?.activity !== 'done') return;
+        await archiveSession(c, session.id, { oneShot: true, ...(session.schedule_id ? { scheduleId: session.schedule_id } : {}) });
+      }, 'one-shot-session');
+      outcomes.push({ sessionId: session.id, archived: true });
+    } catch (error) {
+      await env.DB.query('UPDATE sessions SET one_shot = 0 WHERE id = ?').bind(session.id).run();
+      outcomes.push({ sessionId: session.id, error: await errorCode(error) });
+    }
+  }
+  return outcomes;
 }
 
 export type ScheduledPromptOutcome = { scheduleId: string; sessionId: string; submissionId: string; childSessionId?: string }
@@ -203,7 +232,7 @@ export async function runScheduledPrompts(env: Env, at = Date.now()): Promise<Sc
   return outcomes;
 }
 
-const scheduleFields = ['name', 'cron', 'timeZone', 'content', 'access', 'runIn', 'enabled'] as const;
+const scheduleFields = ['name', 'cron', 'timeZone', 'content', 'access', 'runIn', 'oneShot', 'enabled'] as const;
 type ScheduleInput = Partial<Record<(typeof scheduleFields)[number], unknown>>;
 
 function scheduleInput(input: Record<string, unknown>): ScheduleInput {
@@ -221,6 +250,7 @@ async function createSchedule(env: Env, row: SessionRow, change: ScheduleChange,
   const name = input.name === undefined || input.name === '' ? content.trim().split('\n')[0]!.slice(0, 80) || 'Scheduled prompt' : text(input.name, 'name', 100);
   const access = input.access === undefined ? 'approval' : validAccess(input.access);
   const runIn = input.runIn === undefined ? 'session' : validRunIn(input.runIn);
+  const oneShot = input.oneShot === undefined ? true : validOneShot(input.oneShot);
   const enabled = input.enabled === undefined ? true : validEnabled(input.enabled);
   await requireAccessSupported(env, row, access);
   const at = Date.now();
@@ -229,14 +259,14 @@ async function createSchedule(env: Env, row: SessionRow, change: ScheduleChange,
   const count = await env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM session_schedules WHERE session_id = ?').bind(row.id).first('n');
   if (Number(count) >= MAX_SCHEDULES_PER_SESSION) fail(409, 'too_many_schedules', `A session keeps at most ${MAX_SCHEDULES_PER_SESSION} schedules.`);
   const timestamp = now();
-  const schedule: ScheduleRow = { id: id(), session_id: row.id, created_by: change.actorId, name, cron, time_zone: timeZone, content, access, run_in: runIn,
+  const schedule: ScheduleRow = { id: id(), session_id: row.id, created_by: change.actorId, name, cron, time_zone: timeZone, content, access, run_in: runIn, one_shot: oneShot ? 1 : 0,
     enabled: enabled ? 1 : 0, next_run_at: nextRunAt, last_run_at: null, last_submission_id: null, last_session_id: null, last_error: null, created_at: timestamp,
     updated_at: timestamp };
   await env.DB.batch([
-    env.DB.query(`INSERT INTO session_schedules (id, session_id, created_by, name, cron, time_zone, content, access, run_in, enabled, next_run_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(schedule.id, row.id, schedule.created_by, name, cron, timeZone, content, access, runIn, schedule.enabled,
+    env.DB.query(`INSERT INTO session_schedules (id, session_id, created_by, name, cron, time_zone, content, access, run_in, one_shot, enabled, next_run_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(schedule.id, row.id, schedule.created_by, name, cron, timeZone, content, access, runIn, schedule.one_shot, schedule.enabled,
       nextRunAt, timestamp, timestamp),
-    auditStatement(env, change.actorId, 'session.schedule.created', row.workspace_id, row.id, { scheduleId: schedule.id, cron, timeZone, access, runIn, enabled,
+    auditStatement(env, change.actorId, 'session.schedule.created', row.workspace_id, row.id, { scheduleId: schedule.id, cron, timeZone, access, runIn, oneShot, enabled,
       ...changedBy(change) }),
   ]);
   await refreshNextScheduled(env, row.id);
@@ -251,6 +281,7 @@ async function updateSchedule(env: Env, row: SessionRow, change: ScheduleChange,
     ...(input.content !== undefined ? { content: text(input.content, 'content', 60000) } : {}),
     ...(input.access !== undefined ? { access: validAccess(input.access) } : {}),
     ...(input.runIn !== undefined ? { run_in: validRunIn(input.runIn) } : {}),
+    ...(input.oneShot !== undefined ? { one_shot: validOneShot(input.oneShot) ? 1 : 0 } : {}),
     ...(input.enabled !== undefined ? { enabled: validEnabled(input.enabled) ? 1 : 0 } : {}),
     updated_at: now() };
   if (next.access !== current.access) await requireAccessSupported(env, row, next.access);
@@ -258,16 +289,16 @@ async function updateSchedule(env: Env, row: SessionRow, change: ScheduleChange,
   if (timing) next.next_run_at = next.enabled ? nextRun(next.cron, next.time_zone, Date.now()) : null;
   if (next.enabled && next.next_run_at === null) fail(400, 'invalid_cron', 'This schedule never comes round.');
   const update = timing
-    ? env.DB.query(`UPDATE session_schedules SET name = ?, cron = ?, time_zone = ?, content = ?, access = ?, run_in = ?, enabled = ?, next_run_at = ?, updated_at = ?
+    ? env.DB.query(`UPDATE session_schedules SET name = ?, cron = ?, time_zone = ?, content = ?, access = ?, run_in = ?, one_shot = ?, enabled = ?, next_run_at = ?, updated_at = ?
         WHERE id = ? AND ${current.next_run_at === null ? 'next_run_at IS NULL' : 'next_run_at = ?'}`)
-      .bind(next.name, next.cron, next.time_zone, next.content, next.access, next.run_in, next.enabled, next.next_run_at, next.updated_at, next.id,
+      .bind(next.name, next.cron, next.time_zone, next.content, next.access, next.run_in, next.one_shot, next.enabled, next.next_run_at, next.updated_at, next.id,
         ...(current.next_run_at === null ? [] : [current.next_run_at]))
-    : env.DB.query('UPDATE session_schedules SET name = ?, content = ?, access = ?, run_in = ?, updated_at = ? WHERE id = ?')
-      .bind(next.name, next.content, next.access, next.run_in, next.updated_at, next.id);
+    : env.DB.query('UPDATE session_schedules SET name = ?, content = ?, access = ?, run_in = ?, one_shot = ?, updated_at = ? WHERE id = ?')
+      .bind(next.name, next.content, next.access, next.run_in, next.one_shot, next.updated_at, next.id);
   const [updated] = await env.DB.batch([
     update,
     auditStatement(env, change.actorId, 'session.schedule.updated', row.workspace_id, row.id,
-      { scheduleId: next.id, cron: next.cron, timeZone: next.time_zone, access: next.access, runIn: next.run_in, enabled: next.enabled === 1, ...changedBy(change) }),
+      { scheduleId: next.id, cron: next.cron, timeZone: next.time_zone, access: next.access, runIn: next.run_in, oneShot: next.one_shot === 1, enabled: next.enabled === 1, ...changedBy(change) }),
   ]);
   if (updated!.changes !== 1) fail(409, 'schedule_changed', 'This schedule ran or changed meanwhile. Reload it and try again.');
   await refreshNextScheduled(env, row.id);
@@ -306,9 +337,10 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
     if (fields[key] !== undefined && typeof fields[key] !== 'string') fail(400, 'invalid_input', `${key} is text.`);
   }
   if (fields.runIn !== undefined) validRunIn(fields.runIn);
+  if (fields.oneShot !== undefined) validOneShot(fields.oneShot);
   if (fields.enabled !== undefined) validEnabled(fields.enabled);
   const target = scheduleToolTarget({ action, scheduleId, ...fields as { name?: string; cron?: string; timeZone?: string; content?: string; access?: AccessMode;
-    runIn?: ScheduleRunIn; enabled?: boolean } });
+    runIn?: ScheduleRunIn; oneShot?: boolean; enabled?: boolean } });
   const access = await sessionAccess(c.env, sessionId, actorId);
   if (!access || access.row.status === 'archived' || !hasPermission(access.permissions, 'write')) {
     fail(403, 'permission_revoked', 'The requester can no longer write to this session.');

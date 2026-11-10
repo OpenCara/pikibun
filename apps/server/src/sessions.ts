@@ -122,6 +122,10 @@ export async function submitMessage(c: AppContext, row: SessionRow, mode: 'submi
     fail(413, 'message_too_large', 'This message and its images are too large to send together. Remove an image or shorten the message.');
   }
   const admissionId = mode === 'submit' ? await issueRunAdmission(c, row, content, requestId, options?.access, images, options?.autoMerge === true) : undefined;
+  if (mode === 'submit' && Number(row.one_shot) === 1) {
+    await c.env.DB.query('UPDATE sessions SET one_shot = 0 WHERE id = ? AND one_shot = 1').bind(row.id).run();
+    row.one_shot = 0;
+  }
   const result = await runnerJSON<SubmitResult>(await runnerRequest(c, row, mode, '', { content, requestId, ...(admissionId ? { admissionId } : {}), ...(options ? { options } : {}),
     ...(images ? { images } : {}) }));
   invalidateSessionView(c, row.id);
@@ -516,7 +520,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     const actorId = c.get('auth').userId;
     if (access.row.status !== 'archived') fail(409, 'session_not_archived', 'Session is not archived.');
     const row = await unpackSession(c, access);
-    const restored = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = COALESCE(archived_status, 'ready'), archived_status = NULL,
+    const restored = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = COALESCE(archived_status, 'ready'), archived_status = NULL, one_shot = 0,
         policy_version = policy_version + 1
       WHERE id = ? AND owner_id = ? AND policy_version = ? AND status = 'archived' AND packed_at IS NULL AND ${sessionManagerSQL('sessions')}
       RETURNING *`).bind(row.id, row.owner_id, row.policy_version, actorId).first();
