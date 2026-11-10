@@ -3,7 +3,8 @@ import test from "node:test";
 import { decidedAsHostCommand, decidesHostCommand, decidesHostCommands, hostCommandWaiting, isHostCommand, offersAlwaysApprove, requesterAutoApproves } from "../packages/client/src/host-commands.js";
 import type { ConnectorInfo } from "../packages/shared/src/connector.js";
 import type { Operation } from "../packages/shared/src/types.js";
-import { decidedAsHostCommand as sharedRule, grantedShell, type HostCommandSession } from "../packages/shared/src/host-operations.js";
+import { decidedAsHostCommand as sharedRule, grantedShell, memberAutoApproves, type HostCommandSession } from "../packages/shared/src/host-operations.js";
+import { mayAutoApprove } from "../packages/shared/src/policy.js";
 import { hostCommandSession } from "../apps/server/src/authority/host-access.js";
 
 test("a host command is host_bash, or any command of a session that runs on its host", () => {
@@ -120,6 +121,23 @@ test("another member's requests run without asking only for sandboxed commands, 
   assert.equal(offersAlwaysApprove(card, sandboxed, host, "alice"), false);
   assert.equal(offersAlwaysApprove(card, session, { capabilities: {} } as unknown as ConnectorInfo, "alice"), false);
   assert.equal(offersAlwaysApprove(card, session, undefined, "alice"), true);
+});
+
+test("a workspace owner's, admin's or collaborator's own Auto-approve runs only their commands that stay in the sandbox", () => {
+  // Who may choose it: the session's owner always; anyone else by their workspace role.
+  assert.equal(mayAutoApprove("alice", "alice", "member"), true);
+  for (const role of ["owner", "admin", "collaborator"] as const) assert.equal(mayAutoApprove("carol", "alice", role), true, role);
+  for (const role of ["member", "viewer", undefined] as const) assert.equal(mayAutoApprove("carol", "alice", role), false, String(role));
+  // What it runs without asking: commands in the sandbox, with the host's limits.
+  const sandboxed = { ownerId: "alice", connectorOwnerId: "bob" };
+  assert.equal(memberAutoApproves({ kind: "bash" }, sandboxed), true);
+  assert.equal(memberAutoApproves({ kind: "program" }, sandboxed), true);
+  // Everything else still asks, pushes and GitHub comments and issues included, unlike the owner's Always approve.
+  for (const kind of ["git.push", "github.comment", "github.issue", "github.merge", "host.bash", "extension.tool", "permission", "git.commit"]) {
+    assert.equal(memberAutoApproves({ kind }, sandboxed), false, kind);
+  }
+  assert.equal(memberAutoApproves({ kind: "bash" }, { ...sandboxed, hostEnvironment: true }), false, "a session on its host");
+  assert.equal(memberAutoApproves({ kind: "program" }, sandboxed, true), false, "without the host's limits");
 });
 
 test("an extension's tool call is decided as a host command, by the host's owner without approve permission, and never auto-approved for another member", () => {

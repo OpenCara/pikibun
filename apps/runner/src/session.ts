@@ -88,7 +88,7 @@ import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import { documentKindNames, type DocumentKind, type GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
 import { commandLimits, type CommandLimits } from "./host-config.js";
-import { requesterAutoApproves, decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
+import { memberAutoApproves, requesterAutoApproves, decidedAsHostCommand, grantedShell, type HostCommandSession } from "../../../packages/shared/src/host-operations.js";
 
 export type Run = {
   key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
@@ -389,10 +389,20 @@ export class RunnerSession {
       throw new RunnerError(403, "Ticket session, owner, or connector mismatch");
   }
 
-  async authorize(actorId: string, permission: Permission, expectedPolicyVersion?: number, host = false, hostSessions = false, archived = false, autoApprove = false): Promise<AuthorizationResult> {
+  /**
+   * `host`: also ask for the actor's authority over host commands on this host (`hostCommands`); `hostSessions`, also
+   * whether they may run their own sessions directly on it. `archived`: the request acts on the session because it is
+   * archived, as packing and unpacking its files do; the control plane then allows it only while the session is archived,
+   * and refuses every other request of an archived one. `autoApprove`: also ask whether the session's owner auto-approves
+   * the actor's requests (`autoApprove`), which only the control plane knows. `memberAutoApprove`: also ask whether the
+   * actor's own Auto-approve messages run their sandboxed commands without asking (`memberAutoApprove`), which takes
+   * their workspace role, which only the control plane knows too.
+   */
+  async authorize(actorId: string, permission: Permission, expectedPolicyVersion?: number, host = false, hostSessions = false, archived = false, autoApprove = false,
+    memberAutoApprove = false): Promise<AuthorizationResult> {
     const body: AuthorizationRequest = { sessionId: this.binding.session.id, ownerId: this.binding.owner.id, actorId, permission,
       ...(host ? { host: true } : {}), ...(host && hostSessions ? { hostSessions: true } : {}), ...(archived ? { archived: true } : {}),
-      ...(autoApprove ? { autoApprove: true } : {}) };
+      ...(autoApprove ? { autoApprove: true } : {}), ...(memberAutoApprove ? { memberAutoApprove: true } : {}) };
     let result: AuthorizationResult;
     try {
       if (this.config.authorize) result = await this.config.authorize(body);
@@ -1372,11 +1382,19 @@ export class RunnerSession {
     }
     if (value.access !== undefined) {
       if (!accessModes.includes(value.access as never) || mode !== "write") throw invalid();
-      if (value.access === "auto" && actorId !== this.binding.owner.id) throw new RunnerError(403, "Only the session owner can auto-approve");
+      // The owner's Auto-approve covers everything it does; another member's, only where their workspace role lets them
+      // choose it, and then only their sandboxed commands (memberAutoApproves, see createApproval).
+      if (value.access === "auto" && actorId !== this.binding.owner.id
+        && (await this.authorize(actorId, "write", undefined, false, false, false, false, true)).memberAutoApprove !== true) {
+        throw new RunnerError(403, "Only the session owner, or a workspace owner, admin or collaborator who can write to the session, can auto-approve");
+      }
       options.access = value.access as ChatOptions["access"];
     }
+    // Only an Auto-approve message merges without asking too, as the apps mark each one (see ChatOptions), and only the
+    // owner's: another member's Auto-approve runs no GitHub effect without asking.
     if (value.autoMerge !== undefined) {
       if (typeof value.autoMerge !== "boolean" || (value.autoMerge && options.access !== "auto")) throw invalid("Auto-merge needs Auto-approve");
+      if (value.autoMerge && actorId !== this.binding.owner.id) throw invalid("Only the session owner's Auto-approve merges without asking");
       if (value.autoMerge) options.autoMerge = true;
     }
     return Object.keys(options).length ? options : undefined;
@@ -2365,6 +2383,8 @@ export class RunnerSession {
     let admissionId: string | undefined;
     let callId: string | undefined;
     let automatic = false;
+    // Ran without asking because its member's own Auto-approve message let it (see below), not the owner's choice.
+    let memberAuto = false;
     if (toolTaskId !== undefined) {
       const state = await this.metadata();
       const attribution = state.toolActors[toolTaskId];
@@ -2384,6 +2404,17 @@ export class RunnerSession {
           || await this.hostCommandLevel(this.binding.owner.id, "write") === "auto");
       if (operation.kind === "extension.tool" && consent.automatic === true) automatic = true;
       if (operation.kind === "extension.tool" && operation.source === "piki:tunnel") automatic = false;
+      // Another member's own Auto-approve message, which their workspace role let them send, runs their commands that
+      // stay in the sandbox within the host's limits (memberAutoApproves) without asking, while the control plane still
+      // says their role allows it. Everything else it does asks, as in any of their messages; so does every command on a
+      // host its owner runs unsandboxed, where it would run directly on their machine.
+      if (!automatic && run.initiatedBy !== this.binding.owner.id && run.options?.access === "auto" && admissionId !== undefined && !this.#onHost
+        && memberAutoApproves(operation, this.hostCommandSession(), consent.unbounded === true)) {
+        memberAuto = automatic = (await this.authorize(actorId, "write", undefined, false, false, false, false, true)).memberAutoApprove === true;
+      }
+      // Another member's sandboxed command, push, or GitHub comment or issue (requesterAutoApproves) runs without asking
+      // while the session's owner auto-approves their requests, as the control plane reports it now; its brokers check
+      // that again, with the message's admission, before a push or GitHub effect.
       if (!automatic && run.initiatedBy !== this.binding.owner.id && admissionId !== undefined
         && requesterAutoApproves(operation, this.hostCommandSession(), consent.unbounded === true)) {
         automatic = (await this.authorize(actorId, "write", undefined, false, false, false, true)).autoApprove === true;
@@ -2401,11 +2432,14 @@ export class RunnerSession {
       this.#waits.forget(id);
       throw error;
     }
-    if (automatic && created) return this.executeAutomatically(id, actorId, signal);
+    // A replayed tool task finds its record and never repeats the effect; reopening marks interrupted executions.
+    // `signal`: the tool call's, so stopping its message stops a long command it runs.
+    if (automatic && created) return this.executeAutomatically(id, actorId, signal, memberAuto);
     return (await this.metadata()).approvals[id]!;
   }
 
-  private async executeAutomatically(id: string, actorId: string, signal?: AbortSignal): Promise<ApprovalRecord> {
+  /** `memberAuto`: another member's command that runs because their own Auto-approve message lets it (createApproval). */
+  private async executeAutomatically(id: string, actorId: string, signal?: AbortSignal, memberAuto = false): Promise<ApprovalRecord> {
     const approval = (await this.metadata()).approvals[id]!;
     const operation = approval.operation;
     let status: ApprovalRecord["status"];
@@ -2444,7 +2478,13 @@ export class RunnerSession {
         this.requireShellCapability(operation, approval.unbounded === true);
         await this.requireHostEnvironment(true);
         if (approval.unbounded === true && grantedShell(this.hostCommandSession())) await this.requireShellGrant(true);
-        if (actorId !== this.binding.owner.id) {
+        // Another member's command runs only while the session's owner still auto-approves their requests, or, from their
+        // own Auto-approve message, while their workspace role still lets them choose it.
+        if (actorId !== this.binding.owner.id && memberAuto) {
+          if ((await this.authorize(actorId, "write", undefined, false, false, false, false, true)).memberAutoApprove !== true) {
+            throw new RunnerError(403, "This member can no longer auto-approve their commands here: commands need approval. Nothing ran.");
+          }
+        } else if (actorId !== this.binding.owner.id) {
           if ((await this.authorize(actorId, "write", undefined, false, false, false, true)).autoApprove !== true) {
             throw new RunnerError(403, "The session owner no longer auto-approves this member's requests: commands need approval. Nothing ran.");
           }

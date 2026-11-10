@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import type { ConnectorInfo } from "../packages/shared/src/connector.js";
 import type { SessionView } from "../packages/shared/src/types.js";
 import {
-  accessUnavailable, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, initialSelection, modelUnavailable, mustConfirmAutoApprove, parseChatPreference,
-  preferredSelection, type ChatSelection,
+  accessHint, accessLabels, accessUnavailable, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, initialSelection, memberAutoApproveHint,
+  memberAutoApproveWarning, modelUnavailable, mustConfirmAutoApprove, offersMemberAutoApprove, parseChatPreference, preferredSelection, type ChatSelection,
 } from "../packages/client/src/chat-options.js";
 
 const host = { capabilities: { chatOptions: true }, models: [] } as unknown as ConnectorInfo;
@@ -109,4 +109,31 @@ test("the Auto-approve warning says what runs without asking on this host", () =
   assert.match(autoApproveWarning({ ...base, hostCommandAccess: "auto" }, false), /granted you automatic host commands, so host commands, such as its extensions' tools, also run OUTSIDE the sandbox on Bob's Pi/);
   assert.match(autoApproveWarning({ ...base, hostCommandAccess: "owner" }, false), /On someone else's host they still need their approval/);
   assert.match(autoApproveWarning(base, false), /or one whose owner granted you automatic host commands/);
+});
+
+test("a workspace owner, admin or collaborator may choose Auto-approve in someone else's session, for their sandboxed commands only", () => {
+  const automatic = { name: "Bob's Pi", capabilities: { chatOptions: true, automaticGitHub: true, memberAutoApprove: true }, models: [] } as unknown as ConnectorInfo;
+  const older = { name: "Bob's Pi", capabilities: { chatOptions: true, automaticGitHub: true }, models: [] } as unknown as ConnectorInfo;
+  const session = { ownerId: "owner" };
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "collaborator", true, false), true);
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "admin", true, false), true);
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "owner", true, false), true);
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "member", true, false), false, "a plain member asks");
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "viewer", true, false), false);
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", undefined, true, false), false, "until the role is known");
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "collaborator", false, false), false, "only someone who writes to it");
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "collaborator", true, true), false, "never on an unsandboxed host");
+  assert.equal(offersMemberAutoApprove(session, older, "teammate", "collaborator", true, false), false, "an older connector takes it from the owner only");
+  assert.equal(offersMemberAutoApprove(session, undefined, "teammate", "collaborator", true, false), false);
+  assert.equal(offersMemberAutoApprove(session, automatic, "owner", "collaborator", true, false), false, "the owner has their own Auto-approve");
+  // Their messages never ask to merge without asking, so they never wait on the owner's merge confirmation either.
+  assert.deepEqual(chatOptionsBody(automatic, auto, "submit", false), { access: "auto" });
+  assert.deepEqual(chatOptionsBody(automatic, auto, "submit", true), { access: "auto", autoMerge: true });
+  assert.equal(mustConfirmAutoApprove(chatOptionsBody(automatic, auto, "submit", false), false), false);
+  // The menu and the confirmation say what it does there.
+  assert.equal(accessHint("auto", false), memberAutoApproveHint);
+  assert.equal(accessHint("auto", true), accessLabels.auto.hint);
+  assert.equal(accessHint("approval", false), accessLabels.approval.hint);
+  assert.match(memberAutoApproveWarning(automatic), /in the sandbox .* will run immediately on Bob's Pi, as the session's owner/);
+  assert.match(memberAutoApproveWarning(automatic), /Pushes, GitHub comments, issues and merges, host commands, commands without resource limits, and tools the session doesn't allow yet still need approval/);
 });

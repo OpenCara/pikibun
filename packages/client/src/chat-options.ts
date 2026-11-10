@@ -1,6 +1,7 @@
 import type { ConnectorInfo, LocalModelSummary } from "../../shared/src/connector";
 import type {} from "../../shared/src/host-operations";
-import { thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type ThinkingLevel } from "../../shared/src/types";
+import { mayAutoApprove } from "../../shared/src/policy";
+import { thinkingLevels, type AccessMode, type ChatOptions, type SessionRecord, type SessionView, type ThinkingLevel, type WorkspaceRole } from "../../shared/src/types";
 
 export interface ChatSelection {
   model?: { provider: string; modelId: string };
@@ -18,6 +19,33 @@ export const accessLabels: Record<AccessMode, { label: string; hint: string }> =
   auto: { label: "Auto-approve", hint: "Commands, commits, pushes, GitHub comments, issues and merges run immediately as the owner, without asking" },
 };
 
+/** What Auto-approve means in the access menu of a member who doesn't own the session (see offersMemberAutoApprove). */
+export const memberAutoApproveHint = "Commands in the sandbox run immediately as the session owner, without asking; pushes, GitHub comments, merges and host commands still ask";
+
+/** An access mode's hint in the menu: Auto-approve does less in a session the viewer doesn't own. */
+export function accessHint(mode: AccessMode, owner: boolean): string {
+  return mode === "auto" && !owner ? memberAutoApproveHint : accessLabels[mode].hint;
+}
+
+/**
+ * Whether `userId`, who doesn't own the session, may choose Auto-approve for their messages to it, as the control plane
+ * and the host let them: they write to it, their workspace `role` allows it (mayAutoApprove), and its host runs such
+ * messages (`memberAutoApprove`) in a sandbox (not `unsandboxed`, as the session or its host says). Their Auto-approve
+ * runs only commands that stay in the sandbox without asking.
+ */
+export function offersMemberAutoApprove(session: Pick<SessionRecord, "ownerId">, host: Pick<ConnectorInfo, "capabilities"> | undefined, userId: string,
+  role: WorkspaceRole | undefined, canWrite: boolean, unsandboxed: boolean): boolean {
+  return session.ownerId !== userId && canWrite && !unsandboxed && mayAutoApprove(userId, session.ownerId, role) && host?.capabilities.memberAutoApprove === true;
+}
+
+/** What turning on Auto-approve means in a session the viewer doesn't own (see offersMemberAutoApprove), confirmed before it applies. */
+export function memberAutoApproveWarning(host: Pick<ConnectorInfo, "name">): string {
+  return `Commands the agent runs in the sandbox for your messages (bash, git, node, python, cargo and the browser) will run immediately on ${host.name}, `
+    + "as the session's owner and with their access to the workspace's repositories, without asking them. Pushes, GitHub comments, issues and merges, "
+    + "host commands, commands without resource limits, and tools the session doesn't allow yet still need approval.";
+}
+
+/** Whether Auto-approve on `host` merges pull requests without asking too: older connectors ask before every GitHub effect. */
 export function autoApproveMerges(host: Pick<ConnectorInfo, "capabilities"> | undefined): boolean {
   return host?.capabilities.automaticGitHub === true;
 }
@@ -140,7 +168,14 @@ export function modelUnavailable(host: ConnectorInfo | undefined, selection: Cha
   return undefined;
 }
 
-export function chatOptionsBody(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): ChatOptions | undefined {
+/**
+ * Request options for a selection, or undefined when the host's connector cannot apply them.
+ * Only choices the host advertises are sent; access only applies to the shared conversation. Auto-approve covers merges
+ * too: hosts that run GitHub effects automatically, and the control plane, merge without asking only in a message that
+ * says so (`autoMerge`), so each Auto-approve message to one does, from the session's `owner`: another member's
+ * Auto-approve runs no GitHub effect without asking.
+ */
+export function chatOptionsBody(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask", owner = true): ChatOptions | undefined {
   if (!host?.capabilities.chatOptions) return undefined;
   const model = findModel(host, selection.model);
   const options: ChatOptions = {};
@@ -148,7 +183,7 @@ export function chatOptionsBody(host: ConnectorInfo | undefined, selection: Chat
   const thinkingLevel = effectiveLevel(model, selection.thinkingLevel);
   if (thinkingLevel) options.thinkingLevel = thinkingLevel;
   if (mode === "submit") options.access = selection.access;
-  if (mode === "submit" && selection.access === "auto" && autoApproveMerges(host)) options.autoMerge = true;
+  if (mode === "submit" && selection.access === "auto" && owner && autoApproveMerges(host)) options.autoMerge = true;
   return options;
 }
 

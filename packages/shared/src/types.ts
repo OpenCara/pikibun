@@ -177,6 +177,12 @@ export interface AuthorizationRequest {
   hostSessions?: boolean;
   archived?: boolean;
   autoApprove?: boolean;
+  /**
+   * Also report whether the actor's own Auto-approve messages run their sandboxed commands without asking
+   * (`memberAutoApprove`). Asked only by connectors that honor that (ConnectorCapabilities.memberAutoApprove), so older
+   * ones never receive the field.
+   */
+  memberAutoApprove?: boolean;
 }
 export const hostCommandLevels = ["approve", "auto"] as const;
 export type HostCommandLevel = (typeof hostCommandLevels)[number];
@@ -187,6 +193,12 @@ export interface AuthorizationResult {
   hostCommands?: HostCommandLevel;
   hostSessions?: true;
   autoApprove?: true;
+  /**
+   * Present only when requested (`memberAutoApprove`) and the actor's own Auto-approve messages run their sandboxed
+   * commands without asking: the actor isn't the session's owner, can still write to it, and their workspace role is one
+   * of memberAutoApproveRoles (policy.ts). What runs so is what memberAutoApproves (host-operations.ts) says.
+   */
+  memberAutoApprove?: true;
 }
 export interface PullRequestRequest {
   title: string;

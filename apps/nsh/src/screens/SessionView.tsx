@@ -2,7 +2,7 @@ import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, pl
 import { Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
-  initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, pairToolResults, preparingRepositories,
+  initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, offersMemberAutoApprove, pairToolResults, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ApprovalRecord, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
 } from "../shared";
@@ -400,6 +400,10 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const current = () => props.live.session()!;
   const view = () => props.live.view()!;
   const owner = () => current().ownerId === user.id;
+  // A workspace owner, admin or collaborator who writes to someone else's session auto-approves their sandboxed commands.
+  const memberAutoApprove = () => offersMemberAutoApprove(current(), props.host(), user.id,
+    data.workspaces().find(item => item.id === current().workspaceId)?.role, canWrite(), unsandboxed());
+  // Initialised once per session; view refreshes never reset the user's picks.
   const selection = signal<ChatSelection>(untracked(() => initialSelection(view(), owner())));
   const mode = signal<"write" | "ask">("write");
   const content = createDraft(props.id);
@@ -467,7 +471,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     if (!permitted() || (!text.trim() && !pasted.length && !attached.length) || submission.busy() || confirming) return;
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
-    const options = chatOptionsBody(host, selection(), kind);
+    const options = chatOptionsBody(host, selection(), kind, owner());
     const unavailable = accessUnavailable(host, selection(), kind) ?? modelUnavailable(host, selection());
     if (!unavailable && host && mustConfirmAutoApprove(options, data.autoApproveConfirmed())) {
       confirming = true;
@@ -704,7 +708,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                     options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
                 </If>
                 <If when={permitted()}>
-                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} owner={owner()} showAccess={actualMode() === "write"}
+                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} owner={owner()} memberAutoApprove={memberAutoApprove()} showAccess={actualMode() === "write"}
                     unsandboxed={unsandboxed()} data={data} />
                 </If>
               </If>

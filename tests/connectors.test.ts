@@ -1378,7 +1378,9 @@ test('per-message chat options are checked against the session host, mode and ow
   await denied(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'foreign', options: { model: { provider: 'local-native', modelId: 'not-on-host' } } }), 403, 'model_not_on_host');
   await denied(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'level', options: { model, thinkingLevel: 'xhigh' } }), 400, 'invalid_options');
   await denied(await s.creator.request('POST', `${path}/ask`, { content: 'Hi', requestId: 'ask-access', options: { access: 'read' } }), 400, 'invalid_options');
-  await denied(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'writer-auto', options: { access: 'auto' } }), 403, 'owner_required');
+  // The workspace's owner may auto-approve their own sandboxed commands in someone else's session, but only on a host that
+  // runs them so (memberAutoApprove).
+  await denied(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'writer-auto', options: { access: 'auto' } }), 409, 'connector_update_required');
   assert.equal(requests.length, before, 'rejected choices never reach the host');
   await json(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'writer-read', options: { access: 'read' } }), 202);
   assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { access: 'read' });
@@ -2966,6 +2968,74 @@ test('a session owner auto-approves another member\'s requests from one of their
   assert.equal((await present()).get('tool-ran')!.automatic, true);
   const audit = f.sqlite.prepare(`SELECT action FROM audit WHERE action LIKE 'session.requester_auto_approve.%' OR action = 'workspace.approvals.updated' ORDER BY rowid`).all().map(row => row.action);
   assert.deepEqual(audit, ['workspace.approvals.updated', 'session.requester_auto_approve.started', 'workspace.approvals.updated', 'workspace.approvals.updated', 'session.requester_auto_approve.stopped']);
+});
+
+test('a workspace owner, admin or collaborator auto-approves their own sandboxed commands in someone else\'s session, and nothing more', async t => {
+  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'bash', 'github_comment']);
+  const owner = s.creator.user.id; const teammate = s.host.user.id; const workspaceOwner = s.admin.user.id;
+  const path = `/api/sessions/${s.session.id}`;
+  // The teammate, a workspace member, writes to the creator's session through a session role.
+  await json(await s.creator.request('POST', `${path}/grants`, { userId: teammate, permissions: ['write'] }));
+  let approvals: ApprovalRecord[] = [];
+  const requests = rpcHub(f, s.connector, envelope => {
+    if (envelope.request.ticket.action === 'view') return Response.json({ view: {
+      sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
+      entries: [], approvals, conversations: [], busy: true,
+    } });
+    return Response.json({ submissionId: 'submission', conversationId: 'conversation', status: 'queued' }, { status: 202 });
+  });
+  const send = (client: Client, requestId: string, options: Record<string, unknown>) => client.request('POST', `${path}/submit`, { content: 'Hi', requestId, options });
+  const admission = (requestId: string) => f.sqlite.prepare('SELECT id, access, auto_merge FROM run_admissions WHERE request_id = ?').get(requestId)!;
+  const capabilities = { ...manifest.capabilities, chatOptions: true, automaticGitHub: true };
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities }));
+
+  // A plain workspace member never may, whatever their session role.
+  await denied(await send(s.host, 'member', { access: 'auto' }), 403, 'owner_required');
+  await json(await s.admin.request('PATCH', `/api/workspaces/${s.team.id}/members/${teammate}`, { role: 'collaborator' }));
+  // A host whose connector takes Auto-approve from the owner only isn't sent it.
+  await denied(await send(s.host, 'older-host', { access: 'auto' }), 409, 'connector_update_required');
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, memberAutoApprove: true } }));
+  // A collaborator's Auto-approve goes, without the merges the apps ask for with it; so does the workspace owner's.
+  await json(await send(s.host, 'collaborator', { access: 'auto', autoMerge: true }), 202);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { access: 'auto' });
+  assert.equal(admission('collaborator').access, 'auto');
+  assert.equal(Number(admission('collaborator').auto_merge), 0);
+  await json(await send(s.admin, 'workspace-owner', { access: 'auto' }), 202);
+  assert.equal(admission('workspace-owner').access, 'auto');
+
+  // The host learns it only when it asks, and never for the session's owner, whose own Auto-approve covers more.
+  const authorize = async (actorId: string, ask = true) => json<{ allowed: boolean; memberAutoApprove?: true }>(await self(f, s.connector, 'authorize',
+    { ...authorization(s.session, actorId), ...(ask ? { memberAutoApprove: true } : {}) }));
+  assert.equal((await authorize(teammate)).memberAutoApprove, true);
+  assert.equal((await authorize(workspaceOwner)).memberAutoApprove, true);
+  assert.equal((await authorize(owner)).memberAutoApprove, undefined);
+  assert.equal(Object.hasOwn(await authorize(teammate, false), 'memberAutoApprove'), false);
+  await denied(await self(f, s.connector, 'authorize', { ...authorization(s.session, teammate), memberAutoApprove: 'yes' }), 400, 'invalid_authorization');
+
+  // A view shows their sandboxed command as automatic; a host can't claim the same of their GitHub comment, nor of a
+  // command from a message that asked before acting.
+  const ran = (id: string, operation: Operation, admissionId: string): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: teammate,
+    decidedBy: owner, automatic: true, admissionId, status: 'executed', result: 'ok', createdAt: new Date().toISOString(), operation });
+  const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
+  const auto = String(admission('collaborator').id);
+  approvals = [ran('tool-ran', { kind: 'bash', command: 'npm test' }, auto)];
+  assert.equal((await present()).get('tool-ran')!.automatic, true);
+  approvals = [ran('tool-comment', { kind: 'github.comment', repository: 'owner/repo', issue: 3, body: 'Exactly approved text' }, auto)];
+  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
+  approvals = [ran('tool-asked', { kind: 'bash', command: 'npm test' }, autoAdmission(f, s.session.id, teammate, 'approval'))];
+  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
+  // Nor does their Auto-approve post GitHub comments as the owner.
+  const github = githubFetch(t);
+  await denied(await self(f, s.connector, 'github/comment', { sessionId: s.session.id, actorId: teammate, approvalId: 'tool-post', admissionId: auto,
+    repository: 'owner/repo', issue: 3, body: 'Exactly approved text' }), 403, 'permission_revoked');
+  assert.equal(github.mock.callCount(), 0);
+
+  // Back to a plain member, they ask again; what already ran stays valid history.
+  await json(await s.admin.request('PATCH', `/api/workspaces/${s.team.id}/members/${teammate}`, { role: 'member' }));
+  assert.equal((await authorize(teammate)).memberAutoApprove, undefined);
+  await denied(await send(s.host, 'demoted', { access: 'auto' }), 403, 'owner_required');
+  approvals = [ran('tool-ran', { kind: 'bash', command: 'npm test' }, auto)];
+  assert.equal((await present()).get('tool-ran')!.automatic, true);
 });
 
 test('another member\'s extension tool call that ran automatically shows in the session view, checked once against the workspace and the host owner\'s leave', async t => {

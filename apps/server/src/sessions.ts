@@ -9,7 +9,7 @@ import { connectorLimits, type ConnectorCapabilities, type LocalModelSummary } f
 import { parseChatImages, type ChatImage } from '../../../packages/shared/src/chat-images.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { isRevision } from '../../../packages/shared/src/view-patch.js';
-import { hasPermission, managesSession, normalizePermissions, roleSessionCeiling, sessionRoleOf, sessionRolePermissions, validateUserEnv } from '../../../packages/shared/src/policy.js';
+import { hasPermission, managesSession, mayAutoApprove, normalizePermissions, roleSessionCeiling, sessionRoleOf, sessionRolePermissions, validateUserEnv } from '../../../packages/shared/src/policy.js';
 import { redactApproval } from '../../../packages/shared/src/redaction.js';
 import type { AgentRow, AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
 import { agentVersion, getUser, modelDefinition, requireActiveSession, requireUnfrozen, runnerSessionRecord, sessionRecord, userProfile } from './db.js';
@@ -35,6 +35,12 @@ import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 
+/**
+ * Per-message model, reasoning and access. The model must be one the session's own host offers: one it advertises that its
+ * owner or an admin didn't disable. Auto-approve is the owner's, and for their sandboxed commands only, a workspace
+ * owner's, admin's or collaborator's who writes to the session (mayAutoApprove). The runner re-checks all of it except the disabled
+ * models, which only the Worker knows, and only the Worker can say whether the host understands options at all.
+ */
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown): Promise<ChatOptions | undefined> {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(400, 'invalid_options', 'Invalid chat options.');
@@ -71,13 +77,30 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
   }
   if (input.access !== undefined) {
     if (mode !== 'submit' || !accessModes.includes(input.access as never)) fail(400, 'invalid_options', 'Side asks are always read-only.');
-    if (input.access === 'auto' && c.get('auth').userId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can auto-approve commands.');
+    // The owner's Auto-approve covers everything it does; a workspace owner's, admin's or collaborator's who writes to
+    // the session, their sandboxed commands only (memberAutoApproves), on a host that runs those so.
+    const actorId = c.get('auth').userId;
+    if (input.access === 'auto' && actorId !== row.owner_id) {
+      const actor = await sessionAccess(c.env, row.id, actorId);
+      if (!actor || !hasPermission(actor.permissions, 'write') || !mayAutoApprove(actorId, row.owner_id, actor.role)) {
+        fail(403, 'owner_required', 'Only the session owner, or a workspace owner, admin or collaborator, can auto-approve commands.');
+      }
+      if (capabilities.memberAutoApprove !== true) {
+        fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to auto-approve commands in a session you don\'t own.');
+      }
+      // Its commands would run directly on its owner's machine, so they ask whatever this message says.
+      if (capabilities.unsandboxed === true || Number(row.host_environment ?? 0) === 1) {
+        fail(409, 'unsandboxed_host', 'This session\'s host runs commands without a sandbox, so only the session owner can auto-approve them.');
+      }
+    }
     options.access = input.access as ChatOptions['access'];
   }
   if (input.autoMerge !== undefined) {
     if (typeof input.autoMerge !== 'boolean') fail(400, 'invalid_options', 'Invalid auto-merge choice.');
     if (input.autoMerge && options.access !== 'auto') fail(400, 'invalid_options', 'Auto-merge needs Auto-approve.');
-    if (input.autoMerge && capabilities.automaticGitHub === true) options.autoMerge = true;
+    // Only the owner's Auto-approve merges: another member's runs no GitHub effect without asking, so the mark the apps
+    // put on each Auto-approve message is left off theirs.
+    if (input.autoMerge && capabilities.automaticGitHub === true && c.get('auth').userId === row.owner_id) options.autoMerge = true;
   }
   return options;
 }
