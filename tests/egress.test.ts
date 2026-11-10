@@ -347,6 +347,63 @@ test("tunnels take a local proxy's fake-IP answers for hosts the policy names, n
   assert.deepEqual(connected, ["198.18.0.206", "93.184.216.35"]);
 });
 
+test("a host's owner who trusts its fake-IP proxy lets any host the policy allows resolve to it, and nothing else", async t => {
+  const echo: Server = createTcpServer(socket => socket.pipe(socket));
+  await new Promise<void>(resolve => echo.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>(resolve => { echo.close(() => resolve()); }));
+  const lookups: Record<string, string[]> = {
+    "anything.example.org": ["198.18.0.9"], "mixed.example.com": ["198.18.0.10", "10.0.0.8"], "x.cdn.example.net": ["198.18.0.11"],
+    "elsewhere.example.org": ["198.18.0.12"],
+  };
+  const connected: string[] = [];
+  let trusted: boolean | Error = true;
+  const asked: string[] = [];
+  const open = async (policy: EgressGrant["policy"]) => {
+    const directory = await mkdtemp(join(tmpdir(), "egress-"));
+    const instance = new EgressProxy({
+      socketPath: join(directory, "proxy.sock"),
+      grant: async () => ({ policy, repositories: [] }),
+      relay: async () => new Response("", { status: 404 }),
+      lookup: async host => (lookups[host] ?? ["93.184.216.35"]).map(address => ({ address, family: 4 })),
+      connect: (port, address) => { connected.push(address); return tcpConnect({ port: (echo.address() as AddressInfo).port, host: "127.0.0.1" }); },
+      fakeIpTunnels: async () => { asked.push("asked"); if (trusted instanceof Error) throw trusted; return trusted; },
+    });
+    await instance.start();
+    t.after(async () => { await instance.close(); await rm(directory, { recursive: true, force: true }); });
+    return instance;
+  };
+  const through = async (instance: EgressProxy, target: string) => {
+    const result = await tunnel(instance.socketPath, target);
+    result.socket?.destroy();
+    return result;
+  };
+
+  const anything = await open({ mode: "open", domains: [], packageRegistries: false });
+  assert.equal((await through(anything, "anything.example.org:443")).status, 200, "any host, in open mode");
+  assert.equal((await through(anything, "public.example.org:443")).status, 200);
+  assert.equal(asked.length, 1, "asked only where a fake-IP answer needs it");
+  const mixed = await through(anything, "mixed.example.com:443");
+  assert.equal(mixed.status, 403, "a private answer beside a fake one is still refused");
+  assert.match(mixed.body!, /does not resolve to a public address/);
+  assert.equal((await through(anything, "198.18.0.9:443")).status, 403, "a bare fake-IP address names no host");
+  assert.deepEqual(connected, ["198.18.0.9", "93.184.216.35"]);
+
+  const allowlist = await open({ mode: "allowlist", domains: ["*.cdn.example.net"], packageRegistries: false });
+  assert.equal((await through(allowlist, "x.cdn.example.net:443")).status, 200, "a subdomain under a *. entry");
+  const outside = await through(allowlist, "elsewhere.example.org:443");
+  assert.equal(outside.status, 403, "the policy still decides which hosts");
+  assert.match(outside.body!, /not allowed by this workspace's network policy/);
+  assert.deepEqual(connected, ["198.18.0.9", "93.184.216.35", "198.18.0.11"]);
+
+  trusted = false;
+  const off = await through(anything, "anything.example.org:443");
+  assert.equal(off.status, 403, "turned off, the next tunnel is refused");
+  assert.match(off.body!, /a fake-IP address of a proxy on this host\. .*or for any host it allows once the host's owner trusts that proxy .*\. Otherwise, exclude anything\.example\.org/);
+  trusted = new Error("control plane unreachable");
+  assert.equal((await through(anything, "anything.example.org:443")).status, 403, "an unknown setting counts as off");
+  assert.deepEqual(connected, ["198.18.0.9", "93.184.216.35", "198.18.0.11"]);
+});
+
 function binding(id: string): RunnerBinding {
   return {
     session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Egress test", policyVersion: 1,
