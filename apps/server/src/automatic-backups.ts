@@ -62,11 +62,14 @@ export async function asSessionOwner<T>(env: Env, row: Pick<SessionRow, 'owner_i
   return outcome.value;
 }
 
-/** The error code an attempt stopped at: the API's own code for refusals, else 'internal_error'. */
+/**
+ * The error code an attempt stopped at: the API's own code for refusals, else 'internal_error'. It reads a copy of the
+ * refusal, which stays whole for a caller that records the code and rethrows it (a schedule's Run now).
+ */
 export async function errorCode(error: unknown): Promise<string> {
   if (error instanceof HTTPException) {
     try {
-      const body = await error.getResponse().json() as { code?: unknown };
+      const body = await (error.res ? error.res.clone() : error.getResponse()).json() as { code?: unknown };
       if (typeof body.code === 'string' && /^[a-z0-9_]{1,64}$/.test(body.code)) return body.code;
     } catch { /* not a JSON refusal */ }
   }
