@@ -22,6 +22,20 @@ And around them:
 - **People decide.** Shell commands, commits, pushes, GitHub comments, merges and new issues wait for an approval unless the session owner auto-approves a message (a workspace's owner, admins and collaborators can auto-approve their own sandboxed commands in others' sessions).
 - **Built for teams.** Workspace roles (viewer, member, collaborator, admin) set what each person can do by default, with the workspace's owner and admins managing every session in it, and session grants add more for one session at a time.
 
+## Pi and pi-durable
+
+Pikibun has no agent or model integrations of its own: it builds on two packages from [Pi](https://github.com/earendil-works/pi).
+
+- **Pi** (`@earendil-works/pi-coding-agent`) is what you set up on each host. Install it and sign it in to your model provider there, as you would to use Pi in a terminal (the desktop app's **This Mac** can do the sign-in for you):
+
+  ```sh
+  npm install -g @earendil-works/pi-coding-agent
+  pi    # then /login, or configure a provider and model
+  ```
+
+  The connector reads Pi's configuration (`~/.pi/agent`, or `--pi-agent-dir`). It offers the models matched by `enabledModels` in Pi's `settings.json` (every authenticated model when that is unset), takes reasoning levels and compaction settings from there, and loads extensions with Pi's own loader. Provider credentials stay in Pi on the host. Restart the connector after changing Pi's configuration. See [Hosts](docs/hosts.md#models).
+- **pi-durable** (`@earendil-works/pi-durable`) is the agent runtime each session runs on, inside the connector, with nothing to install or configure. Sessions don't use Pi's interactive agent session. Each session is a durable conversation kept in its own SQLite database on the host: messages, tool calls and approvals are recorded as they happen. A session waiting on an approval, or interrupted by a connector restart, picks up where it stopped, and [backups and moves](docs/backups.md) carry that database. Pikibun's tools (sandboxed commands, Git, GitHub and others) and Pi's code mode are added as pi-durable extensions. For the same reason, the host's personal Pi extensions and `AGENTS.md` aren't loaded: a workspace chooses its sessions' [extensions](docs/extensions.md). See [Host extensions](docs/design/host-extensions.md) for how Pi extensions map onto pi-durable.
+
 ## Quick start
 
 Just for yourself, on one computer:
