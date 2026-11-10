@@ -8,7 +8,7 @@ import {
 } from '../../../packages/shared/src/cross-session.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  auditStatement, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
+  auditStatement, hostCapabilities, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
   sessionsNeedGranted, workspaceSessionAccess,
 } from './authority/index.js';
 import { getUser } from './db.js';
@@ -27,7 +27,7 @@ interface MessageRow {
   notify_message_id: string | null; reply_to: string | null; created_at: string; updated_at: string;
 }
 
-type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; request_id: string; expires_at: number };
+type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; auto_merge?: number; request_id: string; expires_at: number };
 
 interface Chain { hops: number; sessions: string[] }
 
@@ -133,7 +133,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   }
   const origin = originAccess.row;
   await requireCallbackScope(c, origin, connectorId);
-  const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, request_id, expires_at FROM run_admissions WHERE id = ?')
+  const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, auto_merge, request_id, expires_at FROM run_admissions WHERE id = ?')
     .bind(admissionId).first();
   if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
     || admission.expires_at <= Math.floor(Date.now() / 1000)) {
@@ -242,11 +242,33 @@ function perMessageLimit(): never {
   fail(429, 'cross_session_limit', `One message sends at most ${crossSessionLimits.perMessage} messages to other sessions.`);
 }
 
-async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'create', message: string, access: AccessMode | undefined, notify: boolean,
+/** The session's commands run in its host's sandbox, and its host takes a message's access. */
+async function sandboxedWithAccess(env: Env, row: Pick<SessionRow, 'connector_id' | 'host_environment'>): Promise<boolean> {
+  if (!row.connector_id || Number(row.host_environment ?? 0) === 1) return false;
+  const capabilities = await hostCapabilities(env, row.connector_id, { active: true });
+  return capabilities?.chatOptions === true && capabilities.unsandboxed !== true;
+}
+
+/**
+ * A sandboxed session runs the messages an agent sends it, starts it with or notifies it with on Auto-approve by default,
+ * as its chat box does, when they come from the session owner's own Auto-approve message (merging without asking too where
+ * that message did) and go to a session of theirs. Any other message keeps asking: none runs with more than the one that
+ * sent it.
+ */
+async function inheritedAccess(env: Env, admission: Pick<AdmissionRow, 'access' | 'auto_merge' | 'actor_id'>, origin: Pick<SessionRow, 'owner_id'>,
+  target: Pick<SessionRow, 'owner_id' | 'connector_id' | 'host_environment'>): Promise<Pick<ChatOptions, 'access' | 'autoMerge'>> {
+  if (admission.access !== 'auto' || admission.actor_id !== origin.owner_id || target.owner_id !== admission.actor_id) return {};
+  if (!await sandboxedWithAccess(env, target)) return {};
+  return { access: 'auto', ...(Number(admission.auto_merge ?? 0) === 1 ? { autoMerge: true } : {}) };
+}
+
+async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'create', message: string, chosen: AccessMode | undefined, notify: boolean,
   thinkingLevel?: ThinkingLevel): Promise<CrossSessionMessage> {
   const { c, origin, actorId, admission, callId, chain } = call;
   await requireSendable(call, target.id);
-  if (access === 'auto' && target.owner_id !== actorId) fail(403, 'owner_required', 'Only the owner of that session sends it an auto-approved message.');
+  if (chosen === 'auto' && target.owner_id !== actorId) fail(403, 'owner_required', 'Only the owner of that session sends it an auto-approved message.');
+  const inherited = kind === 'ask' || chosen !== undefined ? {} : await inheritedAccess(c.env, admission, origin, target);
+  const access = chosen ?? inherited.access;
   const messageId = id();
   const hops = chain.hops + 1;
   const actor = await getUser(c.env, actorId);
@@ -267,7 +289,8 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
       if (kind !== 'ask' && busyActivities.includes(row.activity ?? '')) {
         fail(409, 'session_busy', 'That session is working or waiting on an approval. Read it, or try again once it is done.');
       }
-      const options: ChatOptions = { ...(access && access !== 'approval' ? { access } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
+      const options: ChatOptions = { ...(access && access !== 'approval' ? { access } : {}), ...(inherited.autoMerge ? { autoMerge: true } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}) };
       return submitMessage(inner, row, kind === 'ask' ? 'ask' : 'submit', {
         content, requestId: `xs:${messageId}`, ...(Object.keys(options).length ? { options } : {}),
       }, { crossSession: messageId, originSessionId: origin.id }, { currentModel: true });
@@ -442,11 +465,15 @@ async function notify(env: Env, message: MessageRow): Promise<{ delivered: strin
       if (!granted) fail(403, 'audience_changed', 'The two sessions\' readers changed since the message was sent.');
     }
     const notifyId = `${message.id}-n`;
+    const sender = message.origin_admission_id ? await env.DB.query<Pick<AdmissionRow, 'access' | 'auto_merge' | 'actor_id'>>(
+      'SELECT access, auto_merge, actor_id FROM run_admissions WHERE id = ? AND session_id = ?').bind(message.origin_admission_id, origin.id).first() : null;
+    const inherited = sender && sender.actor_id === message.actor_id ? await inheritedAccess(env, sender, origin, origin) : {};
     const actor = await getUser(env, message.actor_id);
     const header = crossSessionHeader({ id: notifyId, kind: 'notify', hops: Number(message.hops) + 1 }, target, { id: message.actor_id, login: actor?.github_login }, { id: message.id });
     const body = `Its ${message.kind === 'ask' ? 'side ask' : 'message'} ended: ${outcome.status}${outcome.failed ? ' (its model request failed)' : ''}.`
       + (outcome.reply ? `\n\nIts reply:\n\n${outcome.reply}` : '\n\nIt left no reply.');
-    const submitted = await submitMessage(c, origin, 'submit', { content: `${header}\n\n${body}`, requestId: `xs:${notifyId}` }, { crossSessionNotification: message.id }, { currentModel: true });
+    const submitted = await submitMessage(c, origin, 'submit', { content: `${header}\n\n${body}`, requestId: `xs:${notifyId}`,
+      ...(inherited.access ? { options: inherited } : {}) }, { crossSessionNotification: message.id }, { currentModel: true });
     const at = now();
     await env.DB.query(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, submission_id, conversation_id, hops,
       chain_json, reply_to, created_at, updated_at) VALUES (?,?,?,?,?,'notify',?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING`)

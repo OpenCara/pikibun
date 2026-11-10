@@ -97,12 +97,13 @@ async function fixture(t: TestContext) {
     session.view.entries.push({ id: `${conversationId}:${submissions}`, kind: 'message', role: 'user', text: String(body.content), conversationId });
     return Response.json({ submissionId, conversationId, status: 'queued' });
   };
-  const admit = (sessionId: string, actorId: string, options: { access?: string; requestId?: string } = {}) => {
+  const admit = (sessionId: string, actorId: string, options: { access?: string; requestId?: string; autoMerge?: boolean } = {}) => {
     const issued = options.requestId && sqlite.prepare('SELECT id FROM run_admissions WHERE session_id = ? AND actor_id = ? AND request_id = ?').get(sessionId, actorId, options.requestId);
     if (issued) return String(issued.id);
     const admission = randomBytes(32).toString('base64url');
-    sqlite.prepare('INSERT INTO run_admissions (id,session_id,actor_id,mode,access,request_id,content_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(admission, sessionId, actorId, 'write', options.access ?? null, options.requestId ?? `request-${admission}`, 'h'.repeat(43), Math.floor(Date.now() / 1000) + 3600, new Date().toISOString());
+    sqlite.prepare('INSERT INTO run_admissions (id,session_id,actor_id,mode,access,auto_merge,request_id,content_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(admission, sessionId, actorId, 'write', options.access ?? null, options.autoMerge ? 1 : 0, options.requestId ?? `request-${admission}`, 'h'.repeat(43),
+        Math.floor(Date.now() / 1000) + 3600, new Date().toISOString());
     return admission;
   };
   let calls = 0;
@@ -394,6 +395,80 @@ test('a notification brings a finished message\'s outcome back to its origin, on
   f.sqlite.prepare("UPDATE session_messages SET created_at = ? WHERE id = ?").run(new Date(Date.now() - 25 * 3600_000).toISOString(), later);
   assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: later, failed: 'expired' }]);
 });
+
+test('a sandboxed session an agent starts, messages or notifies runs on Auto-approve by default when the owner\'s own Auto-approve message sent it', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  f.allow('session-a', 'sessions');
+  const at = new Date().toISOString();
+  const capabilities = { platform: 'linux', sandbox: true, productionShell: true, chatOptions: true, plainGit: true, automaticGitHub: true };
+  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('sandbox-host', ownerId, 'Sandbox', 'h'.repeat(43), 'c'.repeat(43), JSON.stringify(capabilities), JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3' }]), at);
+  f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('sandbox-host', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run('hosted-model', f.workspace.id, 'Faux 3', 'faux', 'faux-3', at, 'sandbox-host', ownerId);
+  const submits: { sessionId: string; body: Record<string, unknown> }[] = [];
+  f.env.CONNECTOR_HUB = fakeHub({ rpc(_connectorId, envelope) {
+    const { action, sessionId } = envelope.request.ticket;
+    if (action === 'create') return Response.json({ ok: true }, { status: 201 });
+    if (action === 'view') return Response.json({ view: { ...f.fake(sessionId).view, sessionId } });
+    if (action === 'submit') {
+      const body = JSON.parse(envelope.request.body) as Record<string, unknown>;
+      submits.push({ sessionId, body });
+      const submissionId = `hosted-${submits.length}`;
+      f.fake(sessionId).view.queue!.push({ submissionId, actorId: ownerId, mode: 'write', status: 'queued' });
+      return Response.json({ submissionId, conversationId: '0', status: 'queued' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 503 });
+  } });
+  const last = () => submits.at(-1)!;
+  const sentAccess = () => [(last().body.options as ChatOptionsSent | undefined)?.access, (last().body.options as ChatOptionsSent | undefined)?.autoMerge];
+
+  const auto = f.admit('session-a', ownerId, { access: 'auto', autoMerge: true });
+  const started = await f.tool('session-a', ownerId, auto, { action: 'create', title: 'Worker', modelId: 'hosted-model', message: 'Build it' });
+  assert.equal(started.status, 201, JSON.stringify(started.body));
+  const worker = (started.body.session as CrossSessionSummary).id;
+  assert.equal((started.body.message as CrossSessionMessage).access, 'auto');
+  assert.deepEqual(sentAccess(), ['auto', true], 'it merges without asking too, as the message that started it does');
+
+  const sent = await f.tool('session-a', ownerId, auto, { action: 'send', targetSessionId: worker, message: 'And test it' });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  assert.equal((sent.body.message as CrossSessionMessage).access, 'auto');
+  assert.deepEqual(sentAccess(), ['auto', true]);
+  const chosen = await f.tool('session-a', ownerId, auto, { action: 'send', targetSessionId: worker, message: 'Ask me first', access: 'approval' });
+  assert.equal((chosen.body.message as CrossSessionMessage).access, 'approval', 'an access the agent chooses stands');
+  assert.equal(last().body.options && (last().body.options as ChatOptionsSent).access, undefined);
+
+  const asking = f.admit('session-a', ownerId);
+  const fromAsking = await f.tool('session-a', ownerId, asking, { action: 'create', title: 'Asks', modelId: 'hosted-model', message: 'Go' });
+  assert.equal(fromAsking.status, 201, JSON.stringify(fromAsking.body));
+  assert.equal((fromAsking.body.message as CrossSessionMessage).access, 'approval', 'no message gains more than the one that sent it');
+  assert.deepEqual(sentAccess(), [undefined, undefined]);
+
+  f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify({ ...capabilities, unsandboxed: true }), 'sandbox-host');
+  const unsandboxed = await f.tool('session-a', ownerId, auto, { action: 'send', targetSessionId: worker, message: 'On the bare host' });
+  assert.equal((unsandboxed.body.message as CrossSessionMessage).access, 'approval', 'an unsandboxed session keeps asking');
+  assert.deepEqual(sentAccess(), [undefined, undefined]);
+  f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify(capabilities), 'sandbox-host');
+
+  // The worker's own Auto-approve message asked session-b for a review, to be notified of its outcome.
+  const inWorker = f.admit(worker, ownerId, { access: 'auto' });
+  const message = { id: 'review-1', submissionId: 'review-sub' };
+  f.sqlite.prepare(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, origin_admission_id, origin_call_id,
+      submission_id, conversation_id, hops, chain_json, access, notify_status, created_at, updated_at) VALUES (?,?,?,?,?,'send',?,'call-review',?,'0',1,?,'approval','pending',?,?)`)
+    .run(message.id, f.workspace.id, worker, 'session-b', ownerId, inWorker, message.submissionId, JSON.stringify([worker]), at, at);
+  const reviewer = f.fake('session-b');
+  reviewer.view.entries.push({ id: '0:69', kind: 'message', role: 'user', text: `[Pikibun cross-session message xs:${message.id} · …]\n\nReview it`, conversationId: '0' },
+    { id: '0:70', kind: 'message', role: 'assistant', text: 'Looks good.', conversationId: '0' });
+  reviewer.view.queue!.push({ submissionId: message.submissionId, actorId: ownerId, mode: 'write', status: 'settled' });
+  await nextView();
+  assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: message.id, delivered: `${message.id}-n` }]);
+  assert.equal(last().sessionId, worker);
+  assert.equal(last().body.requestId, `xs:${message.id}-n`);
+  assert.deepEqual(sentAccess(), ['auto', undefined], 'its outcome comes back on Auto-approve, as the message that sent it went');
+});
+
+type ChatOptionsSent = { access?: string; autoMerge?: boolean };
 
 test('lists nest the sessions an agent started under the session that started them', () => {
   const sessions = [{ id: 'c', parentSessionId: 'a' }, { id: 'b' }, { id: 'a' }, { id: 'd', parentSessionId: 'c' }, { id: 'e', parentSessionId: 'gone' },

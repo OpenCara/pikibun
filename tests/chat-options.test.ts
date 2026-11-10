@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { ConnectorInfo } from "../packages/shared/src/connector.js";
 import type { SessionView } from "../packages/shared/src/types.js";
 import {
-  accessHint, accessLabels, accessUnavailable, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, initialSelection, memberAutoApproveHint,
+  accessHint, accessLabels, accessUnavailable, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, defaultAccess, initialSelection, memberAutoApproveHint,
   memberAutoApproveWarning, modelUnavailable, mustConfirmAutoApprove, offersMemberAutoApprove, parseChatPreference, preferredSelection, type ChatSelection,
 } from "../packages/client/src/chat-options.js";
 
@@ -83,6 +83,21 @@ test("the owner's chat box starts on Auto-approve before the first shared messag
   assert.equal(initialSelection(view("approval"), true).access, "approval");
   assert.equal(initialSelection(view("read"), true).access, "read");
   assert.equal(initialSelection(view("auto"), false).access, "approval", "only the owner can auto-approve");
+});
+
+test("a sandboxed session's chat box starts on Auto-approve for whoever may use it, however the session started, unless its last message was Read-only", () => {
+  const view = (access?: SessionView["access"]) => ({ entries: [{ id: "1", kind: "message", role: "user", text: "Hi" }], ...(access ? { access } : {}) }) as SessionView;
+  const sandboxed = { sandboxed: true };
+  assert.equal(defaultAccess(view("approval"), true, sandboxed), "auto", "a session an agent started with an approval message");
+  assert.equal(defaultAccess(view(), true, sandboxed), "auto");
+  assert.equal(initialSelection(view("approval"), true, sandboxed).access, "auto");
+  assert.equal(defaultAccess(view("read"), true, sandboxed), "read");
+  assert.equal(defaultAccess(view("approval"), false, { sandboxed: true, memberAutoApprove: true }), "auto", "a member the host and workspace let auto-approve");
+  assert.equal(defaultAccess(view("auto"), false, { memberAutoApprove: true }), "auto");
+  assert.equal(defaultAccess(view("approval"), false, sandboxed), "approval", "a member who may not auto-approve");
+  assert.equal(defaultAccess(view("auto"), false, sandboxed), "approval");
+  assert.equal(defaultAccess(view("approval"), true, { sandboxed: false }), "approval", "an unsandboxed session keeps its last message's access");
+  assert.equal(defaultAccess(view("approval"), true), "approval");
 });
 
 test("Auto-approve merges too, on hosts that run GitHub effects automatically, once its owner confirmed that on the device", () => {
