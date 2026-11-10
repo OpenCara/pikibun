@@ -1,5 +1,5 @@
-import {
 import { parseCapabilities } from '../../../packages/shared/src/connector.js';
+import {
   apiCredential, auditStatement, authenticateConnector, authorizeSession, connectorAdmins, connectorHostGrants, type ConnectorRow, egressGrant,
   gitDirect, githubComment, githubIssue, githubMerge, githubRead, gitRelay, legacyRepositoryFixture, managedConnector, pushComplete,
   personalWorkspaceSQL, pushCredential, requireCallbackScope, requireConfiguredWorkspace, requireConnectorTLS, requireManagedWorkspace, requireMember,
