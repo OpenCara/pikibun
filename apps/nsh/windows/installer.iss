@@ -6,6 +6,10 @@
 ; It installs for the current user, into %LOCALAPPDATA%\Programs\Pikibun, so it needs no administrator (one can
 ; choose all users in its first dialog), adds Pikibun to the Start menu and, if asked, the desktop, and registers an
 ; uninstaller. A newer installer updates in place. Built and tested by .github/workflows/release-app.yml.
+;
+; The app updates itself with it: it downloads the installer and has Windows' Task Scheduler run it outside the app,
+;   Pikibun-<version>-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /NORESTARTAPPLICATIONS /RELAUNCH
+; where /RELAUNCH starts Pikibun again once it is installed (apps/nsh/src/lib/app-update.ts).
 
 #ifndef AppVersion
   #error Pass the version: /DAppVersion=1.2.3
@@ -72,3 +76,16 @@ Name: "{autodesktop}\Pikibun"; Filename: "{app}\Pikibun.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\Pikibun.exe"; Description: "{cm:LaunchProgram,Pikibun}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Pikibun.exe"; Flags: nowait runasoriginaluser; Check: Relaunch
+
+[Code]
+// /RELAUNCH: the app's own update asks for Pikibun to start again once it is installed, silent as it is.
+function Relaunch: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+      Result := True;
+end;

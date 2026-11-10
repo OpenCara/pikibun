@@ -12,8 +12,7 @@ import { ConnectedAccountsSection } from "./accounts";
 import { OwnJoinRequests } from "./join-requests";
 import { SectionPage, SettingsActions, type SectionProps } from "./parts";
 import { serverVersion } from "./index";
-
-export const APP_VERSION = "0.1.0";
+import { AppUpdateRows } from "../components/AppUpdate";
 
 type EnvRow = { id: string; key: string; value: string };
 
@@ -117,7 +116,7 @@ export function Profile(_props: SectionProps) {
           trailing={<Button testID="sign-out" small variant="outline" label="Sign out" onPress={() => void confirmSignOut()} />} />
       </Section>
       <Section title="This app">
-        <Row title="Version" trailing={`Pikibun ${APP_VERSION}`} />
+        <AppUpdateRows />
         <Row title="Platform" trailing={`${platform.os} ${platform.version} · ${platform.desktop ? "desktop" : platform.idiom}`} />
         <If when={serverVersion()}>{version => <Row title="Server" trailing={`Pikibun server ${version()}`} />}</If>
       </Section>

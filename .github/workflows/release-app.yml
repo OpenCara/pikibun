@@ -40,6 +40,7 @@ on:
       - apps/nsh/icon.png
       - apps/nsh/windows/**
       - scripts/nsh.mjs
+      - scripts/app-version.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -112,6 +113,8 @@ jobs:
               Write-Output "::warning::SignPath is not set up (SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID): the Windows installer is unsigned, so SmartScreen warns before it runs."
             }
           }
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs $env:VERSION
       - name: Package
         run: node scripts/nsh.mjs package App.tsx --target windows --app-version $env:APP_VERSION --build $env:BUILD --out "$env:RUNNER_TEMP\app"
       - name: Installer
@@ -211,6 +214,8 @@ jobs:
         run: |
           version="${TAG_VERSION:-$(node -p 'require("./apps/nsh/nsh.json").version')-dev.$GITHUB_RUN_NUMBER}"
           { echo "VERSION=$version"; echo "APP_VERSION=${version%%-*}"; echo "BUILD=$GITHUB_RUN_NUMBER"; } >> "$GITHUB_ENV"
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
       - name: Package
         run: |
           node scripts/nsh.mjs package App.tsx --target macos --app-version "$APP_VERSION" --build "$BUILD" --out "$RUNNER_TEMP/app"
@@ -360,12 +365,22 @@ jobs:
         run: |
           version="${TAG_VERSION:-$(node -p 'require("./apps/nsh/nsh.json").version')-dev.$GITHUB_RUN_NUMBER}"
           { echo "VERSION=$version"; echo "APP_VERSION=${version%%-*}"; echo "BUILD=$GITHUB_RUN_NUMBER"; } >> "$GITHUB_ENV"
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
       # The app's directory (the runner, its bundle, a .desktop file and the icon) as a .tar.gz.
       - name: Package
         run: |
           node scripts/nsh.mjs package App.tsx --target linux --app-version "$APP_VERSION" --build "$BUILD" --out "$RUNNER_TEMP/app"
           mkdir -p "$RUNNER_TEMP/release"
           mv "$RUNNER_TEMP/app/Pikibun.tar.gz" "$RUNNER_TEMP/release/Pikibun-$VERSION-linux-x86_64.tar.gz"
+      # The layout the app's own update unpacks and swaps in (LINUX_INSTALL in apps/nsh/src/lib/update-scripts.ts).
+      - name: The tarball has the app's folder as the update expects it
+        run: |
+          listing=$(tar -tzvf "$RUNNER_TEMP/release/Pikibun-$VERSION-linux-x86_64.tar.gz")
+          echo "$listing" | awk '$NF == "Pikibun/Pikibun" && $1 ~ /^-..x/ { found = 1 } END { exit !found }' \
+            || { echo "::error::The tarball has no executable Pikibun/Pikibun, which the app's update starts."; exit 1; }
+          echo "$listing" | awk '$NF == "Pikibun/nsh/" { found = 1 } END { exit !found }' \
+            || { echo "::error::The tarball has no Pikibun/nsh/ folder, by which the app's update knows its folder."; exit 1; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: app-linux
@@ -415,6 +430,8 @@ jobs:
             echo "::error::Android signing is partly configured; missing: ${missing[*]}."
             exit 1
           fi
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
       - name: Package
         env:
           SIGNED: ${{ steps.signing.outputs.configured }}
@@ -588,6 +605,8 @@ jobs:
             exit 1
           fi
           echo "NSH_RUNTIME=$runtime" >> "$GITHUB_ENV"
+      - name: Stamp the version into the app
+        run: node scripts/app-version.mjs "$VERSION"
       - name: Package
         env:
           SIGNED: ${{ steps.signing.outputs.configured }}
