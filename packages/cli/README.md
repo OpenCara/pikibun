@@ -146,7 +146,7 @@ Three extensions are built into the connector, so there is nothing to install: `
 
 ## Chat options
 
-In a session's chat box you can pick any model this host's Pi offers that isn't disabled in the web app, its reasoning level, and the access mode for each message: **Read only**, **Ask before acting** (the default) or **Auto-approve** (session owner only). Hosts running a connector older than 0.3.0 keep each session's pinned model; restart the connector with `npx pikibun@latest connect` to enable the options.
+In a session's chat box you can pick any model this host's Pi offers that isn't disabled in the web app, its reasoning level, and the access mode for each message: **Read only**, **Ask before acting** (the default) or **Auto-approve** (the session owner; in a session they don't own, a workspace owner, admin or collaborator, for their sandboxed commands only). Hosts running a connector older than 0.3.0 keep each session's pinned model; restart the connector with `npx pikibun@latest connect` to enable the options.
 
 A model starts at the reasoning level Pi on the host gives it: the level in its `enabledModels` pattern (such as `"anthropic/*:high"`), else its entry in `modelThinkingLevels`, else `defaultThinkingLevel`, else Pi's default (medium), moved to the nearest level the model supports. The chat box shows that level when you pick the model (connector 0.5.1 or newer). The levels on offer are the ones Pi reports for the model. If the host's `models.json` redefines a model without its `thinkingLevelMap`, Pi offers only Off to High for it.
 

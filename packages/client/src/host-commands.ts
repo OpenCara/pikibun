@@ -98,5 +98,5 @@ export function extensionToolArguments(operation: { arguments: string }): string
 export function automaticNote(operation: Pick<Operation, "kind">): string {
   return operation.kind === "extension.tool"
     ? "Ran without a decision: its workspace runs this extension's tools automatically on this host, or the owner's auto-approve access ran it"
-    : "Ran under the owner's auto-approve access, without a per-command decision";
+    : "Ran under auto-approve, without a per-command decision";
 }

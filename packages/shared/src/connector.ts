@@ -106,6 +106,13 @@ export interface ConnectorCapabilities {
    */
   requesterAutoApprove?: boolean;
   /**
+   * The connector takes Auto-approve messages from members other than the session's owner whose workspace role allows
+   * it (memberAutoApproveRoles in policy.ts), and runs their sandboxed commands without asking (memberAutoApproves in
+   * host-operations.ts), as the control plane reports it before each one (AuthorizationResult.memberAutoApprove).
+   * Absent on older connectors, which take Auto-approve from the session's owner only.
+   */
+  memberAutoApprove?: boolean;
+  /**
    * The connector lets members its owner granted host commands to (HostCommandGrant) approve them, or auto-approve
    * them in their own sessions, as the control plane reports. Absent on older connectors: only the owner decides them.
    */

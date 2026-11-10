@@ -333,6 +333,12 @@ export interface AuthorizationRequest {
    * that honor that (ConnectorCapabilities.requesterAutoApprove), so older ones never receive the field.
    */
   autoApprove?: boolean;
+  /**
+   * Also report whether the actor's own Auto-approve messages run their sandboxed commands without asking
+   * (`memberAutoApprove`). Asked only by connectors that honor that (ConnectorCapabilities.memberAutoApprove), so older
+   * ones never receive the field.
+   */
+  memberAutoApprove?: boolean;
 }
 /**
  * What a member may do with host_bash on a host: `approve` decides each host command; `auto` also runs the host
@@ -357,6 +363,12 @@ export interface AuthorizationResult {
    * isn't the owner and can still write, the workspace allows it (requester auto-approve) and the owner chose it for them.
    */
   autoApprove?: true;
+  /**
+   * Present only when requested (`memberAutoApprove`) and the actor's own Auto-approve messages run their sandboxed
+   * commands without asking: the actor isn't the session's owner, can still write to it, and their workspace role is one
+   * of memberAutoApproveRoles (policy.ts). What runs so is what memberAutoApproves (host-operations.ts) says.
+   */
+  memberAutoApprove?: true;
 }
 /**
  * A pull request the control plane opens as the session owner after a successful push. `base` defaults to the default
