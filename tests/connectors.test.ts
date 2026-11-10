@@ -1391,6 +1391,46 @@ test('per-message chat options are checked against the session host, mode and ow
   assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { model, thinkingLevel: 'off' });
 });
 
+test('a person\'s message naming no access runs on Auto-approve in a sandboxed session where they may use it, never falling back to asking', async t => {
+  const f = await fixture(t); const s = await sharedSession(f);
+  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.admin.user.id, permissions: ['read', 'ask', 'write'] }));
+  const receipt = { submissionId: 'submission', conversationId: 'conversation', status: 'queued' };
+  const requests = rpcHub(f, s.connector, () => Response.json(receipt, { status: 202 }));
+  const path = `/api/sessions/${s.session.id}`;
+  const sent = () => JSON.parse(requests.at(-1)!.request.body).options as Record<string, unknown> | undefined;
+  const host = (capabilities: Record<string, unknown>) => self(f, s.connector, 'manifest', { models: manifest.models, capabilities: { ...manifest.capabilities, ...capabilities } });
+
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'old-host' }), 202);
+  assert.equal(sent(), undefined, 'a host that takes no options keeps asking, as it can\'t be told otherwise');
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'old-host-merge', options: { autoMerge: true } }), 202);
+  assert.equal(sent(), undefined, 'the auto-merge that rides on the default goes with it');
+  await json(await host({ chatOptions: true }));
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-default' }), 202);
+  assert.deepEqual(sent(), { access: 'auto' });
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-thinking', options: { thinkingLevel: 'off' } }), 202);
+  assert.deepEqual(sent(), { access: 'auto', thinkingLevel: 'off' });
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-asking', options: { access: 'approval' } }), 202);
+  assert.deepEqual(sent(), { access: 'approval' }, 'an access the person picked stands');
+  await json(await s.creator.request('POST', `${path}/ask`, { content: 'Hi', requestId: 'side-ask' }), 202);
+  assert.equal(sent(), undefined, 'side asks stay read-only');
+  await json(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'member-old-host' }), 202);
+  assert.equal(sent(), undefined, 'a member asks where the host can\'t check their auto-approve');
+
+  await json(await host({ chatOptions: true, automaticGitHub: true, memberAutoApprove: true }));
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-unconfirmed' }), 202);
+  assert.deepEqual(sent(), { access: 'auto' }, 'merging without asking needs the owner\'s confirmation, which their app sends');
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-merges', options: { autoMerge: true } }), 202);
+  assert.deepEqual(sent(), { access: 'auto', autoMerge: true });
+  await json(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'member-default', options: { autoMerge: true } }), 202);
+  assert.deepEqual(sent(), { access: 'auto' }, 'a member auto-approves their sandboxed commands, never merges');
+
+  const stored = f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(s.connector.connectorId)!;
+  f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?')
+    .run(JSON.stringify({ ...JSON.parse(String(stored.capabilities_json)), unsandboxed: true }), s.connector.connectorId);
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'unsandboxed', options: { autoMerge: true } }), 202);
+  assert.equal(sent(), undefined, 'an unsandboxed host keeps asking unless Auto-approve is chosen');
+});
+
 test('pasted images are checked and go only to a host whose connector gives them to the model', async t => {
   const f = await fixture(t); const s = await sharedSession(f);
   const receipt = { submissionId: 'submission', conversationId: 'conversation', status: 'queued' };
@@ -3392,7 +3432,7 @@ test('a host\'s owner and admins disable its models for everyone: a disabled mod
   await denied(await message(creator, 'ask-no-model', undefined, 'ask'), 409, 'model_required');
   assert.equal(requests.length, before, 'refused messages never reach the host');
   await json(await message(creator, 'enabled-model', { model: first }), 202);
-  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { model: first });
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { model: first, access: 'auto' }, 'the owner\'s message to a sandboxed session runs on Auto-approve');
 
   await json(await host.request('PUT', `/api/connectors/${id}/admins/${creator.user.id}`));
   const enabled = await json<HostModelSettings>(await creator.request('PATCH', settings, { ...second, enabled: true }));

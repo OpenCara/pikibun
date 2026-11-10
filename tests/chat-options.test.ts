@@ -4,7 +4,7 @@ import type { ConnectorInfo } from "../packages/shared/src/connector.js";
 import type { SessionView } from "../packages/shared/src/types.js";
 import {
   accessHint, accessLabels, accessUnavailable, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, defaultAccess, initialSelection, memberAutoApproveHint,
-  memberAutoApproveWarning, modelUnavailable, mustConfirmAutoApprove, offersMemberAutoApprove, parseChatPreference, preferredSelection, type ChatSelection,
+  memberAutoApproveWarning, modelUnavailable, mustConfirmAutoApprove, offersMemberAutoApprove, optionsBeforeHost, parseChatPreference, preferredSelection, type ChatSelection,
 } from "../packages/client/src/chat-options.js";
 
 const host = { capabilities: { chatOptions: true }, models: [] } as unknown as ConnectorInfo;
@@ -18,6 +18,20 @@ test("a chosen access goes with every shared message, or the message waits until
   assert.match(accessUnavailable(undefined, { access: "read" }, "submit") ?? "", /Read only/);
   assert.equal(accessUnavailable(undefined, { access: "approval" }, "submit"), undefined);
   assert.equal(accessUnavailable(undefined, auto, "ask"), undefined);
+  // Before the host is known, only what the server applies as shown goes (optionsBeforeHost).
+  const owner = { sandboxed: true, owner: true, picked: false, mergeConfirmed: true };
+  const member = { ...owner, owner: false, mergeConfirmed: false };
+  assert.deepEqual(optionsBeforeHost(auto, owner), { options: { autoMerge: true } }, "the owner's Auto-approve, merging as they confirmed");
+  assert.equal(accessUnavailable(undefined, auto, "submit", owner), undefined);
+  assert.equal(optionsBeforeHost(auto, { ...owner, mergeConfirmed: false }), undefined, "an unconfirmed owner waits to confirm merging");
+  assert.equal(optionsBeforeHost({ access: "read" }, owner), undefined, "Read only never runs as the server's Auto-approve");
+  assert.match(accessUnavailable(undefined, { access: "read" }, "submit", owner) ?? "", /Read only/);
+  assert.equal(optionsBeforeHost({ access: "approval" }, { ...owner, picked: true }), undefined, "a picked Ask before acting waits");
+  assert.equal(optionsBeforeHost(auto, member), undefined, "a member's Auto-approve waits for their host's support");
+  assert.deepEqual(optionsBeforeHost({ access: "approval" }, member), {}, "a member who may not auto-approve asks, as the server keeps it");
+  assert.deepEqual(optionsBeforeHost({ access: "approval" }, { ...owner, sandboxed: false }), {});
+  assert.equal(optionsBeforeHost(auto, { ...owner, sandboxed: false }), undefined);
+  assert.equal(accessUnavailable(host, { access: "read" }, "submit", owner), undefined);
 });
 
 test("a message waits for a model its host offers, once the conversation's own one is disabled there", () => {
