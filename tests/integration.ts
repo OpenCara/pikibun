@@ -200,8 +200,8 @@ if (connectedRuntime) {
     for (const mode of ["submit", "ask"]) {
       await bob.request("POST", `/api/sessions/${sessionId}/${mode}`, { content: "TEST_IDENTITY", requestId: `viewer-${mode}` }, [403]);
     }
-    await bob.request("POST", `/api/sessions/${sessionId}/operations`, { kind: "program", tool: "git", command: "true" }, [403]);
-    await bob.request("POST", `/api/sessions/${sessionId}/approvals/${crypto.randomUUID()}`, { decision: "approve" }, [403]);
+    await bob.request("POST", `/api/sessions/${sessionId}/operations`, { kind: "program", tool: "git", command: "true" }, [403, 404]);
+    await bob.request("POST", `/api/sessions/${sessionId}/approvals/${crypto.randomUUID()}`, { decision: "approve" }, [403, 404]);
     await bob.request("POST", `/api/sessions/${sessionId}/grants`, { userId: bob.user.id, permissions: ["write", "manage"] }, [403]);
     await bob.request("POST", `/api/sessions/${sessionId}/restart`, {}, [403]);
     await bob.request("POST", `/api/sessions/${sessionId}/backup`, {}, [403]);
@@ -359,7 +359,7 @@ await check("session ownership is assigned by the server, not the session caller
   await bob.request("GET", `/api/sessions/${aliceSession.id}/view`, undefined, [403, 404]);
 });
 
-await check("read-only sharing cannot prompt, ask, approve, manage, or cross workspace boundaries", async () => {
+await check("read-only sharing cannot prompt, ask, manage, or cross workspace boundaries", async () => {
   await alice.request("POST", `/api/sessions/${aliceSession.id}/grants`, { userId: bob.user.id, permissions: ["read"] });
   assert.equal((await bob.view(aliceSession.id)).owner.id, alice.user.id);
   await bob.request("POST", `/api/sessions/${aliceSession.id}/submit`, { content: "TEST_IDENTITY", requestId: "forbidden-write" }, [403]);
@@ -397,20 +397,13 @@ await check("collaborative writes execute as owner; another user's worktree stay
   await bob.settled(bobSession.id, "owned-by-bob");
 });
 
-await check("write access does not grant approval; approved git commits use owner identity", async () => {
+await check("a writer's command runs at once, asking nobody, and git commits use the owner's identity", async () => {
   const commit = `git init -q integration && cd integration && git commit -q --allow-empty -m 'Integration ${run}'`;
-  const approval: ApprovalRecord = (await bob.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "program", tool: "git", command: commit })).approval;
-  assert.equal(approval.status, "pending");
-  assert.ok(approval.reviewHash, "the Worker must commit to the displayed operation and requester");
-  await bob.request("POST", `/api/sessions/${aliceSession.id}/approvals/${approval.id}`, { decision: "approve", reviewHash: approval.reviewHash }, [403]);
-  const decided: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/approvals/${approval.id}`, { decision: "approve", reviewHash: approval.reviewHash })).approval;
-  assert.ok(["approved", "executing", "executed"].includes(decided.status));
-  const query: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "program", tool: "git", command: "cd integration && git log -1 --format='%an <%ae>|%cn <%ce>'" })).approval;
-  const approved: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/approvals/${query.id}`, { decision: "approve", reviewHash: query.reviewHash })).approval;
-  assert.ok(["executing", "executed"].includes(approved.status));
-  const inspected = await alice.settledCard(aliceSession.id, query.id);
-  assert.equal(inspected.status, "executed", inspected.result);
-  assert.ok(inspected.result?.includes("Alice Integration <alice@example.invalid>"), "git commit author and committer must use owner identity");
+  await bob.submit(aliceSession.id, `TEST_BASH ${commit}`);
+  await bob.settled(aliceSession.id);
+  await alice.submit(aliceSession.id, "TEST_BASH cd integration && git log -1 --format='%an <%ae>|%cn <%ce>'");
+  const view = await alice.settled(aliceSession.id, "Alice Integration <alice@example.invalid>|Alice Integration <alice@example.invalid>");
+  assert.deepEqual(view.approvals, [], "nothing waits for anyone");
 });
 
 await check("durable request deduplication and restart preserve transcript and owner files", async () => {
@@ -580,7 +573,7 @@ if (connectedRuntime) {
     else { assert.ok([403, 404].includes(crossHost.status)); await crossHost.body?.cancel(); }
     const fabricated = await fetch(`${base}/api/connectors/self/github/comment`, {
       method: "POST", headers, body: JSON.stringify({
-        sessionId: aliceSession.id, actorId: alice.user.id, approvalId: crypto.randomUUID(), capability: "not-a-real-capability-with-sufficient-length",
+        sessionId: aliceSession.id, actorId: alice.user.id, approvalId: `tool-${crypto.randomUUID()}`, admissionId: "not-a-real-admission-with-sufficient-length-0",
         repository: "fixture/repository", issue: 1, body: "Must never reach GitHub",
       }),
     });
