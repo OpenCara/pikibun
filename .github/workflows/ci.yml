@@ -3,7 +3,7 @@ name: CI
 # it on main's own pushes, whose changes their pull request already checked (merged into main as it was then). Run it by
 # hand (workflow_dispatch) for any branch.
 #
-# A pull request runs only what its changes need: one that changes only documentation (Markdown, docs/, the licence)
+# A pull request runs only what its changes need: one that changes only documentation (Markdown, docs/images, the licence)
 # runs none of it, and the container image is built only when something it is built from changes. A release or a run
 # by hand checks everything. `verify` is the one result to wait for: it passes once every job passed or was not needed.
 on:
@@ -38,11 +38,12 @@ jobs:
             { echo "code=true"; echo "image=true"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+          # Both paths of a renamed file: one moved out of what the image is built from changes the image too.
+          git diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed"
           cat "$RUNNER_TEMP/changed"
-          # Anything but documentation is code (an empty list counts as code, to be safe).
+          # Anything but documentation (Markdown, docs/images, the licence) is code; an empty list counts as code, to be safe.
           code=false
-          if [ ! -s "$RUNNER_TEMP/changed" ] || grep -qvE '(\.md$|^docs/|^LICENSE$)' "$RUNNER_TEMP/changed"; then code=true; fi
+          if [ ! -s "$RUNNER_TEMP/changed" ] || grep -qvE '(\.md$|^docs/images/|^LICENSE$)' "$RUNNER_TEMP/changed"; then code=true; fi
           # What the image is built from, as the Dockerfile copies it, and this workflow.
           image=false
           if grep -qE '^(Dockerfile|\.dockerignore|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig\.json|packages/cli/package\.json|apps/server/|apps/nsh/|packages/shared/|packages/client/|scripts/nsh\.mjs|scripts/nsh-web-fixes\.mjs|\.github/workflows/ci\.yml)' "$RUNNER_TEMP/changed"; then image=true; fi
