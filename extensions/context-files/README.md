@@ -43,9 +43,14 @@ extension itself runs on the host, as the host's user, outside any sandbox. So i
 be able to reach:
 
 - Repository paths are relative. They may not contain `..` or `.git` segments. A file that resolves (through links)
-  outside the working directory is refused, so a repository can't link `AGENTS.md` to a file on the host.
+  outside its repository, or into a `.git` directory, is refused. So a repository can't link `AGENTS.md` to a file on
+  the host, or to `.git/config` with a token in a remote's URL. The file actually opened is checked again, so a link
+  swapped in after the first check can't get around this either.
+- Only regular files are read, so a FIFO named `AGENTS.md` can't make a message hang.
 - Host files come only from the context directory, and a file there that links outside it is refused.
-- Only `https://` URLs are fetched, without credentials and with at most three redirects (all `https://`). A URL is
+- Only `https://` URLs are fetched, without credentials and with at most three redirects (all `https://`). Pages load
+  in parallel, each within 10 seconds. A page that failed is tried again after a minute, or at the next message if
+  that message was stopped while it loaded. A URL is
   never fetched from a private, loopback, link-local or reserved network address. This is checked against every
   address its name resolves to, as the connection is made. Pages are fetched directly, not through a proxy from the
   environment. A host whose DNS gives such addresses for public names, such as a fake-IP proxy using `198.18.0.0/15`,

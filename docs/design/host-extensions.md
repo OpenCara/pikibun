@@ -216,7 +216,7 @@ don't run that session, so they load neither. `@opencara/pi-context-files` (`ext
 installs it like any other extension. Its `context-files` setting chooses the files: paths in each clone (alternatives
 and wildcards), `host:` files from the host owner's context directory, and `https://` pages. Its `before_agent_start`
 adds them as a prompt section, and its `tool_result` adds a clone's files to the result of the call that cloned it
-during a message. It reads nothing that links outside the worktree or that context directory, and fetches no page from
+during a message. It reads nothing that links outside its repository, into `.git`, or outside that context directory, and fetches no page from
 a private network address. See its [README](../../extensions/context-files/README.md).
 
 ## Later

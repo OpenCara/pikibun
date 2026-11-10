@@ -91,16 +91,28 @@ test("each clone gets the first alternative it has, wildcards match in name orde
   assert.deepEqual(again.files.map(item => item.label), ["app/AGENTS.md"], "a file named twice is added once");
 });
 
-test("a repository file that links outside the worktree is never read", async t => {
+test("a repository file that links outside its repository or into .git is never read", async t => {
   const cwd = await worktree(t);
   const secret = join(cwd, "..", "secret.txt");
   await writeFile(secret, "TOP SECRET");
+  await file(join(cwd, "app", ".git", "config"), "url = https://user:TOKEN@github.com/acme/app");
+  await file(join(cwd, "app", "guides", "style.md"), "Style.");
   await symlink(secret, join(cwd, "app", "LINKED.md"));
   await symlink(join(cwd, "lib", "CLAUDE.md"), join(cwd, "app", "SIBLING.md"));
-  const collected = await collectContext(cwd, await repositoryRoots(cwd), parseContextFiles("LINKED.md, SIBLING.md"));
-  assert.doesNotMatch(JSON.stringify(collected.files), /TOP SECRET/);
-  assert.deepEqual(collected.problems, ["app/LINKED.md: it links outside its directory, so it was not read"]);
-  assert.deepEqual(collected.files.map(item => item.label), ["lib/CLAUDE.md"], "a link within the worktree is read, as its target");
+  await symlink(join(cwd, "app", ".git", "config"), join(cwd, "app", "GIT.md"));
+  await symlink(join(cwd, "app", "guides", "style.md"), join(cwd, "app", "STYLE.md"));
+  const collected = await collectContext(cwd, await repositoryRoots(cwd), parseContextFiles("LINKED.md, SIBLING.md, GIT.md, STYLE.md"));
+  assert.doesNotMatch(JSON.stringify(collected.files), /TOP SECRET|TOKEN|Lib claude/);
+  const refused = "it links outside its directory or into .git, so it was not read";
+  assert.deepEqual(collected.problems, [`app/LINKED.md: ${refused}`, `app/SIBLING.md: ${refused}`, `app/GIT.md: ${refused}`]);
+  assert.deepEqual(collected.files, [{ label: "app/guides/style.md", text: "Style." }], "a link within its repository is read, as its target");
+});
+
+test("a wildcard's matches are files: directories that match take none of their places", async t => {
+  const cwd = await worktree(t);
+  for (let i = 0; i < 25; i++) await mkdir(join(cwd, "app", "docs", `${String(i).padStart(2, "0")}.md`));
+  const collected = await collectContext(cwd, [join(cwd, "app")], parseContextFiles("docs/*.md"));
+  assert.deepEqual(collected.files.map(item => item.label), ["app/docs/a.md", "app/docs/b.md"]);
 });
 
 test("host files come only from the host's context directory", async t => {
@@ -113,7 +125,7 @@ test("host files come only from the host's context directory", async t => {
   const collected = await collectContext(cwd, await repositoryRoots(cwd), parseContextFiles("host:team.md, host:style/*.md, host:missing.md, host:escape.md"),
     { hostDirectory: host });
   assert.deepEqual(collected.files, [{ label: "host:team.md", text: "Team rules." }, { label: "host:style/ts.md", text: "TS style." }]);
-  assert.deepEqual(collected.problems, ["host:missing.md: not found on the host", "host:escape.md: it links outside its directory, so it was not read"]);
+  assert.deepEqual(collected.problems, ["host:missing.md: not found on the host", "host:escape.md: it links outside its directory or into .git, so it was not read"]);
   const none = await collectContext(cwd, [cwd], parseContextFiles("host:team.md"), { hostDirectory: join(cwd, "nowhere") });
   assert.deepEqual(none.problems, ["host:team.md: not found on the host"]);
   const reposOnly = await collectContext(cwd, [cwd], parseContextFiles("host:team.md, https://example.com/x, /etc/passwd"), { hostDirectory: host, only: "repo" });
@@ -138,12 +150,50 @@ test("pages are fetched once in a while; a page that fails again keeps its last 
   assert.deepEqual(failed.problems, ["https://example.com/other.md: HTTP 503"]);
 });
 
+test("a failed page is tried again within a minute, and a stopped message's page at once", async () => {
+  let calls = 0;
+  let outcome: "ok" | "fail" = "fail";
+  const urls = new UrlCache(async (_url, signal) => {
+    calls++;
+    if (signal?.aborted) throw new Error("This operation was aborted");
+    if (outcome === "fail") throw new Error("HTTP 503");
+    return "Page";
+  });
+  const start = Date.now();
+  assert.deepEqual(await urls.get("https://example.com/a.md", undefined, start), { error: "HTTP 503" });
+  assert.deepEqual(await urls.get("https://example.com/a.md", undefined, start + 30_000), { error: "HTTP 503" });
+  assert.equal(calls, 1, "within a minute, a failure stands");
+  outcome = "ok";
+  assert.deepEqual(await urls.get("https://example.com/a.md", undefined, start + 61_000), { text: "Page" });
+  assert.equal(calls, 2);
+  const stopped = new AbortController();
+  stopped.abort();
+  assert.deepEqual(await urls.get("https://example.com/b.md", stopped.signal, start), { error: "This operation was aborted" });
+  assert.deepEqual(await urls.get("https://example.com/b.md", undefined, start + 1), { text: "Page" }, "a stopped load isn't remembered as a failure");
+});
+
+test("pages load side by side, and are added in the setting's order", async t => {
+  const cwd = await worktree(t);
+  let running = 0;
+  let most = 0;
+  const urls = new UrlCache(async url => {
+    running++;
+    most = Math.max(most, running);
+    await new Promise(resolve => setTimeout(resolve, url.endsWith("slow.md") ? 30 : 5));
+    running--;
+    return `Page ${url.slice(-7)}`;
+  });
+  const collected = await collectContext(cwd, [cwd], parseContextFiles("https://example.com/slow.md, https://example.com/fast.md, https://example.com/slow.md"), { urls });
+  assert.equal(most, 2, "both pages loaded at once, the repeated one once");
+  assert.deepEqual(collected.files.map(item => item.text), ["Page slow.md", "Page fast.md"]);
+});
+
 test("URLs never reach the host's own or private networks, unless its owner allows a range", async () => {
   for (const address of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "198.18.0.66",
-    "::1", "::", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "not an address"]) {
+    "::1", "::", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "64:ff9b::a00:1", "2001::1", "2002:a00:1::1", "not an address"]) {
     assert.equal(blockedAddress(address, allowedRanges("")), true, address);
   }
-  for (const address of ["93.184.216.34", "1.1.1.1", "2606:4700:4700::1111"]) assert.equal(blockedAddress(address, allowedRanges("")), false, address);
+  for (const address of ["93.184.216.34", "1.1.1.1", "2606:4700:4700::1111", "2001:4860:4860::8888"]) assert.equal(blockedAddress(address, allowedRanges("")), false, address);
   assert.equal(blockedAddress("198.18.0.66", allowedRanges("198.18.0.0/15, nonsense, 10.0.0.0/99")), false, "a fake-IP proxy's range, allowed");
   assert.equal(blockedAddress("10.0.0.1", allowedRanges("198.18.0.0/15, nonsense, 10.0.0.0/99")), true);
   await assert.rejects(fetchText("https://127.0.0.1/rules.md"), /private network/);

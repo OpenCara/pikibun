@@ -1,6 +1,6 @@
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
-import { existsSync } from "node:fs";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { constants, existsSync } from "node:fs";
+import { open, readdir, realpath, stat, type FileHandle } from "node:fs/promises";
 import { Agent, request } from "node:https";
 import { BlockList, isIP } from "node:net";
 import { homedir } from "node:os";
@@ -22,8 +22,8 @@ import type { ExtensionContext, ExtensionFactory, ToolResultEvent } from "@earen
  *
  * Settings come from whoever sets the extension's flags (in Pikibun, the workspace's owners and admins), while the
  * extension runs as the host's user, outside any sandbox. So it reads nothing outside what those settings may reach: a
- * repository file that links outside the working directory, a host file that links outside the context directory, and
- * a URL whose host is on a private, loopback or link-local network are refused.
+ * repository file that links outside its repository or into a .git directory, a host file that links outside the
+ * context directory, and a URL whose host is on a private, loopback or link-local network are refused.
  *
  * A clone made during a message, after its system prompt was built, gets its files through the result of the tool call
  * that made it (`tool_result`), so the agent sees them before it works there.
@@ -51,6 +51,8 @@ const MAX_ENTRIES = 50;
 /** At most this many repositories under the working directory. */
 const MAX_CLONES = 50;
 const URL_TTL_MS = 5 * 60_000;
+/** A page that failed is tried again after this. */
+const URL_ERROR_TTL_MS = 60_000;
 const URL_TIMEOUT_MS = 10_000;
 const MAX_REDIRECTS = 3;
 
@@ -159,25 +161,66 @@ async function matches(base: string, pattern: string): Promise<string[]> {
   const directory = join(base, ...segments);
   if (!/[*?]/.test(name)) return [join(directory, name)];
   let names: string[];
-  try { names = await readdir(directory); } catch { return []; }
+  try {
+    // Files and links (to files, as readInside checks), so that directories don't take the matches' places.
+    names = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isFile() || entry.isSymbolicLink()).map(entry => entry.name);
+  } catch {
+    return [];
+  }
   const regex = wildcard(name);
   return names.filter(item => regex.test(item)).sort().slice(0, MAX_MATCHES).map(item => join(directory, item));
 }
 
 type Read = { real: string; text: string } | { error: string } | undefined;
 
-/** A regular file's text, if it is one, when it resolves (links followed) inside `boundary`. */
+const OUTSIDE = "it links outside its directory or into .git, so it was not read";
+
+/** Whether `real`, inside `boundary`, is in a `.git` directory there (which a link may point to). */
+const inGit = (boundary: string, real: string) => relative(boundary, real).split(sep).includes(".git");
+
+/** Where an open file is: from the descriptor itself on Linux; elsewhere `real` again, if it is still that same file. */
+async function openedPath(handle: FileHandle, real: string): Promise<string | undefined> {
+  if (process.platform === "linux") {
+    try { return await realpath(`/proc/self/fd/${handle.fd}`); } catch { /* No /proc: as elsewhere. */ }
+  }
+  try {
+    const [again, opened] = await Promise.all([realpath(real), handle.stat()]);
+    const now = await stat(again);
+    return now.dev === opened.dev && now.ino === opened.ino ? again : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A regular file's text, if it is one, when it resolves (links followed) inside `boundary` and outside its `.git`
+ * directories. What was opened is checked again, so a link swapped in after the first check can't lead outside, and a
+ * FIFO never blocks the read.
+ */
 async function readInside(path: string, boundary: string): Promise<Read> {
   let real: string;
   try { real = await realpath(path); } catch { return undefined; }
-  if (!inside(boundary, real)) return { error: "it links outside its directory, so it was not read" };
+  if (!inside(boundary, real) || inGit(boundary, real)) return { error: OUTSIDE };
+  let handle: FileHandle;
+  try { handle = await open(real, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); } catch { return undefined; }
   try {
-    const info = await stat(real);
+    const info = await handle.stat();
     if (!info.isFile()) return undefined;
+    const opened = await openedPath(handle, real);
+    if (!opened || !inside(boundary, opened) || inGit(boundary, opened)) return { error: OUTSIDE };
     if (info.size > MAX_FILE_BYTES) return { error: "larger than 1 MB" };
-    return { real, text: await readFile(real, "utf8") };
+    const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
+    let size = 0;
+    for (let read = -1; read !== 0 && size < buffer.length;) {
+      ({ bytesRead: read } = await handle.read(buffer, size, buffer.length - size, size));
+      size += read;
+    }
+    if (size > MAX_FILE_BYTES) return { error: "larger than 1 MB" };
+    return { real: opened, text: buffer.subarray(0, size).toString("utf8") };
   } catch (error) {
     return { error: describe(error) };
+  } finally {
+    await handle.close().catch(() => undefined);
   }
 }
 
@@ -191,7 +234,9 @@ for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0",
   privateNetworks.addSubnet(network, prefix, "ipv4");
 }
 // IPv4-mapped addresses (::ffff:a.b.c.d) are checked against the IPv4 rules; a ::ffff:0:0/96 rule would match all of IPv4.
-for (const [network, prefix] of [["::", 128], ["::1", 128], ["64:ff9b::", 96], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]] as const) {
+// Translation and tunnelling prefixes (NAT64, Teredo, 6to4) are blocked too: they can carry an IPv4 address of any network.
+for (const [network, prefix] of [["::", 128], ["::1", 128], ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["2001::", 32], ["2001:db8::", 32],
+  ["2002::", 16], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]] as const) {
   privateNetworks.addSubnet(network, prefix, "ipv6");
 }
 
@@ -254,7 +299,7 @@ export async function fetchText(url: string, signal?: AbortSignal, resolve: type
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
-          if (size > MAX_FILE_BYTES) { outgoing.destroy(new Error("larger than 1 MB")); return; }
+          if (size > MAX_FILE_BYTES) { reject(new Error("larger than 1 MB")); outgoing.destroy(); return; }
           chunks.push(chunk);
         });
         response.on("end", () => resolve({ text: Buffer.concat(chunks).toString("utf8") }));
@@ -281,14 +326,16 @@ export class UrlCache {
 
   async get(url: string, signal?: AbortSignal, now = Date.now()): Promise<{ text: string } | { error: string }> {
     const known = this.#pages.get(url);
-    if (known && now - known.at < this.#ttl) return known.text !== undefined ? { text: known.text } : { error: known.error! };
+    if (known?.text !== undefined && now - known.at < this.#ttl) return { text: known.text };
+    if (known?.error !== undefined && now - known.at < Math.min(this.#ttl, URL_ERROR_TTL_MS)) return { error: known.error };
     try {
       const text = await this.#fetch(url, signal);
       this.#pages.set(url, { at: now, text });
       return { text };
     } catch (error) {
       if (known?.text !== undefined) { this.#pages.set(url, { at: now, text: known.text }); return { text: known.text }; }
-      this.#pages.set(url, { at: now, error: describe(error) });
+      // A message stopped while its page loaded says nothing about the page: the next one tries again.
+      if (!signal?.aborted) this.#pages.set(url, { at: now, error: describe(error) });
       return { error: describe(error) };
     }
   }
@@ -316,6 +363,12 @@ export async function collectContext(cwd: string, roots: readonly string[], entr
   };
   let boundary: string;
   try { boundary = await realpath(cwd); } catch { return { files, problems }; }
+  // Pages load side by side, from the start, and are added in the setting's order.
+  const cache = options.urls ?? new UrlCache();
+  const pages = new Map<string, Promise<{ text: string } | { error: string }>>();
+  if (options.only !== "repo") {
+    for (const entry of entries) if (entry.kind === "url" && !pages.has(entry.url)) pages.set(entry.url, cache.get(entry.url, options.signal));
+  }
   for (const entry of entries) {
     if (entry.kind === "invalid") { if (options.only !== "repo") problems.push(`${entry.text}: ${entry.reason}`); continue; }
     if (entry.kind === "repo") {
@@ -326,7 +379,8 @@ export async function collectContext(cwd: string, roots: readonly string[], entr
         for (const alternative of entry.alternatives) {
           let found = false;
           for (const path of await matches(base, alternative)) {
-            const read = await readInside(path, boundary);
+            // Within its own repository (the worktree for a path given from it), never in a .git directory.
+            const read = await readInside(path, base);
             if (!read) continue;
             found = true;
             if ("error" in read) problems.push(`${label(boundary, path)}: ${read.error}`);
@@ -352,7 +406,7 @@ export async function collectContext(cwd: string, roots: readonly string[], entr
       if (!found) problems.push(`${entry.text}: not found on the host`);
       continue;
     }
-    const page = await (options.urls ?? new UrlCache()).get(entry.url, options.signal);
+    const page = await pages.get(entry.url)!;
     if ("error" in page) problems.push(`${entry.url}: ${page.error}`);
     else add(entry.url, entry.url, page.text);
   }
