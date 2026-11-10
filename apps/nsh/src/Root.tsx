@@ -1,7 +1,9 @@
 import { computed, effect, safeArea, signal, untracked, View, windowSize } from "nsh";
 import { createNavStack, NavPage, NavStack } from "nsh/base";
+import { SidebarUpdate, UpdateIconButton } from "./components/AppUpdate";
 import { NewWorkspaceSheet } from "./components/NewWorkspaceSheet";
 import { AppDataContext, createAppData } from "./lib/app-data";
+import { startUpdateChecks } from "./lib/app-update";
 import { auth, restore, session } from "./lib/auth";
 import { createNotificationDelivery } from "./lib/notifications";
 import { pageRoute, showRoute, startPage, type PageRoute } from "./lib/page";
@@ -40,6 +42,7 @@ export function Root() {
   void applyStoredAppearance();
   void restore();
   resumeThisComputer();
+  startUpdateChecks();
   const signedIn = () => auth().status === "signedIn";
   const shared = () => {
     const route = pageRoute();
@@ -185,6 +188,7 @@ function Shell() {
   const workspaceSettings = (workspaceId: string) => openSettings("workspaces", workspaceId);
   const listActions = () => (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+      <UpdateIconButton onOpen={() => openSettings("profile")} />
       <IconButton testID="open-by-id" icon="hash" label="Open a session by ID" onPress={() => nav.push({ name: "open" })} />
       <IconButton testID="new-session" icon="plus" label="New session" onPress={() => startNew()} />
     </View>
@@ -287,6 +291,7 @@ function Sidebar(props: {
         <NavItem testID="all-sessions" icon="history" label="Sessions" onPress={props.onAll} />
         <NavItem testID="open-by-id" icon="hash" label="Open by ID" onPress={props.onOpenById} />
       </View>
+      <SidebarUpdate onDetails={() => props.onSettings("profile")} />
       <SessionList compact selectedId={props.selectedId} onOpen={props.onOpen} onNew={props.onNew} onNewIn={props.onNewIn} onWorkspaceSettings={props.onWorkspaceSettings}
         onNewWorkspace={props.onNewWorkspace} />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 2, borderTopWidth: 1, borderColor: palette().border, padding: 8, paddingBottom: Math.max(8, safeArea().bottom) }}>

@@ -11,12 +11,14 @@
     "picker": true,
     "openUrl": true,
     "statusBar": true,
-    "fs": { "read": ["${homeDir}"] },
+    "fs": { "read": ["${homeDir}", "${dataDir}/updates"], "write": ["${dataDir}/updates"] },
     "process": {
-      "execute": ["zsh", "bash", "sh", "cmd"],
+      "execute": ["zsh", "bash", "sh", "cmd", "schtasks"],
+      "exit": true,
       "env": [
         "SHELL", "USER", "LOGNAME", "TERM", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
-        "PATHEXT", "ComSpec", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramData", "SystemDrive", "windir", "USERNAME", "COMPUTERNAME",
+        "PATHEXT", "ComSpec", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramData", "SystemDrive", "windir", "USERNAME", "USERDOMAIN", "COMPUTERNAME",
+        "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
         "PIKIBUN_MXC_RUNTIME"
       ]
     },
