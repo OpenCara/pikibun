@@ -74,7 +74,12 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
   with a `text/plain` reason that Git shows as `remote: …`.
 - **`CONNECT host:443`** opens a tunnel if the policy allows the host and every address it resolves to is public
   (no loopback, private, CGNAT, link-local, multicast or documentation ranges, IPv4-mapped included); the
-  connection goes to a checked address, so DNS can't be swapped in between. The proxy never looks inside tunnels.
+  connection goes to a checked address, so DNS can't be swapped in between. One exception: on a host whose DNS answers
+  with a local proxy's fake-IP addresses (198.18.0.0/15: Clash, mihomo, sing-box, Surge, a TUN mode), a name the
+  policy names itself (`hostNamed`: an allowlist's domains and package registries, and in open mode the package
+  registries) may resolve to them, as the host's own traffic does; that proxy resolves the name again on its side,
+  where nothing checks the address, so other names (any host in open mode) and bare 198.18 addresses are refused,
+  saying why. The proxy never looks inside tunnels.
   Other ports and plain-HTTP proxying are refused.
 - **`/__pikibun/status`** shows the policy, the relayed repositories and the last 50 decisions (the proxy keeps
   200 in memory).
