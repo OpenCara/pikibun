@@ -35,7 +35,7 @@ jobs:
           apps = get("/v1/apps", **{"filter[bundleId]": "com.pikibun.app"})
           app = apps["data"][0]["id"]
           print("app", app, apps["data"][0]["attributes"].get("name"))
-          builds = get("/v1/builds", **{"filter[app]": app, "sort": "-uploadedDate", "limit": "15",
+          builds = {} if True else get("/v1/builds", **{"filter[app]": app, "sort": "-uploadedDate", "limit": "15",
                        "include": "preReleaseVersion,buildBetaDetail"})
           inc = {(i["type"], i["id"]): i["attributes"] for i in builds.get("included", [])}
           for b in builds.get("data", []):
@@ -46,12 +46,22 @@ jobs:
                                 "processing": a.get("processingState"), "encryption": a.get("usesNonExemptEncryption"),
                                 "expired": a.get("expired"), "internal": bd.get("internalBuildState"),
                                 "external": bd.get("externalBuildState"), "autoNotify": bd.get("autoNotifyEnabled")}))
-          show(get(f"/v1/apps/{app}/buildUploads", limit="10"))
-          groups = get(f"/v1/apps/{app}/betaGroups")
+          groups = {}
           for g in groups.get("data", []):
               a = g["attributes"]
               print("group", g["id"], a.get("name"), "internal" if a.get("isInternalGroup") else "external",
                     "allBuilds" if a.get("hasAccessToAllBuilds") else "")
               gb = get(f"/v1/betaGroups/{g['id']}/builds", limit="5")
               print("  builds", [x["attributes"].get("version") for x in gb.get("data", [])])
-          show(get(f"/v1/apps/{app}/appEncryptionDeclarations"))
+          # 0.15.0 (build 35) waits for its export compliance answer: the same as 0.13.0's, no non-exempt encryption.
+          target = "88cc34a4-ead2-4939-af88-f17fc6193f95"
+          r = requests.patch(f"{B}/v1/builds/{target}", headers={**H, "Content-Type": "application/json"}, timeout=60,
+                             json={"data": {"type": "builds", "id": target, "attributes": {"usesNonExemptEncryption": False}}})
+          print("\n### PATCH build 35 ->", r.status_code, r.text[:1500])
+          time.sleep(20)
+          b = get(f"/v1/builds/{target}", include="buildBetaDetail")
+          print("encryption", b["data"]["attributes"].get("usesNonExemptEncryption"))
+          for i in b.get("included", []):
+              print("beta", i["attributes"].get("internalBuildState"), i["attributes"].get("externalBuildState"))
+          gb = get("/v1/betaGroups/ed991524-69c8-48e4-9785-61edd0a64251/builds", limit="5")
+          print("dev group builds", [x["attributes"].get("version") for x in gb.get("data", [])])
