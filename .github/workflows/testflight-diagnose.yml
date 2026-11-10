@@ -1,0 +1,57 @@
+name: TestFlight diagnose (temporary)
+# Read-only: what App Store Connect has for com.pikibun.app's recent builds. Temporary, for the session branch.
+on:
+  push:
+    branches: ["pikibun/testfligt-has-no-new-release-since-0-13-please-bf842e84e57b"]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - run: pip install --quiet pyjwt cryptography requests
+      - name: Query App Store Connect
+        env:
+          API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        shell: python
+        run: |
+          import json, os, time, jwt, requests
+          now = int(time.time())
+          token = jwt.encode({"iss": os.environ["API_ISSUER_ID"], "iat": now, "exp": now + 900, "aud": "appstoreconnect-v1"},
+                             os.environ["API_KEY"], algorithm="ES256", headers={"kid": os.environ["API_KEY_ID"], "typ": "JWT"})
+          H = {"Authorization": f"Bearer {token}"}
+          B = "https://api.appstoreconnect.apple.com"
+          def get(path, **params):
+              r = requests.get(B + path, headers=H, params=params, timeout=60)
+              print(f"\n### GET {path} {params} -> {r.status_code}")
+              try:
+                  return r.json()
+              except Exception:
+                  print(r.text[:2000]); return {}
+          def show(x): print(json.dumps(x, indent=1)[:12000])
+          apps = get("/v1/apps", **{"filter[bundleId]": "com.pikibun.app"})
+          app = apps["data"][0]["id"]
+          print("app", app, apps["data"][0]["attributes"].get("name"))
+          builds = get("/v1/builds", **{"filter[app]": app, "sort": "-uploadedDate", "limit": "15",
+                       "include": "preReleaseVersion,buildBetaDetail"})
+          inc = {(i["type"], i["id"]): i["attributes"] for i in builds.get("included", [])}
+          for b in builds.get("data", []):
+              a = b["attributes"]; rel = b["relationships"]
+              pv = inc.get(("preReleaseVersions", (rel["preReleaseVersion"]["data"] or {}).get("id")), {})
+              bd = inc.get(("buildBetaDetails", (rel["buildBetaDetail"]["data"] or {}).get("id")), {})
+              print(json.dumps({"id": b["id"], "version": pv.get("version"), "build": a.get("version"), "uploaded": a.get("uploadedDate"),
+                                "processing": a.get("processingState"), "encryption": a.get("usesNonExemptEncryption"),
+                                "expired": a.get("expired"), "internal": bd.get("internalBuildState"),
+                                "external": bd.get("externalBuildState"), "autoNotify": bd.get("autoNotifyEnabled")}))
+          show(get(f"/v1/apps/{app}/buildUploads", limit="10"))
+          groups = get(f"/v1/apps/{app}/betaGroups")
+          for g in groups.get("data", []):
+              a = g["attributes"]
+              print("group", g["id"], a.get("name"), "internal" if a.get("isInternalGroup") else "external",
+                    "allBuilds" if a.get("hasAccessToAllBuilds") else "")
+              gb = get(f"/v1/betaGroups/{g['id']}/builds", limit="5")
+              print("  builds", [x["attributes"].get("version") for x in gb.get("data", [])])
+          show(get(f"/v1/apps/{app}/appEncryptionDeclarations"))
