@@ -113,8 +113,9 @@ export function ContextSection(props: { usage: SessionContextView }) {
   /** Where the meter warns: near compaction where Pi compacts, else near the window's end. */
   const tone = (): Tone => {
     const limit = usage().compactsAt ?? usage().window;
-    if (!limit) return "running";
-    const ratio = usage().tokens / limit;
+    if (limit === undefined) return "running";
+    // A reserve as large as the window compacts at 0: always due.
+    const ratio = limit > 0 ? usage().tokens / limit : Infinity;
     return ratio >= 1 ? "danger" : ratio >= 0.8 ? "warning" : "running";
   };
   const title = () => (usage().window ? `${formatTokens(usage().tokens)} of ${formatTokens(usage().window!)} tokens` : `About ${formatTokens(usage().tokens)} tokens`);

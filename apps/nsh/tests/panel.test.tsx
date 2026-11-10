@@ -42,6 +42,11 @@ describe("a session's panel", () => {
     const unknown = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, context: { tokens: 1_250_000 } }, revision: "r1" } } });
     await unknown.waitFor("text:About 1.3M tokens");
     expect(unknown.shows("id:context-percent")).toBe(false);
+    unknown.dispose();
+    // A reserve as large as the window compacts at once: the meter warns as its words do.
+    const due = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, context: { tokens: 1200, window: 8192, compactsAt: 0 } }, revision: "r1" } } });
+    await due.waitFor("text:Past where Pi compacts it, at about 0 tokens: Pi summarizes the older messages at its next step");
+    expect(due.shows("text:15%")).toBe(true);
   });
 
   test("Approvals lists the session's approvals, pending first", async () => {
