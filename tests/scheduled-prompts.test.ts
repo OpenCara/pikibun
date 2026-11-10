@@ -3,7 +3,8 @@ import { randomBytes } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
-import { runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
+import { MAX_SCHEDULED_CHILDREN, runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
+import type { SessionConnections } from '../packages/shared/src/cross-session.js';
 import { CronError, nextCronTime, parseCron } from '../packages/shared/src/cron.js';
 import { sessionStatus } from '../packages/client/src/session-status.js';
 import type { SessionRecord, SessionSchedule } from '../packages/shared/src/types.js';
@@ -99,6 +100,8 @@ async function fixture(t: TestContext) {
   t.after(() => { globalThis.fetch = previousFetch; });
   globalThis.fetch = async (input, init) => {
     const path = new URL(String(input)).pathname;
+    // Starts a session: a schedule's run in a new child session.
+    if (path === '/v1/sessions') return Response.json({ ok: true }, { status: 201 });
     if (path.endsWith('/submit')) {
       submitted.push({ path, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
       return Response.json({ submissionId: `sub-${submitted.length}`, conversationId: '0', status: 'queued' });
@@ -219,6 +222,72 @@ test('a refused run is recorded on its schedule, and Run now sends at once witho
   assert.equal(listed.lastSubmissionId, null);
 });
 
+test('a schedule that runs in a new child session starts one each run, as the owner, whatever the session itself is doing', async t => {
+  const f = await fixture(t);
+  const refused = await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Triage', runIn: 'elsewhere' });
+  assert.equal(refused.status, 400);
+  assert.equal((await refused.json() as { code: string }).code, 'invalid_input');
+  const created = await f.owner.request('POST', base, { cron: '0 9 * * *', timeZone: 'UTC', name: 'Triage', content: 'Triage the new issues', runIn: 'child' });
+  assert.equal(created.status, 201, await created.clone().text());
+  const { schedule } = await created.json() as { schedule: SessionSchedule };
+  assert.deepEqual([schedule.runIn, schedule.lastSessionId], ['child', null]);
+  const plain = (await (await f.owner.request('POST', base, { cron: '0 10 * * *', content: 'Report', enabled: false })).json() as { schedule: SessionSchedule }).schedule;
+  assert.equal(plain.runIn, 'session', 'runs in the session itself by default');
+
+  // The session is at work: a run in it would be skipped, but this one starts a session of its own.
+  f.sqlite.prepare("UPDATE sessions SET activity = 'working' WHERE id = 'scheduled-session'").run();
+  const due = Date.parse(schedule.nextRunAt!);
+  const [outcome] = await runScheduledPrompts(f.env, due + 1000);
+  assert.ok(outcome && 'childSessionId' in outcome && outcome.childSessionId, JSON.stringify(outcome));
+  const childId = outcome.childSessionId!;
+  assert.deepEqual(f.submitted.map(item => [item.path, item.body.content]), [[`/v1/sessions/${childId}/submit`, 'Triage the new issues']],
+    'the message opens the new session; the session itself gets nothing');
+  assert.match(String(f.submitted[0]!.body.requestId), new RegExp(`^schedule:${schedule.id}:`));
+  const child = f.sqlite.prepare('SELECT * FROM sessions WHERE id = ?').get(childId)!;
+  assert.deepEqual([child.parent_session_id, child.schedule_id, child.owner_id, child.visibility, child.status],
+    ['scheduled-session', schedule.id, f.owner.user.id, 'private', 'ready']);
+  assert.match(String(child.title), /^Triage · \d{4}-\d{2}-\d{2} 09:00$/, 'named for the schedule and its run');
+  const submit = f.sqlite.prepare("SELECT actor_id, session_id, detail_json FROM audit WHERE action = 'session.submit'").get()!;
+  assert.deepEqual([submit.actor_id, submit.session_id], [f.owner.user.id, childId], 'sent as the owner, in the new session');
+  assert.equal((JSON.parse(String(submit.detail_json)) as { scheduleId: string }).scheduleId, schedule.id);
+  const started = f.sqlite.prepare("SELECT session_id, detail_json FROM audit WHERE action = 'session.schedule.child_started'").get()!;
+  assert.equal(started.session_id, 'scheduled-session');
+  assert.equal((JSON.parse(String(started.detail_json)) as { childSessionId: string }).childSessionId, childId);
+  const listed = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
+  assert.deepEqual([listed.lastSessionId, listed.lastSubmissionId, listed.lastError], [childId, 'sub-1', null]);
+  assert.equal(listed.nextRunAt, new Date(due + 86400_000).toISOString(), 'moved on to the next day');
+  // Lists nest it under the session whose schedule started it.
+  const connections = await (await f.owner.request('GET', '/api/sessions/scheduled-session/connections')).json() as SessionConnections;
+  assert.deepEqual(connections.children.map(item => item.id), [childId]);
+
+  // Run now starts another.
+  const ran = await f.owner.request('POST', `${base}/${schedule.id}/run`);
+  assert.equal(ran.status, 202, await ran.clone().text());
+  const result = await ran.json() as { schedule: SessionSchedule; sessionId: string };
+  assert.ok(result.sessionId && result.sessionId !== childId);
+  assert.equal(result.schedule.lastSessionId, result.sessionId);
+  assert.equal(f.submitted.at(-1)!.path, `/v1/sessions/${result.sessionId}/submit`);
+
+  // Only so many stay open; archived ones no longer count.
+  const fill = f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,parent_session_id,schedule_id)
+    SELECT ?, workspace_id, owner_id, agent_version_id, 'filler', 'ready', created_at, 'private', id, ? FROM sessions WHERE id = 'scheduled-session'`);
+  for (let index = 2; index < MAX_SCHEDULED_CHILDREN; index++) fill.run(`filler-${index}`, schedule.id);
+  const full = await f.owner.request('POST', `${base}/${schedule.id}/run`);
+  assert.equal(full.status, 409);
+  assert.equal((await full.json() as { code: string }).code, 'too_many_children');
+  f.sqlite.prepare("UPDATE sessions SET status = 'archived', archived_status = 'ready' WHERE id = ?").run(childId);
+
+  // A session its host fails to start is archived again: a failed run leaves nothing open behind.
+  globalThis.fetch = async () => Response.json({ error: 'offline', code: 'connector_relay_error' }, { status: 503 });
+  const before = f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
+  const [failed] = await runScheduledPrompts(f.env, due + 86400_000 + 1000);
+  assert.ok(failed && 'error' in failed, JSON.stringify(failed));
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, Number(before) + 1);
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM sessions WHERE schedule_id IS NOT NULL AND status <> 'archived'").get()!.n, MAX_SCHEDULED_CHILDREN - 1);
+  const afterFailure = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules.find(item => item.id === schedule.id)!;
+  assert.deepEqual([afterFailure.lastSessionId, afterFailure.lastSubmissionId, afterFailure.lastError], [null, null, failed.error]);
+});
+
 test('schedules due together for one session send one message; the rest find it busy', async t => {
   const f = await fixture(t);
   const first = (await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'One' })).json() as { schedule: SessionSchedule }).schedule;
@@ -292,7 +361,8 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   }
   for (const [bad, code] of [[{ ...create, cron: '* * * * *' }, 'invalid_cron'], [{ ...create, timeZone: 'Mars/Olympus' }, 'invalid_time_zone'],
     [{ ...create, extra: 1 }, 'invalid_input'], [{ ...create, action: 'run' }, 'invalid_input'], [{ action: 'update' }, 'invalid_input'],
-    [{ action: 'list', cron: '0 9 * * *' }, 'invalid_input'], [{ ...create, enabled: 'yes' }, 'invalid_input']] as const) {
+    [{ action: 'list', cron: '0 9 * * *' }, 'invalid_input'], [{ ...create, enabled: 'yes' }, 'invalid_input'], [{ ...create, runIn: 'elsewhere' }, 'invalid_input'],
+    [{ ...create, runIn: 1 }, 'invalid_input']] as const) {
     await refused(tool(write, bad), 400, code);
   }
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules').get()!.n, 0);
@@ -308,9 +378,10 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   assert.equal((await f.session(f.owner)).nextScheduledAt, schedule.nextRunAt);
   assert.deepEqual(((await tool(write, { action: 'list' })).body.schedules as SessionSchedule[]).map(item => item.id), [schedule.id]);
 
-  const paused = await tool(write, { action: 'update', scheduleId: schedule.id, enabled: false, name: 'Build check' });
+  const paused = await tool(write, { action: 'update', scheduleId: schedule.id, enabled: false, name: 'Build check', runIn: 'child' });
   assert.equal(paused.status, 200, JSON.stringify(paused.body));
-  assert.deepEqual([(paused.body.schedule as SessionSchedule).name, (paused.body.schedule as SessionSchedule).nextRunAt], ['Build check', null]);
+  assert.deepEqual([(paused.body.schedule as SessionSchedule).name, (paused.body.schedule as SessionSchedule).nextRunAt, (paused.body.schedule as SessionSchedule).runIn],
+    ['Build check', null, 'child']);
   await refused(tool(write, { action: 'update', scheduleId: 'missing', enabled: true }), 404, 'not_found');
 
   // Auto-approved schedules come only from the owner's Auto-approve message: not created, and not changed, by any other.

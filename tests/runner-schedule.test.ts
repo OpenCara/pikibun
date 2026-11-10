@@ -52,7 +52,7 @@ test("the agent schedules prompts from the chat for the session owner, never add
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests: ScheduleToolRequest[] = [];
   const schedule = { id: "schedule-1", name: "Check the build", cron: "0 9 * * 1-5", timeZone: "Europe/Berlin", access: "approval", enabled: true } as SessionSchedule;
-  const create = { action: "create", message: "Check the build", cron: "0 9 * * 1-5", time_zone: "Europe/Berlin" };
+  const create = { action: "create", message: "Check the build", cron: "0 9 * * 1-5", time_zone: "Europe/Berlin", run_in: "child" };
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("schedule", create)], { stopReason: "toolUse" }),
@@ -82,9 +82,10 @@ test("the agent schedules prompts from the chat for the session owner, never add
   // The agent lacks the tool, so the owner allows this one call, seeing exactly what it schedules.
   await session.submit(await ticket(id, "submit"), { content: "Every weekday at nine, check the build.", requestId: "create", admissionId }, "write");
   const permission = await pendingApproval(session);
-  const fields = { cron: "0 9 * * 1-5", timeZone: "Europe/Berlin", content: "Check the build" };
+  const fields = { cron: "0 9 * * 1-5", timeZone: "Europe/Berlin", content: "Check the build", runIn: "child" as const };
   assert.equal((permission.operation as PermissionRequest).tool, "schedule");
   assert.equal((permission.operation as PermissionRequest).target, scheduleToolTarget({ action: "create", ...fields }));
+  assert.match((permission.operation as PermissionRequest).target, /each run in a new child session/, "the card says where its runs go");
   assert.equal(requests.length, 0, "nothing is scheduled before the owner allows it");
   await session.decide(await ticket(id, "approve"), permission.id, { decision: "approve", operation: permission.operation });
   await idle(session);

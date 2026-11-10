@@ -162,10 +162,12 @@ async function withCurrentModel(c: AppContext, row: SessionRow, options: Record<
 }
 
 /**
- * Starts a session as the request's user: the route of the apps' New session, and the sessions tool's create
- * (cross-session.ts), whose sessions record the session that started them (`parentSessionId`). Every check is the same.
+ * Starts a session as the request's user: the route of the apps' New session, the sessions tool's create
+ * (cross-session.ts) and scheduled prompts that run in a new child session (scheduled-prompts.ts), whose sessions record
+ * the session that started them (`parentSessionId`) and, for a schedule's, the schedule (`scheduleId`). Every check is
+ * the same.
  */
-export async function createSession(c: AppContext, input: Record<string, unknown>, link: { parentSessionId?: string } = {}): Promise<{ row: SessionRow; notice?: string }> {
+export async function createSession(c: AppContext, input: Record<string, unknown>, link: { parentSessionId?: string; scheduleId?: string } = {}): Promise<{ row: SessionRow; notice?: string }> {
   if (['ownerId', 'permissions', 'githubId', 'repositories', 'repositories_json', 'pins'].some(key => key in input)) fail(400, 'server_owned_identity', 'Session identity, repository pins, and permissions are assigned by the server.');
   const workspaceId = identifier(input.workspaceId, 'workspaceId');
   // A session starts from a model, with a chat agent of its own.
@@ -271,13 +273,14 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       // Its host still accepts sessions on its own environment as the write lands.
       onHost ? 1 : 0, row.connector_id ?? null).first();
   if (!inserted) fail(409, 'session_configuration_changed', 'Workspace repositories, Git account access, membership, or connector authority changed. Try again.');
-  // Started by another session's agent: linked to it before anything runs, so it never shows unlinked.
+  // Started by another session's agent, or its schedule: linked to it before anything runs, so it never shows unlinked.
   if (link.parentSessionId) {
-    await c.env.DB.query('UPDATE sessions SET parent_session_id = ? WHERE id = ?').bind(link.parentSessionId, row.id).run();
+    await c.env.DB.query('UPDATE sessions SET parent_session_id = ?, schedule_id = ? WHERE id = ?').bind(link.parentSessionId, link.scheduleId ?? null, row.id).run();
     row.parent_session_id = link.parentSessionId;
+    row.schedule_id = link.scheduleId ?? null;
   }
   await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}),
-    ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}) }).run();
+    ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}), ...(link.parentSessionId && link.scheduleId ? { scheduleId: link.scheduleId } : {}) }).run();
   try {
     const binding = await bindingForSession(c, row);
     const response = await runnerRequest(c, row, 'create', '', binding);

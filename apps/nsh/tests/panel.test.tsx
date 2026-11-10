@@ -88,6 +88,8 @@ describe("a session's panel", () => {
     await app.press("id:schedule-save");
     await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)));
     expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)).toMatchObject({ content: "Run the tests", cron: "0 9 * * 1-5", access: "approval" });
+    // Runs in the session itself, the default, which older servers take without a runIn.
+    expect(Object.keys(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`) as object)).not.toContain("runIn");
   });
 
   test("Activity shows the audit log", async () => {

@@ -1,5 +1,5 @@
 import { computed, effect, signal, untracked, View } from "nsh";
-import type { AccessMode, SessionSchedule } from "../../../../packages/shared/src/types";
+import type { AccessMode, ScheduleRunIn, SessionSchedule } from "../../../../packages/shared/src/types";
 import { CronError, isTimeZone, MIN_CRON_INTERVAL_MINUTES, nextCronTime, parseCron } from "../../../../packages/shared/src/cron";
 import { segment } from "../shared";
 import { useAppData } from "../lib/app-data";
@@ -32,8 +32,14 @@ const accessHints: Record<AccessMode, string> = {
   approval: "Commands and pushes wait for someone to approve them, as in the chat box",
   auto: "Commands run without asking, under your auto-approve. Nobody may be watching when it runs",
 };
+const runInLabels: Record<ScheduleRunIn, string> = { session: "This session", child: "A new session each run" };
+const runInHints: Record<ScheduleRunIn, string> = {
+  session: "Wakes this session's agent; a run that comes while it is busy is skipped",
+  child: "Starts a new session under this one for each run, on its model and host, so this session's own work goes on undisturbed",
+};
 const errorLabels: Record<string, string> = {
   session_busy: "Skipped: the agent was busy or waiting for an approval",
+  too_many_children: "Skipped: too many of the sessions its schedules started are still open. Archive some",
   connector_offline: "The host was offline",
   connector_unavailable: "The host was unavailable",
   connector_relay_error: "The host didn't answer",
@@ -93,7 +99,7 @@ export function Schedules(props: PanelTabProps) {
     void action.run(async () => {
       await session().api(`${base()}/${segment(schedule.id)}/run`, { method: "POST" });
       after();
-    }, `Sent ${schedule.name} to the agent`);
+    }, schedule.runIn === "child" ? `Started a new session for ${schedule.name}` : `Sent ${schedule.name} to the agent`);
   }
   async function remove(schedule: SessionSchedule) {
     if (!await confirm({ title: "Delete schedule?", message: `${schedule.name} stops waking the agent. Messages it already sent stay in the conversation.`, confirmLabel: "Delete", destructive: true })) return;
@@ -111,6 +117,7 @@ export function Schedules(props: PanelTabProps) {
         <Section bare title={`Scheduled prompts${schedules().length ? ` ${schedules().length}` : ""}`} info={<View style={{ gap: 8 }}>
           <Note>A scheduled prompt sends the agent a message on a schedule, as the session owner, so the session wakes up and works on its own: a nightly check, a weekly report.</Note>
           <Note>A run that comes while the agent is working or waiting for an approval is skipped, not queued. Runs missed while the host or server was offline aren't caught up. The session's host must be online.</Note>
+          <Note>A schedule can instead run in a new session each time: it starts a session under this one with the message, so this session isn't interrupted, and runs whatever this session is doing.</Note>
           <Note>Only the session owner manages its schedules; everyone who can view the session sees them.</Note>
         </View>} action={<View style={{ flexDirection: "row", gap: 4 }}>
           <IconButton icon="refresh" label="Refresh schedules" size={28} disabled={listing.loading()} onPress={listing.refresh} />
@@ -124,16 +131,23 @@ export function Schedules(props: PanelTabProps) {
                   {schedule => (
                     <Card testID={`schedule-${schedule().id}`}>
                       <Row leading={<Icon name="clock" size={16} color={palette().muted} />} title={schedule().name}
-                        hint={`${schedule().cron} · ${schedule().timeZone} · ${accessLabels[schedule().access]}`}
+                        hint={`${schedule().cron} · ${schedule().timeZone} · ${accessLabels[schedule().access]}${schedule().runIn === "child" ? ` · ${runInLabels.child}` : ""}`}
                         trailing={schedule().enabled ? schedule().nextRunAt ? <Badge tone="info">{`Next ${untilText(schedule().nextRunAt!)}`}</Badge> : <Badge tone="warning">Never runs</Badge>
                           : <Badge>Paused</Badge>} />
                       <CardBody>
                         <CodeView text={schedule().content} />
                         <Small>
                           {`${schedule().enabled && schedule().nextRunAt ? `Next run ${timestamp(schedule().nextRunAt!)}. ` : ""}${schedule().lastRunAt
-                            ? `Last run ${timestamp(schedule().lastRunAt!)}${schedule().lastError ? `: ${errorLabels[schedule().lastError!] ?? schedule().lastError}` : " sent its message"}.`
+                            ? `Last run ${timestamp(schedule().lastRunAt!)}${schedule().lastError ? `: ${errorLabels[schedule().lastError!] ?? schedule().lastError}`
+                              : schedule().lastSessionId ? " started a new session" : " sent its message"}.`
                             : "Hasn't run yet."}`}
                         </Small>
+                        <If when={schedule().lastSessionId}>
+                          {started => <View style={{ flexDirection: "row" }}>
+                            <Button small variant="outline" icon="chevron-right" label="Open last session" testID={`schedule-last-session-${schedule().id}`}
+                              onPress={() => props.go({ name: "session", sessionId: started() })} />
+                          </View>}
+                        </If>
                         <If when={canManage()}>
                           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                             <Button small variant="outline" label={schedule().enabled ? "Pause" : "Resume"} disabled={action.busy()} onPress={() => toggle(schedule())} />
@@ -164,13 +178,16 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
   const timeZone = signal(existing?.timeZone ?? localTimeZone());
   const content = signal(existing?.content ?? "");
   const access = signal<AccessMode>(existing?.access ?? "approval");
+  const runIn = signal<ScheduleRunIn>(existing?.runIn ?? "session");
   const next = computed(() => preview(cron(), timeZone()));
   const preset = () => presets.find(item => item.cron === cron().trim())?.cron ?? "";
   const ready = () => props.isOwner && content().trim().length > 0 && "runs" in next();
   function save() {
     if (!ready() || form.busy()) return;
     void form.run(async () => {
-      const body = { name: name().trim(), cron: cron(), timeZone: timeZone(), content: content(), access: access() };
+      // Older servers take no runIn: it goes only where it says something, or the schedule already has one.
+      const body = { name: name().trim(), cron: cron(), timeZone: timeZone(), content: content(), access: access(),
+        ...(runIn() !== "session" || existing?.runIn !== undefined ? { runIn: runIn() } : {}) };
       if (existing) await session().api(`${props.base}/${segment(existing.id)}`, { method: "PATCH", body: { ...body, ...(body.name ? {} : { name: existing.name }) } });
       else await session().api(props.base, { method: "POST", body });
       props.onDone(true);
@@ -180,7 +197,7 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
   return (
     <Section title={existing ? "Edit scheduled prompt" : "New scheduled prompt"} testID="schedule-form">
       <CardBody>
-        <Field label="Message" hint="Sent to the agent as you, as if you typed it in the chat box">
+        <Field label="Message" hint={runIn() === "child" ? "Opens a new session under this one, as you, each time it runs" : "Sent to the agent as you, as if you typed it in the chat box"}>
           <TextField testID="schedule-content" multiline value={content()} onChange={value => content.set(value)} disabled={form.busy()} autoFocus={!existing}
             placeholder="Pull main, run the tests and summarise any failures" />
         </Field>
@@ -201,6 +218,10 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
         <If when={"runs" in next() ? (next() as { runs: string[] }).runs : null}>
           {runs => <Small>{`Next runs: ${runs().map(timestamp).join(", ")}`}</Small>}
         </If>
+        <Field label="Runs in" hint={runInHints[runIn()]}>
+          <Select<ScheduleRunIn> label="Runs in" value={runIn()} disabled={form.busy()} onChange={value => runIn.set(value)} testID="schedule-run-in"
+            options={(["session", "child"] as const).map(mode => ({ value: mode, label: runInLabels[mode] }))} />
+        </Field>
         <Field label="Access" hint={accessHints[access()]}>
           <Select<AccessMode> label="Access" value={access()} disabled={form.busy()} onChange={value => access.set(value)}
             options={(["approval", "read", "auto"] as const).map(mode => ({ value: mode, label: accessLabels[mode] }))} />

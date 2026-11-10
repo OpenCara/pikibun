@@ -148,6 +148,8 @@ export interface SessionRow {
   next_scheduled_at?: string | null;
   /** The session whose agent started this one with the sessions tool (cross-session.ts); null otherwise. Immutable. */
   parent_session_id?: string | null;
+  /** The scheduled prompt that started this session under parent_session_id (scheduled-prompts.ts); null otherwise. Immutable. */
+  schedule_id?: string | null;
   /** How its transcript shows tool output to viewers (transcript-display.ts); display only. Absent on older rows: full. */
   tool_output?: 'full' | 'brief';
   /** Its server's public address while it is online through its tunnel, as its host last reported it (piki:tunnel); display state only. */

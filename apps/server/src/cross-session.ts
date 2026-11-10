@@ -357,8 +357,8 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const { c, origin, actorId } = call;
   await requireSessionCreator(c.env, origin.workspace_id, actorId);
   // One message's calls run one at a time on the host (the tool is sequential) and a session runs one message at a time,
-  // so the count can't race its own creates.
-  const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ?').bind(origin.id).first();
+  // so the count can't race its own creates. Sessions its scheduled prompts started count on their own (scheduled-prompts.ts).
+  const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ? AND schedule_id IS NULL').bind(origin.id).first();
   if (Number(children?.n ?? 0) >= crossSessionLimits.children) fail(429, 'cross_session_limit', `A session starts at most ${crossSessionLimits.children} sessions.`);
   if (options.message !== undefined) await requireSendable(call, null);
   if (options.access === 'auto' && actorId !== origin.owner_id) fail(403, 'owner_required', 'Only the session owner sends an auto-approved message.');
@@ -439,7 +439,7 @@ async function advertised(env: Env, model: Pick<ModelRow, 'provider' | 'model_id
  * offer it at, or else this session's own (`inherited`) where the new session's model runs at it; none leaves it to
  * the host, which starts the model at its own level.
  */
-async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
+export async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
   inherited: ThinkingLevel | undefined): Promise<ThinkingLevel | undefined> {
   if (chosen === undefined && inherited === undefined) return undefined;
   const offered = await advertised(env, model);
@@ -450,26 +450,30 @@ async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | '
   return chosen;
 }
 
-/**
- * The model this session runs on now, as a model of the workspace the actor may use, and its reasoning level: what
- * its host reports for the shared conversation; before that, or where that model isn't one the actor may use here,
- * the model it started on, leaving the reasoning level to its host.
- */
 async function parentModel(call: Call): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
-  const { c, origin, actorId } = call;
+  return sessionCurrentModel(call.c.env, call.origin, call.actorId);
+}
+
+/**
+ * The model `origin` runs on now, as a model of the workspace `actorId` may use, and its reasoning level: what its host
+ * reports for the shared conversation; before that, or where that model isn't one the actor may use here, the model it
+ * started on, leaving the reasoning level to its host. What the sessions it starts run on, by default: the sessions
+ * tool's and its scheduled prompts' (scheduled-prompts.ts).
+ */
+export async function sessionCurrentModel(env: Env, origin: SessionRow, actorId: string): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
   let agent: SessionView['agent'];
   try {
-    agent = (await asActor(c.env, actorId, inner => sessionView(inner, origin))).view.agent;
+    agent = (await asActor(env, actorId, inner => sessionView(inner, origin))).view.agent;
   } catch {
     // A host that can't show the session now: the model it started on still names one.
     agent = undefined;
   }
   if (agent) {
-    const current = (await usableModels(c.env, origin.workspace_id, actorId))
+    const current = (await usableModels(env, origin.workspace_id, actorId))
       .find(model => (model.connector_id ?? null) === (origin.connector_id ?? null) && model.provider === agent.provider && model.model_id === agent.modelId);
     if (current) return { modelId: current.id, ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) };
   }
-  const started = await c.env.DB.query<{ model_id: string }>('SELECT model_id FROM agent_versions WHERE id = ?').bind(origin.agent_version_id).first();
+  const started = await env.DB.query<{ model_id: string }>('SELECT model_id FROM agent_versions WHERE id = ?').bind(origin.agent_version_id).first();
   return started ? { modelId: started.model_id } : {};
 }
 
