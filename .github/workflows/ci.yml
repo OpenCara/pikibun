@@ -1,22 +1,84 @@
 name: CI
-# Once per commit: pull requests run it on their pushes, main on its own (merges and direct pushes), and other branches
-# only through a pull request or by hand (workflow_dispatch). Version tags run it through their release workflow before
-# publishing, so tag pushes don't trigger it twice.
+# Pull requests run it on their pushes, and version tags through their release workflow before publishing; nothing runs
+# it on main's own pushes, whose changes their pull request already checked (merged into main as it was then). Run it by
+# hand (workflow_dispatch) for any branch.
+#
+# A pull request runs only what its changes need: one that changes only documentation (Markdown, docs/images, the licence)
+# runs none of it, and the container image is built only when something it is built from changes. A release or a run
+# by hand checks everything. `verify` is the one result to wait for: it passes once every job passed or was not needed.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:
 permissions:
   contents: read
-# A pull request's newer push cancels its run in progress; every other run (main, releases, by hand) has a group of its
-# own, so each of main's commits is checked.
+# A pull request's newer push cancels its run in progress; every other run (releases, by hand) has a group of its own.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 jobs:
-  verify:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
+      image: ${{ steps.paths.outputs.image }}
+    steps:
+      # A pull request's run checks out its merge into the base branch, whose first parent is the base it changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - name: What the changes need
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            { echo "code=true"; echo "image=true"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Both paths of a renamed file: one moved out of what the image is built from changes the image too.
+          git diff --name-only --no-renames HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+          cat "$RUNNER_TEMP/changed"
+          # Anything but documentation (Markdown, docs/images, the licence) is code; an empty list counts as code, to be safe.
+          code=false
+          if [ ! -s "$RUNNER_TEMP/changed" ] || grep -qvE '(\.md$|^docs/images/|^LICENSE$)' "$RUNNER_TEMP/changed"; then code=true; fi
+          # What the image is built from, as the Dockerfile copies it, and this workflow.
+          image=false
+          if grep -qE '^(Dockerfile|\.dockerignore|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig\.json|packages/cli/package\.json|apps/server/|apps/nsh/|packages/shared/|packages/client/|scripts/nsh\.mjs|scripts/nsh-web-fixes\.mjs|\.github/workflows/ci\.yml)' "$RUNNER_TEMP/changed"; then image=true; fi
+          { echo "code=$code"; echo "image=$image"; } >> "$GITHUB_OUTPUT"
+          echo "Code: $code. Container image: $image."
+
+  # Static checks: the connector's shrinkwrap, types (the apps' too) and the sandbox's Python programs.
+  checks:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The Native Shell CLI the client (apps/nsh) is checked and built with, at the version scripts/nsh.mjs pins.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .cache/nsh
+          key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
+      - name: Connector shrinkwrap matches package.json
+        run: node packages/cli/scripts/shrinkwrap.mjs --check
+      - run: pnpm typecheck
+      # The sandbox's Python programs: Ruff and Pyright, from npm (embedded as checked by tests/sandbox-python.test.ts).
+      - run: pnpm python:check
+
+  # The tests and the end-to-end suite, in the Linux sandbox and against Postgres.
+  tests:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -47,17 +109,27 @@ jobs:
             --cap-drop ALL --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
             --symlink usr/bin /bin --proc /proc --dev /dev -- /usr/bin/true
       - run: pnpm install --frozen-lockfile
-      # The Native Shell CLI the client (apps/nsh) is built with, at the version scripts/nsh.mjs pins.
+      - run: pnpm test
+      - run: pnpm test:connected
+
+  # The client on Native Shell and in a browser, the web build and the published CLI.
+  client:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
-      - name: Connector shrinkwrap matches package.json
-        run: node packages/cli/scripts/shrinkwrap.mjs --check
-      - run: pnpm typecheck
-      # The sandbox's Python programs: Ruff and Pyright, from npm (embedded as checked by tests/sandbox-python.test.ts).
-      - run: pnpm python:check
-      - run: pnpm test
       # The client's tests, headless on Native Shell's own engine against a stubbed server.
       - run: pnpm test:client
       # The web build in the runner's Chrome against a test-mode server: the web runtime differs from that engine (it
@@ -68,9 +140,16 @@ jobs:
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build
       - run: node packages/cli/dist/pikibun.js serve --help
-      - run: pnpm test:connected
-      # TRUST_PROXY with forwarded requests, on the image's own Node: its health check sends no forwarded headers, so it
-      # stayed healthy while every request through a TLS proxy was a 500 (#71).
+
+  # TRUST_PROXY with forwarded requests, on the image's own Node: its health check sends no forwarded headers, so it
+  # stayed healthy while every request through a TLS proxy was a 500 (#71).
+  image:
+    needs: changes
+    if: needs.changes.outputs.image == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Container image builds and serves health, directly and behind a proxy
         run: |
           docker build -t pikibun:ci .
@@ -92,3 +171,22 @@ jobs:
           curl -fsS -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: pikibun.example' http://127.0.0.1:8787/api/health | grep -q '"databaseProvider":"sqlite"'
           curl -fsS -H 'X-Forwarded-Proto: https' http://127.0.0.1:8787/ | grep -qi '<!doctype html'
           docker rm -f pikibun
+
+  # The one result: every job passed, or was skipped as the changes didn't need it.
+  verify:
+    needs: [changes, checks, tests, client, image]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was not needed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::A CI job ended $result."; exit 1 ;;
+            esac
+          done
