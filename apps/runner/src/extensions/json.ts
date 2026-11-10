@@ -1,4 +1,4 @@
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 
 export function isJsonValue(value: unknown, depth = 0): value is JsonValue {
   if (depth > 64) return false;

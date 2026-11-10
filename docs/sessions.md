@@ -5,9 +5,9 @@
 Select a workspace in the sidebar (or open **New session** in it):
 
 - **Describe the task**: the first message. Its first line becomes the session's title.
-- **Host**: one of your hosts, or a host shared with the workspace.
+- **Host**: one of your hosts, or a host shared with the workspace. In your [private workspace](workspaces.md#your-private-workspace), the desktop app picks **This Computer** (**This Mac**) while it is your host and online.
 - **Visibility**: **Workspace** (members can view; the default) or **Private** (explicit grants only, apart from the workspace's owner and admins, who [manage every session](workspaces.md#managing-every-session)). See [Collaborating on a session](collaboration.md).
-- **Where it runs** (on your own host, or one whose owner granted you **Sessions on the host**, once its [configuration](hosts.md#host-configuration) allows **Sessions on the host**): **Sandbox** (the default) or **On this host**, without the sandbox. See [Sessions on the host](hosts.md#sessions-on-the-host).
+- **Where it runs** (on your own host, or on one whose owner granted you **Sessions on the host** once its [configuration](hosts.md#host-configuration) allows **Sessions on the host**): **Sandbox** or **On this host**, without the sandbox. It starts in the sandbox, except in your [private workspace](workspaces.md#your-private-workspace), where it starts on the host wherever it can. See [Sessions on the host](hosts.md#sessions-on-the-host).
 - The model, reasoning level and access for the first message (see [Chat options](#chat-options)). The info tips show the host, the model and the repositories the session will pin.
 
 Press Enter to start (Shift+Enter adds a line; on a phone, Enter adds a line and the send button starts it). On someone else's host, first confirm that you trust it: its operator can read the session's prompts and repository files. The session shows **Starting** while the host prepares it, then runs your message. If it fails to start (**Not started**), its owner sends a message to start it again on the same host (**Restart and send**).
