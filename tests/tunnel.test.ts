@@ -14,7 +14,7 @@ import { tunnelRequest } from "../apps/runner/src/tunnel-command.js";
 import { pinServiceSocket, SERVICE_MARK, SessionService, serviceLimits, serviceShellCommand, type ServiceExit, type ServiceProcess } from "../apps/runner/src/session-service.js";
 import { SessionTunnel } from "../apps/runner/src/session/tunnel.js";
 import { HostTunnels, HostTunnelSource, NO_ADDRESS, type QuickTunnel } from "../apps/runner/src/tunnel-host.js";
-import { cloudflaredAsset, downloadedCloudflareds, PINNED_CLOUDFLARED, pinnedCloudflared } from "../apps/runner/src/cloudflared.js";
+import { cloudflaredAsset, downloadedCloudflareds, latestCloudflared } from "../apps/runner/src/cloudflared.js";
 import { SERVICE_DRIVER } from "../apps/runner/src/sandbox-python.generated.js";
 import { fakeCloudflared } from "./helpers/fake-cloudflared.js";
 import { python } from "./helpers/workspaces.js";
@@ -499,28 +499,31 @@ test("a host's cloudflared stands as its owner chose: found, at a path, download
   const fetched: string[] = [];
   const fakeFetch = (async (url: string) => {
     fetched.push(String(url));
+    if (String(url).startsWith("https://api.github.com/")) {
+      return Response.json({ tag_name: "2026.1.0", body: `## SHA256 Checksums:\n\`\`\`\ncloudflared-darwin-amd64.tgz: ${"0".repeat(64)}\n${asset}: ${sha}\n\`\`\``,
+        assets: [{ name: asset, browser_download_url: `https://github.com/cloudflare/cloudflared/releases/download/2026.1.0/${asset}` }] });
+    }
     return new Response(body, { status: 200 });
   }) as unknown as typeof fetch;
-  const release = () => ({ version: "2026.1.0", asset, url: `https://github.com/cloudflare/cloudflared/releases/download/2026.1.0/${asset}`, sha256: sha });
-  assert.deepEqual(pinnedCloudflared(asset), { version: PINNED_CLOUDFLARED.version, asset,
-    url: `https://github.com/cloudflare/cloudflared/releases/download/${PINNED_CLOUDFLARED.version}/${asset}`, sha256: PINNED_CLOUDFLARED.sha256[asset] });
-  assert.throws(() => pinnedCloudflared("cloudflared-darwin-amd64.tgz"), /pins no cloudflared/);
+  assert.deepEqual(await latestCloudflared(asset, { fetch: fakeFetch }), { version: "2026.1.0", asset, url: `https://github.com/cloudflare/cloudflared/releases/download/2026.1.0/${asset}`, sha256: sha });
   let now = 0;
-  const download = new HostTunnelSource({ ...base, fetch: fakeFetch, release, now: () => now, detect: () => undefined });
+  const download = new HostTunnelSource({ ...base, fetch: fakeFetch, now: () => now, detect: () => undefined });
   assert.equal((await download.apply({ source: "download" })).state, "downloading");
   await download.settled();
   assert.deepEqual(download.status(), { source: "download", state: "ready", executable: join(base.root, "2026.1.0", "cloudflared"), version: "2026.1.0", downloadable: true });
   assert.deepEqual((await downloadedCloudflareds(base.root)).map(item => item.version), ["2026.1.0"]);
   await rm(base.root, { recursive: true, force: true });
   body = Buffer.concat([elf, Buffer.from("tampered")]);
-  const tampered = new HostTunnelSource({ ...base, fetch: fakeFetch, release, now: () => now, detect: () => undefined });
+  const tampered = new HostTunnelSource({ ...base, fetch: fakeFetch, now: () => now, detect: () => undefined });
   await tampered.apply({ source: "download" });
   await tampered.settled();
   assert.equal(tampered.status().state, "failed");
   assert.match(tampered.status().error!, /doesn't match its release's SHA-256/);
   assert.equal(tampered.current(), undefined);
+  sha = "";
+  await assert.rejects(latestCloudflared(asset, { fetch: fakeFetch }), /lists no SHA-256/);
   now += 11 * 60_000;
-  assert.ok(fetched.length > 0 && fetched.every(url => url.startsWith("https://github.com/cloudflare/cloudflared/releases/download/")));
+  assert.ok(fetched.every(url => url.startsWith("https://api.github.com/repos/cloudflare/cloudflared/") || url.startsWith("https://github.com/cloudflare/cloudflared/releases/download/")));
 });
 
 test("a connector that stopped without ending its cloudflareds ends those it recorded as it starts again", { skip: process.platform !== "linux" && "reaping reads /proc" }, async t => {

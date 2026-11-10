@@ -12,9 +12,7 @@ export const computerName = platform.os === "macos" ? "this Mac" : "this compute
 const STDIO_FRAME = "\u001epikibun ";
 const SHELLS = ["zsh", "bash", "sh"];
 const CMD = "cmd";
-export const APP_CLI_VERSION = "0.27.0";
-const CLI_PACKAGE = `pikibun@${APP_CLI_VERSION}`;
-export const INSTALL_COMMAND = `npm install -g ${CLI_PACKAGE}`;
+export const INSTALL_COMMAND = "npm install -g pikibun@latest";
 const CLI_FOLDER = "cli";
 const INSTALL_TIMEOUT_MS = 5 * 60_000;
 const LOG_LIMIT = 200;
@@ -44,7 +42,7 @@ export function hostCommand(os: string, shell: string | undefined, cli?: string 
 }
 
 export function installCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[]; line: string } {
-  const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", CLI_PACKAGE];
+  const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", "pikibun@latest"];
   if (os === "windows") {
     const words = cli ? own : INSTALL_COMMAND.split(" ");
     return { command: CMD, args: ["/d", "/c", ...words], line: words.join(" ") };
