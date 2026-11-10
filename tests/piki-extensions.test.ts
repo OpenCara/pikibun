@@ -43,9 +43,11 @@ test('Pikibun extension sources parse as piki:<name>, are their own package, and
     .map(item => item.source), ['piki:gh'], 'every member\'s sessions run it, not only the host owner\'s');
 
   assert.deepEqual(pikiExtensions.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow']);
-  assert.deepEqual(pikiExtensionsFor('github-enterprise').map(item => item.source), ['piki:gh']);
-  assert.deepEqual(pikiExtensionsFor('azure-devops').map(item => item.tool), ['az']);
-  assert.deepEqual(pikiExtensionsFor('bitbucket'), []);
+  // A forge's command-line tool, and piki:git with any first repository (piki:github only on github.com).
+  assert.deepEqual(pikiExtensionsFor('github').map(item => item.source), ['piki:gh', 'piki:git', 'piki:github']);
+  assert.deepEqual(pikiExtensionsFor('github-enterprise').map(item => item.source), ['piki:gh', 'piki:git']);
+  assert.deepEqual(pikiExtensionsFor('azure-devops').map(item => item.source), ['piki:azure-cli', 'piki:git']);
+  assert.deepEqual(pikiExtensionsFor('bitbucket').map(item => item.source), ['piki:git']);
   assert.equal(pikiExtension('piki:nope'), undefined);
 
   assert.throws(() => parseExtensionSource('piki:gh'), /built into the connector/);
