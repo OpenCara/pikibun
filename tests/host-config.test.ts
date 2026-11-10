@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,9 +9,11 @@ import { commandLimits, detectGpu, gpuMounts, HostConfigSource } from "../apps/r
 import { movedOptionsNotice } from "../apps/runner/src/connect-cli.js";
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
+import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
 const MiB = 1024 * 1024;
-const sandboxed = process.platform === "linux" && spawnSync("bwrap", ["--version"]).status === 0;
+// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
+const sandboxed = !linuxSandboxMissing();
 
 const GPU_DEVICE = "sys/devices/pci0000:00/0000:00:02.0";
 

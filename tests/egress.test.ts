@@ -14,6 +14,7 @@ import { parsePushCommands, pushRejection, readPushCommands, sessionBranch, sess
 import { hostAllowed, hostNamed, parseNetworkPolicy } from "../packages/shared/src/network.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 import { startGitHttpServer } from "./helpers/git-http.js";
+import { linuxSandboxMissing } from "./helpers/workspaces.js";
 import { CA_BUNDLE, CA_BUNDLE_VARIABLES, trustedCertificates } from "../apps/runner/src/trust-store.js";
 
 const repository = { bindingId: "binding-app", provider: "github", host: "github.com", repositoryId: "1701", fullName: "acme/app" } as const;
@@ -359,7 +360,8 @@ function binding(id: string): RunnerBinding {
   };
 }
 
-const sandboxed = process.platform === "linux" && spawnSync("bwrap", ["--version"]).status === 0;
+// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
+const sandboxed = !linuxSandboxMissing();
 
 test("a sandboxed git clone of a workspace repository goes through the proxy and the relay", { skip: !sandboxed }, async t => {
   const directory = await mkdtemp(join(tmpdir(), "egress-sandbox-"));
