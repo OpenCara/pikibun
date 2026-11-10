@@ -44,15 +44,6 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-async function pendingApproval(session: RunnerSession) {
-  for (let count = 0; count < 1500; count++) {
-    const approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
-    if (approval) return approval;
-    await delay(20);
-  }
-  assert.fail("no pending approval");
-}
-
 const ready: HostTunnelStatus = { source: "auto", state: "ready", executable: "/usr/local/bin/cloudflared", downloadable: true };
 
 test("the tunnel is off until the workspace turns it on, and a session on its host is never offered it, saying why", { skip: process.platform === "win32" }, async t => {
@@ -93,7 +84,7 @@ test("the tunnel is off until the workspace turns it on, and a session on its ho
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool tunnel is not available/);
   const tunnelReason = () => view.extensions?.unavailable?.filter(item => item.source === "piki:tunnel");
   assert.deepEqual(tunnelReason(), []);
-  answer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "approval", settings: {} }], automaticTools: false };
+  answer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "automatic", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Now?", requestId: "on-host", admissionId: await sha256("tunnel on host") }, "write");
   await idle(session);
   view = await session.view();
@@ -109,7 +100,7 @@ test("the tunnel is off until the workspace turns it on, and a session on its ho
   await assert.rejects(session.tunnelAction(await ticket(id, "tunnel"), { action: "stop", reason: "whim" }), /Invalid tunnel request/);
 });
 
-test("a tunnel start is a host command card, never automatic and refused in Read-only; its server stays online in the sandbox until stopped, the session's work stops or the session closes",
+test("a tunnel start runs at once for the host's owner and is refused in Read-only; its server stays online in the sandbox until stopped, the session's work stops or the session closes",
   { skip: linuxSandboxMissing(), timeout: 120_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-tunnel-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -117,7 +108,7 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   const serve = { program: "node", args: ["server.js", String(port)], directory: "site", port };
   const start = () => fauxAssistantMessage([fauxToolCall("tunnel", { action: "start", serve })], { stopReason: "toolUse" });
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
-  faux.setResponses([start(), fauxAssistantMessage("Online."), start(), fauxAssistantMessage("Read only."), start(), fauxAssistantMessage("Denied."),
+  faux.setResponses([start(), fauxAssistantMessage("Online."), start(), fauxAssistantMessage("Read only."),
     start(), fauxAssistantMessage("Again."), start(), fauxAssistantMessage("Last.")]);
   const models = createModels();
   models.setProvider(faux.provider);
@@ -146,16 +137,9 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   const edge = async () => Number(lines.map(line => /^FAKE_EDGE=(\d+)$/.exec(line)?.[1]).filter(Boolean).at(-1));
 
   await send("first");
-  const approval = await pendingApproval(session);
-  assert.equal(approval.operation.kind, "extension.tool");
-  assert.ok(approval.operation.kind === "extension.tool" && approval.operation.source === "piki:tunnel" && approval.operation.tool === "tunnel");
-  assert.deepEqual(approval.operation.kind === "extension.tool" && JSON.parse(approval.operation.arguments), { action: "start", serve });
-  assert.equal(approval.automatic, undefined, "never automatic, though the workspace runs the extension's tools automatically");
-  await assert.rejects(session.decide(await ticket(id, "approve", "test:bob", true), approval.id, { decision: "approve", operation: approval.operation }), /host/);
-  await session.decide(await ticket(id, "approve", "test:alice", true), approval.id, { decision: "approve", operation: approval.operation });
   await idle(session);
   let view = await session.view();
-  assert.equal(view.approvals.find(item => item.id === approval.id)?.status, "executed", view.approvals.find(item => item.id === approval.id)?.result);
+  assert.deepEqual(view.approvals, [], "nobody is asked");
   const url = view.tunnel?.url;
   assert.match(url ?? "", /^https:\/\/fake-quick-tunnel\.trycloudflare\.com$/);
   assert.deepEqual([view.tunnel!.command, view.tunnel!.port, view.tunnel!.startedBy], [`node server.js ${port}`, port, "test:alice"]);
@@ -167,16 +151,7 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   await idle(session);
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /a Read-only message doesn't take/);
-  assert.equal(view.approvals.filter(item => item.operation.kind === "extension.tool").length, 1);
-
-  await send("auto", { access: "auto" });
-  const auto = await pendingApproval(session);
-  assert.equal(auto.status, "pending");
-  await session.decide(await ticket(id, "approve", "test:alice", true), auto.id, { decision: "deny", operation: auto.operation });
-  await idle(session);
-  view = await session.view();
-  assert.match(view.entries.map(entry => entry.text).join("\n"), /wasn't approved/);
-  assert.equal(view.tunnel?.url, url);
+  assert.equal(view.tunnel?.url, url, "the tunnel online stays");
 
   assert.deepEqual(await session.tunnelAction(await ticket(id, "tunnel", "test:alice", true), { action: "stop" }), { stopped: true, url });
   assert.equal((await session.view()).tunnel, undefined);
@@ -184,8 +159,6 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   await assert.rejects(fetch(`http://127.0.0.1:${await edge()}/`), "offline");
 
   await send("again");
-  const again = await pendingApproval(session);
-  await session.decide(await ticket(id, "approve", "test:alice", true), again.id, { decision: "approve", operation: again.operation });
   await idle(session);
   assert.ok((await session.view()).tunnel);
   await session.stop(await ticket(id, "stop", "test:alice", true));
@@ -193,8 +166,6 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   assert.equal(reports.at(-1)!.reason, "session-stop");
 
   await send("last");
-  const last = await pendingApproval(session);
-  await session.decide(await ticket(id, "approve", "test:alice", true), last.id, { decision: "approve", operation: last.operation });
   await idle(session);
   assert.ok((await session.view()).tunnel);
   closed = true;

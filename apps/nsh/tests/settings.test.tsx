@@ -93,6 +93,23 @@ describe("settings", () => {
     await app.waitFor("id:workspace-w1");
   });
 
+  test("Workspaces shows each role's tools and creates a tool group with the tools an admin picks", async () => {
+    const app = await openSettings("workspaces");
+    await app.waitFor("id:workspace-w1");
+    await app.press("id:workspace-w1");
+    await app.waitFor("id:workspace-tool-groups");
+    await app.waitFor("id:workspace-member-tools");
+    expect(app.texts().join(" ")).toContain("Members (role)");
+    expect(app.texts().join(" ")).toContain("All but: Push to other branches, open pull requests");
+    await app.press("id:new-tool-group");
+    await app.waitFor("id:tool-group-editor");
+    await app.type("id:tool-group-name", "Releasers");
+    for (const tool of ["read_file", "git", "git_push", "github_merge"]) await app.press(`id:tool-${tool}`);
+    await app.press("id:tool-group-save");
+    await app.waitUntil(() => bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/tool-groups`) !== undefined);
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/workspaces/w1/tool-groups`)).toEqual({ name: "Releasers", tools: ["read_file", "git", "git_push", "github_merge"] });
+  });
+
   test("a new workspace is created and its first session starts there", async () => {
     const app = await openSettings("workspaces");
     await app.waitFor("id:new-workspace");

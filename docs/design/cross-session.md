@@ -1,5 +1,7 @@
 # Cross-session communication
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 A session's agent works with the workspace's other sessions through one tool, `sessions`: it lists them, reads them,
 asks and messages their agents, starts new sessions for sub-tasks, waits for or is notified of outcomes, and stops or
 archives sessions. Everything goes through the control plane (`apps/server/src/cross-session.ts`), which decides each
@@ -13,7 +15,7 @@ call as if the person behind it had made it themselves. Shared types, limits and
 | `list` | Sessions of this workspace the actor can see, and the models `create` can use | read (only those) | any |
 | `read` | Latest shared-conversation entries (cut to 2000 characters each, up to 50; a failed model turn with its provider, model, HTTP status and fixed failure codes, never provider text), pending approvals, busy; with `message_id`, that message's outcome | read | any |
 | `ask` | A side ask (read-only thread) | ask | any |
-| `send` | A shared message, access `approval` (default), `read` or `auto` | write; refused while the target is working or waiting on a card | Read only needs the owner's permission |
+| `send` | A shared message, access `approval`, `read` or `auto` (left out: `auto` where the owner's Auto-approve message sends it to their own sandboxed session, else `approval`) | write; refused while the target is working or waiting on a card | Read only needs the owner's permission |
 | `wait` | The runner reads one message's outcome every 3 seconds until it is done (default 300 s, at most 1800 s) | read | any |
 | `create` | A new session as the actor, linked to this one (`parent_session_id`), with an optional opening message, on a model and reasoning level of the agent's choice (see below) | creating sessions in the workspace | Read only needs the owner's permission |
 | `stop` | Stops the other session's work | write | Read only needs the owner's permission |
@@ -34,6 +36,12 @@ session's owner on someone else's behalf. The control plane checks, on each call
 4. In a Read-only message, a change elsewhere (`send`, `create`, `stop`, `archive`) was allowed by the owner
    (`sessions:write` grant, for the call or the session), unless it is the owner's own Auto-approve message.
 5. `access: auto` only from the owner's Auto-approve message, and only to a session the actor owns.
+6. A `send` or `create` that names no access inherits Auto-approve (`inheritedAccess`) only where rule 5 would allow it
+   and the target session is sandboxed (no unsandboxed host, not run on its host) on a host taking chat options; the
+   origin admission's `auto_merge` comes with it, and the audit records `inheritedAccess`. Its notification (not a side
+   ask's) inherits the access, never `auto_merge`, from the same admission, delivered into the origin under the same
+   conditions: the reply it carries may be steered by others writing in the target. Anything else stays `approval`, so no
+   message runs with more than its sender's.
 
 Work in the other session then runs through `asActor` (a request context of the actor's own), through the same
 functions as the apps' routes: `submitMessage`, `createSession`, `stopSession`, `archiveSession`, `sessionView`. Each

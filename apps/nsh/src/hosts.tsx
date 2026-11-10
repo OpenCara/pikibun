@@ -37,7 +37,7 @@ export function HostCapabilities(props: { connector: ConnectorInfo }) {
 export function UnsandboxedHost(props: { connector: ConnectorInfo }) {
   return (
     <If when={props.connector.capabilities.unsandboxed}>
-      <Banner tone="danger" title="Unsandboxed host">Agent work runs directly on the owner's machine without isolation: approved commands and commits run as their user, with access to their files, credentials and network, and no resource limits. File tools are confined to the session folder by path checks only.</Banner>
+      <Banner tone="danger" title="Unsandboxed host">Agent work runs directly on the owner's machine without isolation: commands and commits run as their user, as soon as the agent calls them, with access to their files, credentials and network, and no resource limits. File tools are confined to the session folder by path checks only.</Banner>
     </If>
   );
 }
@@ -51,7 +51,12 @@ export function HostDetails(props: { connector: ConnectorInfo }) {
       <Note>{`Sandbox: ${capabilities().unsandboxed ? "disabled by the host owner." : !capabilities().sandbox ? "unverified (not necessarily unavailable); the runner checks isolation when preparing each session." : "reported by the host; not a security attestation."} Production shell limits: ${capabilities().productionShell ? "reported; still verified per session." : "not confirmed."}`}</Note>
       <If when={config()?.gitCredentials || capabilities().gitCredentials}><Note>Git credentials: offered by the host owner for pushes in their own sessions, where a workspace's push access uses the host's Git credentials.</Note></If>
       <If when={capabilities().repositoryCache}><Note>Repository cache: this host fetches repositories into its own cache with the host owner's Git credentials, after Pikibun confirms that the session's owner can read them with their own account.</Note></If>
-      <If when={config()?.hostSessions && capabilities().hostConfig && !capabilities().unsandboxed}><Note>Sessions on the host: its owner may start sessions that run directly on it, without the sandbox.</Note></If>
+      <If when={(config()?.hostSessions || capabilities().ownerHostSessions) && capabilities().hostConfig && !capabilities().unsandboxed}>
+        <Note>{capabilities().ownerHostSessions
+          ? `Sessions on the host: its owner${config()?.hostSessions ? ", and members they grant it," : ""} may start sessions that run directly on it, without the sandbox.`
+          : "Sessions on the host: its owner may start sessions that run directly on it, without the sandbox."}</Note>
+      </If>
+      <If when={config()?.fakeIpTunnels && capabilities().fakeIpTunnels && !capabilities().unsandboxed}><Note>Fake-IP proxy: its owner trusts a local proxy's fake-IP addresses for every host a workspace's network policy allows, where Pikibun can't check where that proxy connects.</Note></If>
       <If when={config() && capabilities().hostConfig}>
         <Note>{`Commands: stopped after ${config()?.commandTimeoutSeconds} seconds${config()?.gpu && capabilities().gpu ? `, with the host's GPU (${capabilities().gpu === "dxg" ? "WSL /dev/dxg" : "render nodes"})` : ""}.`}</Note>
       </If>

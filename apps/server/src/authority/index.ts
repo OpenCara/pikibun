@@ -14,15 +14,15 @@ export { isPersonalWorkspace, personalWorkspaceName, personalWorkspaceSQL, requi
 export { authorizeConnectorTicket, connectorPermissions, requireRunnerAccess } from './runner-access.js';
 export { authorizeSession } from './authorize.js';
 export {
-  connectorAdmins, connectorHostGrants, hostAuthority, hostCommandSession, hostOwnerDecides, managedConnector, managedConnectorFor, managesConnectorSQL,
-  mayDecideHostCommands, registerHostAccess, requireManagedWorkspace, runsShellCommands, viewerHostAuthority,
+  connectorAdmins, connectorHostGrants, hostAuthority, hostCommandSession, managedConnector, managedConnectorFor, managesConnectorSQL,
+  registerHostAccess, requireManagedWorkspace, runsShellCommands, viewerHostAuthority,
 } from './host-access.js';
 
 export { parseOperation } from './operations.js';
-export { crossSessionCall, permissionCall, presentApprovals, requireOperationTool, requireToolCall, reviewedApproval, sessionsNeedGranted } from './approval-reviews.js';
-export { autoApprovedRequesters, chooseAutoApprovedRequester, registerRequesterAutoApprove, workspaceApprovalSettings, type WorkspaceApprovalSettings } from './requester-auto-approve.js';
+export { audienceSharing, registerAudienceSharing, requireOperationTool, requireToolCall, sessionsNeedGranted, setAudienceSharing } from './tool-checks.js';
 export { issueRunAdmission } from './run-admissions.js';
 export { automaticTools, sessionToolSources, workspaceExtensions } from './extension-policy.js';
+export { memberToolGroup, memberToolGroups, requireOwnerTool } from './tool-groups.js';
 
 export { assertVaultConfigured, decryptToken, encryptToken } from './vault.js';
 export {

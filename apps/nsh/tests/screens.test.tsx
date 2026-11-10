@@ -53,6 +53,6 @@ describe("every session", () => {
     await app.type("id:sessions-search", "flaky");
     await app.waitUntil(() => !app.shows("id:sessions-row-s2"));
     await app.press("id:sessions-row-s1");
-    await app.waitFor("id:approval-approve");
+    await app.waitFor("id:composer-input");
   });
 });

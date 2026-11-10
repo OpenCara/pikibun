@@ -1,7 +1,6 @@
 import type { ConnectorInfo, LocalModelSummary } from "../../shared/src/connector";
 import type {} from "../../shared/src/host-operations";
-import { mayAutoApprove } from "../../shared/src/policy";
-import { thinkingLevels, type AccessMode, type ChatOptions, type SessionRecord, type SessionView, type ThinkingLevel, type WorkspaceRole } from "../../shared/src/types";
+import { thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type ThinkingLevel } from "../../shared/src/types";
 
 export interface ChatSelection {
   model?: { provider: string; modelId: string };
@@ -13,53 +12,14 @@ export const levelLabels: Record<ThinkingLevel, string> = {
   off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max",
 };
 
+/** A message either acts, with the tools of the session owner's tool group, or only reads: nobody is asked to approve anything. */
 export const accessLabels: Record<AccessMode, { label: string; hint: string }> = {
-  read: { label: "Read only", hint: "Inspect files; edits, commands and commits ask the session owner first" },
-  approval: { label: "Ask before acting", hint: "Edits are automatic; commands, commits, GitHub comments and merges need approval" },
-  auto: { label: "Auto-approve", hint: "Commands, commits, pushes, GitHub comments, issues and merges run immediately as the owner, without asking" },
+  read: { label: "Read only", hint: "Inspect files; edits, commands, commits and pushes are refused" },
+  approval: { label: "Act", hint: "Runs the session's tools, as its owner's tool group allows" },
+  auto: { label: "Act", hint: "Runs the session's tools, as its owner's tool group allows" },
 };
 
-export const memberAutoApproveHint = "Commands in the sandbox run immediately as the session owner, without asking; pushes, GitHub comments, merges and host commands still ask";
-
-export function accessHint(mode: AccessMode, owner: boolean): string {
-  return mode === "auto" && !owner ? memberAutoApproveHint : accessLabels[mode].hint;
-}
-
-export function offersMemberAutoApprove(session: Pick<SessionRecord, "ownerId">, host: Pick<ConnectorInfo, "capabilities"> | undefined, userId: string,
-  role: WorkspaceRole | undefined, canWrite: boolean, unsandboxed: boolean): boolean {
-  return session.ownerId !== userId && canWrite && !unsandboxed && mayAutoApprove(userId, session.ownerId, role) && host?.capabilities.memberAutoApprove === true;
-}
-
-export function memberAutoApproveWarning(host: Pick<ConnectorInfo, "name">): string {
-  return `Commands the agent runs in the sandbox for your messages (bash, git, node, python, cargo and the browser) will run immediately on ${host.name}, `
-    + "as the session's owner and with their access to the workspace's repositories, without asking them. Pushes, GitHub comments, issues and merges, "
-    + "host commands, commands without resource limits, and tools the session doesn't allow yet still need approval.";
-}
-
-export function autoApproveMerges(host: Pick<ConnectorInfo, "capabilities"> | undefined): boolean {
-  return host?.capabilities.automaticGitHub === true;
-}
-
-export function autoApproveWarning(host: Pick<ConnectorInfo, "name" | "capabilities" | "hostCommandAccess">, unsandboxed: boolean): string {
-  const github = autoApproveMerges(host)
-    ? " GitHub comments and new issues are posted, and pull requests merged, as you without asking too: the agent can merge any pull request of this workspace's github.com repositories that GitHub lets you merge, into its base branch. Branch protection and required checks on GitHub still apply."
-    : " GitHub comments and merges still need approval.";
-  return (unsandboxed
-    ? `Commands, commits and pushes the agent writes will run immediately on ${host.name}, an UNSANDBOXED host: commands run directly on the owner's machine with their full user permissions and network access, and no resource limits. Tools outside the agent won't ask either.`
-    : "Commands, commits and pushes the agent writes will run immediately as you, without asking, as will tools outside the agent and commands on a host without resource limits.")
-    + github + hostCommandsWarning(host);
-}
-
-function hostCommandsWarning(host: Pick<ConnectorInfo, "name" | "capabilities" | "hostCommandAccess">): string {
-  if (!host.capabilities.hostCommands) return "";
-  if (host.hostCommandAccess === "auto") {
-    return ` Its owner granted you automatic host commands, so host commands, such as its extensions' tools, also run OUTSIDE the sandbox on ${host.name} without asking, with access to the owner's host files, credentials and network.`;
-  }
-  if (host.hostCommandAccess === "owner" || !host.capabilities.hostGrants) {
-    return " On your own host, host commands, such as its extensions' tools, also run OUTSIDE the sandbox without asking, with access to your host files, credentials and network. On someone else's host they still need their approval.";
-  }
-  return " On your own host, or one whose owner granted you automatic host commands, host commands, such as its extensions' tools, also run OUTSIDE the sandbox without asking, with access to that host's files, credentials and network. Elsewhere they still need approval.";
-}
+export const chatAccessModes: readonly AccessMode[] = ["read", "auto"];
 
 export const CONNECTOR_UPDATE_HINT = "Update the host's connector (npx pikibun@latest connect) to choose model, reasoning and access";
 
@@ -136,19 +96,18 @@ export function preferredSelection(
   return { model: { provider: model.provider, modelId: model.modelId }, thinkingLevel, access: "auto" };
 }
 
-export function initialSelection(view: SessionView, owner: boolean): ChatSelection {
-  const fresh = !view.entries?.some(entry => entry.role === "user");
-  const access = view.access ?? (owner && fresh ? "auto" : "approval");
+export function initialSelection(view: SessionView): ChatSelection {
   return {
     model: view.agent && { provider: view.agent.provider, modelId: view.agent.modelId },
     thinkingLevel: view.agent?.thinkingLevel,
-    access: access === "auto" && !owner ? "approval" : access,
+    access: "auto",
   };
 }
 
+/** A Read-only message waits until the session's host is known, which takes its options; any other message goes, and acts. */
 export function accessUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): string | undefined {
-  if (mode !== "submit" || host || selection.access === "approval") return undefined;
-  return `Still checking this session's host, so "${accessLabels[selection.access].label}" can't be applied yet. Try again in a moment.`;
+  if (mode !== "submit" || host || selection.access !== "read") return undefined;
+  return `Still checking this session's host, so "${accessLabels.read.label}" can't be applied yet. Try again in a moment.`;
 }
 
 export function modelUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection): string | undefined {
@@ -158,20 +117,13 @@ export function modelUnavailable(host: ConnectorInfo | undefined, selection: Cha
   return undefined;
 }
 
-export function chatOptionsBody(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask", owner = true): ChatOptions | undefined {
+export function chatOptionsBody(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): ChatOptions | undefined {
   if (!host?.capabilities.chatOptions) return undefined;
   const model = findModel(host, selection.model);
   const options: ChatOptions = {};
   if (model) options.model = { provider: model.provider, modelId: model.modelId };
   const thinkingLevel = effectiveLevel(model, selection.thinkingLevel);
   if (thinkingLevel) options.thinkingLevel = thinkingLevel;
-  if (mode === "submit") options.access = selection.access;
-  if (mode === "submit" && selection.access === "auto" && owner && autoApproveMerges(host)) options.autoMerge = true;
+  if (mode === "submit" && selection.access === "read") options.access = "read";
   return options;
-}
-
-export const AUTO_APPROVE_CONFIRMED_KEY = "pikibun.autoApproveConfirmed";
-
-export function mustConfirmAutoApprove(options: ChatOptions | undefined, confirmed: boolean): boolean {
-  return options?.autoMerge === true && !confirmed;
 }

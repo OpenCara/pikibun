@@ -1,8 +1,8 @@
 export { ApiError, createApi, errorMessage, segment, type Api, type ApiOptions, type RequestOptions } from "./api";
 export {
-  accessHint, accessLabels, accessUnavailable, AUTO_APPROVE_CONFIRMED_KEY, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, clampLevel, CONNECTOR_UPDATE_HINT,
-  effectiveLevel, findModel, initialSelection, levelLabels, memberAutoApproveHint, memberAutoApproveWarning, modelKey, modelUnavailable, mustConfirmAutoApprove,
-  offeredLevels, offersMemberAutoApprove, parseChatPreference, preferredSelection, selectModel, type ChatPreference, type ChatSelection,
+  accessLabels, accessUnavailable, chatAccessModes, chatOptionsBody, chatPreference, clampLevel, CONNECTOR_UPDATE_HINT,
+  effectiveLevel, findModel, initialSelection, levelLabels, modelKey, modelUnavailable,
+  offeredLevels, parseChatPreference, preferredSelection, selectModel, type ChatPreference, type ChatSelection,
 } from "./chat-options";
 export {
   activeStatuses, createViewCache, liveTiming, startLiveSession, type CachedView, type EventStream, type LiveSession, type LiveSessionDependencies,
@@ -12,7 +12,6 @@ export { COMPACTION_FAILED_TITLE, compactionFailureText } from "./compaction";
 export { createEntryImageCache, entryImageCaches, entryImageHref, imageSource, seesEntryImages, shownImages, textBesideImages, type EntryImageCache } from "./entry-images";
 export { copyText, messageCut, resendText, restoredDraft, rewindable, type MessageCut } from "./message-actions";
 export type { CompactionFailure } from "../../shared/src/types";
-export { decidedAsHostCommand, decidesHostCommand, decidesHostCommands, hostCommandWaiting, isHostCommand, offersAlwaysApprove, requesterAutoApproves, automaticNote, extensionToolArguments, extensionToolNotice } from "./host-commands";
 export { formatBytes, preparingRepositories, repositoryPhaseLabel, repositoryProgressText, repositoryProgressValue } from "./repository-progress";
 export { sessionStatus, type SessionStatus, type SessionStatusTone } from "./session-status";
 export { openFetchEventStream, SseParser, type FetchEventStreamOptions } from "./sse";

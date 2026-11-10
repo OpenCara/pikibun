@@ -1,6 +1,7 @@
 import { pikiExtension, pikiExtensions, pikiSessionToolExtensions } from "./piki-extensions.js";
 import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
 import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
+import { parseMemberToolGroups, type MemberToolGroup } from "./tool-groups.js";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -120,7 +121,7 @@ export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]
   const listed = new Set(extensions.map(item => extensionPackageKey(item.source)));
   const replaced = new Set<string>(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
   const unlisted = pikiSessionToolExtensions().filter(item => !item.core && !replaced.has(item.source) && !listed.has(item.source));
-  return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "approval" as const, settings: {} }))];
+  return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "automatic" as const, settings: {} }))];
 }
 
 export const extensionLimits = Object.freeze({
@@ -162,10 +163,11 @@ export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
   if (typeof value.source !== "string") throw new Error("Invalid extension source");
   const source = normalizeExtensionSource(value.source);
   const enabled = value.enabled ?? true;
-  const tools = value.tools ?? "approval";
+  const tools = value.tools ?? "automatic";
   if (typeof enabled !== "boolean") throw new Error("Invalid extension setting");
-  if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("An extension's tools run with approval or automatically");
-  return { source, enabled, tools: tools as ExtensionToolMode, settings: parseExtensionSettings(value.settings ?? {}) };
+  if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("Invalid extension tools mode");
+  // "approval" is still read, from clients and backups of before approvals were removed; every extension's tools now run alike.
+  return { source, enabled, tools: "automatic", settings: parseExtensionSettings(value.settings ?? {}) };
 }
 
 export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {
@@ -290,6 +292,8 @@ export interface ExtensionsSyncAnswer {
 export interface WorkspaceExtensionsAnswer {
   extensions: WorkspaceExtension[];
   automaticTools: boolean;
+  /** The tool group of each member whose sessions lack some of Pikibun's tools (tool-groups.ts), by user ID. */
+  toolGroups?: Record<string, MemberToolGroup>;
 }
 
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -305,7 +309,8 @@ export function parseExtensionsSyncAnswer(value: unknown): ExtensionsSyncAnswer 
 
 export function parseWorkspaceExtensionsAnswer(value: unknown): WorkspaceExtensionsAnswer {
   if (!isPlainObject(value) || typeof value.automaticTools !== "boolean") throw new Error("Invalid workspace extensions");
-  return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools };
+  const toolGroups = parseMemberToolGroups(value.toolGroups);
+  return { extensions: parseWorkspaceExtensions(value.extensions), automaticTools: value.automaticTools, ...(Object.keys(toolGroups).length ? { toolGroups } : {}) };
 }
 
 export function parseExtensionsSync(value: unknown): ExtensionsSync {

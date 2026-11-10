@@ -1,44 +1,24 @@
 import { Text } from "nsh";
 import {
-  accessHint, accessLabels, autoApproveMerges, autoApproveWarning, CONNECTOR_UPDATE_HINT, effectiveLevel, findModel, levelLabels, memberAutoApproveWarning, modelKey,
-  offeredLevels, selectModel,
+  accessLabels, chatAccessModes, CONNECTOR_UPDATE_HINT, effectiveLevel, findModel, levelLabels, modelKey, offeredLevels, selectModel,
   type AccessMode, type ChatSelection, type ConnectorInfo, type ThinkingLevel,
 } from "../shared";
-import type { AppData } from "../lib/app-data";
 import type { IconName } from "../icons";
 import { palette, text } from "../theme";
-import { Chip, confirm, Picker } from "../ui";
+import { Chip, Picker } from "../ui";
 
 const accessIcons: Record<AccessMode, IconName> = { read: "eye", approval: "shield-check", auto: "zap" };
-
-export function confirmAutoApprove(data: AppData) {
-  return async (host: ConnectorInfo, unsandboxed: boolean, owner = true) => {
-    const confirmed = await confirm({ title: "Auto-approve commands?", message: owner ? autoApproveWarning(host, unsandboxed) : memberAutoApproveWarning(host),
-      confirmLabel: "Enable auto-approve", destructive: true });
-    if (confirmed && owner && autoApproveMerges(host)) data.rememberAutoApproveConfirmed();
-    return confirmed;
-  };
-}
 
 export function ChatOptionsBar(props: {
   host: ConnectorInfo | undefined;
   value: ChatSelection;
   onChange: (value: ChatSelection) => void;
-  owner: boolean;
-  memberAutoApprove?: boolean;
   showAccess: boolean;
-  unsandboxed: boolean;
-  data: AppData;
 }) {
   const model = () => (props.host ? findModel(props.host, props.value.model) : undefined);
   const levels = () => offeredLevels(model());
   const level = () => effectiveLevel(model(), props.value.thinkingLevel);
-  const ask = confirmAutoApprove(props.data);
-  async function selectAccess(access: AccessMode) {
-    if (access === "auto" && props.value.access !== "auto" && props.host && !await ask(props.host, props.unsandboxed, props.owner)) return;
-    props.onChange({ ...props.value, access });
-  }
-  const modes = (): AccessMode[] => (props.owner || props.memberAutoApprove ? ["read", "approval", "auto"] : ["read", "approval"]);
+  const access = (): AccessMode => (props.value.access === "read" ? "read" : "auto");
   return (
     <If when={props.host}>
       {host => (
@@ -59,10 +39,10 @@ export function ChatOptionsBar(props: {
               onSelect={thinkingLevel => props.onChange({ ...props.value, thinkingLevel })} />
           </If>
           <If when={props.showAccess}>
-            <Picker<AccessMode> title="Access" value={props.value.access}
-              trigger={<Chip testID="chat-access" icon={accessIcons[props.value.access]} tone={props.value.access === "auto" ? "warning" : undefined} label={accessLabels[props.value.access].label} />}
-              options={modes().map(mode => ({ value: mode, label: accessLabels[mode].label, hint: accessHint(mode, props.owner), destructive: mode === "auto", icon: accessIcons[mode] }))}
-              onSelect={access => void selectAccess(access)} />
+            <Picker<AccessMode> title="Access" value={access()}
+              trigger={<Chip testID="chat-access" icon={accessIcons[access()]} label={accessLabels[access()].label} />}
+              options={chatAccessModes.map(mode => ({ value: mode, label: accessLabels[mode].label, hint: accessLabels[mode].hint, icon: accessIcons[mode] }))}
+              onSelect={value => props.onChange({ ...props.value, access: value })} />
           </If>
         </If>
       )}

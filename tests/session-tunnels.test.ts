@@ -14,7 +14,7 @@ const origin = 'http://localhost:8787';
 const testSecret = 'session-tunnels-test-secret-not-for-deployment';
 const manifest = {
   models: [{ provider: 'local-native', modelId: 'local/model-v1', name: 'Local model' }],
-  capabilities: { platform: 'linux', sandbox: true, productionShell: false, plainGit: true, hostConfig: true },
+  capabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, plainGit: true, hostConfig: true },
 };
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
 type ApiRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<Response>;

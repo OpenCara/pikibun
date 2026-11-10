@@ -1,5 +1,7 @@
 # Design: the authority's module boundary
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 Status: implemented, as a module boundary inside the server. Running the authority as a service of its own is not
 planned; the boundary keeps it possible.
 

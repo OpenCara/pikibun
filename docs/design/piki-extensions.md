@@ -1,5 +1,7 @@
 # Pikibun's built-in extensions: gh, glab, az and the prompt audit
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 Sessions on a sandboxed host have no network but the workspace's: they clone and push through the egress proxy, and read
 and act on GitHub through `github_read`, `github_comment`, `github_issue` and `github_merge`. What those don't cover (CI
 runs and their logs, checks, releases, other forges' merge requests and pipelines, the forges' APIs) took `host_bash`,
@@ -377,9 +379,11 @@ download the sandbox can't make, a display, and a way to drive it. `piki:browser
     ours (no user namespaces), so it runs with `--no-sandbox`: the session's sandbox is the boundary, as for every other
     program there. `/dev/shm` is read-only, so it doesn't use it; the sandbox has no `/etc/fonts`, so the driver writes
     a fontconfig file naming `/usr/share/fonts` and the host's generic-family rules. Chrome and Chromium (not the
-    headless shell) bind their profile's singleton socket in `TMPDIR`, and the session's (`/sessions/<64 hex
+    headless shell) bind their profile's singleton socket in `TMPDIR`, and a session's own (`/sessions/<64 hex
     digits>/home/.tmp`) leaves too little of a Unix socket path's 107 bytes, so they crash at start there: Chromium runs
-    in a directory of its own under it, which its `TMPDIR` names as `/proc/self/cwd`. The HTTP cache is off: a dev server
+    in a directory of its own under it, which its `TMPDIR` names as `/proc/self/cwd`. (The Linux sandbox now shows that
+    directory as `/tmp` and sets `TMPDIR=/tmp`, so every program finds a short one; the driver keeps its own for older
+    connectors and the other sandboxes.) The HTTP cache is off: a dev server
     changes between calls. Actions find elements by CSS or `text=` (interactive elements first, then the innermost),
     click with real mouse events at the element's centre after scrolling it into view (and say what covered it), type
     with `Input.insertText` (what frameworks listen for), and wait for a navigation an action starts. The answer is a

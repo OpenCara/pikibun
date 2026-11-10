@@ -22,7 +22,7 @@ test("phone screens", async () => {
   await signed.waitFor("id:session-row-s1");
   await shot(signed, "phone-sessions");
   await signed.press("id:session-row-s1");
-  await signed.waitFor("id:approval-approve");
+  await signed.waitFor("id:composer-input");
   await shot(signed, "phone-session");
 });
 
@@ -30,7 +30,7 @@ test("desktop, light and dark", async () => {
   const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1280, height: 820 });
   await app.waitFor("id:session-row-s1");
   await app.press("id:session-row-s1");
-  await app.waitFor("id:approval-approve");
+  await app.waitFor("id:composer-input");
   await shot(app, "desktop-session");
   await app.setColorScheme("dark");
   await shot(app, "desktop-session-dark");

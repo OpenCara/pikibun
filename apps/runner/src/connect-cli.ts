@@ -62,11 +62,11 @@ isolated sandbox. On native Windows run this command inside WSL2, or try
 for Windows, busybox-w32 and Microsoft's MXC SDK; it checks each and says what to do). On macOS,
 --experimental-sandbox needs the developer tools (xcode-select --install); its shell
 commands have no hard memory limits, so only you can let them run, in your own sessions.
---unsafe-no-sandbox needs only Git on PATH, but approved commands then run as your
+--unsafe-no-sandbox needs only Git on PATH, but commands then run as your
 user with access to your files, credentials and network, and no resource limits.
 GitLab, Azure DevOps, Bitbucket, Gitea/Forgejo and GitHub Enterprise repositories are
 connected in the web app (Settings > Profile > Connected accounts) with personal access tokens;
-the connector never receives those tokens. Each approved git_push gets a credential for
+the connector never receives those tokens. Each git_push gets a credential for
 that push only, held in connector memory and sent only to the repository's Git host; the
 sandbox never sees it.
 Production bash additionally requires verified per-session aggregate cgroups and a
@@ -254,7 +254,7 @@ export async function connectMain(args = process.argv.slice(2)): Promise<void> {
     onWarning: () => { process.stderr.write("Some resource domains are unavailable; production bash remains fail-closed.\n"); },
   });
   process.stderr.write(unsandboxed
-    ? "Running unsandboxed: approved commands execute directly on this machine.\n"
+    ? "Running unsandboxed: commands execute directly on this machine.\n"
     : sandboxBackend ? `Experimental ${sandboxBackend.kind === "seatbelt" ? "macOS (Seatbelt)" : "Windows (process container)"} sandbox: not yet verified; report what breaks.\n`
     : "Sandbox capability is verified per session; production shell stays disabled without provisioned, verified limits.\n");
   process.stderr.write("Host configuration (command time limit, GPU, Git credentials, repository cache) is set in Pikibun: Settings > Hosts > this host.\n");

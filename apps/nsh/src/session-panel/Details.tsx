@@ -1,6 +1,6 @@
 import { signal, Text, untracked, View } from "nsh";
 import {
-  sessionRoles, type ApprovalRecord, type ModelDefinition, type Operation, type SessionContextView, type SessionGrant, type SessionRecord, type SessionRole, type SessionView,
+  sessionRoles, type ModelDefinition, type SessionContextView, type SessionGrant, type SessionRecord, type SessionRole, type SessionView,
   type WorkspaceRole,
 } from "../../../../packages/shared/src/types";
 import {
@@ -57,9 +57,8 @@ export function Details(props: DetailsProps) {
             <ConnectionsSection {...props} current={current()} />
             <If when={owner() && !archived()}><BackupsSection {...props} current={current()} /></If>
             <If when={owner() && !archived() && !current().frozen && current().connectorId}><MoveHostSection {...props} current={current()} /></If>
-            <If when={canWrite() && !archived() && !current().frozen}><OperationSection {...props} current={current()} /></If>
             <If when={owner()}>
-              <Section title="Export" info="Downloads this session's details, people, approvals, pushes, backup list and activity as JSON, without secrets. The conversation itself is in the session's backups. Only the session owner can export it.">
+              <Section title="Export" info="Downloads this session's details, people, pushes, backup list and activity as JSON, without secrets. The conversation itself is in the session's backups. Only the session owner can export it.">
                 <Row leading={icon("archive")} title="Session data" hint={opensServerPages ? "JSON, without secrets" : "JSON, without secrets. Download it from Pikibun on the web"}
                   trailing={opensServerPages ? <Button small variant="outline" label="Export" onPress={() => openServerLink(`/api/sessions/${segment(current().id)}/export`)} /> : undefined} />
               </Section>
@@ -80,14 +79,14 @@ function TunnelSection(props: Part & { canStop: boolean }) {
   const tunnel = () => props.view()!.tunnel!;
   async function stop() {
     if (!await confirm({ title: "Take this server offline?", confirmLabel: "Stop", destructive: true,
-      message: `${tunnel().url} stops answering, and the server stops in the session's sandbox. The agent can put it online again, at a new address, with the host owner's approval.` })) return;
+      message: `${tunnel().url} stops answering, and the server stops in the session's sandbox. The agent can put it online again, at a new address, in a message of the host's owner or a member granted host commands.` })) return;
     await action.run(async () => {
       await session().api(`/api/sessions/${segment(props.current.id)}/tunnel/stop`, { method: "POST", body: {} });
       props.refresh();
     }, "Offline.");
   }
   return (
-    <Section title="Online" info="The agent put the session's web server online through a Cloudflare tunnel, with the approval of its host's owner or a member granted host commands. The server runs in the session's sandbox; cloudflared runs on the host and reaches only its port. Anyone with the address can open it.">
+    <Section title="Online" info="The agent put the session's web server online through a Cloudflare tunnel, in a message of its host's owner or a member granted host commands. The server runs in the session's sandbox; cloudflared runs on the host and reaches only its port. Anyone with the address can open it.">
       <Row leading={icon("globe")} title={tunnel().url.replace(/^https:\/\//, "")}
         hint={`${tunnel().command} on port ${tunnel().port} · started by ${name(tunnel().startedBy, true)} · online until ${timestamp(tunnel().expiresAt)} at most`}
         trailing={<>
@@ -161,7 +160,7 @@ function HostSection(props: Part) {
 
 function ExtensionsSection(props: { extensions: NonNullable<SessionView["extensions"]> }) {
   return (
-    <Section title="Extensions" info="Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls are approved like host commands unless the workspace and the host's owner let them run automatically. Built-in ones come with Pikibun, as the host's configuration turns them on.">
+    <Section title="Extensions" info="Pi extensions the workspace chose, as this session's host has them installed. They run on the host, outside the sandbox; their tool calls run only for the host's owner and members granted host commands, unless the host's owner lets every session run them. Built-in ones come with Pikibun, as the host's configuration turns them on.">
       <Each of={props.extensions.running} key={item => item.source}>
         {item => <Row leading={icon("tool")} title={item().source} hint={item().tools.length ? `Tools: ${item().tools.join(", ")}` : "No tools: prompt or hooks only"}
           trailing={item().dev ? <Badge tone="warning">Dev</Badge> : <Badge tone="success">{item().required ? "Required by the host" : "Running"}</Badge>} />}
@@ -223,7 +222,7 @@ const sessionRoleHint: Record<SessionRole, string> = {
   viewer: "Follows the session: prompts, output and side asks",
   member: "Viewer, and asks side questions without messaging the agent",
   collaborator: "Member, and sends messages to the agent and stops its work",
-  admin: "Collaborator, and decides approvals and manages who has access",
+  admin: "Collaborator, and manages who has access",
 };
 const workspaceRoleLabel: Record<WorkspaceRole, string> = { owner: "workspace owner", admin: "workspace admin", collaborator: "workspace collaborator", member: "workspace member", viewer: "workspace viewer" };
 const grantRole = (grant: SessionGrant): SessionRole | null => (grant.sessionRole === undefined ? sessionRoleOf(grant.permissions) : grant.sessionRole);
@@ -286,12 +285,12 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
     }, targetManages() ? "Session role removed. As a workspace owner or admin, they still manage this session."
       : visibility() === "workspace" ? "Session role removed. Workspace members can still view this session until it is made private." : "Session role removed");
   }
-  async function stopAutoApprove(requester: string) {
-    if (form.busy()) return;
+  async function setAudienceSharing(enabled: boolean) {
+    if (form.busy() || !isOwner()) return;
     await form.run(async () => {
-      await session().api(`${base()}/auto-approved-requesters/${segment(requester)}`, { method: "DELETE" });
+      await session().api(`${base()}/audience-sharing`, { method: "PUT", body: { enabled } });
       props.refresh();
-    }, `${usernameWithId(people().person(requester))}'s requests ask again.`);
+    }, enabled ? "Its agent may now exchange content with sessions other people read." : "Its agent exchanges content only with sessions the same people read.");
   }
   const linkResource = createResource<{ link: SessionLink | null }>(() => (isOwner() ? `${base()}/link` : null));
   const link = () => (linkResource.data() ? linkResource.data()!.link : undefined);
@@ -299,7 +298,7 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
   async function shareLink() {
     if (!isOwner() || props.actions.action.busy() || archived() || link()) return;
     if (!await confirm({ title: "Share with anyone who has the link?", confirmLabel: "Create link",
-      message: "Anyone with the link will be able to view existing and future prompts and output of the shared conversation, including tool output and repository content shown in it, without signing in. They can't send messages, or see side asks, approvals, who sent each message, or the host. The session title and your display name are shown with it. Values that look like passwords, tokens or keys are hidden, but anyone who has the link can pass it on, so check the transcript for other sensitive content first. You can turn the link off at any time." })) return;
+      message: "Anyone with the link will be able to view existing and future prompts and output of the shared conversation, including tool output and repository content shown in it, without signing in. They can't send messages, or see side asks, who sent each message, or the host. The session title and your display name are shown with it. Values that look like passwords, tokens or keys are hidden, but anyone who has the link can pass it on, so check the transcript for other sensitive content first. You can turn the link off at any time." })) return;
     await props.actions.action.run(async () => {
       await session().api(`${base()}/link`, { method: "PUT" });
       linkResource.refresh();
@@ -318,13 +317,13 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
   }
   return (
     <Section title="People" testID="panel-people" info={<View style={{ gap: 8 }}>
-      <Note>The server checks every request. You give a workspace member one of four session roles: a viewer follows the session; a member also asks side questions; a collaborator also sends messages to the agent; an admin also decides approvals and manages who has access. You can only give a role whose permissions you hold, and workspace viewers can only be session viewers.</Note>
-      <Note>The workspace's owner and admins manage every session in it, private ones included. Deciding its approvals takes a session role from its owner, since approved operations run as the owner.</Note>
-      <Note>The owner can also share a link: anyone who has it can view the shared conversation without signing in, but not side asks, approvals, who sent each message, or the host.</Note>
+      <Note>The server checks every request. You give a workspace member one of four session roles: a viewer follows the session; a member also asks side questions; a collaborator also sends messages to the agent; an admin also manages who has access. You can only give a role whose permissions you hold, and workspace viewers can only be session viewers.</Note>
+      <Note>The workspace's owner and admins manage every session in it, private ones included. The session's tools run as its owner, as the owner's tool group allows.</Note>
+      <Note>The owner can also share a link: anyone who has it can view the shared conversation without signing in, but not side asks, who sent each message, or the host.</Note>
     </View>}>
       <Row leading={icon("user")} title={isOwner() ? "Owner" : managerRole() ? `Workspace ${managerRole()}` : ownRole() ? `Session ${sessionRoleLabel[ownRole()!].toLowerCase()}` : "Custom access"}
-        hint={`Your permissions: ${own().join(", ") || "none"}${viewerOnly() ? ". You can follow committed work but can't ask, submit, approve, manage grants, change visibility, or use backups"
-          : managerRole() && !own().includes("approve") ? `. As the workspace's ${managerRole()}, you manage every session in it; deciding approvals takes a session role from the owner` : ""}`} />
+        hint={`Your permissions: ${own().join(", ") || "none"}${viewerOnly() ? ". You can follow committed work but can't ask, submit, manage grants, change visibility, or use backups"
+          : managerRole() ? `. As the workspace's ${managerRole()}, you manage every session in it` : ""}`} />
       <Row leading={icon(visibility() === "workspace" ? "globe" : "lock")} title={visibility() === "workspace" ? "Workspace-visible" : "Private"}
         hint={`${visibility() === "workspace" ? "All workspace members can view existing and future prompts and output, including tool output, repository content in the transcript, and side asks"
           : "Only the owner, the workspace's owner and admins, and people with a session role can view prompts and output"}. ${manages()
@@ -335,7 +334,7 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
       <If when={isOwner() || linkShared()}>
         <Row leading={icon("link")} title={linkShared() ? "Anyone with the link can view" : "Link sharing off"}
           hint={!isOwner() ? `The owner shared this session by link: anyone who has it can view the shared conversation without signing in, including messages you send to it. Side asks stay hidden${manages() ? ". You can turn the link off, which stops it at once" : ""}`
-            : linkShared() ? "Without signing in, they can follow the shared conversation, but not side asks, approvals, who sent each message, or the host. Turning the link off stops it at once"
+            : linkShared() ? "Without signing in, they can follow the shared conversation, but not side asks, who sent each message, or the host. Turning the link off stops it at once"
             : archived() ? "Archived sessions can't get a new share link" : "Create a link that lets anyone who has it view the shared conversation, read-only, without signing in"}
           trailing={isOwner() ? (linkShared() ? <Button small variant="outline" label="Turn off" disabled={props.actions.action.busy()} onPress={() => void unshareLink()} />
             : !archived() ? <Button small variant="outline" label="Create link" testID="share-link-create" disabled={props.actions.action.busy() || linkResource.loading()} onPress={() => void shareLink()} /> : undefined)
@@ -345,14 +344,12 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
         {current => <CardBody><Field label="Share link" hint={`Created ${relativeTime(current().createdAt)}`}><CopyField value={current().url} label="Copy share link" /></Field></CardBody>}
       </If>
       <If when={isOwner() && linkResource.error()}><CardBody><Feedback error={linkResource.error()} /></CardBody></If>
-      <Each of={props.current.autoApprovedRequesters ?? []}>
-        {requester => (
-          <Row leading={icon("check")} title={`Always approves ${name(requester(), true)}`}
-            hint={props.current.requesterAutoApprove ? `Their commands, pushes, and GitHub comments and issues here run without asking, as the owner. Merges, host commands and new permissions still ask${isOwner() ? "" : ". Only the owner can stop it"}`
-              : "Paused: the workspace no longer lets owners auto-approve other members' requests, so they ask again. It applies again if that's turned back on"}
-            trailing={isOwner() ? <Button small variant="outline" label="Stop" disabled={form.busy()} onPress={() => void stopAutoApprove(requester())} /> : undefined} />
-        )}
-      </Each>
+      <Row leading={icon("users")} title="Content from sessions other people read"
+        hint={props.current.audienceSharing ? "Its agent may read from, and send to, sessions that not all the same people can read, with the sessions tool"
+          : `Its agent's sessions tool is refused sessions that not all the same people can read${isOwner() ? "" : ". Only the owner can change this"}`}
+        trailing={isOwner() && !archived() ? <CheckControl testID="audience-sharing" label="Let the agent exchange content with sessions other people read" checked={Boolean(props.current.audienceSharing)}
+          disabled={form.busy()} onChange={value => void setAudienceSharing(value)} />
+          : <Badge tone={props.current.audienceSharing ? "warning" : "neutral"}>{props.current.audienceSharing ? "On" : "Off"}</Badge>} />
       <If when={canManage() && !archived()}
         else={<Row leading={icon("users")} title="Session roles" hint={canManage() ? "Unarchive the session to manage session roles" : "Managing session roles takes the session admin role"} />}>
         <CollapsibleRow leading={icon("users")} title="Session roles" testID="session-roles"
@@ -473,7 +470,7 @@ function BackupsSection(props: Part) {
     <Section title="Backups" testID="panel-backups" info={<View style={{ gap: 8 }}>
       <Note>Only the session owner can create, download or restore backups. Backups need the session to be idle.</Note>
       <Note>A backup keeps the conversation, the session's files and each clone's local work. Conversation only keeps just the conversation: it's much smaller, and a session restored from it starts with an empty worktree.</Note>
-      <Note>Restore creates a new private session and never overwrites this one. It doesn't replay approvals or run operations, and needs the original host to be available.</Note>
+      <Note>Restore creates a new private session and never overwrites this one. It doesn't run any operations again, and needs the original host to be available.</Note>
     </View>} action={<View style={{ flexDirection: "row", gap: 4 }}>
       <IconButton icon="refresh" label="Refresh backups" size={28} onPress={actions.backups.refresh} />
       <Button small variant="ghost" label="Conversation only" disabled={off() || actions.backupsPending() || blocked() || actions.conversationOnlyOff() || actions.action.busy()}
@@ -696,38 +693,6 @@ function MoveHostSection(props: Part) {
         )}
       </If>
       <If when={error() || models.error() || listing.error()}><CardBody><Feedback error={error() || models.error() || listing.error()} /></CardBody></If>
-    </Section>
-  );
-}
-
-function OperationSection(props: Part) {
-  const form = createAction();
-  const approval = signal<Pick<ApprovalRecord, "id" | "status"> | null>(null);
-  const repository = signal("");
-  const issue = signal("");
-  const body = signal("");
-  const ready = () => /^[^/\s]+\/[^/\s]+$/.test(repository().trim()) && Number.isSafeInteger(Number(issue())) && Number(issue()) > 0 && Boolean(body().trim());
-  function request() {
-    if (!ready() || form.busy()) return;
-    const operation: Operation = { kind: "github.comment", repository: repository().trim(), issue: Number(issue()), body: body() };
-    approval.set(null);
-    void form.run(async () => {
-      const result = await session().api<{ approval: ApprovalRecord }>(`/api/sessions/${segment(props.current.id)}/operations`, { method: "POST", body: operation });
-      approval.set({ id: result.approval.id, status: result.approval.status });
-      props.refresh();
-    }, "Operation requested. Review its approval in the session.");
-  }
-  return (
-    <Section title="Operation request" info="This only requests the operation; it runs after approval in the session. Don't include passwords, tokens or other secrets.">
-      <CardBody>
-        <Field label="Operation"><Select<string> label="Operation" value="github.comment" onChange={() => undefined} options={[{ value: "github.comment", label: "GitHub comment" }]} /></Field>
-        <Field label="Repository" hint="owner/name"><TextField monospace value={repository()} onChange={value => repository.set(value)} disabled={form.busy()} /></Field>
-        <Field label="Issue number"><TextField keyboardType="number-pad" value={issue()} onChange={value => issue.set(value)} disabled={form.busy()} /></Field>
-        <Field label="Comment"><TextField multiline value={body()} onChange={value => body.set(value)} disabled={form.busy()} /></Field>
-        <View style={{ flexDirection: "row" }}><Button small label={form.busy() ? "Requesting…" : "Request approval"} disabled={!ready() || form.busy()} onPress={request} /></View>
-        <If when={approval()}>{current => <Small>{`Approval ${current().id}: ${current().status}`}</Small>}</If>
-        <Feedback error={form.error()} notice={form.notice()} />
-      </CardBody>
     </Section>
   );
 }

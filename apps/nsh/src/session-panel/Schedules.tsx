@@ -9,7 +9,7 @@ import { createAction, createResource } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette } from "../theme";
 import { Field, Select, TextField } from "../form";
-import { Badge, Banner, Button, CardBody, confirm, EmptyState, Feedback, IconButton, Note, ResourceState, Row, Section, Small } from "../ui";
+import { Badge, Button, CardBody, confirm, EmptyState, Feedback, IconButton, Note, ResourceState, Row, Section, Small } from "../ui";
 import { Card } from "../settings/accounts";
 import { CodeView } from "./Files";
 import { TabPage, type PanelTabProps } from "./parts";
@@ -23,11 +23,11 @@ const presets: { label: string; cron: string }[] = [
   { label: "Every Monday at 09:00", cron: "0 9 * * 1" },
   { label: "First of the month at 09:00", cron: "0 9 1 * *" },
 ];
-const accessLabels: Record<AccessMode, string> = { read: "Read-only", approval: "Ask for approval", auto: "Auto-approve" };
+const accessLabels: Record<AccessMode, string> = { read: "Read only", approval: "Act", auto: "Act" };
 const accessHints: Record<AccessMode, string> = {
   read: "The agent can look, but changes nothing",
-  approval: "Commands and pushes wait for someone to approve them, as in the chat box",
-  auto: "Commands run without asking, under your auto-approve. Nobody may be watching when it runs",
+  approval: "The agent runs the session's tools, as your tool group allows. Nobody may be watching when it runs",
+  auto: "The agent runs the session's tools, as your tool group allows. Nobody may be watching when it runs",
 };
 const runInLabels: Record<ScheduleRunIn, string> = { session: "This session", child: "A new session each run" };
 const runInHints: Record<ScheduleRunIn, string> = {
@@ -35,7 +35,7 @@ const runInHints: Record<ScheduleRunIn, string> = {
   child: "Starts a new session under this one for each run, on its model and host, so this session's own work goes on undisturbed",
 };
 const errorLabels: Record<string, string> = {
-  session_busy: "Skipped: the agent was busy or waiting for an approval",
+  session_busy: "Skipped: the agent was busy",
   too_many_children: "Skipped: too many of the sessions its schedules started are still open. Archive some",
   connector_offline: "The host was offline",
   connector_unavailable: "The host was unavailable",
@@ -112,7 +112,7 @@ export function Schedules(props: PanelTabProps) {
           onDone={saved => { editing.set(null); if (saved) after(); }} />}>
         <Section bare title={`Scheduled prompts${schedules().length ? ` ${schedules().length}` : ""}`} info={<View style={{ gap: 8 }}>
           <Note>A scheduled prompt sends the agent a message on a schedule, as the session owner, so the session wakes up and works on its own: a nightly check, a weekly report.</Note>
-          <Note>A run that comes while the agent is working or waiting for an approval is skipped, not queued. Runs missed while the host or server was offline aren't caught up. The session's host must be online.</Note>
+          <Note>A run that comes while the agent is working is skipped, not queued. Runs missed while the host or server was offline aren't caught up. The session's host must be online.</Note>
           <Note>A schedule can instead run in a new session each time: it starts a session under this one with the message, so this session isn't interrupted, and runs whatever this session is doing.</Note>
           <Note>Only the session owner manages its schedules; everyone who can view the session sees them.</Note>
         </View>} action={<View style={{ flexDirection: "row", gap: 4 }}>
@@ -127,7 +127,8 @@ export function Schedules(props: PanelTabProps) {
                   {schedule => (
                     <Card testID={`schedule-${schedule().id}`}>
                       <Row leading={<Icon name="clock" size={16} color={palette().muted} />} title={schedule().name}
-                        hint={`${schedule().cron} · ${schedule().timeZone} · ${accessLabels[schedule().access]}${schedule().runIn === "child" ? ` · ${runInLabels.child}` : ""}`}
+                        hint={`${schedule().cron} · ${schedule().timeZone} · ${accessLabels[schedule().access]}${schedule().runIn === "child"
+                          ? ` · ${runInLabels.child}${schedule().oneShot === false ? ", kept open" : ", archived when done"}` : ""}`}
                         trailing={schedule().enabled ? schedule().nextRunAt ? <Badge tone="info">{`Next ${untilText(schedule().nextRunAt!)}`}</Badge> : <Badge tone="warning">Never runs</Badge>
                           : <Badge>Paused</Badge>} />
                       <CardBody>
@@ -173,8 +174,9 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
   const cron = signal(existing?.cron ?? "0 9 * * 1-5");
   const timeZone = signal(existing?.timeZone ?? localTimeZone());
   const content = signal(existing?.content ?? "");
-  const access = signal<AccessMode>(existing?.access ?? "approval");
+  const access = signal<AccessMode>(existing?.access === "read" ? "read" : "auto");
   const runIn = signal<ScheduleRunIn>(existing?.runIn ?? "session");
+  const oneShot = signal<boolean>(existing?.oneShot ?? true);
   const next = computed(() => preview(cron(), timeZone()));
   const preset = () => presets.find(item => item.cron === cron().trim())?.cron ?? "";
   const ready = () => props.isOwner && content().trim().length > 0 && "runs" in next();
@@ -182,7 +184,8 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
     if (!ready() || form.busy()) return;
     void form.run(async () => {
       const body = { name: name().trim(), cron: cron(), timeZone: timeZone(), content: content(), access: access(),
-        ...(runIn() !== "session" || existing?.runIn !== undefined ? { runIn: runIn() } : {}) };
+        ...(runIn() !== "session" || existing?.runIn !== undefined ? { runIn: runIn() } : {}),
+        ...(runIn() === "child" && (!oneShot() || existing?.oneShot !== undefined) ? { oneShot: oneShot() } : {}) };
       if (existing) await session().api(`${props.base}/${segment(existing.id)}`, { method: "PATCH", body: { ...body, ...(body.name ? {} : { name: existing.name }) } });
       else await session().api(props.base, { method: "POST", body });
       props.onDone(true);
@@ -217,11 +220,18 @@ function ScheduleForm(props: { base: string; schedule: SessionSchedule | null; i
           <Select<ScheduleRunIn> label="Runs in" value={runIn()} disabled={form.busy()} onChange={value => runIn.set(value)} testID="schedule-run-in"
             options={(["session", "child"] as const).map(mode => ({ value: mode, label: runInLabels[mode] }))} />
         </Field>
+        <If when={runIn() === "child"}>
+          <Field label="When its run is done" hint={oneShot()
+            ? "Each new session is archived once its run is done; you can still open it. One that fails, or that you send a message of your own, stays open"
+            : "Each new session stays open until you archive it"}>
+            <Select<string> label="When its run is done" value={oneShot() ? "archive" : "keep"} disabled={form.busy()} onChange={value => oneShot.set(value === "archive")}
+              testID="schedule-one-shot" options={[{ value: "archive", label: "Archive the session" }, { value: "keep", label: "Keep it open" }]} />
+          </Field>
+        </If>
         <Field label="Access" hint={accessHints[access()]}>
           <Select<AccessMode> label="Access" value={access()} disabled={form.busy()} onChange={value => access.set(value)}
-            options={(["approval", "read", "auto"] as const).map(mode => ({ value: mode, label: accessLabels[mode] }))} />
+            options={(["auto", "read"] as const).map(mode => ({ value: mode, label: accessLabels[mode] }))} />
         </Field>
-        <If when={access() === "auto"}><Banner tone="danger" title="Runs commands unattended">Every command this message's work runs is approved automatically, at times when nobody may be watching.</Banner></If>
         <View style={{ flexDirection: "row", gap: 8 }}>
           <Button small variant="primary" testID="schedule-save" label={form.busy() ? "Saving…" : existing ? "Save" : "Create schedule"} disabled={!ready() || form.busy()} onPress={save} />
           <Button small variant="ghost" label="Cancel" onPress={() => props.onDone(false)} />

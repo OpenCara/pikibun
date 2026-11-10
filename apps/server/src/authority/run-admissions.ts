@@ -68,7 +68,6 @@ async function admissionStorage<T>(operation: Promise<T>): Promise<T> {
 
 export async function issueRunAdmission(c: AppContext, row: SessionRow, content: string, requestId: string, access?: AccessMode,
   images?: readonly ChatImage[], autoMerge = false): Promise<string> {
-  if (autoMerge && access !== 'auto') fail(400, 'invalid_options', 'Auto-merge needs Auto-approve.');
   const actorId = c.get('auth')?.userId;
   if (!actorId) fail(401, 'unauthorized', 'Authentication is required.');
   text(content, 'content', 60000, images?.length ? 0 : 1);

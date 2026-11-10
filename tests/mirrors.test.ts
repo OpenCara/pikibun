@@ -12,6 +12,7 @@ import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 import { startGitHttpServer } from "./helpers/git-http.js";
+import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
 const repository = { bindingId: "binding-app", provider: "github", host: "github.com", repositoryId: "1701", fullName: "acme/app" } as const;
 const HOST_AUTH = "Basic aG9zdDpjcmVkZW50aWFs";
@@ -171,7 +172,8 @@ function binding(id: string): RunnerBinding {
   };
 }
 
-const sandboxed = process.platform === "linux" && spawnSync("bwrap", ["--version"]).status === 0;
+// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
+const sandboxed = !linuxSandboxMissing();
 
 test("a sandboxed clone borrows the host mirror's objects through the git shim", { skip: !sandboxed }, async t => {
   const u = await upstream(t);

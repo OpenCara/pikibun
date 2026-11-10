@@ -106,8 +106,27 @@ export function server(overrides: Record<string, unknown> = {}) {
     [`GET ${ORIGIN}/api/sessions/s1/migrations`]: { body: { migrations: [] } },
     [`PATCH ${ORIGIN}/api/sessions/s1`]: (request: Request) => ({ body: { session: { ...sessionRecord, ...JSON.parse(request.body ?? "{}") } } }),
     [`POST ${ORIGIN}/api/workspaces`]: { status: 201, body: { workspace: { id: "w2", name: "Difference Engine", ownerId: "u1", role: "owner" } } },
+    [`GET ${ORIGIN}/api/workspaces/w1/tool-groups`]: { body: toolGroups },
+    [`POST ${ORIGIN}/api/workspaces/w1/tool-groups`]: (request: Request) => ({ status: 201, body: { ...toolGroups,
+      groups: [{ id: "g1", createdAt: "2026-11-10T10:00:00.000Z", updatedAt: "2026-11-10T10:00:00.000Z", ...JSON.parse(request.body ?? "{}") }] } }),
     ...overrides,
   };
 }
 
 export const signedIn = { "pikibun.token": TOKEN, "pikibun.origin": ORIGIN };
+
+const everyTool = ["identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file", "git", "git_push", "node", "python",
+  "rust", "go", "dotnet", "make", "browser", "tunnel", "github_read", "github_comment", "github_issue", "github_merge", "source_read", "schedule", "sessions"];
+const sandboxTools = ["identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file", "git", "node", "python",
+  "rust", "go", "dotnet", "make", "browser", "github_read", "source_read"];
+export const toolGroups = {
+  groups: [],
+  members: [
+    { userId: "u1", displayName: "Ada Lovelace", username: "ada", githubLogin: "ada", role: "owner", groupId: null },
+    { userId: "u2", displayName: "Grace Hopper", username: "grace", githubLogin: "grace", role: "member", groupId: null },
+  ],
+  roles: { owner: everyTool, admin: everyTool, collaborator: everyTool.filter(tool => tool !== "tunnel" && tool !== "github_merge"), member: sandboxTools,
+    viewer: ["identity", "list_files", "read_file", "search"] },
+  tools: everyTool,
+  admin: true,
+};

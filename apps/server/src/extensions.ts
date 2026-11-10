@@ -7,7 +7,7 @@ import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExte
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, AppEnv } from './types.js';
 import {
-  auditStatement, authenticateConnector, automaticTools, managedConnector, requireMember, sessionToolSources, workspaceExtensions,
+  auditStatement, authenticateConnector, automaticTools, managedConnector, memberToolGroups, requireMember, sessionToolSources, workspaceExtensions,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
 
@@ -56,7 +56,7 @@ function withReplacedSwitches(shown: readonly WorkspaceExtension[], extensions: 
     const own = result.find(item => item.source === source);
     if (on) result = result.filter(item => item.source !== source);
     else if (own) result = result.map(item => item.source === source ? { ...item, enabled: false } : item);
-    else result.push({ source, enabled: false, tools: 'approval', settings: {} });
+    else result.push({ source, enabled: false, tools: 'automatic', settings: {} });
   }
   return result;
 }
@@ -101,7 +101,8 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     const extensions = await workspaceExtensions(c.env, workspaceId);
     const shown = extensions.some(item => isPikiExtensionSource(item.source))
       ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed, options) : extensions;
-    return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id) });
+    const toolGroups = await memberToolGroups(c.env, workspaceId);
+    return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id), ...(Object.keys(toolGroups).length ? { toolGroups } : {}) });
   });
 }
 
@@ -137,7 +138,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
     catch (error) { return fail(400, 'invalid_extension', error instanceof Error ? error.message : 'Invalid extension.'); }
     const key = extensionPackageKey(extension.source);
     const sessionTool = sessionToolSources.includes(key);
-    if (sessionTool) extension = { ...extension, tools: 'approval', settings: {} };
+    if (sessionTool) extension = { ...extension, tools: 'automatic', settings: {} };
     if (coreSources.includes(key) && !extension.enabled) fail(400, 'invalid_extension', `${key} offers the tools every session needs; it can't be turned off.`);
     const saved = await c.env.DB.query(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
       SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), ?, ?, ?, ?, ?
@@ -229,7 +230,7 @@ export function registerExtensions(app: Hono<AppEnv>): void {
 
   app.patch('/api/connectors/:id/extensions', async c => {
     const row = await managedConnector(c);
-    if (row.role !== 'owner') fail(403, 'host_owner_required', 'Only the host\'s owner decides whether extension tools run on it without approval.');
+    if (row.role !== 'owner') fail(403, 'host_owner_required', 'Only the host\'s owner decides whether extension tools run on it for every session.');
     if (row.revoked_at) fail(409, 'connector_revoked', 'Connector is revoked.');
     const input = await jsonObject(c, 1024);
     if (Object.keys(input).join() !== 'automaticTools' || typeof input.automaticTools !== 'boolean') fail(400, 'invalid_input', 'Set automaticTools to true or false.');

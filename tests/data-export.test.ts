@@ -39,7 +39,6 @@ async function fixture(t: TestContext) {
     INSERT INTO session_grants VALUES ('owner-private','test:admin','["read"]','2026-01-01'),
       ('member-granted','test:owner','["read","ask"]','2026-01-06');
     INSERT INTO session_tool_grants VALUES ('owner-private','bash','','approval-1','test:owner','2026-01-01');
-    INSERT INTO session_auto_approved_requesters VALUES ('owner-private','test:admin','approval-1','test:owner','2026-01-01','2026-01-02');
     INSERT INTO backups (id,session_id,owner_id,object_key,sha256,size,created_at) VALUES ('backup-server','owner-private','test:owner','OBJECT-KEY-SERVER','${'s'.repeat(43)}',10,'2026-01-02'),
       ('backup-database','owner-private','test:owner','OBJECT-KEY-DATABASE','${'t'.repeat(43)}',20,'2026-01-03');
     INSERT INTO workspace_database_backups VALUES ('backup-database','workspace','2026-01-03');
@@ -47,9 +46,6 @@ async function fixture(t: TestContext) {
       binding_json,download_token_hash,download_expires_at,created_at)
       VALUES ('restore','request','test:owner','workspace','owner-private','backup-server','owner-restored','Restored','${'s'.repeat(43)}',10,
         '{"owner":{"env":{"TOKEN":"PERSONAL-ENVIRONMENT-VALUE"}}}','${'D'.repeat(43)}',1,'2026-01-03');
-    INSERT INTO approval_reviews (session_id,approval_id,requested_by,source,admission_id,operation_json,review_hash,created_at)
-      VALUES ('owner-private','approval-1','test:owner','explicit',NULL,'{"kind":"bash","command":"ls"}','${'r'.repeat(43)}','2026-01-01');
-    INSERT INTO broker_capabilities VALUES ('BROKER-TOKEN-HASH','owner-private','approval-1','test:owner','test:owner','operation',1,NULL,'2026-01-01');
     INSERT INTO push_credentials (id,session_id,approval_id,requested_by,identity_id,kind,binding_id,operation_json,automatic,admission_id,
       revocation_ciphertext,expires_at,created_at,completed_at,outcome,tip,pull_request_url)
       VALUES ('push','owner-private','approval-2','test:owner',NULL,'github-app','binding','{"kind":"git.push","branch":"feature"}',0,NULL,
@@ -99,13 +95,10 @@ test('a session export is its owner\'s, archived sessions included, with every r
   assert.equal(exported.session.archivedStatus, null);
   assert.deepEqual(exported.grants, [{ userId: 'test:admin', permissions: ['read'], createdAt: '2026-01-01' }]);
   assert.deepEqual(exported.toolGrants, [{ tool: 'bash', callId: '', approvalId: 'approval-1', grantedBy: 'test:owner', createdAt: '2026-01-01' }]);
-  assert.deepEqual(exported.autoApprovedRequesters, [{ userId: 'test:admin', approvalId: 'approval-1', grantedBy: 'test:owner', createdAt: '2026-01-01', revokedAt: '2026-01-02' }]);
   assert.deepEqual(exported.backups.map(backup => [backup.id, backup.location, backup.size]),
     [['backup-server', 'server', 10], ['backup-database', 'workspace-database', 20]]);
   assert.deepEqual(exported.restores, [{ id: 'restore', sourceSessionId: 'owner-private', backupId: 'backup-server',
     targetSessionId: 'owner-restored', title: 'Restored', status: 'pending', createdAt: '2026-01-03', completedAt: null }]);
-  assert.deepEqual(exported.approvals, [{ approvalId: 'approval-1', requestedBy: 'test:owner', source: 'explicit',
-    operation: { kind: 'bash', command: 'ls' }, createdAt: '2026-01-01' }]);
   assert.equal(exported.pushes.length, 1);
   assert.equal(exported.pushes[0]!.automatic, false);
   assert.equal(exported.pushes[0]!.outcome, 'pushed');
@@ -144,7 +137,6 @@ test('a workspace export covers its settings, the exporter\'s own sessions in fu
   assert.equal(exported.format, 'pikibun-workspace-export-v1');
   assert.equal(exported.exportedBy, 'test:owner');
   assert.deepEqual(exported.workspace, { id: 'workspace', name: 'Workspace', ownerId: 'test:owner', createdAt: '2026-01-01' });
-  assert.deepEqual(exported.approvalSettings, { requesterAutoApprove: false });
   assert.deepEqual(exported.members, [
     { userId: 'test:owner', displayName: 'Owner', githubLogin: null, role: 'owner', createdAt: '2026-01-01' },
     { userId: 'test:admin', displayName: 'Admin', githubLogin: null, role: 'admin', createdAt: '2026-01-02' },

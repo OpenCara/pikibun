@@ -1,12 +1,11 @@
 import type { AuthorizationResult, Permission } from '../../../../packages/shared/src/types.js';
 import { permissions } from '../../../../packages/shared/src/types.js';
-import { hasPermission, memberAutoApproveRoles } from '../../../../packages/shared/src/policy.js';
+import { hasPermission } from '../../../../packages/shared/src/policy.js';
 import type { AppContext } from '../types.js';
 import { fail, identifier, jsonObject, userIdentifier } from '../http.js';
 import { sessionAccess } from './access.js';
 import { requireCallbackScope } from './hosts.js';
 import { hostAuthority } from './host-access.js';
-import { autoApprovesRequester } from './requester-auto-approve.js';
 
 export async function authorizeSession(c: AppContext, connectorId: string | null): Promise<Response> {
     const input = await jsonObject(c, 4096);
@@ -29,8 +28,5 @@ export async function authorizeSession(c: AppContext, connectorId: string | null
     const host = allowed && input.host === true ? await hostAuthority(c.env, access!.row, actorId) : undefined;
     if (host) result.hostCommands = host.level === 'owner' ? 'auto' : host.level;
     if (host?.sessions && input.hostSessions === true) result.hostSessions = true;
-    if (allowed && input.autoApprove === true && await autoApprovesRequester(c.env, access!.row, actorId)) result.autoApprove = true;
-    if (allowed && input.memberAutoApprove === true && actorId !== access!.row.owner_id && hasPermission(access!.permissions, 'write')
-      && memberAutoApproveRoles.includes(access!.role)) result.memberAutoApprove = true;
     return c.json(result);
 }

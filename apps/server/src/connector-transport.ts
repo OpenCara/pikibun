@@ -26,14 +26,11 @@ export function connectorPath(action: RunnerAction, sessionId: string, suffix = 
   const base = `/v1/sessions/${sessionId}`;
   switch (action) {
     case 'create': return '/v1/sessions';
-    case 'approve':
-      if (!/^[A-Za-z0-9_-]{1,128}$/.test(suffix)) fail(400, 'invalid_approval', 'Invalid approval identifier.');
-      return `${base}/approvals/${suffix}`;
     case 'view':
       if (!suffix) return `${base}/view`;
       if (!isRevision(suffix)) fail(400, 'invalid_revision', 'Invalid view revision.');
       return `${base}/view/${suffix}`;
-    case 'events': case 'submit': case 'ask': case 'operations': case 'backup': case 'restart': case 'restore': case 'stop': case 'files': case 'revert': case 'fork':
+    case 'events': case 'submit': case 'ask': case 'backup': case 'restart': case 'restore': case 'stop': case 'files': case 'revert': case 'fork':
     case 'pack': case 'unpack': case 'withdraw': case 'upload': case 'tunnel': case 'image':
       return `${base}/${action}`;
     default: return fail(400, 'invalid_action', 'Invalid connector action.');
@@ -70,7 +67,7 @@ export async function validateConnectorRpc(envelope: ConnectorRelayEnvelope): Pr
     fail(400, 'invalid_rpc', 'Invalid connector request.');
   }
   const parts = typeof request.path === 'string' ? request.path.split('/') : [];
-  const suffix = ticket.action === 'approve' || (ticket.action === 'view' && parts.length === 6) ? parts.at(-1) ?? '' : '';
+  const suffix = ticket.action === 'view' && parts.length === 6 ? parts.at(-1) ?? '' : '';
   if (request.path !== connectorPath(ticket.action, ticket.sessionId, suffix) ||
       request.method !== (ticket.action === 'view' ? 'GET' : 'POST') ||
       (request.method === 'GET' && request.body !== '') ||

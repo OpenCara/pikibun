@@ -34,7 +34,7 @@ const cacheHints: Record<RepositoryCacheMode, string> = {
 
 const configInfo = (
   <View style={{ gap: 8 }}>
-    <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache or runs their sessions without the sandbox.</Note>
+    <Note>How this host runs sessions. Its owner and admins change the command time limit and the GPU; only its owner decides whether it uses its Git credentials, keeps a repository cache, runs their sessions without the sandbox or trusts a fake-IP proxy on it.</Note>
     <Note>Running sessions pick up a change within a minute. A repository cache change applies when the host's connector next connects.</Note>
     <Note>The service lifetime bounds a session service: a server a session keeps running after the call that started it, such as the one the tunnel tool puts online. It stops then, and goes offline.</Note>
     <Note>A longer time limit also lifts the per-process limits of short commands (25 seconds of CPU, 64 MiB files, 256 open files) so builds fit. Without provisioned resource limits on the host (connect --resources), a command can use the whole machine for that long.</Note>
@@ -67,8 +67,12 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
       message: `Pushes in your own sessions on ${name} will use the credentials Git on that machine would use (its credential helpers), wherever a workspace's push access chooses the host's Git credentials. Other members' sessions never use them.` })) return;
     if (next.repositoryCache !== "off" && before.repositoryCache === "off" && !await confirm({ title: "Keep a repository cache on this host?", confirmLabel: "Keep a cache",
       message: `${name} will keep a full mirror of each repository its sessions clone, in its state directory, and their clones will borrow objects from it. It fills the mirrors straight from the repositories' hosts with the credentials Git on that machine would use (its credential helpers), and a session borrows from one only once Pikibun confirms that the session's owner can read the repository with their own account.` })) return;
-    if (next.hostSessions && !before.hostSessions && !await confirm({ title: "Let your sessions run directly on this host?", confirmLabel: "Allow", destructive: true,
+    if (next.hostSessions && !before.hostSessions && capabilities().ownerHostSessions && !await confirm({ title: "Let members' sessions run directly on this host?", confirmLabel: "Allow", destructive: true,
+      message: `Members you grant sessions on the host under Host command access will be able to start sessions on ${name} without the sandbox. Their commands then run as that machine's user, with its files, credentials, network and GPU, and no resource limits, and only you, or members you granted host commands, decide them. Members without that grant stay in the sandbox. Your own sessions can run on the host either way.` })) return;
+    if (next.hostSessions && !before.hostSessions && !capabilities().ownerHostSessions && !await confirm({ title: "Let your sessions run directly on this host?", confirmLabel: "Allow", destructive: true,
       message: `When you start a session on ${name}, you'll be able to run it without the sandbox. Its commands then run as that machine's user, with its files, credentials, network and GPU, and no resource limits, and only you, or members you granted host commands, decide them. Other members' sessions stay in the sandbox, and so do yours unless you choose otherwise when you start one.` })) return;
+    if (next.fakeIpTunnels && !before.fakeIpTunnels && !await confirm({ title: "Trust this host's fake-IP proxy for every host?", confirmLabel: "Trust it", destructive: true,
+      message: `Sessions on ${name} will reach any host their workspace's network policy allows even where ${name}'s DNS answers with a local proxy's fake-IP addresses (198.18.0.0/15, as Clash, mihomo, sing-box or Surge give in a fake-IP or TUN mode). Pikibun can't check where that proxy then connects: a name a session picks that really points at this machine or its local network (its router, a NAS, an intranet) is reached on port 443 through it. Without this, only hosts the policy names exactly and package registries go through such addresses.` })) return;
     if (next.gpu && !before.gpu && !await confirm({ title: "Lend this host's GPU to sandboxed commands?", confirmLabel: "Lend GPU", destructive: true,
       message: `Shell commands in every session on ${name} will be able to use its GPU for rendering and compute. They get its render device only, never the screen, windows or input, but its driver is more of the kernel exposed to them, and they share the GPU with everything else on the machine.` })) return;
     await action.run(async () => {
@@ -104,10 +108,20 @@ export function HostConfigSection(props: { connector: ConnectorInfo; refresh: ()
             options={(["off", "host", "owner"] as const).map(value => ({ value, label: cacheLabels[value] }))} />
           : <Badge tone={saved().repositoryCache === "off" ? "neutral" : "success"}>{cacheLabels[saved().repositoryCache]}</Badge>} />
       <Row title="Sessions on the host" hint={capabilities().unsandboxed ? "This host runs every session without the sandbox"
-        : owner() ? "You, and members you grant it under Host command access, may start sessions that run directly on this machine, without the sandbox, as its user. Turning it off stops their commands within half a minute" : "Only the host's owner changes this"}
+        : !owner() ? "Only the host's owner changes this"
+        : capabilities().ownerHostSessions ? "You may always start sessions that run directly on this machine, without the sandbox, as its user. Members you grant it under Host command access may too while this is on. Turning it off stops their commands within half a minute"
+        : "You, and members you grant it under Host command access, may start sessions that run directly on this machine, without the sandbox, as its user. Turning it off stops their commands within half a minute"}
         trailing={capabilities().unsandboxed ? <Badge tone="danger">Every session</Badge>
-          : owner() ? <Checkbox label="Allow sessions on the host" checked={config().hostSessions} disabled={!editable()} onChange={hostSessions => set({ hostSessions })} />
+          : owner() ? <Checkbox label={capabilities().ownerHostSessions ? "Allow members' sessions on the host" : "Allow sessions on the host"} checked={config().hostSessions} disabled={!editable()} onChange={hostSessions => set({ hostSessions })} />
           : <Badge tone={saved().hostSessions ? "danger" : "neutral"}>{saved().hostSessions ? "On" : "Off"}</Badge>} />
+      <If when={!capabilities().unsandboxed}>
+        <Row title="Fake-IP proxy" hint={!owner() ? "Only the host's owner changes this"
+          : !capabilities().fakeIpTunnels ? "This host's connector predates this setting: update it (npx pikibun@latest connect) for it to apply"
+          : "Where this machine's DNS answers with a local proxy's fake-IP addresses (198.18.0.0/15: Clash, mihomo, sing-box, Surge), sessions reach any host the network policy allows through them, not only hosts it names exactly and package registries. That proxy then connects where Pikibun can't check"}
+          trailing={owner() ? <Checkbox label="Trust for every host" checked={config().fakeIpTunnels} disabled={!editable() || (!config().fakeIpTunnels && !capabilities().fakeIpTunnels)}
+            onChange={fakeIpTunnels => set({ fakeIpTunnels })} />
+            : <Badge tone={saved().fakeIpTunnels ? "warning" : "neutral"}>{saved().fakeIpTunnels ? "On" : "Off"}</Badge>} />
+      </If>
       <If when={!capabilities().hostConfig}>
         <Row title="Update the host's connector" hint="This host's connector predates configuration in Pikibun and keeps its connect options until it is updated (npx pikibun@latest connect). What you save here applies then." />
       </If>
@@ -255,8 +269,8 @@ export function HostCompactionSection(props: { connector: ConnectorInfo; refresh
 }
 
 const levelLabels: Record<HostCommandLevel, { label: string; hint: string }> = {
-  approve: { label: "Approve host commands", hint: "Decides each host command in sessions they can approve" },
-  auto: { label: "Auto-approve host commands", hint: "Also runs the host commands of their own Auto-approve messages without asking" },
+  approve: { label: "Host commands", hint: "Their messages run host commands, such as extension tools, at once" },
+  auto: { label: "Host commands", hint: "Their messages run host commands, such as extension tools, at once" },
 };
 const expiries = [
   { value: "never", label: "No expiry", days: 0 }, { value: "1", label: "1 day", days: 1 }, { value: "7", label: "7 days", days: 7 }, { value: "30", label: "30 days", days: 30 },
@@ -345,7 +359,8 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
   const members = createMembers(() => target()?.id);
   const eligible = () => (members.data()?.members ?? []).filter(member => member.userId !== props.connector.ownerId && member.role !== "viewer");
   const grantee = signal(EVERYONE);
-  const level = signal<HostCommandLevel>("approve");
+  // Both levels of before approvals were removed grant the same; new grants take the one that ran commands without asking.
+  const level = (): HostCommandLevel => "auto";
   const expiry = signal<Expiry>("7");
   const capabilities = () => props.connector.capabilities;
   const accepting = () => props.connector.config?.hostSessions === true && !capabilities().unsandboxed;
@@ -361,19 +376,16 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
   async function grant() {
     const workspace = target();
     if (!workspace) return;
-    const auto = level() === "auto";
     const withSessions = owner() && sessions();
     const dropsSessions = owner() && !sessions() && existing()?.hostSessions === true;
     const name = props.connector.name;
     if (!await confirm({
-      title: withSessions ? "Grant sessions on the host?" : auto ? "Grant automatic host commands?" : "Grant host command approval?",
-      message: (auto
-        ? `${who()} will be able to run host commands on ${name}, such as its extensions' tools, OUTSIDE the sandbox without anyone approving each command, whenever they send a message with Auto-approve. Commands run on the owner's machine as its user, with its files, credentials and network, and no resource limits.`
-        : `${who()} will be able to approve host commands on ${name}, such as its extensions' tools, which run OUTSIDE the sandbox on the owner's machine with its files, credentials and network.`)
-        + (withSessions ? ` They will also be able to start their own sessions directly on ${name}, without the sandbox: every command of those sessions runs as its user${auto ? ", without asking under their Auto-approve" : ", once approved"}, and their clones use its Git and credentials.` : "")
-        + (lendsShell() ? ` As ${name} has no resource limits for commands, the shell commands of their own sandboxed sessions will run there without them too${auto ? ", without asking under their Auto-approve" : ", each once approved like a host command"}.` : "")
+      title: withSessions ? "Grant sessions on the host?" : "Grant host commands?",
+      message: `${who()} will be able to run host commands on ${name}, such as its extensions' tools, OUTSIDE the sandbox, as soon as their messages' agents call them; nobody approves each command. Commands run on the owner's machine as its user, with its files, credentials and network, and no resource limits.`
+        + (withSessions ? ` They will also be able to start their own sessions directly on ${name}, without the sandbox: every command of those sessions runs as its user, and their clones use its Git and credentials.` : "")
+        + (lendsShell() ? ` As ${name} has no resource limits for commands, the shell commands of their own sandboxed sessions will run there without them too.` : "")
         + (dropsSessions ? ` This replaces their current grant, which includes sessions on the host: they will no longer start sessions directly on ${name}, and the next command of any they have there will stop.` : ""),
-      confirmLabel: "Grant", destructive: auto || withSessions,
+      confirmLabel: "Grant", destructive: true,
     })) return;
     const days = expiries.find(item => item.value === expiry())!.days;
     await action.run(async () => {
@@ -393,14 +405,14 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
     }, "Host command access removed.");
   }
   return (
-    <Section title="Host command access" testID="host-grants" info="Host commands, such as the tools of this host's extensions, run OUTSIDE the sandbox, on this machine as its user. By default only the owner decides those commands. Grant members of a shared workspace the right to approve them, or to run their own without asking under Auto-approve. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run shell commands without them, decided like host commands. Grants end when they expire, when you remove them, or when the host stops being shared there.">
-      <If when={grants().length > 0} else={<Row title="Only the owner" hint="No one else decides host commands on this host" />}>
+    <Section title="Host command access" testID="host-grants" info="Host commands, such as the tools of this host's extensions, run OUTSIDE the sandbox, on this machine as its user. By default they run only in the owner's own sessions; anyone else's are refused. Grant members of a shared workspace the right to run them in their own sessions and messages. The owner may also let them start their own sessions directly on the host, without the sandbox. On a host without resource limits, a grant also lets the member's own sandboxed sessions run shell commands without them. Grants end when they expire, when you remove them, or when the host stops being shared there.">
+      <If when={grants().length > 0} else={<Row title="Only the owner" hint="No one else runs host commands on this host" />}>
         <Each of={grants()} key={item => `${item.workspaceId}:${item.userId ?? ""}`}>
           {item => (
             <Row title={`${item().userId ? item().userName ?? item().userId : "All members"} · ${names().get(item().workspaceId) ?? item().workspaceId}`}
               hint={`${levelLabels[item().level].hint}${item().hostSessions ? " · may start sessions on the host" : ""}${item().expiresAt ? ` · expires ${timestamp(item().expiresAt!)}` : " · no expiry"}`}
               trailing={<>
-                <Badge tone={item().level === "auto" ? "warning" : "neutral"}>{item().level === "auto" ? "Auto-approve" : "Approve"}</Badge>
+                <Badge tone="warning">{"Host commands"}</Badge>
                 <If when={item().hostSessions}><Badge tone="danger">Sessions on host</Badge></If>
                 <Button small variant="outline" label="Remove" disabled={action.busy()} onPress={() => revoke(item())} />
               </>} />
@@ -416,8 +428,6 @@ export function HostCommandGrantsSection(props: { connector: ConnectorInfo; refr
             </If>
             <Select<string> compact label="Member" value={member() ? member()!.userId : EVERYONE} disabled={action.busy()} onChange={value => grantee.set(value)}
               options={[{ value: EVERYONE, label: "All members" }, ...eligible().map(item => ({ value: item.userId, label: usernameWithId(memberPerson(item)) }))]} />
-            <Select<HostCommandLevel> compact label="Access" value={level()} disabled={action.busy()} onChange={value => level.set(value)}
-              options={(["approve", "auto"] as const).map(value => ({ value, label: levelLabels[value].label }))} />
             <If when={owner() && !capabilities().unsandboxed}>
               <Checkbox label="Sessions on the host" checked={sessions()} disabled={action.busy()} onChange={value => sessionsChoice.set({ key: grantKey(), value })}
                 hint={accepting() ? undefined : "Applies once Configuration → Sessions on the host is on"} />

@@ -91,6 +91,12 @@ async function settledCard(session: RunnerSession, id: string): Promise<Approval
   }
   assert.fail("the card did not settle");
 }
+/** What the session's tools ran, as the session records it: nobody decides any of it. */
+async function records(session: RunnerSession): Promise<ApprovalRecord[]> {
+  return Object.values((await (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata()).approvals);
+}
+const ranCommands = async (session: RunnerSession) => (await records(session)).filter(record => record.operation.kind === "program" || record.operation.kind === "bash");
+const hostRule = /only in sessions of the host's owner and of members they granted host commands/;
 const rejectedWith = (code: number, message: RegExp) => (error: unknown) => error instanceof RunnerError && error.status === code && message.test(error.message);
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const directory = await mkdtemp(join(tmpdir(), "runner-unit-"));
@@ -211,22 +217,18 @@ test("read-only durable ask inherits transcript but cannot write; restart preser
   await assert.rejects(session.sandbox.writeFile(".git/config", "unsafe", allowTestOperation));
 });
 
-test("writer cannot self-approve without approve permission; exact authorized operation uses owner git identity", { skip: process.platform !== "linux" }, async t => {
+test("a writer's command runs at once, as the session owner's git identity, and a revoked writer runs nothing more", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   const session = await service.provision(binding("approval-session"), await ticket("approval-session", "create"));
-  const operation = { kind: "bash" as const, command: "git init -q app && cd app && echo hello > hello.txt && git add -A && git commit -q -m 'Owner identity'" };
-  const approval = await session.createApproval("test:bob", operation);
-  await assert.rejects(session.decide(await ticket("approval-session", "approve", "test:bob"), approval.id, { decision: "approve", operation }));
-  await assert.rejects(session.decide(await ticket("approval-session", "approve"), approval.id, { decision: "approve", operation: { ...operation, command: "true" } }));
-  const decided = await session.decide(await ticket("approval-session", "approve"), approval.id, { decision: "approve", operation });
-  assert.equal(decided.status, "executing", "an approved command runs in the background");
-  const result = await settledCard(session, approval.id);
-  assert.equal(result.status, "executed", result.result);
-  assert.equal(result.requestedBy, "test:bob");
-  assert.equal(result.decidedBy, "test:alice");
+  await session.submit(await ticket("approval-session", "submit", "test:bob"),
+    { content: "TEST_BASH git init -q app && cd app && echo hello > hello.txt && git add -A && git commit -q -m 'Owner identity'", requestId: "identity" }, "write");
+  await idle(session);
+  const [ran] = await ranCommands(session);
+  assert.equal(ran?.status, "executed", ran?.result);
+  assert.equal(ran!.requestedBy, "test:bob");
+  assert.equal(ran!.decidedBy, undefined, "nobody decided it");
   const log = await session.sandbox.execute({ kind: "bash", command: "cd app && git log -1 --format='%an <%ae> / %cn <%ce>'" }, true, allowTestOperation, { allowTestShell: true });
   assert.match(log, /Alice <alice@example.test> \/ Alice <alice@example.test>/);
-  await assert.rejects(session.decide(await ticket("approval-session", "approve"), approval.id, { decision: "approve", operation }));
   grants["test:bob"] = ["read"];
   await assert.rejects(session.submit(await ticket("approval-session", "submit", "test:bob"), { content: "TEST_IDENTITY", requestId: "revoked" }, "write"));
 });
@@ -265,12 +267,7 @@ test("owner restore publishes a new idle session, drops old authority and leaves
   const source = await service.provision(binding("restore-source"), await ticket("restore-source", "create"));
   await source.submit(await ticket("restore-source", "submit"), { requestId: "source-write", content: "TEST_WRITE evidence.txt\noriginal" }, "write");
   await idle(source);
-  await source.submit(await ticket("restore-source", "submit"), { requestId: "source-read", content: "TEST_WRITE allowed.txt\nonce", options: { access: "read" } }, "write");
-  const permission = await permissionRequest(source);
-  await source.decide(await ticket("restore-source", "approve"), permission.id, { decision: "approve", operation: permission.operation, scope: "session" });
-  await idle(source);
-  const approval = await source.createApproval("test:alice", { kind: "bash", command: "echo must-not-replay" });
-  const oldTicket = await ticket("restore-source", "operations");
+  const oldTicket = await ticket("restore-source", "submit");
   await source.consumeTicket(oldTicket);
   const backup = await source.backup(await ticket("restore-source", "backup"));
   const text = JSON.stringify(backup);
@@ -312,19 +309,14 @@ test("owner restore publishes a new idle session, drops old authority and leaves
   const restored = await restoredService.get(target.session.id);
   const view = await restored.view();
   assert.equal(view.busy, false);
-  assert.equal(view.approvals.find(item => item.id === approval.id)?.status, "interrupted");
-  assert.equal(view.approvals.find(item => item.id === permission.id)?.status, "approved");
-  assert.equal((await source.view()).approvals.find(item => item.id === approval.id)?.status, "pending");
   assert.equal(await restored.sandbox.readFile("evidence.txt", allowTestOperation), "original");
   assert.match(await readFile(join(directory, "sessions", target.session.id, "sandbox", "owner.gitconfig"), "utf8"), /Alice Current/);
   await restored.consumeTicket({ ...oldTicket, sessionId: target.session.id });
   await restored.submit({ ...await ticket(target.session.id, "submit"), policyVersion }, { requestId: "target-write", content: "TEST_WRITE evidence.txt\nnew session" }, "write");
   await idle(restored);
   await restored.submit({ ...await ticket(target.session.id, "submit"), policyVersion }, { requestId: "target-read", content: "TEST_WRITE allowed.txt\nagain", options: { access: "read" } }, "write");
-  const asked = await permissionRequest(restored);
-  assert.deepEqual(asked.operation, { kind: "permission", tool: "write_file", target: "allowed.txt", needs: ["write"] });
-  await restored.decide({ ...await ticket(target.session.id, "approve"), policyVersion }, asked.id, { decision: "deny", operation: asked.operation });
   await idle(restored);
+  await assert.rejects(restored.sandbox.readFile("allowed.txt", allowTestOperation), "a Read-only message writes nothing");
   assert.equal(await source.sandbox.readFile("evidence.txt", allowTestOperation), "original");
   await restoredService.close();
 });
@@ -427,17 +419,15 @@ test("queued sandbox effects recheck authority after admission and fail closed o
 test("generic shell requires both explicit test flags and a faux binding", { skip: process.platform !== "linux" }, async t => {
   const { service, directory } = await fixture(t);
   const operation = { kind: "bash" as const, command: "true" };
-  const fauxDisabled = new RunnerSession(binding("shell-disabled"), join(directory, "shell-disabled"), { ...service.config, allowTestShell: false });
-  await assert.rejects(fauxDisabled.createApproval("test:alice", operation), /quota-backed/);
+  const refuses = (session: RunnerSession) => assert.throws(() => (session as unknown as { requireShellCapability(op: typeof operation): void }).requireShellCapability(operation), /quota-backed/);
+  refuses(new RunnerSession(binding("shell-disabled"), join(directory, "shell-disabled"), { ...service.config, allowTestShell: false }));
   const realBinding = binding("shell-real");
   realBinding.model.provider = "openai";
-  const real = new RunnerSession(realBinding, join(directory, "shell-real"), service.config);
-  await assert.rejects(real.createApproval("test:alice", operation), /quota-backed/);
-  const noFaux = new RunnerSession(binding("shell-no-faux"), join(directory, "shell-no-faux"), { ...service.config, allowFaux: false });
-  await assert.rejects(noFaux.createApproval("test:alice", operation), /quota-backed/);
+  refuses(new RunnerSession(realBinding, join(directory, "shell-real"), service.config));
+  refuses(new RunnerSession(binding("shell-no-faux"), join(directory, "shell-no-faux"), { ...service.config, allowFaux: false }));
 });
 
-test("connected writes durably bind Worker admission to every model approval without exposing it to the model", { skip: process.platform !== "linux" }, async t => {
+test("connected writes durably bind Worker admission to every tool call they make without exposing it to the model", { skip: process.platform !== "linux" }, async t => {
   const { service } = await fixture(t);
   const connectorId = "proof-connector";
   const target = binding("proof-session");
@@ -452,7 +442,7 @@ test("connected writes durably bind Worker admission to every model approval wit
         fauxToolCall("github_comment", { repository: "example/repo", issue: 3, body: "And this one" }),
         fauxToolCall("github_comment", { repository: "example/repo", issue: 4, body: "And a third" }),
       ], { stopReason: "toolUse" }),
-      fauxAssistantMessage("Approval requests recorded."),
+      fauxAssistantMessage("Comments attempted."),
     ]);
     models.setProvider(faux.provider);
     return { models, provider: model.provider, modelId: model.modelId };
@@ -462,32 +452,24 @@ test("connected writes durably bind Worker admission to every model approval wit
   const session = await connected.provision(target, { ...await ticket(target.session.id, "create"), connectorId });
   const writer = { ...await ticket(target.session.id, "submit", "test:bob"), connectorId };
   const admissionId = await sha256("opaque Worker-issued write admission");
-  const input = { content: "Request the three reviews.", requestId: "proof-request", admissionId };
+  const input = { content: "Post the three comments.", requestId: "proof-request", admissionId };
   await assert.rejects(session.submit(writer, { content: input.content, requestId: input.requestId }, "write"), /Worker write admission/);
   await assert.rejects(session.submit(writer, { ...input, admissionId: "malformed" }, "write"), /Worker write admission/);
   await assert.rejects(session.submit({ ...writer, action: "ask" }, input, "ask"), /Worker write admission/);
   const receipt = await session.submit(writer, input, "write");
-  await operationRequests(session, 3);
-  const view = await session.view();
-  assert.equal(view.approvals.length, 3);
-  assert.ok(view.approvals.every(approval => approval.requestedBy === "test:bob" && approval.admissionId === admissionId));
-  assert.deepEqual(view.approvals.map(approval => approval.operation.kind).sort(), ["github.comment", "github.comment", "github.comment"]);
-  assert.ok(view.entries.every(entry => !entry.text.includes(admissionId)), "proof must not appear in user, tool-result, or model transcript content");
-  const explicit = await session.createApproval("test:bob", { kind: "github.comment", repository: "example/repo", issue: 2, body: "Explicit operation" });
-  assert.equal(explicit.admissionId, undefined, "explicit operations use the Worker's authenticated-request pin instead");
-  const waiting = new Set(view.approvals.map(approval => approval.id));
-  await session.restart();
-  assert.ok((await session.view()).approvals.filter(approval => waiting.has(approval.id)).every(approval => approval.status === "interrupted"),
-    "a restart ends the calls waiting on cards, and their cards with them");
-  const retried = (await operationRequests(session, 4)).filter(approval => approval.id !== explicit.id);
-  assert.equal(retried.length, 3);
-  for (const approval of retried) await session.decide({ ...await ticket(target.session.id, "approve"), connectorId }, approval.id, { decision: "deny", operation: approval.operation });
   await idle(session);
+  const calls = await records(session);
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(call => call.requestedBy === "test:bob" && call.admissionId === admissionId));
+  assert.deepEqual(calls.map(call => call.operation.kind), ["github.comment", "github.comment", "github.comment"]);
+  assert.ok(calls.every(call => call.status !== "pending"), "nothing waits for anyone");
+  const view = await session.view();
+  assert.deepEqual(view.approvals, []);
+  assert.ok(view.entries.every(entry => !entry.text.includes(admissionId)), "proof must not appear in user, tool-result, or model transcript content");
   assert.equal((await session.submit(writer, input, "write")).submissionId, receipt.submissionId);
   await assert.rejects(session.submit(writer, { ...input, admissionId: await sha256("replacement proof") }, "write"), /different Worker admission/);
   const backup = await session.backup({ ...await ticket(target.session.id, "backup"), connectorId });
   assert.equal(backup.manifest.runs[receipt.submissionId]!.admissionId, admissionId);
-  assert.ok((await session.view()).approvals.filter(approval => approval.id !== explicit.id).every(approval => approval.admissionId === admissionId));
   await connected.close();
   const snapshot = JSON.stringify(backup);
   const restoredBinding = structuredClone(target);
@@ -498,14 +480,13 @@ test("connected writes durably bind Worker admission to every model approval wit
   t.after(() => recoveredService.close());
   await recoveredService.restore({ binding: restoredBinding, restore }, { ...await ticket(restoredBinding.session.id, "restore"), connectorId });
   const recovered = await recoveredService.get(restoredBinding.session.id);
-  assert.ok((await recovered.view()).approvals.every(approval => ["interrupted", "denied"].includes(approval.status) && approval.admissionId === undefined));
-  assert.equal((await recovered.view()).approvals.find(approval => approval.id === explicit.id)?.status, "interrupted", "a restored card can't be decided");
+  assert.ok((await records(recovered)).every(call => call.admissionId === undefined));
   const restoredBackup = await recovered.backup({ ...await ticket(restoredBinding.session.id, "backup"), connectorId });
   assert.equal(restoredBackup.manifest.runs[receipt.submissionId]!.admissionId, undefined, "restoring history never transfers source admission authority");
   await recoveredService.close();
 });
 
-test("the host's owner lets their own commands run without the resource limits the host lacks; nobody lifts them for a member without a host command grant", { skip: process.platform !== "linux" }, async t => {
+test("the host's owner's own commands run without the resource limits the host lacks; nobody else's do without a host command grant", { skip: process.platform !== "linux" }, async t => {
   const { service } = await fixture(t);
   const connectorId = "limitless-connector";
   const limitless = new RunnerService({ ...service.config, connectorId, allowTestShell: false });
@@ -518,43 +499,22 @@ test("the host's owner lets their own commands run without the resource limits t
     target.session.connectorOwnerId = target.model.connectorOwnerId = hostOwner;
     const session = await limitless.provision(target, { ...await ticket(id, "create"), connectorId });
     await session.submit({ ...await ticket(id, "submit"), connectorId }, { content: `TEST_BASH ${command}`, requestId: id, admissionId }, "write");
+    await idle(session);
     return session;
   }
   const shared = await start("limitless-shared", "test:host", "echo shared");
-  await idle(shared);
-  const sharedView = await shared.view();
-  assert.deepEqual(sharedView.approvals, []);
-  assert.ok(sharedView.entries.some(entry => entry.role === "toolResult" && entry.text.includes("only in sessions of its owner and of members they granted host commands")));
+  assert.deepEqual(await ranCommands(shared), [], "a member's command without the host's limits never runs without a grant");
+  assert.ok((await shared.view()).entries.some(entry => entry.role === "toolResult" && hostRule.test(entry.text)));
 
   const own = await start("limitless-own", "test:alice", "echo unlimited-marker");
-  const request = await permissionRequest(own);
-  assert.deepEqual(request.operation, { kind: "permission", tool: "node", target: commandTarget("echo unlimited-marker"), needs: ["unbounded-shell"] });
-  assert.equal(request.admissionId, admissionId);
-  await own.decide({ ...await ticket("limitless-own", "approve"), connectorId }, request.id, { decision: "approve", operation: request.operation });
-  const [command] = await operationRequests(own);
-  assert.equal(command!.operation.kind, "program");
-  assert.equal(command!.unbounded, true);
-  await own.decide({ ...await ticket("limitless-own", "approve"), connectorId }, command!.id, { decision: "approve", operation: command!.operation });
-  const ran = await settledCard(own, command!.id);
-  assert.equal(ran.status, "executed");
-  assert.match(ran.result ?? "", /unlimited-marker/);
-  await idle(own);
-
-  const auto = await start("limitless-auto", "test:alice", "echo auto-unlimited-marker");
-  await auto.submit({ ...await ticket("limitless-auto", "submit"), connectorId }, { content: "TEST_BASH echo auto-unlimited-marker", requestId: "auto", admissionId, options: { access: "auto" } }, "write");
-  const first = await permissionRequest(auto);
-  await auto.decide({ ...await ticket("limitless-auto", "approve"), connectorId }, first.id, { decision: "deny", operation: first.operation });
-  await idle(auto);
-  const autoView = await auto.view();
-  assert.equal(autoView.approvals.filter(approval => approval.operation.kind === "permission").length, 1, "only the default-access message asked");
-  assert.deepEqual(autoApproved(autoView), [{ tool: "node", status: "executed", unbounded: true }]);
-  assert.ok(toolOutput(autoView, /auto-unlimited-marker/));
+  const [ran] = await ranCommands(own);
+  assert.equal(ran?.status, "executed", ran?.result);
+  assert.equal(ran!.unbounded, true);
+  assert.match(ran!.result ?? "", /unlimited-marker/);
 });
 
-test("a member granted host commands runs commands in the sandbox without the limits the host lacks, decided as host commands are, while the grant lasts", { skip: process.platform !== "linux" }, async t => {
+test("a member granted host commands runs commands in the sandbox without the limits the host lacks, while the grant lasts", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
-  grants["test:carol"] = ["read", "ask", "write", "approve"];
-  grants["test:host"] = ["read", "approve"];
   const connectorId = "granted-shell-connector";
   const grant: { hostCommands?: "approve" | "auto" } = { hostCommands: "approve" };
   const asked: AuthorizationRequest[] = [];
@@ -573,100 +533,56 @@ test("a member granted host commands runs commands in the sandbox without the li
   value.session.connectorOwnerId = value.model.connectorOwnerId = "test:host";
   const session = await runner.provision(value, { ...await ticket("granted-shell", "create"), connectorId });
   assert.ok(!(session.sandbox instanceof HostWorkspace), "it runs in the sandbox");
-  const submit = async (requestId: string, command: string, access?: "auto") => session.submit({ ...await ticket("granted-shell", "submit"), connectorId },
-    { content: `TEST_BASH ${command}`, requestId, admissionId, ...(access ? { options: { access } } : {}) }, "write");
-  const decide = async (approval: ApprovalRecord, actorId = "test:alice", decision: "approve" | "deny" = "approve") =>
-    session.decide({ ...await ticket("granted-shell", "approve", actorId), connectorId }, approval.id, { decision, operation: approval.operation });
+  const submit = async (requestId: string, command: string) => {
+    await session.submit({ ...await ticket("granted-shell", "submit"), connectorId }, { content: `TEST_BASH ${command}`, requestId, admissionId }, "write");
+    await idle(session);
+  };
 
-  await submit("approved", "echo granted-approved");
-  const request = await permissionRequest(session);
-  assert.deepEqual(request.operation, { kind: "permission", tool: "node", target: commandTarget("echo granted-approved"), needs: ["unbounded-shell"] });
-  assert.ok(asked.some(input => input.actorId === "test:alice" && input.host), "the host checks their grant before the card asks");
-  await decide(request);
-  const [command] = await operationRequests(session);
-  assert.equal(command!.operation.kind, "program");
-  assert.equal(command!.unbounded, true);
-  await assert.rejects(decide(command!, "test:carol"), rejectedWith(403, /on the strength of a host command grant/));
-  await decide(command!);
-  const ran = await settledCard(session, command!.id);
-  assert.equal(ran.status, "executed", ran.result);
-  assert.match(ran.result ?? "", /granted-approved/);
-  await idle(session);
+  for (const level of ["approve", "auto"] as const) {
+    grant.hostCommands = level;
+    await submit(`granted-${level}`, `echo granted-${level}-marker`);
+    const ran = (await ranCommands(session)).at(-1)!;
+    assert.equal(ran.status, "executed", ran.result);
+    assert.equal(ran.unbounded, true);
+    assert.match(ran.result ?? "", new RegExp(`granted-${level}-marker`));
+  }
+  assert.ok(asked.some(input => input.actorId === "test:alice" && input.host), "the host checks their grant before the command runs");
 
-  await submit("approve-level-auto", "echo approve-level-auto", "auto");
-  const [asking] = await operationRequests(session);
-  assert.equal(asking!.unbounded, true);
-  await decide(asking!, "test:host", "deny");
-  assert.equal((await settledCard(session, asking!.id)).status, "denied");
-  await idle(session);
-
-  grant.hostCommands = "auto";
-  await submit("automatic", "echo granted-automatic", "auto");
-  await idle(session);
-  const automatic = await session.view();
-  assert.deepEqual(autoApproved(automatic), [{ tool: "node", status: "executed", unbounded: true }]);
-  assert.ok(toolOutput(automatic, /granted-automatic/));
-
-  grant.hostCommands = "approve";
-  await submit("waiting", "echo left-waiting");
-  const unlimited = await permissionRequest(session);
-  await decide(unlimited);
-  const [waiting] = await operationRequests(session);
   delete grant.hostCommands;
-  await assert.rejects(decide(waiting!), rejectedWith(403, /on the strength of a host command grant/));
-  await decide(waiting!, "test:host");
-  const stopped = await settledCard(session, waiting!.id);
-  assert.equal(stopped.status, "failed");
-  assert.match(stopped.result ?? "", /members they granted host commands/);
-  await idle(session);
-
-  const refusals = (view: SessionView) => view.entries.filter(entry => entry.role === "toolResult"
-    && entry.text.includes("only in sessions of its owner and of members they granted host commands")).length;
-  const before = await session.view();
-  await submit("ended", "echo after-the-grant", "auto");
-  await idle(session);
-  const view = await session.view();
-  assert.equal(view.approvals.length, before.approvals.length, "no card asks anyone");
-  assert.equal(refusals(view), refusals(before) + 1);
+  const before = (await ranCommands(session)).length;
+  await submit("ended", "echo after-the-grant");
+  assert.equal((await ranCommands(session)).length, before, "nothing runs once the grant ended");
+  assert.ok((await session.view()).entries.some(entry => entry.role === "toolResult" && hostRule.test(entry.text)));
 });
 
-test("a session its host's owner started on the host runs there while the host accepts that, and only host command authority decides it", { skip: process.platform !== "linux" }, async t => {
-  const { service, grants } = await fixture(t);
-  grants["test:carol"] = ["read", "ask", "write", "approve"];
+test("a session its host's owner started on the host runs there whatever the host accepts from members", { skip: process.platform !== "linux" }, async t => {
+  const { service } = await fixture(t);
   const connectorId = "host-sessions-connector";
   let accepted = true;
   const runner = new RunnerService({ ...service.config, connectorId, allowTestShell: false, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: accepted }) });
   await runner.initialize();
   t.after(() => runner.close());
   const admissionId = await sha256("host session write admission");
-  const onHost = (id: string, hostOwner: string) => {
-    const value = binding(id);
-    value.session.connectorId = value.model.connectorId = connectorId;
-    value.session.connectorOwnerId = value.model.connectorOwnerId = hostOwner;
-    value.session.hostEnvironment = true;
-    return value;
-  };
-  const session = await runner.provision(onHost("host-own", "test:alice"), { ...await ticket("host-own", "create"), connectorId });
+  const value = binding("host-own");
+  value.session.connectorId = value.model.connectorId = connectorId;
+  value.session.connectorOwnerId = value.model.connectorOwnerId = "test:alice";
+  value.session.hostEnvironment = true;
+  const session = await runner.provision(value, { ...await ticket("host-own", "create"), connectorId });
   assert.ok(session.sandbox instanceof HostWorkspace, "no sandbox is created for it");
   await session.submit({ ...await ticket("host-own", "submit"), connectorId }, { content: "TEST_BASH pwd", requestId: "host-own", admissionId }, "write");
-  const [command] = await operationRequests(session);
-  assert.equal(command!.operation.kind, "program");
-  await assert.rejects(session.decide({ ...await ticket("host-own", "approve", "test:carol"), connectorId }, command!.id, { decision: "approve", operation: command!.operation }),
-    rejectedWith(403, /runs directly on its host/));
-  await session.decide({ ...await ticket("host-own", "approve"), connectorId }, command!.id, { decision: "approve", operation: command!.operation });
-  const ran = await settledCard(session, command!.id);
-  assert.equal(ran.status, "executed", ran.result);
-  assert.ok(ran.result?.includes(join(service.config.dataDir, "sessions", "host-own")), `it ran in the session's own worktree on the host: ${ran.result}`);
   await idle(session);
+  const [ran] = await ranCommands(session);
+  assert.equal(ran?.status, "executed", ran?.result);
+  assert.ok(ran!.result?.includes(join(service.config.dataDir, "sessions", "host-own")), `it ran in the session's own worktree on the host: ${ran!.result}`);
   accepted = false;
-  await session.submit({ ...await ticket("host-own", "submit"), connectorId }, { content: "TEST_BASH echo never-ran", requestId: "host-own-off", admissionId }, "write");
+  await session.submit({ ...await ticket("host-own", "submit"), connectorId }, { content: "TEST_BASH echo still-runs", requestId: "host-own-off", admissionId }, "write");
   await idle(session);
-  const view = await session.view();
-  assert.equal(view.approvals.filter(approval => approval.status === "pending").length, 0);
-  assert.ok(view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("no longer runs sessions directly on it")));
+  const still = (await ranCommands(session)).at(-1)!;
+  assert.equal(still.status, "executed", "the host's own owner needs no consent of the host's configuration");
+  assert.match(still.result ?? "", /still-runs/);
 });
 
-test("a member the host's owner granted sessions on the host runs one there only while their grant includes it, and without approval only with automatic host commands", { skip: process.platform !== "linux" }, async t => {
+test("a member the host's owner granted sessions on the host runs one there only while their grant includes it", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   const connectorId = "member-host-sessions-connector";
   const grant: { hostCommands?: "approve" | "auto"; hostSessions?: true } = { hostCommands: "approve", hostSessions: true };
@@ -678,7 +594,8 @@ test("a member the host's owner granted sessions on the host runs one there only
       ...(allowed && input.host && input.actorId === "test:alice" && grant.hostCommands ? { hostCommands: grant.hostCommands } : {}),
       ...(allowed && input.host && input.hostSessions && input.actorId === "test:alice" && grant.hostSessions ? { hostSessions: true as const } : {}) };
   };
-  const runner = new RunnerService({ ...service.config, connectorId, allowTestShell: false, authorize, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: true }) });
+  let accepted = true;
+  const runner = new RunnerService({ ...service.config, connectorId, allowTestShell: false, authorize, hostConfig: async () => ({ ...defaultHostConfig, hostSessions: accepted }) });
   await runner.initialize();
   t.after(() => runner.close());
   const admissionId = await sha256("member host session write admission");
@@ -688,71 +605,31 @@ test("a member the host's owner granted sessions on the host runs one there only
   value.session.hostEnvironment = true;
   const session = await runner.provision(value, { ...await ticket("host-member", "create"), connectorId });
   assert.ok(session.sandbox instanceof HostWorkspace, "no sandbox is created for it");
-
-  await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo member-approved", requestId: "approved", admissionId, options: { access: "auto" } }, "write");
-  const [command] = await operationRequests(session);
-  assert.equal(command!.operation.kind, "program");
-  await session.decide({ ...await ticket("host-member", "approve"), connectorId }, command!.id, { decision: "approve", operation: command!.operation });
-  const ran = await settledCard(session, command!.id);
-  assert.equal(ran.status, "executed", ran.result);
-  assert.match(ran.result ?? "", /member-approved/);
-  assert.ok(asked.some(input => input.actorId === "test:alice" && input.host && input.hostSessions), "the host checks the grant before their command");
-  await idle(session);
-
-  grant.hostCommands = "auto";
-  await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo member-automatic", requestId: "automatic", admissionId, options: { access: "auto" } }, "write");
-  await idle(session);
-  assert.deepEqual(autoApproved(await session.view()), [{ tool: "node", status: "executed" }]);
-
-  delete grant.hostSessions;
-  await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo never-ran", requestId: "ended", admissionId, options: { access: "auto" } }, "write");
-  await idle(session);
-  const view = await session.view();
-  assert.equal(view.approvals.filter(approval => approval.status === "pending").length, 0);
-  assert.ok(view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("grant that let them has ended")));
-  assert.ok(!view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("never-ran\n")));
-});
-
-test("a workspace collaborator's own Auto-approve runs their sandboxed commands at once, only while the control plane says their role allows it", { skip: process.platform !== "linux" }, async t => {
-  const { service, grants } = await fixture(t);
-  const connectorId = "member-auto-connector";
-  let allowed = true;
-  const asked: AuthorizationRequest[] = [];
-  const authorize = async (input: AuthorizationRequest) => {
-    if (input.memberAutoApprove) asked.push(input);
-    const permitted = grants[input.actorId]?.includes(input.permission) ?? false;
-    return { allowed: permitted, ownerId: input.ownerId, policyVersion: 1,
-      ...(permitted && input.memberAutoApprove && input.actorId === "test:bob" && allowed ? { memberAutoApprove: true as const } : {}) };
+  const send = async (requestId: string, command: string) => {
+    await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: `TEST_BASH ${command}`, requestId, admissionId }, "write");
+    await idle(session);
   };
-  const runner = new RunnerService({ ...service.config, connectorId, authorize });
-  await runner.initialize();
-  t.after(() => runner.close());
-  const id = "member-auto";
-  const value = binding(id);
-  value.session.connectorId = value.model.connectorId = connectorId;
-  value.session.connectorOwnerId = value.model.connectorOwnerId = "test:alice";
-  const session = await runner.provision(value, { ...await ticket(id, "create"), connectorId });
-  assert.ok(!(session.sandbox instanceof HostWorkspace), "it runs in the sandbox");
-  const submit = async (requestId: string, command: string, options?: { access: "auto" | "approval"; autoMerge?: boolean }) => session.submit(
-    { ...await ticket(id, "submit", "test:bob"), connectorId },
-    { content: `TEST_BASH ${command}`, requestId, admissionId: await sha256(`member auto ${requestId}`), ...(options ? { options } : {}) }, "write");
+  const toolText = async (text: string) => (await session.view()).entries.some(entry => entry.role === "toolResult" && entry.text.includes(text));
 
-  await submit("auto", "echo member-auto-marker", { access: "auto" });
-  await idle(session);
-  const view = await session.view();
-  assert.deepEqual(autoApproved(view), [{ tool: "node", status: "executed" }]);
-  assert.ok(toolOutput(view, /member-auto-marker/));
-  assert.ok(asked.length > 0 && asked.every(input => input.actorId === "test:bob"), "only another member's message asks");
-  await assert.rejects(submit("merge", "echo never", { access: "auto", autoMerge: true }), rejectedWith(422, /owner's Auto-approve merges/));
+  for (const level of ["approve", "auto"] as const) {
+    grant.hostCommands = level;
+    await send(level, `echo member-${level}`);
+    const ran = (await ranCommands(session)).at(-1)!;
+    assert.equal(ran.status, "executed", ran.result);
+    assert.match(ran.result ?? "", new RegExp(`member-${level}`));
+  }
+  assert.ok(asked.some(input => input.actorId === "test:alice" && input.host && input.hostSessions), "the host checks the grant before their command");
 
-  await submit("asking", "echo member-asking", { access: "approval" });
-  const [card] = await operationRequests(session);
-  assert.equal(card!.requestedBy, "test:bob");
-  await session.decide({ ...await ticket(id, "approve"), connectorId }, card!.id, { decision: "deny", operation: card!.operation });
-  await idle(session);
-
-  allowed = false;
-  await assert.rejects(submit("demoted", "echo never", { access: "auto" }), rejectedWith(403, /can auto-approve/));
+  const count = (await ranCommands(session)).length;
+  accepted = false;
+  await send("refused", "echo never-ran");
+  assert.ok(await toolText("no longer runs members' sessions directly on it"));
+  accepted = true;
+  delete grant.hostSessions;
+  await send("ended", "echo never-ran");
+  assert.ok(await toolText("grant that let them has ended"));
+  assert.ok(!await toolText("never-ran\n"));
+  assert.equal((await ranCommands(session)).filter(record => record.status === "executed").length, count);
 });
 
 test("shell commands may reserve address space they never touch, as gh and node do when they start", { skip: process.platform !== "linux" }, async t => {
@@ -813,149 +690,60 @@ async function hostFixture(t: { after: (fn: () => Promise<void>) => void }, extr
   return { service, grants };
 }
 
-test("the agent gets a command's whole output; the approval record and the control plane keep an excerpt", hostMode, async t => {
+test("the agent gets a command's whole output; the session's record and the control plane keep an excerpt", hostMode, async t => {
   const { service } = await hostFixture(t);
   const session = await service.provision(binding("long-output"), await ticket("long-output", "create"));
   const command = "printf start-marker; head -c 20000 /dev/zero | tr '\\0' x; printf end-marker";
   const whole = new RegExp(`start-marker${"x".repeat(20000)}end-marker`);
-
-  await session.submit(await ticket("long-output", "submit"), { content: `TEST_BASH ${command}`, requestId: "auto", options: { access: "auto" } }, "write");
+  await session.submit(await ticket("long-output", "submit"), { content: `TEST_BASH ${command}`, requestId: "run" }, "write");
   await idle(session);
-  assert.ok(toolOutput(await session.view(), whole), "an auto-approved command's whole output reaches the agent");
-
-  await session.submit(await ticket("long-output", "submit"), { content: `TEST_BASH ${command}`, requestId: "approved" }, "write");
-  const [pending] = await operationRequests(session);
-  await session.decide(await ticket("long-output", "approve"), pending!.id, { decision: "approve", operation: pending!.operation });
-  const ran = await settledCard(session, pending!.id);
-  assert.equal(ran.status, "executed");
-  assert.ok(ran.result!.length <= 8192, "the control plane gets an excerpt it accepts");
-  assert.match(ran.result!, /^start-marker[\s\S]*characters omitted[\s\S]*end-marker$/);
-  await idle(session);
-  const view = await session.view();
-  assert.equal(view.entries.filter(entry => entry.role === "toolResult" && whole.test(entry.text)).length, 2, "an approved command's whole output reaches the agent too");
-  assert.ok(view.approvals.every(approval => (approval.result?.length ?? 0) <= 1000));
+  assert.ok(toolOutput(await session.view(), whole), "the command's whole output reaches the agent");
+  const [ran] = await ranCommands(session);
+  assert.equal(ran?.status, "executed");
+  assert.ok(ran!.result!.length <= 8192, "the control plane gets an excerpt it accepts");
+  assert.match(ran!.result!, /^start-marker[\s\S]*characters omitted[\s\S]*end-marker$/);
 });
 
-test("read access asks the owner before a change, and auto access runs owner commands immediately", hostMode, async t => {
+test("a Read-only message changes nothing, and any other message runs commands at once, asking nobody", hostMode, async t => {
   const { service } = await hostFixture(t);
   const session = await service.provision(binding("options-session"), await ticket("options-session", "create"));
   await session.submit(await ticket("options-session", "submit"), { content: "TEST_WRITE read-only.txt\nleaked", requestId: "read", options: { access: "read" } }, "write");
-  const request = await permissionRequest(session);
-  assert.deepEqual(request.operation, { kind: "permission", tool: "write_file", target: "read-only.txt", needs: ["write"] });
-  assert.equal((await session.view()).busy, true, "the call waits on the owner");
-  const denial = await session.decide(await ticket("options-session", "approve"), request.id, { decision: "deny", operation: request.operation });
-  assert.equal(denial.status, "denied");
   await idle(session);
   await assert.rejects(session.sandbox.readFile("read-only.txt", allowTestOperation));
   let view = await session.view();
-  assert.ok(view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("The session owner did not allow write_file on read-only.txt.")));
+  assert.ok(view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("which a Read-only message doesn't do")));
   assert.equal(view.access, "read");
-  assert.deepEqual(view.approvals.map(approval => approval.status), ["denied"]);
+  assert.deepEqual(view.approvals, []);
 
-  await session.submit(await ticket("options-session", "submit"), { content: "TEST_BASH echo auto-output-marker", requestId: "auto", options: { access: "auto" } }, "write");
-  await idle(session);
-  view = await session.view();
-  assert.equal(view.access, "auto");
-  assert.deepEqual(autoApproved(view), [{ tool: "node", status: "executed" }]);
-  assert.ok(toolOutput(view, /"automatic":true/) && toolOutput(view, /"decidedBy":"test:alice"/) && toolOutput(view, /auto-output-marker/));
-
-  await session.submit(await ticket("options-session", "submit"), { content: "TEST_BASH echo pending-marker", requestId: "default" }, "write");
-  const [pending] = await operationRequests(session);
-  assert.equal(pending!.operation.kind, "program");
-  assert.equal(pending!.automatic, undefined);
-  view = await session.view();
-  assert.equal(view.access, "approval", "the view says the latest message asks before acting");
-  assert.equal(view.busy, true, "the call waits on the card");
-  assert.equal(view.activity, "waiting");
-  assert.ok(!view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("pending-marker")), "no result before the decision");
-  await session.decide(await ticket("options-session", "approve"), pending!.id, { decision: "approve", operation: pending!.operation });
-  const ran = await settledCard(session, pending!.id);
-  assert.equal(ran.status, "executed");
-  await idle(session);
-  view = await session.view();
-  const result = view.entries.find(entry => entry.role === "toolResult" && entry.text.includes("pending-marker"));
-  assert.ok(result, "the agent gets the command's outcome");
-  assert.match(result.text, /"status":"executed"/);
-
-  await session.submit(await ticket("options-session", "submit"), { content: "TEST_BASH echo denied-marker", requestId: "denied" }, "write");
-  const [refused] = await operationRequests(session);
-  assert.equal((await session.decide(await ticket("options-session", "approve"), refused!.id, { decision: "deny", operation: refused!.operation })).status, "denied");
-  await idle(session);
-  assert.ok((await session.view()).entries.some(entry => entry.role === "toolResult" && entry.text.includes("denied-marker") && entry.text.includes('"status":"denied"')));
+  for (const [requestId, access] of [["auto", "auto"], ["default", undefined], ["approval", "approval"]] as const) {
+    await session.submit(await ticket("options-session", "submit"), { content: `TEST_BASH echo ${requestId}-output-marker`, requestId, ...(access ? { options: { access } } : {}) }, "write");
+    await idle(session);
+    view = await session.view();
+    assert.equal(view.access, "auto", `a message of access ${access} acts`);
+    assert.ok(toolOutput(view, new RegExp(`${requestId}-output-marker`)), requestId);
+    assert.equal((await ranCommands(session)).at(-1)!.status, "executed");
+  }
+  assert.deepEqual(view.approvals, []);
 });
 
-test("a tool outside the agent waits for its owner, who allows it once or for the rest of the session", hostMode, async t => {
-  const { service, grants } = await hostFixture(t);
-  grants["test:bob"] = ["read", "ask", "write", "approve"];
+test("a tool outside the agent's pinned list runs at once for whoever sent the message, as any other does", hostMode, async t => {
+  const { service } = await hostFixture(t);
   const id = "permission-session";
   const base = binding(id);
   const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read_file"] } }, await ticket(id, "create"));
-  const commands = () => session.view().then(view => view.approvals.filter(approval => approval.operation.kind === "program"));
   assert.equal((await session.view()).access, undefined, "no shared message has run at any access yet");
-
-  await session.submit(await ticket(id, "submit", "test:bob"), { content: "TEST_BASH echo once", requestId: "once" }, "write");
-  const once = await permissionRequest(session);
-  assert.deepEqual(once.operation, { kind: "permission", tool: "node", target: commandTarget("echo once"), needs: ["tool"] });
-  assert.equal(once.requestedBy, "test:bob");
-  await assert.rejects(session.decide(await ticket(id, "approve", "test:bob"), once.id, { decision: "approve", operation: once.operation }), rejectedWith(403, /session owner/));
-  await assert.rejects(session.decide(await ticket(id, "approve"), once.id, { decision: "approve", operation: once.operation, scope: "forever" as never }), rejectedWith(400, /scope/));
-  const allowedOnce = await session.decide(await ticket(id, "approve"), once.id, { decision: "approve", operation: once.operation, scope: "call" });
-  assert.equal(allowedOnce.status, "approved");
-  assert.equal(allowedOnce.scope, "call");
-  const deny = async () => {
-    const [command] = await operationRequests(session);
-    await session.decide(await ticket(id, "approve"), command!.id, { decision: "deny", operation: command!.operation });
-    await idle(session);
-  };
-  assert.deepEqual((await operationRequests(session)).map(approval => approval.operation), [commandOperation(session, "echo once")]);
-  await deny();
-  await assert.rejects(session.createApproval("test:alice", commandOperation(session, "echo explicit")), rejectedWith(403, /not enabled/));
-
-  await session.submit(await ticket(id, "submit"), { content: "TEST_BASH echo again", requestId: "again" }, "write");
-  const again = await permissionRequest(session);
-  assert.notEqual(again.id, once.id, "one call's permission doesn't cover the next");
-  await session.decide(await ticket(id, "approve"), again.id, { decision: "approve", operation: again.operation, scope: "session" });
+  await session.submit(await ticket(id, "submit", "test:bob"), { content: "TEST_BASH echo bob-marker", requestId: "bob" }, "write");
   await idle(session);
-  await session.submit(await ticket(id, "submit"), { content: "TEST_BASH echo granted", requestId: "granted" }, "write");
-  await idle(session);
-  await session.submit(await ticket(id, "submit", "test:bob"), { content: "TEST_BASH echo bob", requestId: "bob" }, "write");
-  await deny();
-  const view = await session.view();
-  assert.deepEqual(view.approvals.filter(approval => approval.operation.kind === "permission").map(approval => [approval.id, approval.status, approval.scope]),
-    [[again.id, "approved", "session"]]);
-  assert.deepEqual((await commands()).map(approval => [approval.operation, approval.status, approval.permission]), [
-    [commandOperation(session, "echo once"), "denied", { decidedBy: "test:alice", scope: "call" }],
-    [commandOperation(session, "echo bob"), "denied", undefined],
-  ]);
-  assert.deepEqual(marks(view), [{ tool: "node", status: "executed" }, { tool: "node", status: "executed" }]);
-  assert.equal(view.access, "approval");
-  assert.equal((await session.createApproval("test:alice", commandOperation(session, "echo explicit"))).status, "pending");
-  await assert.rejects(session.decide(await ticket(id, "approve"), again.id, { decision: "approve", operation: again.operation }), rejectedWith(409, /already been decided/));
+  const [ran] = await ranCommands(session);
+  assert.deepEqual([ran?.operation, ran?.status, ran?.requestedBy], [commandOperation(session, "echo bob-marker"), "executed", "test:bob"]);
+  assert.ok(toolOutput(await session.view(), /bob-marker/));
 });
 
-test("auto access runs a tool outside the agent without a permission card", hostMode, async t => {
-  const { service } = await hostFixture(t);
-  const id = "permission-auto";
-  const base = binding(id);
-  const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read_file"] } }, await ticket(id, "create"));
-  await session.submit(await ticket(id, "submit"), { content: "TEST_BASH echo auto-tool-marker", requestId: "auto", options: { access: "auto" } }, "write");
-  await idle(session);
-  const view = await session.view();
-  assert.deepEqual(view.approvals.filter(approval => approval.operation.kind === "permission"), [], "auto-approve asks nothing");
-  assert.deepEqual(autoApproved(view), [{ tool: "node", status: "executed" }]);
-  assert.ok(toolOutput(view, /auto-tool-marker/));
-  await session.submit(await ticket(id, "submit"), { content: "TEST_BASH echo after", requestId: "after" }, "write");
-  const request = await permissionRequest(session);
-  assert.deepEqual(request.operation, { kind: "permission", tool: "node", target: commandTarget("echo after"), needs: ["tool"] });
-  await session.decide(await ticket(id, "approve"), request.id, { decision: "deny", operation: request.operation });
-  await idle(session);
-});
-
-test("allowing a tool for the session lets the round's other waiting calls of it go ahead", hostMode, async t => {
+test("a round's calls of a tool outside the agent's pinned list all run", hostMode, async t => {
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("list_files", { path: "." }), fauxToolCall("list_files", { path: "" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage("Both requested."),
+    fauxAssistantMessage("Both listed."),
   ]);
   const models = createModels();
   models.setProvider(faux.provider);
@@ -964,48 +752,12 @@ test("allowing a tool for the session lets the round's other waiting calls of it
   const base = binding(id);
   const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read_file"] } }, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Run both.", requestId: "both" }, "write");
-  let requests: ApprovalRecord[] = [];
-  for (let count = 0; count < 500 && requests.length < 2; count++) {
-    requests = (await session.view()).approvals.filter(approval => approval.operation.kind === "permission" && approval.status === "pending");
-    if (requests.length < 2) await delay(20);
-  }
-  assert.equal(requests.length, 2);
-  await session.decide(await ticket(id, "approve"), requests[0]!.id, { decision: "approve", operation: requests[0]!.operation, scope: "session" });
   await idle(session);
   const view = await session.view();
-  assert.deepEqual(view.approvals.filter(approval => approval.operation.kind === "permission").map(approval => [approval.status, approval.scope]), [["approved", "session"], ["approved", "session"]]);
+  assert.deepEqual(view.approvals, []);
   const results = view.entries.filter(entry => entry.role === "toolResult");
   assert.equal(results.length, 2);
   assert.ok(results.every(entry => !/denied|not allowed|refused/i.test(entry.text)), JSON.stringify(results.map(entry => entry.text)));
-});
-
-test("a restart ends a call waiting on its owner, and its card can no longer be decided", hostMode, async t => {
-  const { service } = await hostFixture(t);
-  const id = "permission-restart";
-  const base = binding(id);
-  const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read_file"] } }, await ticket(id, "create"));
-  await session.submit(await ticket(id, "submit"), { content: "TEST_BASH echo waiting", requestId: "waiting" }, "write");
-  const request = await permissionRequest(session);
-  await session.restart();
-  await idle(session);
-  const view = await session.view();
-  assert.deepEqual(view.approvals.map(approval => [approval.id, approval.status]), [[request.id, "interrupted"]]);
-  assert.ok(view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("Tool node was interrupted")));
-  await assert.rejects(session.decide(await ticket(id, "approve"), request.id, { decision: "approve", operation: request.operation }), rejectedWith(409, /already been decided/));
-});
-
-test("a restart ends a call waiting on a command's approval, and the command never runs", hostMode, async t => {
-  const { service } = await hostFixture(t);
-  const id = "operation-restart";
-  const session = await service.provision(binding(id), await ticket(id, "create"));
-  await session.submit(await ticket(id, "submit"), { content: "TEST_BASH echo never-ran > never.txt", requestId: "waiting" }, "write");
-  const [command] = await operationRequests(session);
-  await session.restart();
-  await idle(session);
-  const view = await session.view();
-  assert.deepEqual(view.approvals.map(approval => [approval.id, approval.status]), [[command!.id, "interrupted"]]);
-  await assert.rejects(session.decide(await ticket(id, "approve"), command!.id, { decision: "approve", operation: command!.operation }), rejectedWith(409, /already been decided/));
-  await assert.rejects(session.sandbox.readFile("never.txt", allowTestOperation));
 });
 
 test("chat options are validated against owner, mode, model and request idempotency", hostMode, async t => {
@@ -1013,7 +765,6 @@ test("chat options are validated against owner, mode, model and request idempote
   const id = "validate-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
   const status = (code: number) => (error: unknown) => error instanceof RunnerError && error.status === code;
-  await assert.rejects(session.submit(await ticket(id, "submit", "test:bob"), { content: "TEST_IDENTITY", requestId: "bob-auto", options: { access: "auto" } }, "write"), status(403));
   await assert.rejects(session.submit(await ticket(id, "ask"), { content: "TEST_IDENTITY", requestId: "ask-access", options: { access: "read" } }, "ask"), status(422));
   await assert.rejects(session.submit(await ticket(id, "submit"), { content: "TEST_IDENTITY", requestId: "thinking", options: { thinkingLevel: "high" } }, "write"), status(422));
   await assert.rejects(session.submit(await ticket(id, "submit"), { content: "TEST_IDENTITY", requestId: "model", options: { model: { provider: "faux", modelId: "other" } } }, "write"), status(422));

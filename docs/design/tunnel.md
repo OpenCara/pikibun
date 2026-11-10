@@ -1,5 +1,7 @@
 # Putting a session's server online: session services and piki:tunnel
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 A session that builds a web app had no way to show it to people: the browser tool sees it from inside the sandbox, for
 one call, and nothing else could reach it ([#203](https://github.com/OpenCara/pikibun/issues/203)). Doing it by hand
 showed why: `cloudflared` can't reach Cloudflare's edge from the sandbox (port 7844, its own DNS), a sandboxed command's

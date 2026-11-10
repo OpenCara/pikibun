@@ -10,9 +10,11 @@ import { Sandbox, type SandboxAuthorize } from "../apps/runner/src/sandbox.js";
 import { worktreePath } from "../apps/server/src/session-files.js";
 import { checkBrowseResult, InvalidBrowseResult } from "../packages/shared/src/file-browser.js";
 import { fileBrowserLimits, type RunnerBinding } from "../packages/shared/src/types.js";
+import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
 const authorize: SandboxAuthorize = async () => {};
-const sandboxed = process.platform === "linux" && spawnSync("bwrap", ["--version"]).status === 0;
+// bwrap --version passes where bwrap can't make a sandbox (inside another one, say): probe one.
+const sandboxed = !linuxSandboxMissing();
 const hostMode = { skip: !["linux", "darwin"].includes(process.platform) || spawnSync("git", ["--version"]).status !== 0 };
 const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(100)]);
 

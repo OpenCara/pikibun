@@ -47,7 +47,7 @@ needs a decision stand out:
   stack the session list, then the session.
 - **Session**: a header with where the session lives and runs and its connection; the transcript in one readable column,
   user messages as bubbles, the agent's replies as Markdown, each tool call one quiet line that opens to its exact text;
-  pending approvals docked above the chat box; the chat box's pickers (shared or side ask, model, reasoning, access)
+  the chat box's pickers (shared or side ask, model, reasoning, access)
   along its bottom edge. Details (owner, host, visibility, ID) are in the session's panel.
 - **Kit**: first drawn as the React web client's. `src/tokens.ts` has its three themes (light, dark and Pikibun's night
   theme) under its CSS variables' names; `src/theme.ts` builds the palettes from
@@ -56,7 +56,7 @@ needs a decision stand out:
   a sheet on phones; right-click menus on `ContextMenu` (`RowMenu`), which a finger held on the row opens as a sheet on
   touch screens); `src/icons.tsx` has the same Lucide outlines, drawn with `Canvas` as NSH has no icon font. Where
   it differs from the React client on purpose: the sidebar keeps a search box, tool rows
-  name what they work on, approval cards say what they ask in words, and message actions open a sheet rather than
+  name what they work on, and message actions open a sheet rather than
   appear on hover.
 
 ## Test it
@@ -92,10 +92,37 @@ the latest (`app-v1.2.3-beta.1` makes a prerelease), and iOS to TestFlight. Its 
 and the secrets it needs are in [docs/development.md](../../docs/development.md). To package one by hand, for this
 machine's platforms: `pnpm nsh package App.tsx --target macos` (or `windows`, `linux`, `android`, `ios`).
 
+## Updates
+
+The macOS, Windows and Linux builds offer a newer release themselves (`src/lib/app-update.ts`, `src/components/AppUpdate.tsx`).
+NSH can't read the version a package was built with, so each release stamps it into `src/app-version.ts`
+(`node scripts/app-version.mjs <version>`, run by `release-app.yml` before `nsh package`); a build from the repository
+is a development build, which offers none. The app asks GitHub for the repository's releases at launch and every six
+hours, takes the newest published `app-v` one (a prerelease only while it runs one), and shows it in the sidebar (an icon
+in a narrow window's header) and under **Settings → Profile → This app**. **Update** downloads the release's package for
+this computer into the app's data folder (`updates/`, `capabilities.fs.write`) with a progress bar, in parts of at most
+4 MiB that the platform's own `copy /b` or `cat` joins (NSH writes at most 8 MiB at once), checks it against the SHA-256
+GitHub publishes for the asset, installs it and quits; the new version starts once the old one has gone:
+
+- **Windows**: every program the app starts runs in a job that ends with the app, so the app has Task Scheduler run the
+  installer instead (`schtasks`, a hidden one-off task that runs on battery too), silently, with `/RELAUNCH`, which
+  [`windows/installer.iss`](windows/installer.iss) answers by starting Pikibun once it is installed. The next launch
+  deletes the task.
+- **macOS**: the app finds its bundle from its own process, copies `Pikibun.app` from the disk image next to it, swaps the
+  two, and leaves a relauncher in a session of its own (NSH ends a child's whole process group) that `open`s the new one
+  once the app has quit. An app run from its disk image or its download (App Translocation) is asked to move to
+  Applications first.
+- **Linux**: the same with the app's folder, unpacked from the `.tar.gz` next to it; the relauncher starts it with the
+  display's environment (`DISPLAY`, `WAYLAND_DISPLAY` and the like, granted in `nsh.json`).
+
+The scripts are in `src/lib/update-scripts.ts`; `tests/app-update-scripts.test.ts`, at the repository's root, runs the
+Linux one against a stand-in app and checks both parse. A failed update says why and offers the release page; one that
+didn't finish by the next launch says so then.
+
 ## What the React client had that this client doesn't
 
 Every page of the React client is here: sign-in, the sidebar and Sessions, a new session, a
-session with its header menu and its panel (Details, Approvals, Files, Browser, Schedules, Activity), a share link, an
+session with its header menu and its panel (Details, Files, Browser, Schedules, Activity), a share link, an
 invite link, and every settings section (Profile, Notifications, Hosts, Workspaces, Appearance with the Pikibun theme,
 Administration). What is left out, and why:
 
@@ -183,5 +210,5 @@ when the app quit, with the consent given then (`src/lib/this-computer.ts`).
 - `src/screens`: sign-in, the session list, a session, new session, open by ID, a shared session, joining a workspace.
 - `src/settings`: one file per section (`index.tsx` lists them); `src/session-panel`: one file per tab of a session's
   panel (`index.tsx` lists them).
-- `src/components`, `src/ui.tsx`, `src/theme.ts`: the transcript, approval cards, the chat box and the UI kit.
+- `src/components`, `src/ui.tsx`, `src/theme.ts`: the transcript, the chat box and the UI kit.
 - `web/host.js`: the page's host on the web.

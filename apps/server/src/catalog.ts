@@ -54,7 +54,7 @@ function membersStatement(env: Env, workspaceId: string, actorId: string): Query
     ORDER BY member.created_at, member.user_id`).bind(actorId, workspaceId);
 }
 
-async function requireMemberManagement(
+export async function requireMemberManagement(
   env: Env, workspaceId: string, actorId: string, targetId: string, role?: AssignableWorkspaceRole,
 ): Promise<WorkspaceRole | null> {
   const authority = await env.DB.query<{ ownerId: string; actorRole: WorkspaceRole; targetRole: WorkspaceRole | null }>(`SELECT w.owner_id AS ownerId, actor.role AS actorRole,
@@ -213,7 +213,7 @@ function newWorkspaceStatements(env: Env, workspace: { id: string; name: string;
     auditStatement(env, workspace.ownerId, 'workspace.create', workspace.id, null, detail),
     ...defaultWorkspaceExtensions.map((source, index) => env.DB.query<never>(`INSERT INTO workspace_extensions
         (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
-        VALUES (?, ?, ?, ?, 0, 'approval', '{}', ?, ?)`)
+        VALUES (?, ?, ?, ?, 0, 'automatic', '{}', ?, ?)`)
       .bind(workspace.id, extensionPackageKey(source), source, index + 1, workspace.ownerId, createdAt)),
     ...ownerHostStatements(env, workspace.ownerId, workspace.id),
   ];
@@ -386,6 +386,9 @@ export function registerCatalog(app: Hono<AppEnv>): void {
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(targetId, workspaceId, auditId),
       c.env.DB.query(`DELETE FROM workspace_database_consents WHERE workspace_id = ? AND user_id = ?
+        AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
+        .bind(workspaceId, targetId, auditId),
+      c.env.DB.query(`DELETE FROM workspace_member_tool_groups WHERE workspace_id = ? AND user_id = ?
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, targetId, auditId),
       c.env.DB.query(`DELETE FROM connector_workspaces WHERE workspace_id = ?

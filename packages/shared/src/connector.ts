@@ -32,12 +32,15 @@ export interface ConnectorCapabilities {
   sessionBranches?: boolean;
   conversationBackups?: boolean;
   sessionPacking?: boolean;
+  /** The host runs a session's tools or refuses them, never asking anyone (Pikibun requires it). */
+  approvalFree?: boolean;
   automaticGitHub?: boolean;
   requesterAutoApprove?: boolean;
   memberAutoApprove?: boolean;
   hostGrants?: boolean;
   hostOwnerDecides?: boolean;
   hostSessionGrants?: boolean;
+  ownerHostSessions?: boolean;
   unboundedShellGrants?: boolean;
   fileBrowser?: boolean;
   fileUploads?: boolean;
@@ -46,6 +49,7 @@ export interface ConnectorCapabilities {
   extensions?: boolean;
   builtinExtensions?: boolean;
   requiredExtensions?: boolean;
+  fakeIpTunnels?: boolean;
   hostConfig?: boolean;
   compactionConfig?: boolean;
   gpu?: GpuKind;

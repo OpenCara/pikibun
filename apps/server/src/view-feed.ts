@@ -1,10 +1,10 @@
 import { HTTPException } from 'hono/http-exception';
 import type { EntryView, SessionView } from '../../../packages/shared/src/types.js';
-import { redactApproval, redactEntry } from '../../../packages/shared/src/redaction.js';
+import { redactEntry } from '../../../packages/shared/src/redaction.js';
 import {
   applyViewPatch, isPatchableView, isRevision, isViewPatch, reuseUnchanged, ViewRevisions, type SessionViewPatch,
 } from '../../../packages/shared/src/view-patch.js';
-import { onSessionChange, presentApprovals, requireRunnerAccess } from './authority/index.js';
+import { onSessionChange, requireRunnerAccess } from './authority/index.js';
 import type { ConnectionPin } from './connector-transport.js';
 import { fail } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
@@ -166,11 +166,9 @@ async function fetchSnapshot(c: AppContext, row: SessionRow, base: Snapshot | un
   if (!result) fail(502, 'invalid_runner_response', 'The runner returned an invalid view.');
   const { raw } = result;
   if (raw.sessionId !== row.id || raw.owner?.id !== row.owner_id) fail(502, 'invalid_runner_response', 'The runner returned an inconsistent session binding.');
-  const approvals = await presentApprovals(c, row, raw.approvals);
-  const { olderApprovals, ...rest } = raw;
+  const { olderApprovals: _older, approvals: _approvals, ...rest } = raw;
   const entries = raw.entries.map(redactedEntry);
-  const view: SessionView = { ...rest, entries: display.toolOutput === 'brief' ? entries.map(briefedEntry) : entries, approvals: approvals.map(redactApproval),
-    ...(Number.isSafeInteger(olderApprovals) && olderApprovals! > 0 ? { olderApprovals } : {}) };
+  const view: SessionView = { ...rest, entries: display.toolOutput === 'brief' ? entries.map(briefedEntry) : entries, approvals: [] };
   return { ...result, view };
 }
 

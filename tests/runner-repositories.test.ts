@@ -174,7 +174,7 @@ test("repository protocol rejects malformed or duplicate provider pins", async t
 });
 
 
-test("a session that pinned its repositories opens read-only: its history shows, and nothing runs, is decided or backed up", linux, async t => {
+test("a session that pinned its repositories opens read-only: its history shows, and nothing runs or is backed up", linux, async t => {
   const root = await directory(t);
   const input = binding("pinned-session", [repository()]);
   const session = new RunnerSession(input, root, config(root));
@@ -183,8 +183,7 @@ test("a session that pinned its repositories opens read-only: its history shows,
   assert.equal((await session.view()).busy, false);
   for (const attempt of [
     async () => session.submit(await ticket(input.session.id, "submit"), { content: "hello", requestId: "frozen" }, "write"),
-    async () => session.createApproval(OWNER, { kind: "bash", command: "true" }),
-    async () => session.decide(await ticket(input.session.id, "approve"), "approval", { decision: "approve", operation: { kind: "bash", command: "true" } }),
+    async () => session.runOperation(OWNER, { kind: "bash", command: "true" }, "none"),
     async () => session.backup(await ticket(input.session.id, "backup")),
   ]) await assert.rejects(attempt(), runnerError(409, /pinned its repositories.*read-only/));
   const names = (session as unknown as { buildTools(): { name: string }[] }).buildTools().map(tool => tool.name);
@@ -224,7 +223,7 @@ test("unsandboxed clone sessions clone and push with the host's own Git, so they
   assert.match(instructions, /starts empty/);
   assert.match(instructions, /https:\/\/github\.com\/acme\/project-1\.git/);
   assert.doesNotMatch(instructions, /git_push/);
-  await assert.rejects(session.createApproval(OWNER, { kind: "git.push", repository: "acme/project-1", directory: "app", branch: "feature", commit: "a".repeat(40) }),
+  await assert.rejects(session.runOperation(OWNER, { kind: "git.push", repository: "acme/project-1", directory: "app", branch: "feature", commit: "a".repeat(40) }, "none"),
     /push with the git tool/);
 });
 
@@ -251,9 +250,9 @@ test("clone sessions pin nothing, commit with Git and push a clone's directory",
   assert.match(instructions, /https:\/\/github\.com\/acme\/project-1\.git/);
   assert.match(instructions, /git_push \{directory, branch\}/);
   assert.doesNotMatch(instructions, /pinned commit/);
-  await assert.rejects(session.createApproval(OWNER, { kind: "git.commit", message: "x" }), /Commit and switch branches with the git tool/);
-  await assert.rejects(session.createApproval(OWNER, { kind: "git.push", repository: "acme/project-1", branch: "feature", commit: "a".repeat(40) }), /a push names a clone.s directory/);
+  await assert.rejects(session.runOperation(OWNER, { kind: "git.commit", message: "x" }, "none"), /Commit and switch branches with the git tool/);
+  await assert.rejects(session.runOperation(OWNER, { kind: "git.push", repository: "acme/project-1", branch: "feature", commit: "a".repeat(40) }, "none"), /a push names a clone.s directory/);
   const plain = new RunnerSession(binding("plain-session", []), join(root, "plain"), config(join(root, "plain")));
   t.after(() => plain.sandbox.close());
-  await assert.rejects(plain.createApproval(OWNER, { kind: "git.push", repository: "acme/project-1", directory: "app", branch: "feature", commit: "a".repeat(40) }), /Only clone sessions/);
+  await assert.rejects(plain.runOperation(OWNER, { kind: "git.push", repository: "acme/project-1", directory: "app", branch: "feature", commit: "a".repeat(40) }, "none"), /Only clone sessions/);
 });

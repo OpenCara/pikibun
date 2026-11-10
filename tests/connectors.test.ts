@@ -20,6 +20,7 @@ import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
 import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
+import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'connectors-test-secret-not-for-deployment';
@@ -27,7 +28,7 @@ const internalSecret = 'connectors-internal-secret-not-for-deployment';
 const githubToken = 'github-vault-secret-never-in-connector-metadata';
 const manifest = {
   models: [{ provider: 'local-native', modelId: 'local/model-v1', name: 'Local model' }],
-  capabilities: { platform: 'linux', sandbox: true, productionShell: false, plainGit: true },
+  capabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, plainGit: true },
 };
 const token = () => Buffer.from(randomBytes(32)).toString('base64url');
 const changedToken = (value: string) => `${value[0] === 'A' ? 'B' : 'A'}${value.slice(1)}`;
@@ -127,6 +128,23 @@ async function addMember(admin: Client, workspaceId: string, member: Client) {
   await json(await admin.request('POST', `/api/workspaces/${workspaceId}/members`, { userId: member.user.id, role: 'member' }));
 }
 
+/** These members' sessions get every Pikibun tool, as a workspace admin may choose, beyond their role's. */
+async function allTools(admin: Client, workspaceId: string, ...members: Client[]) {
+  const created = await json<ToolGroupSettings>(await admin.request('POST', `/api/workspaces/${workspaceId}/tool-groups`, { name: 'All tools', tools: groupTools }), 201);
+  const group = created.groups.find(item => item.name === 'All tools')!;
+  for (const member of members) await json(await admin.request('PUT', `/api/workspaces/${workspaceId}/members/${member.user.id}/tool-group`, { groupId: group.id }));
+}
+
+/** Puts a member in the workspace's group of this name, making it with these tools if it isn't there yet. */
+async function inGroup(admin: Client, workspaceId: string, member: Client, name: string, tools: string[] = []) {
+  let settings = await json<ToolGroupSettings>(await admin.request('GET', `/api/workspaces/${workspaceId}/tool-groups`));
+  if (!settings.groups.some(group => group.name === name)) {
+    settings = await json<ToolGroupSettings>(await admin.request('POST', `/api/workspaces/${workspaceId}/tool-groups`, { name, tools }), 201);
+  }
+  const group = settings.groups.find(item => item.name === name)!;
+  await json(await admin.request('PUT', `/api/workspaces/${workspaceId}/members/${member.user.id}/tool-group`, { groupId: group.id }));
+}
+
 function provisionHub(f: Fixture) {
   const requests: ConnectorRelayEnvelope[] = [];
   const unexpected: string[] = [];
@@ -155,6 +173,7 @@ async function sharedHost(f: Fixture) {
   const admin = await f.client('admin'); const host = await f.client('host'); const creator = await f.githubClient();
   const team = await workspace(admin);
   await addMember(admin, team.id, host); await addMember(admin, team.id, creator);
+  await allTools(admin, team.id, host, creator);
   f.sqlite.prepare(`INSERT INTO workspace_repositories
     (id, workspace_id, repository_id, full_name, ref, private, created_at) VALUES (?,?,?,?,?,?,?)`)
     .run('shared-repository', team.id, '7', 'owner/repo', 'main', 1, new Date().toISOString());
@@ -230,16 +249,10 @@ function authorization(session: SessionRecord, actorId = session.ownerId) {
   return { sessionId: session.id, actorId, ownerId: session.ownerId, permission: 'write' };
 }
 
-async function approvedOperation(f: Fixture, session: SessionRecord, operation: Operation, actorId: string, requestedBy: string) {
-  const capability = token(); const approvalId = Buffer.from(randomBytes(16)).toString('hex');
-  const reviewHash = await sha256(JSON.stringify({ sessionId: session.id, approvalId, requestedBy, operation }));
-  f.sqlite.prepare(`INSERT INTO approval_reviews
-    (session_id,approval_id,requested_by,source,admission_id,operation_json,review_hash,created_at) VALUES (?,?,?,?,?,?,?,?)`)
-    .run(session.id, approvalId, requestedBy, 'explicit', null, JSON.stringify(operation), reviewHash, new Date().toISOString());
-  f.sqlite.prepare('INSERT INTO broker_capabilities (token_hash,session_id,approval_id,actor_id,requested_by,operation_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run(await sha256(capability), session.id, approvalId, actorId, requestedBy, await sha256(JSON.stringify(operation)),
-      Math.floor(Date.now() / 1000) + 600, new Date().toISOString());
-  return { sessionId: session.id, actorId, approvalId, capability };
+/** A GitHub effect runs for the write message that asked for it: its requester's admission, and the tool call's id. */
+async function approvedOperation(f: Fixture, session: SessionRecord, _operation: Operation, _actorId: string, requestedBy: string) {
+  const admissionId = admit(f, session.id, requestedBy);
+  return { sessionId: session.id, actorId: requestedBy, approvalId: `tool-${token().slice(0, 32)}`, admissionId };
 }
 
 async function brokerPayload(f: Fixture, session: SessionRecord, actorId = session.ownerId, requestedBy = session.ownerId) {
@@ -460,6 +473,7 @@ test('claim and manifest updates reject malformed metadata and secret-bearing fi
     { name: 'GPU lent by an unsandboxed host', value: { ...manifest, capabilities: { platform: 'darwin', sandbox: false, productionShell: false, unsandboxed: true, gpu: 'render' } }, code: 'invalid_manifest' },
     { name: 'unbounded shell grants without host grants', value: { ...manifest, capabilities: { ...manifest.capabilities, hostCommands: true, unboundedShellGrants: true } }, code: 'invalid_manifest' },
     { name: 'non-boolean unbounded shell grants', value: { ...manifest, capabilities: { ...manifest.capabilities, hostCommands: true, hostGrants: true, unboundedShellGrants: 'yes' } }, code: 'invalid_manifest' },
+    { name: 'non-boolean owner host sessions', value: { ...manifest, capabilities: { ...manifest.capabilities, hostConfig: true, ownerHostSessions: 'yes' } }, code: 'invalid_manifest' },
   ];
   const before = f.sqlite.prepare('SELECT * FROM connectors WHERE id = ?').get(connector.connectorId);
   for (const entry of invalid) {
@@ -663,13 +677,13 @@ test('callbacks are scoped to the exact session connector, not merely its owner 
   assert.deepEqual(s.hub.unexpected, []);
 });
 
-for (const mutation of ['revoke', 'unshare', 'remove-host', 'remove-owner', 'remove-approver', 'remove-requester'] as const) {
-  test(`${mutation} immediately denies existing connector callbacks and unconsumed broker capabilities`, async t => {
+for (const mutation of ['revoke', 'unshare', 'remove-host', 'remove-owner', 'remove-requester'] as const) {
+  test(`${mutation} immediately denies existing connector callbacks and the brokered effects of messages already admitted`, async t => {
     const f = await fixture(t); const s = await sharedSession(f); const fetch = githubFetch(t);
     const collaborator = await f.client('collaborator');
     await addMember(s.admin, s.team.id, collaborator);
     await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: collaborator.user.id, permissions: ['write', 'approve'] }));
-    const actorId = mutation === 'remove-approver' ? collaborator.user.id : s.creator.user.id;
+    const actorId = s.creator.user.id;
     const requestedBy = mutation === 'remove-requester' ? collaborator.user.id : s.creator.user.id;
     const auth = authorization(s.session, mutation === 'remove-requester' ? collaborator.user.id : actorId);
     assert.equal((await json<{ allowed: boolean }>(await self(f, s.connector, 'authorize', auth))).allowed, true);
@@ -706,7 +720,6 @@ for (const mutation of ['revoke', 'unshare', 'remove-host', 'remove-owner', 'rem
       await denied(await self(f, s.connector, 'github/comment', pending), 403, 'permission_revoked');
     }
     assert.equal(fetch.mock.callCount(), 1, 'Denied callbacks must not perform another external effect');
-    assert.equal(f.sqlite.prepare('SELECT consumed_at FROM broker_capabilities WHERE token_hash = ?').get(await sha256(pending.capability))!.consumed_at, null);
     if (mutation === 'revoke' || mutation === 'unshare' || mutation === 'remove-host') {
       assert.deepEqual(await json(await s.admin.request('GET', `/api/workspaces/${s.team.id}/connectors`)), { connectors: [] });
       assert.deepEqual(await json(await s.admin.request('GET', `/api/workspaces/${s.team.id}/models`)), { models: [] });
@@ -715,29 +728,19 @@ for (const mutation of ['revoke', 'unshare', 'remove-host', 'remove-owner', 'rem
   });
 }
 
-test('broker authentication and approval capabilities require exact tokens and payloads before any fetch', async t => {
+test('broker authentication needs the internal secret, a writer\'s live admission and a tool call, before any fetch', async t => {
   const f = await fixture(t); const s = await sharedSession(f); const fetch = githubFetch(t);
   const payload = await brokerPayload(f, s.session);
   for (const secret of [internalSecret.slice(1), `${internalSecret}-suffix`, changedToken(internalSecret)]) {
     await denied(await f.request('POST', '/api/internal/github/comment', payload, { Authorization: `Bearer ${secret}` }), 401, 'unauthorized');
   }
-  for (const capability of [payload.capability.slice(1), `${payload.capability}-suffix`, changedToken(payload.capability), await sha256(payload.capability)]) {
-    await denied(await self(f, s.connector, 'github/comment', { ...payload, capability }), 403, 'invalid_capability');
-  }
-  for (const mismatch of [
-    { sessionId: 'another-session' }, { approvalId: 'another-approval' }, { actorId: s.host.user.id },
-    { repository: 'owner/other-repo' }, { issue: payload.issue + 1 }, { body: `${payload.body} ` },
-  ]) {
-    await denied(await self(f, s.connector, 'github/comment', { ...payload, ...mismatch }), 403, 'invalid_capability');
-  }
+  await denied(await self(f, s.connector, 'github/comment', { ...payload, capability: token() }), 410, 'approvals_removed');
+  await denied(await self(f, s.connector, 'github/comment', { ...payload, approvalId: 'another-approval' }), 400, 'invalid_input');
   assert.equal(fetch.mock.callCount(), 0);
-  const hash = await sha256(payload.capability);
-  assert.equal(f.sqlite.prepare('SELECT consumed_at FROM broker_capabilities WHERE token_hash = ?').get(hash)!.consumed_at, null);
   const result = await json(await self(f, s.connector, 'github/comment', payload));
   assert.deepEqual(result, { id: 99, url: 'https://github.com/owner/repo/issues/3#issuecomment-99' });
   assert.equal(fetch.mock.callCount(), 1);
-  assert.ok(f.sqlite.prepare('SELECT consumed_at FROM broker_capabilities WHERE token_hash = ?').get(hash)!.consumed_at);
-  await denied(await self(f, s.connector, 'github/comment', payload), 409, 'capability_consumed');
+  assert.equal((await self(f, s.connector, 'github/comment', payload)).status, 409, 'a tool call posts once');
   assert.equal(fetch.mock.callCount(), 1);
 });
 
@@ -786,7 +789,6 @@ test('callbacks require both an available imported model and its exact provider/
   await denied(await self(f, s.connector, 'authorize', authorization(s.session)), 403, 'connector_unavailable');
   await denied(await self(f, s.connector, 'github/comment', payload), 403, 'connector_unavailable');
   assert.equal(fetch.mock.callCount(), 0);
-  assert.equal(f.sqlite.prepare('SELECT consumed_at FROM broker_capabilities WHERE token_hash = ?').get(await sha256(payload.capability))!.consumed_at, null);
   await json(await self(f, s.connector, 'manifest', manifest));
   const restored = await json<{ models: ModelDefinition[] }>(await s.creator.request('GET', `/api/workspaces/${s.team.id}/models`));
   assert.deepEqual(restored.models, [s.model], 'Reimport must retain the model identity pinned by the existing session');
@@ -970,397 +972,6 @@ test('a host is asked for what changed only on the connection that reported the 
   assert.notEqual(seen[2]!.connection, seen[1]!.connection);
 });
 
-for (const mutation of ['operation', 'requester'] as const) {
-  test(`a reviewed explicit approval rejects a host ${mutation} swap before capability minting`, async t => {
-    const f = await fixture(t); const s = await sharedSession(f); const fetch = githubFetch(t);
-    await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, {
-      userId: s.admin.user.id, permissions: ['write'],
-    }));
-    const operation = { kind: 'github.comment' as const, repository: 'owner/repo', issue: 3, body: 'Exactly approved text' };
-    const original: ApprovalRecord = {
-      id: 'reviewed-approval', sessionId: s.session.id, requestedBy: s.creator.user.id, operation,
-      status: 'pending', createdAt: new Date().toISOString(), reviewHash: 'untrusted-host-review-hash',
-    };
-    let advertised = original;
-    const requests = rpcHub(f, s.connector, envelope => {
-      const action = envelope.request.ticket.action;
-      if (action === 'view') return Response.json({ view: {
-        sessionId: s.session.id,
-        owner: { id: s.creator.user.id, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-        entries: [], approvals: [advertised], conversations: [], busy: false,
-      } });
-      if (action === 'operations') {
-        assert.deepEqual(JSON.parse(envelope.request.body), { operation });
-        return Response.json({ approval: advertised }, { status: 201 });
-      }
-      assert.equal(action, 'approve');
-      return Response.json({ approval: { ...advertised, status: 'approved' } });
-    });
-    const path = `/api/sessions/${s.session.id}`;
-    const created = await json<{ approval: ApprovalRecord }>(await s.creator.request('POST', `${path}/operations`, operation), 201);
-    const presented = (await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals[0];
-    const reviewHash = presented.reviewHash;
-    assert.ok(reviewHash);
-    assert.match(reviewHash, /^[A-Za-z0-9_-]{43}$/);
-    assert.notEqual(reviewHash, original.reviewHash, 'Only the Worker commitment may be returned to the browser');
-    assert.equal(created.approval.reviewHash, reviewHash);
-    assert.deepEqual(presented.operation, operation);
-    assert.equal(presented.requestedBy, s.creator.user.id);
-    const pinned = f.sqlite.prepare('SELECT * FROM approval_reviews WHERE session_id = ? AND approval_id = ?')
-      .get(s.session.id, original.id)!;
-    assert.equal(pinned.review_hash, reviewHash);
-    assert.equal(pinned.requested_by, s.creator.user.id);
-    assert.equal(pinned.source, 'explicit');
-    assert.equal(pinned.admission_id, null);
-    assert.deepEqual(JSON.parse(String(pinned.operation_json)), operation);
-    for (const invalidHash of [undefined, 'malformed', changedToken(reviewHash)]) {
-      await denied(await s.creator.request('POST', `${path}/approvals/${original.id}`, {
-        decision: 'approve', reviewHash: invalidHash,
-      }), 409, 'approval_review_required');
-    }
-    advertised = mutation === 'operation'
-      ? { ...original, operation: { ...operation, body: 'Host substituted an unreviewed external effect' } }
-      : { ...original, requestedBy: s.admin.user.id };
-    await denied(await s.creator.request('POST', `${path}/approvals/${original.id}`, {
-      decision: 'approve', reviewHash,
-    }), 502, 'approval_changed');
-    assert.equal(requests[0].request.ticket.action, 'operations');
-    assert.equal(requests[1].request.ticket.action, 'view');
-    assert.equal(requests.at(-1)!.request.ticket.action, 'view', 'The denial must compare the newly fetched host approval');
-    assert.equal(requests.filter(envelope => envelope.request.ticket.action === 'approve').length, 0);
-    assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM broker_capabilities').get()!.n, 0);
-    assert.equal(fetch.mock.callCount(), 0);
-    assert.deepEqual(f.sqlite.prepare('SELECT * FROM approval_reviews WHERE session_id = ? AND approval_id = ?')
-      .get(s.session.id, original.id), pinned, 'A conflicting host reread must not overwrite the reviewed operation or requester');
-    assert.throws(() => f.sqlite.prepare('UPDATE approval_reviews SET requested_by = ? WHERE session_id = ? AND approval_id = ?')
-      .run(s.admin.user.id, s.session.id, original.id), /immutable/);
-    assert.throws(() => f.sqlite.prepare('DELETE FROM approval_reviews WHERE session_id = ? AND approval_id = ?')
-      .run(s.session.id, original.id), /immutable|must be retained/);
-  });
-}
-
-test('a read-only approver cannot turn an unadmitted host candidate into a reviewed operation or broker capability', async t => {
-  const f = await fixture(t); const s = await sharedSession(f); const fetch = githubFetch(t);
-  const approver = await f.client('approver'); await addMember(s.admin, s.team.id, approver);
-  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, {
-    userId: approver.user.id, permissions: ['read', 'approve'],
-  }));
-  const operation = { kind: 'github.comment' as const, repository: 'owner/repo', issue: 3, body: 'Exactly approved text' };
-  const forged: ApprovalRecord = {
-    id: 'unadmitted-approval', sessionId: s.session.id, requestedBy: s.creator.user.id,
-    operation, status: 'pending', createdAt: new Date().toISOString(),
-  };
-  const forgedHash = await sha256(JSON.stringify({
-    sessionId: s.session.id, approvalId: forged.id, requestedBy: s.creator.user.id, operation,
-  }));
-  let advertised: ApprovalRecord = { ...forged, reviewHash: forgedHash };
-  const requests = rpcHub(f, s.connector, envelope => {
-    assert.equal(envelope.request.ticket.action, 'view');
-    return Response.json({ view: {
-      sessionId: s.session.id,
-      owner: { id: s.creator.user.id, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals: [advertised], conversations: [], busy: false,
-    } });
-  });
-  const path = `/api/sessions/${s.session.id}`;
-  await denied(await approver.request('POST', `${path}/submit`, { content: 'Create an external effect', requestId: 'forged-write' }), 403, 'forbidden');
-  await denied(await approver.request('POST', `${path}/operations`, operation), 403, 'forbidden');
-  assert.equal(requests.length, 0);
-  for (const admissionId of [undefined, token()]) {
-    advertised = { ...forged, admissionId, reviewHash: forgedHash };
-    const { view } = await json<{ view: SessionView }>(await approver.request('GET', `${path}/view`));
-    assert.equal(view.approvals.length, 1);
-    assert.equal(view.approvals[0].id, forged.id);
-    assert.equal(view.approvals[0].status, 'interrupted');
-    assert.equal(Object.hasOwn(view.approvals[0], 'reviewHash'), false, 'A host-supplied commitment is not proof of a human write admission');
-    await denied(await approver.request('POST', `${path}/approvals/${forged.id}`, {
-      decision: 'approve', reviewHash: forgedHash,
-    }), 409, 'approval_review_required');
-    assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM run_admissions').get()!.n, 0);
-    assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM approval_reviews').get()!.n, 0);
-    assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM broker_capabilities').get()!.n, 0);
-  }
-  assert.equal(requests.length, 2, 'Only display reads may reach the host; no approval or write may be relayed');
-  assert.equal(fetch.mock.callCount(), 0);
-});
-
-test('only a Worker-issued write admission produces an approvable model review and the exact broker effect', async t => {
-  const f = await fixture(t); const s = await sharedSession(f); const fetch = githubFetch(t);
-  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, {
-    userId: s.admin.user.id, permissions: ['read', 'approve'],
-  }));
-  const operation = { kind: 'github.comment' as const, repository: 'owner/repo', issue: 3, body: 'Exactly approved text' };
-  const candidate: ApprovalRecord = {
-    id: 'model-approval', sessionId: s.session.id, requestedBy: s.creator.user.id,
-    operation, status: 'pending', createdAt: new Date().toISOString(),
-  };
-  const receipt = { submissionId: 'submission', conversationId: 'conversation', status: 'queued' };
-  let capability = '';
-  const requests = rpcHub(f, s.connector, envelope => {
-    const action = envelope.request.ticket.action;
-    if (action === 'submit') {
-      const input = JSON.parse(envelope.request.body) as { content: string; requestId: string; admissionId: string };
-      assert.equal(input.content, 'Please draft the approved comment');
-      assert.equal(input.requestId, 'human-write');
-      assert.match(input.admissionId, /^[A-Za-z0-9_-]{43}$/);
-      candidate.admissionId = input.admissionId;
-      return Response.json(receipt, { status: 202 });
-    }
-    if (action === 'ask') {
-      assert.deepEqual(JSON.parse(envelope.request.body), { content: 'Read-only question', requestId: 'human-ask' });
-      return Response.json(receipt, { status: 202 });
-    }
-    if (action === 'view') return Response.json({ view: {
-      sessionId: s.session.id,
-      owner: { id: s.creator.user.id, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals: [candidate], conversations: [], busy: false,
-    } });
-    assert.equal(action, 'approve');
-    const input = JSON.parse(envelope.request.body) as { approvalId: string; decision: string; operation: unknown; brokerCapability: string };
-    assert.equal(input.approvalId, candidate.id);
-    assert.equal(input.decision, 'approve');
-    assert.deepEqual(input.operation, operation);
-    assert.match(input.brokerCapability, /^[A-Za-z0-9_-]{43}$/);
-    capability = input.brokerCapability;
-    return Response.json({ approval: { ...candidate, status: 'approved' } });
-  });
-  const path = `/api/sessions/${s.session.id}`;
-  for (const mode of ['submit', 'ask']) {
-    await denied(await s.creator.request('POST', `${path}/${mode}`, {
-      content: 'Forged admission', requestId: `forged-${mode}`, admissionId: token(),
-    }), 400, 'server_owned_admission');
-  }
-  assert.equal(requests.length, 0);
-  assert.deepEqual(await json(await s.creator.request('POST', `${path}/ask`, {
-    content: 'Read-only question', requestId: 'human-ask',
-  }), 202), receipt);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM run_admissions').get()!.n, 0);
-  const submitted = await json(await s.creator.request('POST', `${path}/submit`, {
-    content: 'Please draft the approved comment', requestId: 'human-write',
-  }), 202);
-  assert.deepEqual(submitted, receipt);
-  const admissionId = candidate.admissionId;
-  assert.ok(admissionId);
-  assert.ok(!JSON.stringify(submitted).includes(admissionId));
-  const admission = f.sqlite.prepare('SELECT * FROM run_admissions WHERE id = ?').get(admissionId)!;
-  assert.equal(admission.session_id, s.session.id);
-  assert.equal(admission.actor_id, s.creator.user.id);
-  assert.equal(admission.mode, 'write');
-  assert.equal(admission.request_id, 'human-write');
-  assert.equal(admission.content_hash, await sha256('Please draft the approved comment'));
-  assert.ok(Number(admission.expires_at) > Math.floor(Date.now() / 1000));
-  assert.ok(!JSON.stringify(admission).includes('Please draft the approved comment'));
-  const { view } = await json<{ view: SessionView }>(await s.admin.request('GET', `${path}/view`));
-  const reviewHash = view.approvals[0].reviewHash;
-  assert.equal(reviewHash, await sha256(JSON.stringify({
-    sessionId: s.session.id, approvalId: candidate.id, requestedBy: s.creator.user.id, operation,
-  })));
-  assert.equal(view.approvals[0].status, 'pending');
-  assert.equal(Object.hasOwn(view.approvals[0], 'admissionId'), false);
-  const review = f.sqlite.prepare('SELECT * FROM approval_reviews WHERE session_id = ? AND approval_id = ?').get(s.session.id, candidate.id)!;
-  assert.equal(review.source, 'model');
-  assert.equal(review.admission_id, admissionId);
-  assert.equal(review.requested_by, s.creator.user.id);
-  const approved = await json<{ approval: ApprovalRecord }>(await s.admin.request('POST', `${path}/approvals/${candidate.id}`, {
-    decision: 'approve', reviewHash,
-  }));
-  assert.equal(approved.approval.status, 'approved');
-  assert.equal(approved.approval.reviewHash, reviewHash);
-  assert.equal(Object.hasOwn(approved.approval, 'admissionId'), false);
-  assert.ok(!JSON.stringify(approved).includes(capability));
-  assert.equal(fetch.mock.callCount(), 0, 'Human approval only mints the exact capability; the host callback performs the effect');
-  const broker = f.sqlite.prepare('SELECT * FROM broker_capabilities WHERE token_hash = ?').get(await sha256(capability))!;
-  assert.equal(broker.actor_id, s.admin.user.id);
-  assert.equal(broker.requested_by, s.creator.user.id);
-  assert.equal(broker.operation_hash, await sha256(JSON.stringify(operation)));
-  await json(await self(f, s.connector, 'github/comment', {
-    sessionId: s.session.id, actorId: s.admin.user.id, approvalId: candidate.id, capability,
-    repository: operation.repository, issue: operation.issue, body: operation.body,
-  }));
-  assert.equal(fetch.mock.callCount(), 1);
-});
-
-test('only the session owner answers a permission request, for one call or the session, and only allowed tools reach review', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
-  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.admin.user.id, permissions: ['read', 'approve'] }));
-  const path = `/api/sessions/${s.session.id}`;
-  const pending = (id: string, operation: Operation): ApprovalRecord => ({
-    id, sessionId: s.session.id, requestedBy: s.creator.user.id, operation, status: 'pending', createdAt: new Date().toISOString(),
-  });
-  const once = pending('permission-call-1', { kind: 'permission', tool: 'bash', target: 'npm test', needs: ['tool'] });
-  const always = pending('permission-call-2', { kind: 'permission', tool: 'git_commit', target: 'Fix it', needs: ['tool'] });
-  const unlimited = pending('permission-call-3', { kind: 'permission', tool: 'bash', target: 'make', needs: ['unbounded-shell'] });
-  const unnamed = pending('permission-', { kind: 'permission', tool: 'github_comment', target: 'owner/repo#3', needs: ['tool'] });
-  const command = pending('tool-call-1', { kind: 'bash', command: 'npm test' });
-  const otherCommand = pending('tool-call-4', { kind: 'bash', command: 'npm test' });
-  const commit = pending('tool-call-5', { kind: 'git.commit', message: 'Fix it' });
-  const hostCommand = pending('permission-call-6', { kind: 'permission', tool: 'host_bash', target: 'dotnet --info', needs: ['tool'] });
-  let approvals = [once, always, unlimited, unnamed, command, otherCommand, commit, hostCommand];
-  const decisions: unknown[] = [];
-  rpcHub(f, s.connector, envelope => {
-    const action = envelope.request.ticket.action;
-    if (action === 'submit') {
-      const { admissionId } = JSON.parse(envelope.request.body) as { admissionId: string };
-      approvals = approvals.map(approval => ({ ...approval, admissionId }));
-      return Response.json({ submissionId: 'submission', conversationId: 'conversation', status: 'queued' }, { status: 202 });
-    }
-    if (action === 'view') return Response.json({ view: {
-      sessionId: s.session.id,
-      owner: { id: s.creator.user.id, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals, conversations: [], busy: true,
-    } });
-    assert.equal(action, 'approve');
-    const input = JSON.parse(envelope.request.body) as { approvalId: string; decision: string; operation: Operation; scope?: 'call' | 'session' };
-    decisions.push({ approvalId: input.approvalId, decision: input.decision, scope: input.scope });
-    const decided: ApprovalRecord = { ...approvals.find(approval => approval.id === input.approvalId)!, status: 'approved', decidedBy: envelope.request.ticket.actorId, ...(input.scope ? { scope: input.scope } : {}) };
-    approvals = approvals.map(approval => approval.id === decided.id ? decided : approval);
-    return Response.json({ approval: decided });
-  });
-  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Run the tests', requestId: 'permission-write' }), 202);
-  const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
-  let presented = await present();
-  for (const id of [unnamed.id, command.id, otherCommand.id, commit.id]) {
-    assert.equal(presented.get(id)!.status, 'interrupted');
-    assert.equal(Object.hasOwn(presented.get(id)!, 'reviewHash'), false);
-  }
-  const decide = (client: typeof s.creator, id: string, body: Record<string, unknown>) =>
-    client.request('POST', `${path}/approvals/${id}`, { decision: 'approve', reviewHash: presented.get(id)!.reviewHash, ...body });
-  await denied(await decide(s.admin, once.id, { scope: 'call' }), 403, 'owner_required');
-  await denied(await decide(s.creator, once.id, { scope: 'forever' }), 400, 'invalid_decision');
-  await denied(await decide(s.creator, unlimited.id, {}), 403, 'host_owner_required');
-  await denied(await decide(s.creator, hostCommand.id, { scope: 'session' }), 400, 'invalid_decision');
-  assert.deepEqual(decisions, []);
-  const allowed = await json<{ approval: ApprovalRecord }>(await decide(s.creator, once.id, { scope: 'call' }));
-  assert.equal(allowed.approval.status, 'approved');
-  assert.equal(allowed.approval.scope, 'call');
-  await json(await decide(s.creator, always.id, { scope: 'session' }));
-  assert.deepEqual(decisions, [{ approvalId: once.id, decision: 'approve', scope: 'call' }, { approvalId: always.id, decision: 'approve', scope: 'session' }]);
-  presented = await present();
-  assert.equal(presented.get(command.id)!.status, 'pending');
-  assert.ok(presented.get(command.id)!.reviewHash);
-  assert.equal(presented.get(otherCommand.id)!.status, 'interrupted');
-  assert.equal(presented.get(commit.id)!.status, 'pending');
-  assert.ok(presented.get(commit.id)!.reviewHash);
-  assert.equal(presented.get(always.id)!.scope, 'session');
-  await denied(await decide(s.admin, command.id, { scope: 'session' }), 400, 'invalid_decision');
-  await denied(await s.creator.request('POST', `${path}/operations`, { kind: 'permission', tool: 'bash', target: '', needs: ['tool'] }), 400, 'invalid_operation');
-});
-
-test('a member granted host commands lets their commands run without the limits the host lacks, and only host command authority decides them', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'bash']);
-  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.admin.user.id, permissions: ['read', 'approve'] }));
-  const path = `/api/sessions/${s.session.id}`;
-  const pending = (id: string, operation: Operation, extra: Partial<ApprovalRecord> = {}): ApprovalRecord => ({
-    id, sessionId: s.session.id, requestedBy: s.creator.user.id, operation, status: 'pending', createdAt: new Date().toISOString(), ...extra,
-  });
-  const unlimited = pending('permission-call-1', { kind: 'permission', tool: 'bash', target: 'make', needs: ['unbounded-shell'] });
-  const command = pending('tool-call-1', { kind: 'bash', command: 'make' }, { unbounded: true });
-  const bounded = pending('tool-call-2', { kind: 'bash', command: 'make check' });
-  let approvals = [unlimited, command, bounded];
-  const decisions: { approvalId: string; actorId: string }[] = [];
-  rpcHub(f, s.connector, envelope => {
-    const action = envelope.request.ticket.action;
-    if (action === 'submit') {
-      const { admissionId } = JSON.parse(envelope.request.body) as { admissionId: string };
-      approvals = approvals.map(approval => ({ ...approval, admissionId }));
-      return Response.json({ submissionId: 'submission', conversationId: 'conversation', status: 'queued' }, { status: 202 });
-    }
-    if (action === 'view') return Response.json({ view: {
-      sessionId: s.session.id,
-      owner: { id: s.creator.user.id, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals, conversations: [], busy: true,
-    } });
-    assert.equal(action, 'approve');
-    const input = JSON.parse(envelope.request.body) as { approvalId: string };
-    decisions.push({ approvalId: input.approvalId, actorId: envelope.request.ticket.actorId });
-    const decided: ApprovalRecord = { ...approvals.find(approval => approval.id === input.approvalId)!, status: 'approved', decidedBy: envelope.request.ticket.actorId };
-    approvals = approvals.map(approval => approval.id === decided.id ? decided : approval);
-    return Response.json({ approval: decided });
-  });
-  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Build it', requestId: 'granted-shell' }), 202);
-  const presented = new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
-  assert.equal(presented.get(command.id)!.unbounded, true);
-  const decide = (client: typeof s.creator, approval: ApprovalRecord) =>
-    client.request('POST', `${path}/approvals/${approval.id}`, { decision: 'approve', reviewHash: presented.get(approval.id)!.reviewHash });
-
-  await denied(await decide(s.creator, unlimited), 403, 'host_owner_required');
-  await denied(await decide(s.creator, command), 403, 'host_owner_required');
-  assert.deepEqual(decisions, []);
-  await json(await s.host.request('PUT', `/api/connectors/${s.connector.connectorId}/host-grants/${s.team.id}`, { level: 'approve', userId: s.creator.user.id }));
-  await json(await decide(s.creator, unlimited));
-  await denied(await decide(s.admin, command), 403, 'host_owner_required');
-  await json(await decide(s.creator, command));
-  await json(await decide(s.admin, bounded));
-  assert.deepEqual(decisions, [{ approvalId: unlimited.id, actorId: s.creator.user.id }, { approvalId: command.id, actorId: s.creator.user.id },
-    { approvalId: bounded.id, actorId: s.admin.user.id }]);
-});
-
-test('the host\'s owner decides host commands in a session on it they can read, once its connector lets them; nothing else and nobody else without approve', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'host_bash', 'github_comment']);
-  const path = `/api/sessions/${s.session.id}`;
-  const pending = (id: string, operation: Operation): ApprovalRecord => ({
-    id, sessionId: s.session.id, requestedBy: s.creator.user.id, operation, status: 'pending', createdAt: new Date().toISOString(),
-  });
-  const command = pending('tool-call-1', { kind: 'host.bash', command: 'dotnet --info', timeoutSeconds: 300 });
-  const comment = pending('tool-call-2', { kind: 'github.comment', repository: 'owner/repo', issue: 3, body: 'Looks good.' });
-  let approvals = [command, comment];
-  const decisions: { approvalId: string; actorId: string; decision: string }[] = [];
-  rpcHub(f, s.connector, envelope => {
-    const action = envelope.request.ticket.action;
-    if (action === 'submit') {
-      const { admissionId } = JSON.parse(envelope.request.body) as { admissionId: string };
-      approvals = approvals.map(approval => ({ ...approval, admissionId }));
-      return Response.json({ submissionId: 'submission', conversationId: 'conversation', status: 'queued' }, { status: 202 });
-    }
-    if (action === 'view') return Response.json({ view: {
-      sessionId: s.session.id,
-      owner: { id: s.creator.user.id, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals, conversations: [], busy: true,
-    } });
-    assert.equal(action, 'approve');
-    const input = JSON.parse(envelope.request.body) as { approvalId: string; decision: string };
-    decisions.push({ approvalId: input.approvalId, actorId: envelope.request.ticket.actorId, decision: input.decision });
-    const decided: ApprovalRecord = { ...approvals.find(approval => approval.id === input.approvalId)!, status: input.decision === 'approve' ? 'executing' : 'denied',
-      decidedBy: envelope.request.ticket.actorId };
-    approvals = approvals.map(approval => approval.id === decided.id ? decided : approval);
-    return Response.json({ approval: decided });
-  });
-  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Comment, then check the SDK', requestId: 'host-owner-write' }), 202);
-  const { session } = await json<{ session: SessionRecord }>(await s.host.request('GET', path));
-  assert.deepEqual(session.permissions, ['read']);
-  const presented = new Map((await json<{ view: SessionView }>(await s.host.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
-  const decide = (client: typeof s.creator, approval: ApprovalRecord, decision = 'approve') =>
-    client.request('POST', `${path}/approvals/${approval.id}`, { decision, reviewHash: presented.get(approval.id)!.reviewHash });
-
-  const decisionTicket = async (): Promise<RunnerTicket> => {
-    const issuedAt = Math.floor(Date.now() / 1000);
-    const { policy_version } = f.sqlite.prepare('SELECT policy_version FROM sessions WHERE id = ?').get(s.session.id) as { policy_version: number };
-    return { aud: 'runner', sessionId: s.session.id, actorId: s.host.user.id, ownerId: s.creator.user.id, connectorId: s.connector.connectorId,
-      action: 'approve', policyVersion: policy_version, iat: issuedAt, exp: issuedAt + 60, jti: token(), bodyHash: await sha256('') };
-  };
-  const refused = (error: unknown) => error instanceof HTTPException && error.status === 403;
-
-  await denied(await decide(s.host, command), 403, 'forbidden');
-  await assert.rejects(authorizeConnectorTicket(f.env, await decisionTicket()), refused);
-  const capabilities = { ...manifest.capabilities, hostCommands: true, hostGrants: true };
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostOwnerDecides: 'yes' } }), 400);
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, hostOwnerDecides: true } }), 400);
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostOwnerDecides: true } }));
-  await authorizeConnectorTicket(f.env, await decisionTicket());
-  await denied(await decide(s.host, comment, 'deny'), 403, 'forbidden');
-  await json(await s.host.request('PUT', `/api/connectors/${s.connector.connectorId}/host-grants/${s.team.id}`, { level: 'approve', userId: s.admin.user.id }));
-  await denied(await decide(s.admin, command), 403, 'forbidden');
-  assert.deepEqual(decisions, []);
-  const approved = await json<{ approval: ApprovalRecord }>(await decide(s.host, command));
-  assert.deepEqual([approved.approval.status, approved.approval.decidedBy], ['executing', s.host.user.id]);
-  assert.deepEqual(decisions, [{ approvalId: command.id, actorId: s.host.user.id, decision: 'approve' }]);
-  await denied(await decide(s.host, command), 409, 'approval_already_decided');
-  approvals = approvals.map(approval => approval.id === command.id ? { ...approval, status: 'pending' as const, decidedBy: undefined } : approval);
-  f.sqlite.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run(s.session.id);
-  await denied(await decide(s.host, command), 409, 'session_archived');
-  assert.equal(decisions.length, 1);
-});
-
 test('per-message chat options are checked against the session host, mode and owner before reaching the runtime', async t => {
   const f = await fixture(t); const s = await sharedSession(f);
   await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.admin.user.id, permissions: ['read', 'ask', 'write'] }));
@@ -1378,13 +989,14 @@ test('per-message chat options are checked against the session host, mode and ow
   await denied(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'foreign', options: { model: { provider: 'local-native', modelId: 'not-on-host' } } }), 403, 'model_not_on_host');
   await denied(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'level', options: { model, thinkingLevel: 'xhigh' } }), 400, 'invalid_options');
   await denied(await s.creator.request('POST', `${path}/ask`, { content: 'Hi', requestId: 'ask-access', options: { access: 'read' } }), 400, 'invalid_options');
-  await denied(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'writer-auto', options: { access: 'auto' } }), 409, 'connector_update_required');
   assert.equal(requests.length, before, 'rejected choices never reach the host');
   await json(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'writer-read', options: { access: 'read' } }), 202);
   assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { access: 'read' });
-  const options = { model, thinkingLevel: 'high', access: 'auto' };
-  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-auto', options }), 202);
-  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, options);
+  const options = { model, thinkingLevel: 'high' };
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-auto', options: { ...options, access: 'auto' } }), 202);
+  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, options, 'a message that acts names no access: only Read only does');
+  await json(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'writer-auto', options: { access: 'auto' } }), 202);
+  assert.equal(Object.hasOwn(JSON.parse(requests.at(-1)!.request.body), 'options'), false);
   await json(await s.creator.request('POST', `${path}/ask`, { content: 'Hi', requestId: 'ask-model', options: { model, thinkingLevel: 'off' } }), 202);
   assert.equal(requests.at(-1)!.request.ticket.action, 'ask');
   assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { model, thinkingLevel: 'off' });
@@ -1425,193 +1037,31 @@ test('pasted images are checked and go only to a host whose connector gives them
   assert.deepEqual(audit.map(row => JSON.parse(row.detail_json).images ?? 0).sort(), [0, 1, 1, 1]);
 });
 
-test('automatic approvals are shown only for the owner\'s own decided commands, never comments or pending work', async t => {
-  const f = await fixture(t); const s = await sharedSession(f);
-  const owner = s.creator.user.id;
-  const valid: ApprovalRecord = { id: 'auto-approval', sessionId: s.session.id, requestedBy: owner, decidedBy: owner, automatic: true,
-    operation: { kind: 'bash', command: 'npm test' }, status: 'executed', result: 'ok', createdAt: new Date().toISOString() };
-  let advertised = valid;
-  rpcHub(f, s.connector, () => Response.json({ view: {
-    sessionId: s.session.id,
-    owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-    entries: [], approvals: [advertised], conversations: [], busy: false,
-  } }));
-  const path = `/api/sessions/${s.session.id}/view`;
-  const { view } = await json<{ view: SessionView }>(await s.creator.request('GET', path));
-  assert.equal(view.approvals[0].automatic, true);
-  for (const forged of [
-    { ...valid, requestedBy: s.admin.user.id },
-    { ...valid, decidedBy: s.admin.user.id },
-    { ...valid, status: 'pending' as const, decidedBy: undefined },
-    { ...valid, operation: { kind: 'github.comment' as const, repository: 'owner/repo', issue: 3, body: 'text' } },
-  ]) {
-    advertised = forged;
-    await denied(await s.creator.request('GET', path), 502, 'invalid_runner_response');
-  }
-});
-
-test('a folded permission, older approvals and auto-approved calls reach people only in their exact shapes', async t => {
-  const f = await fixture(t); const s = await sharedSession(f);
-  const owner = s.creator.user.id;
-  const command: ApprovalRecord = { id: 'tool-1', sessionId: s.session.id, requestedBy: owner, decidedBy: owner, permission: { decidedBy: owner, scope: 'session' },
-    operation: { kind: 'bash', command: 'npm test' }, status: 'denied', createdAt: new Date().toISOString() };
-  let advertised: Record<string, unknown> = command as unknown as Record<string, unknown>;
-  let olderApprovals: unknown = 7;
-  const entry = { id: '1:2', kind: 'message', role: 'assistant', text: 'bash({"command":"ls"})', conversationId: '1', autoApproved: [{ tool: 'bash', status: 'executed' }] };
-  rpcHub(f, s.connector, () => Response.json({ view: {
-    sessionId: s.session.id,
-    owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-    entries: [entry], approvals: [advertised], olderApprovals, conversations: [{ id: '1', mode: 'write' }], busy: false,
-  } }));
-  const path = `/api/sessions/${s.session.id}/view`;
-  let { view } = await json<{ view: SessionView }>(await s.creator.request('GET', path));
-  assert.deepEqual(view.approvals[0]!.permission, { decidedBy: owner, scope: 'session' });
-  assert.equal(view.olderApprovals, 7);
-  assert.deepEqual(view.entries[0]!.autoApproved, [{ tool: 'bash', status: 'executed' }]);
-  for (const value of [-1, 1.5, '7', null]) {
-    olderApprovals = value;
-    ({ view } = await json<{ view: SessionView }>(await s.creator.request('GET', path)));
-    assert.equal(view.olderApprovals, undefined, String(value));
-  }
-  for (const permission of [null, 'yes', { decidedBy: owner, scope: 'forever' }, { decidedBy: owner, extra: true }, { decidedBy: 'not an id!' }]) {
-    advertised = { ...command, permission };
-    await denied(await s.creator.request('GET', path), 502, 'invalid_runner_response');
-  }
-  advertised = { ...command, id: 'permission-1', operation: { kind: 'permission', tool: 'bash', target: 'npm test', needs: ['tool'] } };
-  await denied(await s.creator.request('GET', path), 502, 'invalid_runner_response');
-});
-
-for (const invalid of ['ask', 'expired', 'foreign-session', 'foreign-actor'] as const) {
-  test(`${invalid} admission cannot authorize a model review while history remains readable`, async t => {
-    const f = await fixture(t); const s = await sharedSession(f); const fetch = githubFetch(t);
-    await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, {
-      userId: s.admin.user.id, permissions: ['write'],
-    }));
-    let admissionSessionId = s.session.id;
-    if (invalid === 'foreign-session') {
-      const other = await json<{ session: SessionRecord }>(await s.creator.request('POST', '/api/sessions', {
-        ...s.input, trustedConnectorId: s.connector.connectorId,
-      }), 201);
-      admissionSessionId = other.session.id;
-    }
-    const operation = { kind: 'github.comment' as const, repository: 'owner/repo', issue: 3, body: 'Exactly approved text' };
-    const admissionId = token();
-    const approval: ApprovalRecord = {
-      id: 'invalid-admission-approval', sessionId: s.session.id, requestedBy: s.creator.user.id,
-      operation, admissionId, status: 'pending', createdAt: new Date().toISOString(),
-    };
-    const reviewHash = await sha256(JSON.stringify({
-      sessionId: s.session.id, approvalId: approval.id, requestedBy: s.creator.user.id, operation,
-    }));
-    f.sqlite.prepare(`INSERT INTO run_admissions
-      (id,session_id,actor_id,mode,request_id,content_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?)`)
-      .run(admissionId, admissionSessionId, invalid === 'foreign-actor' ? s.admin.user.id : s.creator.user.id,
-        invalid === 'ask' ? 'ask' : 'write', 'prior-request', await sha256('Prior request'),
-        Math.floor(Date.now() / 1000) + (invalid === 'expired' ? -1 : 600), new Date().toISOString());
-    if (invalid === 'expired') {
-      f.sqlite.prepare(`INSERT INTO approval_reviews
-        (session_id,approval_id,requested_by,source,admission_id,operation_json,review_hash,created_at) VALUES (?,?,?,?,?,?,?,?)`)
-        .run(s.session.id, approval.id, s.creator.user.id, 'model', admissionId, JSON.stringify(operation), reviewHash, new Date().toISOString());
-    }
-    const requests = rpcHub(f, s.connector, envelope => {
-      assert.equal(envelope.request.ticket.action, 'view');
-      return Response.json({ view: {
-        sessionId: s.session.id,
-        owner: { id: s.creator.user.id, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-        entries: [{ id: 'history', kind: 'message', role: 'assistant', text: 'Prior conversation remains readable' }],
-        approvals: [approval], conversations: [], busy: false,
-      } });
-    });
-    const path = `/api/sessions/${s.session.id}`;
-    const { view } = await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`));
-    assert.equal(view.entries[0].text, 'Prior conversation remains readable');
-    assert.equal(view.approvals[0].status, 'interrupted');
-    assert.equal(Object.hasOwn(view.approvals[0], 'reviewHash'), false);
-    assert.equal(Object.hasOwn(view.approvals[0], 'admissionId'), false);
-    await denied(await s.creator.request('POST', `${path}/approvals/${approval.id}`, {
-      decision: 'approve', reviewHash,
-    }), 409, invalid === 'expired' ? 'approval_admission_expired' : 'approval_review_required');
-    assert.equal(requests.length, 1);
-    assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM approval_reviews').get()!.n, invalid === 'expired' ? 1 : 0);
-    assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM broker_capabilities').get()!.n, 0);
-    assert.equal(fetch.mock.callCount(), 0);
-  });
-}
-
-test('broker callbacks require github_comment in the immutable pinned agent even with a matching review and capability', async t => {
+test('broker callbacks need github_comment among the tools of the session owner\'s group, whatever the message', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']); const fetch = githubFetch(t);
-  assert.deepEqual(s.agent.tools, ['identity']);
   assert.equal((await json<{ allowed: boolean }>(await self(f, s.connector, 'authorize', authorization(s.session)))).allowed, true);
+  await inGroup(s.admin, s.team.id, s.creator, 'Readers', ['identity', 'read_file']);
   const payload = await brokerPayload(f, s.session);
-  await denied(await self(f, s.connector, 'github/comment', payload), 403, 'tool_not_allowed');
+  await denied(await self(f, s.connector, 'github/comment', payload), 403, 'tool_not_in_group');
   assert.equal(fetch.mock.callCount(), 0);
-  assert.equal(f.sqlite.prepare('SELECT consumed_at FROM broker_capabilities WHERE token_hash = ?').get(await sha256(payload.capability))!.consumed_at, null);
 });
 
-test('the owner\'s Auto-approve message lets its tool calls use tools the agent lacks, and no other message does', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity']); const fetch = githubFetch(t);
-  await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.admin.user.id, permissions: ['write', 'approve'] }));
-  const owner = s.creator.user.id;
-  const admission = (actorId: string, access: string | null) => {
-    const id = token();
-    f.sqlite.prepare(`INSERT INTO run_admissions (id,session_id,actor_id,mode,request_id,content_hash,expires_at,created_at,access) VALUES (?,?,?,?,?,?,?,?,?)`)
-      .run(id, s.session.id, actorId, 'write', `request-${id}`, 'h'.repeat(43), Math.floor(Date.now() / 1000) + 600, new Date().toISOString(), access);
-    return id;
-  };
-  const operation = { kind: 'github.comment' as const, repository: 'owner/repo', issue: 3, body: 'Exactly approved text' };
-  const approval = (id: string, requestedBy: string, admissionId: string): ApprovalRecord =>
-    ({ id, sessionId: s.session.id, requestedBy, operation, admissionId, status: 'pending', createdAt: new Date().toISOString() });
-  const approvals = [
-    approval('tool-auto', owner, admission(owner, 'auto')),
-    approval('tool-asking', owner, admission(owner, 'approval')),
-    approval('tool-teammate', s.admin.user.id, admission(s.admin.user.id, 'auto')),
-  ];
-  let capability = '';
-  rpcHub(f, s.connector, envelope => {
-    if (envelope.request.ticket.action === 'view') return Response.json({ view: {
-      sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals, conversations: [], busy: false,
-    } });
-    const input: unknown = JSON.parse(envelope.request.body);
-    assert.ok(input && typeof input === 'object' && 'brokerCapability' in input && typeof input.brokerCapability === 'string');
-    capability = input.brokerCapability;
-    return Response.json({ approval: { ...approvals[0], status: 'approved' } });
-  });
-  const path = `/api/sessions/${s.session.id}`;
-  const { view } = await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`));
-  const presented = Object.fromEntries(view.approvals.map(item => [item.id, item]));
-  assert.equal(presented['tool-auto'].status, 'pending');
-  assert.ok(presented['tool-auto'].reviewHash);
-  for (const id of ['tool-asking', 'tool-teammate']) {
-    assert.equal(presented[id].status, 'interrupted');
-    assert.equal(presented[id].reviewHash, undefined);
-  }
-  await json(await s.admin.request('POST', `${path}/approvals/tool-auto`, { decision: 'approve', reviewHash: presented['tool-auto'].reviewHash }));
-  assert.match(capability, /^[A-Za-z0-9_-]{43}$/);
-  await json(await self(f, s.connector, 'github/comment', {
-    sessionId: s.session.id, actorId: s.admin.user.id, approvalId: 'tool-auto', capability,
-    repository: operation.repository, issue: operation.issue, body: operation.body,
-  }));
-  assert.equal(fetch.mock.callCount(), 1);
-});
-
-test('github merges need a pinned repository, consume their capability once, and tell GitHub refusals apart from unknown outcomes', async t => {
+test('github merges need a pinned repository, run once per tool call, and tell GitHub refusals apart from unknown outcomes', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_merge']);
   let answer = () => Response.json({ merged: true, sha: mergedSha, message: 'Pull Request successfully merged' });
   const calls = mergeFetch(t, () => answer());
-  const consumed = async (capability: string) =>
-    f.sqlite.prepare('SELECT consumed_at FROM broker_capabilities WHERE token_hash = ?').get(await sha256(capability))!.consumed_at;
+  const consumed = (approvalId: string) => f.sqlite.prepare('SELECT created_at FROM automatic_github_effects WHERE approval_id = ?').get(approvalId)?.created_at ?? null;
   const audits = (action: string) => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM audit WHERE action = ?').get(action)!.n);
 
   const unpinned = await mergePayload(f, s.session, 'owner/other');
   await denied(await self(f, s.connector, 'github/merge', unpinned), 403, 'repository_not_pinned');
   assert.deepEqual(calls, []);
-  assert.equal(await consumed(unpinned.capability), null);
+  assert.equal(consumed(unpinned.approvalId), null);
 
   const payload = await mergePayload(f, s.session);
   assert.deepEqual(await json(await self(f, s.connector, 'github/merge', payload)), { sha: mergedSha, url: 'https://github.com/owner/repo/pull/5' });
   assert.deepEqual(calls, ['GET https://api.github.com/repos/owner/repo', 'PUT https://api.github.com/repos/owner/repo/pulls/5/merge']);
-  assert.ok(await consumed(payload.capability));
+  assert.ok(consumed(payload.approvalId));
   assert.equal(audits('github.merge.attempted'), 1);
   assert.equal(audits('github.merge.completed'), 1);
   await denied(await self(f, s.connector, 'github/merge', payload), 409, 'capability_consumed');
@@ -1623,33 +1073,31 @@ test('github merges need a pinned repository, consume their capability once, and
   assert.equal(refusal.code, 'github_merge_refused');
   assert.ok(refusal.error.includes('Pull Request is not mergeable'), refusal.error);
   assert.ok(refusal.error.includes('owner/repo#5'), refusal.error);
-  assert.ok(await consumed(refused.capability));
+  assert.ok(consumed(refused.approvalId));
   assert.equal(audits('github.merge.failed'), 1);
   assert.equal(calls.length, 4);
 
   answer = () => Response.json({ message: 'Server Error' }, { status: 502 });
   const unknown = await mergePayload(f, s.session);
   await denied(await self(f, s.connector, 'github/merge', unknown), 502, 'github_outcome_unknown');
-  assert.ok(await consumed(unknown.capability));
+  assert.ok(consumed(unknown.approvalId));
   assert.equal(audits('github.merge.ambiguous'), 1);
   assert.equal(calls.length, 6);
   assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
 });
 
-test('github issues need a workspace repository, consume their capability once, and tell GitHub refusals apart from unknown outcomes', async t => {
+test('github issues need a workspace repository, run once per tool call, and tell GitHub refusals apart from unknown outcomes', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_issue']);
   let answer = () => Response.json({ number: 63, html_url: 'https://github.com/owner/repo/issues/63', title: 'Sandbox has no CA certificates' }, { status: 201 });
   const calls = issueFetch(t, () => answer());
-  const consumed = async (capability: string) =>
-    f.sqlite.prepare('SELECT consumed_at FROM broker_capabilities WHERE token_hash = ?').get(await sha256(capability))!.consumed_at;
+  const consumed = (approvalId: string) => f.sqlite.prepare('SELECT created_at FROM automatic_github_effects WHERE approval_id = ?').get(approvalId)?.created_at ?? null;
   const audits = (action: string) => Number(f.sqlite.prepare('SELECT COUNT(*) AS n FROM audit WHERE action = ?').get(action)!.n);
 
   const outside = await issuePayload(f, s.session, 'owner/other');
   await denied(await self(f, s.connector, 'github/issue', outside), 403, 'repository_not_pinned');
   assert.deepEqual(calls, []);
-  assert.equal(await consumed(outside.capability), null);
+  assert.equal(consumed(outside.approvalId), null);
   const altered = await issuePayload(f, s.session);
-  await denied(await self(f, s.connector, 'github/issue', { ...altered, body: 'Something else' }), 403, 'invalid_capability');
   await denied(await self(f, s.connector, 'github/issue', { ...altered, title: 'Two\nlines' }), 400, 'invalid_operation');
   await denied(await self(f, s.connector, 'github/issue', { ...altered, labels: ['bug'] }), 400, 'invalid_input');
   assert.deepEqual(calls, []);
@@ -1657,7 +1105,7 @@ test('github issues need a workspace repository, consume their capability once, 
   const payload = await issuePayload(f, s.session);
   assert.deepEqual(await json(await self(f, s.connector, 'github/issue', payload)), { number: 63, url: 'https://github.com/owner/repo/issues/63' });
   assert.deepEqual(calls, ['GET https://api.github.com/repos/owner/repo', 'POST https://api.github.com/repos/owner/repo/issues']);
-  assert.ok(await consumed(payload.capability));
+  assert.ok(consumed(payload.approvalId));
   assert.equal(audits('github.issue.attempted'), 1);
   assert.equal(audits('github.issue.completed'), 1);
   await denied(await self(f, s.connector, 'github/issue', payload), 409, 'capability_consumed');
@@ -1669,7 +1117,7 @@ test('github issues need a workspace repository, consume their capability once, 
   assert.equal(refusal.code, 'github_issue_refused');
   assert.ok(refusal.error.includes('Issues are disabled for this repo'), refusal.error);
   assert.ok(refusal.error.includes('owner/repo'), refusal.error);
-  assert.ok(await consumed(refused.capability));
+  assert.ok(consumed(refused.approvalId));
   assert.equal(audits('github.issue.failed'), 1);
   assert.equal(calls.length, 4);
 
@@ -1677,14 +1125,14 @@ test('github issues need a workspace repository, consume their capability once, 
     answer = unclear;
     const unknown = await issuePayload(f, s.session);
     await denied(await self(f, s.connector, 'github/issue', unknown), 502, 'github_outcome_unknown');
-    assert.ok(await consumed(unknown.capability));
+    assert.ok(consumed(unknown.approvalId));
   }
   assert.equal(audits('github.issue.ambiguous'), 2);
   assert.equal(calls.length, 8);
   assert.ok(!JSON.stringify(f.sqlite.prepare('SELECT * FROM audit').all()).includes(githubToken));
 });
 
-test('github reads need the requester\'s live write admission, the github_read tool or the owner\'s grant, and a pinned repository before any GitHub call', async t => {
+test('github reads need the requester\'s live write admission, github_read among the owner\'s tools, and a pinned repository before any GitHub call', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
   const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('GitHub must not be called'); });
   await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.admin.user.id, permissions: ['write'] }));
@@ -1699,22 +1147,10 @@ test('github reads need the requester\'s live write admission, the github_read t
     await denied(await read(admissionId), 403, 'github_read_not_admitted');
   }
   const admissionId = admit(f, s.session.id, owner);
-  await denied(await read(admissionId), 403, 'tool_not_allowed');
-  const grant = f.sqlite.prepare('INSERT INTO session_tool_grants (session_id,tool,call_id,approval_id,granted_by,created_at) VALUES (?,?,?,?,?,?)');
-  grant.run(s.session.id, 'github_comment', '', 'permission-any', owner, new Date().toISOString());
-  grant.run(s.session.id, 'github_read', 'call-2', 'permission-call-2', owner, new Date().toISOString());
-  await denied(await read(admissionId), 403, 'tool_not_allowed');
-  grant.run(s.session.id, 'github_read', 'call-1', 'permission-call-1', owner, new Date().toISOString());
-  await denied(await read(admissionId), 403, 'tool_not_allowed');
-  f.sqlite.prepare(`INSERT INTO approval_reviews (session_id,approval_id,requested_by,source,admission_id,operation_json,review_hash,created_at)
-    VALUES (?,?,?,?,?,?,?,?)`).run(s.session.id, 'permission-call-1', owner, 'model', admissionId,
-    JSON.stringify({ kind: 'permission', tool: 'github_read', target: 'owner/other#5', needs: ['tool'] }), token(), new Date().toISOString());
+  await inGroup(s.admin, s.team.id, s.creator, 'Readers', ['identity', 'read_file']);
+  await denied(await read(admissionId), 403, 'tool_not_in_group');
+  await inGroup(s.admin, s.team.id, s.creator, 'All tools', [...groupTools]);
   await denied(await read(admissionId), 403, 'repository_not_pinned');
-  for (const [admission, body] of [[admissionId, { issue: 6 }], [admissionId, { repository: 'owner/repo' }], [admit(f, s.session.id, owner), {}]] as const) {
-    await denied(await read(admission, body), 403, 'tool_not_allowed');
-  }
-  await denied(await read(admissionId, { callId: 'call-3' }), 403, 'tool_not_allowed');
-  grant.run(s.session.id, 'github_read', '', 'permission-call-4', owner, new Date().toISOString());
   await denied(await read(admissionId, { callId: 'call-3', issue: 6 }), 403, 'repository_not_pinned');
   assert.equal(fetch.mock.callCount(), 0);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'github.read'").get()!.n, 0);
@@ -2057,8 +1493,6 @@ test('workspace read does not grant mutations, connector credentials, personal e
   for (const [method, suffix, body] of [
     ['POST', '/ask', { content: 'Question', requestId: 'read-only-ask' }],
     ['POST', '/submit', { content: 'Write', requestId: 'read-only-write' }],
-    ['POST', '/operations', { kind: 'github.comment', repository: 'owner/repo', issue: 1, body: 'No' }],
-    ['POST', '/approvals/approval', { decision: 'approve', reviewHash: 'a'.repeat(64) }],
     ['POST', '/restart', {}],
     ['POST', '/stop', {}],
     ['POST', '/backup', {}],
@@ -2075,7 +1509,6 @@ test('workspace read does not grant mutations, connector credentials, personal e
   assert.equal(requests.length, 0);
   assert.equal(storageCalls, 0);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM run_admissions').get()!.n, 0);
-  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM broker_capabilities').get()!.n, 0);
   const visible = [];
   for (const route of [path, `${path}/view`, `${path}/audit`, '/api/sessions', '/api/me',
     `/api/workspaces/${s.team.id}/members`, `/api/workspaces/${s.team.id}/connectors`, `/api/workspaces/${s.team.id}/models`]) {
@@ -2323,7 +1756,6 @@ test('the workspace\'s owner and admins manage every session there, private ones
   await json(await s.admin.request('DELETE', `${path}/grants/${encodeURIComponent(s.host.user.id)}`));
   await denied(await s.host.request('GET', path), 404, 'not_found');
 
-  await denied(await workspaceAdmin.request('POST', `${path}/approvals/approval`, { decision: 'approve', reviewHash: 'r'.repeat(43) }), 403, 'forbidden');
   for (const [method, suffix, body] of [['POST', '/backup', {}], ['GET', '/backups', undefined], ['POST', '/restart', {}], ['GET', '/export', undefined],
     ['GET', '/link', undefined], ['PUT', '/link', undefined], ['POST', '/schedules', { message: 'Nightly', cron: '0 3 * * *' }],
     ['POST', '/migrate', { requestId: 'manager-move', modelId: s.model.id }]] as const) {
@@ -2813,40 +2245,31 @@ function autoAdmission(f: Fixture, sessionId: string, actorId: string, access: s
   return id;
 }
 
-test('an Auto-approve message whose app asks merges without asking, on hosts that run GitHub effects automatically', async t => {
+test('a merge runs for any message that may act, whatever its app asks, and never for a Read-only one', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_merge']);
   const receipt = { submissionId: 'submission', conversationId: 'conversation', status: 'queued' };
   const requests = rpcHub(f, s.connector, () => Response.json(receipt, { status: 202 }));
   const path = `/api/sessions/${s.session.id}`;
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, chatOptions: true } }));
   const send = async (requestId: string, options: Record<string, unknown>) => {
     await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId, options }), 202);
-    const admission = f.sqlite.prepare('SELECT id, auto_merge FROM run_admissions WHERE request_id = ?').get(requestId)!;
-    return { admissionId: String(admission.id), sent: [JSON.parse(requests.at(-1)!.request.body).options, admission.auto_merge] };
+    return String(f.sqlite.prepare('SELECT id FROM run_admissions WHERE request_id = ?').get(requestId)!.id);
   };
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, chatOptions: true } }));
-  const olderHost = await send('older-host', { access: 'auto', autoMerge: true });
-  assert.deepEqual(olderHost.sent, [{ access: 'auto' }, 0]);
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, chatOptions: true, automaticGitHub: true } }));
-  const auto = await send('auto', { access: 'auto', autoMerge: true });
-  assert.deepEqual(auto.sent, [{ access: 'auto', autoMerge: true }, 1]);
-  const unasked = await send('unasked', { access: 'auto' });
-  assert.deepEqual(unasked.sent, [{ access: 'auto' }, 0]);
-  assert.deepEqual((await send('declined', { access: 'auto', autoMerge: false })).sent, [{ access: 'auto' }, 0]);
-  await denied(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'asking', options: { access: 'approval', autoMerge: true } }), 400, 'invalid_options');
-  await denied(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'not-boolean', options: { access: 'auto', autoMerge: 'yes' } }), 400, 'invalid_options');
+  const acting = await send('acting', { access: 'auto', autoMerge: true });
+  assert.equal(Object.hasOwn(JSON.parse(requests.at(-1)!.request.body), 'options'), false, 'auto-merge is no longer a choice');
+  const reading = await send('reading', { access: 'read' });
+  await denied(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'not-boolean', options: { autoMerge: 'yes' } }), 400, 'invalid_options');
 
   const calls = mergeFetch(t, () => Response.json({ merged: true, sha: mergedSha }));
   const merge = (approvalId: string, admissionId: string) => ({ sessionId: s.session.id, actorId: s.creator.user.id, approvalId, admissionId,
     repository: 'owner/repo', pull: 5, sha: headSha, method: 'squash' });
-  for (const [approvalId, admissionId] of [['tool-older-host', olderHost.admissionId], ['tool-unasked', unasked.admissionId]]) {
-    await denied(await self(f, s.connector, 'github/merge', merge(approvalId!, admissionId!)), 403, 'automatic_merge_not_admitted');
-  }
+  await denied(await self(f, s.connector, 'github/merge', merge('tool-read', reading)), 403, 'automatic_github_not_admitted');
   assert.deepEqual(calls, []);
-  assert.deepEqual(await json(await self(f, s.connector, 'github/merge', merge('tool-merge', auto.admissionId))), { sha: mergedSha, url: 'https://github.com/owner/repo/pull/5' });
+  assert.deepEqual(await json(await self(f, s.connector, 'github/merge', merge('tool-merge', acting))), { sha: mergedSha, url: 'https://github.com/owner/repo/pull/5' });
   assert.deepEqual(calls, ['GET https://api.github.com/repos/owner/repo', 'PUT https://api.github.com/repos/owner/repo/pulls/5/merge']);
 });
 
-test('the owner\'s Auto-approve message posts GitHub comments without a capability, once per tool call and only for its own message', async t => {
+test('a message that may act posts GitHub comments, once per tool call and only for its own sender', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_comment']); const fetch = githubFetch(t);
   await json(await s.creator.request('POST', `/api/sessions/${s.session.id}/grants`, { userId: s.admin.user.id, permissions: ['write', 'approve'] }));
   const owner = s.creator.user.id;
@@ -2854,11 +2277,10 @@ test('the owner\'s Auto-approve message posts GitHub comments without a capabili
     repository: 'owner/repo', issue: 3, body: 'Exactly approved text' });
   const auto = autoAdmission(f, s.session.id, owner);
   await denied(await self(f, s.connector, 'github/comment', comment('manual-id', auto)), 400, 'invalid_input');
-  await denied(await self(f, s.connector, 'github/comment', { ...comment('tool-both', auto), capability: token() }), 400, 'invalid_input');
-  await denied(await self(f, s.connector, 'github/comment', comment('tool-asking', autoAdmission(f, s.session.id, owner, 'approval'))), 403, 'automatic_github_not_admitted');
+  await denied(await self(f, s.connector, 'github/comment', { ...comment('tool-both', auto), capability: token() }), 410, 'approvals_removed');
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-reading', autoAdmission(f, s.session.id, owner, 'read'))), 403, 'automatic_github_not_admitted');
   await denied(await self(f, s.connector, 'github/comment', comment('tool-expired', autoAdmission(f, s.session.id, owner, 'auto', false, Math.floor(Date.now() / 1000) - 1))), 403, 'automatic_github_not_admitted');
-  await denied(await self(f, s.connector, 'github/comment', comment('tool-teammate', autoAdmission(f, s.session.id, s.admin.user.id), s.admin.user.id)), 403, 'permission_revoked');
-  await denied(await self(f, s.connector, 'github/comment', comment('tool-borrowed', auto, s.admin.user.id)), 403, 'permission_revoked');
+  await denied(await self(f, s.connector, 'github/comment', comment('tool-borrowed', auto, s.admin.user.id)), 403, 'automatic_github_not_admitted');
   assert.equal(fetch.mock.callCount(), 0);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM automatic_github_effects').get()!.n, 0);
 
@@ -2873,224 +2295,10 @@ test('the owner\'s Auto-approve message posts GitHub comments without a capabili
   for (let index = 0; index < 19; index++) await json(await self(f, s.connector, 'github/comment', comment(`tool-more-${index}`, auto)));
   await denied(await self(f, s.connector, 'github/comment', comment('tool-over', auto)), 429, 'automatic_github_limit');
   assert.equal(fetch.mock.callCount(), 20);
+  await json(await self(f, s.connector, 'github/comment', comment('tool-teammate', autoAdmission(f, s.session.id, s.admin.user.id), s.admin.user.id)));
+  assert.equal(fetch.mock.callCount(), 21, 'another member who may write posts for their own message, as the owner');
 });
 
-test('a session owner auto-approves another member\'s requests from one of their cards, only while the workspace allows it', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_comment', 'github_merge', 'bash']);
-  const owner = s.creator.user.id; const member = s.admin.user.id;
-  const path = `/api/sessions/${s.session.id}`;
-  const settings = `/api/workspaces/${s.team.id}/approvals`;
-  assert.deepEqual(await json(await s.creator.request('GET', settings)), { settings: { requesterAutoApprove: false } });
-  await denied(await s.creator.request('PUT', settings, { requesterAutoApprove: true }), 403, 'forbidden');
-  await denied(await s.admin.request('PUT', settings, { requesterAutoApprove: 'yes' }), 400, 'invalid_input');
-
-  const admissionId = autoAdmission(f, s.session.id, member, 'approval');
-  const pending = (id: string, operation: Operation): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: member, operation,
-    status: 'pending', admissionId, createdAt: new Date().toISOString() });
-  const command = pending('tool-command', { kind: 'bash', command: 'npm test' });
-  const merge = pending('tool-merge', { kind: 'github.merge', repository: 'owner/repo', pull: 5, sha: headSha, method: 'squash' });
-  let approvals: ApprovalRecord[] = [command, merge];
-  const decisions: string[] = [];
-  rpcHub(f, s.connector, envelope => {
-    const action = envelope.request.ticket.action;
-    if (action === 'view') return Response.json({ view: {
-      sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals, conversations: [], busy: true,
-    } });
-    assert.equal(action, 'approve');
-    const input = JSON.parse(envelope.request.body) as Record<string, unknown>;
-    assert.equal(Object.hasOwn(input, 'alwaysApprove'), false);
-    decisions.push(String(input.approvalId));
-    const decided: ApprovalRecord = { ...approvals.find(approval => approval.id === input.approvalId)!, status: 'executing', decidedBy: owner };
-    approvals = approvals.map(approval => approval.id === decided.id ? decided : approval);
-    return Response.json({ approval: decided });
-  });
-  const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
-  let presented = await present();
-  const always = (client: Client, id: string, body: Record<string, unknown> = {}) =>
-    client.request('POST', `${path}/approvals/${id}`, { decision: 'approve', reviewHash: presented.get(id)!.reviewHash, alwaysApprove: true, ...body });
-  await denied(await always(s.creator, command.id), 403, 'requester_auto_approve_disabled');
-  assert.deepEqual(await json(await s.admin.request('PUT', settings, { requesterAutoApprove: true })), { settings: { requesterAutoApprove: true } });
-  let record = (await json<{ session: SessionRecord }>(await s.creator.request('GET', path))).session;
-  assert.equal(record.requesterAutoApprove, true);
-  assert.equal(Object.hasOwn(record, 'autoApprovedRequesters'), false);
-  await denied(await always(s.creator, command.id), 409, 'connector_update_required');
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, requesterAutoApprove: true } }));
-  await denied(await always(s.creator, merge.id), 400, 'invalid_decision');
-  await denied(await always(s.creator, command.id, { decision: 'deny' }), 400, 'invalid_decision');
-  assert.deepEqual(decisions, []);
-
-  const authorize = async (actorId: string, autoApprove = true) => json<{ allowed: boolean; autoApprove?: true }>(await self(f, s.connector, 'authorize',
-    { ...authorization(s.session, actorId), ...(autoApprove ? { autoApprove: true } : {}) }));
-  assert.equal((await authorize(member)).autoApprove, undefined);
-  await json(await always(s.creator, command.id));
-  assert.deepEqual(decisions, [command.id]);
-  record = (await json<{ session: SessionRecord }>(await s.creator.request('GET', path))).session;
-  assert.deepEqual(record.autoApprovedRequesters, [member]);
-  assert.equal((await authorize(member)).autoApprove, true);
-  assert.equal(Object.hasOwn(await authorize(member, false), 'autoApprove'), false);
-  assert.equal((await authorize(owner)).autoApprove, undefined);
-
-  const fetch = githubFetch(t);
-  const comment = (approvalId: string, admission = admissionId) => ({ sessionId: s.session.id, actorId: member, approvalId, admissionId: admission,
-    repository: 'owner/repo', issue: 3, body: 'Exactly approved text' });
-  await denied(await self(f, s.connector, 'github/comment', comment('tool-borrowed', autoAdmission(f, s.session.id, owner))), 403, 'automatic_github_not_admitted');
-  assert.deepEqual(await json(await self(f, s.connector, 'github/comment', comment('tool-comment'))), { id: 99, url: 'https://github.com/owner/repo/issues/3#issuecomment-99' });
-  assert.equal(fetch.mock.callCount(), 1);
-  await denied(await self(f, s.connector, 'github/merge', { sessionId: s.session.id, actorId: member, approvalId: 'tool-automerge', admissionId,
-    repository: 'owner/repo', pull: 5, sha: headSha, method: 'squash' }), 403, 'permission_revoked');
-
-  const ran = (id: string, operation: Operation): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: member, decidedBy: owner, automatic: true,
-    admissionId, status: 'executed', result: 'ok', createdAt: new Date().toISOString(), operation });
-  approvals = [ran('tool-ran', { kind: 'bash', command: 'npm run build' })];
-  presented = await present();
-  assert.equal(presented.get('tool-ran')!.automatic, true);
-  approvals = [ran('tool-merged', merge.operation)];
-  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
-
-  await json(await s.admin.request('PUT', settings, { requesterAutoApprove: false }));
-  assert.equal((await authorize(member)).autoApprove, undefined);
-  await denied(await self(f, s.connector, 'github/comment', comment('tool-later')), 403, 'permission_revoked');
-  approvals = [ran('tool-ran', { kind: 'bash', command: 'npm run build' })];
-  assert.equal((await present()).get('tool-ran')!.automatic, true);
-  record = (await json<{ session: SessionRecord }>(await s.creator.request('GET', path))).session;
-  assert.equal(Object.hasOwn(record, 'requesterAutoApprove'), false);
-  assert.deepEqual(record.autoApprovedRequesters, [member]);
-
-  await json(await s.admin.request('PUT', settings, { requesterAutoApprove: true }));
-  assert.equal((await authorize(member)).autoApprove, true);
-  await denied(await s.admin.request('DELETE', `${path}/auto-approved-requesters/${member}`), 403, 'owner_required');
-  assert.deepEqual(await json(await s.creator.request('DELETE', `${path}/auto-approved-requesters/${member}`)), { autoApprovedRequesters: [] });
-  await denied(await s.creator.request('DELETE', `${path}/auto-approved-requesters/${member}`), 404, 'not_found');
-  assert.equal((await authorize(member)).autoApprove, undefined);
-  assert.equal((await present()).get('tool-ran')!.automatic, true);
-  const audit = f.sqlite.prepare(`SELECT action FROM audit WHERE action LIKE 'session.requester_auto_approve.%' OR action = 'workspace.approvals.updated' ORDER BY rowid`).all().map(row => row.action);
-  assert.deepEqual(audit, ['workspace.approvals.updated', 'session.requester_auto_approve.started', 'workspace.approvals.updated', 'workspace.approvals.updated', 'session.requester_auto_approve.stopped']);
-});
-
-test('a workspace owner, admin or collaborator auto-approves their own sandboxed commands in someone else\'s session, and nothing more', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'bash', 'github_comment']);
-  const owner = s.creator.user.id; const teammate = s.host.user.id; const workspaceOwner = s.admin.user.id;
-  const path = `/api/sessions/${s.session.id}`;
-  await json(await s.creator.request('POST', `${path}/grants`, { userId: teammate, permissions: ['write'] }));
-  let approvals: ApprovalRecord[] = [];
-  const requests = rpcHub(f, s.connector, envelope => {
-    if (envelope.request.ticket.action === 'view') return Response.json({ view: {
-      sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals, conversations: [], busy: true,
-    } });
-    return Response.json({ submissionId: 'submission', conversationId: 'conversation', status: 'queued' }, { status: 202 });
-  });
-  const send = (client: Client, requestId: string, options: Record<string, unknown>) => client.request('POST', `${path}/submit`, { content: 'Hi', requestId, options });
-  const admission = (requestId: string) => f.sqlite.prepare('SELECT id, access, auto_merge FROM run_admissions WHERE request_id = ?').get(requestId)!;
-  const capabilities = { ...manifest.capabilities, chatOptions: true, automaticGitHub: true };
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities }));
-
-  await denied(await send(s.host, 'member', { access: 'auto' }), 403, 'owner_required');
-  await json(await s.admin.request('PATCH', `/api/workspaces/${s.team.id}/members/${teammate}`, { role: 'collaborator' }));
-  await denied(await send(s.host, 'older-host', { access: 'auto' }), 409, 'connector_update_required');
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, memberAutoApprove: true } }));
-  await json(await send(s.host, 'collaborator', { access: 'auto', autoMerge: true }), 202);
-  assert.deepEqual(JSON.parse(requests.at(-1)!.request.body).options, { access: 'auto' });
-  assert.equal(admission('collaborator').access, 'auto');
-  assert.equal(Number(admission('collaborator').auto_merge), 0);
-  await json(await send(s.admin, 'workspace-owner', { access: 'auto' }), 202);
-  assert.equal(admission('workspace-owner').access, 'auto');
-
-  const authorize = async (actorId: string, ask = true) => json<{ allowed: boolean; memberAutoApprove?: true }>(await self(f, s.connector, 'authorize',
-    { ...authorization(s.session, actorId), ...(ask ? { memberAutoApprove: true } : {}) }));
-  assert.equal((await authorize(teammate)).memberAutoApprove, true);
-  assert.equal((await authorize(workspaceOwner)).memberAutoApprove, true);
-  assert.equal((await authorize(owner)).memberAutoApprove, undefined);
-  assert.equal(Object.hasOwn(await authorize(teammate, false), 'memberAutoApprove'), false);
-  await denied(await self(f, s.connector, 'authorize', { ...authorization(s.session, teammate), memberAutoApprove: 'yes' }), 400, 'invalid_authorization');
-
-  const ran = (id: string, operation: Operation, admissionId: string): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: teammate,
-    decidedBy: owner, automatic: true, admissionId, status: 'executed', result: 'ok', createdAt: new Date().toISOString(), operation });
-  const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
-  const auto = String(admission('collaborator').id);
-  approvals = [ran('tool-ran', { kind: 'bash', command: 'npm test' }, auto)];
-  assert.equal((await present()).get('tool-ran')!.automatic, true);
-  approvals = [ran('tool-comment', { kind: 'github.comment', repository: 'owner/repo', issue: 3, body: 'Exactly approved text' }, auto)];
-  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
-  approvals = [ran('tool-asked', { kind: 'bash', command: 'npm test' }, autoAdmission(f, s.session.id, teammate, 'approval'))];
-  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
-  const github = githubFetch(t);
-  await denied(await self(f, s.connector, 'github/comment', { sessionId: s.session.id, actorId: teammate, approvalId: 'tool-post', admissionId: auto,
-    repository: 'owner/repo', issue: 3, body: 'Exactly approved text' }), 403, 'permission_revoked');
-  assert.equal(github.mock.callCount(), 0);
-
-  await json(await s.admin.request('PATCH', `/api/workspaces/${s.team.id}/members/${teammate}`, { role: 'member' }));
-  assert.equal((await authorize(teammate)).memberAutoApprove, undefined);
-  await denied(await send(s.host, 'demoted', { access: 'auto' }), 403, 'owner_required');
-  approvals = [ran('tool-ran', { kind: 'bash', command: 'npm test' }, auto)];
-  assert.equal((await present()).get('tool-ran')!.automatic, true);
-});
-
-test('another member\'s extension tool call that ran automatically shows in the session view, checked once against the workspace and the host owner\'s leave', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity']);
-  const owner = s.creator.user.id; const member = s.admin.user.id;
-  const path = `/api/sessions/${s.session.id}`;
-  const admissionId = autoAdmission(f, s.session.id, member, 'approval');
-  const operation: Operation = { kind: 'extension.tool', source: 'npm:shout@1.0.0', tool: 'shout', arguments: '{"text":"hi"}', digest: 'a'.repeat(64) };
-  const ran = (id: string, admission: string | null = admissionId): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: member, decidedBy: owner,
-    automatic: true, ...(admission ? { admissionId: admission } : {}), status: 'executed', result: 'HI!', createdAt: new Date().toISOString(), operation });
-  let approvals: ApprovalRecord[] = [];
-  rpcHub(f, s.connector, envelope => {
-    assert.equal(envelope.request.ticket.action, 'view');
-    return Response.json({ view: { sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-      entries: [], approvals, conversations: [], busy: false } });
-  });
-  const present = async () => new Map((await json<{ view: SessionView }>(await s.creator.request('GET', `${path}/view`))).view.approvals.map(approval => [approval.id, approval]));
-  approvals = [ran('tool-early')];
-  const early = (await present()).get('tool-early')!;
-  assert.deepEqual([early.reviewHash, early.automatic, early.status], [undefined, undefined, 'executed']);
-  await json(await s.admin.request('PUT', `/api/workspaces/${s.team.id}/extensions`, { source: 'npm:shout@1.0.0', tools: 'automatic' }));
-  await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }));
-  approvals = [ran('tool-early')];
-  const later = (await present()).get('tool-early')!;
-  assert.deepEqual([later.reviewHash, later.automatic], [undefined, undefined]);
-  approvals = [ran('tool-ran')];
-  const presented = (await present()).get('tool-ran')!;
-  assert.deepEqual([presented.automatic, presented.status, typeof presented.reviewHash], [true, 'executed', 'string']);
-  await json(await s.host.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: false }));
-  assert.equal(typeof (await present()).get('tool-ran')!.reviewHash, 'string', 'a setting changed later doesn\'t undo what it allowed');
-  approvals = [ran('tool-forged', null)];
-  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
-  approvals = [ran('tool-borrowed', autoAdmission(f, s.session.id, owner))];
-  await denied(await s.creator.request('GET', `${path}/view`), 502, 'invalid_runner_response');
-});
-
-test('automatic GitHub merges need an Auto-approve admission marked to merge, and runtimes cannot claim otherwise', async t => {
-  const f = await fixture(t); const s = await sharedSession(f, ['identity', 'github_merge']);
-  const calls = mergeFetch(t, () => Response.json({ merged: true, sha: mergedSha }));
-  const owner = s.creator.user.id;
-  const merge = (approvalId: string, admissionId: string) => ({ sessionId: s.session.id, actorId: owner, approvalId, admissionId,
-    repository: 'owner/repo', pull: 5, sha: headSha, method: 'squash' });
-  const autoOnly = autoAdmission(f, s.session.id, owner);
-  await denied(await self(f, s.connector, 'github/merge', merge('tool-merge', autoOnly)), 403, 'automatic_merge_not_admitted');
-  assert.deepEqual(calls, []);
-  const autoMerge = autoAdmission(f, s.session.id, owner, 'auto', true);
-  assert.deepEqual(await json(await self(f, s.connector, 'github/merge', merge('tool-merge', autoMerge))), { sha: mergedSha, url: 'https://github.com/owner/repo/pull/5' });
-  assert.deepEqual(calls, ['GET https://api.github.com/repos/owner/repo', 'PUT https://api.github.com/repos/owner/repo/pulls/5/merge']);
-
-  const operation = { kind: 'github.merge' as const, repository: 'owner/repo', pull: 5, sha: headSha, method: 'squash' as const };
-  const record = (id: string, admissionId: string, kind: 'merge' | 'comment' = 'merge'): ApprovalRecord => ({ id, sessionId: s.session.id, requestedBy: owner, decidedBy: owner,
-    automatic: true, admissionId, status: 'executed', result: '{}', createdAt: new Date().toISOString(),
-    operation: kind === 'merge' ? operation : { kind: 'github.comment', repository: 'owner/repo', issue: 3, body: 'text' } });
-  let advertised = [record('tool-merged', autoMerge), record('tool-commented', autoOnly, 'comment')];
-  rpcHub(f, s.connector, () => Response.json({ view: {
-    sessionId: s.session.id, owner: { id: owner, displayName: 'Creator', gitName: 'Creator', gitEmail: 'creator@example.test', githubLogin: 'creator' },
-    entries: [], approvals: advertised, conversations: [], busy: false,
-  } }));
-  const path = `/api/sessions/${s.session.id}/view`;
-  const { view } = await json<{ view: SessionView }>(await s.creator.request('GET', path));
-  assert.deepEqual(view.approvals.map(item => item.automatic), [true, true]);
-  for (const forged of [record('tool-forged', autoOnly), record('tool-forged', autoAdmission(f, s.session.id, owner, 'approval', true), 'comment')]) {
-    advertised = [forged];
-    await denied(await s.creator.request('GET', path), 502, 'invalid_runner_response');
-  }
-});
 
 test('host owners add admins who manage sharing and host command grants, and grants decide host command authority', async t => {
   const f = await fixture(t); const s = await sharedSession(f); const outsider = await f.client('outsider');
@@ -3170,7 +2378,7 @@ test('host owners add admins who manage sharing and host command grants, and gra
 test('host owners and admins configure how the host runs sessions, and only the owner decides whose credentials it uses', async t => {
   const f = await fixture(t); const s = await sharedHost(f); const outsider = await f.client('outsider');
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
+  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false };
   const listed = async (client: Client) => (await json<{ connectors: ConnectorInfo[] }>(await client.request('GET', '/api/connectors'))).connectors
     .find(item => item.id === id)?.config;
   assert.deepEqual(await listed(host), defaults);
@@ -3182,11 +2390,11 @@ test('host owners and admins configure how the host runs sessions, and only the 
 
   for (const invalid of [{ commandTimeoutSeconds: 29 }, { commandTimeoutSeconds: 3601 }, { ...defaults, commandTimeoutSeconds: 60.5 },
     { commandTimeoutSeconds: '60' }, { gpu: 'yes' }, { ...defaults, gitCredentials: 1 }, { repositoryCache: 'shared' },
-    { hostSessions: 1 }, { ...defaults, unknown: true }, { unknown: true }, {}, []]) {
+    { hostSessions: 1 }, { fakeIpTunnels: 'yes' }, { ...defaults, unknown: true }, { unknown: true }, {}, []]) {
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
   }
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM connector_configs').get()!.n, 0);
-  const owned = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: 'owner', hostSessions: true, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
+  const owned = { commandTimeoutSeconds: 600, gpu: true, gitCredentials: true, repositoryCache: 'owner', hostSessions: true, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false };
   assert.deepEqual(await json(await host.request('PATCH', path, owned)), { config: owned });
   assert.deepEqual(await listed(host), owned);
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: owned });
@@ -3214,7 +2422,7 @@ test('a save changes only the settings it names, so what someone else saved mean
   const audits = () => f.sqlite.prepare(`SELECT COUNT(*) AS n FROM audit WHERE action = 'host.config.updated'`).get()!.n;
   await json(await host.request('PUT', `/api/connectors/${id}/admins/${creator.user.id}`));
   await json(await host.request('PATCH', path, { gitCredentials: true, repositoryCache: 'host' }));
-  const both = { commandTimeoutSeconds: 120, gpu: false, gitCredentials: true, repositoryCache: 'host', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
+  const both = { commandTimeoutSeconds: 120, gpu: false, gitCredentials: true, repositoryCache: 'host', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false };
   assert.deepEqual(await json(await creator.request('PATCH', path, { commandTimeoutSeconds: 120 })), { config: both });
   assert.deepEqual(await json(await host.request('PATCH', path, { gpu: true })), { config: { ...both, gpu: true } });
   const saved = audits();
@@ -3243,11 +2451,28 @@ test('only a host\'s owner chooses where its browser comes from; its connector r
   assert.deepEqual((await json<Config>(await self(f, s.connector, 'config', {}))).config.browser, { source: 'auto' });
 });
 
+test('only a host\'s owner trusts its local fake-IP proxy for every host, which its connector reads with the rest of its configuration', async t => {
+  const f = await fixture(t); const s = await sharedHost(f);
+  const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
+  type Config = { config: { fakeIpTunnels: boolean } };
+  assert.equal((await json<Config>(await self(f, s.connector, 'config', {}))).config.fakeIpTunnels, false, 'off by default');
+  await json(await host.request('PUT', `/api/connectors/${id}/admins/${creator.user.id}`));
+  await denied(await creator.request('PATCH', path, { fakeIpTunnels: true }), 403, 'host_owner_required');
+  assert.equal((await json<Config>(await self(f, s.connector, 'config', {}))).config.fakeIpTunnels, false, 'a refused save changes nothing');
+  assert.equal((await json<Config>(await host.request('PATCH', path, { fakeIpTunnels: true }))).config.fakeIpTunnels, true);
+  assert.equal((await json<Config>(await self(f, s.connector, 'config', {}))).config.fakeIpTunnels, true);
+  assert.equal(f.sqlite.prepare('SELECT fake_ip_tunnels FROM connector_configs WHERE connector_id = ?').get(id)!.fake_ip_tunnels, 1);
+  assert.equal((await json<Config>(await creator.request('PATCH', path, { fakeIpTunnels: true, gpu: true }))).config.fakeIpTunnels, true, 'naming it as it is changes nothing');
+  await denied(await creator.request('PATCH', path, { fakeIpTunnels: false }), 403, 'host_owner_required');
+  assert.equal((await json<Config>(await host.request('PATCH', path, { fakeIpTunnels: false }))).config.fakeIpTunnels, false);
+  assert.throws(() => f.sqlite.prepare('UPDATE connector_configs SET fake_ip_tunnels = 2 WHERE connector_id = ?').run(id), /CHECK constraint/);
+});
+
 test('an admin\'s first configuration of a host leaves the owner\'s settings at their defaults', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
   await json(await s.host.request('PUT', `/api/connectors/${id}/admins/${s.creator.user.id}`));
-  const config = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
+  const config = { commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false };
   assert.deepEqual(await json(await s.creator.request('PATCH', path, config)), { config });
   assert.deepEqual({ ...f.sqlite.prepare('SELECT git_credentials, repository_cache, host_sessions, updated_by FROM connector_configs WHERE connector_id = ?').get(id) },
     { git_credentials: 0, repository_cache: 'off', host_sessions: 0, updated_by: s.creator.user.id });
@@ -3256,7 +2481,7 @@ test('an admin\'s first configuration of a host leaves the owner\'s settings at 
 test('a host\'s owner and admins set its compaction token counts, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
+  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false };
   for (const invalid of [{ compaction: null }, { compaction: [] }, { compaction: { reserveTokens: -1 } }, { compaction: { reserveTokens: 1.5 } },
     { compaction: { reserveTokens: 10_000_001 } }, { compaction: { enabled: false } }, { compaction: { modelOverrides: { model: { reserveTokens: 1 } } } },
     { compaction: { modelOverrides: { 'anthropic/opus': { keepRecentTokens: '1' } } } }]) {
@@ -3280,7 +2505,7 @@ test('a host\'s owner and admins set its compaction token counts, which its conn
 test('a host\'s owner and admins turn on Pi\'s built-in extensions for its sessions, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
+  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false };
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, builtinExtensions: [] } });
   for (const invalid of [{ builtinExtensions: null }, { builtinExtensions: 'codemode' }, { builtinExtensions: ['tool-search'] }, { builtinExtensions: ['pi:codemode', 'codemode'] }, { builtinExtensions: ['piki:gh'] }]) {
     await denied(await host.request('PATCH', path, invalid), 400, 'invalid_host_config');
@@ -3302,7 +2527,7 @@ test('a host\'s owner and admins turn on Pi\'s built-in extensions for its sessi
 test('only a host\'s owner requires extensions of every session on it, which its connector reads with the rest of its configuration', async t => {
   const f = await fixture(t); const s = await sharedHost(f);
   const { host, creator } = s; const id = s.connector.connectorId; const path = `/api/connectors/${id}/config`;
-  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } };
+  const defaults = { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' }, fakeIpTunnels: false };
   assert.deepEqual(await json(await self(f, s.connector, 'config', {})), { config: { ...defaults, requiredExtensions: [] } });
   for (const invalid of [{ requiredExtensions: null }, { requiredExtensions: ['piki:prompt-audit'] }, { requiredExtensions: [{ source: 'npm:cc-safety-net' }] },
     { requiredExtensions: [{ source: './guard.ts' }] }, { requiredExtensions: [{ source: 'piki:prompt-audit', settings: { policy: 5 } }] },
@@ -3655,7 +2880,7 @@ test('a desktop app hands a chunk to the session host on its own computer with a
   await denied(await self(f, s.connector, 'uploads/verify', { grant: granted.grant }), 403, 'permission_revoked');
 });
 
-test('a host\'s owner starts a session directly on the host only where its configuration accepts that, and its binding says so', async t => {
+test('a host\'s owner starts a session directly on the host, without its configuration accepting that once its connector allows it, and its binding says so', async t => {
   const f = await fixture(t); const s = await privateWorkspace(f);
   const id = s.connector.connectorId; const config = `/api/connectors/${id}/config`;
   const accept = (hostSessions: boolean) => s.owner.request('PATCH', config, { hostSessions });
@@ -3690,6 +2915,13 @@ test('a host\'s owner starts a session directly on the host only where its confi
   await denied(await start({ hostEnvironment: true }), 409, 'host_sessions_off');
   assert.equal((await listed())?.hostSessions, undefined);
   assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', `/api/sessions/${session.id}`))).session.hostEnvironment, true);
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, hostConfig: true, ownerHostSessions: true } }));
+  assert.equal((await listed())?.hostSessions, true, 'its owner is offered sessions on the host whatever the host accepts from members');
+  const own = (await json<{ session: SessionRecord }>(await start({ hostEnvironment: true }), 201)).session;
+  assert.equal(own.hostEnvironment, true);
+  assert.equal((JSON.parse(s.hub.requests.at(-1)!.request.body) as RunnerBinding).session.hostEnvironment, true);
+  assert.equal((await json<{ connectors: ConnectorInfo[] }>(await s.member.request('GET', `/api/workspaces/${s.team.id}/connectors`))).connectors
+    .find(item => item.id === id)?.hostSessions, undefined);
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { platform: 'darwin', sandbox: false, productionShell: false, unsandboxed: true, plainGit: true, hostConfig: true } }));
   await json(await accept(true));
   await denied(await start({ hostEnvironment: true }), 400, 'host_unsandboxed');
@@ -3725,7 +2957,7 @@ test('a member it is shared with starts sessions directly on a host only with a 
   assert.equal(await offered(), undefined);
   await denied(await start(), 409, 'connector_update_required');
   assert.equal(onHost(), 0);
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostSessionGrants: true } }));
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostSessionGrants: true, ownerHostSessions: true } }));
   assert.equal(await offered(), true);
   const { session } = await json<{ session: SessionRecord }>(await start(), 201);
   assert.equal(session.hostEnvironment, true);
@@ -3949,7 +3181,7 @@ test('a source an admin sets to read as the workspace reads with the workspace\'
   assert.deepEqual(actions.sort(), ['workspace.connection.connected', 'workspace.connection.connected', 'workspace.connection.removed', 'workspace.source.read_as']);
 });
 
-test('source reads need the source_read tool or the owner\'s permission for that read', async t => {
+test('source reads need source_read among the tools of the session owner\'s group', async t => {
   const f = await fixture(t); const s = await sharedSession(f, ['identity']);
   const tokens = { admin: 'ntn_admin_secret_0123456789abcdef' };
   const notion = notionFake(t, tokens);
@@ -3958,9 +3190,9 @@ test('source reads need the source_read tool or the owner\'s permission for that
   const before = notion.calls.length;
   const admissionId = admit(f, s.session.id, s.session.ownerId);
   const read = () => self(f, s.connector, 'sources/read', { sessionId: s.session.id, actorId: s.session.ownerId, admissionId, callId: 'call-1', source: source.id });
-  await denied(await read(), 403, 'tool_not_allowed');
-  f.sqlite.prepare('INSERT INTO session_tool_grants (session_id,tool,call_id,approval_id,granted_by,created_at) VALUES (?,?,?,?,?,?)')
-    .run(s.session.id, 'source_read', '', 'permission-any', s.session.ownerId, new Date().toISOString());
+  await inGroup(s.admin, s.team.id, s.creator, 'Readers', ['identity', 'read_file']);
+  await denied(await read(), 403, 'tool_not_in_group');
+  await inGroup(s.admin, s.team.id, s.creator, 'All tools', [...groupTools]);
   await denied(await read(), 409, 'source_account_required');
   assert.equal(notion.calls.length, before);
 });

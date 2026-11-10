@@ -274,7 +274,7 @@ const isHttps = (url: string) => { try { return new URL(url).protocol === "https
 
 export class ThisComputerHost {
   readonly state = signal<HostState>("stopped");
-  readonly running = signal<{ server: string; unsandboxed: boolean; sandbox?: HostInspection["sandbox"] } | null>(null);
+  readonly running = signal<{ server: string; unsandboxed: boolean; sandbox?: HostInspection["sandbox"]; connectorId?: string } | null>(null);
   readonly inspection = signal<HostInspection | null>(null);
   readonly inspecting = signal(false);
   readonly problem = signal<LaunchProblem | null>(null);
@@ -334,8 +334,11 @@ export class ThisComputerHost {
     this.state.set(event.state);
     if (event.state === "stopped") this.running.set(null);
     else if (event.server !== undefined) {
+      const before = untracked(this.running);
+      const connectorId = event.connectorId ?? (before?.server === event.server ? before.connectorId : undefined);
       this.running.set({ server: event.server, unsandboxed: event.unsandboxed === true,
-        ...(event.sandbox === "bubblewrap" || event.sandbox === "seatbelt" || event.sandbox === "windows" ? { sandbox: event.sandbox } : {}) });
+        ...(event.sandbox === "bubblewrap" || event.sandbox === "seatbelt" || event.sandbox === "windows" ? { sandbox: event.sandbox } : {}),
+        ...(connectorId ? { connectorId } : {}) });
     }
     if (event.server !== undefined) this.server = event.server;
     if (event.state === "connected") this.error.set("");
@@ -581,6 +584,11 @@ export function setUnsandboxedConsent(ask: typeof consent): void { consent = ask
 export function thisComputer(): ThisComputerHost {
   shared ??= new ThisComputerHost((warning, server, missing) => consent(warning, server, missing));
   return shared;
+}
+
+// The host this computer runs for the app, once it has connected: new sessions in a private workspace go to it by default.
+export function thisComputerHostId(): string | undefined {
+  return hostsHere ? thisComputer().running()?.connectorId : undefined;
 }
 
 export function resumeThisComputer(): void {

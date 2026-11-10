@@ -1,6 +1,6 @@
 import {
   auditStatement, publicIdentity, publicRepository, type RepositorySettingsRow, repositorySettingsSelect, requireMember, requireSession,
-  workspaceApprovalSettings, type WorkspaceApprovalSettings, workspaceNetworkPolicy, workspaceSessionAccess,
+  workspaceNetworkPolicy, workspaceSessionAccess,
 } from './authority/index.js';
 import type { Hono } from 'hono';
 import type {
@@ -23,13 +23,11 @@ export interface SessionData {
   session: SessionRecord & { archivedStatus: string | null };
   grants: { userId: string; permissions: unknown; createdAt: string }[];
   toolGrants: { tool: string; callId: string; approvalId: string; grantedBy: string; createdAt: string }[];
-  autoApprovedRequesters: { userId: string; approvalId: string; grantedBy: string; createdAt: string; revokedAt: string | null }[];
   backups: { id: string; size: number; sha256: string; createdAt: string; location: BackupLocation; conversationOnly?: true }[];
   restores: {
     id: string; sourceSessionId: string; backupId: string; targetSessionId: string; title: string | null; status: string;
     createdAt: string; completedAt: string | null;
   }[];
-  approvals: { approvalId: string; requestedBy: string; source: string; operation: unknown; createdAt: string }[];
   pushes: {
     id: string; approvalId: string; requestedBy: string; kind: string; bindingId: string; operation: unknown; automatic: boolean;
     createdAt: string; completedAt: string | null; outcome: string | null; tip: string | null; pullRequestUrl: string | null;
@@ -54,7 +52,6 @@ export interface WorkspaceExport {
   repositories: WorkspaceRepository[];
   pushIdentities: PushIdentity[];
   networkPolicy: NetworkPolicy;
-  approvalSettings: WorkspaceApprovalSettings;
   database: WorkspaceDatabase | null;
   audit: AuditEntry[];
   sessions: SessionData[];
@@ -81,9 +78,6 @@ export async function sessionData(db: Database, row: SessionRow): Promise<Sessio
     'SELECT user_id, permissions_json, created_at FROM session_grants WHERE session_id = ? ORDER BY created_at, user_id', row.id);
   const toolGrants = await all<{ tool: string; call_id: string; approval_id: string; granted_by: string; created_at: string }>(
     'SELECT tool, call_id, approval_id, granted_by, created_at FROM session_tool_grants WHERE session_id = ? ORDER BY created_at, tool, call_id', row.id);
-  const autoApproved = await all<{ user_id: string; approval_id: string; granted_by: string; created_at: string; revoked_at: string | null }>(
-    `SELECT user_id, approval_id, granted_by, created_at, revoked_at FROM session_auto_approved_requesters WHERE session_id = ?
-      ORDER BY created_at, user_id`, row.id);
   const backups = await all<{ id: string; size: number; sha256: string; created_at: string; conversation_only: number; stored_in: string | null }>(
     `SELECT b.id, b.size, b.sha256, b.created_at, b.conversation_only, l.workspace_id AS stored_in FROM backups b
       LEFT JOIN workspace_database_backups l ON l.backup_id = b.id WHERE b.session_id = ? ORDER BY b.created_at, b.id`, row.id);
@@ -92,8 +86,6 @@ export async function sessionData(db: Database, row: SessionRow): Promise<Sessio
     created_at: string; completed_at: string | null;
   }>(`SELECT id, source_session_id, backup_id, target_session_id, request_title, status, created_at, completed_at FROM restore_jobs
     WHERE source_session_id = ? OR target_session_id = ? ORDER BY created_at, id`, row.id, row.id);
-  const approvals = await all<{ approval_id: string; requested_by: string; source: string; operation_json: string; created_at: string }>(
-    'SELECT approval_id, requested_by, source, operation_json, created_at FROM approval_reviews WHERE session_id = ? ORDER BY created_at, approval_id', row.id);
   const pushes = await all<{
     id: string; approval_id: string; requested_by: string; kind: string; binding_id: string; operation_json: string; automatic: number;
     created_at: string; completed_at: string | null; outcome: string | null; tip: string | null; pull_request_url: string | null;
@@ -104,15 +96,11 @@ export async function sessionData(db: Database, row: SessionRow): Promise<Sessio
     grants: grants.map(grant => ({ userId: grant.user_id, permissions: parsed(grant.permissions_json), createdAt: grant.created_at })),
     toolGrants: toolGrants.map(grant => ({ tool: grant.tool, callId: grant.call_id, approvalId: grant.approval_id, grantedBy: grant.granted_by,
       createdAt: grant.created_at })),
-    autoApprovedRequesters: autoApproved.map(item => ({ userId: item.user_id, approvalId: item.approval_id, grantedBy: item.granted_by,
-      createdAt: item.created_at, revokedAt: item.revoked_at })),
     backups: backups.map(backup => ({ id: backup.id, size: backup.size, sha256: backup.sha256, createdAt: backup.created_at,
       location: backupLocation(backup.stored_in), ...(backup.conversation_only ? { conversationOnly: true as const } : {}) })),
     restores: restores.map(restore => ({ id: restore.id, sourceSessionId: restore.source_session_id, backupId: restore.backup_id,
       targetSessionId: restore.target_session_id, title: restore.request_title, status: restore.status, createdAt: restore.created_at,
       completedAt: restore.completed_at })),
-    approvals: approvals.map(review => ({ approvalId: review.approval_id, requestedBy: review.requested_by, source: review.source,
-      operation: parsed(review.operation_json), createdAt: review.created_at })),
     pushes: pushes.map(push => ({ id: push.id, approvalId: push.approval_id, requestedBy: push.requested_by, kind: push.kind,
       bindingId: push.binding_id, operation: parsed(push.operation_json), automatic: push.automatic === 1, createdAt: push.created_at,
       completedAt: push.completed_at, outcome: push.outcome, tip: push.tip, pullRequestUrl: push.pull_request_url })),
@@ -158,7 +146,6 @@ export async function exportWorkspace(db: Database, workspaceId: string,
     repositories: repositories.map(repository => publicRepository(repository)),
     pushIdentities: identities.map(identity => publicIdentity(identity)),
     networkPolicy: await workspaceNetworkPolicy(db, workspaceId),
-    approvalSettings: await workspaceApprovalSettings(db, workspaceId),
     database: database ? publicWorkspaceDatabase(database) : null,
     audit: await auditEntries(db, 'workspace_id = ? AND session_id IS NULL', workspaceId),
     sessions,

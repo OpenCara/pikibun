@@ -10,6 +10,7 @@ import {
 } from '../packages/shared/src/cross-session.js';
 import type { EntryView, SessionRecord, SessionView } from '../packages/shared/src/types.js';
 import { nestSessions } from '../packages/client/src/session-tree.js';
+import type { ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 import { fakeHub, seedAgentVersion, testDatabase } from './helpers/control-plane.js';
 
 test('a delivered message names its origin and sender, and its outcome is the answer after it in its own conversation', () => {
@@ -32,7 +33,6 @@ test('a delivered message names its origin and sender, and its outcome is the an
   const older = { entries: view.entries.slice(0, 6), approvals: [] as SessionView['approvals'] };
   assert.deepEqual(messageOutcome(older, message), { status: 'unknown', done: true, reply: 'Done: it works.' });
   assert.equal(messageOutcome({ ...older, entries: view.entries.slice(0, 5) }, message).done, false, 'a tool result last: still at work');
-  assert.equal(messageOutcome({ ...older, approvals: [{ status: 'pending' } as SessionView['approvals'][number]] }, message).done, false);
   const long = sessionsToolTarget({ action: 'send', targetSessionId: 'b', message: 'x'.repeat(100_000) });
   assert.ok(long.length < 8192 && long.startsWith('send · session b · message:\n'));
   assert.equal(sessionsToolTarget({ action: 'read', targetSessionId: 'b', messageId: 'm1' }), 'read · session b · message m1');
@@ -97,12 +97,13 @@ async function fixture(t: TestContext) {
     session.view.entries.push({ id: `${conversationId}:${submissions}`, kind: 'message', role: 'user', text: String(body.content), conversationId });
     return Response.json({ submissionId, conversationId, status: 'queued' });
   };
-  const admit = (sessionId: string, actorId: string, options: { access?: string; requestId?: string } = {}) => {
+  const admit = (sessionId: string, actorId: string, options: { access?: string; requestId?: string; autoMerge?: boolean } = {}) => {
     const issued = options.requestId && sqlite.prepare('SELECT id FROM run_admissions WHERE session_id = ? AND actor_id = ? AND request_id = ?').get(sessionId, actorId, options.requestId);
     if (issued) return String(issued.id);
     const admission = randomBytes(32).toString('base64url');
-    sqlite.prepare('INSERT INTO run_admissions (id,session_id,actor_id,mode,access,request_id,content_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(admission, sessionId, actorId, 'write', options.access ?? null, options.requestId ?? `request-${admission}`, 'h'.repeat(43), Math.floor(Date.now() / 1000) + 3600, new Date().toISOString());
+    sqlite.prepare('INSERT INTO run_admissions (id,session_id,actor_id,mode,access,auto_merge,request_id,content_hash,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(admission, sessionId, actorId, 'write', options.access ?? null, options.autoMerge ? 1 : 0, options.requestId ?? `request-${admission}`, 'h'.repeat(43),
+        Math.floor(Date.now() / 1000) + 3600, new Date().toISOString());
     return admission;
   };
   let calls = 0;
@@ -127,8 +128,6 @@ test('an agent lists and reads the sessions its sender can see, and a read never
   const f = await fixture(t);
   const ownerId = f.owner.user.id;
   const write = f.admit('session-a', ownerId);
-  await f.refused(f.tool('session-a', ownerId, write, { action: 'list' }), 403, 'tool_not_allowed');
-  f.allow('session-a', 'sessions');
   for (const [body, code] of [[{ action: 'read' }, 'invalid_input'], [{ action: 'list', targetSessionId: 'session-b' }, 'invalid_input'],
     [{ action: 'send', targetSessionId: 'session-b' }, 'invalid_input'], [{ action: 'jump' }, 'invalid_input'], [{ action: 'read', targetSessionId: 'session-b', limit: 51 }, 'invalid_input'],
     [{ action: 'ask', targetSessionId: 'session-b', message: 'hi', access: 'auto' }, 'invalid_input']] as const) {
@@ -149,22 +148,18 @@ test('an agent lists and reads the sessions its sender can see, and a read never
     { id: '0:2', kind: 'message', role: 'assistant', text: 'y'.repeat(5000), conversationId: '0' },
     { id: '7:3', kind: 'message', role: 'assistant', text: 'a side answer', conversationId: '7' });
   worker.view.conversations.push({ id: '7', mode: 'ask' });
-  worker.view.approvals.push({ id: 'permission-1', sessionId: 'session-b', requestedBy: ownerId, createdAt: new Date().toISOString(), status: 'pending',
-    operation: { kind: 'permission', tool: 'bash', target: 'make', needs: ['tool'] },
-    admissionId: f.admit('session-b', ownerId) } as SessionView['approvals'][number]);
   const consent = await f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-b' }, 'read-1');
   assert.deepEqual(consent.body, { consent: 'audience', target: audienceTarget({ id: 'session-b', title: 'Worker' }), reason: 'This session\'s readers include people who can\'t read that session.' });
-  f.sqlite.prepare("INSERT INTO approval_reviews (session_id,approval_id,requested_by,operation_json,source,admission_id,review_hash,created_at) VALUES (?,?,?,?,?,?,?,?)")
-    .run('session-a', 'permission-read-1_audience', ownerId, JSON.stringify({ kind: 'permission', tool: 'sessions', target: audienceTarget({ id: 'session-b', title: 'Worker' }), needs: ['audience'] }),
-      'model', write, 'r'.repeat(43), new Date().toISOString());
-  f.allow('session-a', 'sessions:audience', 'read-1', 'permission-read-1_audience');
+  assert.equal((await f.collaborator.request('PUT', '/api/sessions/session-a/audience-sharing', { enabled: true })).status, 403, 'only its owner lets content through');
+  assert.equal((await f.owner.request('PUT', '/api/sessions/session-a/audience-sharing', { enabled: true })).status, 200);
+  assert.equal(((await (await f.owner.request('GET', '/api/sessions/session-a')).json()) as { session: SessionRecord }).session.audienceSharing, true);
   const read = await f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-b' }, 'read-1');
   assert.equal(read.status, 200, JSON.stringify(read.body));
   assert.ok(!('consent' in read.body), JSON.stringify(read.body));
   const entries = read.body.entries as EntryView[];
   assert.deepEqual(entries.map(entry => entry.id), ['0:1', '0:2'], 'the shared conversation only');
   assert.ok(entries[1]!.text.length < 2100 && entries[1]!.text.endsWith('3000 more characters'));
-  assert.deepEqual(read.body.pendingApprovals, [{ id: 'permission-1', kind: 'permission', tool: 'bash', requestedBy: ownerId }]);
+  assert.equal((await f.owner.request('PUT', '/api/sessions/session-a/audience-sharing', { enabled: false })).status, 200);
   assert.ok('consent' in (await f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-b' }, 'read-2')).body);
   assert.equal((await f.owner.request('DELETE', `/api/sessions/session-a/grants/${f.collaborator.user.id}`)).status, 200);
   assert.equal((await f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-b', limit: 1 })).status, 200);
@@ -185,12 +180,12 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
   const message = sent.body.message as CrossSessionMessage;
   assert.deepEqual([message.kind, message.originSessionId, message.targetSessionId, message.actorId, message.hops, message.access, message.notify],
-    ['send', 'session-a', 'session-b', ownerId, 1, 'approval', undefined]);
+    ['send', 'session-a', 'session-b', ownerId, 1, 'auto', undefined]);
   const delivered = worker.submitted.at(-1)!;
   assert.equal(delivered.mode, 'submit');
   assert.equal(delivered.body.requestId, `xs:${message.id}`);
   assert.equal(delivered.body.content, `[Pikibun cross-session message xs:${message.id} · from session "Coordinator" (session-a) · sent by test:xs-owner through its agent · hop 1]\n\nRun the tests`);
-  assert.equal(delivered.body.options, undefined, 'approval, the default, sends no options');
+  assert.equal(delivered.body.options, undefined, 'a message that acts, the default, sends no options');
   const audits = f.sqlite.prepare("SELECT action, session_id, actor_id, detail_json FROM audit WHERE action IN ('session.submit', 'session.cross_session.sent') ORDER BY rowid").all();
   assert.deepEqual(audits.map(row => [row.action, row.session_id, row.actor_id]), [['session.submit', 'session-b', ownerId], ['session.cross_session.sent', 'session-a', ownerId]]);
   assert.equal((JSON.parse(String(audits[0]!.detail_json)) as { crossSession: string }).crossSession, message.id);
@@ -209,14 +204,12 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   assert.equal(worker.submitted.at(-1)!.mode, 'ask');
   f.sqlite.prepare("UPDATE sessions SET activity = 'done' WHERE id = 'session-b'").run();
 
-  await f.refused(f.tool('session-a', ownerId, write, { action: 'send', targetSessionId: 'session-b', message: 'Go', access: 'auto' }), 403, 'automatic_message_not_admitted');
-  await f.refused(f.tool('session-a', ownerId, f.admit('session-a', ownerId, { access: 'auto' }), { action: 'send', targetSessionId: 'session-b', message: 'Go', access: 'auto' }), 400, 'options_unsupported');
   const readOnly = f.admit('session-a', ownerId, { access: 'read' });
   await f.refused(f.tool('session-a', ownerId, readOnly, { action: 'send', targetSessionId: 'session-b', message: 'Go' }), 403, 'write_not_allowed');
   await f.refused(f.tool('session-a', ownerId, readOnly, { action: 'stop', targetSessionId: 'session-b' }), 403, 'write_not_allowed');
   assert.equal((await f.tool('session-a', ownerId, readOnly, { action: 'ask', targetSessionId: 'session-b', message: 'Status?' })).status, 202);
   f.allow('session-a', 'sessions:write');
-  assert.equal((await f.tool('session-a', ownerId, readOnly, { action: 'send', targetSessionId: 'session-b', message: 'Go' })).status, 202);
+  await f.refused(f.tool('session-a', ownerId, readOnly, { action: 'send', targetSessionId: 'session-b', message: 'Go' }), 403, 'write_not_allowed');
 
   const inWorker = f.admit('session-b', ownerId, { requestId: `xs:${message.id}` });
   await f.refused(f.tool('session-b', ownerId, inWorker, { action: 'send', targetSessionId: 'session-a', message: 'Back to you' }), 409, 'session_loop');
@@ -267,14 +260,10 @@ test('an agent stops and archives sessions as its sender may, and starts linked 
 
   const readOnly = f.admit('session-a', ownerId, { access: 'read' });
   const spaced = { action: 'create', title: '  Spaced title  ' } as const;
-  f.sqlite.prepare("INSERT INTO approval_reviews (session_id,approval_id,requested_by,operation_json,source,admission_id,review_hash,created_at) VALUES (?,?,?,?,?,?,?,?)")
-    .run('session-a', 'permission-create-1', ownerId, JSON.stringify({ kind: 'permission', tool: 'sessions', target: sessionsToolTarget(spaced), needs: ['write'] }),
-      'model', readOnly, 'r'.repeat(43), new Date().toISOString());
-  f.allow('session-a', 'sessions:write', 'create-1', 'permission-create-1');
-  const spacedChild = await f.tool('session-a', ownerId, readOnly, spaced, 'create-1');
+  await f.refused(f.tool('session-a', ownerId, readOnly, spaced, 'create-1'), 403, 'write_not_allowed');
+  const spacedChild = await f.tool('session-a', ownerId, write, spaced, 'create-2');
   assert.equal(spacedChild.status, 201, JSON.stringify(spacedChild.body));
   assert.equal((spacedChild.body.session as CrossSessionSummary).title, 'Spaced title');
-  await f.refused(f.tool('session-a', ownerId, readOnly, spaced, 'create-2'), 403, 'write_not_allowed');
 
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', title: 'Wide', visibility: 'workspace' }), 403, 'visibility_wider');
   const created = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Write the docs', message: 'Document the API', notify: true });
@@ -346,6 +335,10 @@ test('the workspace\'s owner and admins read every session there, so content pas
   assert.equal(f.sqlite.prepare("SELECT actor_id FROM run_admissions WHERE session_id = 'member-private' AND request_id LIKE 'xs:%'").get()!.actor_id, adminId);
 
   const memberWrite = f.admit('member-private', memberId);
+  await f.refused(f.tool('member-private', memberId, memberWrite, { action: 'list' }), 403, 'tool_not_in_group');
+  const grouped = await (await f.owner.request('POST', `/api/workspaces/${f.workspace.id}/tool-groups`, { name: 'Coordinators', tools: ['read_file', 'sessions'] })).json() as ToolGroupSettings;
+  const coordinators = grouped.groups.find(group => group.name === 'Coordinators')!;
+  assert.equal((await f.owner.request('PUT', `/api/workspaces/${f.workspace.id}/members/${memberId}/tool-group`, { groupId: coordinators.id })).status, 200);
   await f.refused(f.tool('member-private', memberId, memberWrite, { action: 'read', targetSessionId: 'admin-private' }), 404, 'not_found');
   const created = await f.tool('member-private', memberId, memberWrite, { action: 'create', title: 'Sub-task', message: 'Do it', notify: true });
   assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -395,6 +388,77 @@ test('a notification brings a finished message\'s outcome back to its origin, on
   assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: later, failed: 'expired' }]);
 });
 
+test('a session an agent starts, messages or notifies acts, unless the agent chose Read only or its own message was', async t => {
+  const f = await fixture(t);
+  const ownerId = f.owner.user.id;
+  const at = new Date().toISOString();
+  const capabilities = { platform: 'linux', sandbox: true, productionShell: true, approvalFree: true, chatOptions: true, plainGit: true };
+  f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('sandbox-host', ownerId, 'Sandbox', 'h'.repeat(43), 'c'.repeat(43), JSON.stringify(capabilities), JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3' }]), at);
+  f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('sandbox-host', f.workspace.id, at);
+  f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run('hosted-model', f.workspace.id, 'Faux 3', 'faux', 'faux-3', at, 'sandbox-host', ownerId);
+  const submits: { sessionId: string; body: Record<string, unknown> }[] = [];
+  f.env.CONNECTOR_HUB = fakeHub({ rpc(_connectorId, envelope) {
+    const { action, sessionId } = envelope.request.ticket;
+    if (action === 'create') return Response.json({ ok: true }, { status: 201 });
+    if (action === 'view') return Response.json({ view: { ...f.fake(sessionId).view, sessionId } });
+    if (action === 'submit') {
+      const body = JSON.parse(envelope.request.body) as Record<string, unknown>;
+      submits.push({ sessionId, body });
+      const submissionId = `hosted-${submits.length}`;
+      f.fake(sessionId).view.queue!.push({ submissionId, actorId: ownerId, mode: 'write', status: 'queued' });
+      return Response.json({ submissionId, conversationId: '0', status: 'queued' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 503 });
+  } });
+  const last = () => submits.at(-1)!;
+  const sentAccess = () => (last().body.options as { access?: string } | undefined)?.access;
+
+  const write = f.admit('session-a', ownerId, { access: 'auto', autoMerge: true });
+  const started = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Worker', modelId: 'hosted-model', message: 'Build it' });
+  assert.equal(started.status, 201, JSON.stringify(started.body));
+  const worker = (started.body.session as CrossSessionSummary).id;
+  assert.equal((started.body.message as CrossSessionMessage).access, 'auto');
+  assert.equal(sentAccess(), undefined, 'a message that acts names no access');
+
+  const chosen = await f.tool('session-a', ownerId, write, { action: 'send', targetSessionId: worker, message: 'Only look', access: 'read' });
+  assert.equal(chosen.status, 202, JSON.stringify(chosen.body));
+  assert.equal((chosen.body.message as CrossSessionMessage).access, 'read', 'Read only, the agent\'s choice, stands');
+  assert.equal(sentAccess(), 'read');
+
+  // The worker's message asked session-b for a review, to be notified of its outcome.
+  const inWorker = f.admit(worker, ownerId);
+  const message = { id: 'review-1', submissionId: 'review-sub' };
+  f.sqlite.prepare(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, origin_admission_id, origin_call_id,
+      submission_id, conversation_id, hops, chain_json, access, notify_status, created_at, updated_at) VALUES (?,?,?,?,?,'send',?,'call-review',?,'0',1,?,'auto','pending',?,?)`)
+    .run(message.id, f.workspace.id, worker, 'session-b', ownerId, inWorker, message.submissionId, JSON.stringify([worker]), at, at);
+  const reviewer = f.fake('session-b');
+  reviewer.view.entries.push({ id: '0:69', kind: 'message', role: 'user', text: `[Pikibun cross-session message xs:${message.id} · …]\n\nReview it`, conversationId: '0' },
+    { id: '0:70', kind: 'message', role: 'assistant', text: 'Looks good.', conversationId: '0' });
+  reviewer.view.queue!.push({ submissionId: message.submissionId, actorId: ownerId, mode: 'write', status: 'settled' });
+  await nextView();
+  assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: message.id, delivered: `${message.id}-n` }]);
+  assert.equal(last().sessionId, worker);
+  assert.equal(last().body.requestId, `xs:${message.id}-n`);
+  assert.equal(sentAccess(), undefined, 'its outcome comes back acting, as the message that sent it did');
+
+  const reading = f.admit(worker, ownerId, { access: 'read' });
+  const asked = { id: 'side-1', submissionId: 'side-sub' };
+  f.sqlite.prepare(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, origin_admission_id, origin_call_id,
+      submission_id, conversation_id, hops, chain_json, notify_status, created_at, updated_at) VALUES (?,?,?,?,?,'ask',?,'call-side',?,'7',1,?,'pending',?,?)`)
+    .run(asked.id, f.workspace.id, worker, 'session-b', ownerId, reading, asked.submissionId, JSON.stringify([worker]), at, at);
+  reviewer.view.conversations.push({ id: '7', mode: 'ask' });
+  reviewer.view.entries.push({ id: '7:80', kind: 'message', role: 'user', text: `[Pikibun cross-session side ask xs:${asked.id} \u00b7 \u2026]\n\nHow?`, conversationId: '7' },
+    { id: '7:81', kind: 'message', role: 'assistant', text: 'Like this.', conversationId: '7' });
+  reviewer.view.queue!.push({ submissionId: asked.submissionId, actorId: ownerId, mode: 'ask', status: 'settled' });
+  await nextView();
+  assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: asked.id, delivered: `${asked.id}-n` }]);
+  assert.equal(last().body.requestId, `xs:${asked.id}-n`);
+  assert.equal(sentAccess(), 'read', 'the answer to a Read-only message\'s question comes back Read only');
+});
+
+
 test('lists nest the sessions an agent started under the session that started them', () => {
   const sessions = [{ id: 'c', parentSessionId: 'a' }, { id: 'b' }, { id: 'a' }, { id: 'd', parentSessionId: 'c' }, { id: 'e', parentSessionId: 'gone' },
     { id: 'x', parentSessionId: 'y' }, { id: 'y', parentSessionId: 'x' }];
@@ -436,7 +500,7 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'huge' }), 400, 'invalid_input');
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'low' }), 409, 'thinking_unsupported');
   f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run('levels-host', ownerId, 'Levels', 'h'.repeat(43), 'c'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, chatOptions: true, plainGit: true }),
+    .run('levels-host', ownerId, 'Levels', 'h'.repeat(43), 'c'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, approvalFree: true, chatOptions: true, plainGit: true }),
       JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3', thinkingLevels: ['off', 'low'], thinkingLevel: 'low' }]), new Date().toISOString());
   f.sqlite.prepare('INSERT INTO connector_workspaces (connector_id, workspace_id, created_at) VALUES (?,?,?)').run('levels-host', f.workspace.id, new Date().toISOString());
   f.sqlite.prepare('INSERT INTO models (id, workspace_id, name, provider, model_id, created_at, connector_id, connector_owner_id) VALUES (?,?,?,?,?,?,?,?)')

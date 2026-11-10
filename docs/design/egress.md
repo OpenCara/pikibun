@@ -1,5 +1,7 @@
 # Design: sessions that use plain Git through a host egress proxy
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 Status: implemented: phases 1 (the egress proxy and Git relay), 2 (clone sessions), 3 (the host cache for clones), 4
 (session-branch pushes, and backups and moves of clone sessions) and 5 (every session clones; pinned sessions are
 read-only, and the pin machinery is gone). This replaced the pinned snapshot model; the host cache it shares is in
@@ -79,7 +81,12 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
   policy names itself exactly (`hostNamed`: an allowlist's exact domains, not its `*.` entries, and package registries,
   and in open mode the package registries) may resolve to them, as the host's own traffic does; that proxy resolves the
   name again on its side, where nothing checks the address, so names a session picks (any host in open mode, any
-  subdomain under a `*.` entry) and bare 198.18 addresses are refused, saying why. The proxy never looks inside tunnels.
+  subdomain under a `*.` entry) and bare 198.18 addresses are refused, saying why. A host's owner who trusts that proxy
+  with every name turns on `HostConfig.fakeIpTunnels` (Settings → Hosts → the host → Configuration → Fake-IP proxy, off
+  by default, owner-only): then any host the policy allows may resolve to fake-IP addresses, accepting that a name a
+  session picks which really points at the host or its network is reached through that proxy on port 443. The proxy
+  asks for it on each such tunnel (the connector caches the host's configuration for 30 seconds) and counts an error as
+  off; bare 198.18 addresses stay refused. The proxy never looks inside tunnels.
   Other ports and plain-HTTP proxying are refused.
 - **`/__pikibun/status`** shows the policy, the relayed repositories and the last 50 decisions (the proxy keeps
   200 in memory).

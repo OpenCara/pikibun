@@ -25,7 +25,6 @@ interface ExtensionHost {
 }
 interface ExtensionsResponse { extensions: WorkspaceExtension[]; hosts: ExtensionHost[]; admin: boolean }
 
-const toolsLabel: Record<ExtensionToolMode, string> = { approval: "Approval", automatic: "Automatic" };
 
 function flagsOf(source: string, hosts: readonly ExtensionHost[]): ExtensionFlag[] | undefined {
   for (const host of hosts) {
@@ -59,7 +58,7 @@ function ToolList(props: { tools: readonly Pick<WorkspaceTool, "name" | "descrip
               <Text style={{ flex: 1, minWidth: 160, fontSize: text.small, color: palette().muted }}>{descriptionSummary(tool().description) || (by() ? "" : "No description")}</Text>
               <If when={by() || props.sources}>
                 <Text style={{ fontSize: text.small, color: palette().muted, numberOfLines: 1 }}>
-                  {by() ? `Left out: ${extensionLabel(by()!)} has it` : `${extensionLabel(tool().source)}${tool().mode ? ` · ${toolsLabel[tool().mode!]}` : ""}`}
+                  {by() ? `Left out: ${extensionLabel(by()!)} has it` : extensionLabel(tool().source)}
                 </Text>
               </If>
             </View>
@@ -78,12 +77,12 @@ function ToolsOverview(props: { usable: WorkspaceTools }) {
       hint={`${props.usable.tools.length} tools: ${own().length} of Pikibun's own, ${offered().length} from extensions${props.usable.off.length ? ` · ${props.usable.off.length} not added` : ""}`}>
       <View style={{ gap: 4 }}>
         <Text style={{ fontSize: text.body, fontWeight: "500", color: palette().text }}>Pikibun's own</Text>
-        <Small>In the session's sandbox or through Pikibun, with the session's permissions, approval cards and Read-only rules</Small>
+        <Small>In the session's sandbox or through Pikibun, with the session's permissions, tool group and Read-only rules</Small>
         <ToolList tools={own()} sources />
       </View>
       <View style={{ gap: 4 }}>
         <Text style={{ fontSize: text.body, fontWeight: "500", color: palette().text }}>From extensions</Text>
-        <Small>On the host, outside the sandbox: each call is approved like a host command, unless it runs automatically where the workspace and the host's owner allow that</Small>
+        <Small>On the host, outside the sandbox: its calls run for the host's owner and members granted host commands, or for every session where the host's owner allows that</Small>
         <If when={offered().length} else={<Small>{`None: no extension enabled here offers a tool${props.usable.unreported.length ? " that hosts have reported" : ""}.`}</Small>}>
           <ToolList tools={offered()} sources />
         </If>
@@ -161,7 +160,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
       <Note>Pi extensions add tools, prompt text and hooks to this workspace's sessions. A session runs those enabled here that its host has installed at the same version: its host's owner installs them there, from the host's page or with pikibun extensions.</Note>
       <Note>Tools sessions can use lists every tool they get: Pikibun's own, which the session-tool extensions below add, the built-in code mode, and those of the extensions enabled here, as hosts that have them report them.</Note>
       <Note>Pikibun's own extensions are added as the workspace needs them: Git, GitHub and the forge's command-line tool with its first repository there, a document source's reader with its first source of that kind. Add the others (Node.js, Python, the browser, scheduled prompts, ...) with Add extension.</Note>
-      <Note>Extensions run on the host, as its owner's OS user, outside the sandbox and the network access above. Their tool calls are approved like host commands, by the host's owner or a member granted host commands, unless you set their tools to run automatically and the host's owner allows that on their host.</Note>
+      <Note>Extensions run on the host, as its owner's OS user, outside the sandbox and the network access above. Their tool calls run like host commands: for the host's owner and members granted host commands, and for everyone else only where the host's owner lets every session run them.</Note>
       <Note>Settings are the extension's own options. Never put secrets in them: an extension reads keys on its host, which its owner sets up.</Note>
     </View>} action={admin() && (listed().length < extensionLimits.workspace || sessionToolsOff().length > 0) ? <Button small variant="outline" icon="plus" label="Add extension" onPress={() => editing.set("new")} /> : undefined}>
       <ResourceState inline loading={resource.loading() && !data()} error={resource.error()} retry={resource.refresh}>
@@ -190,7 +189,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                   return (
                     <CollapsibleRow leading={<Icon name="tool" size={16} color={palette().muted} />} title={cli() ? `${cli()!.title} · ${extension().source}` : extension().source}
                       hint={extensionHint(offer(), extension().enabled ? shadowedOf(extension().source) : undefined, 300, undefined,
-                        `Tool calls: ${toolsLabel[extension().tools].toLowerCase()} · ${cli() ? "on" : "installed on"} ${hostsWithIt()} of ${current().hosts.length} ${current().hosts.length === 1 ? "host" : "hosts"}`)}
+                        `${cli() ? "On" : "Installed on"} ${hostsWithIt()} of ${current().hosts.length} ${current().hosts.length === 1 ? "host" : "hosts"}`)}
                       trailing={<Badge tone={extension().enabled ? "success" : "neutral"}>{extension().enabled ? "On" : "Off"}</Badge>}>
                       <If when={offer()?.tools.length}>
                         <ToolList tools={offer()!.tools.map(tool => ({ ...tool, source: extension().source }))} shadowed={extension().enabled ? shadowedOf(extension().source) : undefined} />
@@ -216,7 +215,7 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
                       </Each>
                       <If when={!current().hosts.length}><Small>No host is connected to this workspace yet</Small></If>
                       <If when={cli()?.tool && cli()?.install && cli()?.account}>
-                        <Small>{`Each host needs ${cli()?.tool} installed (${cli()?.install}) where its sandbox finds it. It acts as the session's owner, with ${cli()?.account} in Pikibun: it reads the workspace's repositories, and writes only in a call a person approved, on the session owner's own host. Turn on read-only under Edit before running its tools automatically.`}</Small>
+                        <Small>{`Each host needs ${cli()?.tool} installed (${cli()?.install}) where its sandbox finds it. It acts as the session's owner, with ${cli()?.account} in Pikibun: it reads the workspace's repositories, and writes only outside Read only, on the session owner's own host. Turn on read-only under Edit to keep it from writing.`}</Small>
                         <View style={{ flexDirection: "row" }}><Button small variant="ghost" icon="external-link" label="How to install it" onPress={() => openExternal(cli()!.install!)} /></View>
                       </If>
                       <If when={admin()}>
@@ -277,7 +276,6 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
   close: () => void; save: (extension: WorkspaceExtension) => Promise<void>; busy: boolean; error: string }) {
   const existing = untracked(() => props.extension);
   const source = signal(existing?.source ?? "");
-  const tools = signal<ExtensionToolMode>(existing?.tools ?? "approval");
   const settings = signal<ExtensionSettings>(existing?.settings ?? {});
   const parsed = () => {
     try { return { normalized: source().trim() ? normalizeExtensionSource(source().trim()) : undefined, invalid: "" }; }
@@ -294,8 +292,8 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
   const extra = () => Object.keys(settings()).filter(name => !props.flags?.some(flag => flag.name === name));
   function submit() {
     const value = normalized();
-    if (value) void props.save(sessionTool() ? { source: value, enabled: true, tools: "approval", settings: {} }
-      : { source: value, enabled: existing?.enabled ?? true, tools: tools(), settings: settings() });
+    if (value) void props.save(sessionTool() ? { source: value, enabled: true, tools: "automatic", settings: {} }
+      : { source: value, enabled: existing?.enabled ?? true, tools: "automatic", settings: settings() });
   }
   return (
     <FormSheet open title={existing ? "Edit extension" : "Add extension"} onClose={() => { if (!props.busy) props.close(); }}
@@ -304,7 +302,7 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
         <Button variant="primary" label={props.busy ? "Saving…" : "Save"} disabled={props.busy || !normalized()} onPress={submit} />
       </>}>
       <If when={!existing && props.sessionTools.length}>
-        <Field label="Pikibun tools" hint="The session's own tools, which run in its sandbox or through Pikibun with the session's approvals. They take none of the workspace's places.">
+        <Field label="Pikibun tools" hint="The session's own tools, which run in its sandbox or through Pikibun, as the owner's tool group allows. They take none of the workspace's places.">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             <Each of={props.sessionTools} key={item => item.source}>
               {item => <Button small variant={normalized() === item().source ? "primary" : "outline"} label={item().title} disabled={props.busy} onPress={() => source.set(item().source)} />}
@@ -346,12 +344,6 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
         )}
       </If>
       <If when={replacing()}><Note>{`The workspace uses ${replacing()?.source}: this replaces it, in its place.`}</Note></If>
-      <If when={!sessionTool()}>
-        <Field label="Tools" hint={tools() === "approval" ? "Each tool call waits for the host's owner, or a member granted host commands, to approve it."
-          : "Tool calls run at once, outside the sandbox, on hosts whose owner lets workspaces do that; elsewhere they still wait for approval."}>
-          <Segmented value={tools()} onChange={value => tools.set(value)} options={(["approval", "automatic"] as const).map(value => ({ value, label: toolsLabel[value] }))} />
-        </Field>
-      </If>
       <If when={existing}>
         <If when={props.flags !== undefined} else={<Note>Its settings show here once a host that has it installed reports them.</Note>}>
           <If when={props.flags?.length || extra().length} else={<Note>This extension has no settings.</Note>}>
