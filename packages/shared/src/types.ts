@@ -235,9 +235,16 @@ export interface SessionPullRequest {
   state?: PullRequestState;
 }
 /**
+ * Where a scheduled prompt's runs go: `session`, the session's own agent (the default), or `child`, a new session each
+ * run, started under it as its child (parentSessionId), whose opening message the run's message is. A child run never
+ * waits on, or interrupts, the session itself.
+ */
+export const scheduleRunIns = ["session", "child"] as const;
+export type ScheduleRunIn = (typeof scheduleRunIns)[number];
+/**
  * A scheduled prompt: a message the server sends the session's agent on a cron schedule (packages/shared/src/cron.ts),
  * as the session's owner, who alone manages them. A run that comes while the agent is busy or waits for an approval is
- * skipped, not queued.
+ * skipped, not queued; one that runs in a new child session (`runIn`) starts that session whatever this one is doing.
  */
 export interface SessionSchedule {
   id: string;
@@ -248,11 +255,15 @@ export interface SessionSchedule {
   timeZone: string;
   content: string;
   access: AccessMode;
+  /** Where each run goes (ScheduleRunIn); absent from older servers, which send every run to the session itself. */
+  runIn?: ScheduleRunIn;
   enabled: boolean;
   /** Null while paused, or when the expression never comes round. */
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastSubmissionId: string | null;
+  /** The child session its last run started (runIn `child`); null otherwise, and absent from older servers. */
+  lastSessionId?: string | null;
   /** Why its last run sent nothing: an API error code, or `session_busy`. */
   lastError: string | null;
   createdBy: string;
@@ -553,6 +564,7 @@ export interface ScheduleToolRequest {
   timeZone?: string;
   content?: string;
   access?: AccessMode;
+  runIn?: ScheduleRunIn;
   enabled?: boolean;
 }
 export type ScheduleToolResult = { schedules: SessionSchedule[] } | { schedule: SessionSchedule } | { deleted: string };

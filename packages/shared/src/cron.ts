@@ -196,12 +196,13 @@ const SCHEDULE_TARGET_LIMIT = 4000;
  * one-call permission against: the runner and the control plane both build it from the call's own fields, so a grant
  * covers only the change the owner saw.
  */
-export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" | "scheduleId" | "name" | "cron" | "timeZone" | "content" | "access" | "enabled">): string {
+export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" | "scheduleId" | "name" | "cron" | "timeZone" | "content" | "access" | "runIn" | "enabled">): string {
   const parts: string[] = [request.action];
   if (request.scheduleId !== undefined) parts.push(request.scheduleId);
   if (request.cron !== undefined) parts.push(`cron ${request.cron}`);
   if (request.timeZone !== undefined) parts.push(`in ${request.timeZone}`);
   if (request.access !== undefined) parts.push(`access ${request.access}`);
+  if (request.runIn !== undefined) parts.push(request.runIn === "child" ? "each run in a new child session" : "runs in this session");
   if (request.enabled !== undefined) parts.push(request.enabled ? "enabled" : "paused");
   if (request.name !== undefined) parts.push(`name ${JSON.stringify(request.name)}`);
   let target = parts.join(" ");
