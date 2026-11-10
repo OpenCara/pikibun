@@ -42,6 +42,9 @@ export interface HostConfig {
   browser: HostBrowserConfig;
   serviceLifetimeSeconds: number;
   tunnel: HostTunnelConfig;
+  // Lets the egress proxy tunnel to a local proxy's fake-IP addresses (198.18.0.0/15) for any host the network policy
+  // allows, not only the ones it names exactly: the host's owner trusts that proxy with every name (docs/design/egress.md).
+  fakeIpTunnels: boolean;
 }
 
 export interface RequiredExtension {
@@ -65,6 +68,7 @@ export const defaultHostConfig: Readonly<HostConfig> = Object.freeze({
   browser: defaultHostBrowserConfig as HostBrowserConfig,
   serviceLifetimeSeconds: serviceLifetimeLimits.default,
   tunnel: defaultHostTunnelConfig as HostTunnelConfig,
+  fakeIpTunnels: false,
 });
 
 export function parseRequiredExtensions(input: unknown): RequiredExtension[] {
@@ -137,7 +141,7 @@ export function parseHostCompaction(value: unknown): HostCompaction {
   return Object.keys(overrides).length ? { ...compaction, modelOverrides: overrides } : compaction;
 }
 
-export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel"]);
+export const ownerOnlyHostConfig: readonly (keyof HostConfig)[] = Object.freeze(["gitCredentials", "repositoryCache", "hostSessions", "requiredExtensions", "browser", "tunnel", "fakeIpTunnels"]);
 
 export function parseHostConfig(value: unknown): HostConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host configuration");
@@ -155,6 +159,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   if (typeof input.gitCredentials !== "boolean") throw new Error("Invalid Git credentials setting");
   if (!repositoryCacheModes.includes(input.repositoryCache as RepositoryCacheMode)) throw new Error("Invalid repository cache setting");
   if (typeof input.hostSessions !== "boolean") throw new Error("Invalid host sessions setting");
+  if (typeof input.fakeIpTunnels !== "boolean") throw new Error("Invalid fake-IP tunnels setting");
   const lifetime = input.serviceLifetimeSeconds;
   const lifetimes = hostConfigLimits.serviceLifetimeSeconds;
   if (typeof lifetime !== "number" || !Number.isSafeInteger(lifetime) || lifetime < lifetimes.min || lifetime > lifetimes.max) {
@@ -163,7 +168,7 @@ export function parseHostConfig(value: unknown): HostConfig {
   return { commandTimeoutSeconds: timeout, gpu: input.gpu, gitCredentials: input.gitCredentials, repositoryCache: input.repositoryCache as RepositoryCacheMode,
     hostSessions: input.hostSessions, compaction: parseHostCompaction(input.compaction), builtinExtensions: parseBuiltinExtensions(input.builtinExtensions),
     requiredExtensions: parseRequiredExtensions(input.requiredExtensions), browser: parseHostBrowserConfig(input.browser),
-    serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel) };
+    serviceLifetimeSeconds: lifetime, tunnel: parseHostTunnelConfig(input.tunnel), fakeIpTunnels: input.fakeIpTunnels };
 }
 
 export function parseHostConfigChange(value: unknown): Partial<HostConfig> {
