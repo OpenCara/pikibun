@@ -23,7 +23,8 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
 import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
-import { boundOutput, MODEL_OUTPUT, SavedOutputs, toolOutputPath } from "./tool-output.js";
+import { boundOutput, MODEL_OUTPUT, SAVED_OUTPUT_BYTES, SavedOutputs, scriptOutput, toolOutputPath } from "./tool-output.js";
+import { inScriptCall, wholeForScripts } from "./script-output.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
@@ -248,7 +249,7 @@ export class RunnerSession {
   readonly #uploads: SessionUploads;
   readonly #mirrors: SessionMirrors | undefined;
   readonly #savedOutputs = new SavedOutputs();
-  readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" } }>();
+  readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" }; script: boolean }>();
   #hostExtensions?: SessionExtensions;
   #currentModel?: { provider: string; modelId: string; thinkingLevel?: string };
   #opening: Promise<void> = Promise.resolve();
@@ -692,7 +693,7 @@ export class RunnerSession {
     const own = this.buildTools();
     this.#definitions = this.usableDefinitions(await this.fetchDefinitions(), own.map(tool => tool.name));
     this.#definedExtensions = [];
-    this.tools = [...own, ...this.#definitions.map(definition => this.definedTool(definition))];
+    this.tools = [...own, ...this.#definitions.map(definition => wholeForScripts(this.definedTool(definition)))];
     const extension = defineExtension({ name: "workspace-tools", tools: this.tools });
     this.#extension = extension;
     registry.install(extension);
@@ -1248,6 +1249,7 @@ export class RunnerSession {
       hostSignIn: this.#onHost || (ownSession && this.config.pikiHostSignIn === true),
       ...(this.#egress && !this.#onHost ? { sandbox: (run: PikiSandboxRun) => this.runPikiCommand(run) } : {}),
       saveOutput: (callId, tool, output) => this.savePikiOutput(callId, tool, output),
+      fromScript: callId => this.#pikiCalls.get(callId)?.script === true,
     };
   }
 
@@ -1263,6 +1265,9 @@ export class RunnerSession {
     const shown = { ...approval, admissionId: undefined, callId: undefined };
     const result = approval.result;
     if (typeof result !== "string") return shown;
+    if (inScriptCall()) {
+      return { ...shown, result: scriptOutput(result, candidate => Buffer.byteLength(JSON.stringify({ ...shown, result: candidate })) <= SAVED_OUTPUT_BYTES) };
+    }
     const files = await this.outputFiles(api).catch(() => undefined);
     return { ...shown, result: await boundOutput(result, {
       ...(files
@@ -1316,7 +1321,7 @@ export class RunnerSession {
     await this.recheckTool(attribution);
     const limits = commandLimits((await this.hostConfig()).commandTimeoutSeconds);
     const callId = String(call.api.callId);
-    this.#pikiCalls.set(callId, { write: trusted, attribution });
+    this.#pikiCalls.set(callId, { write: trusted, attribution, script: inScriptCall() });
     try {
       const result = await execute(AbortSignal.any([call.signal, AbortSignal.timeout(limits.seconds * 1000)]));
       const shown = (result.output ?? []).map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
@@ -1730,7 +1735,7 @@ export class RunnerSession {
 
   private buildTools(): ToolRegistration[] {
     const tools = this.sessionTools();
-    return this.#clone && this.#egress ? [...tools, this.clonePushTool()] : tools;
+    return (this.#clone && this.#egress ? [...tools, this.clonePushTool()] : tools).map(wholeForScripts);
   }
 
   private clonePushTool(): ToolRegistration {
@@ -2120,7 +2125,7 @@ export class RunnerSession {
     }
     const added = this.usableDefinitions(fetched, [...this.tools.map(tool => tool.name), ...extensionTools]);
     if (!added.length) return;
-    const tools = added.map(definition => this.definedTool(definition));
+    const tools = added.map(definition => wholeForScripts(this.definedTool(definition)));
     const extension = defineExtension({ name: `defined-tools-${this.#definedExtensions.length + 1}`, tools });
     this.#registry.install(extension);
     this.#definedExtensions.push(extension);

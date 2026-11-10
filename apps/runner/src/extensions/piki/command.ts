@@ -6,7 +6,7 @@ import { arr, int, obj, opt, str, type Static } from "@earendil-works/pi-schema"
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { PikiExtensionInfo } from "../../../../../packages/shared/src/piki-extensions.js";
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
-import { boundOutput, fitsModel, SAVED_OUTPUT_BYTES } from "../../tool-output.js";
+import { boundOutput, fitsModel, SAVED_OUTPUT_BYTES, scriptOutput } from "../../tool-output.js";
 
 export interface CliSpec {
   info: PikiExtensionInfo;
@@ -205,6 +205,8 @@ export interface PikiSession {
   sandbox?: (run: PikiSandboxRun) => Promise<CliRun>;
   hostSignIn: boolean;
   saveOutput?: (callId: string, tool: string, output: string) => Promise<string>;
+  /** Whether a code mode script made the call: it gets the whole output (up to about 1 MB), not the model's excerpt. */
+  fromScript?: (callId: string) => boolean;
 }
 
 export const noPikiSession: PikiSession = Object.freeze({ hostSignIn: false });
@@ -255,7 +257,8 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
         const tool = spec.info.tool ?? spec.command;
         const outcome = async (run: CliRun) => {
           const status = run.failure ?? (run.exitCode === 0 ? undefined : run.signal ? `It ended with ${run.signal}` : `It exited with ${run.exitCode}`);
-          const text = await boundOutput(run.output.trim() || "(no output)", {
+          const output = run.output.trim() || "(no output)";
+          const text = session.fromScript?.(toolCallId) ? scriptOutput(output) : await boundOutput(output, {
             ...(session.saveOutput ? { save: (whole: string) => session.saveOutput!(toolCallId, tool, whole) } : {}),
             ...(status ? { fits: (shown: string) => fitsModel(`${status}.\n${shown}`) } : {}),
           });

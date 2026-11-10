@@ -84,6 +84,22 @@ export function savedOutput(text: string): string {
   return excerpt(text, { bytes: SAVED_OUTPUT_BYTES, lines: Number.MAX_SAFE_INTEGER }, omitted => `[… ${omitted} bytes of the output left out here …]`);
 }
 
+/**
+ * What a code mode script gets of an output: all of it while it fits (by default, while it is at most
+ * SAVED_OUTPUT_BYTES), else its head and tail with a note of what was left out, so a runaway can't exhaust memory.
+ */
+export function scriptOutput(text: string, fits: (shown: string) => boolean = shown => byteLength(shown) <= SAVED_OUTPUT_BYTES): string {
+  if (fits(text)) return text;
+  const note = (omitted: number) => `[… ${omitted} bytes of the output left out here …]`;
+  let bytes = SAVED_OUTPUT_BYTES;
+  let shown = excerpt(text, { bytes, lines: Number.MAX_SAFE_INTEGER }, note);
+  for (let attempt = 0; attempt < 16 && !fits(shown); attempt++) {
+    bytes = Math.floor(bytes * 0.7);
+    shown = excerpt(text, { bytes, lines: Number.MAX_SAFE_INTEGER }, note);
+  }
+  return fits(shown) ? shown : note(byteLength(text));
+}
+
 export function toolOutputPath(tool: string, callId: string): string {
   const name = (value: string) => value.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 60) || "call";
   const digest = createHash("sha256").update(`${tool}\0${callId}`).digest("hex").slice(0, 8);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { boundOutput, excerpt, fitsModel, KEPT_OUTPUTS, MODEL_OUTPUT, outputsToPrune, SAVED_OUTPUT_BYTES, SavedOutputs, savedOutput, toolOutputPath } from '../apps/runner/src/tool-output.js';
+import { boundOutput, excerpt, fitsModel, KEPT_OUTPUTS, MODEL_OUTPUT, outputsToPrune, SAVED_OUTPUT_BYTES, SavedOutputs, savedOutput, scriptOutput, toolOutputPath } from '../apps/runner/src/tool-output.js';
 
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
 const lines = (text: string) => text.split('\n').length;
@@ -70,6 +70,23 @@ test('what is saved of an output longer than a file may be keeps its start and e
   assert.ok(saved.startsWith('ok 0 -') && saved.endsWith('FAILED: 1 test'));
   assert.match(saved, /\[… \d+ bytes of the output left out here …\]/);
   assert.equal(savedOutput('short'), 'short');
+});
+
+test('a script gets an output whole up to about 1 MB, else its start and end, and fits it in a card where it is given one', () => {
+  const json = JSON.stringify({ items: Array.from({ length: 20_000 }, (_, index) => ({ id: index })) });
+  assert.ok(!fitsModel(json) && bytes(json) < SAVED_OUTPUT_BYTES);
+  assert.equal(scriptOutput(json), json, 'past what the model is shown, whole');
+  const text = log(100_000);
+  const shown = scriptOutput(text);
+  assert.ok(bytes(shown) <= SAVED_OUTPUT_BYTES && bytes(shown) > SAVED_OUTPUT_BYTES - 64 * 1024);
+  assert.ok(shown.startsWith('ok 0 -') && shown.endsWith('FAILED: 1 test'));
+  assert.match(shown, /\[… \d+ bytes of the output left out here …\]/);
+  const card = { id: 'tool-1', operation: { kind: 'program', tool: 'git', command: 'git log' }, status: 'executed' };
+  const escaped = '"quoted"\t\\\n'.repeat(70_000);
+  const fits = (candidate: string) => bytes(JSON.stringify({ ...card, result: candidate })) <= SAVED_OUTPUT_BYTES;
+  assert.ok(bytes(escaped) < SAVED_OUTPUT_BYTES && !fits(escaped));
+  const inCard = scriptOutput(escaped, fits);
+  assert.ok(fits(inCard) && inCard.startsWith('"quoted"'));
 });
 
 test('excerpts keep whole lines, and an output\'s path is the same for the same call', () => {

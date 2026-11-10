@@ -13,7 +13,7 @@ import { apiWrites, cliEnvironment, commandWords, optionValues, sandboxDirectory
 import { ghSpec } from '../apps/runner/src/extensions/piki/gh.js';
 import { glabSpec } from '../apps/runner/src/extensions/piki/glab.js';
 import { connectorPikiExtensions } from '../apps/runner/src/extensions/piki/index.js';
-import { fitsModel } from '../apps/runner/src/tool-output.js';
+import { fitsModel, SAVED_OUTPUT_BYTES } from '../apps/runner/src/tool-output.js';
 import { SessionExtensions, type ExtensionHost } from '../apps/runner/src/extensions/adapter.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { loadInstalled, loadSource } from '../apps/runner/src/extensions/load.js';
@@ -319,6 +319,19 @@ test('a long output: its start and end, which hold how it ended, and the whole o
     const message = (error as Error).message;
     return message.startsWith('It exited with 1.\nok 0 - passes') && message.endsWith('not ok 20000 - the failure') && fitsModel(message);
   });
+});
+
+test('a code mode script\'s call gets the whole output, not the model\'s excerpt, and nothing is saved for it', async t => {
+  const json = JSON.stringify({ items: Array.from({ length: 20_000 }, (_, index) => ({ id: index, title: `item ${index}` })) });
+  assert.ok(!fitsModel(json) && json.length < SAVED_OUTPUT_BYTES);
+  const saved: string[] = [];
+  const session: PikiSession = { hostSignIn: false, sandbox: async () => ({ exitCode: 0, signal: null, output: json }),
+    saveOutput: async (_callId, _tool, whole) => { saved.push(whole); return 'tool-output/gh-call.txt'; }, fromScript: callId => callId === 'call' };
+  const { call } = await ghTool(t, false, session);
+  const text = await call({ args: ['api', 'repos/acme/app/issues'] });
+  assert.equal(text, json, 'the script can parse it');
+  assert.equal((JSON.parse(text) as { items: unknown[] }).items.length, 20_000);
+  assert.deepEqual(saved, []);
 });
 
 test('in the sandbox, read-only: only commands that read, in the worktree mounted read-only', async t => {
