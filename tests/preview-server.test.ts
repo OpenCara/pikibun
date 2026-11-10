@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig } from "../apps/server/src/config.js";
+import { InstanceLockedError } from "../apps/server/src/db/index.js";
 import { startServer } from "../apps/server/src/serve.js";
 
 const production = "https://pikibun.com";
@@ -118,4 +119,30 @@ test("each origin serves its own NSH build, and each host's authentication keeps
     assert.equal(auth.status, 302);
     assert.equal(new URL(auth.headers.get("location")!).searchParams.get("redirect_uri"), `${production}/api/auth/github/callback`);
   });
+});
+
+test("a second server on a database another one serves is refused before it migrates, and starts once the first has stopped", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pikibun-instance-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const migrations = join(root, "migrations");
+  await mkdir(join(migrations, "sqlite"), { recursive: true });
+  await writeFile(join(migrations, "sqlite", "0001_first.sql"), "CREATE TABLE first (id TEXT PRIMARY KEY);\n");
+  const previous = process.env.MIGRATIONS_DIR;
+  process.env.MIGRATIONS_DIR = migrations;
+  t.after(() => { if (previous === undefined) delete process.env.MIGRATIONS_DIR; else process.env.MIGRATIONS_DIR = previous; });
+  const settings = { ...environment, DATABASE_URL: `sqlite://${join(root, "db.sqlite")}`, STATIC_DIR: join(root, "web") };
+  const first = await startServer(await loadConfig(settings));
+  await writeFile(join(migrations, "sqlite", "0002_second.sql"), "CREATE TABLE second (id TEXT PRIMARY KEY);\n");
+  const second = await loadConfig(settings);
+  await assert.rejects(startServer(second), InstanceLockedError);
+  const reader = await loadConfig(settings);
+  try {
+    assert.deepEqual(await reader.env.DB.query<{ name: string }>("SELECT name FROM schema_migrations ORDER BY name").all(), [{ name: "0001_first.sql" }]);
+  } finally {
+    await reader.env.CONNECTOR_HUB!.close();
+    await reader.env.DB.close();
+  }
+  await first.close();
+  const next = await startServer(await loadConfig(settings));
+  await next.close();
 });

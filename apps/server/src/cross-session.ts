@@ -1,7 +1,6 @@
 import type { Hono } from 'hono';
-import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import { accessModes, thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type SubmitResult, type ThinkingLevel, type WorkspaceRole } from '../../../packages/shared/src/types.js';
-import type { ConnectorCapabilities, LocalModelSummary } from '../../../packages/shared/src/connector.js';
+import { parseCapabilities, type LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { hasPermission, workspaceSessionPermissions } from '../../../packages/shared/src/policy.js';
 import {
   audienceTarget, crossSessionHeader, crossSessionLimits, cut, messageOutcome, sessionsBrokerActions, sessionsToolTarget, sessionsWriteActions,
@@ -216,7 +215,6 @@ async function read(call: Call, targetId: string, messageId: string | undefined,
   if (!fresh || !hasPermission(fresh.permissions, 'read')) fail(403, 'permission_revoked', 'Session access is no longer authorized.');
   const shared = new Set(view.conversations.filter(conversation => conversation.mode === 'write').map(conversation => conversation.id));
   const entries = view.entries.filter(entry => entry.conversationId === undefined || shared.has(entry.conversationId)).slice(-limit)
-    // A failed model turn keeps its codes, as the session's screen shows them, so the reading agent can tell why it failed.
     .map(entry => ({ id: entry.id, role: entry.role, kind: entry.kind, ...(entry.actorId ? { actorId: entry.actorId } : {}), text: cut(entry.text, crossSessionLimits.entryChars),
       ...(entry.error ? { error: entryError(entry.error) } : {}) }));
   const pendingApprovals = view.approvals.filter(approval => approval.status === 'pending').map(approval => ({ id: approval.id, kind: approval.operation.kind,

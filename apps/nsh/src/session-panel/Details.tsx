@@ -101,18 +101,12 @@ function TunnelSection(props: Part & { canStop: boolean }) {
   );
 }
 
-/**
- * How full the shared conversation's context window is (SessionView.context): its tokens against its model's window, as a
- * meter that turns to a warning near where Pi compacts it, and where that is.
- */
 export function ContextSection(props: { usage: SessionContextView }) {
   const usage = () => props.usage;
   const percent = () => (usage().window ? Math.round(usage().tokens / usage().window! * 100) : undefined);
-  /** Where the meter warns: near compaction where Pi compacts, else near the window's end. */
   const tone = (): Tone => {
     const limit = usage().compactsAt ?? usage().window;
     if (limit === undefined) return "running";
-    // A reserve as large as the window compacts at 0: always due.
     const ratio = limit > 0 ? usage().tokens / limit : Infinity;
     return ratio >= 1 ? "danger" : ratio >= 0.8 ? "warning" : "running";
   };

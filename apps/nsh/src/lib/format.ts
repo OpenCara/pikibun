@@ -11,15 +11,12 @@ export function formatDuration(ms: number): string {
 
 const tokenUnits: readonly [number, string][] = [[1e3, "K"], [1e6, "M"], [1e9, "B"]];
 
-/** A count of tokens, short: "850", "84.2K", "200K", "1M". */
 export function formatTokens(tokens: number): string {
   if (!Number.isFinite(tokens) || tokens < 0) return "?";
   if (tokens < 1000) return String(Math.round(tokens));
   for (const [size, unit] of tokenUnits) {
     const value = tokens / size;
-    // A count that rounds to 1000 of a unit is 1 of the next: 999,600 is "1M", not "1000K".
     if (value >= 999.5 && unit !== "B") continue;
-    // One decimal under 100, as "84.2K"; rounded first, so 99,960 is "100K" rather than "100.0K".
     const tenths = Math.round(value * 10);
     return `${tenths < 1000 ? tenths / 10 : Math.round(value)}${unit}`;
   }
@@ -49,10 +46,6 @@ export function timestamp(value: string): string {
   return Number.isNaN(date.getTime()) ? value : `${dateLabel(date)}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/**
- * Why a model request failed, from the only details that cross the host boundary: provider, model, HTTP status and the
- * fixed cause Pi's own message gave. `advice: false` (a share link, whose readers can't act on it) gives the cause alone.
- */
 export function modelFailure({ provider, modelId, status, cause, compacting }: NonNullable<EntryView["error"]>, { advice = true }: { advice?: boolean } = {}): string {
   const name = provider ?? "the provider";
   if (cause === "incomplete_stream") {

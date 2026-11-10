@@ -101,14 +101,8 @@ export type Run = {
   options?: ChatOptions;
   images?: { count: number; bytes: number };
   inputsLost?: true;
-  /**
-   * Pi ended the run without an answer or any entry: its model was unavailable, or its context could not be compacted.
-   * `cause` is which fixed cause Pi's own text gave; `compacting`, that the host started compacting the conversation's
-   * context for it (see compactsAfterFailure).
-   */
   failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure;
     cause?: ModelFailureCause; compacting?: true };
-  /** Who stopped it (see stop); `pending` until its conversation's work has ended, which holds the queue. */
   stopped?: { by: string; pending?: true };
   crashed?: true;
   screening?: true;
@@ -266,9 +260,7 @@ export class RunnerSession {
   #drainAgain = false;
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
-  /** The compaction settings the harness runs by now, which the view's context reads (see `contextView`). */
   #compaction: () => CompactionSettings | undefined = () => undefined;
-  /** Pushes (approved ones settle after decide() returns; automatic ones inline); close() aborts and awaits them. */
   private pushes = new Set<{ controller: AbortController; done: Promise<void> }>();
   #failed = false;
   #recovery: Promise<void> | undefined;
@@ -954,20 +946,16 @@ export class RunnerSession {
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
       const cause = settled.status === "unanswered" && settled.reason === "model_error" && !compaction ? modelFailureCause(settled.detail) : undefined;
       const failed = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model");
-      // Only a failure names its model: a run that answered asks the conversation nothing more.
       const model = failed ? (await conversation?.agent(context))?.model : undefined;
       const failure: Run["failure"] = failed
         ? { reason: compaction ? "compaction_failed" : settled.reason, ...model, ...(compaction ? { compaction } : {}), ...(cause ? { cause } : {}) } : undefined;
       const compacts = !!failure && !!conversation && await this.compactsAfterFailure(conversation, state.runs[key]!.mode, cause, model);
-      // Pi ends a run that host crashes cut off again and again rather than crash the host once more; sending it again runs
-      // it afresh.
       const crashed = settled.status === "unanswered" && (settled.reason === "restart_limit" || settled.reason === "interrupted");
       await this.exclusive(async () => {
         if (generation !== this.generation || this.closing) return;
-        // Compaction starts only for a run nobody stopped: `stop` holds the same lock, so none can come between.
         if (compacts && !(await this.metadata()).runs[key]?.stopped) {
           try { await conversation!.compact(undefined, context); failure!.compacting = true; }
-          catch { /* A compaction that can't start leaves the failure as it was. */ }
+          catch { }
         }
         await this.mutate(meta => {
           const run = meta.runs[key]!;
@@ -981,11 +969,6 @@ export class RunnerSession {
     })().catch(() => { });
   }
 
-  /**
-   * Whether a conversation whose run just failed should start compacting (see compactsAfterFailure): a dropped stream on a
-   * large context, so the next message sends less. Pi then summarizes in the background and places the summary while the
-   * conversation is idle. A context it can't read compacts nothing.
-   */
   private async compactsAfterFailure(conversation: Conversation, mode: Run["mode"], cause: ModelFailureCause | undefined,
     model: { provider: string; modelId: string } | undefined): Promise<boolean> {
     if (cause !== "incomplete_stream" || mode !== "write") return false;
@@ -2721,12 +2704,9 @@ export class RunnerSession {
     const tunnel = this.#tunnel?.view();
     const initial = await this.metadata();
     const snapshots: { branch: Branch; entries: readonly EntryRecord[]; messages: readonly Message[] }[] = [];
-    // A shared conversation someone went back from stays on the host, out of the view: its fork shows what was kept.
     for (const branch of initial.branches.filter(item => !item.superseded)) {
       const conversation = await this.harness.conversation(branch.id as ConversationId, context);
       if (!conversation) continue;
-      // The active transcript, from the newest head marker (a compaction's summary) on, as the model sees it. A watch's
-      // view would hold only a window of the newest entries.
       const active = await conversation.context(context);
       snapshots.push({ branch, entries: active.entries, messages: active.messages });
     }
@@ -2785,11 +2765,6 @@ export class RunnerSession {
     };
   }
 
-  /**
-   * How full the shared conversation's context is (SessionView.context): about how many tokens its messages hold, its
-   * model's context window from the host's catalog, and where Pi compacts it under the settings the harness runs by.
-   * A conversation without a model of its own is on the session's.
-   */
   private contextView(messages: readonly Message[], model: { provider: string; modelId: string } | undefined): SessionView["context"] {
     const tokens = contextTokens(messages);
     if (!Number.isFinite(tokens) || tokens < 0) return undefined;
@@ -2804,7 +2779,6 @@ export class RunnerSession {
     return { tokens, ...(window !== undefined ? { window } : {}), ...(compactsAt !== undefined ? { compactsAt } : {}) };
   }
 
-  /** What the view tells of the session's extensions: those it runs with now, and its workspace's enabled ones its host lacks. */
   private async extensionView(): Promise<Pick<SessionView, "extensions">> {
     const config = this.config.extensions;
     const enabled = this.#builtins ? (await this.hostConfig().catch(() => undefined))?.builtinExtensions ?? [] : [];

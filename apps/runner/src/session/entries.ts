@@ -23,7 +23,6 @@ export function entryView(entry: EntryRecord, branch: number, actorId?: string, 
   const images = entryImages(entry).slice(0, entryImageLimits.images).map(image => ({ mimeType: image.mimeType }));
   const failed = messages.find(message => message.role === "assistant" && message.stopReason === "error");
   const status = failed?.role === "assistant" ? Number(/^(\d{3})\b/.exec(failed.errorMessage ?? "")?.[1]) : NaN;
-  // And which fixed cause it was, when the text is exactly one of Pi's own.
   const cause = failed?.role === "assistant" ? modelFailureCause(failed.errorMessage) : undefined;
   const error = failed?.role === "assistant" ? {
     provider: String(failed.provider).slice(0, 128), modelId: String(failed.model).slice(0, 256), ...(status >= 100 && status <= 599 ? { status } : {}),
@@ -68,10 +67,6 @@ export function refusedView(run: Run, branch: number): SessionView["entries"][nu
   return { id: `${branch}:refused:${run.key}`, kind: "workspace.run-refused", role: "system", text: run.refused!.notice, actorId: run.initiatedBy, conversationId: String(branch) };
 }
 
-/**
- * A run Pi settled without an answer, shown as a failed model turn after its entries: provider and model, which fixed
- * compaction failure or cause it was, and whether the host started compacting the context for it, never Pi's detail.
- */
 export function failureView(run: Run, branch: number): SessionView["entries"][number] {
   const { provider, modelId, compaction, cause, compacting } = run.failure!;
   return { id: `${branch}:failure:${run.key}`, kind: "workspace.run-failure", role: "assistant", text: "", actorId: run.initiatedBy, conversationId: String(branch),

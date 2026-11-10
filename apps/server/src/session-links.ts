@@ -58,11 +58,6 @@ async function requireLinkedSession(c: AppContext, token: string | undefined): P
   return row;
 }
 
-/**
- * An entry's model failure with only the fields a transcript shows, for a reader outside the session's own screen (a
- * share link, another session's `sessions` read): its codes only when they are known fixed ones, so a newer or
- * misbehaving runner can't put text there.
- */
 export function entryError(error: NonNullable<EntryView['error']>): NonNullable<EntryView['error']> {
   return {
     ...(error.provider !== undefined ? { provider: error.provider } : {}),
@@ -74,7 +69,6 @@ export function entryError(error: NonNullable<EntryView['error']>): NonNullable<
   };
 }
 
-/** Short strings only: a call's id or a tool's name, from what a host sent. */
 const label = (value: unknown, limit: number): value is string => typeof value === 'string' && value.length > 0 && value.length <= limit;
 
 function sharedToolFields({ toolCalls, toolResult }: EntryView): Pick<EntryView, 'toolCalls' | 'toolResult'> {

@@ -367,13 +367,6 @@ export class EgressProxy {
     }
   }
 
-  /**
-   * The addresses a tunnel to `host` may connect to, or why there are none. Every address must be public: a name that
-   * also points inside the host's networks is refused outright. A local proxy's fake-IP addresses (fakeIpAddress) are
-   * taken too for a name, never an address given as the host, that the policy names itself (hostNamed): that proxy
-   * passes the connection on to the name as the host's own traffic goes (#248), and a name the session chose freely in
-   * open mode could have it resolved into the host's networks on the proxy's side, where it can't be checked.
-   */
   async #addresses(host: string, policy: NetworkPolicy): Promise<{ addresses: string[] } | { reason: string }> {
     const refused = { reason: `${host} does not resolve to a public address` };
     if (isIP(host)) return publicAddress(host) ? { addresses: [host] } : refused;

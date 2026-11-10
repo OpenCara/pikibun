@@ -72,15 +72,12 @@ test("the panel's context compacts where Pi does: the window less the reserve th
   const sonnet = { provider: "anthropic", modelId: "sonnet" };
   assert.equal(compactionThreshold(undefined, sonnet, 200_000), 200_000 - 16_384, "Pi's own reserve");
   assert.equal(compactionThreshold({ reserveTokens: 32_768 }, sonnet, 200_000), 200_000 - 32_768);
-  // A model's own override wins over the harness-wide reserve, as in Pi; the reasoning default is one.
   const models = [{ provider: "anthropic", id: "sonnet", reasoning: true, contextWindow: 200_000 }];
   assert.equal(compactionThreshold(hostCompaction({ keepRecentTokens: 4000 }, models), sonnet, 200_000), 180_000);
   assert.equal(compactionThreshold({ reserveTokens: 32_768, modelOverrides: { "anthropic/sonnet": { reserveTokens: 50_000 } } }, sonnet, 200_000), 150_000);
-  // Off for every model, or for this one, it never compacts on its own; a model's own setting wins either way.
   assert.equal(compactionThreshold({ enabled: false }, sonnet, 200_000), undefined);
   assert.equal(compactionThreshold({ modelOverrides: { "anthropic/sonnet": { enabled: false } } }, sonnet, 200_000), undefined);
   assert.equal(compactionThreshold({ enabled: false, modelOverrides: { "anthropic/sonnet": { enabled: true } } }, sonnet, 200_000), 200_000 - 16_384);
-  // Without a window there is nothing to tell, and a reserve larger than the window compacts at once.
   assert.equal(compactionThreshold(undefined, sonnet, undefined), undefined);
   assert.equal(compactionThreshold(undefined, sonnet, 0), undefined);
   assert.equal(compactionThreshold(undefined, sonnet, 8192), 0);

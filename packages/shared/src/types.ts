@@ -481,11 +481,6 @@ export interface ToolCallRef {
 }
 export type CompactionFailure = "token_limit" | "tool_call" | "no_text" | "aborted";
 export const COMPACTION_FAILURES: readonly CompactionFailure[] = ["token_limit", "tool_call", "no_text", "aborted"];
-/**
- * Why a model request failed, from Pi's own fixed messages, never provider text: `incomplete_stream`, the provider's
- * response stream closed before it said why it ended (no stop or finish reason), as when a gateway or proxy between the
- * host and the provider drops it without passing on an error.
- */
 export type ModelFailureCause = "incomplete_stream";
 export const MODEL_FAILURE_CAUSES: readonly ModelFailureCause[] = ["incomplete_stream"];
 export interface EntryView {
@@ -495,14 +490,7 @@ export interface EntryView {
   text: string;
   actorId?: string;
   conversationId?: string;
-  /**
-   * The model request behind this entry failed. Only the provider/model, HTTP status, which fixed cause it was when Pi's
-   * own message says (`cause`), and, when Pi could not compact the context first, which fixed compaction failure it was
-   * cross the boundary, never provider text. `compacting`: the run failed so on a long conversation that the host started
-   * compacting its context, so the next message sends less (a run failure's only).
-   */
   error?: { provider?: string; modelId?: string; status?: number; compaction?: CompactionFailure; cause?: ModelFailureCause; compacting?: true };
-  /** How long the model took to write this reply, or the tool to run; absent for entries recorded before Pi 1.1.0. */
   durationMs?: number;
   autoApproved?: AutoApprovedCall[];
   toolCalls?: ToolCallRef[];
@@ -547,12 +535,7 @@ export interface SessionView {
   rewindable?: boolean;
   memberForks?: boolean;
   agent?: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
-  /** How full the shared conversation's context window is, which the session panel shows. Absent from older runners. */
   context?: SessionContextView;
-  /**
-   * Access mode of the latest shared-conversation submission ("approval" when it named none). Absent before the first
-   * one; older runners also leave it out when the latest one asked before acting.
-   */
   access?: AccessMode;
   repositories?: RepositoryPreparationView;
   activity?: SessionActivity;
@@ -560,13 +543,6 @@ export interface SessionView {
     unavailable?: { source: string; tools: string[]; reason: string; programs?: string[] }[] };
   tunnel?: SessionTunnelView;
 }
-/**
- * The shared conversation's context, as its model sees it now: about how many tokens it holds (what the provider counted
- * for its last answered request, and about 4 characters a token for everything since), the context window of its current
- * model when the host's catalog gives one, and the size at which Pi compacts it, its window less the reserve the host's
- * compaction settings keep for that model. `compactsAt` is absent where compaction is off for the model, or its window
- * unknown.
- */
 export interface SessionContextView {
   tokens: number;
   window?: number;

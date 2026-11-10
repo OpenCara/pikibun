@@ -42,7 +42,7 @@ const CLIENT_BUILD_BEFORE_RENAME = 'dist/preview';
 
 function clientBuildDirectory(configured: string | undefined): string {
   const directory = resolve(configured || CLIENT_BUILD);
-  const namesMovedBuild = directory === resolve(CLIENT_BUILD_BEFORE_RENAME) && !existsSync(directory);
+  const namesMovedBuild = directory === resolve(CLIENT_BUILD_BEFORE_RENAME) && (!existsSync(directory) || existsSync(resolve(CLIENT_BUILD)));
   return namesMovedBuild ? resolve(CLIENT_BUILD) : directory;
 }
 

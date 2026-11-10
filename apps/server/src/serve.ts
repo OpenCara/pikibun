@@ -5,7 +5,7 @@ import { rejectUpgrade } from './connector-hub.js';
 import { connectorError } from './connector-transport.js';
 import { authenticateConnectorSocket, refreshPullRequestStates, settlePushCredentials } from './authority/index.js';
 import type { Database } from './db/types.js';
-import { lockInstance } from './db/index.js';
+import { lockInstance, type InstanceLock } from './db/index.js';
 import { settleNotificationDeliveries } from './notifications.js';
 import { requestUrl, trustForwardedHeaders } from './forwarded.js';
 import { app } from './index.js';
@@ -24,17 +24,32 @@ function errorCode(error: unknown): string | undefined {
 const NOTIFICATION_DRAIN_MS = 15_000;
 const transientDatabaseCodes = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', '57P03'];
 
-export async function migrateWhenReachable(db: Pick<Database, 'migrate' | 'provider'>): Promise<void> {
+async function whenReachable<T>(provider: Database['provider'], work: () => Promise<T>): Promise<T> {
   const deadline = Date.now() + Number(process.env.DATABASE_WAIT_SECONDS || 60) * 1000;
   for (let attempt = 1; ; attempt++) {
-    try { return await db.migrate(); } catch (error) {
+    try { return await work(); } catch (error) {
       const code = errorCode(error);
       if (!code || !transientDatabaseCodes.includes(code) || Date.now() >= deadline) throw error;
-      if (attempt === 1) console.error(`pikibun: waiting for the ${db.provider} database (${code})`);
+      if (attempt === 1) console.error(`pikibun: waiting for the ${provider} database (${code})`);
       const { promise, resolve } = Promise.withResolvers<void>();
       setTimeout(resolve, Math.min(5000, 500 * attempt));
       await promise;
     }
+  }
+}
+
+export function migrateWhenReachable(db: Pick<Database, 'migrate' | 'provider'>): Promise<void> {
+  return whenReachable(db.provider, () => db.migrate());
+}
+
+async function lockThenMigrate(db: Database): Promise<InstanceLock> {
+  const lock = await whenReachable(db.provider, () => lockInstance(db));
+  try {
+    await migrateWhenReachable(db);
+    return lock;
+  } catch (error) {
+    await lock.release();
+    throw error;
   }
 }
 
@@ -61,8 +76,12 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
   const previewEnv = preview ? { ...env, APP_ORIGIN: preview.origin } : undefined;
   const environment = (url: string) => preview && new URL(url).origin === preview.origin ? previewEnv! : env;
   const hub = env.CONNECTOR_HUB!;
-  await migrateWhenReachable(env.DB);
-  const instanceLock = await lockInstance(env.DB);
+  let instanceLock: InstanceLock;
+  try { instanceLock = await lockThenMigrate(env.DB); } catch (error) {
+    await hub.close();
+    await env.DB.close();
+    throw error;
+  }
 
   const timers = [
     sweep('push credential settling', 5 * 60_000, () => settlePushCredentials(env).catch(() => {})),

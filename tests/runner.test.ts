@@ -1005,8 +1005,6 @@ test("failed model turns expose provider, model and HTTP status but never the pr
 });
 
 test("a stream that keeps dropping on a large conversation says so, and starts compacting its context", hostMode, async t => {
-  // Six answered messages of 100,000 characters make about 150K tokens; then every attempt of the seventh drops its
-  // stream, Pi's retries included (2 + 4 + 8 s), and the host compacts with the next response as the summary.
   const dropped = "Anthropic stream ended without a stop reason";
   const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow: 1_000_000 }] });
   faux.setResponses([
@@ -1037,7 +1035,6 @@ test("a stream that keeps dropping on a large conversation says so, and starts c
   for (const attempt of attempts) assert.deepEqual(attempt.error, { provider: "faux", modelId: "faux-1", cause: "incomplete_stream" });
   const failure = entries.find(entry => entry.kind === "workspace.run-failure");
   assert.deepEqual(failure?.error, { provider: "faux", modelId: "faux-1", cause: "incomplete_stream", compacting: true });
-  // The summary takes the next response: nothing else asked the provider for one.
   for (const end = Date.now() + 10_000; faux.getPendingResponseCount() > 0 && Date.now() < end;) await delay(50);
   assert.equal(faux.getPendingResponseCount(), 0, "the host asked for a compaction summary");
   let kinds: string[] = [];
@@ -1058,7 +1055,6 @@ test("the view tells how full the shared conversation's context window is, and w
   } });
   const id = "context-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
-  // Pi's own reserve: the host's settings keep no other for this model.
   assert.deepEqual((await session.view()).context, { tokens: 0, window: 200_000, compactsAt: 200_000 - 16_384 });
   await session.submit(await ticket(id, "submit"), { content: "x".repeat(4000), requestId: "long" }, "write");
   await idle(session);
