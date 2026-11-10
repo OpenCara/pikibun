@@ -6,6 +6,9 @@ import { control, palette, radius, text } from "../theme";
 import { Small } from "../ui";
 import { AttachButton, AttachmentStrip } from "./Attachments";
 
+/** How tall the message grows before it scrolls. */
+const MAX_TEXT_HEIGHT = 220;
+
 /**
  * The chat box, as the web app's .composer: one bordered field, the message on top and, along its bottom edge, its
  * option pickers (`tools`), the hint and the send button. `onStop`, while the agent works and the person may stop it,
@@ -50,17 +53,21 @@ export function Composer(props: {
       onFileDragEnter={() => dragging.set(accepting())} onFileDragLeave={() => dragging.set(false)}
       onFileDrop={event => { dragging.set(false); attachLocal(event.uris); }}>
       <If when={props.attachments}>{attachments => <AttachmentStrip attachments={attachments()} disabled={props.busy || props.disabled} />}</If>
-      <Input testID={props.testID ?? "composer-input"} value={props.value} onChange={event => props.onChange(event.value)} multiline readonly={props.busy || props.disabled}
-        placeholder={props.placeholder} accessibilityLabel={props.placeholder}
-        submitBehavior={platform.desktop ? "submit" : "newline"} onSubmit={submit}
-        onPaste={event => {
-          if (!accepting()) return;
-          if (event.uris.length) attachLocal(event.uris);
-          else if (event.files.length) props.attachments!.attach(event.files);
-        }}
-        onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
-        style={{ fontSize: text.reading, lineHeight: 22, minHeight: props.minHeight ?? 24, maxHeight: 220, paddingHorizontal: 4, paddingVertical: 0,
-          color: palette().text, placeholderColor: palette().muted }} />
+      {/* The box around the text holds its height too: NSH (0.4) sizes an input's parent by the whole text, past the input's
+          maxHeight, so a long message left the box far taller than the text, its pickers and send button halfway down it. */}
+      <View style={{ maxHeight: MAX_TEXT_HEIGHT }}>
+        <Input testID={props.testID ?? "composer-input"} value={props.value} onChange={event => props.onChange(event.value)} multiline readonly={props.busy || props.disabled}
+          placeholder={props.placeholder} accessibilityLabel={props.placeholder}
+          submitBehavior={platform.desktop ? "submit" : "newline"} onSubmit={submit}
+          onPaste={event => {
+            if (!accepting()) return;
+            if (event.uris.length) attachLocal(event.uris);
+            else if (event.files.length) props.attachments!.attach(event.files);
+          }}
+          onFocus={() => focused.set(true)} onBlur={() => focused.set(false)}
+          style={{ fontSize: text.reading, lineHeight: 22, minHeight: props.minHeight ?? 24, maxHeight: MAX_TEXT_HEIGHT, paddingHorizontal: 4, paddingVertical: 0,
+            color: palette().text, placeholderColor: palette().muted }} />
+      </View>
       <If when={props.attachments?.notice()}>{notice => <Small testID="composer-notice" tone="warning">{notice()}</Small>}</If>
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", rowGap: 4, columnGap: 8 }}>
         {/* The pickers wrap rather than scroll: what a message runs with (Auto-approve above all) must never be out of sight. */}
