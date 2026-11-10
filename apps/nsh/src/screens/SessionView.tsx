@@ -2,7 +2,7 @@ import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, pl
 import { Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
-  initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, preparingRepositories,
+  initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, pairToolResults, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ApprovalRecord, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
 } from "../shared";
@@ -477,13 +477,15 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const shownConversation = (conversation: { id: string; mode?: string; actorId?: string } | undefined) => (actualMode() === "ask"
     ? conversation?.mode === "ask" && (!conversation.actorId || conversation.actorId === user.id) && (!conversationId() || conversation.id === conversationId())
     : conversation?.mode !== "ask");
-  const entries = computed(() => {
+  // Each tool call shows with the result that answered it, which isn't an entry of its own then.
+  const transcript = computed(() => {
     const conversations = view().conversations;
-    return view().entries.filter(entry => {
+    return pairToolResults(view().entries.filter(entry => {
       if (entry.role === "system" && !entry.text.trim()) return false;
       return shownConversation(conversations.find(item => item.id === entry.conversationId));
-    });
+    }));
   });
+  const entries = () => transcript().entries;
   // In a workspace that loads transcripts latest first: the shown conversations with earlier entries still to read.
   const olderConversations = () => view().conversations.filter(conversation => (conversation.olderEntries ?? 0) > 0 && shownConversation(conversation));
   const olderCount = () => olderConversations().reduce((total, conversation) => total + (conversation.olderEntries ?? 0), 0);
@@ -687,6 +689,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
         {entry => (
           <View style={{ width: "100%", maxWidth: 760, alignSelf: "center" }}>
             <TranscriptEntry entry={entry()} userId={user.id} imagesOf={imagesOf()} expanded={id => expanded().has(id)} onCopy={copyMessage} actions={messageActions}
+              results={transcript().results.get(entry().id)}
               toggle={id => expanded.update(set => { const next = new Set(set); if (!next.delete(id)) next.add(id); return next; })} />
           </View>
         )}

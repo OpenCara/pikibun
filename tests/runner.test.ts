@@ -68,7 +68,14 @@ function commandOperation(session: RunnerSession, command: string) {
 
 function autoApproved(view: SessionView) {
   assert.deepEqual(view.approvals.filter(approval => approval.automatic && approval.operation.kind === "program"), [], "no card repeats an auto-approved command");
-  return view.entries.flatMap(entry => entry.autoApproved ?? []);
+  return marks(view);
+}
+/** Each entry's auto-approve marks, each checked to name one of its entry's calls, without that id. */
+function marks(view: SessionView) {
+  return view.entries.flatMap(entry => (entry.autoApproved ?? []).map(({ callId, ...mark }) => {
+    assert.ok(callId && entry.toolCalls?.some(call => call.id === callId && call.name === mark.tool), "the mark names its call");
+    return mark;
+  }));
 }
 const toolOutput = (view: SessionView, marker: RegExp) => view.entries.some(entry => entry.role === "toolResult" && marker.test(entry.text));
 
@@ -931,7 +938,7 @@ test("a tool outside the agent waits for its owner, who allows it once or for th
     [commandOperation(session, "echo once"), "denied", { decidedBy: "test:alice", scope: "call" }],
     [commandOperation(session, "echo bob"), "denied", undefined],
   ]);
-  assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "node", status: "executed" }, { tool: "node", status: "executed" }]);
+  assert.deepEqual(marks(view), [{ tool: "node", status: "executed" }, { tool: "node", status: "executed" }]);
   // The last shared message named no access, so it asked before acting, and the view says so.
   assert.equal(view.access, "approval");
   assert.equal((await session.createApproval("test:alice", commandOperation(session, "echo explicit"))).status, "pending");
@@ -1190,4 +1197,21 @@ test("entries carry how long each reply took and each tool ran", hostMode, async
   assert.deepEqual(timed("assistant"), [true, true]);
   assert.deepEqual(timed("toolResult"), [true]);
   assert.deepEqual(timed("user"), [false]);
+});
+
+test("entries name which tool call each result answers, so clients show them together", hostMode, async t => {
+  const { service } = await hostFixture(t);
+  const id = "paired-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "TEST_IDENTITY", requestId: "paired" }, "write");
+  await idle(session);
+  const entries = (await session.view()).entries;
+  const call = entries.find(entry => entry.role === "assistant" && entry.toolCalls)!;
+  const result = entries.find(entry => entry.role === "toolResult")!;
+  assert.equal(call.toolCalls!.length, 1);
+  assert.equal(call.toolCalls![0]!.name, "identity");
+  assert.ok(call.toolCalls![0]!.id, "the model's id of the call");
+  assert.deepEqual(result.toolResult, { callId: call.toolCalls![0]!.id, tool: "identity" });
+  assert.ok(entries.filter(entry => entry.role !== "assistant").every(entry => entry.toolCalls === undefined));
+  assert.ok(entries.filter(entry => entry.role !== "toolResult").every(entry => entry.toolResult === undefined));
 });

@@ -1,6 +1,6 @@
-import { effect, List, safeArea, signal, Text, View } from "nsh";
+import { computed, effect, List, safeArea, signal, Text, View } from "nsh";
 import type { SharedSession as SharedRecord, SharedSessionView } from "../../../../packages/shared/src/sharing";
-import { ApiError, createApi, errorMessage } from "../shared";
+import { ApiError, createApi, errorMessage, pairToolResults } from "../shared";
 import { timestamp } from "../lib/format";
 import { inBackground } from "../lib/resource";
 import { TranscriptEntry } from "../components/TranscriptEntry";
@@ -72,7 +72,9 @@ export function SharedSession(props: { token: string; /** The server: the page's
     void load();
     return () => { controller.abort(); clearTimeout(timer); };
   });
-  const entries = () => (view()?.entries ?? []).filter(entry => entry.role !== "system" || entry.text.trim());
+  // Each tool call shows with the result that answered it, which isn't an entry of its own then.
+  const transcript = computed(() => pairToolResults((view()?.entries ?? []).filter(entry => entry.role !== "system" || entry.text.trim())));
+  const entries = () => transcript().entries;
   const toggle = (id: string) => expanded.update(current => {
     const next = new Set(current);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -117,7 +119,7 @@ export function SharedSession(props: { token: string; /** The server: the page's
             empty={() => <EmptyState title="The conversation begins here">Messages and tool results appear here as the work goes on</EmptyState>}>
             {entry => (
               <View style={{ width: "100%", maxWidth: layout.chat, alignSelf: "center" }}>
-                <TranscriptEntry entry={entry()} userId="" shared expanded={id => expanded().has(id)} toggle={toggle} />
+                <TranscriptEntry entry={entry()} userId="" shared expanded={id => expanded().has(id)} toggle={toggle} results={transcript().results.get(entry().id)} />
               </View>
             )}
           </List>

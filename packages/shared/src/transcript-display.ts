@@ -1,3 +1,4 @@
+import { briefCallLine, resultSummary } from "./tool-summary.js";
 import { transcriptLines } from "./transcript.js";
 import type { EntryView, SessionView } from "./types.js";
 
@@ -6,7 +7,7 @@ import type { EntryView, SessionView } from "./types.js";
  * these change only what leaves the control plane, so they work with every connector.
  *
  * - Tool output (per session, `SessionRecord.toolOutput`, starting as its workspace sets for new sessions): "brief" shows
- *   each tool result as its first line and cuts long tool calls short.
+ *   each tool result as one line saying what came of it (tool-summary.ts) and cuts long tool calls short.
  * - Paging (per workspace): views hold only each conversation's latest entries, and clients read earlier ones a page at
  *   a time as people scroll up.
  */
@@ -48,18 +49,24 @@ function cut(text: string, limit: number): string {
 
 /**
  * The entry as a session with brief tool output shows it, or the entry itself when that shows it whole. A tool result
- * keeps its first non-blank line, and none of its images; an assistant message keeps its prose and each tool call's name and the start of its
- * arguments, still as a call line. Apply it after redaction, so a cut never splits a secret the redaction would hide.
+ * becomes the line that says what came of it (`resultSummary`: a command's last line of output, the lines a read got,
+ * or the first line of text), marked as failed where it says so, and keeps none of its images; an assistant message
+ * keeps its prose and each tool call's name and its arguments cut short, still as a call line. Apply it after
+ * redaction, so a cut never splits a secret the redaction would hide.
  */
 export function briefEntry(entry: EntryView): EntryView {
   const text = typeof entry.text === "string" ? entry.text : "";
   if (entry.role === "toolResult") {
     const lines = text.split("\n");
-    const first = cut((lines.find(line => line.trim()) ?? "").trimEnd(), briefChars);
+    const summary = resultSummary(text, { error: entry.toolResult?.error === true });
+    const shown = cut(summary.text, briefChars);
     // Its images go with the lines that stood for them, even where its only line is one of them (a screenshot alone).
     const { images, ...rest } = entry;
-    if (first === text) return images === undefined ? entry : rest;
-    return { ...rest, text: first, trimmed: { lines: lines.length, chars: characters(text) } };
+    // The whole answer said it failed (a command's card): the line alone doesn't, so the entry does.
+    const failed = summary.failed && entry.toolResult?.error !== true;
+    if (shown === text && !failed) return images === undefined ? entry : rest;
+    return { ...rest, ...(failed ? { toolResult: { ...entry.toolResult, error: true as const } } : {}), text: shown,
+      ...(shown === text ? {} : { trimmed: { lines: lines.length, chars: characters(text) } }) };
   }
   if (entry.role !== "assistant") return entry;
   let changed = false;
@@ -67,11 +74,11 @@ export function briefEntry(entry: EntryView): EntryView {
     if (tool === undefined) return line;
     // `name({...})`: the arguments' JSON is everything between the parentheses.
     const args = line.slice(tool.length + 1, -1);
-    const short = cut(args, briefChars);
-    if (short === args) return line;
+    if (characters(args) <= briefChars) return line;
     changed = true;
-    // Still a call line (`name({…})`), so clients show it as a tool call, never as prose.
-    return `${tool}(${short}})`;
+    // Long strings cut short, so the arguments stay JSON that clients read (what file, which command), or, where even
+    // that is too long, the line itself cut: still a call line (`name({…})`), so clients show it as a tool call.
+    return briefCallLine(tool, line, briefChars * 2) ?? `${tool}(${cut(args, briefChars)}})`;
   });
   return changed ? { ...entry, text: shown.join("\n"), trimmed: { lines: shown.length, chars: characters(text) } } : entry;
 }
