@@ -276,7 +276,7 @@ test('a workspace\'s first GitHub repository adds piki:gh, piki:git and piki:git
   const first = await bind();
   assert.deepEqual(first.extensions, ['piki:gh', 'piki:git', 'piki:github']);
   // After the extensions every workspace starts with, turned off, and before the session tools it hasn't added, listed off.
-  const on = (source: string) => ({ source, enabled: true, tools: 'approval', settings: {} });
+  const on = (source: string) => ({ source, enabled: true, tools: 'approval' as const, settings: {} });
   assert.deepEqual(await extensions(), withSessionToolsListed([...defaultWorkspaceExtensions.map(source => ({ source, enabled: false, tools: 'approval' as const, settings: {} })),
     on('piki:gh'), on('piki:git'), on('piki:github')]));
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.extension.updated'").get()!.n, 3);

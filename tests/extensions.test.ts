@@ -248,7 +248,7 @@ test('Pikibun extensions: hosts aren\'t asked to install them, and a connector t
 test('every workspace starts with popular extensions, turned off, and existing ones got them after their own', async t => {
   const f = await fixture(t);
   const alice = await f.client('alice');
-  const off = (source: string) => ({ source, enabled: false, tools: 'approval', settings: {} });
+  const off = (source: string) => ({ source, enabled: false, tools: 'approval' as const, settings: {} });
   const expected = ['npm:pi-web-access@0.46.0', 'npm:pi-web-search@1.7.0', 'npm:cc-safety-net@2.7.2'];
   assert.deepEqual(defaultWorkspaceExtensions, expected);
   const { workspace } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'New' }), 201);
