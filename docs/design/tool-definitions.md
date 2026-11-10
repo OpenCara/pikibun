@@ -114,3 +114,29 @@ So the connector is now an engine for both kinds, and the control plane describe
 | Registering, switching and running them in a session | `apps/runner/src/session.ts` (`fetchDefinitions`, `refreshDefinitions`, `definedTool`, `sessionToolsOff`) |
 | Serving them; names in operations and agents | `apps/server/src/connectors.ts`, `authority/operations.ts`, `catalog.ts`, `extensions.ts` |
 | Tests | `tests/defined-tools.test.ts`, and in `node-command`, `ecosystem-command`, `runner-program-tools`, `connectors` |
+
+## Why `git` and `python` are still code
+
+Both are program tools in every other respect (one program, its arguments as a list, one approved command), but their
+refusals need rules the grammar of decision 3 doesn't have. Adding those rules would be a connector change either way,
+so until a third tool needs the same rule they stay hand-written, in one file each
+(`apps/runner/src/git-command.ts`, `apps/runner/src/python-command.ts`):
+
+- **`git` allows, the grammar refuses.** The grammar lists the word sequences a program refuses and runs everything
+  else. `git` is the other way round: it runs only the subcommands in `gitSubcommands` and refuses Git's own options
+  before the subcommand (`-C`, `-c`, `--git-dir`, `--exec-path`). An allow-list of first words is not a rule a
+  definition can state.
+- **`git` matches options as Git reads them.** The options that name a program or load settings (`--upload-pack`,
+  `--exec`, `--template`, `--config`) are refused in every spelling Git takes: any unambiguous abbreviation of the
+  long form (`--upload-p`, `--e`), and the short form inside a cluster of short options, up to the first letter that
+  takes a value (`-ix`, but not the `x` of `-bx`). The grammar compares whole words.
+- **`python` follows modules and package specs.** `python3 -m twine upload` runs a module as a program, under any of
+  the interpreter's names (`python`, `python3.12`), with `-mtwine` as one word too, and launchers name what they run
+  as a package spec whose version is stripped first (`uvx twine==5`, `uv tool run twine@5`). The grammar follows
+  launchers by plain program name only.
+- **`python` takes a `venv`.** Its call names a virtual environment whose programs run instead of the host's, which
+  changes the command the card shows. Program definitions have no parameter beyond `program`, `args` and `directory`.
+
+As for the tools that are data, these lists are not the security boundary. They keep the plain forms of a refused
+command off approval cards, so a card can be read at face value; a command that reaches the same effect another way (a
+script, a repository's own Git configuration) is stopped by the approval of the card and by the sandbox, not by them.

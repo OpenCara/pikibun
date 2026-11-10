@@ -68,7 +68,7 @@ export const browserSources: { value: BrowserSource; label: string; hint: string
 const tunnelSources: { value: TunnelSource; label: string; hint: string }[] = [
   { value: "auto", label: "Find it", hint: "Looks on this host: PIKIBUN_CLOUDFLARED, cloudflared on the connector's PATH, /usr/local/bin and /usr/bin, Homebrew's, then one downloaded here" },
   { value: "path", label: "This path", hint: "Runs the cloudflared executable you name, and no other" },
-  { value: "download", label: "Download", hint: "The connector downloads Cloudflare's latest cloudflared (about 40 MB) into its own folder, checked against its release's SHA-256, and keeps it up to date" },
+  { value: "download", label: "Download", hint: "The connector downloads the cloudflared its version pins (about 40 MB) into its own folder, checked against the SHA-256 the connector carries" },
   { value: "off", label: "Off", hint: "Sessions on this host put nothing online, whatever their workspace chose" },
 ];
 

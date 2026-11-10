@@ -65,10 +65,12 @@ quick tunnel that the connector runs on the host.
    connector whose cloudflared is ready (`HostTunnelSource`: found, at a path, downloaded or off, applied without a
    restart and reported with the extensions as `HostTunnelStatus`). Elsewhere the view's `extensions.unavailable` names a
    fixed reason (`tunnelUnavailableReasons`) and the agent is told in a sentence.
-9. **Downloading cloudflared.** `download` takes Cloudflare's latest release on GitHub (`cloudflared-linux-amd64` or
-   `-arm64`, a lone executable), only from `github.com/cloudflare/cloudflared/releases/download/`, and refuses it unless
-   it matches the SHA-256 the release's notes list for it; it is written beside its place and moved there whole, under
-   the connector's state (`cloudflared/<version>`), and checked once a day for a newer one, as Chromium is.
+9. **Downloading cloudflared.** `download` takes the one release each connector version pins (`PINNED_CLOUDFLARED` in
+   `apps/runner/src/cloudflared.ts`: a version and the SHA-256 of `cloudflared-linux-amd64` and `-arm64`, lone
+   executables), only from `github.com/cloudflare/cloudflared/releases/download/`, and refuses it unless it matches
+   that SHA-256. The digest ships in the connector, so a release replaced on GitHub after the pin fails the check. It
+   is written beside its place and moved there whole, under the connector's state (`cloudflared/<version>`). A newer
+   cloudflared comes with a connector update, which raises the pin.
 10. **Visible.** While it is online the session's view carries `tunnel` (`SessionTunnelView`: the address, who started
     it, until when, the command and port, whether it is connected), which the panel shows with a **Stop** button for
     whoever may write to the session (`POST /api/sessions/:id/tunnel/stop`, the runner's `tunnel` action). The connector

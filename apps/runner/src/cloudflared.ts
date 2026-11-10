@@ -27,8 +27,13 @@ export const SYSTEM_CLOUDFLAREDS: readonly string[] = Object.freeze([
   "/usr/local/bin/cloudflared", "/usr/bin/cloudflared", "/opt/homebrew/bin/cloudflared", "/home/linuxbrew/.linuxbrew/bin/cloudflared",
 ]);
 
-/** Cloudflare's releases of cloudflared, on GitHub. */
-export const CLOUDFLARED_RELEASES = "https://api.github.com/repos/cloudflare/cloudflared/releases/latest";
+export const PINNED_CLOUDFLARED: { readonly version: string; readonly sha256: Readonly<Record<string, string>> } = Object.freeze({
+  version: "2026.10.7",
+  sha256: Object.freeze({
+    "cloudflared-linux-amd64": "1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872",
+    "cloudflared-linux-arm64": "3df43aedc9ff291d1735b5cb576cb97e0b157488796db2e32b28aecabb445775",
+  }),
+});
 /** Where its downloads are; one from anywhere else is refused. */
 const DOWNLOAD_PREFIX = "https://github.com/cloudflare/cloudflared/releases/download/";
 /** Where GitHub sends a release's downloads. */
@@ -40,7 +45,6 @@ const ASSETS: Readonly<Record<string, string>> = Object.freeze({ "linux x64": "c
 export const cloudflaredLimits = Object.freeze({
   /** The executable, about 40 MB today. */
   bytes: 256 * 1024 * 1024,
-  releaseBytes: 2 * 1024 * 1024,
 });
 
 /** The release asset this connector would download, or undefined where Cloudflare builds none it takes. */
@@ -100,11 +104,9 @@ export function hostCloudflared(options: { env?: NodeJS.ProcessEnv; platform?: N
 /** A cloudflared release: its version, and the one asset this host downloads with its SHA-256, as the release lists it. */
 export interface CloudflaredRelease { version: string; asset: string; url: string; sha256: string }
 
-const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-
 /** `url`, or an error that names the host it couldn't reach and why, for the host's owner (a firewall, a proxy). */
 async function reach(fetcher: typeof fetch, url: string, signal: AbortSignal | undefined, what: string): Promise<Response> {
-  try { return await fetcher(url, { headers: { accept: "application/vnd.github+json, application/octet-stream" }, ...(signal ? { signal } : {}) }); }
+  try { return await fetcher(url, { headers: { accept: "application/octet-stream" }, ...(signal ? { signal } : {}) }); }
   catch (error) {
     if (signal?.aborted) throw error;
     const cause = error instanceof Error && error.cause instanceof Error ? (error.cause as NodeJS.ErrnoException).code ?? error.cause.message : undefined;
@@ -112,26 +114,10 @@ async function reach(fetcher: typeof fetch, url: string, signal: AbortSignal | u
   }
 }
 
-/**
- * The latest cloudflared release for `asset`: its version, its download (only at Cloudflare's releases on GitHub) and
- * the SHA-256 its release notes list for it. A release that lists none is refused: the download is checked against it.
- */
-export async function latestCloudflared(asset: string, options: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<CloudflaredRelease> {
-  const response = await reach(options.fetch ?? fetch, CLOUDFLARED_RELEASES, options.signal, "cloudflared's releases");
-  if (!response.ok) throw new Error(`cloudflared's releases answered ${response.status}`);
-  const text = await response.text();
-  if (text.length > cloudflaredLimits.releaseBytes) throw new Error("cloudflared's release is too long");
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { throw new Error("cloudflared's release isn't JSON"); }
-  const version = isObject(value) ? value.tag_name : undefined;
-  if (typeof version !== "string" || !VERSION.test(version)) throw new Error("cloudflared's latest release has no version");
-  const url = `${DOWNLOAD_PREFIX}${version}/${asset}`;
-  const assets = isObject(value) && Array.isArray(value.assets) ? value.assets : [];
-  if (!assets.some(item => isObject(item) && item.name === asset && item.browser_download_url === url)) throw new Error(`cloudflared ${version} has no ${asset}`);
-  const body = isObject(value) && typeof value.body === "string" ? value.body : "";
-  const sha256 = new RegExp(`^\\s*${asset.replace(/[.-]/g, "\\$&")}\\s*:\\s*([0-9a-f]{64})\\s*$`, "m").exec(body)?.[1];
-  if (!sha256) throw new Error(`cloudflared ${version}'s release lists no SHA-256 for ${asset}`);
-  return { version, asset, url, sha256 };
+export function pinnedCloudflared(asset: string): CloudflaredRelease {
+  const sha256 = PINNED_CLOUDFLARED.sha256[asset];
+  if (!sha256) throw new Error(`This connector pins no cloudflared for ${asset}`);
+  return { version: PINNED_CLOUDFLARED.version, asset, url: `${DOWNLOAD_PREFIX}${PINNED_CLOUDFLARED.version}/${asset}`, sha256 };
 }
 
 /** The cloudflareds downloaded under `root`, newest first. */

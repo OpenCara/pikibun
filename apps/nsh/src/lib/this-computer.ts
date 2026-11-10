@@ -36,7 +36,9 @@ const STDIO_FRAME = "\u001epikibun ";
 const SHELLS = ["zsh", "bash", "sh"];
 const CMD = "cmd";
 /** What gets the command from a terminal, with Node.js 24 or newer, where the Install button didn't. */
-export const INSTALL_COMMAND = "npm install -g pikibun@latest";
+export const APP_CLI_VERSION = "0.27.0";
+const CLI_PACKAGE = `pikibun@${APP_CLI_VERSION}`;
+export const INSTALL_COMMAND = `npm install -g ${CLI_PACKAGE}`;
 /**
  * The app's own copy of the command: this folder of its data directory, which is also where it runs npm and the host
  * (their working directory, NSH's default), so on Windows it is named relative to it and needs no quoting through cmd.
@@ -83,7 +85,7 @@ export function hostCommand(os: string, shell: string | undefined, cli?: string 
  * the app's own folder `cli` (appCliFolder's), or, without one, npm's global folder. The command line is fixed.
  */
 export function installCommand(os: string, shell: string | undefined, cli?: string | null): { command: string; args: string[]; line: string } {
-  const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", "pikibun@latest"];
+  const own = ["npm", "install", "--prefix", os === "windows" ? CLI_FOLDER : cli ?? "", "--no-audit", "--no-fund", CLI_PACKAGE];
   // `line` is exactly what runs (the folder quoted as the shell takes it), so the activity's copy runs as it reads.
   if (os === "windows") {
     const words = cli ? own : INSTALL_COMMAND.split(" ");

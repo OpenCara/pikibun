@@ -47,13 +47,13 @@ describe("starting Pikibun's command", () => {
   test("installs it with npm the same way, into the app's own folder, or npm's global one without it", () => {
     const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
     expect(installCommand("macos", "/bin/zsh", mac)).toEqual({ command: "zsh",
-      args: ["-ilc", "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest"],
+      args: ["-ilc", "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@0.27.0"],
       // What the activity shows is what runs: copied into a terminal, it runs as it reads.
-      line: "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest" });
+      line: "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@0.27.0" });
     expect(installCommand("macos", "/opt/homebrew/bin/fish", mac).command).toBe("zsh");
-    expect(installCommand("windows", "/bin/zsh", "C:\\data\\cli").args).toEqual(["/d", "/c", "npm", "install", "--prefix", "cli", "--no-audit", "--no-fund", "pikibun@latest"]);
-    expect(installCommand("linux", "/usr/bin/bash", null)).toEqual({ command: "bash", args: ["-ilc", "npm install -g pikibun@latest"], line: "npm install -g pikibun@latest" });
-    expect(installCommand("windows", undefined, null).args).toEqual(["/d", "/c", "npm", "install", "-g", "pikibun@latest"]);
+    expect(installCommand("windows", "/bin/zsh", "C:\\data\\cli").args).toEqual(["/d", "/c", "npm", "install", "--prefix", "cli", "--no-audit", "--no-fund", "pikibun@0.27.0"]);
+    expect(installCommand("linux", "/usr/bin/bash", null)).toEqual({ command: "bash", args: ["-ilc", "npm install -g pikibun@0.27.0"], line: "npm install -g pikibun@0.27.0" });
+    expect(installCommand("windows", undefined, null).args).toEqual(["/d", "/c", "npm", "install", "-g", "pikibun@0.27.0"]);
   });
 
   test("says why an install failed in a way the owner can act on", () => {
@@ -130,7 +130,7 @@ describe("This Mac", () => {
     // What npm said is in the activity.
     await app.press("text:Recent activity");
     await app.waitUntil(() => showsText("added 1 package in 2s"));
-    expect(showsText("Running npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest.")).toBe(true);
+    expect(showsText("Running npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@0.27.0.")).toBe(true);
     expect(showsText("npm installed pikibun in Pikibun's own folder.")).toBe(true);
   });
 
@@ -150,7 +150,7 @@ describe("This Mac", () => {
     await noNpm.app.press("id:this-computer-install-button");
     await noNpm.app.waitFor("id:this-computer-install");
     expect(noNpm.showsText("npm isn't installed on this Mac. Install Node.js 24 or newer (from nodejs.org, or brew install node), then choose Install again.")).toBe(true);
-    expect(noNpm.app.shows("text:npm install -g pikibun@latest")).toBe(true);
+    expect(noNpm.app.shows("text:npm install -g pikibun@0.27.0")).toBe(true);
     expect(noNpm.app.shows("id:this-computer-pair-button")).toBe(false);
     const denied = await openPanel({ command: "missing", npm: "denied" });
     await denied.app.waitFor("id:this-computer-install-button");

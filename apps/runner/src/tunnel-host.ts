@@ -3,8 +3,8 @@ import { mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSy
 import { createServer, connect, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { hostTunnelStatusLimits, quickTunnelUrl, type HostTunnelConfig, type HostTunnelStatus } from "../../../packages/shared/src/tunnel.js";
-import { cloudflaredAsset, downloadCloudflared, downloadedCloudflareds, hostCloudflared, inspectCloudflared, latestCloudflared, pruneCloudflareds,
-  type CloudflaredToolchain } from "./cloudflared.js";
+import { cloudflaredAsset, downloadCloudflared, downloadedCloudflareds, hostCloudflared, inspectCloudflared, pinnedCloudflared, pruneCloudflareds,
+  type CloudflaredRelease, type CloudflaredToolchain } from "./cloudflared.js";
 
 /*
  * The connector's side of the tunnel tool (piki:tunnel; docs/design/tunnel.md):
@@ -18,7 +18,7 @@ import { cloudflaredAsset, downloadCloudflared, downloadedCloudflareds, hostClou
 
 /** A failed download is tried again after this long, or when the host's owner chooses again. */
 const RETRY_MS = 10 * 60_000;
-/** How often a downloaded cloudflared is checked against Cloudflare's latest release. */
+/** How often a downloaded cloudflared is checked against the release this connector pins. */
 const UPDATE_MS = 24 * 3600_000;
 
 export interface HostTunnelOptions {
@@ -34,6 +34,7 @@ export interface HostTunnelOptions {
   signal?: AbortSignal;
   /** How `auto` looks on the host (hostCloudflared); tests stand in their own, whatever this machine has. */
   detect?: () => CloudflaredToolchain | undefined;
+  release?: (asset: string) => CloudflaredRelease;
 }
 
 export class HostTunnelSource {
@@ -95,7 +96,7 @@ export class HostTunnelSource {
     }
     if (!this.downloadable) return this.set({ state: "missing", error: "Cloudflare builds a lone cloudflared for Linux on x86-64 and ARM64 only: install its package and find it on the host" });
     const now = (this.options.now ?? Date.now)();
-    const newest = downloads[0];
+    const newest = downloads.find(download => download.version === this.release().version) ?? downloads[0];
     if (newest) {
       this.set({ state: "ready" }, newest);
       if (!this.#download && now - this.#checked >= UPDATE_MS) this.startDownload(newest.version);
@@ -108,18 +109,17 @@ export class HostTunnelSource {
     this.set({ state: "downloading", ...retried });
   }
 
-  /** Downloads Cloudflare's latest cloudflared for this host, unless `have` is that version already. */
+  /** Downloads the cloudflared this connector pins, unless `have` is that version already. */
   private startDownload(have?: string): void {
     const now = this.options.now ?? Date.now;
     this.#checked = now();
     const signal = this.options.signal ? AbortSignal.any([this.#abort.signal, this.options.signal]) : this.#abort.signal;
     const options = { ...(this.options.fetch ? { fetch: this.options.fetch } : {}), signal };
-    const asset = cloudflaredAsset(this.options.platform ?? process.platform, this.options.arch ?? process.arch)!;
     const task = (async () => {
       try {
+        const release = this.release();
         // The one in use stays, and the one it replaced until the next check: a tunnel may still run it.
-        await pruneCloudflareds(this.options.root, have ? [have] : []);
-        const release = await latestCloudflared(asset, options);
+        await pruneCloudflareds(this.options.root, have ? [have, release.version] : [release.version]);
         if (release.version !== have) await downloadCloudflared(this.options.root, release, options);
         this.#failure = undefined;
       } catch (error) {
@@ -131,6 +131,11 @@ export class HostTunnelSource {
     })();
     this.#download = task;
     this.#task = task;
+  }
+
+  private release(): CloudflaredRelease {
+    const asset = cloudflaredAsset(this.options.platform ?? process.platform, this.options.arch ?? process.arch)!;
+    return (this.options.release ?? pinnedCloudflared)(asset);
   }
 
   /** The last download, and its outcome applied, for tests. */
