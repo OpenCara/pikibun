@@ -1,4 +1,4 @@
-import type { GitProvider } from "./repositories.js";
+import { gitProviders, type GitProvider } from "./repositories.js";
 import type { DocumentKind } from "./sources.js";
 
 /*
@@ -6,8 +6,9 @@ import type { DocumentKind } from "./sources.js";
  * command-line tool as one tool, run in the session's sandbox as the session owner, with the owner's account in
  * Pikibun added to its API requests by the session's egress proxy, and guards such as the prompt audit, which checks
  * messages before they reach the agent. Every connector that knows one has it, at its own version, so hosts never
- * install them; a workspace runs one like any other extension, as `piki:<name>`, and gets the one for a forge as soon
- * as it binds a repository there; a host's owner can require one of every session on it.
+ * install them; a workspace runs one like any other extension, as `piki:<name>`. None is in a workspace by default: it
+ * gets the ones for a forge (and Git) as soon as it binds a repository there, a document source's as soon as it adds a
+ * source of that kind, and its owners and admins add the others; a host's owner can require one of every session on it.
  */
 
 export interface PikiExtensionInfo {
@@ -32,8 +33,9 @@ export interface PikiExtensionInfo {
   /**
    * Session tools only: the session's own tools this extension turns on (docs/design/piki-extensions.md, "Session
    * tools"). They keep running as the session's own, under its permissions and approvals, never as `extension.tool`
-   * cards; the workspace only decides whether its sessions offer them. They are on unless the workspace lists the
-   * extension turned off, so a workspace that never chose, or a control plane that predates it, keeps them.
+   * cards; the workspace only decides whether its sessions offer them. A workspace has them once it adds the extension
+   * (`withSessionToolsListed`, host-extensions.ts): the control plane lists every one it hasn't added as turned off.
+   * Here, as connectors read the list, one it doesn't list is on, so a control plane that predates it keeps them.
    */
   sessionTools?: readonly string[];
   /**
@@ -80,7 +82,7 @@ export interface PikiExtensionInfo {
 function documentSourceExtension(name: string, kind: DocumentKind, title: string): PikiExtensionInfo {
   return {
     name, source: `piki:${name}`, title, sessionTools: ["source_read"], replaces: "piki:sources", documentKinds: [kind],
-    description: `The source_read tool for the workspace's ${title} sources: the agent reads them as the session owner. On unless turned off here.`,
+    description: `The source_read tool for the workspace's ${title} sources: the agent reads them as the session owner. Added with the workspace's first ${title} source.`,
     providers: [],
   };
 }
@@ -104,7 +106,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "schedule", source: "piki:schedule", title: "Scheduled prompts", sessionTools: ["schedule"],
-    description: "The schedule tool: the agent lists, creates, changes and deletes the session's scheduled prompts when its owner asks, such as a nightly check. On unless turned off here.",
+    description: "The schedule tool: the agent lists, creates, changes and deletes the session's scheduled prompts when its owner asks, such as a nightly check. Off until added here.",
     providers: [],
   },
   {
@@ -122,47 +124,47 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "git", source: "piki:git", title: "Git", sessionTools: ["git", "git_push"],
-    description: "The git and git_push tools: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, each call approved as a command is, and pushes a clone's commit to another branch with approval. On unless turned off here.",
-    providers: [],
+    description: "The git and git_push tools: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, each call approved as a command is, and pushes a clone's commit to another branch with approval. Added with the workspace's first repository.",
+    providers: gitProviders,
   },
   {
     name: "node", source: "piki:node", title: "Node.js", sessionTools: ["node"],
-    description: "The node tool: the agent runs Node.js and its package managers (node, npm, npx, pnpm, yarn, corepack) with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    description: "The node tool: the agent runs Node.js and its package managers (node, npm, npx, pnpm, yarn, corepack) with their arguments as a list, without a shell, each call approved as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "python", source: "piki:python", title: "Python", sessionTools: ["python"],
-    description: "The python tool: the agent runs Python and its package and test tools (python3, pip, pip3, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    description: "The python tool: the agent runs Python and its package and test tools (python3, pip, pip3, uv, uvx, poetry, pytest) with their arguments as a list, without a shell, each call approved as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "rust", source: "piki:rust", title: "Rust", sessionTools: ["rust"],
-    description: "The rust tool: the agent runs cargo, rustc, rustup and rustfmt with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    description: "The rust tool: the agent runs cargo, rustc, rustup and rustfmt with their arguments as a list, without a shell, each call approved as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "go", source: "piki:go", title: "Go", sessionTools: ["go"],
-    description: "The go tool: the agent runs go and gofmt with their arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    description: "The go tool: the agent runs go and gofmt with their arguments as a list, without a shell, each call approved as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "dotnet", source: "piki:dotnet", title: ".NET", sessionTools: ["dotnet"],
-    description: "The dotnet tool: the agent runs the .NET CLI with its arguments as a list, without a shell, each call approved as a command is. On unless turned off here.",
+    description: "The dotnet tool: the agent runs the .NET CLI with its arguments as a list, without a shell, each call approved as a command is. Off until added here.",
     providers: [],
   },
   {
     name: "make", source: "piki:make", title: "Make", sessionTools: ["make"],
-    description: "The make tool: the agent runs make with its arguments as a list, without a shell of its own, each call approved as a command is (a Makefile's recipes are shell commands). On unless turned off here.",
+    description: "The make tool: the agent runs make with its arguments as a list, without a shell of its own, each call approved as a command is (a Makefile's recipes are shell commands). Off until added here.",
     providers: [],
   },
   {
     name: "browser", source: "piki:browser", title: "Browser", sessionTools: ["browser"],
-    description: "The browser tool: the agent drives a headless Chromium in the session's sandbox (open a page, click, type, run a script, take a screenshot), serving the web app it works on for the call, each call approved as a command is. Its screenshots show in the session panel's Browser tab. Runs only in the Linux sandbox, with Chromium on the host. On unless turned off here.",
+    description: "The browser tool: the agent drives a headless Chromium in the session's sandbox (open a page, click, type, run a script, take a screenshot), serving the web app it works on for the call, each call approved as a command is. Its screenshots show in the session panel's Browser tab. Runs only in the Linux sandbox, with Chromium on the host. Off until added here.",
     providers: [],
   },
   {
     name: "tunnel", source: "piki:tunnel", title: "Tunnel", sessionTools: ["tunnel"], optIn: true,
-    description: "The tunnel tool: the agent starts the web server it works on in the session's sandbox, as a service that outlives the call, and puts it online at a public https:// address through a Cloudflare quick tunnel, which cloudflared runs on the host. Each start is approved as a host command is, never automatically. The session panel shows the address with a Stop button. Runs only in the Linux sandbox, with cloudflared on the host. Off unless turned on here.",
+    description: "The tunnel tool: the agent starts the web server it works on in the session's sandbox, as a service that outlives the call, and puts it online at a public https:// address through a Cloudflare quick tunnel, which cloudflared runs on the host. Each start is approved as a host command is, never automatically. The session panel shows the address with a Stop button. Runs only in the Linux sandbox, with cloudflared on the host. Off until added here.",
     providers: [],
   },
   {
@@ -173,8 +175,8 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "github", source: "piki:github", title: "GitHub, through Pikibun", sessionTools: ["github_read", "github_comment", "github_issue", "github_merge"],
-    description: "The github_read, github_comment, github_issue and github_merge tools: the agent reads issues and pull requests, waits for their checks, and comments, opens issues and merges with approval, as the session owner, through Pikibun's broker. With the GitHub CLI on too, the agent reads and waits for checks with gh instead, sparing the session owner's GitHub rate limit, and uses these where gh can't. On unless turned off here.",
-    providers: [],
+    description: "The github_read, github_comment, github_issue and github_merge tools: the agent reads issues and pull requests, waits for their checks, and comments, opens issues and merges with approval, as the session owner, through Pikibun's broker. With the GitHub CLI on too, the agent reads and waits for checks with gh instead, sparing the session owner's GitHub rate limit, and uses these where gh can't. Added with the workspace's first GitHub repository.",
+    providers: ["github"],
   },
   {
     // Retired when split into one extension per kind of source, below: kept so connectors still report it, and the
@@ -192,7 +194,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   documentSourceExtension("tencent-docs", "tencent-docs", "Tencent Docs"),
   {
     name: "sessions", source: "piki:sessions", title: "Other sessions", sessionTools: ["sessions"],
-    description: "The sessions tool: the agent lists, reads, messages, starts, stops and archives the workspace's other sessions, as the message's sender, with their permissions. On unless turned off here.",
+    description: "The sessions tool: the agent lists, reads, messages, starts, stops and archives the workspace's other sessions, as the message's sender, with their permissions. Off until added here.",
     providers: [],
   },
   {
