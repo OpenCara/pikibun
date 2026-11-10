@@ -1,7 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
-import {
-  assetSuffix, compareVersions, newerRelease, RELEASES_API, updatesFolder, utf16le, windowsInstallerArguments, windowsUpdateTask,
-} from "../src/lib/app-update";
+import { assetSuffix, compareVersions, newerRelease, RELEASES_API, updatesFolder } from "../src/lib/app-update";
+import { utf16le, windowsInstallerArguments, windowsUpdateTask } from "../src/lib/update-scripts";
 import { server, signedIn } from "./fixtures";
 
 const asset = (name: string, extra: Record<string, unknown> = {}) => ({
