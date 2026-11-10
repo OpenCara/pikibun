@@ -398,11 +398,17 @@ await check("collaborative writes execute as owner; another user's worktree stay
 });
 
 await check("a writer's command runs at once, asking nobody, and git commits use the owner's identity", async () => {
+  await alice.request("PUT", `/api/workspaces/${workspace.id}/extensions`, { source: "piki:node" });
   const commit = `git init -q integration && cd integration && git commit -q --allow-empty -m 'Integration ${run}'`;
   await bob.submit(aliceSession.id, `TEST_BASH ${commit}`);
+  await delay(300);
   await bob.settled(aliceSession.id);
   await alice.submit(aliceSession.id, "TEST_BASH cd integration && git log -1 --format='%an <%ae>|%cn <%ce>'");
-  const view = await alice.settled(aliceSession.id, "Alice Integration <alice@example.invalid>|Alice Integration <alice@example.invalid>");
+  await delay(300);
+  const view = await alice.settled(aliceSession.id);
+  const results = view.entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
+  assert.ok(results.some(text => text.includes("Alice Integration <alice@example.invalid>|Alice Integration <alice@example.invalid>")),
+    `git commits use the owner's identity: ${results.slice(-3).join("\n---\n").slice(0, 3000)}`);
   assert.deepEqual(view.approvals, [], "nothing waits for anyone");
 });
 
