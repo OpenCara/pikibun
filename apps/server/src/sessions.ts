@@ -38,27 +38,27 @@ import { packSession, reopenUnpacked, unpackSession } from './session-packing.js
 /**
  * A person's shared message to a sandboxed session that names no access (sent before their app knew the session's host, or
  * from an app that sends no options) runs on Auto-approve where its sender may use it there, as their chat box starts on it:
- * the session's owner, merging without asking too where the host runs GitHub effects automatically, or a workspace owner,
- * admin or collaborator, for their sandboxed commands. It doesn't fall back to asking before acting there. An access the
- * message names stands, and messages the server sends itself (from schedules, other sessions and notifications) keep theirs.
+ * the session's owner, or a workspace owner, admin or collaborator, for their sandboxed commands. It doesn't fall back to
+ * asking before acting there. It merges without asking only with the owner's autoMerge, which their app sends once they
+ * confirmed that on the device, and which goes only with this default. An access the message names stands, and messages
+ * the server sends itself (from schedules, other sessions and notifications) keep theirs.
  */
 export async function withSandboxedDefault(c: AppContext, row: SessionRow, input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const options = input.options;
   if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) return input;
   if (options && 'access' in options) return input;
-  if (!row.connector_id || Number(row.host_environment ?? 0) === 1) return input;
+  const { autoMerge, ...rest } = (options ?? {}) as Record<string, unknown>;
+  const asking = () => (autoMerge === undefined ? input : { ...input, options: Object.keys(rest).length ? rest : undefined });
+  if (!row.connector_id || Number(row.host_environment ?? 0) === 1) return asking();
   const capabilities = await hostCapabilities(c.env, row.connector_id, { active: true });
-  if (capabilities?.chatOptions !== true || capabilities.unsandboxed === true) return input;
+  if (capabilities?.chatOptions !== true || capabilities.unsandboxed === true) return asking();
   const actorId = c.get('auth').userId;
-  let defaults: ChatOptions = { access: 'auto' };
-  if (actorId === row.owner_id) {
-    if (capabilities.automaticGitHub === true) defaults = { access: 'auto', autoMerge: true };
-  } else {
-    if (capabilities.memberAutoApprove !== true) return input;
+  if (actorId !== row.owner_id) {
+    if (capabilities.memberAutoApprove !== true) return asking();
     const actor = await sessionAccess(c.env, row.id, actorId);
-    if (!actor || !hasPermission(actor.permissions, 'write') || !mayAutoApprove(actorId, row.owner_id, actor.role)) return input;
+    if (!actor || !hasPermission(actor.permissions, 'write') || !mayAutoApprove(actorId, row.owner_id, actor.role)) return asking();
   }
-  return { ...input, options: { ...defaults, ...(options as Record<string, unknown> | undefined) } };
+  return { ...input, options: { access: 'auto', ...(options as Record<string, unknown> | undefined) } };
 }
 
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown): Promise<ChatOptions | undefined> {

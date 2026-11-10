@@ -165,15 +165,34 @@ export function initialSelection(view: SessionView, owner: boolean, context: Acc
   };
 }
 
+export interface PendingHostContext {
+  /** The session record says its commands run in the sandbox. */
+  sandboxed: boolean;
+  owner: boolean;
+  /** The person picked the access themselves, rather than leaving the default. */
+  picked: boolean;
+  /** The owner confirmed on this device that Auto-approve merges without asking. */
+  mergeConfirmed: boolean;
+}
+
 /**
- * Why a message can't go with its access yet: until the session's host is known its options can't be sent. In a sandboxed
- * session (sandboxedDefault given), a message on the chat box's default goes without them and the server applies that same
- * default (Auto-approve where its sender may use it), so only an access the person picked waits; elsewhere a message without
- * options asks before acting, so only another access waits.
+ * What a shared message sends before its session's host is known, when its access can't be checked against the host; or
+ * undefined when it must wait for the host. A message without options runs on what the server gives it: in a sandboxed
+ * session Auto-approve where the sender may use it (merging without asking only with the owner's autoMerge, sent once they
+ * confirmed it on this device), elsewhere Ask before acting. So the owner's Auto-approve goes, and a member's default Ask
+ * before acting (they may not auto-approve there); anything the server wouldn't apply as shown waits: Read only, a picked
+ * Ask before acting, a member's Auto-approve (their host's support for it is unknown) and an unconfirmed owner's.
  */
-export function accessUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask", sandboxedDefault?: boolean): string | undefined {
+export function optionsBeforeHost(selection: ChatSelection, context: PendingHostContext): { options?: ChatOptions } | undefined {
+  if (!context.sandboxed) return selection.access === "approval" ? {} : undefined;
+  if (selection.access === "auto") return context.owner && context.mergeConfirmed ? { options: { autoMerge: true } } : undefined;
+  return selection.access === "approval" && !context.picked && !context.owner ? {} : undefined;
+}
+
+/** Why a message can't go with its access yet: until the session's host is known, only what optionsBeforeHost allows goes. */
+export function accessUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask", pending?: PendingHostContext): string | undefined {
   if (mode !== "submit" || host) return undefined;
-  if (sandboxedDefault === undefined ? selection.access === "approval" : sandboxedDefault) return undefined;
+  if (pending ? optionsBeforeHost(selection, pending) : selection.access === "approval") return undefined;
   return `Still checking this session's host, so "${accessLabels[selection.access].label}" can't be applied yet. Try again in a moment.`;
 }
 

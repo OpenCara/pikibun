@@ -2,7 +2,7 @@ export { ApiError, createApi, errorMessage, segment, type Api, type ApiOptions, 
 export {
   accessHint, accessLabels, accessUnavailable, AUTO_APPROVE_CONFIRMED_KEY, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, clampLevel, CONNECTOR_UPDATE_HINT,
   defaultAccess, effectiveLevel, findModel, initialSelection, levelLabels, memberAutoApproveHint, memberAutoApproveWarning, modelKey, modelUnavailable, mustConfirmAutoApprove,
-  offeredLevels, offersMemberAutoApprove, parseChatPreference, preferredSelection, selectModel, type ChatPreference, type ChatSelection,
+  offeredLevels, offersMemberAutoApprove, optionsBeforeHost, type PendingHostContext, parseChatPreference, preferredSelection, selectModel, type ChatPreference, type ChatSelection,
 } from "./chat-options";
 export {
   activeStatuses, createViewCache, liveTiming, startLiveSession, type CachedView, type EventStream, type LiveSession, type LiveSessionDependencies,

@@ -1402,6 +1402,8 @@ test('a person\'s message naming no access runs on Auto-approve in a sandboxed s
 
   await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'old-host' }), 202);
   assert.equal(sent(), undefined, 'a host that takes no options keeps asking, as it can\'t be told otherwise');
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'old-host-merge', options: { autoMerge: true } }), 202);
+  assert.equal(sent(), undefined, 'the auto-merge that rides on the default goes with it');
   await json(await host({ chatOptions: true }));
   await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-default' }), 202);
   assert.deepEqual(sent(), { access: 'auto' });
@@ -1415,15 +1417,17 @@ test('a person\'s message naming no access runs on Auto-approve in a sandboxed s
   assert.equal(sent(), undefined, 'a member asks where the host can\'t check their auto-approve');
 
   await json(await host({ chatOptions: true, automaticGitHub: true, memberAutoApprove: true }));
-  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-merges' }), 202);
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-unconfirmed' }), 202);
+  assert.deepEqual(sent(), { access: 'auto' }, 'merging without asking needs the owner\'s confirmation, which their app sends');
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'owner-merges', options: { autoMerge: true } }), 202);
   assert.deepEqual(sent(), { access: 'auto', autoMerge: true });
-  await json(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'member-default' }), 202);
+  await json(await s.admin.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'member-default', options: { autoMerge: true } }), 202);
   assert.deepEqual(sent(), { access: 'auto' }, 'a member auto-approves their sandboxed commands, never merges');
 
   const stored = f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(s.connector.connectorId)!;
   f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?')
     .run(JSON.stringify({ ...JSON.parse(String(stored.capabilities_json)), unsandboxed: true }), s.connector.connectorId);
-  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'unsandboxed' }), 202);
+  await json(await s.creator.request('POST', `${path}/submit`, { content: 'Hi', requestId: 'unsandboxed', options: { autoMerge: true } }), 202);
   assert.equal(sent(), undefined, 'an unsandboxed host keeps asking unless Auto-approve is chosen');
 });
 

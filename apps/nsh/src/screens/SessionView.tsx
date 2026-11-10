@@ -2,7 +2,7 @@ import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, pl
 import { Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
-  defaultAccess, initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, offersMemberAutoApprove, pairToolResults, preparingRepositories,
+  defaultAccess, initialSelection, isHostCommand, optionsBeforeHost, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, offersMemberAutoApprove, pairToolResults, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ApprovalRecord, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
 } from "../shared";
@@ -437,8 +437,8 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const permitted = () => !readOnly() && (actualMode() === "write" ? canWrite() : canAsk());
   const unsandboxed = () => Boolean(current().hostUnsandboxed || props.host()?.capabilities.unsandboxed);
   // Until the person picks an access themselves, the chat box follows the default as messages arrive and the host loads:
-  // Auto-approve in a sandboxed session for its owner, or for a member the host and workspace let auto-approve there. A
-  // message sent on the default before the host loads goes without options, and the server applies the same default.
+  // Auto-approve in a sandboxed session for its owner, or for a member the host and workspace let auto-approve there. The
+  // owner's message sent on it before the host loads goes without its access, which the server applies (optionsBeforeHost).
   let accessPicked = false;
   const chooseSelection = (value: ChatSelection) => {
     if (value.access !== untracked(selection).access) accessPicked = true;
@@ -489,8 +489,9 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     if (!permitted() || (!text.trim() && !pasted.length && !attached.length) || submission.busy() || confirming) return;
     const host = props.host();
     const kind = actualMode() === "ask" ? "ask" : "submit";
-    const options = chatOptionsBody(host, selection(), kind, owner());
-    const unavailable = accessUnavailable(host, selection(), kind, accessContext().sandboxed ? !accessPicked : undefined) ?? modelUnavailable(host, selection());
+    const beforeHost = { sandboxed: accessContext().sandboxed, owner: owner(), picked: accessPicked, mergeConfirmed: data.autoApproveConfirmed() };
+    const options = host || kind !== "submit" ? chatOptionsBody(host, selection(), kind, owner()) : optionsBeforeHost(selection(), beforeHost)?.options;
+    const unavailable = accessUnavailable(host, selection(), kind, beforeHost) ?? modelUnavailable(host, selection());
     if (!unavailable && host && mustConfirmAutoApprove(options, data.autoApproveConfirmed())) {
       confirming = true;
       const confirmed = await askAutoApprove(host, unsandboxed()).finally(() => { confirming = false; });
