@@ -112,15 +112,6 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       createdAt: text(raw.createdAt, 'createdAt', 64),
       ...(raw.decidedBy === undefined ? {} : { decidedBy: userIdentifier(raw.decidedBy, 'decidedBy') }),
       ...(raw.result === undefined ? {} : { result: text(raw.result, 'result', 8192, 0) }) };
-    // Only the owner's own operations may auto-approve, and those of a member whose requests the owner chose to
-    // auto-approve, as far as requesterAutoApproves goes (checked below against that choice), or a member's sandboxed
-    // command from their own Auto-approve message, as far as memberAutoApproves goes (checked below against that
-    // message's admission). GitHub comments, issues and
-    // merges only from the owner's Auto-approve message (merges only when its admission is marked `auto_merge`), or a
-    // comment or issue from such a member's message, checked below with the message's admission. A host command runs
-    // automatically only where the control plane told the host its owner may (see hostCommandAuthority); a grant or
-    // choice can lapse later, so the records it left are not judged by today's grants. Another member's extension tool
-    // call runs automatically where its workspace and its host's owner let it (checked below, when it is first reviewed).
     if (raw.automatic !== undefined) {
       const memberMay = operation.kind === 'extension.tool' || requesterAutoApproves(operation, hostCommandSession(row), raw.unbounded === true);
       if (raw.automatic !== true || explicit || approval.decidedBy !== row.owner_id || approval.status === 'pending' || operation.kind === 'permission'
@@ -162,12 +153,6 @@ export async function presentApprovals(c: AppContext, row: SessionRow, input: Ap
       WHERE session_id = ? AND id IN (SELECT value FROM json_each(?))`).bind(row.id, JSON.stringify(admissionIds)).all();
     for (const admission of result) admissions.set(admission.id, admission);
   }
-  // Another member's automatic operations need their own message's admission, and the owner to have chosen to
-  // auto-approve their requests; or, for a sandboxed command (memberAutoApproves), that message to have been sent with
-  // Auto-approve, which the control plane takes only from a member whose workspace role allows it (mayAutoApprove, as
-  // the role was then: the records it left are not judged by today's); or, for an extension's tool call, the workspace to run that extension's tools
-  // automatically where its host's owner allows it, as it does when the call is first reviewed (a setting can change
-  // later, so the records it left are not judged by today's).
   const members = normalized.filter(item => item.approval.automatic && item.approval.requestedBy !== row.owner_id);
   const chosen = await everAutoApproved(c.env.DB, row.id, members.filter(item => item.approval.operation.kind !== 'extension.tool').map(item => item.approval.requestedBy));
   const unconfirmed = new Set<string>();

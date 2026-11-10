@@ -124,15 +124,12 @@ test("another member's requests run without asking only for sandboxed commands, 
 });
 
 test("a workspace owner's, admin's or collaborator's own Auto-approve runs only their commands that stay in the sandbox", () => {
-  // Who may choose it: the session's owner always; anyone else by their workspace role.
   assert.equal(mayAutoApprove("alice", "alice", "member"), true);
   for (const role of ["owner", "admin", "collaborator"] as const) assert.equal(mayAutoApprove("carol", "alice", role), true, role);
   for (const role of ["member", "viewer", undefined] as const) assert.equal(mayAutoApprove("carol", "alice", role), false, String(role));
-  // What it runs without asking: commands in the sandbox, with the host's limits.
   const sandboxed = { ownerId: "alice", connectorOwnerId: "bob" };
   assert.equal(memberAutoApproves({ kind: "bash" }, sandboxed), true);
   assert.equal(memberAutoApproves({ kind: "program" }, sandboxed), true);
-  // Everything else still asks, pushes and GitHub comments and issues included, unlike the owner's Always approve.
   for (const kind of ["git.push", "github.comment", "github.issue", "github.merge", "host.bash", "extension.tool", "permission", "git.commit"]) {
     assert.equal(memberAutoApproves({ kind }, sandboxed), false, kind);
   }

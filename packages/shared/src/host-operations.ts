@@ -26,14 +26,6 @@ export function requesterAutoApproves(operation: { kind: string }, session: Host
   return operation.kind === "git.push" || operation.kind === "github.comment" || operation.kind === "github.issue";
 }
 
-/**
- * Whether `operation` runs without asking in an Auto-approve message of a member who isn't the session's owner, which
- * their workspace role lets them send (memberAutoApproveRoles in policy.ts): a command that stays in the sandbox, with
- * the host's limits (bash and the program tools: git, node, python, cargo, the browser). Pushes, GitHub comments, issues
- * and merges, host commands, every command of a session that runs on its host, a command without the host's limits and
- * anything the session doesn't allow yet (a permission request) still ask. The control plane, the host and the apps all
- * decide by this one rule.
- */
 export function memberAutoApproves(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
   return (operation.kind === "bash" || operation.kind === "program") && requesterAutoApproves(operation, session, unbounded);
 }

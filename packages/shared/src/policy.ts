@@ -42,36 +42,15 @@ export function workspaceSessionPermissions(role: WorkspaceRole, visibility: "pr
   return sharedSessionWriterRoles.includes(role) ? ["read", "ask", "write"] : ["read"];
 }
 
-/**
- * Whether `userId`, whose role in the session's workspace is `role`, manages the session as a whole as its owner does:
- * renames, archives and unarchives it, changes its visibility and tool output, and turns off its share link. Its owner
- * does, and so do its workspace's owner and admins; a session admin role manages only who holds a session role.
- * What acts as the session's owner or takes their work elsewhere stays theirs alone: Auto-approve beyond sandboxed
- * commands (see mayAutoApprove), auto-approving another member's requests (where the workspace allows it; see
- * requester-auto-approve.ts), permission requests,
- * scheduled prompts, restarts, backups, restores, moves, exports and creating a share link.
- */
 export function managesSession(userId: string, ownerId: string, role: WorkspaceRole | undefined): boolean {
   return userId === ownerId || (role !== undefined && workspaceManagerRoles.includes(role));
 }
 export const sharedSessionWriterRoles: readonly WorkspaceRole[] = ["owner", "admin", "collaborator"];
-/**
- * Workspace roles whose members may send their own messages with Auto-approve to a session they write to but don't own.
- * Approved operations run as the session's owner, so such a message runs without asking only the commands that stay in
- * the sandbox, within the host's limits (memberAutoApproves in host-operations.ts); its pushes, GitHub effects, host
- * commands and anything the session doesn't allow yet still ask, as they do in any of their messages.
- */
 export const memberAutoApproveRoles: readonly WorkspaceRole[] = ["owner", "admin", "collaborator"];
 
-/**
- * Whether `userId`, whose role in the session's workspace is `role`, may choose Auto-approve for their messages to a
- * session owned by `ownerId`: its owner always (with everything Auto-approve covers), and a member whose workspace role
- * is one of memberAutoApproveRoles (for their sandboxed commands only). Write permission on the session is checked apart.
- */
 export function mayAutoApprove(userId: string, ownerId: string, role: WorkspaceRole | undefined): boolean {
   return userId === ownerId || (role !== undefined && memberAutoApproveRoles.includes(role));
 }
-/** Roles whose explicit session grants are capped at read (see roleSessionCeiling). */
 export const readOnlyRoles: readonly WorkspaceRole[] = ["viewer"];
 
 export function roleSessionCeiling(role: WorkspaceRole): readonly Permission[] | null {

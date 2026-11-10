@@ -126,11 +126,9 @@ test("a workspace owner, admin or collaborator may choose Auto-approve in someon
   assert.equal(offersMemberAutoApprove(session, older, "teammate", "collaborator", true, false), false, "an older connector takes it from the owner only");
   assert.equal(offersMemberAutoApprove(session, undefined, "teammate", "collaborator", true, false), false);
   assert.equal(offersMemberAutoApprove(session, automatic, "owner", "collaborator", true, false), false, "the owner has their own Auto-approve");
-  // Their messages never ask to merge without asking, so they never wait on the owner's merge confirmation either.
   assert.deepEqual(chatOptionsBody(automatic, auto, "submit", false), { access: "auto" });
   assert.deepEqual(chatOptionsBody(automatic, auto, "submit", true), { access: "auto", autoMerge: true });
   assert.equal(mustConfirmAutoApprove(chatOptionsBody(automatic, auto, "submit", false), false), false);
-  // The menu and the confirmation say what it does there.
   assert.equal(accessHint("auto", false), memberAutoApproveHint);
   assert.equal(accessHint("auto", true), accessLabels.auto.hint);
   assert.equal(accessHint("approval", false), accessLabels.approval.hint);

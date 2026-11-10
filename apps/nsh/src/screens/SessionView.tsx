@@ -400,10 +400,8 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const current = () => props.live.session()!;
   const view = () => props.live.view()!;
   const owner = () => current().ownerId === user.id;
-  // A workspace owner, admin or collaborator who writes to someone else's session auto-approves their sandboxed commands.
   const memberAutoApprove = () => offersMemberAutoApprove(current(), props.host(), user.id,
     data.workspaces().find(item => item.id === current().workspaceId)?.role, canWrite(), unsandboxed());
-  // Initialised once per session; view refreshes never reset the user's picks.
   const selection = signal<ChatSelection>(untracked(() => initialSelection(view(), owner())));
   const mode = signal<"write" | "ask">("write");
   const content = createDraft(props.id);
