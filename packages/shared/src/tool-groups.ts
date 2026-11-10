@@ -1,4 +1,4 @@
-import type { WorkspaceRole } from "./types.js";
+import { toolNames, type WorkspaceRole } from "./types.js";
 
 /**
  * Tool groups: which of Pikibun's own session tools a session has, decided by its owner's place in the workspace. Each
@@ -112,6 +112,18 @@ export function memberTools(role: WorkspaceRole, group?: { tools: readonly strin
 export function toolsLeftOut(tools: readonly string[]): GroupTool[] {
   return groupTools.filter(tool => !tools.includes(tool));
 }
+
+/** Pikibun's retired tools (bash, host_bash ...), which old agent versions may still pin: only sessions with every tool keep them. */
+export const retiredGroupTools: readonly string[] = toolNames.filter(tool => !isGroupTool(tool));
+
+/** What a session whose owner has these tools runs without: the group tools they lack and, unless they lack none, the retired ones. */
+export function toolsOff(tools: readonly string[]): string[] {
+  const out: string[] = toolsLeftOut(tools);
+  return out.length ? [...out, ...retiredGroupTools] : [];
+}
+
+/** Until a host has heard of a workspace, its sessions run only the tools that read the session's files. */
+export const unknownToolGroup: MemberToolGroup = { name: "not known yet: Pikibun hasn't answered", off: toolsOff(roleTools.viewer) };
 
 export function parseMemberToolGroups(value: unknown): Record<string, MemberToolGroup> {
   if (value === undefined) return {};

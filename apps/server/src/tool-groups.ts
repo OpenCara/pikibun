@@ -94,7 +94,10 @@ export function registerToolGroups(app: Hono<AppEnv>): void {
     const saved = await c.env.DB.query(`UPDATE workspace_tool_groups SET name = ?, tools_json = ?, updated_by = ?, updated_at = ?
       WHERE id = ? AND workspace_id = ? AND ${workspaceAdminSQL} RETURNING id`)
       .bind(name, JSON.stringify(tools), actor, now(), groupId, workspaceId, workspaceId, actor).first().catch(sameName);
-    if (!saved) fail(403, 'forbidden', 'Workspace administrator access is required.');
+    if (!saved) {
+      const exists = await c.env.DB.query('SELECT 1 AS n FROM workspace_tool_groups WHERE id = ? AND workspace_id = ?').bind(groupId, workspaceId).first();
+      fail(exists ? 403 : 404, exists ? 'forbidden' : 'not_found', exists ? 'Workspace administrator access is required.' : 'Tool group not found.');
+    }
     await auditStatement(c.env, actor, 'workspace.tool_group.updated', workspaceId, null, { groupId, name, tools }).run();
     return c.json(await toolGroupSettings(c.env, workspaceId, true));
   });

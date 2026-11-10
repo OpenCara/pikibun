@@ -4,7 +4,7 @@ import { app } from '../apps/server/src/index.js';
 import type { Env } from '../apps/server/src/types.js';
 import { memberToolGroups, requireOwnerTool } from '../apps/server/src/authority/tool-groups.js';
 import {
-  groupTools, memberTools, parseGroupTools, parseMemberToolGroups, roleTools, toolsLeftOut, type ToolGroupSettings,
+  groupTools, memberTools, parseGroupTools, parseMemberToolGroups, retiredGroupTools, roleTools, toolsLeftOut, toolsOff, unknownToolGroup, type ToolGroupSettings,
 } from '../packages/shared/src/tool-groups.js';
 import { parseWorkspaceExtensionsAnswer } from '../packages/shared/src/host-extensions.js';
 import { testDatabase } from './helpers/control-plane.js';
@@ -28,6 +28,10 @@ test('each role\'s sessions get their tools, and a group\'s own tools replace th
   assert.deepEqual(parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: false, toolGroups: { u1: { name: 'Members', off: ['sessions'] } } }).toolGroups,
     { u1: { name: 'Members', off: ['sessions'] } }, 'hosts read the groups with the workspace\'s extensions');
   assert.equal(parseWorkspaceExtensionsAnswer({ extensions: [], automaticTools: false }).toolGroups, undefined);
+  assert.ok(retiredGroupTools.includes('bash') && retiredGroupTools.includes('host_bash'));
+  assert.deepEqual(toolsOff(groupTools), [], 'a session with every tool keeps the retired ones old agents may pin');
+  assert.deepEqual(toolsOff(roleTools.collaborator), ['tunnel', 'github_merge', ...retiredGroupTools], 'any other session runs without them');
+  assert.deepEqual(unknownToolGroup.off, toolsOff(roleTools.viewer), 'a host that has never heard of the workspace only reads files');
 });
 
 const origin = 'http://localhost:8787';
@@ -83,7 +87,9 @@ test('workspace owners and admins create tool groups and put members in them; th
   await requireOwnerTool(f.env, row(f.owner.user.id), 'github_merge');
   await requireOwnerTool(f.env, row(f.member.user.id), 'git');
   await refusedTool(f.member.user.id, 'git_push');
-  await requireOwnerTool(f.env, row(f.member.user.id), 'codemode'), 'tools that aren\'t Pikibun\'s own are left to the workspace\'s extensions';
+  await refusedTool(f.member.user.id, 'bash');
+  await requireOwnerTool(f.env, row(f.owner.user.id), 'bash');
+  await requireOwnerTool(f.env, row(f.member.user.id), 'codemode');
   await refusedTool('test:stranger', 'read_file');
   assert.deepEqual(Object.keys(await memberToolGroups(f.env, f.workspace.id)).sort(), [f.member.user.id, f.other.user.id].sort());
 
@@ -103,7 +109,7 @@ test('workspace owners and admins create tool groups and put members in them; th
   assert.equal(assigned.members.find(item => item.userId === f.member.user.id)!.groupId, releasers.id);
   await requireOwnerTool(f.env, row(f.member.user.id), 'github_merge');
   await refusedTool(f.member.user.id, 'write_file');
-  assert.deepEqual((await memberToolGroups(f.env, f.workspace.id))[f.member.user.id], { name: 'Releasers', off: toolsLeftOut(['read_file', 'git', 'git_push', 'github_merge']) });
+  assert.deepEqual((await memberToolGroups(f.env, f.workspace.id))[f.member.user.id], { name: 'Releasers', off: toolsOff(['read_file', 'git', 'git_push', 'github_merge']) });
 
   const renamed = await body<ToolGroupSettings>(await f.owner.request('PATCH', `${f.path}/tool-groups/${releasers.id}`, { name: 'Shippers', tools: [...groupTools] }));
   assert.equal(renamed.groups[0]!.name, 'Shippers');
@@ -116,6 +122,7 @@ test('workspace owners and admins create tool groups and put members in them; th
   const deleted = await body<ToolGroupSettings>(await f.admin.request('DELETE', `${f.path}/tool-groups/${releasers.id}`));
   assert.deepEqual([deleted.groups, deleted.members.find(item => item.userId === f.other.user.id)!.groupId], [[], null], 'its members go back to their role\'s tools');
   await body(await f.admin.request('DELETE', `${f.path}/tool-groups/${releasers.id}`), 404);
+  await body(await f.admin.request('PATCH', `${f.path}/tool-groups/${releasers.id}`, { name: 'Late edit' }), 404);
 
   const again = (await body<ToolGroupSettings>(await f.owner.request('POST', `${f.path}/tool-groups`, { name: 'Again', tools: ['read_file'] }), 201)).groups[0]!;
   await body(await f.owner.request('PUT', `${f.path}/members/${f.other.user.id}/tool-group`, { groupId: again.id }));

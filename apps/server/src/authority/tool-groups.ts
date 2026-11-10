@@ -1,5 +1,5 @@
 import {
-  isGroupTool, memberTools, roleGroupNames, toolsLeftOut, type GroupTool, type MemberToolGroup,
+  isGroupTool, memberTools, retiredGroupTools, roleGroupNames, toolsLeftOut, toolsOff, type GroupTool, type MemberToolGroup,
 } from '../../../../packages/shared/src/tool-groups.js';
 import type { WorkspaceRole } from '../../../../packages/shared/src/types.js';
 import { fail } from '../http.js';
@@ -33,7 +33,7 @@ export async function memberToolGroups(env: Env, workspaceId: string): Promise<R
   const result: Record<string, MemberToolGroup> = {};
   for (const row of rows) {
     const group = groupOf(row);
-    const off = toolsLeftOut(group.tools);
+    const off = toolsOff(group.tools);
     if (off.length) result[row.user_id] = { name: group.name, off };
   }
   return result;
@@ -44,8 +44,9 @@ export async function memberToolGroups(env: Env, workspaceId: string): Promise<R
  * and permission requests included. Tools that aren't Pikibun's own are left to the workspace's extensions.
  */
 export async function requireOwnerTool(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>, tool: string): Promise<void> {
-  if (!isGroupTool(tool)) return;
+  const retired = retiredGroupTools.includes(tool);
+  if (!isGroupTool(tool) && !retired) return;
   const group = await memberToolGroup(env, row.workspace_id, row.owner_id);
-  if (group.tools.includes(tool)) return;
+  if (retired ? !toolsLeftOut(group.tools).length : group.tools.includes(tool as GroupTool)) return;
   fail(403, 'tool_not_in_group', `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups.`);
 }

@@ -50,7 +50,7 @@ import { githubInstructions, githubWaitLimits, githubWaits, waitForGitHub } from
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
 import { lineRange } from "./edits.js";
 import { documentKindsOff, extensionSwitchOn, sessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
-import type { MemberToolGroup } from "../../../packages/shared/src/tool-groups.js";
+import { unknownToolGroup, type MemberToolGroup } from "../../../packages/shared/src/tool-groups.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
@@ -1196,7 +1196,8 @@ export class RunnerSession {
 
   /**
    * The tool group of the session's owner, where it leaves out some of Pikibun's tools: a ceiling on the session's tools, for
-   * every message, Auto-approve included. Without a fresh answer it keeps the last one, so a failed fetch lifts nothing.
+   * every message, Auto-approve included. It follows the last answer the connector read, however old, so a failed fetch
+   * lifts nothing; and until the connector has read one, the session only reads its files.
    */
   private async ownerToolGroup(): Promise<MemberToolGroup | undefined> {
     const config = this.config.extensions;
@@ -1204,10 +1205,9 @@ export class RunnerSession {
     const workspaceId = this.binding.session.workspaceId;
     const answer = await config.workspace(workspaceId).catch(() => undefined);
     const owner = this.binding.owner.id;
-    const current = answer?.toolGroups?.[owner];
-    const last = config.lastKnown?.(workspaceId)?.toolGroups?.[owner];
-    if (!current || !last || current === last) return current ?? last;
-    return { name: current.name, off: [...new Set([...current.off, ...last.off])] };
+    if (!config.lastKnown) return answer?.toolGroups?.[owner];
+    const last = config.lastKnown(workspaceId);
+    return last ? last.toolGroups?.[owner] : unknownToolGroup;
   }
 
   private async documentKindsOff(): Promise<Set<DocumentKind>> {
