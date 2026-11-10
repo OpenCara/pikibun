@@ -23,6 +23,9 @@ export function inScriptCall(): boolean {
 /**
  * Whether the tool task is a nested call: one a running tool made through `executeTool()`, as code mode does for each
  * of a script's calls, rather than one the model made. Read from the task's durable input, so it holds after a restart.
+ * Any nested call counts, not only code mode's: in Pikibun, code mode is the only tool that calls `executeTool()`; a
+ * tool that comes to call it gets results of up to about 1 MB too, as a program that reads them, not a model. Where the
+ * task can't be read, the call is taken for the model's, and bounded: the safe side.
  */
 export async function calledByScript(api: ToolExecutionApi, context: Context): Promise<boolean> {
   try {
@@ -57,6 +60,16 @@ export function boundForModel(result: ToolExecutionResult, limits: Limits): Tool
     { severity: "warn", code: "truncated", message: `Output truncated to its ${kept}: ${bounded.droppedLines} lines, ${bounded.droppedBytes} bytes dropped` }] };
 }
 
+/**
+ * The result with what the tool streamed through `api.output()` as its output, where it returned none: so the bound
+ * below applies to it too, rather than the Harness's, which the wrapper raised to the script cap.
+ */
+function withRetained(result: ToolExecutionResult, api: ToolExecutionApi): ToolExecutionResult {
+  if (result.output !== undefined) return result;
+  const retained = api.retainedOutput();
+  return { ...result, output: retained.text === "" ? [] : [{ type: "text", text: retained.text }] };
+}
+
 /** A script's result: whole up to the script cap, else its head and tail with a note of what was left out. */
 export function capForScript(result: ToolExecutionResult): ToolExecutionResult {
   const output = result.output;
@@ -72,6 +85,10 @@ export function capForScript(result: ToolExecutionResult): ToolExecutionResult {
  * The tool, giving a code mode script its whole output (up to about 1 MB) instead of what the model is shown: scripts
  * are there to filter large output, and a cut one breaks them (JSON.parse of half a document). A call the model makes is
  * bounded as before. Tools only the model calls are left as they are.
+ *
+ * The Harness bounds a result after the `afterTool` hooks; this bounds a model's call before them, as `outputLimits`
+ * can't differ by caller. An extension's `tool_result` handler that makes a model's result larger is then held only to
+ * the script cap the tool declares, about 1 MB.
  */
 export function wholeForScripts(tool: ToolRegistration): ToolRegistration {
   if (tool.callers && !tool.callers.includes("tools")) return tool;
@@ -85,7 +102,7 @@ export function wholeForScripts(tool: ToolRegistration): ToolRegistration {
     outputLimits: { maxBytes: Math.max(limits.maxBytes, SCRIPT_OUTPUT_LIMITS.maxBytes), maxLines: Math.max(limits.maxLines, SCRIPT_OUTPUT_LIMITS.maxLines), retain: limits.retain },
     execute: async (args: never, api: ToolExecutionApi, context: Context) => {
       const script = await calledByScript(api, context);
-      const result = await scriptCalls.run(script, () => tool.execute(args, api, context));
+      const result = withRetained(await scriptCalls.run(script, () => tool.execute(args, api, context)), api);
       return script ? capForScript(result) : boundForModel(result, limits);
     },
   } as ToolRegistration;

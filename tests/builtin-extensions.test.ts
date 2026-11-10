@@ -84,6 +84,7 @@ test("a script gets a tool's whole output, up to about 1 MB, while the model's o
   const tools = [
     defineTool({ name: "pretty", description: "Pretty JSON.", parameters: obj({}, { open: true }), execute: async () => text(pretty) }),
     defineTool({ name: "line", description: "One line of JSON.", parameters: obj({}, { open: true }), execute: async () => text(line) }),
+    defineTool({ name: "stream", description: "Streams pretty JSON.", parameters: obj({}, { open: true }), execute: async (_args, api) => { api.output(pretty); return {}; } }),
     defineTool({ name: "where", description: "Who called.", parameters: obj({}, { open: true }), execute: async () => text(inScriptCall() ? "script" : "model") }),
     defineTool({ name: "huge", description: "Two megabytes.", parameters: obj({}, { open: true }), execute: async () => text(`start\n${`${"x".repeat(99)}\n`.repeat(20_000)}end`) }),
   ].map(wholeForScripts);
@@ -133,6 +134,10 @@ test("a script gets a tool's whole output, up to about 1 MB, while the model's o
   assert.ok(Buffer.byteLength(direct) < 52 * 1024, `${Buffer.byteLength(direct)}`);
   assert.ok(direct.startsWith(pretty.slice(0, 1000)));
   assert.match(direct, /Output truncated to its beginning: \d+ lines, \d+ bytes dropped/, "the model's own call is bounded as the Harness bounds it");
+  assert.equal(await script("const data = JSON.parse(await tools.stream({}));\nreturn data.items.length + ' ' + data.items.at(-1).title;"), "6000 item 5999",
+    "output a tool streamed reaches a script whole too");
+  const streamed = await run("direct:stream");
+  assert.ok(Buffer.byteLength(streamed) < 52 * 1024 && /Output truncated to its beginning/.test(streamed), "and the model bounded");
   assert.match(await run("direct:line"), /^\{"items":[\s\S]*Output truncated to its beginning: 0 lines, \d+ bytes dropped/);
 });
 
