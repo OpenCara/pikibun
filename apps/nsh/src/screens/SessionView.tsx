@@ -2,7 +2,7 @@ import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, pl
 import { Button as BaseButton, NavPage, Sheet } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText, decidedAsHostCommand, decidesHostCommand, hostCommandWaiting,
-  initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, offersMemberAutoApprove, pairToolResults, preparingRepositories,
+  defaultAccess, initialSelection, isHostCommand, managesSession, messageCut, modelUnavailable, mustConfirmAutoApprove, offersAlwaysApprove, offersMemberAutoApprove, pairToolResults, preparingRepositories,
   REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ApprovalRecord, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
 } from "../shared";
@@ -428,6 +428,18 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const readOnly = () => current().status === "archived" || current().frozen === true;
   const permitted = () => !readOnly() && (actualMode() === "write" ? canWrite() : canAsk());
   const unsandboxed = () => Boolean(current().hostUnsandboxed || props.host()?.capabilities.unsandboxed);
+  // Until the person picks an access themselves, the chat box follows the default, which can change once the session's host
+  // is known and as messages arrive: Auto-approve in a sandboxed session for its owner, or for a member the host and workspace
+  // let auto-approve there. A session counts as sandboxed only once its host is known.
+  let accessPicked = false;
+  const chooseSelection = (value: ChatSelection) => {
+    if (value.access !== untracked(selection).access) accessPicked = true;
+    selection.set(value);
+  };
+  effect(() => {
+    const access = defaultAccess(view(), owner(), { sandboxed: Boolean(props.host()) && !unsandboxed(), memberAutoApprove: memberAutoApprove() });
+    untracked(() => { if (!accessPicked && selection().access !== access) selection.set({ ...selection(), access }); });
+  });
   const queue = () => view().queue ?? [];
   const activeQueue = computed(() => queue().filter(item => activeStatuses.includes(item.status)));
   const recentSubmissions = () => queue().filter(item => !activeStatuses.includes(item.status)).slice(-5).reverse();
@@ -474,7 +486,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     if (!unavailable && host && mustConfirmAutoApprove(options, data.autoApproveConfirmed())) {
       confirming = true;
       const confirmed = await askAutoApprove(host, unsandboxed()).finally(() => { confirming = false; });
-      if (!confirmed) { selection.update(value => ({ ...value, access: "approval" })); return; }
+      if (!confirmed) { chooseSelection({ ...untracked(selection), access: "approval" }); return; }
     }
     receipt.set(null);
     withdrawNotice.set("");
@@ -706,7 +718,7 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
                     options={[{ value: "", label: "All my side asks" }, ...sideConversations().map((conversation, index) => ({ value: conversation.id, label: `Side ask ${index + 1}`, hint: conversation.id.slice(0, 8) }))]} />
                 </If>
                 <If when={permitted()}>
-                  <ChatOptionsBar host={props.host()} value={selection()} onChange={value => selection.set(value)} owner={owner()} memberAutoApprove={memberAutoApprove()} showAccess={actualMode() === "write"}
+                  <ChatOptionsBar host={props.host()} value={selection()} onChange={chooseSelection} owner={owner()} memberAutoApprove={memberAutoApprove()} showAccess={actualMode() === "write"}
                     unsandboxed={unsandboxed()} data={data} />
                 </If>
               </If>
