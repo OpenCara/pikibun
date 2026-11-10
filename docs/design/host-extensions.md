@@ -1,5 +1,7 @@
 # Extensions
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 Pi on a workstation is extended with extensions: modules that add tools, react to the agent's events and change its
 prompt. Sessions in Pikibun run on `@earendil-works/pi-durable`, not on `pi-coding-agent`'s agent session, so none of
 those load today: the runner installs one pi-durable extension of its own (`workspace-tools`, see `Session.buildTools`).

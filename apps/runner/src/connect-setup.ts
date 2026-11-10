@@ -146,16 +146,14 @@ export function unsandboxedWarning(): string {
   return `
 WARNING: running WITHOUT a sandbox (--unsafe-no-sandbox).
 Agent work for sessions on this host runs directly as "${userInfo().username}" on this machine:
-  - Approved shell commands and commits run with your full user permissions. They can read
-    and change anything you can, including ~/.ssh, cloud and Git credentials and Pi's auth.
+  - Shell commands and commits run with your full user permissions, as soon as the agent
+    calls them: nobody approves them one by one. They can read and change anything you can,
+    including ~/.ssh, cloud and Git credentials and Pi's auth.
   - Commands have unrestricted network access and no CPU, memory or disk limits.
   - File tools are confined to each session folder by path checks only, not isolation.
-  - Prompts and repository content can try to trick the agent. Read every command in the
-    approval desk before approving it.
-  - Anyone you share this Pi with, and anyone granted approve permission on a session that
-    runs here, can cause approved commands to run on this machine.
-  - A session owner who turns on Auto-approve in the chat box lets their agent run
-    commands and commits here immediately, with no per-command approval.
+  - Prompts and repository content can try to trick the agent.
+  - Only you, and members you grant host commands, run commands here; everyone else's
+    sessions on this host are refused them.
 Pikibun shows this host as "Unsandboxed" to everyone who can see it.
 
 `;

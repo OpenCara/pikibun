@@ -9,15 +9,13 @@ import { connectorLimits, type ConnectorCapabilities, type LocalModelSummary } f
 import { parseChatImages, type ChatImage } from '../../../packages/shared/src/chat-images.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { isRevision } from '../../../packages/shared/src/view-patch.js';
-import { hasPermission, managesSession, mayAutoApprove, normalizePermissions, roleSessionCeiling, sessionRoleOf, sessionRolePermissions, validateUserEnv } from '../../../packages/shared/src/policy.js';
-import { redactApproval } from '../../../packages/shared/src/redaction.js';
+import { hasPermission, managesSession, normalizePermissions, roleSessionCeiling, sessionRoleOf, sessionRolePermissions, validateUserEnv } from '../../../packages/shared/src/policy.js';
 import type { AgentRow, AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
 import { agentVersion, getUser, modelDefinition, requireActiveSession, requireUnfrozen, runnerSessionRecord, sessionRecord, userProfile } from './db.js';
 import {
-  auditStatement, autoApprovedRequesters, chooseAutoApprovedRequester, cloneRepositories, crossSessionCall, hostAuthority, hostCommandSession,
-  hostOwnerDecides, issueRunAdmission, legacyRepositoryFixture, listSessionAccess, mayDecideHostCommands, parseOperation, permissionCall,
-  presentApprovals, requireConnectorSession, requireMember, requireOperationTool, requireRunnerAccess, requireSession, requireSessionCreator, requireSessionManager,
-  reviewedApproval, runsShellCommands, sessionAccess, sessionCreatorSQL, sessionManagerSQL, workspaceApprovalSettings,
+  auditStatement, cloneRepositories, hostAuthority, issueRunAdmission, legacyRepositoryFixture, listSessionAccess, requireConnectorSession, requireMember,
+  requireRunnerAccess, requireSession, requireSessionCreator, requireSessionManager, runsShellCommands, sessionAccess, sessionCreatorSQL, sessionManagerSQL,
+  audienceSharing,
 } from './authority/index.js';
 import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
 import { fail, id, identifier, jsonObject, now, randomToken, testMode, text, userIdentifier } from './http.js';
@@ -27,7 +25,6 @@ import { hostSessionsNeedConsent, hostSessionsSupported } from './connectors.js'
 import { connectorHostConfig } from './host-config.js';
 import { chatAgentVersion, requireModel } from './catalog.js';
 import { isLinkShared } from './session-links.js';
-import { decidedAsHostCommand, grantedShell, requesterAutoApproves } from '../../../packages/shared/src/host-operations.js';
 import { disabledModelKeys, isModelDisabled, messageNeedsModel, modelEnabledSQL, requireEnabledModel } from './host-models.js';
 import { earlierEntries, invalidateSessionView, sessionView, transcriptDisplay, viewChanges } from './view-feed.js';
 import { stopSessionTunnel } from './session-tunnels.js';
@@ -35,38 +32,16 @@ import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 
-/**
- * A person's shared message to a sandboxed session that names no access (sent before their app knew the session's host, or
- * from an app that sends no options) runs on Auto-approve where its sender may use it there, as their chat box starts on it:
- * the session's owner, or a workspace owner, admin or collaborator, for their sandboxed commands. It doesn't fall back to
- * asking before acting there. It merges without asking only with the owner's autoMerge, which their app sends once they
- * confirmed that on the device, and which goes only with this default. An access the message names stands, and messages
- * the server sends itself (from schedules, other sessions and notifications) keep theirs.
- */
-export async function withSandboxedDefault(c: AppContext, row: SessionRow, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const options = input.options;
-  if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) return input;
-  if (options && 'access' in options) return input;
-  const { autoMerge, ...rest } = (options ?? {}) as Record<string, unknown>;
-  const asking = () => (autoMerge === undefined ? input : { ...input, options: Object.keys(rest).length ? rest : undefined });
-  if (!row.connector_id || Number(row.host_environment ?? 0) === 1) return asking();
-  const capabilities = await hostCapabilities(c.env, row.connector_id, { active: true });
-  if (capabilities?.chatOptions !== true || capabilities.unsandboxed === true) return asking();
-  const actorId = c.get('auth').userId;
-  if (actorId !== row.owner_id) {
-    if (capabilities.memberAutoApprove !== true) return asking();
-    const actor = await sessionAccess(c.env, row.id, actorId);
-    if (!actor || !hasPermission(actor.permissions, 'write') || !mayAutoApprove(actorId, row.owner_id, actor.role)) return asking();
-  }
-  return { ...input, options: { access: 'auto', ...(options as Record<string, unknown> | undefined) } };
-}
-
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown): Promise<ChatOptions | undefined> {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(400, 'invalid_options', 'Invalid chat options.');
   const input = value as Record<string, unknown>;
   if (Object.keys(input).some(key => !['model', 'thinkingLevel', 'access', 'autoMerge'].includes(key))) fail(400, 'invalid_options', 'Invalid chat options.');
-  if (!Object.keys(input).length) return undefined;
+  if (input.access !== undefined && (mode !== 'submit' || !accessModes.includes(input.access as never))) fail(400, 'invalid_options', 'Side asks are always read-only.');
+  if (input.autoMerge !== undefined && typeof input.autoMerge !== 'boolean') fail(400, 'invalid_options', 'Invalid auto-merge choice.');
+  // Nobody approves anything any more: a message acts, or with Read only it only reads. The access of before (approval,
+  // auto) and auto-merge go with nothing, on any host.
+  if (input.model === undefined && input.thinkingLevel === undefined && input.access !== 'read') return undefined;
   if (!row.connector_id) fail(400, 'options_unsupported', 'This session\'s runner cannot change model, reasoning or access.');
   const host = await c.env.DB.query<{ models_json: string; capabilities_json: string }>('SELECT models_json, capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
     .bind(row.connector_id).first();
@@ -95,28 +70,7 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
     if (!thinkingLevels.includes(input.thinkingLevel as never)) fail(400, 'invalid_options', 'Invalid reasoning level.');
     options.thinkingLevel = input.thinkingLevel as ChatOptions['thinkingLevel'];
   }
-  if (input.access !== undefined) {
-    if (mode !== 'submit' || !accessModes.includes(input.access as never)) fail(400, 'invalid_options', 'Side asks are always read-only.');
-    const actorId = c.get('auth').userId;
-    if (input.access === 'auto' && actorId !== row.owner_id) {
-      const actor = await sessionAccess(c.env, row.id, actorId);
-      if (!actor || !hasPermission(actor.permissions, 'write') || !mayAutoApprove(actorId, row.owner_id, actor.role)) {
-        fail(403, 'owner_required', 'Only the session owner, or a workspace owner, admin or collaborator, can auto-approve commands.');
-      }
-      if (capabilities.memberAutoApprove !== true) {
-        fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to auto-approve commands in a session you don\'t own.');
-      }
-      if (capabilities.unsandboxed === true || Number(row.host_environment ?? 0) === 1) {
-        fail(409, 'unsandboxed_host', 'This session\'s host runs commands without a sandbox, so only the session owner can auto-approve them.');
-      }
-    }
-    options.access = input.access as ChatOptions['access'];
-  }
-  if (input.autoMerge !== undefined) {
-    if (typeof input.autoMerge !== 'boolean') fail(400, 'invalid_options', 'Invalid auto-merge choice.');
-    if (input.autoMerge && options.access !== 'auto') fail(400, 'invalid_options', 'Auto-merge needs Auto-approve.');
-    if (input.autoMerge && capabilities.automaticGitHub === true && c.get('auth').userId === row.owner_id) options.autoMerge = true;
-  }
+  if (input.access === 'read') options.access = 'read';
   return options;
 }
 
@@ -147,7 +101,10 @@ export async function submitMessage(c: AppContext, row: SessionRow, mode: 'submi
   if (images && connectorUtf8Bytes(JSON.stringify({ content, requestId, admissionId: 'x'.repeat(43), options, images })) > connectorLimits.requestBytes) {
     fail(413, 'message_too_large', 'This message and its images are too large to send together. Remove an image or shorten the message.');
   }
-  const admissionId = mode === 'submit' ? await issueRunAdmission(c, row, content, requestId, options?.access, images, options?.autoMerge === true) : undefined;
+  if (mode === 'submit' && row.connector_id && (await hostCapabilities(c.env, row.connector_id))?.approvalFree !== true) {
+    fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect): Pikibun no longer asks anyone to approve a session\'s tools, and this connector still would.');
+  }
+  const admissionId = mode === 'submit' ? await issueRunAdmission(c, row, content, requestId, options?.access, images) : undefined;
   const result = await runnerJSON<SubmitResult>(await runnerRequest(c, row, mode, '', { content, requestId, ...(admissionId ? { admissionId } : {}), ...(options ? { options } : {}),
     ...(images ? { images } : {}) }));
   invalidateSessionView(c, row.id);
@@ -374,16 +331,6 @@ function sessionVisibility(value: unknown): 'private' | 'workspace' {
   return value;
 }
 
-async function requireDecider(c: AppContext, sessionId: string, operation?: Operation): Promise<SessionRow> {
-  const { row, permissions: held } = await requireSession(c, sessionId, 'read');
-  if (!hasPermission(held, 'approve')) {
-    const hostCommand = operation === undefined || operation.kind === 'host.bash' || operation.kind === 'extension.tool';
-    if (!hostCommand || !await hostOwnerDecides(c.env, row, c.get('auth').userId)) fail(403, 'forbidden', 'Session approve permission is required.');
-  }
-  await requireActiveSession(c.env, row);
-  return row;
-}
-
 async function viewRefused(c: AppContext, row: SessionRow): Promise<boolean> {
   const refused = (error: unknown) => {
     if (!(error instanceof HTTPException)) throw error;
@@ -483,12 +430,10 @@ export function registerSessions(app: Hono<AppEnv>): void {
       ? await c.env.DB.query<{ tools_json: string }>('SELECT tools_json FROM agent_versions WHERE id = ?').bind(access.row.agent_version_id).first() : null;
     const notice = agent ? await cloneUnavailable(c.env, capabilities as ConnectorCapabilities, access.row, JSON.parse(agent.tools_json) as string[]) : undefined;
     const linkShared = await isLinkShared(c.env, access.row.id);
-    const requesterAutoApprove = (await workspaceApprovalSettings(c.env.DB, access.row.workspace_id)).requesterAutoApprove;
-    const autoApproved = await autoApprovedRequesters(c.env.DB, access.row.id);
     const viewable = !await viewRefused(c, access.row);
+    const sharing = await audienceSharing(c.env, access.row.id);
     return c.json({ session: { ...sessionRecord(access.row, access.permissions), ...(hostUnsandboxed ? { hostUnsandboxed } : {}), ...(linkShared ? { linkShared } : {}),
-      ...(notice ? { cloneUnavailable: notice } : {}), ...(requesterAutoApprove ? { requesterAutoApprove: true } : {}),
-      ...(autoApproved.length ? { autoApprovedRequesters: autoApproved } : {}), viewable } });
+      ...(notice ? { cloneUnavailable: notice } : {}), ...(sharing ? { audienceSharing: true } : {}), viewable } });
   });
   app.patch('/api/sessions/:id', async c => {
     const access = await requireSession(c, identifier(c.req.param('id')), 'manage');
@@ -587,112 +532,9 @@ export function registerSessions(app: Hono<AppEnv>): void {
       const { row } = await requireSession(c, identifier(c.req.param('id')), mode === 'ask' ? 'ask' : 'write');
       requireUnfrozen(row);
       const input = await jsonObject(c, connectorLimits.requestBytes + 256 * 1024);
-      return c.json(await submitMessage(c, row, mode, mode === 'submit' ? await withSandboxedDefault(c, row, input) : input), 202);
+      return c.json(await submitMessage(c, row, mode, input), 202);
     });
   }
-
-  app.post('/api/sessions/:id/operations', async c => {
-    const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');
-    requireUnfrozen(row);
-    const operation = parseOperation(await jsonObject(c));
-    if (operation.kind === 'permission') fail(400, 'invalid_operation', 'Permission requests come only from tool calls.');
-    await requireOperationTool(c.env, row, operation);
-    const result = await runnerJSON<{ approval: ApprovalRecord }>(await runnerRequest(c, row, 'operations', '', { operation }));
-    invalidateSessionView(c, row.id);
-    if (!result?.approval || result.approval.sessionId !== row.id || result.approval.requestedBy !== c.get('auth').userId) fail(502, 'invalid_runner_response', 'The runner returned an invalid approval request.');
-    [result.approval] = await presentApprovals(c, row, [result.approval], { operation, requestedBy: c.get('auth').userId });
-    await auditStatement(c.env, c.get('auth').userId, 'approval.requested', row.workspace_id, row.id, { approvalId: result.approval.id, kind: operation.kind }).run();
-    const fresh = await requireSession(c, row.id, 'write');
-    if (fresh.row.connector_id) await requireConnectorSession(c.env, fresh.row.connector_id, fresh.row);
-    return c.json({ ...result, approval: redactApproval(result.approval) }, 201);
-  });
-
-  app.post('/api/sessions/:id/approvals/:approvalId', async c => {
-    const row = await requireDecider(c, identifier(c.req.param('id')));
-    requireUnfrozen(row);
-    const approvalId = identifier(c.req.param('approvalId'), 'approvalId');
-    const input = await jsonObject(c);
-    if (input.decision !== 'approve' && input.decision !== 'deny') fail(400, 'invalid_decision', 'Expected approve or deny.');
-    if (input.scope !== undefined && input.scope !== 'call' && input.scope !== 'session') fail(400, 'invalid_decision', 'Expected the call or session scope.');
-    const review = await reviewedApproval(c, row, approvalId, input.reviewHash);
-    await requireDecider(c, row.id, review.operation);
-    const result = await runnerJSON<{ view: SessionView }>(await runnerRequest(c, row, 'view'));
-    if (!result?.view || result.view.sessionId !== row.id || result.view.owner?.id !== row.owner_id || !Array.isArray(result.view.approvals)) fail(502, 'invalid_runner_response', 'The runner returned an inconsistent session view.');
-    const candidate = result.view.approvals.find(item => item.id === approvalId && item.sessionId === row.id);
-    const approval = candidate ? (await presentApprovals(c, row, [candidate]))[0] : undefined;
-    if (!approval) fail(404, 'not_found', 'Approval request not found.');
-    if (approval.status !== 'pending') fail(409, 'approval_already_decided', 'This approval request is no longer pending.');
-    const operation = review.operation;
-    const hostSession = hostCommandSession(row);
-    if (decidedAsHostCommand(operation, hostSession, approval.unbounded === true) && (!row.connector_id || !await mayDecideHostCommands(c.env, row, c.get('auth').userId))) {
-      fail(403, 'host_owner_required', operation.kind === 'host.bash' ? 'Only the host owner, or a member granted host commands on this host, can decide host commands.'
-        : operation.kind === 'extension.tool' ? 'An extension\'s tool runs on the host, outside the sandbox: only the host owner, or a member granted host commands on this host, decides it.'
-        : hostSession.hostEnvironment ? 'This session runs directly on its host: only the host owner, or a member granted host commands on this host, decides its commands.'
-        : 'This command runs without the resource limits its host lacks: only the host owner, or a member granted host commands on this host, decides it.');
-    }
-    if (operation.kind === 'permission') {
-      if (c.get('auth').userId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can allow more than the session allows.');
-      if (operation.needs.includes('unbounded-shell') && grantedShell(hostSession)
-        && (!row.connector_id || !await mayDecideHostCommands(c.env, row, row.owner_id))) {
-        fail(403, 'host_owner_required', 'Only the host\'s owner, or a member granted host commands on this host, can allow a shell without resource limits.');
-      }
-      if (input.scope === 'session' && operation.tool === 'host_bash') fail(400, 'invalid_decision', 'Host commands can only be allowed once.');
-    } else if (input.scope !== undefined) fail(400, 'invalid_decision', 'Only permission requests take a scope.');
-    const scope = operation.kind === 'permission' ? (input.scope === 'session' ? 'session' : 'call') : undefined;
-    const alwaysApprove = input.alwaysApprove === true;
-    if (input.alwaysApprove !== undefined) {
-      if (input.alwaysApprove !== true || input.decision !== 'approve') fail(400, 'invalid_decision', 'Always approve only approves.');
-      if (c.get('auth').userId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can auto-approve another member\'s requests.');
-      if (review.requested_by === row.owner_id) fail(400, 'invalid_decision', 'Your own requests run without asking under Auto-approve.');
-      if (!requesterAutoApproves(operation, hostSession, approval.unbounded === true)) {
-        fail(400, 'invalid_decision', 'Only sandboxed commands, pushes and GitHub comments and issues are auto-approved for another member; approve this one once.');
-      }
-      if (!(await workspaceApprovalSettings(c.env.DB, row.workspace_id)).requesterAutoApprove) {
-        fail(403, 'requester_auto_approve_disabled', 'This workspace doesn\'t let session owners auto-approve other members\' requests. Its owner or an admin can turn that on in its settings.');
-      }
-      if ((await hostCapabilities(c.env, row.connector_id, { active: true }))?.requesterAutoApprove !== true) {
-        fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to auto-approve other members\' requests.');
-      }
-    }
-    let brokerCapability: string | undefined;
-    if (input.decision === 'approve') {
-      const writer = await sessionAccess(c.env, row.id, review.requested_by);
-      if (!writer || !hasPermission(writer.permissions, 'write')) fail(403, 'requester_revoked', 'The operation requester no longer has write permission.');
-      await reviewedApproval(c, row, approvalId, input.reviewHash);
-      const fresh = await requireDecider(c, row.id, operation);
-      if (fresh.connector_id) await requireConnectorSession(c.env, fresh.connector_id, fresh);
-      if (operation.kind === 'github.comment' || operation.kind === 'github.merge' || operation.kind === 'github.issue' || operation.kind === 'git.push') {
-        const existing = await c.env.DB.query('SELECT token_hash FROM broker_capabilities WHERE session_id = ? AND approval_id = ?').bind(row.id, approvalId).first();
-        if (existing) fail(409, 'approval_attempt_exists', 'This operation already has an approval attempt. Inspect its outcome before creating a new request.');
-        brokerCapability = randomToken();
-        await c.env.DB.query(`INSERT INTO broker_capabilities (token_hash, session_id, approval_id, actor_id, requested_by, operation_hash, expires_at, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(await sha256(brokerCapability), row.id, approvalId, c.get('auth').userId,
-          review.requested_by, await sha256(JSON.stringify(operation)), Math.floor(Date.now() / 1000) + 90, now()).run();
-      }
-      if (operation.kind === 'permission' && operation.needs.includes('tool')) {
-        await c.env.DB.query(`INSERT INTO session_tool_grants (session_id, tool, call_id, approval_id, granted_by, created_at)
-          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (session_id, tool, call_id) DO NOTHING`)
-          .bind(row.id, operation.tool, scope === 'session' ? '' : permissionCall(approvalId)!, approvalId, c.get('auth').userId, now()).run();
-      }
-      if (operation.kind === 'permission' && operation.tool === 'sessions') {
-        for (const need of ['write', 'audience'] as const) {
-          if (!operation.needs.includes(need)) continue;
-          await c.env.DB.query(`INSERT INTO session_tool_grants (session_id, tool, call_id, approval_id, granted_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (session_id, tool, call_id) DO NOTHING`)
-            .bind(row.id, `sessions:${need}`, scope === 'session' ? '' : crossSessionCall(approvalId)!, approvalId, c.get('auth').userId, now()).run();
-        }
-      }
-    }
-    const decided = await runnerJSON<{ approval: ApprovalRecord }>(await runnerRequest(c, row, 'approve', approvalId, {
-      approvalId, decision: input.decision, operation, ...(brokerCapability ? { brokerCapability } : {}), ...(scope ? { scope } : {}),
-    }));
-    invalidateSessionView(c, row.id);
-    if (!decided?.approval || decided.approval.id !== approvalId || decided.approval.sessionId !== row.id) fail(502, 'invalid_runner_response', 'The runner returned an invalid approval result.');
-    [decided.approval] = await presentApprovals(c, row, [decided.approval]);
-    await auditStatement(c.env, c.get('auth').userId, `approval.${input.decision}`, row.workspace_id, row.id, { approvalId, kind: operation.kind, status: decided.approval.status, ...(scope ? { scope } : {}) }).run();
-    if (alwaysApprove) await chooseAutoApprovedRequester(c.env, row, c.get('auth').userId, review.requested_by, approvalId);
-    return c.json({ ...decided, approval: redactApproval(decided.approval) });
-  });
 
   app.get('/api/sessions/:id/grants', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'manage');

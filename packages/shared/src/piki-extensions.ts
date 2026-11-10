@@ -63,7 +63,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "git", source: "piki:git", title: "Git", sessionTools: ["git", "git_push"],
-    description: "The git and git_push tools: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, each call approved as a command is, and pushes a clone's commit to another branch with approval. Added with the workspace's first repository.",
+    description: "The git and git_push tools: the agent runs Git (clone, status, diff, log, commit, switch, fetch, merge, rebase ...) with its arguments as a list, without a shell, and pushes a clone's commit to another branch. Added with the workspace's first repository.",
     providers: gitProviders,
   },
   {
@@ -114,7 +114,7 @@ export const pikiExtensions: readonly PikiExtensionInfo[] = Object.freeze([
   },
   {
     name: "github", source: "piki:github", title: "GitHub, through Pikibun", sessionTools: ["github_read", "github_comment", "github_issue", "github_merge"],
-    description: "The github_read, github_comment, github_issue and github_merge tools: the agent reads issues and pull requests, waits for their checks, and comments, opens issues and merges with approval, as the session owner, through Pikibun's broker. With the GitHub CLI on too, the agent reads and waits for checks with gh instead, sparing the session owner's GitHub rate limit, and uses these where gh can't. Added with the workspace's first GitHub repository.",
+    description: "The github_read, github_comment, github_issue and github_merge tools: the agent reads issues and pull requests, waits for their checks, and comments, opens issues and merges, as the session owner, through Pikibun's broker. With the GitHub CLI on too, the agent reads and waits for checks with gh instead, sparing the session owner's GitHub rate limit, and uses these where gh can't. Added with the workspace's first GitHub repository.",
     providers: ["github"],
   },
   {

@@ -190,7 +190,7 @@ Like start-up, a dump applies pending migrations first.
 
 A workspace's owner can import a session or workspace export of that workspace into its session database under **Settings → Workspaces → Session database → Import dump** (up to 32 MiB), or with `POST /api/workspaces/:id/database/import`. This keeps the history of sessions saved before the database was connected, and adds what backups don't carry:
 
-- `pikibun_sessions.data`: each fully exported session's grants, approvals, pushes, backup list and restores; `pikibun_workspaces.data`: the workspace's members, models, agents, repositories, push access and database connection; `pikibun_audit`: every activity entry.
+- `pikibun_sessions.data`: each fully exported session's grants, pushes, backup list and restores; `pikibun_workspaces.data`: the workspace's members, models, agents, repositories, push access and database connection; `pikibun_audit`: every activity entry.
 - A session's record and details replace older ones only (by export or save time), and activity entries are added once, so importing a dump again, or an older one, changes nothing. Each import is one transaction.
 - The dump must be of that workspace; it is checked before anything is written. Only the workspace database changes; the workspace's activity records the import.
 

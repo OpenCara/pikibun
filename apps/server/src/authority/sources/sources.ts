@@ -11,7 +11,7 @@ import { requireMember, sessionAccess } from '../access.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../../http.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { requireCallbackScope } from '../hosts.js';
-import { requireToolCall } from '../approval-reviews.js';
+import { requireToolCall } from '../tool-checks.js';
 import { addDocumentSourceExtension, workspaceExtensions } from '../extension-policy.js';
 import { documentKindsOff, documentSourceExtensionOf } from '../../../../../packages/shared/src/piki-extensions.js';
 import { fit, type DocumentAdapter } from './document-http.js';
@@ -110,7 +110,7 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
       || admission.expires_at <= Math.floor(Date.now() / 1000)) {
       fail(403, 'source_read_not_admitted', 'Source reads need a write message from the requester sent within the last hour.');
     }
-    await requireToolCall(c.env, access.row, 'source_read', { id: callId, requestedBy: actorId, admission, target: item === null ? sourceId : `${sourceId}: ${item}` });
+    await requireToolCall(c.env, access.row, 'source_read');
     const source = await c.env.DB.query<DocumentSourceRow>(`${documentSourceSelect} WHERE d.source_id = ? AND d.workspace_id = ?`).bind(sourceId, access.row.workspace_id).first();
     if (!source) fail(404, 'source_not_found', 'This workspace has no such source, or it is a repository (clone those with Git).');
     if (documentKindsOff(await workspaceExtensions(c.env, access.row.workspace_id)).has(source.kind)) {

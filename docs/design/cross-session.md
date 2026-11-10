@@ -1,5 +1,7 @@
 # Cross-session communication
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 A session's agent works with the workspace's other sessions through one tool, `sessions`: it lists them, reads them,
 asks and messages their agents, starts new sessions for sub-tasks, waits for or is notified of outcomes, and stops or
 archives sessions. Everything goes through the control plane (`apps/server/src/cross-session.ts`), which decides each

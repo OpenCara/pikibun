@@ -27,7 +27,7 @@ interface MessageRow {
   notify_message_id: string | null; reply_to: string | null; created_at: string; updated_at: string;
 }
 
-type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; auto_merge?: number; request_id: string; expires_at: number };
+type AdmissionRow = { id: string; session_id: string; actor_id: string; mode: string; access: string | null; request_id: string; expires_at: number };
 
 interface Chain { hops: number; sessions: string[] }
 
@@ -105,7 +105,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   const message = input.message === undefined ? undefined : text(input.message, 'message', 50_000);
   if ((action === 'ask' || action === 'send') && message === undefined) fail(400, 'invalid_input', `A ${action} carries a message.`);
   if (message !== undefined && !message.trim()) fail(400, 'invalid_input', 'The message is empty.');
-  if (input.access !== undefined && !accessModes.includes(input.access as AccessMode)) fail(400, 'invalid_input', 'Access is read, approval or auto.');
+  if (input.access !== undefined && !accessModes.includes(input.access as AccessMode)) fail(400, 'invalid_input', 'Access is read or auto.');
   const access = input.access as AccessMode | undefined;
   if (input.notify !== undefined && typeof input.notify !== 'boolean') fail(400, 'invalid_input', 'Notify is true or false.');
   const notify = input.notify === true;
@@ -133,19 +133,15 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   }
   const origin = originAccess.row;
   await requireCallbackScope(c, origin, connectorId);
-  const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, auto_merge, request_id, expires_at FROM run_admissions WHERE id = ?')
+  const admission = await c.env.DB.query<AdmissionRow>('SELECT id, session_id, actor_id, mode, access, request_id, expires_at FROM run_admissions WHERE id = ?')
     .bind(admissionId).first();
   if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write'
     || admission.expires_at <= Math.floor(Date.now() / 1000)) {
     fail(403, 'sessions_not_admitted', 'The sessions tool needs a write message sent within the last hour.');
   }
-  await requireToolCall(c.env, origin, 'sessions', { id: callId, requestedBy: actorId, admission, target });
-  if (sessionsWriteActions.includes(action) && admission.access === 'read'
-    && !await sessionsNeedGranted(c.env, origin, 'write', { id: callId, requestedBy: actorId, admission, target })) {
-    fail(403, 'write_not_allowed', 'This Read-only message changes no other session unless the session owner allows it.');
-  }
-  if (access === 'auto' && (admission.access !== 'auto' || actorId !== origin.owner_id)) {
-    fail(403, 'automatic_message_not_admitted', 'Only a message the session owner sent with Auto-approve sends an auto-approved message. Use access approval.');
+  await requireToolCall(c.env, origin, 'sessions');
+  if (sessionsWriteActions.includes(action) && admission.access === 'read') {
+    fail(403, 'write_not_allowed', 'A Read-only message changes no other session: ask in a message that may act.');
   }
   const call: Call = { c, origin, actorId, admission, callId, chain: await messageChain(c.env, admission), target };
 
@@ -182,7 +178,7 @@ async function audienceConsent(call: Call, other: (SessionRow & Party) | { id: n
   const covered = (await Promise.all(directions.map(direction => audienceCovered(call.c.env, call.origin, other, direction)))).every(Boolean);
   if (covered) return undefined;
   const shown = audienceTarget({ id: other.id ?? 'new', title: other.title });
-  if (await sessionsNeedGranted(call.c.env, call.origin, 'audience', { id: call.callId, requestedBy: call.actorId, admission: call.admission, target: shown })) return undefined;
+  if (await sessionsNeedGranted(call.c.env, call.origin, 'audience')) return undefined;
   const reason = directions.includes('in') && directions.includes('out') ? 'Messages and replies would pass between this session and one whose readers aren\'t the same people.'
     : directions.includes('in') ? 'This session\'s readers include people who can\'t read that session.' : 'That session\'s readers include people who can\'t read this one.';
   return { consent: 'audience', target: shown, reason };
@@ -217,10 +213,8 @@ async function read(call: Call, targetId: string, messageId: string | undefined,
   const entries = view.entries.filter(entry => entry.conversationId === undefined || shared.has(entry.conversationId)).slice(-limit)
     .map(entry => ({ id: entry.id, role: entry.role, kind: entry.kind, ...(entry.actorId ? { actorId: entry.actorId } : {}), text: cut(entry.text, crossSessionLimits.entryChars),
       ...(entry.error ? { error: entryError(entry.error) } : {}) }));
-  const pendingApprovals = view.approvals.filter(approval => approval.status === 'pending').map(approval => ({ id: approval.id, kind: approval.operation.kind,
-    ...(approval.operation.kind === 'permission' ? { tool: approval.operation.tool } : {}), requestedBy: approval.requestedBy }));
   const record = message ? messageRecord(message) : undefined;
-  return { session: summary(fresh), busy: view.busy, entries, pendingApprovals, ...(record ? { message: record, outcome: messageOutcome(view, record) } : {}) };
+  return { session: summary(fresh), busy: view.busy, entries, ...(record ? { message: record, outcome: messageOutcome(view, record) } : {}) };
 }
 
 async function requireSendable(call: Call, targetId: string | null): Promise<void> {
@@ -242,40 +236,18 @@ function perMessageLimit(): never {
   fail(429, 'cross_session_limit', `One message sends at most ${crossSessionLimits.perMessage} messages to other sessions.`);
 }
 
-/** The session's commands run in its host's sandbox, and its host takes a message's access. */
-async function sandboxedWithAccess(env: Env, row: Pick<SessionRow, 'connector_id' | 'host_environment'>): Promise<boolean> {
-  if (!row.connector_id || Number(row.host_environment ?? 0) === 1) return false;
-  const capabilities = await hostCapabilities(env, row.connector_id, { active: true });
-  return capabilities?.chatOptions === true && capabilities.unsandboxed !== true;
-}
-
-/**
- * A sandboxed session runs the messages an agent sends it or starts it with on Auto-approve by default, as its chat box
- * does, when they come from the session owner's own Auto-approve message (merging without asking too where that message
- * did) and go to a session of theirs; a notification of their outcome comes back the same way, without the merges. Any
- * other message keeps asking: none runs with more than the one that sent it.
- */
-async function inheritedAccess(env: Env, admission: Pick<AdmissionRow, 'access' | 'auto_merge' | 'actor_id'>, origin: Pick<SessionRow, 'owner_id'>,
-  target: Pick<SessionRow, 'owner_id' | 'connector_id' | 'host_environment'>): Promise<Pick<ChatOptions, 'access' | 'autoMerge'>> {
-  if (admission.access !== 'auto' || admission.actor_id !== origin.owner_id || target.owner_id !== admission.actor_id) return {};
-  if (!await sandboxedWithAccess(env, target)) return {};
-  return { access: 'auto', ...(Number(admission.auto_merge ?? 0) === 1 ? { autoMerge: true } : {}) };
-}
-
 async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'create', message: string, chosen: AccessMode | undefined, notify: boolean,
   thinkingLevel?: ThinkingLevel): Promise<CrossSessionMessage> {
   const { c, origin, actorId, admission, callId, chain } = call;
   await requireSendable(call, target.id);
-  if (chosen === 'auto' && target.owner_id !== actorId) fail(403, 'owner_required', 'Only the owner of that session sends it an auto-approved message.');
-  const inherited = kind === 'ask' || chosen !== undefined ? {} : await inheritedAccess(c.env, admission, origin, target);
-  const access = chosen ?? inherited.access;
+  const access = chosen === 'read' ? 'read' : undefined;
   const messageId = id();
   const hops = chain.hops + 1;
   const actor = await getUser(c.env, actorId);
   const content = `${crossSessionHeader({ id: messageId, kind, hops }, origin, { id: actorId, login: actor?.github_login })}\n\n${message}`;
   const created = now();
   const chainJson = JSON.stringify([...chain.sessions, origin.id]);
-  const recordedAccess = kind === 'ask' ? null : access ?? 'approval';
+  const recordedAccess = kind === 'ask' ? null : access ?? 'auto';
   const reserved = await c.env.DB.query(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, origin_admission_id,
       origin_call_id, submission_id, conversation_id, hops, chain_json, access, created_at, updated_at)
     SELECT ?,?,?,?,?,?,?,?,'','',?,?,?,?,? WHERE (SELECT COUNT(*) FROM session_messages WHERE origin_admission_id = ?) < ?`)
@@ -289,8 +261,7 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
       if (kind !== 'ask' && busyActivities.includes(row.activity ?? '')) {
         fail(409, 'session_busy', 'That session is working or waiting on an approval. Read it, or try again once it is done.');
       }
-      const options: ChatOptions = { ...(access && access !== 'approval' ? { access } : {}), ...(inherited.autoMerge ? { autoMerge: true } : {}),
-        ...(thinkingLevel ? { thinkingLevel } : {}) };
+      const options: ChatOptions = { ...(access ? { access } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) };
       return submitMessage(inner, row, kind === 'ask' ? 'ask' : 'submit', {
         content, requestId: `xs:${messageId}`, ...(Object.keys(options).length ? { options } : {}),
       }, { crossSession: messageId, originSessionId: origin.id }, { currentModel: true });
@@ -304,7 +275,7 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
     c.env.DB.query('UPDATE session_messages SET submission_id = ?, conversation_id = ?, notify_status = ?, updated_at = ? WHERE id = ?')
       .bind(result.submissionId, result.conversationId, notify ? 'pending' : null, updated, messageId),
     auditStatement(c.env, actorId, 'session.cross_session.sent', origin.workspace_id, origin.id, { messageId, kind, targetSessionId: target.id, hops, callId,
-      ...(notify ? { notify: true } : {}), ...(inherited.access ? { inheritedAccess: inherited.access } : {}), ...(inherited.autoMerge ? { inheritedAutoMerge: true } : {}) }),
+      ...(notify ? { notify: true } : {}) }),
   ]);
   const row: MessageRow = { id: messageId, workspace_id: origin.workspace_id, origin_session_id: origin.id, target_session_id: target.id, actor_id: actorId, kind,
     origin_admission_id: admission.id, origin_call_id: callId, submission_id: result.submissionId, conversation_id: result.conversationId, hops,
@@ -320,7 +291,6 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ? AND schedule_id IS NULL').bind(origin.id).first();
   if (Number(children?.n ?? 0) >= crossSessionLimits.children) fail(429, 'cross_session_limit', `A session starts at most ${crossSessionLimits.children} sessions.`);
   if (options.message !== undefined) await requireSendable(call, null);
-  if (options.access === 'auto' && actorId !== origin.owner_id) fail(403, 'owner_required', 'Only the session owner sends an auto-approved message.');
   const parentVisibility = origin.visibility ?? 'private';
   const visibility = options.visibility ?? parentVisibility;
   if (visibility === 'workspace' && parentVisibility === 'private') fail(403, 'visibility_wider', 'A private session starts only private sessions.');
@@ -460,22 +430,22 @@ async function notify(env: Env, message: MessageRow): Promise<{ delivered: strin
     const { row: origin } = await requireSession(c, message.origin_session_id, 'write');
     if (busyActivities.includes(origin.activity ?? '')) return { waiting: 'session_busy' };
     if (!await audienceCovered(env, origin, target, 'in')) {
+      // The owner's setting (call_id ''), or the one call a person allowed before approvals were removed, for a message
+      // still on its way back from then.
       const granted = await env.DB.query("SELECT 1 FROM session_tool_grants WHERE session_id = ? AND tool = 'sessions:audience' AND (call_id = '' OR call_id = ?)")
         .bind(origin.id, message.origin_call_id ?? '').first();
       if (!granted) fail(403, 'audience_changed', 'The two sessions\' readers changed since the message was sent.');
     }
     const notifyId = `${message.id}-n`;
-    // The outcome of a message (not a side ask) comes back on Auto-approve as that message went, but never merges without
-    // asking: its reply is the other session's, which other people writing there may steer.
-    const sender = message.kind !== 'ask' && message.origin_admission_id ? await env.DB.query<Pick<AdmissionRow, 'access' | 'actor_id'>>(
-      'SELECT access, actor_id FROM run_admissions WHERE id = ? AND session_id = ?').bind(message.origin_admission_id, origin.id).first() : null;
-    const inherited = sender && sender.actor_id === message.actor_id ? { access: (await inheritedAccess(env, sender, origin, origin)).access } : {};
+    // The outcome comes back as the message that sent it went: Read only after a Read-only message, else able to act.
+    const sender = message.origin_admission_id ? await env.DB.query<Pick<AdmissionRow, 'access'>>(
+      'SELECT access FROM run_admissions WHERE id = ? AND session_id = ?').bind(message.origin_admission_id, origin.id).first() : null;
     const actor = await getUser(env, message.actor_id);
     const header = crossSessionHeader({ id: notifyId, kind: 'notify', hops: Number(message.hops) + 1 }, target, { id: message.actor_id, login: actor?.github_login }, { id: message.id });
     const body = `Its ${message.kind === 'ask' ? 'side ask' : 'message'} ended: ${outcome.status}${outcome.failed ? ' (its model request failed)' : ''}.`
       + (outcome.reply ? `\n\nIts reply:\n\n${outcome.reply}` : '\n\nIt left no reply.');
     const submitted = await submitMessage(c, origin, 'submit', { content: `${header}\n\n${body}`, requestId: `xs:${notifyId}`,
-      ...(inherited.access ? { options: inherited } : {}) }, { crossSessionNotification: message.id }, { currentModel: true });
+      ...(sender?.access === 'read' ? { options: { access: 'read' } } : {}) }, { crossSessionNotification: message.id }, { currentModel: true });
     const at = now();
     await env.DB.query(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, submission_id, conversation_id, hops,
       chain_json, reply_to, created_at, updated_at) VALUES (?,?,?,?,?,'notify',?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING`)

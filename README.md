@@ -9,17 +9,17 @@ Its client is written once on [Native Shell](https://nsh.dev) (`apps/nsh`): `pik
 Two things set it apart:
 
 - **One subscription, the whole team.** Pair a machine where Pi is signed in to your model provider, share it with a workspace, and every teammate can start their own sessions on its models. They never see its API keys or subscription login: those stay on the host. Each session still runs as the member who started it, with their own Git accounts, so the team shares the models and not each other's identities. See [Sharing a host](docs/hosts.md#sharing-a-host).
-- **Share a chat session, with exactly the permissions you choose.** Every session is a live conversation teammates can follow. Make it visible to the workspace or keep it private (the workspace's owner and admins still manage it), then give people exactly what they need: `read` to watch, `ask` for side questions that don't touch the work, `write` to drive it, `approve` to decide its commands and pushes, `manage` to share it further. A read-only link can show the conversation to anyone, even without signing in. See [Collaborating on a session](docs/collaboration.md).
+- **Share a chat session, with exactly the permissions you choose.** Every session is a live conversation teammates can follow. Make it visible to the workspace or keep it private (the workspace's owner and admins still manage it), then give people exactly what they need: `read` to watch, `ask` for side questions that don't touch the work, `write` to drive it, `manage` to share it further. A read-only link can show the conversation to anyone, even without signing in. See [Collaborating on a session](docs/collaboration.md).
 
 <p align="center">
-  <img src="docs/images/team-collaboration.svg" alt="Alice shares her host, where Pi is signed in to a model provider, with the workspace. Bob starts a session on it that runs as Bob. Carol can write and approve, Dan sends side asks, Erin reads, and anyone with the share link follows the conversation read-only." width="900">
+  <img src="docs/images/team-collaboration.svg" alt="Alice shares her host, where Pi is signed in to a model provider, with the workspace. Bob starts a session on it that runs as Bob. Carol can write, Dan sends side asks, Erin reads, and anyone with the share link follows the conversation read-only." width="900">
 </p>
 
 And around them:
 
 - **Your machines, your models.** Sessions run on members' own hosts with the models and credentials configured in Pi there. A host connects over an outbound WebSocket: no inbound port or tunnel.
 - **Isolated work.** Each session clones the workspace's repositories into its own sandbox, whose only way out is a proxy that reads them with the session owner's account and follows the workspace's network policy.
-- **People decide.** Shell commands, commits, pushes, GitHub comments, merges and new issues wait for an approval unless the session owner auto-approves a message (a workspace's owner, admins and collaborators can auto-approve their own sandboxed commands in others' sessions).
+- **Tool groups decide.** A session runs at once the tools of its owner's tool group, which workspace owners and admins choose, and refuses everything else; nothing waits for anyone's approval. A **Read only** message changes nothing, and what runs on a host's own machine runs only for its owner and members they granted host commands.
 - **Built for teams.** Workspace roles (viewer, member, collaborator, admin) set what each person can do by default, with the workspace's owner and admins managing every session in it, and session grants add more for one session at a time.
 
 ## Pi and pi-durable
@@ -34,7 +34,7 @@ Pikibun has no agent or model integrations of its own: it builds on two packages
   ```
 
   The connector reads Pi's configuration (`~/.pi/agent`, or `--pi-agent-dir`). It offers the models matched by `enabledModels` in Pi's `settings.json` (every authenticated model when that is unset), takes reasoning levels and compaction settings from there, and loads extensions with Pi's own loader. Provider credentials stay in Pi on the host. Restart the connector after changing Pi's configuration. See [Hosts](docs/hosts.md#models).
-- **pi-durable** (`@earendil-works/pi-durable`) is the agent runtime each session runs on, inside the connector, with nothing to install or configure. Sessions don't use Pi's interactive agent session. Each session is a durable conversation kept in its own SQLite database on the host: messages, tool calls and approvals are recorded as they happen. A session waiting on an approval, or interrupted by a connector restart, picks up where it stopped, and [backups and moves](docs/backups.md) carry that database. Pikibun's tools (sandboxed commands, Git, GitHub and others) and Pi's code mode are added as pi-durable extensions. For the same reason, the host's personal Pi extensions and `AGENTS.md` aren't loaded: a workspace chooses its sessions' [extensions](docs/extensions.md). See [Host extensions](docs/design/host-extensions.md) for how Pi extensions map onto pi-durable.
+- **pi-durable** (`@earendil-works/pi-durable`) is the agent runtime each session runs on, inside the connector, with nothing to install or configure. Sessions don't use Pi's interactive agent session. Each session is a durable conversation kept in its own SQLite database on the host: messages and tool calls are recorded as they happen. A session interrupted by a connector restart picks up where it stopped, and [backups and moves](docs/backups.md) carry that database. Pikibun's tools (sandboxed commands, Git, GitHub and others) and Pi's code mode are added as pi-durable extensions. For the same reason, the host's personal Pi extensions and `AGENTS.md` aren't loaded: a workspace chooses its sessions' [extensions](docs/extensions.md). See [Host extensions](docs/design/host-extensions.md) for how Pi extensions map onto pi-durable.
 
 ## Quick start
 
@@ -66,7 +66,7 @@ The [quick start](docs/quick-start.md) walks through it step by step.
   - [Models and tools](docs/models-and-tools.md)
   - [Extensions](docs/extensions.md)
   - [Sessions](docs/sessions.md)
-  - [Approvals and permission requests](docs/approvals.md)
+  - [What a session may do](docs/approvals.md)
   - [Notifications](docs/notifications.md): on the web, the Mac and Windows app, and iPhone and iPad
   - [Collaborating on a session](docs/collaboration.md)
   - [Commits, pushes and pull requests](docs/pushes.md)

@@ -189,7 +189,7 @@ test("push requests are parsed up to their first flush, and only the session bra
 
   assert.equal(sessionBranchRefusal(parsed.commands, "pikibun/s1"), undefined);
   assert.match(sessionBranchRefusal([{ old: zero, new: tip, ref: "refs/heads/main" }], "pikibun/s1")!, /not main; use the git_push tool/);
-  assert.match(sessionBranchRefusal([{ old: zero, new: tip, ref: "refs/tags/v1.0.0" }], "pikibun/s1")!, /^Tags can't be pushed without approval, not v1\.0\.0; use the git_push tool with a tag/);
+  assert.match(sessionBranchRefusal([{ old: zero, new: tip, ref: "refs/tags/v1.0.0" }], "pikibun/s1")!, /^Tags can't be pushed with plain git, not v1\.0\.0; use the git_push tool with a tag/);
   assert.match(sessionBranchRefusal([...parsed.commands, { old: zero, new: tip, ref: "refs/tags/v1.0.0" }], "pikibun/s1")!, /^Tags can't be pushed/);
   assert.match(sessionBranchRefusal([{ old: tip, new: zero, ref: "refs/heads/pikibun/s1" }], "pikibun/s1")!, /can't be deleted/);
   assert.match(sessionBranchRefusal([...parsed.commands, ...parsed.commands], "pikibun/s1")!, /once per push/);
@@ -223,7 +223,7 @@ test("a clone session's proxy relays pushes of its own branch, streaming the pac
   const main = pkt(`${zero} ${tip} refs/heads/main\0report-status side-band-64k\n`) + "0000";
   const rejected = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: main + "PACK-DATA" });
   assert.equal(rejected.status, 200);
-  assert.match(rejected.body, /ng refs\/heads\/main Only this session's branch pikibun\/s1 can be pushed without approval, not main/);
+  assert.match(rejected.body, /ng refs\/heads\/main Only this session's branch pikibun\/s1 can be pushed with plain git, not main/);
   const probe = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: "0000" });
   assert.equal(probe.status, 200);
   assert.equal(probe.body, "");
@@ -620,7 +620,7 @@ test("a sandboxed git push of the session branch goes through the proxy; other b
   assert.equal(git(["show", "refs/heads/pikibun/branch-push:change.txt"], bare), "change\nmore");
   await shell("cd app && head -c 3000000 /dev/urandom > large.bin && git add large.bin && git commit -q -m 'Large' && git push -q origin HEAD:pikibun/branch-push");
   assert.equal(git(["cat-file", "-s", "refs/heads/pikibun/branch-push:large.bin"], bare), "3000000");
-  await assert.rejects(shell("cd app && git push origin HEAD:main"), /remote rejected.*Only this session's branch pikibun\/branch-push can be pushed without approval/);
+  await assert.rejects(shell("cd app && git push origin HEAD:main"), /remote rejected.*Only this session's branch pikibun\/branch-push can be pushed with plain git/);
   assert.equal(git(["rev-parse", "refs/heads/main"], bare), git(["rev-parse", "main"], work));
 });
 

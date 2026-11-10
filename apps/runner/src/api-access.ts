@@ -101,9 +101,9 @@ export function apiRule(rules: Pick<ApiRules, "graphql">, method: string, pathna
 }
 
 function unleasedWrite(rules: ApiRules, what: string): string {
-  if (rules.provider === "github") return `${what}: ${READ_ONLY}, or the gh tool (piki:gh), approved, on the session owner's own host`;
+  if (rules.provider === "github") return `${what}: ${READ_ONLY}, or the gh tool (piki:gh), on the session owner's own host`;
   const tool = rules.provider === "gitlab" ? "the glab tool (piki:glab)" : "the az tool (piki:azure-cli)";
-  return `${what}: sandboxed commands only read through the ${rules.name} API; it writes only with ${tool}, approved, on the session owner's own host`;
+  return `${what}: sandboxed commands only read through the ${rules.name} API; it writes only with ${tool}, on the session owner's own host`;
 }
 
 export function placeholderOf(headers: IncomingHttpHeaders): { placeholder: boolean; lease?: string; own: boolean } {

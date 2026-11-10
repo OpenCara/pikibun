@@ -18,8 +18,6 @@ import { cloudflaredAsset, downloadedCloudflareds, latestCloudflared } from "../
 import { SERVICE_DRIVER } from "../apps/runner/src/sandbox-python.generated.js";
 import { fakeCloudflared } from "./helpers/fake-cloudflared.js";
 import { python } from "./helpers/workspaces.js";
-import { decidedAsHostCommand, requesterAutoApproves } from "../packages/shared/src/host-operations.js";
-import { extensionToolNotice } from "../packages/client/src/host-commands.js";
 
 async function directory(t: { after: (fn: () => Promise<void>) => void }, name: string): Promise<string> {
   const path = await realpath(await mkdtemp(join(tmpdir(), `pikibun-${name}-`)));
@@ -104,16 +102,6 @@ test("the tunnel tool takes start with serve, checked as the browser's serve is,
     [{ action: "start", serve: { program: "node", port: 3000, url: "http://x" } }, /serve is \{program/],
   ];
   for (const [input, refusal] of refusals) assert.throws(() => tunnelRequest(input), refusal, JSON.stringify(input));
-});
-
-test("a tunnel start's card is decided as a host command everywhere, and never auto-approved for a member; it says what it publishes", () => {
-  const start = { kind: "extension.tool", source: "piki:tunnel", tool: "tunnel", arguments: '{"action":"start"}', digest: "0".repeat(64) };
-  for (const session of [{ ownerId: "alice", connectorOwnerId: "alice" }, { ownerId: "bob", connectorOwnerId: "alice" }]) {
-    assert.equal(decidedAsHostCommand(start, session), true, JSON.stringify(session));
-    assert.equal(requesterAutoApproves(start, session), false, JSON.stringify(session));
-  }
-  assert.match(extensionToolNotice(start), /server runs in the session's sandbox, and cloudflared, on the session's host, publishes it/);
-  assert.match(extensionToolNotice(start), /Only the host's owner, or a member granted host commands, can approve it/);
 });
 
 test("a service runs as one quoted command: the driver, the socket it listens on, the connector's Node.js for Node's programs, and the program as JSON", () => {

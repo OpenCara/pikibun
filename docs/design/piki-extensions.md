@@ -1,5 +1,7 @@
 # Pikibun's built-in extensions: gh, glab, az and the prompt audit
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 Sessions on a sandboxed host have no network but the workspace's: they clone and push through the egress proxy, and read
 and act on GitHub through `github_read`, `github_comment`, `github_issue` and `github_merge`. What those don't cover (CI
 runs and their logs, checks, releases, other forges' merge requests and pipelines, the forges' APIs) took `host_bash`,

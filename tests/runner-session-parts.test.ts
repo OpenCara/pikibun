@@ -7,7 +7,7 @@ import type { EgressGrant, EgressRepository } from "../packages/shared/src/netwo
 import type { ApprovalRecord } from "../packages/shared/src/types.js";
 import { RunnerError } from "../apps/runner/src/protocol.js";
 import { MIRROR_ROOT } from "../apps/runner/src/sandbox.js";
-import { answered, ApprovalWaits, boundedResult } from "../apps/runner/src/session/approval-waits.js";
+import { ApprovalWaits, boundedResult } from "../apps/runner/src/session/approval-waits.js";
 import { CRASHED_TEXT, endView, refusedView } from "../apps/runner/src/session/entries.js";
 import { MessageInputs } from "../apps/runner/src/session/inputs.js";
 import { MIRROR_CONFIRM_MS, refused, SessionMirrors } from "../apps/runner/src/session/mirrors.js";
@@ -89,25 +89,14 @@ test("message inputs: a run's images are kept whole, read back, discarded, and s
 const card = (status: ApprovalRecord["status"], kind = "bash"): ApprovalRecord =>
   ({ id: "tool-1", sessionId: "s", requestedBy: "alice", createdAt: "2026-01-01T00:00:00Z", status, operation: { kind, command: "true" } } as unknown as ApprovalRecord);
 
-test("approval waits: a call waits until its card is answered, and gets the whole of a long result once", async () => {
+test("a long result: the session keeps an excerpt, and its tool call gets the whole of it once it settles", () => {
   const waits = new ApprovalWaits();
-  const waiter = waits.waiter("tool-1");
-  assert.equal(waits.waiter("tool-1"), waiter, "one waiter per card");
-  assert.ok(waits.waiting("tool-1"));
-  waits.settle({ "tool-1": card("pending") });
-  assert.ok(waits.waiting("tool-1"), "a pending card answers no one");
-  waits.settle({ "tool-1": card("executed") });
-  assert.equal((await waiter.promise).status, "executed");
-  assert.ok(!waits.waiting("tool-1"));
-  assert.ok(answered(card("approved", "extension.tool")), "an extension's tool call goes on once approved: it runs itself");
-  assert.ok(!answered(card("approved")));
-
   const long = "x".repeat(9000);
   const kept = waits.kept("tool-1", long);
   assert.equal(kept, boundedResult(long));
   assert.ok(kept.length < 8192 && kept.includes("characters omitted"));
-  const pending = { ...card("executing"), result: kept };
-  assert.equal(waits.whole(pending).result, kept, "not before the card settles");
+  const running = { ...card("executing"), result: kept };
+  assert.equal(waits.whole(running).result, kept, "not before it settles");
   const done = { ...card("executed"), result: kept };
   assert.equal(waits.whole(done).result, long);
   assert.equal(waits.whole(done).result, kept, "the whole result is let go once returned");

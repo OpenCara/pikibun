@@ -1,5 +1,7 @@
 # Design: sessions that use plain Git through a host egress proxy
 
+> Approvals were removed: nothing in a session waits for a person's approval any more. A call runs, as [What a session may do](../approvals.md) describes, or is refused. What this document says about approval cards, permission requests and Auto-approve describes the design before that.
+
 Status: implemented: phases 1 (the egress proxy and Git relay), 2 (clone sessions), 3 (the host cache for clones), 4
 (session-branch pushes, and backups and moves of clone sessions) and 5 (every session clones; pinned sessions are
 read-only, and the pin machinery is gone). This replaced the pinned snapshot model; the host cache it shares is in

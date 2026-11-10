@@ -6,7 +6,6 @@ import { relativeTime } from "../lib/format";
 import { createResource } from "../lib/resource";
 import type { SessionActions } from "../lib/session-actions";
 import { withUsernames, type Person } from "../../../../packages/client/src/usernames";
-import { ApprovalCard } from "../components/ApprovalCard";
 import { palette, radius } from "../theme";
 import { CollapsibleRow, EmptyState, IconButton, Note, ResourceState, Section, Segmented, Value } from "../ui";
 import { Browser } from "./Browser";
@@ -27,24 +26,6 @@ export interface PanelTab {
   id: string;
   label: string;
   Component: (props: PanelProps) => JSX.Element;
-}
-
-const AUTO_APPROVED_NOTE = "Commands that ran under auto-approve are marked on their tool calls in the conversation.";
-
-function Approvals(props: PanelProps) {
-  const approvals = () => [...(props.view()?.approvals ?? [])].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending"));
-  return (
-    <TabPage testID="panel-approvals">
-      <If when={props.view()} else={<Note>Loading…</Note>}>
-        <If when={approvals().length} else={<EmptyState title="No approvals">{AUTO_APPROVED_NOTE}</EmptyState>}>
-          <Each of={approvals()} key={approval => approval.id}>{approval => <ApprovalCard approval={approval()} onOpenSession={id => props.go({ name: "session", sessionId: id })} />}</Each>
-          <If when={props.view()?.olderApprovals}>
-            {count => <Note>{`${count()} older settled ${count() === 1 ? "approval isn't" : "approvals aren't"} listed. ${AUTO_APPROVED_NOTE}`}</Note>}
-          </If>
-        </If>
-      </If>
-    </TabPage>
-  );
 }
 
 type AuditEvent = { id: string; actorId: string; action: string; detail: unknown; createdAt: string };
@@ -88,7 +69,6 @@ function DetailsTab(props: PanelProps) {
 
 export const panelTabs: readonly PanelTab[] = [
   { id: "details", label: "Details", Component: DetailsTab },
-  { id: "approvals", label: "Approvals", Component: Approvals },
   { id: "files", label: "Files", Component: Files },
   { id: "browser", label: "Browser", Component: Browser },
   { id: "schedules", label: "Schedules", Component: Schedules },
@@ -98,7 +78,6 @@ export const panelTabs: readonly PanelTab[] = [
 export function SessionPanel(props: PanelProps & { open: boolean; onClose: () => void }) {
   const tab = signal(panelTabs[0]!.id);
   const sideways = () => windowSize().width >= 700;
-  const pendingCount = () => (props.view()?.approvals ?? []).filter(approval => approval.status === "pending").length;
   const wide = () => tab() === "files" || tab() === "browser";
   return (
     <Sheet open={props.open} side={sideways() ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
@@ -110,7 +89,7 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, paddingHorizontal: 12, borderBottomWidth: 1, borderColor: palette().border }}>
           <Scroll horizontal scrollbar={false} style={{ flex: 1 }}>
             <Segmented small testID="session-panel-tabs" value={tab()} onChange={value => tab.set(value)}
-              options={panelTabs.map(item => ({ value: item.id, label: item.id === "approvals" && pendingCount() ? `Approvals ${pendingCount()}` : item.label }))} />
+              options={panelTabs.map(item => ({ value: item.id, label: item.label }))} />
           </Scroll>
           <IconButton testID="session-panel-close" icon="x" label="Close panel" size={28} onPress={props.onClose} />
         </View>

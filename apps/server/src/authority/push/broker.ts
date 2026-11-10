@@ -2,7 +2,6 @@ import { HTTPException } from 'hono/http-exception';
 import type { GitProvider, SessionRepository } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviderNames, repositoryPath } from '../../../../../packages/shared/src/repositories.js';
 import type { GitPushOperation, HostPushCredential, PushCompletionResult, PushCredential, PushOutcome } from '../../../../../packages/shared/src/types.js';
-import { constantTimeEqual, sha256 } from '../../../../../packages/shared/src/crypto.js';
 import { hasPermission } from '../../../../../packages/shared/src/policy.js';
 import type { AppContext, Env, PushCredentialRow, SessionAccess, SessionRow } from '../../types.js';
 import { auditStatement } from '../audit.js';
@@ -12,8 +11,7 @@ import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../
 import { parseOperation } from '../operations.js';
 import { decryptToken, encryptToken } from '../vault.js';
 import { requireCallbackScope } from '../hosts.js';
-import { requireBrokerReview, requireOperationTool } from '../approval-reviews.js';
-import { autoApprovesRequester } from '../requester-auto-approve.js';
+import { requireOperationTool } from '../tool-checks.js';
 import { cloneSessionRepository, recheckAccess, repositoryAccess } from '../repositories.js';
 import { mintPushToken, revokePushToken, type MintedToken, type PushRevocation } from './mint.js';
 import { branchTip, openPullRequest, pushTarget } from './targets.js';
@@ -85,53 +83,26 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
   const actorId = userIdentifier(input.actorId, 'actorId');
   const operation = parseOperation(input.operation);
   if (operation.kind !== 'git.push') fail(400, 'invalid_operation', 'Only Git pushes are supported.');
-  if ((input.capability === undefined) === (input.admissionId === undefined)) fail(400, 'invalid_push_request', 'Provide exactly one of capability or admissionId.');
-  const automatic = input.admissionId !== undefined;
-  const capability = automatic ? null : text(input.capability, 'capability', 128);
-  const admissionId = automatic ? text(input.admissionId, 'admissionId', 128) : null;
-  const tokenHash = capability ? await sha256(capability) : null;
-  if (automatic && !approvalId.startsWith('tool-')) fail(400, 'invalid_push_request', 'Automatic pushes must name a tool-call approval.');
-  let requestedBy = actorId;
-  let consumedHere = false;
+  if (input.capability !== undefined) fail(410, 'approvals_removed', 'Approvals were removed: pushes run for the message that asks for them. Update the host\'s connector (npx pikibun@latest connect).');
+  const automatic = true;
+  const admissionId = text(input.admissionId, 'admissionId', 128);
+  if (!approvalId.startsWith('tool-')) fail(400, 'invalid_push_request', 'Pushes must name a tool call.');
+  const requestedBy = actorId;
   const credentialId = id();
 
   const authorize = async (): Promise<SessionAccess> => {
-    if (tokenHash) {
-      const stored = await c.env.DB.query<{
-          session_id: string; approval_id: string; actor_id: string; requested_by: string; operation_hash: string; expires_at: number; consumed_at: string | null;
-        }>(`SELECT session_id, approval_id, actor_id, requested_by, operation_hash, expires_at, consumed_at
-        FROM broker_capabilities WHERE token_hash = ?`).bind(tokenHash).first();
-      if (!stored || stored.session_id !== sessionId || stored.approval_id !== approvalId || stored.actor_id !== actorId ||
-          !constantTimeEqual(stored.operation_hash, await sha256(JSON.stringify(operation)))) {
-        fail(403, 'invalid_capability', 'This push does not match its approval capability.');
-      }
-      if (consumedHere ? !stored.consumed_at : stored.consumed_at) fail(409, 'capability_consumed', 'This approved push has already been attempted; do not retry it.');
-      if (!consumedHere && stored.expires_at <= Math.floor(Date.now() / 1000)) fail(403, 'capability_expired', 'The approval capability has expired.');
-      requestedBy = stored.requested_by;
-      const [approver, writer] = await Promise.all([sessionAccess(c.env, sessionId, actorId), sessionAccess(c.env, sessionId, stored.requested_by)]);
-      if (!approver || !writer || approver.row.owner_id !== writer.row.owner_id || approver.row.policy_version !== writer.row.policy_version ||
-          approver.row.status === 'archived' || !hasPermission(approver.permissions, 'approve') || !hasPermission(writer.permissions, 'write')) {
-        fail(403, 'permission_revoked', 'The push requester or approver is no longer authorized.');
-      }
-      await requireCallbackScope(c, approver.row, connectorId);
-      await requireBrokerReview(c.env, approver.row, approvalId, stored.requested_by, operation);
-      return approver;
-    }
     const owner = await sessionAccess(c.env, sessionId, actorId);
-    const member = !!owner && owner.row.owner_id !== actorId;
-    if (!owner || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write') || (member && !await autoApprovesRequester(c.env, owner.row, actorId))) {
-      fail(403, 'permission_revoked', 'Automatic pushes require the session owner, or a member whose requests the owner auto-approves.');
+    if (!owner || owner.row.status === 'archived' || !hasPermission(owner.permissions, 'write')) {
+      fail(403, 'permission_revoked', 'Pushes need someone who may still write to the session.');
     }
     const admission = await c.env.DB.query<{ session_id: string; actor_id: string; mode: string; access: string | null; expires_at: number }>('SELECT session_id, actor_id, mode, access, expires_at FROM run_admissions WHERE id = ?')
       .bind(admissionId).first();
-    const sessionGrant = async () => !!await c.env.DB.query(`SELECT 1 AS granted FROM session_tool_grants
-      WHERE session_id = ? AND tool = 'git_push' AND call_id = ''`).bind(sessionId).first();
-    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' ||
-        admission.expires_at <= Math.floor(Date.now() / 1000) || (!member && admission.access !== 'auto' && !await sessionGrant())) {
-      fail(403, 'automatic_push_not_admitted', 'Automatic pushes require an unexpired write admission from the session owner, sent with auto-approve or after git_push was allowed for the session, or from a member whose requests the owner auto-approves.');
+    if (!admission || admission.session_id !== sessionId || admission.actor_id !== actorId || admission.mode !== 'write' || admission.access === 'read' ||
+        admission.expires_at <= Math.floor(Date.now() / 1000)) {
+      fail(403, 'automatic_push_not_admitted', 'Pushes run only for an unexpired message that may act, from the person who sent it.');
     }
     await requireCallbackScope(c, owner.row, connectorId);
-    await requireOperationTool(c.env, owner.row, operation, approvalId, admission);
+    await requireOperationTool(c.env, owner.row, operation);
     const used = await c.env.DB.query<{ count: number }>('SELECT COUNT(*) AS count FROM push_credentials WHERE admission_id = ? AND id <> ?')
       .bind(admissionId, credentialId).first();
     if ((used?.count ?? 0) >= automaticPushesPerAdmission) fail(429, 'automatic_push_limit', 'This message already used its automatic pushes.');
@@ -163,14 +134,6 @@ export async function pushCredential(c: AppContext, connectorId: string | null):
   }
   await requireNoRestore(c, sessionId);
   await requireBinding(c, row.workspace_id, pin);
-  if (tokenHash) {
-    const consumed = await c.env.DB.query(`UPDATE broker_capabilities SET consumed_at = ?
-      WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?
-      AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND owner_id = ? AND policy_version = ? AND status <> ?)
-      RETURNING token_hash`).bind(now(), tokenHash, Math.floor(Date.now() / 1000), sessionId, row.owner_id, row.policy_version, 'archived').first();
-    if (!consumed) fail(409, 'capability_consumed', 'This capability was consumed, expired, or revoked. Do not retry the push.');
-    consumedHere = true;
-  }
   const inserted = await c.env.DB.query(`INSERT INTO push_credentials (id, session_id, approval_id, requested_by, identity_id, kind, binding_id,
       operation_json, automatic, admission_id, revocation_ciphertext, expires_at, created_at)
     SELECT ?, ?, ?, ?, NULL, 'pending', ?, ?, ?, ?, NULL, ?, ?

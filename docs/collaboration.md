@@ -1,6 +1,6 @@
 # Collaborating on a session
 
-A session is a chat that can be shared. Teammates watch it live, ask side questions, send messages that drive the work, and approve its commands and pushes. Each person gets only what their session role, given by the session's owner, and their workspace role allow. Everything still runs as the session owner, whoever sends the message.
+A session is a chat that can be shared. Teammates watch it live, ask side questions, and send messages that drive the work. Each person gets only what their session role, given by the session's owner, and their workspace role allow. Everything still runs as the session owner, whoever sends the message.
 
 A typical day, with Alice's shared host from [Sharing a host](hosts.md#sharing-a-host):
 
@@ -15,11 +15,10 @@ sequenceDiagram
     participant H as Alice's host (Pi + subscription)
 
     Alice->>P: Share host with workspace
-    Bob->>P: Start session on Alice's host: "Fix the login redirect" (Ask before acting)
+    Bob->>P: Start session on Alice's host: "Fix the login redirect"
     P->>H: Run the message as Bob, with Bob's Git account
     H-->>P: Agent edits code, asks to push fix/login
-    P-->>Carol: Approval card: git push to fix/login
-    Carol->>P: Approve
+    P-->>Carol: The push to fix/login, in the transcript
     P->>H: Push exactly that commit
     Dan->>P: Side ask: "Why does it redirect after refresh?"
     P->>H: Answer in a separate read-only thread
@@ -35,18 +34,18 @@ sequenceDiagram
 
 | Session role | Permissions | Allows |
 |---|---|---|
-| **Viewer** | `read` | Viewing the session, its side asks, approvals and activity |
+| **Viewer** | `read` | Viewing the session, its side asks and activity |
 | **Member** | `read`, `ask` | Also sending side asks |
 | **Collaborator** | `read`, `ask`, `write` | Also sending shared messages, stopping work and requesting operations |
-| **Admin** | `read`, `ask`, `write`, `approve`, `manage` | Also deciding approvals (host commands also need a host command grant, and the host's owner decides them without this role; permission requests need the session owner) and managing who has a session role |
+| **Admin** | `read`, `ask`, `write`, `approve`, `manage` | Also managing who has a session role |
 
 The API takes a tier (`POST /api/sessions/:id/grants` with `{ userId, role }`) or, as before, an explicit permission list (`{ userId, permissions }`). A grant that matches no tier, such as one made before tiers existed, shows as **Custom** until someone chooses a tier for it.
 
-Only the session's owner can restart it, create its share link, back it up, restore, move or export it, use **Auto-approve** for everything it covers, schedule prompts, and decide permission requests. A workspace owner, admin or collaborator who can send messages to it can use **Auto-approve** for their own sandboxed commands (see [Auto-approve in someone else's session](approvals.md#auto-approve-in-someone-elses-session)). Its owner and the workspace's owner and admins rename, archive and unarchive it, change its visibility and tool output, and turn off its share link (see [Managing every session](workspaces.md#managing-every-session)).
+Only the session's owner can restart it, create its share link, back it up, restore, move or export it, schedule prompts, and let content pass between it and sessions other people read. Nobody approves its tool calls: whoever may send it messages runs its tools, as its owner, within the owner's tool group (see [What a session may do](approvals.md)). Its owner and the workspace's owner and admins rename, archive and unarchive it, change its visibility and tool output, and turn off its share link (see [Managing every session](workspaces.md#managing-every-session)).
 
 ## Share links
 
-The owner can share a session by link (**Details → People → Create link**). Anyone who has the link can follow the shared conversation read-only, without signing in, with the session's title and the owner's display name. They see nothing else: no side asks, approvals, senders, host, workspace or repositories. **Turn off** (the owner, or the workspace's owner or an admin) stops the link at once, and turning sharing on again issues a new one; archived sessions can't get a new link. The token is carried only in the URL fragment (`#/shared/…`) and an `X-Share-Token` header, never in a request path, and the link pages read only `GET /api/shared` and `GET /api/shared/view`.
+The owner can share a session by link (**Details → People → Create link**). Anyone who has the link can follow the shared conversation read-only, without signing in, with the session's title and the owner's display name. They see nothing else: no side asks, senders, host, workspace or repositories. **Turn off** (the owner, or the workspace's owner or an admin) stops the link at once, and turning sharing on again issues a new one; archived sessions can't get a new link. The token is carried only in the URL fragment (`#/shared/…`) and an `X-Share-Token` header, never in a request path, and the link pages read only `GET /api/shared` and `GET /api/shared/view`.
 
 ## Transcript size
 
@@ -59,4 +58,4 @@ Open sessions pick up either change within a few seconds.
 
 ## Hidden secrets
 
-Everything Pikibun shows people (transcripts, approvals and their output, in every session view and share link) has values that look like secrets replaced by `[redacted]`, for everyone including the session's owner. That covers well-known token formats, private keys, the values of password-, secret-, token- and key-named settings, and credentials in URLs, Authorization headers, `curl -u` and `.netrc`. The agent and the host still see the real values, and an approved operation runs with them. In shell commands only single words are ever hidden, so an approver always sees what a command does, and an approval that holds a hidden value says so. Detection is pattern-based, so other sensitive text can still show; backups keep the real transcript.
+Everything Pikibun shows people (transcripts and tool output, in every session view and share link) has values that look like secrets replaced by `[redacted]`, for everyone including the session's owner. That covers well-known token formats, private keys, the values of password-, secret-, token- and key-named settings, and credentials in URLs, Authorization headers, `curl -u` and `.netrc`. The agent and the host still see the real values, and an approved operation runs with them. In shell commands only single words are ever hidden, so an approver always sees what a command does, and an approval that holds a hidden value says so. Detection is pattern-based, so other sensitive text can still show; backups keep the real transcript.

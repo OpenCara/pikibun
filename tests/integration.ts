@@ -135,7 +135,7 @@ async function connectFixture(client: Client): Promise<ConnectorFixture> {
   const replay = await fetch(`${base}/api/connectors/pairings/${pairing.id}/claim`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ code: pairing.code, models: [{ provider: "faux", modelId: "faux-1", name: "Fixture" }],
-      capabilities: { platform: process.platform, sandbox: true, productionShell: false, plainGit: true } }),
+      capabilities: { platform: process.platform, sandbox: true, productionShell: false, approvalFree: true, plainGit: true } }),
     signal: AbortSignal.timeout(10_000),
   });
   assert.ok([400, 401, 403, 409].includes(replay.status), "pairing code must be single-use");
@@ -163,6 +163,8 @@ await check("unauthenticated APIs fail closed; test accounts are explicit and is
 
 await check("workspace membership is required before associating a private Pi", async () => {
   workspace = (await alice.request("POST", "/api/workspaces", { name: `Integration ${run}` })).workspace;
+  // The node tool runs the commands the checks below send; sessions get it with piki:node from their start.
+  await alice.request("PUT", `/api/workspaces/${workspace.id}/extensions`, { source: "piki:node" });
   await bob.request("GET", `/api/workspaces/${workspace.id}/models`, undefined, [403, 404]);
   await alice.request("POST", `/api/workspaces/${workspace.id}/members`, { userId: bob.user.id, role: "member" });
 });
@@ -200,8 +202,8 @@ if (connectedRuntime) {
     for (const mode of ["submit", "ask"]) {
       await bob.request("POST", `/api/sessions/${sessionId}/${mode}`, { content: "TEST_IDENTITY", requestId: `viewer-${mode}` }, [403]);
     }
-    await bob.request("POST", `/api/sessions/${sessionId}/operations`, { kind: "program", tool: "git", command: "true" }, [403]);
-    await bob.request("POST", `/api/sessions/${sessionId}/approvals/${crypto.randomUUID()}`, { decision: "approve" }, [403]);
+    await bob.request("POST", `/api/sessions/${sessionId}/operations`, { kind: "program", tool: "git", command: "true" }, [403, 404]);
+    await bob.request("POST", `/api/sessions/${sessionId}/approvals/${crypto.randomUUID()}`, { decision: "approve" }, [403, 404]);
     await bob.request("POST", `/api/sessions/${sessionId}/grants`, { userId: bob.user.id, permissions: ["write", "manage"] }, [403]);
     await bob.request("POST", `/api/sessions/${sessionId}/restart`, {}, [403]);
     await bob.request("POST", `/api/sessions/${sessionId}/backup`, {}, [403]);
@@ -359,7 +361,7 @@ await check("session ownership is assigned by the server, not the session caller
   await bob.request("GET", `/api/sessions/${aliceSession.id}/view`, undefined, [403, 404]);
 });
 
-await check("read-only sharing cannot prompt, ask, approve, manage, or cross workspace boundaries", async () => {
+await check("read-only sharing cannot prompt, ask, manage, or cross workspace boundaries", async () => {
   await alice.request("POST", `/api/sessions/${aliceSession.id}/grants`, { userId: bob.user.id, permissions: ["read"] });
   assert.equal((await bob.view(aliceSession.id)).owner.id, alice.user.id);
   await bob.request("POST", `/api/sessions/${aliceSession.id}/submit`, { content: "TEST_IDENTITY", requestId: "forbidden-write" }, [403]);
@@ -397,20 +399,35 @@ await check("collaborative writes execute as owner; another user's worktree stay
   await bob.settled(bobSession.id, "owned-by-bob");
 });
 
-await check("write access does not grant approval; approved git commits use owner identity", async () => {
-  const commit = `git init -q integration && cd integration && git commit -q --allow-empty -m 'Integration ${run}'`;
-  const approval: ApprovalRecord = (await bob.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "program", tool: "git", command: commit })).approval;
-  assert.equal(approval.status, "pending");
-  assert.ok(approval.reviewHash, "the Worker must commit to the displayed operation and requester");
-  await bob.request("POST", `/api/sessions/${aliceSession.id}/approvals/${approval.id}`, { decision: "approve", reviewHash: approval.reviewHash }, [403]);
-  const decided: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/approvals/${approval.id}`, { decision: "approve", reviewHash: approval.reviewHash })).approval;
-  assert.ok(["approved", "executing", "executed"].includes(decided.status));
-  const query: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "program", tool: "git", command: "cd integration && git log -1 --format='%an <%ae>|%cn <%ce>'" })).approval;
-  const approved: ApprovalRecord = (await alice.request("POST", `/api/sessions/${aliceSession.id}/approvals/${query.id}`, { decision: "approve", reviewHash: query.reviewHash })).approval;
-  assert.ok(["executing", "executed"].includes(approved.status));
-  const inspected = await alice.settledCard(aliceSession.id, query.id);
-  assert.equal(inspected.status, "executed", inspected.result);
-  assert.ok(inspected.result?.includes("Alice Integration <alice@example.invalid>"), "git commit author and committer must use owner identity");
+await check("a writer's command runs at once, asking nobody, and git commits use the owner's identity", async () => {
+  /** Sends a command as a message and returns the tool results that came after it, once its message settled. */
+  const ran = async (client: Client, command: string): Promise<string[]> => {
+    await client.submit(aliceSession.id, `TEST_BASH ${command}`);
+    const deadline = Date.now() + 60_000;
+    let last: SessionView | undefined;
+    while (Date.now() < deadline) {
+      last = await client.view(aliceSession.id);
+      const at = last.entries.findLastIndex(entry => entry.role === "user" && entry.text.includes(command));
+      const conversation = at >= 0 ? last.entries[at]!.conversationId : undefined;
+      const after: SessionView["entries"] = [];
+      for (const entry of at >= 0 ? last.entries.slice(at + 1) : []) {
+        if (entry.conversationId !== conversation) continue;
+        if (entry.role === "user") break;
+        after.push(entry);
+      }
+      if (!last.busy && after.some(entry => entry.role === "assistant" && !entry.toolCalls?.length)) {
+        return after.filter(entry => entry.role === "toolResult" || entry.role === "assistant").map(entry => `${entry.role}: ${entry.text}`);
+      }
+      await delay(200);
+    }
+    throw new Error(`no outcome for ${command}: ${JSON.stringify(last?.entries.slice(-4)).slice(0, 2000)}`);
+  };
+  const committed = await ran(bob, `git init -q integration && cd integration && git commit -q --allow-empty -m 'Integration ${run}'`);
+  assert.ok(committed.some(text => text.startsWith("toolResult:")) && committed.every(text => !/refused|not available|Denied/i.test(text)), committed.join("\n---\n").slice(0, 3000));
+  const logged = await ran(alice, "cd integration && git log -1 --format='%an <%ae>|%cn <%ce>'");
+  assert.ok(logged.some(text => text.includes("Alice Integration <alice@example.invalid>|Alice Integration <alice@example.invalid>")),
+    `git commits use the owner's identity: ${logged.join("\n---\n").slice(0, 3000)}`);
+  assert.deepEqual((await alice.view(aliceSession.id)).approvals, [], "nothing waits for anyone");
 });
 
 await check("durable request deduplication and restart preserve transcript and owner files", async () => {
@@ -580,7 +597,7 @@ if (connectedRuntime) {
     else { assert.ok([403, 404].includes(crossHost.status)); await crossHost.body?.cancel(); }
     const fabricated = await fetch(`${base}/api/connectors/self/github/comment`, {
       method: "POST", headers, body: JSON.stringify({
-        sessionId: aliceSession.id, actorId: alice.user.id, approvalId: crypto.randomUUID(), capability: "not-a-real-capability-with-sufficient-length",
+        sessionId: aliceSession.id, actorId: alice.user.id, approvalId: `tool-${crypto.randomUUID()}`, admissionId: "not-a-real-admission-with-sufficient-length-0",
         repository: "fixture/repository", issue: 1, body: "Must never reach GitHub",
       }),
     });

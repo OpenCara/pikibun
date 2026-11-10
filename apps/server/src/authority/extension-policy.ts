@@ -10,7 +10,7 @@ interface ExtensionRow { source: string; enabled: number | string; tools_mode: E
 export async function workspaceExtensions(env: Env, workspaceId: string): Promise<WorkspaceExtension[]> {
   const rows = await env.DB.query<ExtensionRow>(`SELECT source, enabled, tools_mode, settings_json FROM workspace_extensions
     WHERE workspace_id = ? ORDER BY position, package_key`).bind(workspaceId).all();
-  return withSessionToolsListed(rows.map(row => ({ source: row.source, enabled: Number(row.enabled) === 1, tools: row.tools_mode, settings: JSON.parse(row.settings_json) })));
+  return withSessionToolsListed(rows.map(row => ({ source: row.source, enabled: Number(row.enabled) === 1, tools: 'automatic' as const, settings: JSON.parse(row.settings_json) })));
 }
 
 export async function automaticTools(env: Env, connectorId: string): Promise<boolean> {
@@ -31,7 +31,7 @@ async function addPikiExtension(env: Env, workspaceId: string, source: string, a
   detail: Record<string, string>): Promise<boolean> {
   const sessionTool = sessionToolSources.includes(source);
   const saved = await env.DB.query<{ source: string }>(`INSERT INTO workspace_extensions (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
-    SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), 1, 'approval', '{}', ?, ?
+    SELECT ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM workspace_extensions WHERE workspace_id = ?), 1, 'automatic', '{}', ?, ?
     WHERE ${first.sql}
       AND (? = 1 OR (SELECT COUNT(*) FROM workspace_extensions WHERE workspace_id = ? AND package_key NOT IN (${sessionToolSources.map(() => '?').join(', ')})) < ?)
     ON CONFLICT (workspace_id, package_key) DO NOTHING
@@ -39,7 +39,7 @@ async function addPikiExtension(env: Env, workspaceId: string, source: string, a
     .bind(workspaceId, source, source, workspaceId, actor, now(), ...first.values, sessionTool ? 1 : 0, workspaceId, ...sessionToolSources, extensionLimits.workspace).first();
   if (!saved) return false;
   await auditStatement(env, actor, 'workspace.extension.updated', workspaceId, null,
-    { source: saved.source, enabled: true, tools: 'approval', settings: [], ...detail }).run();
+    { source: saved.source, enabled: true, tools: 'automatic', settings: [], ...detail }).run();
   return true;
 }
 
@@ -61,7 +61,3 @@ export async function addDocumentSourceExtension(env: Env, workspaceId: string, 
   return await addPikiExtension(env, workspaceId, extension.source, actor, first, { reason: 'source', kind }) ? [extension.source] : [];
 }
 
-export async function automaticExtensionSources(env: Env, row: { workspace_id: string; connector_id?: string | null }): Promise<Set<string>> {
-  if (!row.connector_id || !await automaticTools(env, row.connector_id)) return new Set();
-  return new Set((await workspaceExtensions(env, row.workspace_id)).filter(item => item.enabled && item.tools === 'automatic').map(item => item.source));
-}

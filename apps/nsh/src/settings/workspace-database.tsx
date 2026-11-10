@@ -174,7 +174,7 @@ function ImportSheet(props: { path: string; database: WorkspaceDatabase; close: 
           <Button variant="primary" label={action.busy() ? "Importing…" : "Import"} disabled={!file()?.data || action.busy()} onPress={submit} />
         </If>
       </>}>
-      <Note>{`Adds an export of this workspace, or of one of its sessions, to ${databaseLabel(props.database)}: session records and details (grants, approvals, pushes, backups and restores), their activity and the workspace's settings. A record replaces an older one of the same session; activity is added once, so importing a dump again changes nothing. Pikibun itself is unchanged.`}</Note>
+      <Note>{`Adds an export of this workspace, or of one of its sessions, to ${databaseLabel(props.database)}: session records and details (grants, pushes, backups and restores), their activity and the workspace's settings. A record replaces an older one of the same session; activity is added once, so importing a dump again changes nothing. Pikibun itself is unchanged.`}</Note>
       <Field label="Dump file" hint="A JSON export from Pikibun, up to 32 MiB">
         <If when={pageAvailable()}
           else={

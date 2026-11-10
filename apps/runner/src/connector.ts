@@ -63,7 +63,7 @@ const welcomeSchema = z.object({
 const actorSchema = z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f]+$/);
 const ticketSchema = z.object({
   aud: z.literal("runner"), sessionId: z.string().regex(IDENTIFIER), actorId: actorSchema, ownerId: actorSchema,
-  action: z.enum(["create", "view", "events", "submit", "ask", "operations", "approve", "backup", "restart", "restore", "stop", "files", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image"]),
+  action: z.enum(["create", "view", "events", "submit", "ask", "backup", "restart", "restore", "stop", "files", "revert", "fork", "pack", "unpack", "withdraw", "upload", "tunnel", "image"]),
   policyVersion: z.number().int().positive(), iat: z.number().int(), exp: z.number().int(),
   jti: z.string().regex(IDENTIFIER), bodyHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/), connectorId: z.string().regex(IDENTIFIER),
 }).strict();
@@ -239,10 +239,10 @@ export async function validateRelayRequest(value: unknown, connectorId: string, 
     if (binding.session.connectorId !== connectorId || binding.model?.connectorId !== connectorId
       || binding.owner?.id !== rpc.ticket?.ownerId || binding.session.ownerId !== rpc.ticket?.ownerId) throw new Error("Foreign connector binding");
   } else {
-    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|operations|restart|backup|restore|stop|files|revert|fork|pack|unpack|withdraw|upload|tunnel|image|approvals\/[A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(rpc.path);
+    const match = /^\/v1\/sessions\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\/(view|view\/[0-9a-f]{32}|submit|ask|restart|backup|restore|stop|files|revert|fork|pack|unpack|withdraw|upload|tunnel|image)$/.exec(rpc.path);
     if (!match) throw new Error("Relay path is not allowed");
     sessionId = match[1]!;
-    action = match[2]!.startsWith("approvals/") ? "approve" : match[2]!.startsWith("view/") ? "view" : match[2] as RunnerAction;
+    action = match[2]!.startsWith("view/") ? "view" : match[2] as RunnerAction;
     if (rpc.method !== (action === "view" ? "GET" : "POST")) throw new Error("Relay method is not allowed");
     if (action === "restore") {
       const input = decodeJson(encoder.encode(rpc.body)) as { binding?: RunnerBinding };

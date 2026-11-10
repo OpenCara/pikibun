@@ -37,7 +37,7 @@ export function HostCapabilities(props: { connector: ConnectorInfo }) {
 export function UnsandboxedHost(props: { connector: ConnectorInfo }) {
   return (
     <If when={props.connector.capabilities.unsandboxed}>
-      <Banner tone="danger" title="Unsandboxed host">Agent work runs directly on the owner's machine without isolation: approved commands and commits run as their user, with access to their files, credentials and network, and no resource limits. File tools are confined to the session folder by path checks only.</Banner>
+      <Banner tone="danger" title="Unsandboxed host">Agent work runs directly on the owner's machine without isolation: commands and commits run as their user, as soon as the agent calls them, with access to their files, credentials and network, and no resource limits. File tools are confined to the session folder by path checks only.</Banner>
     </If>
   );
 }

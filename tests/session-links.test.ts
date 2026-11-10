@@ -19,7 +19,7 @@ const testSecret = 'session-links-test-secret-not-for-deployment';
 const internalSecret = 'session-links-internal-secret-not-for-deployment';
 const manifest = {
   models: [{ provider: 'local-native', modelId: 'local/model-v1', name: 'Local model' }],
-  capabilities: { platform: 'linux', sandbox: true, productionShell: false, plainGit: true },
+  capabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, plainGit: true },
 };
 const token = () => Buffer.from(randomBytes(32)).toString('base64url');
 const changedToken = (value: string) => `${value[0] === 'A' ? 'B' : 'A'}${value.slice(1)}`;
@@ -334,41 +334,21 @@ test('turning link sharing on answers a concurrent request with the same link an
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'session.link.created'").get()!.n, 0);
 });
 
-test('no viewer ever receives a secret, while approvals still review, decide and run the exact operation', async t => {
+test('no viewer ever receives a secret: not in the view, its events or the shared link', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}`;
   const secret = `ghp_${'a1B2'.repeat(9)}`;
-  const operation = { kind: 'program' as const, tool: 'node' as const, command: `curl -H "Authorization: Bearer ${secret}" https://api.github.com/user` };
-  const shownCommand = 'curl -H "Authorization: Bearer [redacted]" https://api.github.com/user';
-  const pending: ApprovalRecord = { id: 'secret-approval', sessionId: s.session.id, requestedBy: s.owner.user.id, operation,
-    status: 'pending', createdAt: new Date().toISOString() };
   const view: SessionView = {
     sessionId: s.session.id,
     owner: s.view.owner,
     entries: [{ id: '0:1', kind: 'message', role: 'user', text: `Use ${secret} with DB_PASSWORD=hunter2hunter2`, actorId: s.owner.user.id, conversationId: '0' }],
-    approvals: [pending], conversations: [{ id: '0', mode: 'write' }], busy: false,
+    approvals: [], conversations: [{ id: '0', mode: 'write' }], busy: false,
   };
   const leaks = (body: string) => body.includes(secret) || body.includes('hunter2hunter2');
-  let approveBody: { operation?: unknown } = {};
   rpcHub(f, s.connector, envelope => {
-    const action = envelope.request.ticket.action;
-    if (action === 'operations') return Response.json({ approval: pending }, { status: 201 });
-    if (action === 'view') return Response.json({ view });
-    assert.equal(action, 'approve');
-    approveBody = JSON.parse(envelope.request.body);
-    return Response.json({ approval: { ...pending, status: 'executed', decidedBy: s.owner.user.id, result: `{"login":"creator","token":"${secret}"}` } });
+    assert.equal(envelope.request.ticket.action, 'view');
+    return Response.json({ view });
   });
-
-  const reviewHash = await sha256(JSON.stringify({ sessionId: s.session.id, approvalId: pending.id, requestedBy: s.owner.user.id, operation }));
-  const created = await s.owner.request('POST', `${path}/operations`, operation);
-  const createdBody = await created.text();
-  assert.equal(created.status, 201, createdBody);
-  assert.ok(!leaks(createdBody));
-  const { approval: requested } = JSON.parse(createdBody) as { approval: ApprovalRecord };
-  assert.deepEqual(requested.operation, { kind: 'program', tool: 'node', command: shownCommand });
-  assert.equal(requested.reviewHash, reviewHash);
-  assert.deepEqual(JSON.parse(String(f.sqlite.prepare('SELECT operation_json FROM approval_reviews WHERE approval_id = ?').get(pending.id)!.operation_json)), operation,
-    'The review keeps the real operation');
 
   for (const client of [s.owner, s.member]) {
     const response = await client.request('GET', `${path}/view`);
@@ -377,8 +357,6 @@ test('no viewer ever receives a secret, while approvals still review, decide and
     assert.ok(!leaks(body), 'No viewer receives a secret');
     const { view: seen } = JSON.parse(body) as { view: SessionView };
     assert.equal(seen.entries[0]!.text, 'Use ghp_[redacted] with DB_PASSWORD=[redacted]');
-    assert.deepEqual(seen.approvals[0]!.operation, { kind: 'program', tool: 'node', command: shownCommand });
-    assert.equal(seen.approvals[0]!.reviewHash, reviewHash);
   }
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const stream = await s.member.request('GET', `${path}/events`);
@@ -389,15 +367,6 @@ test('no viewer ever receives a secret, while approvals still review, decide and
   t.mock.timers.reset();
   assert.match(snapshot, /event: view/);
   assert.ok(snapshot.includes(REDACTED) && !leaks(snapshot));
-
-  const approved = await s.owner.request('POST', `${path}/approvals/${pending.id}`, { decision: 'approve', reviewHash });
-  const approvedBody = await approved.text();
-  assert.equal(approved.status, 200, approvedBody);
-  assert.deepEqual(approveBody.operation, operation, 'The host receives the real operation');
-  assert.ok(!leaks(approvedBody));
-  const { approval: decided } = JSON.parse(approvedBody) as { approval: ApprovalRecord };
-  assert.equal(decided.result, '{"login":"creator","token":"[redacted]"}');
-  assert.deepEqual(decided.operation, { kind: 'program', tool: 'node', command: shownCommand });
 
   const { link } = await json<{ link: SessionLink }>(await s.owner.request('PUT', `${path}/link`), 201);
   const shared = await f.request('GET', '/api/shared/view', undefined, { 'X-Share-Token': link.url.split('/').at(-1)! });

@@ -121,7 +121,7 @@ export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]
   const listed = new Set(extensions.map(item => extensionPackageKey(item.source)));
   const replaced = new Set<string>(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
   const unlisted = pikiSessionToolExtensions().filter(item => !item.core && !replaced.has(item.source) && !listed.has(item.source));
-  return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "approval" as const, settings: {} }))];
+  return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "automatic" as const, settings: {} }))];
 }
 
 export const extensionLimits = Object.freeze({
@@ -163,10 +163,11 @@ export function parseWorkspaceExtension(value: unknown): WorkspaceExtension {
   if (typeof value.source !== "string") throw new Error("Invalid extension source");
   const source = normalizeExtensionSource(value.source);
   const enabled = value.enabled ?? true;
-  const tools = value.tools ?? "approval";
+  const tools = value.tools ?? "automatic";
   if (typeof enabled !== "boolean") throw new Error("Invalid extension setting");
-  if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("An extension's tools run with approval or automatically");
-  return { source, enabled, tools: tools as ExtensionToolMode, settings: parseExtensionSettings(value.settings ?? {}) };
+  if (!extensionToolModes.includes(tools as ExtensionToolMode)) throw new Error("Invalid extension tools mode");
+  // "approval" is still read, from clients and backups of before approvals were removed; every extension's tools now run alike.
+  return { source, enabled, tools: "automatic", settings: parseExtensionSettings(value.settings ?? {}) };
 }
 
 export function parseWorkspaceExtensions(value: unknown): WorkspaceExtension[] {

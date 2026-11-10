@@ -4,7 +4,7 @@ import { toolNames, type WorkspaceRole } from "./types.js";
  * Tool groups: which of Pikibun's own session tools a session has, decided by its owner's place in the workspace. Each
  * member's sessions get the tools of their role (roleTools) unless a workspace owner or admin put them in a group of the
  * workspace's own, with the tools it chose. It is a ceiling: a session never runs a tool outside its owner's group, under
- * Auto-approve or after a permission request alike. Tools of other extensions are switched under the workspace's Extensions.
+ * under any access. Tools of other extensions are switched under the workspace's Extensions.
  */
 export const groupTools = [
   "identity", "list_files", "read_file", "search", "write_file", "edit_file", "move_file", "copy_file", "delete_file",

@@ -48,7 +48,7 @@ export const visibilityNotice = (visibility: Visibility): string => (visibility 
   ? "Session is workspace-visible. Workspace members can view prompts and output." : "Session is private. Existing explicit grants still apply.");
 
 export const confirmArchive = (): Promise<boolean> => confirm({ title: "Archive session?", confirmLabel: "Archive",
-  message: "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. Pending approvals can't be decided while it's archived. You can unarchive it later." });
+  message: "The session becomes read-only for everyone and is hidden from the sidebar. Its history stays viewable, and nothing is deleted. You can unarchive it later." });
 
 export const unarchiveNotice = (current: SessionRecord): string => (current.packed ? "Session unarchived, its files unpacked" : "Session unarchived");
 

@@ -35,16 +35,7 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-async function pendingApproval(session: RunnerSession, id?: RegExp) {
-  for (let count = 0; count < 1000; count++) {
-    const approval = (await session.view()).approvals.find(candidate => candidate.status === "pending" && (!id || id.test(candidate.id)));
-    if (approval) return approval;
-    await delay(20);
-  }
-  assert.fail("no pending approval");
-}
-
-test("the agent works with other sessions through the control plane, asking the owner for the tool, a Read-only message's changes and a wider audience", async t => {
+test("the agent works with other sessions through the control plane at once; a Read-only message changes nothing, and a wider audience takes the owner's setting", async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-sessions-tool-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const requests: SessionsToolRequest[] = [];
@@ -58,7 +49,7 @@ test("the agent works with other sessions through the control plane, asking the 
     fauxAssistantMessage([fauxToolCall("sessions", { action: "wait", session: "worker", message_id: "m1", timeout_seconds: 60 })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Waited."),
     fauxAssistantMessage([fauxToolCall("sessions", { action: "send", session: "worker", message: "Go", access: "auto" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage("Not allowed."),
+    fauxAssistantMessage("Sent, acting."),
     fauxAssistantMessage([fauxToolCall("sessions", { action: "send", session: "worker", message: "Go" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Sent."),
     fauxAssistantMessage([fauxToolCall("sessions", { action: "create", title: "Docs", message: "Write the docs", model: "model-2", thinking: "low" })], { stopReason: "toolUse" }),
@@ -81,55 +72,44 @@ test("the agent works with other sessions through the control plane, asking the 
   const strip = (request: SessionsToolRequest) => ({ ...request, callId: undefined });
 
   await session.submit(await ticket(id, "submit"), { content: "Which sessions are there?", requestId: "list", admissionId }, "write");
-  const toolCard = await pendingApproval(session);
-  assert.deepEqual(toolCard.operation, { kind: "permission", tool: "sessions", target: "list", needs: ["tool"] });
-  assert.equal(requests.length, 0, "nothing reaches the control plane before the owner allows it");
-  await session.decide(await ticket(id, "approve"), toolCard.id, { decision: "approve", operation: toolCard.operation, scope: "session" });
   await idle(session);
   assert.deepEqual(strip(requests[0]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "list" });
 
   const target = audienceTarget({ id: "worker", title: "Worker" });
-  answers.push({ consent: "audience", target, reason: "This session's readers include people who can't read that session." },
-    { session: { id: "worker", title: "Worker", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], createdAt: "" }, busy: false, entries: [], pendingApprovals: [] });
+  answers.push({ consent: "audience", target, reason: "This session's readers include people who can't read that session." });
   await session.submit(await ticket(id, "submit"), { content: "Read the worker.", requestId: "read", admissionId }, "write");
-  const audienceCard = await pendingApproval(session, /_audience$/);
-  assert.deepEqual(audienceCard.operation, { kind: "permission", tool: "sessions", target, needs: ["audience"] });
-  await session.decide(await ticket(id, "approve"), audienceCard.id, { decision: "approve", operation: audienceCard.operation });
   await idle(session);
-  assert.equal(requests.length, 3);
-  assert.equal(requests[1]!.callId, requests[2]!.callId, "the same call, again");
-  assert.deepEqual(strip(requests[2]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "read", targetSessionId: "worker" });
-  assert.equal(audienceCard.id, `permission-${requests[2]!.callId}_audience`);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(strip(requests[1]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "read", targetSessionId: "worker" });
+  assert.match(await transcript(), /can let content pass between sessions whose readers differ under the session's Details/);
 
   const read = (done: boolean): SessionsToolResult => ({ session: { id: "worker", title: "Worker", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], createdAt: "" },
-    busy: !done, entries: [{ id: "0:1", role: "assistant", kind: "message", text: "hidden" }], pendingApprovals: [],
+    busy: !done, entries: [{ id: "0:1", role: "assistant", kind: "message", text: "hidden" }],
     outcome: done ? { status: "settled", done: true, reply: "All green." } : { status: "running", done: false } });
   answers.push(read(false), read(true));
   await session.submit(await ticket(id, "submit"), { content: "Wait for it.", requestId: "wait", admissionId }, "write");
   await idle(session);
-  assert.deepEqual(requests.slice(3).map(strip), [1, 2].map(() => ({ sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "read", targetSessionId: "worker", messageId: "m1", limit: 1 })));
+  assert.deepEqual(requests.slice(2).map(strip), [1, 2].map(() => ({ sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "read", targetSessionId: "worker", messageId: "m1", limit: 1 })));
   assert.match(await transcript(), /All green\./);
   assert.doesNotMatch(await transcript(), /hidden/, "a wait returns the outcome, not the transcript");
 
-  await session.submit(await ticket(id, "submit"), { content: "Send it with auto-approve.", requestId: "auto", admissionId }, "write");
-  await idle(session);
-  assert.match(await transcript(), /Only a message the session owner sent with auto-approve sends an auto-approved message/);
-  assert.equal(requests.length, 5);
-
   answers.push({ message: { id: "m2", kind: "send", originSessionId: id, targetSessionId: "worker", actorId: "test:alice", submissionId: "s", conversationId: "0", hops: 1, createdAt: "" } });
-  await session.submit(await ticket(id, "submit"), { content: "Tell the worker to go.", requestId: "read-only", admissionId, options: { access: "read" } }, "write");
-  const writeCard = await pendingApproval(session);
-  assert.deepEqual(writeCard.operation, { kind: "permission", tool: "sessions", target: sessionsToolTarget({ action: "send", targetSessionId: "worker", message: "Go" }), needs: ["write"] });
-  await session.decide(await ticket(id, "approve"), writeCard.id, { decision: "approve", operation: writeCard.operation });
+  await session.submit(await ticket(id, "submit"), { content: "Send it, acting.", requestId: "auto", admissionId }, "write");
   await idle(session);
-  assert.deepEqual(strip(requests[5]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "send", targetSessionId: "worker", message: "Go" });
+  assert.deepEqual(strip(requests[4]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "send", targetSessionId: "worker", message: "Go", access: "auto" });
   assert.match(await transcript(), /"m2"/);
+
+  await session.submit(await ticket(id, "submit"), { content: "Tell the worker to go.", requestId: "read-only", admissionId, options: { access: "read" } }, "write");
+  await idle(session);
+  assert.equal(requests.length, 5, "a Read-only message sends nothing");
+  assert.match(await transcript(), /which a Read-only message doesn't do/);
+  assert.deepEqual((await session.view()).approvals, []);
 
   answers.push({ session: { id: "docs", title: "Docs", ownerId: "test:alice", status: "ready", visibility: "private", permissions: ["read"], parentSessionId: id, createdAt: "" },
     model: { id: "model-2", provider: "faux", modelId: "faux-2", thinkingLevel: "low" } });
   await session.submit(await ticket(id, "submit"), { content: "Start a docs sub-task.", requestId: "create", admissionId }, "write");
   await idle(session);
-  assert.deepEqual(strip(requests[6]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "create", title: "Docs", message: "Write the docs",
+  assert.deepEqual(strip(requests[5]!), { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, action: "create", title: "Docs", message: "Write the docs",
     modelId: "model-2", thinkingLevel: "low" });
   assert.match(await transcript(), /"thinkingLevel": ?"low"/);
 });

@@ -87,7 +87,7 @@ export interface SessionsToolRequest {
 export type SessionsToolResult =
   | { sessions: CrossSessionSummary[]; models: { id: string; name: string; provider: string; modelId: string; thinkingLevels?: ThinkingLevel[] }[]; childModels: boolean }
   | { session: CrossSessionSummary; busy: boolean; entries: Pick<EntryView, "id" | "role" | "kind" | "actorId" | "text" | "error">[];
-    pendingApprovals: { id: string; kind: string; tool?: string; requestedBy: string }[]; message?: CrossSessionMessage; outcome?: CrossSessionOutcome }
+    message?: CrossSessionMessage; outcome?: CrossSessionOutcome }
   | { message: CrossSessionMessage }
   | { session: CrossSessionSummary; model?: { id: string; provider: string; modelId: string; thinkingLevel?: ThinkingLevel }; message?: CrossSessionMessage }
   | { stopped: number }
@@ -130,7 +130,7 @@ export function crossSessionHeader(message: { id: string; kind: CrossSessionMess
 
 const doneStatuses = new Set(["settled", "interrupted", "stopped", "images lost", "refused"]);
 
-export function messageOutcome(view: Pick<SessionView, "entries" | "queue" | "approvals">, message: Pick<CrossSessionMessage, "id" | "submissionId" | "conversationId">): CrossSessionOutcome {
+export function messageOutcome(view: Pick<SessionView, "entries" | "queue">, message: Pick<CrossSessionMessage, "id" | "submissionId" | "conversationId">): CrossSessionOutcome {
   const queued = view.queue?.find(item => item.submissionId === message.submissionId);
   const status = queued?.status ?? "unknown";
   const entries = view.entries.filter(entry => entry.conversationId === message.conversationId);
@@ -145,12 +145,10 @@ export function messageOutcome(view: Pick<SessionView, "entries" | "queue" | "ap
   }
   const answers = after.filter(entry => entry.role === "assistant" && !entry.error && entry.text.trim());
   const failed = after.some(entry => entry.error !== undefined);
-  const pendingCard = view.approvals.some(approval => approval.status === "pending");
   const done = doneStatuses.has(status)
-    || (status === "unknown" && answers.length > 0 && after.at(-1) === answers.at(-1) && !pendingCard);
+    || (status === "unknown" && answers.length > 0 && after.at(-1) === answers.at(-1));
   const last = answers.at(-1)?.text;
-  const waiting = !done && pendingCard;
-  return { status, done, ...(waiting ? { waiting: true as const } : {}), ...(failed ? { failed: true as const } : {}),
+  return { status, done, ...(failed ? { failed: true as const } : {}),
     ...(last !== undefined ? { reply: cut(last, crossSessionLimits.replyChars) } : {}) };
 }
 

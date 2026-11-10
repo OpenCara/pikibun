@@ -188,7 +188,7 @@ test('accepting a pending member brings their own hosts into the workspace, as a
   const { credentials } = await json<{ credentials: { connectorId: string } }>(await alice.request('POST', `/api/connectors/pairings/${pairing.id}/claim`, {
     code: pairing.code,
     models: [{ provider: 'local-native', modelId: 'local/model-v1', name: 'Local model' }],
-    capabilities: { platform: 'linux', sandbox: true, productionShell: false, plainGit: true },
+    capabilities: { platform: 'linux', sandbox: true, productionShell: false, approvalFree: true, plainGit: true },
   }), 201);
   const attached = () => f.sqlite.prepare('SELECT COUNT(*) AS count FROM connector_workspaces WHERE connector_id = ? AND workspace_id = ?')
     .get(credentials.connectorId, team.id) as { count: number };

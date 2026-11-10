@@ -63,7 +63,7 @@ async function rpc(action: RunnerAction = 'view', body = '', id = 'request'): Pr
   const now = Math.floor(Date.now() / 1000);
   return {
     type: 'request', id, method: action === 'view' || action === 'events' ? 'GET' : 'POST',
-    path: action === 'create' ? '/v1/sessions' : `/v1/sessions/session/${action === 'approve' ? 'approvals/approval' : action}`,
+    path: action === 'create' ? '/v1/sessions' : `/v1/sessions/session/${action}`,
     body,
     ticket: {
       aud: 'runner', sessionId: 'session', actorId: 'owner', ownerId: 'owner', action,
@@ -155,7 +155,7 @@ test('pairing posts only to the fixed origin and strips extra model/capability s
   assert.equal(request.redirect, 'error');
   assert.equal(request.credentials, 'omit');
   assert.equal(request.headers.get('authorization'), null);
-  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, memberAutoApprove: true, fileBrowser: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(await request.json(), { code: 'fixture_pairing_code', models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   for (const secret of [providerSecret, credentials.token, 'fixture_pairing_code']) assert.equal(request.url.includes(secret), false);
 });
 
@@ -193,8 +193,8 @@ test('connector manifests reject duplicates, excessive catalogs and implicit fau
 
 test('relay accepts exactly the supported action/method/path combinations and locally signs bound tickets', async t => {
   const bodies: Record<Exclude<RunnerAction, 'events'>, string> = {
-    create: JSON.stringify(binding()), view: '', submit: '{}', ask: '{}', operations: '{}',
-    approve: '{}', backup: '{}', restart: '{}', restore: JSON.stringify({ binding: binding() }), stop: '{}',
+    create: JSON.stringify(binding()), view: '', submit: '{}', ask: '{}',
+    backup: '{}', restart: '{}', restore: JSON.stringify({ binding: binding() }), stop: '{}',
     files: JSON.stringify({ path: 'src' }), revert: JSON.stringify({ entryId: '1:2' }),
     fork: JSON.stringify({ sourceSessionId: 'other', entryId: '1:2' }), pack: '{}', unpack: '{}', withdraw: JSON.stringify({ submissionId: 'a'.repeat(43) }),
     upload: JSON.stringify({ uploadId: 'upload-1', name: 'notes.txt', size: 2, offset: 0, data: 'aGk=' }),
@@ -528,7 +528,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   socket.welcome();
   const call = await fixture.workerCalls.next();
   assert.equal(call.request.url, `${origin}/api/connectors/self/manifest`);
-  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, memberAutoApprove: true, fileBrowser: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
+  assert.deepEqual(JSON.parse(call.body), { models: [summary], capabilities: { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, ...hostMigration, hostConfig: true, compactionConfig: true } });
   assert.equal(call.request.headers.get('x-connection-token'), connectionToken);
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(ready, false);
@@ -556,7 +556,7 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   assert.deepEqual(fixture.statuses, ['connecting', 'connected', 'stopped']);
 });
 
-const advertisedBase = { ...publicCapabilities, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, hostOwnerDecides: true, automaticGitHub: true, requesterAutoApprove: true, memberAutoApprove: true, fileBrowser: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, ...hostMigration, hostConfig: true, compactionConfig: true };
+const advertisedBase = { ...publicCapabilities, chatOptions: true, approvalFree: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true, github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, sessionPacking: true, hostCommands: true, hostGrants: true, hostSessionGrants: true, ownerHostSessions: true, unboundedShellGrants: true, fileBrowser: true, fileUploads: true, extensions: true, builtinExtensions: true, requiredExtensions: true, fakeIpTunnels: true, ...hostMigration, hostConfig: true, compactionConfig: true };
 
 test('a host configured in Pikibun uses its Git credentials for pushes only while its owner has them on there', { timeout: 10000 }, async t => {
   let issued: unknown;

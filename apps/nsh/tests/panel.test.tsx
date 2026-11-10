@@ -46,13 +46,6 @@ describe("a session's panel", () => {
     expect(due.shows("text:15%")).toBe(true);
   });
 
-  test("Approvals lists the session's approvals, pending first", async () => {
-    const app = await openPanel();
-    await app.press("text:Approvals 1");
-    await app.waitFor("id:panel-approvals");
-    await app.waitFor("id:approval-ap1");
-  });
-
   test("Files lists the worktree and previews a file", async () => {
     const app = await openPanel();
     await app.press("text:Files");
@@ -82,7 +75,7 @@ describe("a session's panel", () => {
     await app.type("id:schedule-content", "Run the tests");
     await app.press("id:schedule-save");
     await app.waitUntil(() => Boolean(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)));
-    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)).toMatchObject({ content: "Run the tests", cron: "0 9 * * 1-5", access: "approval" });
+    expect(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`)).toMatchObject({ content: "Run the tests", cron: "0 9 * * 1-5", access: "auto" });
     expect(Object.keys(bodyOf(app, "POST", `${ORIGIN}/api/sessions/s1/schedules`) as object)).not.toContain("runIn");
   });
 

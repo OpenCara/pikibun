@@ -48,7 +48,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - In a workspace with many sessions, the `sessions` list is cut off before its models section, so a model's id may not be visible there. Ask the person for the id rather than guess one.
 - A schedule belongs to its session and can't be managed from another one. Give a recurring job its own session: a busy session skips its runs, and missed runs aren't caught up.
 - A scheduled run uses its session's current model, and a child session inherits it unless a model is named.
-- An unattended schedule needs auto-approve, which only the session owner's own auto-approved message can grant.
+- An unattended schedule acts as the session's owner, so only the owner's messages may create one, and never a Read-only message.
 
 ## Writing for people
 

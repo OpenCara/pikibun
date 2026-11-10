@@ -83,7 +83,7 @@ test("a session runs at most a few scripts at once", async t => {
   for (const item of runs.slice(0, -1)) assert.equal((await item.result).ok, false);
 });
 
-test("code mode runs in every session, and its scripts' calls are decided like the model's own", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
+test("code mode runs in every session, and its scripts' calls run as the model's own would", { skip: !["linux", "darwin"].includes(process.platform) }, async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pikibun-builtin-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(join(root, "shout.ts"), `import { Type } from "typebox";
@@ -95,7 +95,8 @@ test("code mode runs in every session, and its scripts' calls are decided like t
   await store.add(parseExtensionSource(join(root, "shout.ts")));
   const [dev] = await loadInstalled(store, []);
   const installed = [{ ...dev!, summary: { ...dev!.summary, source: "npm:shout@1.0.0", dev: false } }];
-  const answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: false };
+  // The host's owner lets every session run its workspace's extension tools: a call runs at once, as the model's own would.
+  const answer = { extensions: parseWorkspaceExtensions([{ source: "npm:shout@1.0.0" }]), automaticTools: true };
   let config: HostConfig = { ...defaultHostConfig, builtinExtensions: ["pi:codemode"] };
   const offered: string[][] = [];
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
@@ -142,7 +143,7 @@ test("code mode runs in every session, and its scripts' calls are decided like t
   };
   const session = await service.provision(target, await claims("create"));
   const send = async (content: string) =>
-    session.submit(await claims("submit"), { content, requestId: content, admissionId: await sha256(content), options: { access: "approval" } }, "write");
+    session.submit(await claims("submit"), { content, requestId: content, admissionId: await sha256(content) }, "write");
   const idle = async () => {
     for (let count = 0; count < 500 && (await session.view()).busy; count++) await delay(20);
   };
@@ -151,16 +152,6 @@ test("code mode runs in every session, and its scripts' calls are decided like t
   assert.deepEqual((await session.view()).extensions, { running: [{ source: "npm:shout@1.0.0", dev: false, tools: ["shout"] }], missing: [], builtin: ["pi:codemode"],
     unavailable: [{ source: "piki:browser", tools: ["browser"], reason: "on-host" }] });
   await send("hello");
-  const decided = new Set<string>();
-  for (let count = 0; count < 1000 && decided.size < 2; count++) {
-    for (const card of (await session.view()).approvals.filter((item: ApprovalRecord) => item.status === "pending" && !decided.has(item.id))) {
-      assert.equal(card.operation.kind, "extension.tool");
-      await session.decide(await claims("approve", "test:bob"), card.id, { decision: "approve", operation: card.operation });
-      decided.add(card.id);
-    }
-    await delay(20);
-  }
-  assert.equal(decided.size, 2);
   await idle();
   assert.ok(offered[0]!.includes("codemode") && offered[0]!.includes("shout"), offered[0]!.join());
   assert.match((await assistant())!, /HELLO! TWICE!/);

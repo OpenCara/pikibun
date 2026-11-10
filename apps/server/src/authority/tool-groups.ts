@@ -40,7 +40,7 @@ export async function memberToolGroups(env: Env, workspaceId: string): Promise<R
 }
 
 /**
- * A session runs only the tools of its owner's group: refused outside it, whoever asks and under any access, Auto-approve
+ * A session runs only the tools of its owner's group: refused outside it, whoever asks and under any access,
  * and permission requests included. Tools that aren't Pikibun's own are left to the workspace's extensions.
  */
 export async function requireOwnerTool(env: Env, row: Pick<SessionRow, 'workspace_id' | 'owner_id'>, tool: string): Promise<void> {
