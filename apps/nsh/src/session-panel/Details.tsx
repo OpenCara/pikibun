@@ -1,6 +1,7 @@
-import { signal, untracked, View } from "nsh";
+import { signal, Text, untracked, View } from "nsh";
 import {
-  sessionRoles, type ApprovalRecord, type ModelDefinition, type Operation, type SessionGrant, type SessionRecord, type SessionRole, type SessionView, type WorkspaceRole,
+  sessionRoles, type ApprovalRecord, type ModelDefinition, type Operation, type SessionContextView, type SessionGrant, type SessionRecord, type SessionRole, type SessionView,
+  type WorkspaceRole,
 } from "../../../../packages/shared/src/types";
 import {
   managesSession, sessionRoleAllowed, sessionRoleGrantable, sessionRoleOf, sessionRolePermissions, workspaceManagerRoles, workspaceSessionPermissions,
@@ -13,14 +14,14 @@ import type { CrossSessionMessage, SessionConnections } from "../../../../packag
 import { browserUnavailableText, errorMessage, REDACTED, segment, userIdFromInput, usernameWithId, type ConnectorInfo } from "../shared";
 import { useAppData } from "../lib/app-data";
 import { session } from "../lib/auth";
-import { relativeTime, timestamp } from "../lib/format";
+import { formatTokens, relativeTime, timestamp } from "../lib/format";
 import { openExternal, openServerLink, opensServerPages } from "../lib/links";
 import { createUsername, createWorkspacePeople } from "../lib/people";
 import { createAction, createResource } from "../lib/resource";
 import { backupDatabaseLabel, type Backup, type SessionActions } from "../lib/session-actions";
 import { ConnectionStatus, HostCapabilities } from "../hosts";
 import { Icon } from "../icons";
-import { palette, type Tone } from "../theme";
+import { palette, text, weight, type Tone } from "../theme";
 import { Checkbox, CheckControl, Field, RadioRow, Select, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, Feedback, IconButton, Note, Row, Section, Small } from "../ui";
 import type { PanelTabProps } from "./parts";
@@ -49,6 +50,7 @@ export function Details(props: DetailsProps) {
         return (
           <View testID="panel-details" style={{ gap: 32 }}>
             <If when={props.view()?.tunnel}>{() => <TunnelSection {...props} current={current()} canStop={canWrite() && !archived()} />}</If>
+            <If when={props.view()?.context}>{usage => <ContextSection usage={usage()} />}</If>
             <HostSection {...props} current={current()} />
             <If when={props.view()?.extensions}>{extensions => <ExtensionsSection extensions={extensions()} />}</If>
             <RepositoriesSection {...props} current={current()} />
@@ -97,6 +99,46 @@ function TunnelSection(props: Part & { canStop: boolean }) {
         </>} />
       <CardBody><Field label="Public address"><CopyField value={tunnel().url} /></Field></CardBody>
       <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+    </Section>
+  );
+}
+
+/**
+ * How full the shared conversation's context window is (SessionView.context): its tokens against its model's window, as a
+ * meter that turns to a warning near where Pi compacts it, and where that is.
+ */
+export function ContextSection(props: { usage: SessionContextView }) {
+  const usage = () => props.usage;
+  const percent = () => (usage().window ? Math.round(usage().tokens / usage().window! * 100) : undefined);
+  /** Where the meter warns: near compaction where Pi compacts, else near the window's end. */
+  const tone = (): Tone => {
+    const limit = usage().compactsAt ?? usage().window;
+    if (!limit) return "running";
+    const ratio = usage().tokens / limit;
+    return ratio >= 1 ? "danger" : ratio >= 0.8 ? "warning" : "running";
+  };
+  const title = () => (usage().window ? `${formatTokens(usage().tokens)} of ${formatTokens(usage().window!)} tokens` : `About ${formatTokens(usage().tokens)} tokens`);
+  const hint = () => (usage().compactsAt !== undefined
+    ? usage().tokens >= usage().compactsAt!
+      ? `Past where Pi compacts it, at about ${formatTokens(usage().compactsAt!)} tokens: Pi summarizes the older messages at its next step`
+      : `Pi summarizes the older messages once it passes about ${formatTokens(usage().compactsAt!)} tokens`
+    : usage().window ? "Compaction is off for this model on its host: a conversation that outgrows the window fails until it is shortened"
+    : "The host's model catalog doesn't give this model's context window");
+  return (
+    <Section title="Context" testID="panel-context" info="About how many tokens the shared conversation holds as its model sees it: the provider's count for its last answered request, and about 4 characters a token for anything since. Side asks have contexts of their own. Once it nears the model's window, Pi compacts it: it summarizes the older messages and keeps the most recent ones word for word. The host's owner sets how much room it keeps.">
+      <CardBody>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", columnGap: 8, rowGap: 2 }}>
+          <Text testID="context-tokens" style={{ flex: 1, minWidth: 120, fontSize: text.body, fontWeight: weight.medium, color: palette().text }}>{title()}</Text>
+          <If when={percent() !== undefined}><Small testID="context-percent" tone={tone() === "running" ? undefined : tone()}>{`${percent()}%`}</Small></If>
+        </View>
+        <If when={usage().window}>
+          <View role="progressbar" accessibilityLabel={`Context: ${title()}, ${percent()}%`}
+            style={{ height: 6, borderRadius: 3, overflow: "hidden", backgroundColor: palette().code }}>
+            <View style={{ height: "100%", borderRadius: 3, width: `${Math.min(100, percent() ?? 0)}%`, backgroundColor: palette().tones[tone()].text }} />
+          </View>
+        </If>
+        <Small testID="context-hint">{hint()}</Small>
+      </CardBody>
     </Section>
   );
 }

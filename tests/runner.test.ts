@@ -1107,6 +1107,26 @@ test("a stream that keeps dropping on a large conversation says so, and starts c
   assert.ok(kinds.some(kind => /compaction/.test(kind)), `the summary is in the transcript: ${kinds.join(", ")}`);
 });
 
+test("the view tells how full the shared conversation's context window is, and where Pi compacts it", hostMode, async t => {
+  const faux = fauxProvider({ models: [{ id: "faux-1", reasoning: false, contextWindow: 200_000 }] });
+  faux.setResponses([fauxAssistantMessage("ok")]);
+  const { service } = await hostFixture(t, { resolveModels: async model => {
+    const models = createModels();
+    models.setProvider(faux.provider);
+    return { models, provider: model.provider, modelId: model.modelId };
+  } });
+  const id = "context-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  // Pi's own reserve: the host's settings keep no other for this model.
+  assert.deepEqual((await session.view()).context, { tokens: 0, window: 200_000, compactsAt: 200_000 - 16_384 });
+  await session.submit(await ticket(id, "submit"), { content: "x".repeat(4000), requestId: "long" }, "write");
+  await idle(session);
+  const after = (await session.view()).context;
+  assert.ok(after && after.tokens >= 1000, `about 4 characters a token, or the provider's count: ${JSON.stringify(after)}`);
+  assert.equal(after.window, 200_000);
+  assert.equal(after.compactsAt, 200_000 - 16_384);
+});
+
 test("a run Pi settles without an answer shows as a failed model turn instead of silence", hostMode, async t => {
   // A model the host no longer offers ends the run like a failed compaction does: unanswered, with no entry for it.
   const { service } = await hostFixture(t, { resolveModels: async model => {

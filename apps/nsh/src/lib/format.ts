@@ -10,6 +10,16 @@ export function formatDuration(ms: number): string {
   return seconds % 60 ? `${Math.floor(seconds / 60)} min ${seconds % 60} s` : `${seconds / 60} min`;
 }
 
+/** A count of tokens, short: "850", "84.2K", "200K", "1M". */
+export function formatTokens(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens < 0) return "?";
+  if (tokens < 1000) return String(Math.round(tokens));
+  const [value, unit] = tokens < 999_500 ? [tokens / 1000, "K"] : [tokens / 1_000_000, "M"];
+  // One decimal under 100, as "84.2K"; rounded first, so 99,960 is "100K" rather than "100.0K".
+  const tenths = Math.round(value * 10);
+  return `${tenths < 1000 ? tenths / 10 : Math.round(value)}${unit}`;
+}
+
 const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n: number) => String(n).padStart(2, "0");
 

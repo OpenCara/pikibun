@@ -77,7 +77,7 @@ import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { applyEdits } from "./edits.js";
-import { compactionFailure, configuredCompaction, hostCompaction } from "./compaction.js";
+import { compactionFailure, compactionThreshold, configuredCompaction, hostCompaction } from "./compaction.js";
 import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "./model-failure.js";
 import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
 import { autoApprovedCalls, viewApprovals, type StoredApproval } from "./approval-view.js";
@@ -442,6 +442,8 @@ export class RunnerSession {
   #drainAgain = false;
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
+  /** The compaction settings the harness runs by now, which the view's context reads (see `contextView`). */
+  #compaction: () => CompactionSettings | undefined = () => undefined;
   /** Pushes (approved ones settle after decide() returns; automatic ones inline); close() aborts and awaits them. */
   private pushes = new Set<{ controller: AbortController; done: Promise<void> }>();
   /** Set when Pi closed the Session because its storage failed; the next request reopens it (see `recover`). */
@@ -1036,6 +1038,7 @@ export class RunnerSession {
       }
       return current.settings;
     };
+    this.#compaction = () => settings()?.compaction;
     const storage = await this.openStorage();
     try {
       this.harness = await Harness.open(storage, { models, registry, settings,
@@ -3490,14 +3493,15 @@ export class RunnerSession {
   async view(): Promise<SessionView> {
     const tunnel = this.#tunnel?.view();
     const initial = await this.metadata();
-    const snapshots: { branch: Branch; entries: readonly EntryRecord[] }[] = [];
+    const snapshots: { branch: Branch; entries: readonly EntryRecord[]; messages: readonly Message[] }[] = [];
     // A shared conversation someone went back from stays on the host, out of the view: its fork shows what was kept.
     for (const branch of initial.branches.filter(item => !item.superseded)) {
       const conversation = await this.harness.conversation(branch.id as ConversationId, context);
       if (!conversation) continue;
       // The active transcript, from the newest head marker (a compaction's summary) on, as the model sees it. A watch's
       // view would hold only a window of the newest entries.
-      snapshots.push({ branch, entries: (await conversation.context(context)).entries });
+      const active = await conversation.context(context);
+      snapshots.push({ branch, entries: active.entries, messages: active.messages });
     }
     // Every admission is committed before its entries: read attribution after transcript snapshots.
     const state = await this.metadata();
@@ -3527,6 +3531,8 @@ export class RunnerSession {
       if (ending) entries.push(ending);
     }
     const agent = await this.#shared.agent(context);
+    const shared = snapshots.find(snapshot => snapshot.branch.mode === "write");
+    const usage = shared && this.contextView(shared.messages, agent.model);
     const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
     // Every shared message ran at some access ("approval" when it named none), so the view says which; only a session
     // without one leaves it out, and the owner's chat box then starts on Auto-approve.
@@ -3546,14 +3552,34 @@ export class RunnerSession {
       rewindable: true,
       memberForks: true,
       ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
+      ...(usage ? { context: usage } : {}),
       ...(access ? { access } : {}),
       ...(repositories ? { repositories } : {}),
       activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
         : sessionActivity(Object.values(state.runs).filter(tellsActivity), Object.values(state.approvals),
-          activityEntry(snapshots.find(snapshot => snapshot.branch.mode === "write")?.entries.at(-1))),
+          activityEntry(shared?.entries.at(-1))),
       ...await this.extensionView(),
       ...(tunnel ? { tunnel } : {}),
     };
+  }
+
+  /**
+   * How full the shared conversation's context is (SessionView.context): about how many tokens its messages hold, its
+   * model's context window from the host's catalog, and where Pi compacts it under the settings the harness runs by.
+   * A conversation without a model of its own is on the session's.
+   */
+  private contextView(messages: readonly Message[], model: { provider: string; modelId: string } | undefined): SessionView["context"] {
+    const tokens = contextTokens(messages);
+    if (!Number.isFinite(tokens) || tokens < 0) return undefined;
+    const current = model ?? this.modelRef;
+    let window: number | undefined;
+    try {
+      const found = current && this.models?.getModel(current.provider, current.modelId)?.contextWindow;
+      window = Number.isSafeInteger(found) && found! > 0 ? found : undefined;
+    }
+    catch { window = undefined; }
+    const compactsAt = current ? compactionThreshold(this.#compaction(), current, window) : undefined;
+    return { tokens, ...(window !== undefined ? { window } : {}), ...(compactsAt !== undefined ? { compactsAt } : {}) };
   }
 
   /** What the view tells of the session's extensions: those it runs with now, and its workspace's enabled ones its host lacks. */
