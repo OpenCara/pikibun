@@ -21,6 +21,12 @@ The composer switches between **Shared** and **Side ask**:
 
 Shared messages and side asks share one queue: up to 64 waiting or running, with up to 1 MiB of queued text. Accepted work goes on after you leave the page, as long as the host is online.
 
+## Tool calls
+
+The transcript shows each of the agent's tool calls as one row with the result that answered it: what the call did and what came of it, such as `read_file · src/app.ts L60–89 → Lines 60–89 of 975`, `git status → nothing to commit, working tree clean` or `search · "TODO" in src → 12 matches in 4 files`, with how long the tool ran. A command's row ends with the last line it printed, where commands say how they went. A call that failed shows in red: a command that failed or was denied, or a tool that reported an error. Press a row to open it: the call's arguments, one per line, then its result as the tool gave it, a command's output as it printed it and a file as it reads, without who asked (the row's message says that). A row with no result yet is a call still running or waiting on a card. A result whose call isn't shown, as when an earlier page holds it, gets a row of its own.
+
+These lines come from the shapes of Pikibun's own tools, not from a model; another tool's row shows its first argument and the first line of its result. An up-to-date connector names which call each result answers; with an older one, results answer their calls in the order they follow them, which is how the agent gets them (update it with `npx pikibun@latest connect`).
+
 ## Images
 
 Paste images, such as screenshots, into the composer, or pick them with its image button (on a phone, from the photo library or camera): into a new session's first message, a shared message or a side ask. They show as thumbnails above the text; **×** removes one. A message carries up to 4 images, and can be images alone. The browser scales each image to at most 1568 pixels on its longest edge and compresses it until the message fits what the host takes in one request; the host decodes and prepares each image again, and the model gets them after the message's text. The images stay on the host, in the conversation: the transcript notes each one as `[image image/png]`.
