@@ -26,6 +26,7 @@ import { Card, gitAccountLabel, GroupTitle } from "./accounts";
 import { SectionPage, type SectionProps } from "./parts";
 import { WorkspaceDatabaseSection } from "./workspace-database";
 import { WorkspaceExtensions } from "./workspace-extensions";
+import { ToolGroups } from "./workspace-tool-groups";
 import { ApprovalSettings, AttachmentSettings, ChildSessionSettings, NetworkAccess, TranscriptSettings } from "./workspace-options";
 import {
   connectionLabel, createWorkspaceConnections, DocumentSources, gitConnectionFor, gitProviderLabel, PushAccess, ReadAsControl, WorkspaceConnections,
@@ -108,6 +109,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
       <PushAccess workspace={workspace()} admin={admin()} />
       <NetworkAccess workspace={workspace()} admin={admin()} />
       <WorkspaceExtensions workspace={workspace()} />
+      <ToolGroups workspace={workspace()} owner={role() === "owner"} />
       <TranscriptSettings workspace={workspace()} admin={admin()} />
       <ApprovalSettings workspace={workspace()} admin={admin()} />
       <ChildSessionSettings workspace={workspace()} admin={admin()} />
