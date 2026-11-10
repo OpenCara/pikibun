@@ -1191,3 +1191,20 @@ test("entries carry how long each reply took and each tool ran", hostMode, async
   assert.deepEqual(timed("toolResult"), [true]);
   assert.deepEqual(timed("user"), [false]);
 });
+
+test("entries name which tool call each result answers, so clients show them together", hostMode, async t => {
+  const { service } = await hostFixture(t);
+  const id = "paired-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  await session.submit(await ticket(id, "submit"), { content: "TEST_IDENTITY", requestId: "paired" }, "write");
+  await idle(session);
+  const entries = (await session.view()).entries;
+  const call = entries.find(entry => entry.role === "assistant" && entry.toolCalls)!;
+  const result = entries.find(entry => entry.role === "toolResult")!;
+  assert.equal(call.toolCalls!.length, 1);
+  assert.equal(call.toolCalls![0]!.name, "identity");
+  assert.ok(call.toolCalls![0]!.id, "the model's id of the call");
+  assert.deepEqual(result.toolResult, { callId: call.toolCalls![0]!.id, tool: "identity" });
+  assert.ok(entries.filter(entry => entry.role !== "assistant").every(entry => entry.toolCalls === undefined));
+  assert.ok(entries.filter(entry => entry.role !== "toolResult").every(entry => entry.toolResult === undefined));
+});
