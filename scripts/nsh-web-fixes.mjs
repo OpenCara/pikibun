@@ -16,6 +16,16 @@
  * do, and follow late-registered values the same way. The runtime's late map is then left out: every browser runs the
  * app from the same map.
  *
+ * Text runs into the text after it (inline code over the words before it, a bold phrase over the next ones) where the
+ * browser's canvas measures a font narrower or wider than the page draws it. Native Shell 0.4 lays text out with widths
+ * from canvas `measureText` and draws each run as a DOM span at the place those widths give, so the two must agree, and
+ * in some browsers they don't for the system font stack it writes (`-apple-system, BlinkMacSystemFont, …`): a canvas
+ * can resolve it to another face than the page does, and a minimum font size or text-only zoom enlarges the page's text
+ * only. The fix: `measure_text` (in nsh.<hash>.js) compares, once per font, a sample measured on canvas with the same
+ * sample drawn in a hidden span; where they differ, it measures that font's text in the span, as the page draws it, as
+ * NSH already does for text with a numeric variant. Where they agree nothing changes. Not reported upstream yet; remove
+ * MEASURE_TEXT and its patch once the pinned release measures what the page draws.
+ *
  * The patched runtime goes into a renamed `browser.<hash>` directory, and the file that imports it into a renamed
  * `nsh.<hash>.js`, so no browser or CDN keeps serving a cached unpatched copy (`nsh.<hash>.js` is cached as immutable).
  */
@@ -36,6 +46,19 @@ export const LATE_MAP = "let Q=f.createElement(`script`);Q.type=`importmap`,Q.te
  * document has loaded modules already, and keeps the runtime's own behaviour.
  */
 export const EARLY_MAP = String.raw`let __nshEarlyMap=null;if(v){__nshEarlyMap=Object.assign({},o);let X0=new URL(e,document.baseURI),Z0=X0.protocol==="blob:"?new URL(document.baseURI):X0;Z0===X0&&(__nshEarlyMap[new URL("bundle.js",X0).href]=X0.href);for(let[k0,u0]of Object.entries(s))__nshEarlyMap[new URL(k0,Z0).href]=new URL(u0,document.baseURI).href;for(let[k0,n0]of Object.entries(c)){let K0=JSON.stringify(k0),L0=["const host=globalThis.__nsh_browser_realm.modules;"],W0=[];n0.forEach((m0,j0)=>{let N0=JSON.stringify(m0);L0.push("let l"+j0+"=host.get("+K0+")["+N0+"];export{l"+j0+" as "+N0+"};"),W0.push("l"+j0+"=host.get("+K0+")["+N0+"];")}),W0.length&&L0.push("globalThis.__nsh_browser_realm.watch(()=>{"+W0.join("")+"});");let B0=URL.createObjectURL(new Blob([L0.join("\n")],{type:"text/javascript"}));x.push(B0),__nshEarlyMap[k0]=B0}let Q0=f.createElement("script");Q0.type="importmap",Q0.textContent=JSON.stringify({imports:__nshEarlyMap}),f.head.append(Q0)}`;
+
+/** Native Shell 0.4's `measure_text` import in nsh.<hash>.js, as `nsh package` minifies it: canvas widths only. */
+export const MEASURE_TEXT = "measure_text:(e,t,n,r)=>(++this.measureUses>=5e3&&(this.measureUses=0,this.measure=O()),this.measure.font=this.str(e,t),this.measure.measureText(this.str(n,r)).width)";
+/** The same, measuring through DRAWN_WIDTH. */
+export const PATCHED_MEASURE_TEXT = "measure_text:(e,t,n,r)=>(++this.measureUses>=5e3&&(this.measureUses=0,this.measure=O()),__pikibunTextWidth(this.measure,this.str(e,t),this.str(n,r)))";
+
+/**
+ * Put before nsh.<hash>.js's code: `__pikibunTextWidth(context, font, text)`, the width of `text` in CSS `font` as the
+ * page draws it. Per font, once (again after a font loads): whether the canvas `context` measures a sample as a hidden
+ * span draws it, within half a pixel or 0.2%. Where it does, the canvas measures; where it doesn't, the span. Before the
+ * page has a body there is no span, and the canvas measures without deciding.
+ */
+export const DRAWN_WIDTH = String.raw`const __pikibunInDom=new Map,__pikibunSample="The quick brown fox jumps over the lazy dog, 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ";let __pikibunSpan=null;typeof document<"u"&&document.fonts?.addEventListener?.("loadingdone",()=>__pikibunInDom.clear());function __pikibunDomWidth(f,s){if(typeof document>"u"||!document.body)return null;if(!__pikibunSpan?.isConnected){let b=document.createElement("div");b.setAttribute("aria-hidden","true");b.style.cssText="position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none;contain:strict";__pikibunSpan=document.createElement("span");__pikibunSpan.style.cssText="position:absolute;left:0;top:0;white-space:pre;letter-spacing:normal;word-spacing:normal;text-transform:none;font-kerning:auto;font-feature-settings:normal";b.append(__pikibunSpan);document.body.append(b)}__pikibunSpan.style.font=f;__pikibunSpan.textContent=s;return __pikibunSpan.getBoundingClientRect().width}function __pikibunTextWidth(c,f,s){c.font=f;let d=__pikibunInDom.get(f);if(d===void 0){let w=__pikibunDomWidth(f,__pikibunSample);if(w==null)return c.measureText(s).width;let m=c.measureText(__pikibunSample).width;d=Math.abs(w-m)>Math.max(.5,m*.002);__pikibunInDom.set(f,d)}return d&&__pikibunDomWidth(f,s)||c.measureText(s).width}`;
 
 const hash10 = text => createHash("sha256").update(text).digest("hex").slice(0, 10);
 
@@ -79,7 +102,12 @@ export function fixWebSite(site) {
   renameSync(path.join(site, browserDir), path.join(site, newBrowserDir));
   const loaderSource = readFileSync(path.join(site, loader), "utf8");
   if (!loaderSource.includes(`./${browserDir}/`)) throw new Error(`nsh-web-fixes: ${loader} does not import ./${browserDir}/`);
-  const newLoaderSource = loaderSource.replaceAll(`./${browserDir}/`, `./${newBrowserDir}/`);
+  if (loaderSource.split(MEASURE_TEXT).length !== 2) {
+    throw new Error(`nsh-web-fixes: ${loader} has no single measure_text to patch. If the pinned Native Shell measures text as the page draws it, remove MEASURE_TEXT and its patch from scripts/nsh-web-fixes.mjs; otherwise update them.`);
+  }
+  const newLoaderSource = `${DRAWN_WIDTH}\n${loaderSource}`
+    .replace(MEASURE_TEXT, () => PATCHED_MEASURE_TEXT)
+    .replaceAll(`./${browserDir}/`, `./${newBrowserDir}/`);
   const newLoader = `nsh.${hash10(newLoaderSource)}.js`;
   const loaderCompressed = existsSync(path.join(site, `${loader}.br`));
   removeWithCompressed(path.join(site, loader));
