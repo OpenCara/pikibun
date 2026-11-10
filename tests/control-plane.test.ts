@@ -108,6 +108,27 @@ test('connector migration preserves populated legacy rows, foreign keys, and imm
   }
 });
 
+test('removing approvals keeps every approval review in the audit log, whatever its operation text, and drops their tables', t => {
+  const sqlite = new DatabaseSync(':memory:'); t.after(() => sqlite.close());
+  const removal = migrationFiles.indexOf('0063_approvals_removed.sql');
+  assert.ok(removal > 0);
+  migrate(sqlite, migrationFiles.slice(0, removal));
+  seedLegacySchema(sqlite);
+  const review = sqlite.prepare(`INSERT INTO approval_reviews (session_id,approval_id,requested_by,source,admission_id,operation_json,review_hash,created_at)
+    VALUES ('schema-session',?, 'schema-owner','explicit',NULL,?,?,'2026-01-02')`);
+  review.run('valid', '{"kind":"bash","command":"ls"}', 'r'.repeat(43));
+  review.run('broken', 'not json', 's'.repeat(43));
+  migrate(sqlite, migrationFiles.slice(removal));
+  const kept = sqlite.prepare("SELECT id, workspace_id, session_id, actor_id, detail_json FROM audit WHERE action = 'approval.requested' ORDER BY id").all();
+  assert.deepEqual(kept.map(row => [row.id, row.workspace_id, row.session_id, row.actor_id]),
+    [['approval-schema-session-broken', 'schema-workspace', 'schema-session', 'schema-owner'], ['approval-schema-session-valid', 'schema-workspace', 'schema-session', 'schema-owner']]);
+  assert.deepEqual(JSON.parse(String(kept[1]!.detail_json)), { approvalId: 'valid', source: 'explicit', operationJson: '{"kind":"bash","command":"ls"}' });
+  assert.equal(JSON.parse(String(kept[0]!.detail_json)).operationJson, 'not json');
+  for (const table of ['approval_reviews', 'broker_capabilities', 'session_auto_approved_requesters', 'workspace_approval_settings']) {
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)!.n, 0, table);
+  }
+});
+
 test('connector schema enforces credentials, shares, catalog identity, and paired immutable session routing', async t => {
   const f = await fixture(t);
   const sqlite = f.sqlite;

@@ -1,6 +1,6 @@
 import { HTTPException } from 'hono/http-exception';
 import type { EntryView, SessionView } from '../../../packages/shared/src/types.js';
-import { redactApproval, redactEntry } from '../../../packages/shared/src/redaction.js';
+import { redactEntry } from '../../../packages/shared/src/redaction.js';
 import {
   applyViewPatch, isPatchableView, isRevision, isViewPatch, reuseUnchanged, ViewRevisions, type SessionViewPatch,
 } from '../../../packages/shared/src/view-patch.js';

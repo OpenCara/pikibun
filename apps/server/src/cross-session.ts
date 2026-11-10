@@ -105,7 +105,7 @@ export async function agentSessions(c: AppContext, connectorId: string | null): 
   const message = input.message === undefined ? undefined : text(input.message, 'message', 50_000);
   if ((action === 'ask' || action === 'send') && message === undefined) fail(400, 'invalid_input', `A ${action} carries a message.`);
   if (message !== undefined && !message.trim()) fail(400, 'invalid_input', 'The message is empty.');
-  if (input.access !== undefined && !accessModes.includes(input.access as AccessMode)) fail(400, 'invalid_input', 'Access is read, approval or auto.');
+  if (input.access !== undefined && !accessModes.includes(input.access as AccessMode)) fail(400, 'invalid_input', 'Access is read or auto.');
   const access = input.access as AccessMode | undefined;
   if (input.notify !== undefined && typeof input.notify !== 'boolean') fail(400, 'invalid_input', 'Notify is true or false.');
   const notify = input.notify === true;
@@ -430,6 +430,8 @@ async function notify(env: Env, message: MessageRow): Promise<{ delivered: strin
     const { row: origin } = await requireSession(c, message.origin_session_id, 'write');
     if (busyActivities.includes(origin.activity ?? '')) return { waiting: 'session_busy' };
     if (!await audienceCovered(env, origin, target, 'in')) {
+      // The owner's setting (call_id ''), or the one call a person allowed before approvals were removed, for a message
+      // still on its way back from then.
       const granted = await env.DB.query("SELECT 1 FROM session_tool_grants WHERE session_id = ? AND tool = 'sessions:audience' AND (call_id = '' OR call_id = ?)")
         .bind(origin.id, message.origin_call_id ?? '').first();
       if (!granted) fail(403, 'audience_changed', 'The two sessions\' readers changed since the message was sent.');
