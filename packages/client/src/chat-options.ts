@@ -165,8 +165,15 @@ export function initialSelection(view: SessionView, owner: boolean, context: Acc
   };
 }
 
-export function accessUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask"): string | undefined {
-  if (mode !== "submit" || host || selection.access === "approval") return undefined;
+/**
+ * Why a message can't go with its access yet: until the session's host is known its options can't be sent. In a sandboxed
+ * session (sandboxedDefault given), a message on the chat box's default goes without them and the server applies that same
+ * default (Auto-approve where its sender may use it), so only an access the person picked waits; elsewhere a message without
+ * options asks before acting, so only another access waits.
+ */
+export function accessUnavailable(host: ConnectorInfo | undefined, selection: ChatSelection, mode: "submit" | "ask", sandboxedDefault?: boolean): string | undefined {
+  if (mode !== "submit" || host) return undefined;
+  if (sandboxedDefault === undefined ? selection.access === "approval" : sandboxedDefault) return undefined;
   return `Still checking this session's host, so "${accessLabels[selection.access].label}" can't be applied yet. Try again in a moment.`;
 }
 

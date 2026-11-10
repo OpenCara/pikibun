@@ -35,6 +35,32 @@ import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
 
+/**
+ * A person's shared message to a sandboxed session that names no access (sent before their app knew the session's host, or
+ * from an app that sends no options) runs on Auto-approve where its sender may use it there, as their chat box starts on it:
+ * the session's owner, merging without asking too where the host runs GitHub effects automatically, or a workspace owner,
+ * admin or collaborator, for their sandboxed commands. It doesn't fall back to asking before acting there. An access the
+ * message names stands, and messages the server sends itself (from schedules, other sessions and notifications) keep theirs.
+ */
+export async function withSandboxedDefault(c: AppContext, row: SessionRow, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const options = input.options;
+  if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) return input;
+  if (options && 'access' in options) return input;
+  if (!row.connector_id || Number(row.host_environment ?? 0) === 1) return input;
+  const capabilities = await hostCapabilities(c.env, row.connector_id, { active: true });
+  if (capabilities?.chatOptions !== true || capabilities.unsandboxed === true) return input;
+  const actorId = c.get('auth').userId;
+  let defaults: ChatOptions = { access: 'auto' };
+  if (actorId === row.owner_id) {
+    if (capabilities.automaticGitHub === true) defaults = { access: 'auto', autoMerge: true };
+  } else {
+    if (capabilities.memberAutoApprove !== true) return input;
+    const actor = await sessionAccess(c.env, row.id, actorId);
+    if (!actor || !hasPermission(actor.permissions, 'write') || !mayAutoApprove(actorId, row.owner_id, actor.role)) return input;
+  }
+  return { ...input, options: { ...defaults, ...(options as Record<string, unknown> | undefined) } };
+}
+
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown): Promise<ChatOptions | undefined> {
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(400, 'invalid_options', 'Invalid chat options.');
@@ -561,7 +587,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
       const { row } = await requireSession(c, identifier(c.req.param('id')), mode === 'ask' ? 'ask' : 'write');
       requireUnfrozen(row);
       const input = await jsonObject(c, connectorLimits.requestBytes + 256 * 1024);
-      return c.json(await submitMessage(c, row, mode, input), 202);
+      return c.json(await submitMessage(c, row, mode, mode === 'submit' ? await withSandboxedDefault(c, row, input) : input), 202);
     });
   }
 
