@@ -20,6 +20,7 @@ import { diffView } from '../packages/shared/src/view-patch.js';
 import type { SourceReadView, WorkspaceDocumentSource } from '../packages/shared/src/sources.js';
 import { bundledToolDefinitions, parseToolDefinitions } from '../packages/shared/src/tool-definitions.js';
 import type { WorkspaceConnection } from '../packages/shared/src/workspace-connections.js';
+import { groupTools, type ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'connectors-test-secret-not-for-deployment';
@@ -127,6 +128,13 @@ async function addMember(admin: Client, workspaceId: string, member: Client) {
   await json(await admin.request('POST', `/api/workspaces/${workspaceId}/members`, { userId: member.user.id, role: 'member' }));
 }
 
+/** These members' sessions get every Pikibun tool, as a workspace admin may choose, beyond their role's. */
+async function allTools(admin: Client, workspaceId: string, ...members: Client[]) {
+  const created = await json<ToolGroupSettings>(await admin.request('POST', `/api/workspaces/${workspaceId}/tool-groups`, { name: 'All tools', tools: groupTools }), 201);
+  const group = created.groups.find(item => item.name === 'All tools')!;
+  for (const member of members) await json(await admin.request('PUT', `/api/workspaces/${workspaceId}/members/${member.user.id}/tool-group`, { groupId: group.id }));
+}
+
 function provisionHub(f: Fixture) {
   const requests: ConnectorRelayEnvelope[] = [];
   const unexpected: string[] = [];
@@ -155,6 +163,7 @@ async function sharedHost(f: Fixture) {
   const admin = await f.client('admin'); const host = await f.client('host'); const creator = await f.githubClient();
   const team = await workspace(admin);
   await addMember(admin, team.id, host); await addMember(admin, team.id, creator);
+  await allTools(admin, team.id, host, creator);
   f.sqlite.prepare(`INSERT INTO workspace_repositories
     (id, workspace_id, repository_id, full_name, ref, private, created_at) VALUES (?,?,?,?,?,?,?)`)
     .run('shared-repository', team.id, '7', 'owner/repo', 'main', 1, new Date().toISOString());

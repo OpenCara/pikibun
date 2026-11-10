@@ -1,4 +1,4 @@
-import type { WorkspaceRole } from "./types";
+import type { WorkspaceRole } from "./types.js";
 
 /**
  * Tool groups: which of Pikibun's own session tools a session has, decided by its owner's place in the workspace. Each
@@ -71,6 +71,9 @@ export interface ToolGroup {
 
 export interface ToolGroupMember {
   userId: string;
+  displayName: string;
+  username: string | null;
+  githubLogin: string | null;
   role: WorkspaceRole;
   groupId: string | null;
 }

@@ -7,7 +7,7 @@ import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExte
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
 import type { Env, AppEnv } from './types.js';
 import {
-  auditStatement, authenticateConnector, automaticTools, managedConnector, requireMember, sessionToolSources, workspaceExtensions,
+  auditStatement, authenticateConnector, automaticTools, managedConnector, memberToolGroups, requireMember, sessionToolSources, workspaceExtensions,
 } from './authority/index.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
 
@@ -101,7 +101,8 @@ export function registerConnectorExtensions(app: Hono<AppEnv>): void {
     const extensions = await workspaceExtensions(c.env, workspaceId);
     const shown = extensions.some(item => isPikiExtensionSource(item.source))
       ? connectorWorkspaceExtensions(extensions, (await hostReport(c.env, row.id))?.report.installed, options) : extensions;
-    return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id) });
+    const toolGroups = await memberToolGroups(c.env, workspaceId);
+    return c.json({ extensions: shown, automaticTools: await automaticTools(c.env, row.id), ...(Object.keys(toolGroups).length ? { toolGroups } : {}) });
   });
 }
 

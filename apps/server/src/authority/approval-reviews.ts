@@ -6,6 +6,7 @@ import { fail, identifier, now, text, userIdentifier } from '../http.js';
 import { parseOperation } from './operations.js';
 import { hostCommandSession } from './host-access.js';
 import { everAutoApproved } from './requester-auto-approve.js';
+import { requireOwnerTool } from './tool-groups.js';
 import { memberAutoApproves, requesterAutoApproves } from '../../../../packages/shared/src/host-operations.js';
 
 type ReviewRow = {
@@ -48,9 +49,12 @@ async function sessionTools(env: Env, row: SessionRow): Promise<(operation: Oper
 }
 export async function requireOperationTool(env: Env, row: SessionRow, operation: Operation, approvalId = '', admission?: AdmissionAccess): Promise<void> {
   if (!(await sessionTools(env, row))(operation, approvalId, admission)) fail(403, 'tool_not_allowed', 'The pinned agent does not allow this operation.');
+  if (operation.kind === 'permission') await requireOwnerTool(env, row, operation.tool);
+  else if (operation.kind !== 'extension.tool') await requireOwnerTool(env, row, operation.kind === 'program' ? operation.tool : operationTools[operation.kind]);
 }
 export async function requireToolCall(env: Env, row: SessionRow, tool: ToolName,
   call: { id: string; requestedBy: string; admission: AdmissionRow; target: string }): Promise<void> {
+  await requireOwnerTool(env, row, tool);
   if ((await toolsFor(env, row)).includes(tool) || ownerAuto(row, call.admission)) return;
   const grants = await env.DB.query<{ call_id: string; approval_id: string }>(`SELECT call_id, approval_id FROM session_tool_grants
     WHERE session_id = ? AND tool = ? AND (call_id = '' OR call_id = ?)`).bind(row.id, tool, call.id).all();
