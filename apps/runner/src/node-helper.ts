@@ -1,15 +1,3 @@
-/**
- * The sandbox helper for native Windows, in JavaScript for the host's own node.exe: Windows has no Python to rely on,
- * and Python there lacks the descriptor-relative calls the Linux helper is built on. It runs inside the session's
- * process container, which the OS confines to the session's grants, so its path checks are a second line, not the
- * boundary: a link inside the worktree that points elsewhere leads only where the container may go anyway.
- *
- * It takes one JSON request line on stdin, like the Linux helper, and answers the same way: JSON on stdout, or
- * `sandbox: <reason>` on stderr with exit status 1. It reads its places from the environment: SANDBOX_WORKTREE, HOME,
- * SANDBOX_GITDIR, SANDBOX_OWNER_CONFIG, SANDBOX_GIT, SANDBOX_BASH, and SANDBOX_EGRESS_PROXY when the step has network.
- *
- * Not yet here: clone backups and restores (backups and moves of clone sessions), which the workspace refuses.
- */
 import { SEARCH_CORE } from "./search.js";
 import { FILE_OPERATIONS_CORE, FILE_OPERATIONS_FS, fileOperationLimits } from "./file-operations.js";
 export const NODE_HELPER = String.raw`
@@ -24,12 +12,7 @@ const GITDIR = process.env.SANDBOX_GITDIR;
 const OWNER_CONFIG = process.env.SANDBOX_OWNER_CONFIG;
 const GIT_BINARY = process.env.SANDBOX_GIT || "git";
 const BASH = process.env.SANDBOX_BASH || "bash";
-// busybox-w32 (as in Git for Windows' MinGit-busybox) starts in Windows' process container, where MSYS2's bash can't. Its
-// shell is ash with bash's common extensions, run as its "bash" applet, and takes none of bash's start-up options.
 const SHELL_ARGS = /^busybox(64)?(\.exe)?$/i.test(basename(BASH)) ? ["bash", "-c"] : ["--noprofile", "--norc", "-c"];
-// MXC's proxy-only egress overwrites the proxy variables with a URL that lacks the session's token, so the proxy would
-// refuse every request (407), and empties NO_PROXY, so even loopback servers the step starts are sent to the proxy. The
-// backend passes the session's own values beside them; everything the helper starts gets them.
 if (process.env.SANDBOX_EGRESS_PROXY) {
   for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) process.env[name] = process.env.SANDBOX_EGRESS_PROXY;
   if (process.env.SANDBOX_EGRESS_NO_PROXY) for (const name of ["NO_PROXY", "no_proxy"]) process.env[name] = process.env.SANDBOX_EGRESS_NO_PROXY;
@@ -39,7 +22,6 @@ delete process.env.SANDBOX_EGRESS_NO_PROXY;
 const MAX_FILE = 1024 * 1024;
 const MAX_IMAGE = 16 * 1024 * 1024;
 const MAX_SNAPSHOT = 32 * 1024 * 1024;
-// Mirrors fileUploadLimits.maxBytes in packages/shared/src/file-uploads.ts; an import's request carries the file, base64.
 const MAX_IMPORT = 50 * 1024 * 1024;
 const MAX_REQUEST = Math.ceil(MAX_IMPORT / 3) * 4 + 64 * 1024;
 const MAX_ENTRIES = 10000;
@@ -47,7 +29,6 @@ const BROWSE_ENTRIES = 1000;
 const BROWSE_TEXT = 256 * 1024;
 const BROWSE_IMAGE = 2 * 1024 * 1024;
 const OID = /^[0-9a-f]{40}$/;
-// Mirrors IMAGE_SIGNATURES in images.ts, which re-checks every image returned.
 const IMAGE_SIGNATURES = [
   ["image/png", [[0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]]]],
   ["image/jpeg", [[0, [0xff, 0xd8, 0xff]]]],
@@ -76,8 +57,6 @@ function imageType(data) {
   return undefined;
 }
 
-// Names Windows treats specially: devices whatever their extension, alternate data streams, and trailing dots or spaces
-// it silently drops, so that two spellings would name one file.
 const RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
 function windowsName(part) {
   return process.platform !== "win32" || (!RESERVED.test(part) && !part.includes(":") && !/[ .]$/.test(part) && !/[<>"|?*]/.test(part));
@@ -114,9 +93,6 @@ function resolveReal(work, lexical) {
   return current;
 }
 
-// Node's realpath lstats every folder from the drive root, and its native form asks Windows for the volume's drive letter;
-// Windows' process container allows neither (EPERM). There, links are resolved from the worktree down: the worktree
-// itself is the runner's, and a link may lead only to somewhere else inside it.
 const denied = error => !!error && (error.code === "EPERM" || error.code === "EACCES");
 
 function worktreeRoot() {
@@ -140,7 +116,6 @@ function resolveBelow(work, lexical) {
     try { info = lstatSync(next); } catch (error) { if (error.code === "ENOENT") return join(next, ...parts); throw error; }
     if (!info.isSymbolicLink()) { current = next; continue; }
     if (++links > 32) refuse("too many links");
-    // Symbolic links and junctions both; a junction's target may carry the \\?\ prefix.
     const target = readlinkSync(next).replace(/^\\\\\?\\/, "");
     if (isAbsolute(target)) {
       const inside = relative(work, target);
@@ -242,7 +217,6 @@ function browseFile(path) {
     const decoder = new TextDecoder("utf-8", { fatal: true });
     try { return { type: "file", size, truncated, text: decoder.decode(data) }; }
     catch {
-      // A preview cut inside a multi-byte character ends before it.
       if (!truncated) return { type: "file", size, truncated, binary: true };
       for (let cut = 1; cut <= 3; cut++) {
         try { return { type: "file", size, truncated, text: new TextDecoder("utf-8", { fatal: true }).decode(data.subarray(0, data.length - cut)) }; } catch {}
@@ -270,14 +244,12 @@ function writeAt(parts, content) {
   } finally { if (created) { try { unlinkSync(temporary); } catch {} } }
 }
 
-// Mirrors attachmentCandidate in packages/shared/src/file-uploads.ts.
 function importCandidate(name, index) {
   if (index <= 1) return name;
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(0, dot) + " (" + index + ")" + name.slice(dot) : name + " (" + index + ")";
 }
 
-/** A file attached to a message: created under a name not taken yet in its directory, never replacing a file. */
 function importAt(request) {
   const name = request.name;
   if (typeof name !== "string" || !name || /[\x00-\x1f\x7f\/\\]/.test(name) || name === "." || name === ".." || name.toLowerCase() === ".git"
@@ -286,7 +258,6 @@ function importAt(request) {
   const data = Buffer.from(request.data, "base64");
   if (data.length > MAX_IMPORT) refuse("file exceeds size limit");
   const parts = partsFor(request.directory, true);
-  // The directory itself, never a symlink to another one in the worktree: the file goes only where it was asked to.
   if (!parts.length || parts.join("/") !== request.directory) refuse("path component is not a real directory");
   const parent = directoryAt(parts, true);
   for (let index = 1; index < 1000; index++) {
@@ -359,8 +330,6 @@ function cloneDirectory(request) {
   return directory;
 }
 
-// A clone's steps read only its objects and config. Git is given its Git directory rather than told to change into the
-// clone: Windows' process container lets a step change only into folders it may write, and these steps are read-only.
 const cloneGitDir = directory => ["-c", "safe.directory=" + directory, "--git-dir=" + join(directory, ".git")];
 
 function cloneGit(directory, args, input = "") {
@@ -405,7 +374,6 @@ async function clonePushPack(request) {
   const directory = cloneDirectory(request);
   const { commit, exclude } = request;
   if (typeof commit !== "string" || !OID.test(commit) || !Array.isArray(exclude) || exclude.length > 1024 || !exclude.every(oid => typeof oid === "string" && OID.test(oid))) refuse("invalid push request");
-  // The pack streams straight to the runner on stdout.
   const child = spawn(GIT_BINARY, [...GIT_HARDENED, "--literal-pathspecs", ...cloneGitDir(directory),
     "-c", "core.bigFileThreshold=64m", "pack-objects", "--stdout", "--revs", "--delta-base-offset", "-q"], {
     env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, stdio: ["pipe", "inherit", "ignore"], windowsHide: true,
@@ -420,7 +388,6 @@ ${SEARCH_CORE}
 ${FILE_OPERATIONS_CORE}
 ${FILE_OPERATIONS_FS}
 
-// An entry itself (file-operations.ts): its directory resolved as any written path is, its last component never.
 function entryFor(value) {
   if (typeof value !== "string" || !value || value.length > 1024) refuse("invalid relative path");
   if (value.startsWith("/") || value.includes("\\") || /[\x00-\x1f\x7f]/.test(value)) refuse("invalid relative path");
@@ -532,7 +499,6 @@ main().catch(error => {
 });
 `;
 
-/** The request kinds the Node helper runs. */
 export const NODE_HELPER_KINDS: ReadonlySet<string> = new Set(["initialize", "read", "read-content", "write", "import", "list", "browse", "search", "snapshot", "bash",
   "move", "copy", "delete",
   "clone-head", "clone-push-prepare", "clone-push-pack"]);

@@ -76,11 +76,11 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
@@ -153,14 +153,14 @@ jobs:
       - name: Upload the installer to sign
         id: unsigned
         if: steps.signing.outputs.configured == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-installer-unsigned
           path: ${{ env.INSTALLER }}
           if-no-files-found: error
       - name: Sign the installer with SignPath
         if: steps.signing.outputs.configured == 'true'
-        uses: signpath/github-action-submit-signing-request@v3
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -184,7 +184,7 @@ jobs:
           Write-Output "$($signature.Status): $($signature.SignerCertificate.Subject)"
           if ($signature.Status -ne 'Valid') { Write-Output "::error::The installer's signature is not valid: $($signature.StatusMessage)"; exit 1 }
           if (-not $signature.TimeStamperCertificate) { Write-Output "::error::The installer's signature has no timestamp."; exit 1 }
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: app-windows
           path: ${{ runner.temp }}/release/*
@@ -197,11 +197,11 @@ jobs:
     timeout-minutes: 45
     environment: ${{ github.event_name == 'push' && 'release' || '' }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
@@ -334,7 +334,7 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$RUNNER_TEMP/notarize.zip"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: app-macos
           path: ${{ runner.temp }}/release/*
@@ -346,11 +346,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
@@ -366,7 +366,7 @@ jobs:
           node scripts/nsh.mjs package App.tsx --target linux --app-version "$APP_VERSION" --build "$BUILD" --out "$RUNNER_TEMP/app"
           mkdir -p "$RUNNER_TEMP/release"
           mv "$RUNNER_TEMP/app/Pikibun.tar.gz" "$RUNNER_TEMP/release/Pikibun-$VERSION-linux-x86_64.tar.gz"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: app-linux
           path: ${{ runner.temp }}/release/*
@@ -379,11 +379,11 @@ jobs:
     timeout-minutes: 20
     environment: ${{ github.event_name == 'push' && 'release' || '' }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
@@ -455,7 +455,7 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/release"
           mv "$apk" "$RUNNER_TEMP/release/Pikibun-$VERSION-android.apk"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: app-android
           path: ${{ runner.temp }}/release/*
@@ -499,11 +499,11 @@ jobs:
             echo "::error::iOS signing is partly configured; missing: ${missing[*]}."
             exit 1
           fi
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .node-version
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .cache/nsh
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
@@ -540,8 +540,9 @@ jobs:
           xcodebuild -version
           echo "version=$(xcodebuild -version | awk 'NR==1{print $2}')" >> "$GITHUB_OUTPUT"
           echo "build=$(xcodebuild -version | awk 'NR==2{print $3}')" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: stable
           targets: aarch64-apple-ios
       - name: Native Shell's source
         run: |
@@ -555,7 +556,7 @@ jobs:
           fi
           echo "NSH_VERSION=$version" >> "$GITHUB_ENV"
       # The build depends on the Xcode it links with, so a new one builds afresh.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -672,7 +673,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: app-*
           merge-multiple: true

@@ -4,9 +4,6 @@ import { createResource, type Resource } from "./lib/resource";
 import type { Tone } from "./theme";
 import { Badge, Banner, CollapsibleRow, Note } from "./ui";
 
-// Hosts as the web app shows them (hosts.tsx): their state, its tone, and what they can do.
-
-/** Polls a connector listing every 10 seconds while the app is in the foreground. */
 export function createConnections(path: () => string | null): Resource<{ connectors: ConnectorInfo[] }> {
   return createResource<{ connectors: ConnectorInfo[] }>(path, 10_000);
 }
@@ -26,7 +23,6 @@ export function ConnectionStatus(props: { connector: ConnectorInfo }) {
   return <Badge tone={hostTone(props.connector)} dot={hostState(props.connector) === "Online"}>{hostState(props.connector)}</Badge>;
 }
 
-/** What a host can do, and an alert when it runs without the sandbox. */
 export function HostCapabilities(props: { connector: ConnectorInfo }) {
   return (
     <View style={{ gap: 8 }}>
@@ -38,7 +34,6 @@ export function HostCapabilities(props: { connector: ConnectorInfo }) {
   );
 }
 
-/** The alert for a host that runs agent work without the sandbox; nothing otherwise. */
 export function UnsandboxedHost(props: { connector: ConnectorInfo }) {
   return (
     <If when={props.connector.capabilities.unsandboxed}>
@@ -47,7 +42,6 @@ export function UnsandboxedHost(props: { connector: ConnectorInfo }) {
   );
 }
 
-/** What a host can do, note by note: its platform, sandbox, credentials, cache, limits and moves. */
 export function HostDetails(props: { connector: ConnectorInfo }) {
   const capabilities = () => props.connector.capabilities;
   const config = () => props.connector.config;

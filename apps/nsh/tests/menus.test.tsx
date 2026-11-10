@@ -1,9 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { ORIGIN, server, sessionRecord, signedIn, workspace } from "./fixtures";
 
-// The right-click menus of the session list's rows (the sidebar's and the phone's list), as the web app's sidebar has
-// them: a workspace's options, and what can be done to a session.
-
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
   return request?.body ? JSON.parse(request.body) : undefined;
@@ -20,14 +17,11 @@ describe("a session's right-click menu", () => {
     await app.rightClick("id:session-row-s1");
     await app.waitFor("id:menu-copy-id");
     for (const item of ["menu-copy-link", "menu-rename", "menu-visibility", "menu-archive"]) expect(app.shows(`id:${item}`)).toBe(true);
-    // A native app is one window: no new tab to open it in.
     expect(app.shows("id:menu-open-tab")).toBe(false);
-    // The fixture's session is workspace-visible.
     expect(app.shows("text:Make private")).toBe(true);
     await app.press("id:menu-copy-id");
     expect(app.clipboard()).toBe("s1");
     await app.waitFor("text:Session ID copied");
-    // A right click opens the menu, not the session.
     expect(app.shows("id:session-actions")).toBe(false);
 
     await app.rightClick("id:session-row-s1");

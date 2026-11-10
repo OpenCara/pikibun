@@ -6,12 +6,6 @@ import { sessionAccess } from './access.js';
 import { mayRequestAction } from './host-access.js';
 import { requireConnectorSession } from './hosts.js';
 
-/*
- * Who may ask a session's host for what (RunnerAction): checked before the server relays a request (requireRunnerAccess),
- * and again for the ticket that goes with it when the relay admits it to a connector (authorizeConnectorTicket). The
- * relay (runner.ts, connector-transport.ts, connector-hub.ts) carries requests; these decide them.
- */
-
 const actionPermissions: Record<RunnerAction, Permission> = {
   create: 'write', view: 'read', events: 'read', submit: 'write', ask: 'ask',
   operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'write', stop: 'write', files: 'write',
@@ -23,13 +17,8 @@ export const connectorPermissions: Record<RunnerAction, Permission> = {
   operations: 'write', approve: 'approve', backup: 'manage', restart: 'manage', restore: 'manage', stop: 'write', files: 'write',
   revert: 'write', fork: 'write', pack: 'manage', unpack: 'manage', withdraw: 'ask', upload: 'write', tunnel: 'write', image: 'write',
 };
-/** What only the session's owner asks of its host. */
 export const ownerActions: readonly RunnerAction[] = ['create', 'restart', 'restore', 'backup', 'fork', 'pack', 'unpack'];
 
-/**
- * An archived session admits only reads, and packing and unpacking its files, which it admits only while archived. A
- * session whose files are packed admits nothing else even if something unarchived it without unpacking them.
- */
 export function requireArchivedAction(row: SessionRow, action: RunnerAction): void {
   if (action === 'view' || action === 'events') return;
   if (action === 'pack' || action === 'unpack') {
@@ -40,22 +29,17 @@ export function requireArchivedAction(row: SessionRow, action: RunnerAction): vo
   if (row.packed_at) fail(409, 'session_packed', 'This session\'s files are packed. Archive and unarchive it to unpack them.');
 }
 
-/** What every runner request checks first: the actor may still do `action` on the session, and no restore or move is under way. */
 export async function requireRunnerAccess(c: AppContext, actorId: string, row: SessionRow, action: RunnerAction): Promise<SessionRow> {
   const access = await sessionAccess(c.env, row.id, actorId);
   if (!access || access.row.owner_id !== row.owner_id || !await mayRequestAction(c.env, access, actorId, action, actionPermissions[action])) {
     fail(403, 'permission_revoked', 'Session access is no longer authorized.');
   }
   requireArchivedAction(access.row, action);
-  // A session that pinned its repositories stays readable only.
-  // A read-only session still opens (create, restart) to show its history and files, and can be stopped; nothing new runs in it.
-  // Its files were never packed (it can't be), but unpacking stays possible whatever happens.
   if (!['view', 'events', 'create', 'restart', 'stop', 'files', 'image', 'unpack'].includes(action)) requireUnfrozen(access.row);
   if (ownerActions.includes(action) && actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can perform this operation.');
   if (action !== 'restore' && await c.env.DB.query("SELECT 1 FROM restore_jobs WHERE target_session_id = ? AND status <> 'completed'").bind(row.id).first()) {
     fail(409, 'restore_pending', 'Session restoration is not complete.');
   }
-  // The move itself restores into the successor; every other request waits for the move to finish or be cancelled.
   if (action !== 'view' && action !== 'events') await requireNoMigration(c.env, row.id, action === 'restore');
   return access.row;
 }

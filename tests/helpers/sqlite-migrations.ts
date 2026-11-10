@@ -1,11 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
-/**
- * Applies SQLite migration files to `sqlite` one by one, as the server's runner does (apps/server/src/db/sqlite.ts): each
- * in its own transaction and, for a file whose first line is `-- pikibun: foreign-keys-off`, with foreign keys off around
- * it and every reference checked before it commits.
- */
 export function applySqliteMigrations(sqlite: DatabaseSync, directory: URL, files: readonly string[]): void {
   for (const file of files) {
     const sql = readFileSync(new URL(file, directory), "utf8");

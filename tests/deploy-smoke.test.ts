@@ -12,7 +12,6 @@ async function fixture(t: TestContext, options: { missingAsset?: boolean; versio
       res.setHeader("Content-Security-Policy", "script-src 'self' 'wasm-unsafe-eval';");
       res.end(options.page ?? '<base href="/"><div id="app"></div><script>const app={wasm:"nsh.0123456789.wasm",code:"app.0123456789.js"}</script>');
     } else if (options.missingAsset) {
-      // The real static handler falls back to HTML for missing files. A 200 alone must not pass the check.
       res.setHeader("Content-Type", "text/html");
       res.end('<div id="app"></div>');
     } else {

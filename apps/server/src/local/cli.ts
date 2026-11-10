@@ -72,7 +72,6 @@ async function ask(question: string): Promise<string> {
   try { return (await prompt.question(question).catch(() => '')).trim(); } finally { prompt.close(); }
 }
 
-/** The GitHub OAuth app to save: from the options (secret from the environment or a hidden prompt), else asked for. */
 async function githubApp(clientId: string | undefined, saved: boolean): Promise<GitHubOAuthApp | undefined> {
   const interactive = process.stdin.isTTY && process.stderr.isTTY;
   if (!clientId) {
@@ -89,7 +88,6 @@ async function githubApp(clientId: string | undefined, saved: boolean): Promise<
   return app;
 }
 
-/** Everything `pikibun connect` checks before it starts, for this computer as the local server's host. */
 async function hostOptions(values: Record<string, string | boolean | string[] | undefined>): Promise<LocalHostOptions> {
   const unsandboxed = values['unsafe-no-sandbox'] === true;
   assertConnectorPlatform();
@@ -114,7 +112,6 @@ async function hostOptions(values: Record<string, string | boolean | string[] | 
   };
 }
 
-/** The sharing settings: the saved ones with the options' changes, or why they can't serve. */
 export function sharedSettings(saved: SharedConfig | undefined, values: {
   'public-origin'?: string; admin?: string[]; listen?: string; 'trust-proxy'?: boolean; signup?: string; 'password-auth'?: boolean;
 }): Omit<SharedConfig, 'github'> {
@@ -155,14 +152,11 @@ export async function serveMain(args = process.argv.slice(2)): Promise<void> {
   try {
     const existing = await peekLocalState(stateDir);
     const shared = share ? sharedSettings(existing?.shared, values) : undefined;
-    // Shared, the GitHub OAuth app is optional with passwords, and is the public origin's own.
     const github = shared
       ? (values['github-client-id'] ? await githubApp(values['github-client-id'], false) : undefined)
       : await githubApp(values['github-client-id'], existing?.github !== undefined);
     if (values['create-admin'] && !values['create-admin'].trim()) throw new ConnectorSetupError('--create-admin needs a username.');
-    // Checked (and consent asked) before anything starts, as `pikibun connect` does.
     const hostSetup = values['no-host'] ? undefined : await hostOptions(values);
-    // Held while the server runs: nothing else creates, changes or serves this state meanwhile.
     const { state, release } = await openLocalState(stateDir, {
       ...(shared ? { shared: { ...shared, ...(github ? { github } : {}) } } : github ? { github } : {}), ...(port ? { port } : {}),
     });

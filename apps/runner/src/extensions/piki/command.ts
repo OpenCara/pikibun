@@ -8,38 +8,18 @@ import type { PikiExtensionInfo } from "../../../../../packages/shared/src/piki-
 import { killTree, windows, windowsSystemEnvironment } from "../../platform.js";
 import { boundOutput, fitsModel, SAVED_OUTPUT_BYTES } from "../../tool-output.js";
 
-/*
- * A command-line tool as a Pi extension (docs/design/piki-extensions.md): one tool that runs the command with the
- * arguments the model gives, without a shell, as the session owner. It runs in the session's sandbox, where the egress
- * proxy adds the session owner's access to the forge's API (api-access.ts): reads always, writes only in a call a person
- * approved, on the session owner's own host. Only where the session itself runs on its host, or in the host owner's own
- * sessions where the host's owner turned it on (PIKIBUN_PIKI_HOST_SIGN_IN), does it run on the host with the host's own
- * sign-in to the command, as it did before. Arguments that would show the command's credentials never run. With the
- * workspace's `read-only` setting, only commands that read run: in the sandbox, with the worktree read-only; on the host,
- * outside the worktree, so that what a session wrote there (a repository's Git configuration) can't make it run code.
- */
-
-/** What one command-line tool needs. */
 export interface CliSpec {
   info: PikiExtensionInfo;
-  /** The executable; on Windows `windowsCommand` (a `.cmd` shim runs through cmd.exe, with plain arguments only). */
   command: string;
   windowsCommand?: { file: string; shim: boolean };
-  /** The tool's description, for the model. */
   description: string;
-  /** Environment variables of the connector it gets on the host, besides the common ones: its own sign-in and configuration. */
   passEnv: (name: string) => boolean;
-  /** The variables that hold its API token in the sandbox: the proxy's placeholder, or an approved call's write lease. */
   tokenEnv: readonly string[];
-  /** Variables it always gets: no prompts, colors, pagers or update checks. */
   setEnv: Record<string, string>;
-  /** Why `args` never run (they would show its credentials), if so. */
   refused(args: readonly string[]): string | undefined;
-  /** Why `args` may change something, if they may: refused with the read-only setting. */
   writes(args: readonly string[]): string | undefined;
 }
 
-/** The arguments' leading words, before the first option: the command path, such as `pr view`. */
 export function commandWords(args: readonly string[]): string[] {
   const words: string[] = [];
   for (const arg of args) {
@@ -49,23 +29,14 @@ export function commandWords(args: readonly string[]): string[] {
   return words;
 }
 
-/**
- * Every argument that isn't an option, wherever it is: the command's words, wherever options sit between them (gh, glab
- * and az all take `auth --hostname x token`), and option values too. For refusals, which would rather refuse too much.
- */
 export function positionals(args: readonly string[]): string[] {
   return args.filter(arg => !arg.startsWith("-"));
 }
 
-/** Whether `args` hold the short option `-letter`, alone, in a cluster (`-at`) or with its value joined (`-tx`). */
 export function hasShortOption(args: readonly string[], letter: string): boolean {
   return args.some(arg => /^-[^-]/.test(arg) && arg.slice(1).includes(letter));
 }
 
-/**
- * The values `args` give an option, by any of its `names` (`-X`, `--method`): `--method GET`, `--method=GET` and
- * `-XGET`. Each value is the argument after the name unless it is joined to it.
- */
 export function optionValues(args: readonly string[], names: readonly string[]): string[] {
   const values: string[] = [];
   for (let index = 0; index < args.length; index++) {
@@ -86,11 +57,6 @@ export const hasOption = (args: readonly string[], names: readonly string[]) =>
 const FIELDS = ["-f", "-F", "--field", "--raw-field"];
 const TYPED_FIELDS = ["-F", "--field"];
 
-/**
- * Why an `api` call of gh or glab (`args` from `api` on) may change something: any method but GET, a body, a field read
- * from a host file, or a GraphQL mutation. Short options must take their values apart (`-X GET`, not `-XGET` or `-iX`),
- * so that none hides in a cluster.
- */
 export function apiWrites(args: readonly string[]): string | undefined {
   const rest = args.slice(1);
   if (rest.some(arg => /^-[^-]./.test(arg))) return "api's short options take their values apart here (-X GET, -f key=value)";
@@ -102,7 +68,6 @@ export function apiWrites(args: readonly string[]): string | undefined {
   const methods = optionValues(rest, ["-X", "--method"]).map(method => method.toUpperCase());
   if (endpoint === "graphql") {
     if (methods.some(method => method !== "POST")) return "api graphql only takes POST";
-    // The command keeps the last of repeated fields: exactly one query, and that one checked.
     const queries = fields.filter(field => field.startsWith("query="));
     if (queries.length !== 1) return "api graphql takes exactly one query field (-f query=...)";
     const query = queries[0]!;
@@ -113,7 +78,6 @@ export function apiWrites(args: readonly string[]): string | undefined {
   return method === "GET" ? undefined : `api sends a ${method} request`;
 }
 
-/** The connector's variables every command gets: where it finds its tools and files, the network's proxies and CAs. */
 const COMMON_ENV = new Set(["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TZ", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
   "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
   "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"]);
@@ -127,16 +91,10 @@ export function cliEnvironment(spec: Pick<CliSpec, "passEnv" | "setEnv">, source
     TERM: "dumb", NO_COLOR: "1", CLICOLOR: "0", PAGER: "cat", ...spec.setEnv };
 }
 
-/**
- * What a run on the host keeps of its output: its start and end, which holds a failure's reason, as much as is saved of a
- * long output (SAVED_OUTPUT_BYTES). What the call returns is bounded again, to what the model is given (boundOutput).
- */
 const HEAD_BYTES = 256 * 1024;
-/** The rest of what is saved, with room for the line between them, so a saved output is never cut again. */
 const TAIL_BYTES = SAVED_OUTPUT_BYTES - HEAD_BYTES - 256;
 const DEFAULT_TIMEOUT_SECONDS = 300;
 
-/** A run's output, its start and end kept where it is longer than the model should read. */
 class Output {
   #head: Buffer[] = [];
   #headSize = 0;
@@ -167,12 +125,10 @@ class Output {
   }
 }
 
-/** Quotes one argument for cmd.exe running a `.cmd` shim; arguments it would read as its own syntax are refused before. */
 const CMD_SPECIAL = /["%!^&|<>()\r\n]/;
 
 export interface CliRun { exitCode: number | null; signal: NodeJS.Signals | null; output: string; failure?: string }
 
-/** Runs the command with `args` in `cwd`, its stdout and stderr together, until it exits, `signal` aborts or it times out. */
 export function runCli(spec: Pick<CliSpec, "command" | "windowsCommand" | "passEnv" | "setEnv">, args: readonly string[], options: {
   cwd: string; signal: AbortSignal; timeoutSeconds: number; env?: Record<string, string>;
 }): Promise<CliRun> {
@@ -219,7 +175,6 @@ export class MissingCommandError extends Error {
   constructor(readonly command: string) { super(`${command} isn't installed on this host, or isn't on its PATH`); }
 }
 
-/** `directory` within the session's worktree `root`, as a real path; anything outside it, through links too, is refused. */
 async function worktreeDirectory(root: string, directory: string): Promise<string> {
   if (directory.includes("\0") || isAbsolute(directory)) throw new Error("directory is a path within the session's worktree, such as app");
   const base = await realpath(root);
@@ -234,50 +189,26 @@ async function worktreeDirectory(root: string, directory: string): Promise<strin
 
 const READ_ONLY = "read-only";
 
-/** One run of a command in the session's sandbox (PikiSession.sandbox). */
 export interface PikiSandboxRun {
-  /** The tool call it is for: only a call the session admitted runs, and only one a person approved may write. */
   callId: string;
   command: string;
   args: readonly string[];
-  /** A directory in the worktree, relative to it; the worktree by default. */
   directory?: string;
-  /** Variables it gets besides the sandbox's own: no prompts, colors, pagers or update checks. */
   env: Record<string, string>;
-  /** The variables that hold the API placeholder, which an approved call's write lease replaces. */
   tokenEnv: readonly string[];
-  /** The workspace's read-only setting: the worktree is mounted read-only, and the call never writes through the API. */
   readOnly: boolean;
   signal: AbortSignal;
   timeoutSeconds: number;
 }
 
-/**
- * Where a session runs its Pikibun extensions' commands: `sandbox`, in its sandbox as the session owner, where it has
- * one with an egress proxy; `hostSignIn`, on the host with the host's own sign-in, only where the session runs on its
- * host or is the host owner's own and its owner allowed that. Neither: the command can't run in this session.
- */
 export interface PikiSession {
   sandbox?: (run: PikiSandboxRun) => Promise<CliRun>;
   hostSignIn: boolean;
-  /**
-   * Saves the whole of call `callId`'s output, too long for the model, in the session's worktree, and answers its path
-   * there; without it, a long output's excerpt says it wasn't saved.
-   */
   saveOutput?: (callId: string, tool: string, output: string) => Promise<string>;
 }
 
-/** What a session that offers neither gets: the tool, which says why it can't run. */
 export const noPikiSession: PikiSession = Object.freeze({ hostSignIn: false });
 
-/**
- * The shell command that runs `command` with `args` and `env` in the sandbox, in `directory` of the worktree: every word
- * quoted, so nothing in them is the shell's; stdin closed, and its errors with its output. The command is looked for in
- * /usr/local/bin too, where its own installers put gh and glab, after the sandbox's own PATH: so the sandbox's git shim
- * (its first entry, where the host keeps a repository cache) and /usr/bin still come first, for the command and the Git
- * it runs.
- * The directory goes to cd as `./<directory>`, so no name of it (`-`) is one of cd's own.
- */
 export function sandboxShellCommand(command: string, args: readonly string[], env: Record<string, string>, directory?: string): string {
   const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
   const assignments = Object.entries(env).map(([name, value]) => {
@@ -288,7 +219,6 @@ export function sandboxShellCommand(command: string, args: readonly string[], en
     + `exec env ${[...assignments, quote(command), ...args.map(quote)].join(" ")} </dev/null 2>&1`;
 }
 
-/** `directory` as the sandbox takes it: a relative path within the worktree, without `..`. */
 export function sandboxDirectory(directory: string): string {
   const parts = directory.replaceAll("\\", "/").split("/").filter(part => part && part !== ".");
   if (directory.includes("\0") || isAbsolute(directory) || /^[A-Za-z]:/.test(directory) || parts.includes("..")) {
@@ -297,7 +227,6 @@ export function sandboxDirectory(directory: string): string {
   return parts.join("/") || ".";
 }
 
-/** The Pi extension for `spec`: its tool, and its `read-only` setting, as `session` runs it. */
 export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSession): ExtensionFactory {
   return (pi: ExtensionAPI) => {
     pi.registerFlag(READ_ONLY, { type: "boolean", default: false,
@@ -326,7 +255,6 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
         const tool = spec.info.tool ?? spec.command;
         const outcome = async (run: CliRun) => {
           const status = run.failure ?? (run.exitCode === 0 ? undefined : run.signal ? `It ended with ${run.signal}` : `It exited with ${run.exitCode}`);
-          // Its start and end where it is longer than the model is given, and the whole of it saved where the session can.
           const text = await boundOutput(run.output.trim() || "(no output)", {
             ...(session.saveOutput ? { save: (whole: string) => session.saveOutput!(toolCallId, tool, whole) } : {}),
             ...(status ? { fits: (shown: string) => fitsModel(`${status}.\n${shown}`) } : {}),
@@ -341,7 +269,6 @@ export function commandExtension(spec: CliSpec, session: PikiSession = noPikiSes
           }
           const run = await session.sandbox({ callId: toolCallId, command: spec.command, args, ...(params.directory !== undefined ? { directory: sandboxDirectory(params.directory) } : {}),
             env: spec.setEnv, tokenEnv: spec.tokenEnv, readOnly, signal: signal ?? new AbortController().signal, timeoutSeconds });
-          // The shell's own answer when the command isn't there: the sandbox sees the host's /usr only.
           if (run.exitCode === 127 && new RegExp(`${spec.command}: (?:command )?not found|No such file`).test(run.output)) {
             throw new Error(`${spec.command} isn't installed where the session's sandbox finds it (the host's /usr/bin or /usr/local/bin). The host's owner installs it (${spec.info.install}).`);
           }

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-/** Check the actual client, its startup assets and its API, not just a healthy backend on the wrong host. */
 export async function checkDeployment(origin, expectedVersion) {
   const base = new URL(origin);
   assert.ok(['http:', 'https:'].includes(base.protocol) && base.origin === origin.replace(/\/$/, ''), 'Deployment URLs must be origins');

@@ -1,9 +1,3 @@
-# The sandbox's helper (see apps/runner/src/sandbox.ts): every untrusted filesystem access of the Linux sandbox and the
-# macOS (Seatbelt) backend happens here, after entering the namespace. realpath is only a policy check: actual opens
-# walk pinned directory descriptors with O_NOFOLLOW, so swapping a checked parent for a symlink cannot win a race.
-#
-# It runs as `python3 -I -c <this file>`, embedded in the connector through sandbox-python.generated.ts
-# (`pnpm python:embed` writes it; tests/sandbox-python.test.ts checks it is current).
 import base64
 import errno
 import json
@@ -19,10 +13,8 @@ import sys
 import threading
 import time
 
-# Where the host's repository mirrors are mounted: sandbox.ts MIRROR_ROOT (tests/sandbox-python.test.ts checks it).
 MIRROR_ROOT = '/repository-mirrors'
 
-# Linux lists a process's descriptors in /proc; macOS (the Seatbelt backend) in /dev/fd.
 for fd_name in os.listdir('/proc/self/fd' if os.path.isdir('/proc/self/fd') else '/dev/fd'):
     fd = int(fd_name)
     if fd > 2:
@@ -32,21 +24,16 @@ for fd_name in os.listdir('/proc/self/fd' if os.path.isdir('/proc/self/fd') else
             pass
 os.umask(0o077)
 PUSH_KINDS = ('clone-push-prepare', 'clone-push-pack')
-# Checkouts from the host repository cache write whole repositories, like pushes read them.
 LONG_KINDS = PUSH_KINDS + ('clone-backup', 'clone-restore')
 
 
 def bounded(which, value):
-    # An unprivileged process can't raise a hard limit: never ask for more than the runner itself has.
     hard = resource.getrlimit(which)[1]
     value = value if hard == resource.RLIM_INFINITY else min(value, hard)
     resource.setrlimit(which, (value, value))
 
 
 def limits(request):
-    # These remain defense in depth for fixed helpers/test fixtures, NOT session quotas.
-    # Push rewrites and packs and cache checkouts handle whole repositories, so only they get larger bounds. A shell
-    # command gets the ones the runner chose for the host's command time limit (commandLimits in host-config.ts).
     kind = request['kind']
     push = kind in LONG_KINDS
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -60,16 +47,11 @@ def limits(request):
     bounded(resource.RLIMIT_CPU, cpu)
     bounded(resource.RLIMIT_FSIZE, size)
     bounded(resource.RLIMIT_NOFILE, files)
-    # Shell commands inherit these limits, so they get no address-space cap: Go and Node reserve far
-    # more address space than they use, and gh and node abort at start-up under 512 MiB. Their memory
-    # bound is the session cgroup's memory.max, which the resource supervisor applies and reads back
-    # before bash starts; Sandbox.execute refuses bash without it unless the host's owner waived limits.
     if kind != 'bash':
         memory = (4096 if push else 512) * 1024 * 1024
         try:
             resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
         except (ValueError, OSError):
-            # macOS doesn't let a process lower its address-space limit; Linux always does.
             if sys.platform != 'darwin':
                 raise
 
@@ -78,7 +60,6 @@ HOME = os.environ['HOME']
 WORK = os.environ['SANDBOX_WORKTREE']
 MAX_FILE = 1024 * 1024
 MAX_IMAGE = 16 * 1024 * 1024
-# Mirrors MAX_IMAGE_BYTES and IMAGE_SIGNATURES in images.ts, which re-checks the signature of every image returned.
 IMAGE_SIGNATURES = (
     ((0, b'\x89PNG\r\n\x1a\n'),),
     ((0, b'\xff\xd8\xff'),),
@@ -87,7 +68,6 @@ IMAGE_SIGNATURES = (
     ((0, b'RIFF'), (8, b'WEBP')),
 )
 MAX_SNAPSHOT = 32 * 1024 * 1024
-# Mirrors fileUploadLimits.maxBytes in packages/shared/src/file-uploads.ts.
 MAX_IMPORT = 50 * 1024 * 1024
 MAX_ENTRIES = 10000
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -162,7 +142,6 @@ def read_at(parent, name, limit):
         os.close(fd)
 
 
-# Mirror fileBrowserLimits in packages/shared/src/types.ts.
 BROWSE_ENTRIES = 1000
 BROWSE_TEXT = 256 * 1024
 BROWSE_IMAGE = 2 * 1024 * 1024
@@ -180,7 +159,6 @@ def entry_type(mode):
 
 
 def browse_directory(directory):
-    # Entries are lstat-ed, never followed: a symlink is listed as one, and opening it resolves it again under parts_for.
     names = os.listdir(directory)
     if len(names) > MAX_ENTRIES * 10:
         raise ValueError('directory has too many entries')
@@ -211,7 +189,6 @@ def read_prefix(fd, limit):
 
 
 def browse_file(parent, name):
-    # O_NONBLOCK keeps a FIFO from blocking the open; only regular files are read.
     fd = os.open(name, FILE_FLAGS, dir_fd=parent)
     try:
         info = os.fstat(fd)
@@ -236,7 +213,6 @@ def browse_file(parent, name):
         try:
             content = data.decode('utf-8')
         except UnicodeDecodeError as error:
-            # A preview cut inside a multi-byte character ends before it.
             if not truncated or error.start < len(data) - 3 or error.reason != 'unexpected end of data':
                 return {'type': 'file', 'size': size, 'truncated': truncated, 'binary': True}
             content = data[:error.start].decode('utf-8')
@@ -246,7 +222,6 @@ def browse_file(parent, name):
 
 
 def import_candidate(name, index):
-    # Mirrors attachmentCandidate in packages/shared/src/file-uploads.ts.
     if index <= 1:
         return name
     dot = name.rfind('.')
@@ -254,7 +229,6 @@ def import_candidate(name, index):
 
 
 def import_at(root, request):
-    # A file attached to a message: created under a name not taken yet in its directory, never replacing a file.
     name, content = request.get('name'), request.get('data')
     if (not isinstance(name, str) or not name or '/' in name or '\\' in name or name in ('.', '..')
             or name.lower() == '.git' or any(ord(c) < 32 or ord(c) == 127 for c in name) or len(name.encode('utf-8')) > 240):
@@ -266,7 +240,6 @@ def import_at(root, request):
         raise ValueError('file exceeds size limit')
     directory = request.get('directory')
     parts = parts_for(directory, True)
-    # The directory itself, never a symlink to another one in the worktree: the file goes only where it was asked to.
     if not parts or parts != directory.split('/'):
         raise ValueError('path component is not a real directory')
     parent = walk(root, parts, True)
@@ -315,7 +288,6 @@ def write_at(root, parts, content):
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        # renameat replaces an entry; it never follows a concurrently inserted symlink.
         os.replace(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent)
         created = False
         os.fsync(parent)
@@ -328,16 +300,12 @@ def write_at(root, parts, content):
         os.close(parent)
 
 
-# The move_file, copy_file and delete_file tools (file-operations.ts): mirrors FILE_OPERATIONS_CORE there, so every
-# backend answers the same; change both together. Mirrors fileOperationLimits.
 COPY_ENTRIES = 10000
 COPY_BYTES = 50 * 1024 * 1024
 OPERATION_DEPTH = 64
 
 
 def entry_parts(value):
-    # An entry itself: its directory resolved as any written path is (through links that stay in the worktree), its
-    # last component never, so a link is moved, copied or deleted as a link.
     if not isinstance(value, str) or not value or len(value) > 1024:
         raise ValueError('invalid relative path')
     if value.startswith('/') or '\\' in value or any(ord(c) < 32 or ord(c) == 127 for c in value):
@@ -414,9 +382,6 @@ def copy_entry(source, name, target, new_name, info, counts, depth, path):
 
 
 def move_entry(source, name, target, new_name, info):
-    # Never over something that appeared since the check: a link is made again where it goes, a file gets a second name
-    # there before losing its first, and a directory takes the place of an empty one made for it, which a rename
-    # replaces only while it is still empty.
     if stat.S_ISLNK(info.st_mode):
         os.symlink(os.readlink(name, dir_fd=source), new_name, dir_fd=target)
         os.unlink(name, dir_fd=source)
@@ -434,8 +399,6 @@ def move_entry(source, name, target, new_name, info):
         try:
             os.link(name, new_name, src_dir_fd=source, dst_dir_fd=target, follow_symlinks=False)
         except OSError as error:
-            # A file system without hard links has no move that can't replace what appears at the destination meanwhile:
-            # refused, rather than a rename that might (review of #185).
             if error.errno in (errno.EPERM, errno.ENOTSUP, errno.EXDEV, errno.EMLINK, errno.ENOSYS):
                 raise ValueError('this file system can\'t move a file without risking what appears at its destination: '
                                  'copy it, then delete the original') from None
@@ -444,7 +407,6 @@ def move_entry(source, name, target, new_name, info):
 
 
 def walk_existing(root, parts):
-    # A directory the operation needs that isn't there: the same refusal on every backend (review of #185).
     try:
         return walk(root, parts)
     except FileNotFoundError:
@@ -465,7 +427,6 @@ def file_operation(root, request):
             except FileNotFoundError:
                 raise ValueError('no such file or directory') from None
             if not recursive:
-                # Only the entry itself, never what is in it, whatever it became since the look above (review of #185).
                 try:
                     if stat.S_ISDIR(info.st_mode):
                         os.rmdir(name, dir_fd=parent)
@@ -515,10 +476,6 @@ def file_operation(root, request):
             try:
                 copy_entry(source, source_name, target, target_name, info, counts, 0, [target_name])
             except BaseException as error:
-                # What the copy made goes again, last first, a directory only while it is empty: what another writer
-                # put there meanwhile, or found at the destination, stays.
-                # A file or link goes only while it is still the one the copy made (same device and inode): one another
-                # writer put in its place stays (review of #185).
                 for path, identity in reversed(counts['made']):
                     try:
                         parent = walk(target, path[:-1])
@@ -544,9 +501,6 @@ def file_operation(root, request):
         os.close(source)
 
 
-# Hardening shared by every Git invocation; session commands add the worktree and owner identity below.
-# Backends without bind mounts (macOS Seatbelt) see the session's Git directory where it is on the host, with a
-# gitdir: file at WORK/.git, and name their own Git and Bash; bubblewrap mounts it at WORK/.git and uses /usr/bin.
 GITDIR = os.environ.get('SANDBOX_GITDIR') or None
 GIT_BINARY = os.environ.get('SANDBOX_GIT') or '/usr/bin/git'
 BASH = os.environ.get('SANDBOX_BASH') or '/usr/bin/bash'
@@ -570,8 +524,6 @@ GIT = GIT_HARDENED + ['-c', 'core.worktree=' + WORK, '-c', 'safe.directory=' + W
 
 
 def egress_relay(path, port):
-    # The sandbox has its own network namespace with only loopback. Each connection to the loopback port is relayed,
-    # byte for byte, to the session's egress proxy socket, which decides what may leave.
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(('127.0.0.1', port))
@@ -625,15 +577,12 @@ def run(argv, data=None):
         sys.exit(child.returncode if child.returncode > 0 else 128 - child.returncode)
 
 
-# Mirrors PACK_SKIPPED_HOME in sandbox.ts: what a pack of the session's files leaves out of its home, all of it downloaded
-# again when needed (package managers' caches) or temporary.
 PACK_SKIPPED_HOME = ('.tmp', '.cache', '.npm', '.pnpm-store', '.yarn', '.bun', '.local/share/pnpm', '.cargo/registry',
                      '.cargo/git', 'go/pkg/mod', '.m2/repository', '.gradle/caches', '.nuget/packages')
 
 
 def snapshot(request):
     files, total = [], 0
-    # Clones are backed up as bundles (clone-backup), never as files.
     clones = request.get('clones', [])
     if not isinstance(clones, list) or not all(clone_path(path) for path in clones):
         raise ValueError('invalid snapshot request')
@@ -674,7 +623,6 @@ def snapshot(request):
             elif stat.S_ISREG(info.st_mode):
                 add(fd, name, archive_path)
             else:
-                # Never follow symlinks or serialize devices/sockets for later restoration.
                 raise ValueError('snapshot refuses symlinks and special files')
 
     home = os.open(HOME, DIR_FLAGS)
@@ -686,15 +634,12 @@ def snapshot(request):
         if owner is None:
             add(home, '.gitconfig', 'owner.gitconfig')
         else:
-            # Not mounted into the home: read where the runner keeps it.
             parent = os.open(os.path.dirname(owner), DIR_FLAGS)
             try:
                 add(parent, os.path.basename(owner), 'owner.gitconfig')
             finally:
                 os.close(parent)
         visit(work, 'worktree', ('.git',))
-        # Push scratch repositories are transient and never belong in a backup; pending clone restorations go with the
-        # clones' bundles.
         visit(git, 'git', ('pikibun-push', CLONE_STATE))
         return files
     finally:
@@ -707,7 +652,6 @@ OID = re.compile('[0-9a-f]{40}')
 
 
 def clone_directory(request):
-    # A clone the agent made in the worktree: Git runs in it read-only, with its own config but the hardened flags.
     parts = parts_for(request['path'])
     directory = os.path.join(WORK, *parts)
     if not parts or not os.path.isdir(directory) or not os.path.lexists(os.path.join(directory, '.git')):
@@ -772,7 +716,6 @@ def clone_push_pack(request):
             or not all(isinstance(oid, str) and OID.fullmatch(oid) for oid in exclude)):
         raise ValueError('invalid push request')
     sys.stdout.flush()
-    # The pack streams straight to the runner on the helper's stdout.
     child = clone_spawn(directory, ['-c', 'core.bigFileThreshold=64m', 'pack-objects', '--stdout', '--revs',
                                     '--delta-base-offset', '-q'], stdout=None)
     child.communicate((commit + '\n' + ''.join('^' + oid + '\n' for oid in exclude)).encode('ascii'))
@@ -780,8 +723,6 @@ def clone_push_pack(request):
         raise ValueError('push pack failed')
 
 
-# Clone sessions keep their clones' local work in backups as Git bundles, not as files: what the clone's origin already
-# has is cloned again on restore. Pending restorations live in the worktree's .git, which shell commands see read-only.
 CLONE_STATE = 'pikibun-clones'
 CLONE_PATH = re.compile(r'[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+){0,63}')
 MAX_CLONES = 50
@@ -799,7 +740,6 @@ def clone_path(value):
 
 
 def branch_name(value):
-    # Mirrors validPushBranch in packages/shared/src/repositories.ts: Git's own rules for a branch name.
     return (isinstance(value, str) and 1 <= len(value) <= 200 and value not in ('HEAD', '@') and not value.startswith(('-', 'refs/'))
             and not re.search(r'[\s\x00-\x1f\x7f\\~^:?*[]', value) and not re.search('[\ud800-\udfff]', value)
             and '..' not in value and '@{' not in value and not value.endswith(('.', '/'))
@@ -807,8 +747,6 @@ def branch_name(value):
 
 
 def find_clones():
-    # Directories of the worktree, up to four levels down, holding a .git directory: what git clone makes. Clones inside
-    # clones count too. Dependency trees are not searched, and the search is bounded: a clone it misses is kept as files.
     found, visited = [], 0
 
     def visit(fd, parts):
@@ -844,7 +782,6 @@ def find_clones():
 
 
 def clone_state(git):
-    # The restorations still pending from the last restore of this session, without their bundles.
     try:
         state = os.open(CLONE_STATE, DIR_FLAGS, dir_fd=git)
     except FileNotFoundError:
@@ -879,8 +816,6 @@ def clone_git_checked(directory, arguments, data=b'', extra=None, reason='the cl
 
 
 def clone_pack_check(path, directory, reason):
-    # A pack replaces the clone with its backup, so what a backup doesn't carry would be lost for good: refused instead.
-    # Its backup carries its branches and working tree; a restore clones its origin again, tags included.
     alternates = os.path.join(directory, '.git', 'objects', 'info', 'alternates')
     if os.path.lexists(alternates):
         with open(alternates, 'rb') as stream:
@@ -892,7 +827,6 @@ def clone_pack_check(path, directory, reason):
             raise ValueError('the clone ' + path + ' has stashed changes, which a pack can\'t keep')
         if not name.startswith(('refs/heads/', 'refs/remotes/', 'refs/tags/', 'refs/pikibun/')):
             raise ValueError('the clone ' + path + ' has refs other than branches and tags, which a pack can\'t keep')
-    # Tags its origin may not have: tags on commits it doesn't have (or on something other than a commit) certainly not.
     code, output = clone_git(directory, ['rev-list', '--count', '--tags', '--not', '--remotes=origin'])
     if code or output.strip() not in (b'', b'0'):
         raise ValueError('the clone ' + path + ' has tags on commits its origin doesn\'t have, which a pack can\'t keep')
@@ -915,8 +849,6 @@ def clone_backup_one(path, nested, budget, pack=False):
     code, output = clone_git(directory, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])
     head = output.decode('ascii', 'replace').strip() if not code else None
     if head is None and os.path.exists(os.path.join(directory, '.git', 'objects', 'info', 'alternates')):
-        # A clone borrowing from the host's mirror reads nothing without it, and the mirror is mounted only while this
-        # session may read its repository.
         raise ValueError('the clone ' + path + ' borrows objects from the host cache that this session can\'t read now')
     if head is not None and not OID.fullmatch(head):
         raise ValueError(reason)
@@ -928,9 +860,6 @@ def clone_backup_one(path, nested, budget, pack=False):
         branches.append([name[len('refs/heads/'):], oid])
     if len(branches) > MAX_CLONE_BRANCHES:
         raise ValueError('the clone ' + path + ' has too many branches to back up')
-    # The working tree, untracked files included and ignored ones not, as a commit on top of HEAD. A copy of the clone's
-    # own index is the starting point, so sparse checkouts stay as they are and unchanged files aren't read again; the
-    # clone's index and HEAD are left alone. Clones inside this one are backed up on their own.
     index = os.path.join(directory, '.git', 'pikibun-backup-index')
     extra = dict(BACKUP_IDENTITY, GIT_INDEX_FILE=index)
     try:
@@ -938,9 +867,6 @@ def clone_backup_one(path, nested, budget, pack=False):
             shutil.copyfile(os.path.join(directory, '.git', 'index'), index, follow_symlinks=False)
         except FileNotFoundError:
             clone_git_checked(directory, ['read-tree', head] if head else ['read-tree', '--empty'], extra=extra, reason=reason)
-        # Without the clone's LFS filters: git-lfs's clean filter would store a changed LFS file as a pointer to an object
-        # in .git/lfs, which the bundle doesn't carry and sessions can't upload, so the change would be lost. Its content
-        # goes into the bundle instead (within the budget below); unchanged files keep their pointers from the index.
         clone_git_checked(directory, ['-c', 'filter.lfs.process=', '-c', 'filter.lfs.clean=', '-c', 'filter.lfs.required=false',
                                       'add', '-A'], extra=extra, reason=reason)
         if nested:
@@ -953,7 +879,6 @@ def clone_backup_one(path, nested, budget, pack=False):
             pass
     if not OID.fullmatch(tree):
         raise ValueError(reason)
-    # A clean working tree is HEAD itself.
     if head is not None and clone_git_checked(directory, ['rev-parse', head + '^{tree}'], reason=reason) == tree:
         worktree = head
     else:
@@ -961,7 +886,6 @@ def clone_backup_one(path, nested, budget, pack=False):
                                      b'Pikibun backup of the working tree\n', extra=BACKUP_IDENTITY, reason=reason)
     if not OID.fullmatch(worktree):
         raise ValueError(reason)
-    # Only what the clone's origin has is left out; a restore fetches by commit whatever its origin no longer lists.
     bundle = None
     new = ['refs/pikibun/backup', '--branches', '--not', '--remotes=origin']
     clone_git_checked(directory, ['update-ref', 'refs/pikibun/backup', worktree], reason=reason)
@@ -999,8 +923,6 @@ def clone_backup(pack=False):
         if clone['bundle'] is not None:
             budget -= len(clone['bundle']) * 3 // 4
         clones.append(clone)
-    # Restorations still pending stay in the backup as they were restored, whatever is at their paths now: a restore
-    # never clones over something, so they stay pending there too.
     work = os.open(WORK, DIR_FLAGS)
     git = open_gitdir(work)
     state = None
@@ -1026,7 +948,6 @@ def clone_backup(pack=False):
             os.close(state)
         os.close(git)
         os.close(work)
-    # The snapshot leaves out the clones found, not the pending ones: whatever is at their paths is kept as files.
     return {'clones': clones, 'found': paths}
 
 
@@ -1045,7 +966,6 @@ def clone_pending():
 
 
 def bundle_prerequisites(path):
-    # The commits a bundle builds on: the "-<oid>" lines of its header, which ends at the first empty line.
     with open(path, 'rb') as handle:
         header = handle.read(4 * 1024 * 1024).split(b'\n\n', 1)[0]
     found = []
@@ -1058,8 +978,6 @@ def bundle_prerequisites(path):
 
 
 def clone_restore(request):
-    # Clones one pending clone again through the egress proxy, then puts its local work back from its bundle: its
-    # branches, HEAD, and the working tree as uncommitted changes. Its entry goes once that is done.
     path, url, reference = request['path'], request['url'], request.get('reference')
     if (not clone_path(path) or not isinstance(url, str) or not re.fullmatch(r'https://[\x21-\x7e]{1,2040}', url)
             or (reference is not None and (not isinstance(reference, str) or not reference.startswith(MIRROR_ROOT + '/')))):
@@ -1084,7 +1002,6 @@ def clone_restore(request):
         directory = os.path.join(WORK, *parts)
         marker = os.path.join(directory, '.git', RESTORED_MARKER)
         if os.path.lexists(directory):
-            # Restored before, but the list kept it (the runner stopped in between): only the list is left to update.
             try:
                 with open(marker, 'rb') as handle:
                     done = handle.read(64).decode('ascii', 'replace').strip() == worktree
@@ -1103,14 +1020,12 @@ def clone_restore(request):
             except FileExistsError:
                 if not stat.S_ISDIR(os.lstat(parent).st_mode):
                     raise ValueError('something else is already at the clone\'s path') from None
-        # Built beside its path and moved there whole, so an interrupted restoration leaves nothing in the way of the next.
         staging = os.path.join(parent, '.' + parts[-1] + '.pikibun-restore')
         if os.path.lexists(staging):
             if os.path.islink(staging) or not os.path.isdir(staging):
                 raise ValueError('something else is already at the clone\'s path')
             shutil.rmtree(staging)
         env = dict(os.environ, GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1')
-        # Through the proxy: https remotes are rewritten to its loopback address (see egressEnvironment).
         argv = GIT_HARDENED + ['-c', 'protocol.http.allow=always', 'clone', '--quiet', '--no-checkout']
         if reference is not None:
             argv += ['--reference-if-able', reference]
@@ -1124,8 +1039,6 @@ def clone_restore(request):
             def present(oid):
                 return clone_git(staging, ['cat-file', '-e', oid + '^{commit}'])[0] == 0
 
-            # Commits the origin had at backup time but no longer lists (a branch merged and deleted, say) are fetched
-            # by commit, which forges allow for what their pull requests still reach.
             def fetch_missing(oids):
                 wanted = list(dict.fromkeys(oid for oid in oids if not present(oid)))
                 if len(wanted) > 256:
@@ -1140,7 +1053,6 @@ def clone_restore(request):
                 clone_git_checked(staging, ['-c', 'protocol.file.allow=always', 'fetch', '--quiet', '--no-tags', source,
                                             'refs/*:refs/pikibun/restore/*'], reason=reason)
             fetch_missing([oid for _, oid in branches] + ([head] if head else []) + [worktree])
-            # The origin as the clone named it (an SSH remote, say), not the form it was cloned again from.
             if origin != url:
                 clone_git_checked(staging, ['remote', 'set-url', 'origin', origin], reason=reason)
             for name, oid in branches:
@@ -1154,7 +1066,6 @@ def clone_restore(request):
             elif head is not None:
                 clone_git_checked(staging, ['update-ref', '--no-deref', 'HEAD', head], reason=reason)
             clone_git_checked(staging, ['read-tree', '--reset', '-u', worktree], reason=reason)
-            # The index goes back to HEAD, so the backed-up changes show as uncommitted again.
             clone_git_checked(staging, ['read-tree', head] if head else ['read-tree', '--empty'], reason=reason)
             with open(os.path.join(staging, '.git', RESTORED_MARKER), 'w') as handle:
                 handle.write(worktree + '\n')
@@ -1178,8 +1089,6 @@ def clone_restore(request):
         os.close(work)
 
 
-# The search tool (search.ts): mirrors SEARCH_CORE there, line for line, so every backend answers the same; change both
-# together. Mirrors searchLimits.
 SEARCH_FILE_BYTES = 1024 * 1024
 SEARCH_FILES = 20000
 SEARCH_BYTES = 64 * 1024 * 1024
@@ -1230,7 +1139,6 @@ def search(root, request):
         return line[:SEARCH_LINE_TEXT] + '\u2026' if len(line) > SEARCH_LINE_TEXT else line
 
     def done():
-        # Stopping with results to spare is stopping early: what lies beyond may hold more matches.
         if len(matches) >= max_results:
             state['truncated'] = True
         return state['truncated']
@@ -1331,7 +1239,6 @@ def search(root, request):
 
 
 def main():
-    # One JSON line.
     request = json.loads(sys.stdin.buffer.readline())
     kind = request['kind']
     limits(request)
@@ -1342,7 +1249,6 @@ def main():
             if GITDIR is None:
                 run(GIT + ['init', '--quiet', '--template=', '--initial-branch=main', WORK])
             else:
-                # The runner wrote WORK/.git, which the session can't change, pointing here.
                 run(GIT + ['--git-dir=' + GITDIR, 'init', '--quiet', '--template=', '--initial-branch=main'])
                 run(GIT + ['--git-dir=' + GITDIR, 'config', 'core.bare', 'false'])
         run(GIT + ['rev-parse', '--is-inside-work-tree'])
@@ -1357,7 +1263,6 @@ def main():
         clone_push_pack(request)
         return
     if kind == 'clone-backup':
-        # A pack's backup replaces the clones (pack.ts), so whatever it can't carry is refused (clone_pack_check).
         pack = request.get('pack', False)
         if not isinstance(pack, bool):
             raise ValueError('invalid clone backup request')

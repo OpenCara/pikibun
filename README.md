@@ -19,7 +19,7 @@ And around them:
 
 - **Your machines, your models.** Sessions run on members' own hosts with the models and credentials configured in Pi there. A host connects over an outbound WebSocket: no inbound port or tunnel.
 - **Isolated work.** Each session clones the workspace's repositories into its own sandbox, whose only way out is a proxy that reads them with the session owner's account and follows the workspace's network policy.
-- **People decide.** Shell commands, commits, pushes, GitHub comments, merges and new issues wait for an approval unless the session owner auto-approves a message.
+- **People decide.** Shell commands, commits, pushes, GitHub comments, merges and new issues wait for an approval unless the session owner auto-approves a message (a workspace's owner, admins and collaborators can auto-approve their own sandboxed commands in others' sessions).
 - **Built for teams.** Workspace roles (viewer, member, collaborator, admin) set what each person can do by default, with the workspace's owner and admins managing every session in it, and session grants add more for one session at a time.
 
 ## Quick start
@@ -72,7 +72,7 @@ Requires Node 24 and pnpm.
 ```sh
 pnpm install
 cp apps/server/.env.example apps/server/.env   # then set the local settings in docs/development.md
-pnpm build                                      # the web client into dist/preview
+pnpm build                                      # the web client into dist/client
 pnpm dev:server                                 # API and web client on :8787
 ```
 

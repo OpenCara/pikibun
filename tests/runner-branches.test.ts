@@ -53,7 +53,6 @@ test("a clone session on the host reports its clones' branches of the workspace'
     dataDir: directory, sharedSecret: "runner-branches-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, unsandboxed: true,
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    // The grant fails when the session opens, and is asked for again when it reports.
     egressGrant: async () => { if (grants++ === 0) throw new Error("control plane unavailable"); return grant; },
     reportActivity: async () => {},
     reportBranches: async (sessionId, branches) => { reports.push([sessionId, branches]); },
@@ -66,12 +65,10 @@ test("a clone session on the host reports its clones' branches of the workspace'
     for (let attempt = 0; attempt < 250 && reports.length < count; attempt++) await delay(20);
     assert.equal(reports.length, count, `reports so far: ${JSON.stringify(reports)}`);
   };
-  // Opened with no clone yet.
   await reported(1);
   assert.deepEqual(reports[0], [id, []]);
   assert.equal(grants, 2, "the grant that failed at open was asked for again");
 
-  // The agent clones and switches to a branch with the host's own Git; then it stops.
   const git = join((session.sandbox as HostWorkspace).worktree, "alpha", ".git");
   await mkdir(join(git, "refs", "remotes", "origin"), { recursive: true });
   await writeFile(join(git, "HEAD"), "ref: refs/heads/fix-parser\n");
@@ -82,7 +79,6 @@ test("a clone session on the host reports its clones' branches of the workspace'
   await reported(2);
   assert.deepEqual(reports[1], [id, [{ repository: "acme/alpha", branch: "fix-parser" }]]);
 
-  // Unchanged branches aren't reported again.
   await session.submit(await ticket(id, "submit"), { content: "Anything else?", requestId: "second" }, "write");
   await idle(session);
   await delay(600);

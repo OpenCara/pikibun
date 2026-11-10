@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import type { Env, WorkerEnv } from '../../types.js';
+import type { Env, AppEnv } from '../../types.js';
 import { appOrigin, fail } from '../../http.js';
 import { importRsaPrivateKey, publicJwk, signJwt, type RsaPublicJwk } from './jwt.js';
 
@@ -17,12 +17,10 @@ async function signingKey(env: Env, missingStatus: 404 | 503): Promise<SigningKe
   return loaded;
 }
 
-/** Federation subject naming a workspace; identity providers trust it per workspace. */
 export function workspaceSubject(workspaceId: string): string {
   return `pikibun:workspace:${workspaceId}`;
 }
 
-/** A short-lived RS256 assertion from Pikibun's OIDC issuer. Standard claims always win over `claims`. */
 export async function issuerAssertion(env: Env, input: { subject: string; audience: string; ttlSeconds: number; claims?: Record<string, string> }): Promise<string> {
   const { key, jwk } = await signingKey(env, 503);
   const issuedAt = Math.floor(Date.now() / 1000);
@@ -30,8 +28,7 @@ export async function issuerAssertion(env: Env, input: { subject: string; audien
     iat: issuedAt, nbf: issuedAt - 30, exp: issuedAt + input.ttlSeconds, jti: crypto.randomUUID() });
 }
 
-/** Public discovery documents (no authentication or CSRF); registered before the /api auth middleware. */
-export function registerOidc(app: Hono<WorkerEnv>): void {
+export function registerOidc(app: Hono<AppEnv>): void {
   app.get('/.well-known/openid-configuration', async c => {
     await signingKey(c.env, 404);
     const issuer = appOrigin(c.env);

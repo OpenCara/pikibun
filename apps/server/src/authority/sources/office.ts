@@ -1,10 +1,5 @@
 import { inflateRawSync } from 'node:zlib';
 
-/**
- * The text of a Word document (.docx): its paragraphs, tabs and line breaks from word/document.xml, without
- * formatting. Null for anything that isn't a readable .docx. Bounded: the archive is read from memory, and the
- * document part inflates to at most 16 MiB.
- */
 export function docxText(bytes: Uint8Array): string | null {
   const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const part = zipEntry(data, 'word/document.xml');
@@ -12,7 +7,6 @@ export function docxText(bytes: Uint8Array): string | null {
   const xml = part.toString('utf8');
   const body = xml.slice(Math.max(0, xml.indexOf('<w:body')));
   let text = '';
-  // Runs of text, tabs and breaks in document order; a paragraph's end is a line's end.
   for (const match of body.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:tab\/>|<w:(?:br|cr)(?:\s[^>]*)?\/>|<\/w:p>/g)) {
     if (match[1] !== undefined) text += entities(match[1]);
     else if (match[0] === '<w:tab/>') text += '\t';
@@ -30,9 +24,7 @@ function entities(value: string): string {
   });
 }
 
-/** One entry of a ZIP archive, found through its central directory; null if absent, encrypted or unreadable. */
 function zipEntry(data: Buffer, name: string): Buffer | null {
-  // The end of central directory record is in the last 64 KiB plus its own 22 bytes.
   let end = -1;
   for (let at = data.length - 22; at >= Math.max(0, data.length - 22 - 65535); at--) {
     if (data.readUInt32LE(at) === 0x06054b50) { end = at; break; }
@@ -65,6 +57,5 @@ function zipEntry(data: Buffer, name: string): Buffer | null {
   return null;
 }
 
-/** File names and types read as text as they are. */
 export const textFile = { types: /^(text\/|application\/(json|xml|x-yaml|yaml|javascript|x-sh|sql|toml|x-toml|csv)\b)/, names: /\.(md|markdown|txt|csv|tsv|json|ya?ml|toml|xml|html?|css|js|ts|py|sh|sql|ini|cfg|log)$/i };
 export const docxFile = { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', name: /\.docx$/i };

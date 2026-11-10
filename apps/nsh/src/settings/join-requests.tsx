@@ -6,15 +6,10 @@ import { createAction, createResource } from "../lib/resource";
 import { Banner, Button, CardBody, confirm, Feedback, Row, Section, Small } from "../ui";
 import { relativeTime } from "../lib/format";
 
-/**
- * The signed-in person's own requests to join (JoinWorkspaceScreen.tsx's OwnJoinRequests), each with Withdraw. They
- * don't need the link they came through, which may have been turned off or replaced since. Nothing while there are none.
- */
 export function OwnJoinRequests() {
   const resource = createResource<{ requests: OwnJoinRequest[] }>(() => "/api/join-requests");
   const action = createAction();
   const requests = () => resource.data()?.requests ?? [];
-  // Once a load fails, the section stays until one succeeds, so Try again doesn't make it vanish while it retries.
   const failed = signal(false);
   effect(() => {
     if (resource.error()) failed.set(true);

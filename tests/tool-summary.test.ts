@@ -30,7 +30,6 @@ test("a call's target is the command line it runs, or what it reads, searches or
   assert.equal(target("sessions", { action: "read", session: "s2" }), "read s2");
   assert.equal(target("custom", { text: "first\nsecond" }), "first second", "a tool it doesn't know: its first text");
   assert.equal(target("identity", {}), "");
-  // A call cut short in brief tool output, past its JSON: nothing but its name.
   assert.equal(callArguments('write({"path":"a.ts","content":"xx…})'), undefined);
   assert.equal(callTarget("write", undefined), "");
   assert.equal(callHeadline("git", "git status"), "git status");
@@ -52,7 +51,6 @@ test("a result's summary says what came of the call, from what Pikibun's tools a
   assert.equal(summary(answer({ edited: "a.ts", edits: 2 })).text, "Edited (2 edits)");
   assert.equal(summary(answer({ deleted: "out", entries: 4 })).text, "Deleted (4 entries)");
   assert.equal(summary(answer({ url: "https://x", ok: true, items: [1, 2], nested: { a: 1 } })).text, "url: https://x, ok: true, items: 2 items");
-  // A command's card: its output's last line, where commands say how they went, or why it didn't run.
   assert.deepEqual(summary(card("executed", "Cloning into 'b'...\n")), { text: "Cloning into 'b'...", failed: false });
   assert.deepEqual(summary(card("executed", "start\n[… 900 bytes left out here. The whole output is in tool-output/x.txt …]\n# pass 12\n# fail 0\n")), { text: "# fail 0", failed: false });
   assert.deepEqual(summary(card("executed", "")), { text: "Done, no output", failed: false });
@@ -61,7 +59,6 @@ test("a result's summary says what came of the call, from what Pikibun's tools a
   assert.deepEqual(summary(card("pending")), { text: "Waiting for approval", failed: false });
   assert.deepEqual(summary(card("executed", "{}", { report: { title: "Home", url: "http://localhost/", status: 200 } })), { text: "Home · HTTP 200", failed: false });
   assert.deepEqual(summary(card("executed", "{}", { report: { error: "No element matched #go", url: "http://localhost/" } })), { text: "No element matched #go", failed: true });
-  // Text that isn't such an answer: its first line that says anything; failed where the tool said so.
   assert.deepEqual(summary("\n  PASS tests/a.test.ts  \nmore"), { text: "  PASS tests/a.test.ts", failed: false });
   assert.deepEqual(summary("Tool bash is not available", true), { text: "Tool bash is not available", failed: true });
   assert.deepEqual(summary("{not json"), { text: "{not json", failed: false });
@@ -85,7 +82,6 @@ const entry = (id: string, role: string, text: string, extra: Partial<EntryView>
 test("each tool call shows with the result that answered it, by its id or in order", () => {
   const calls = entry("0:2", "assistant", `Looking.\n${call("read_file", { path: "a.ts" })}\n${call("git", { args: ["status"] })}`,
     { toolCalls: [{ id: "c1", name: "read_file" }, { id: "c2", name: "git" }] });
-  // Results come back in the order the tools finished, each naming its call.
   const git = entry("0:3", "toolResult", card("executed", "clean\n"), { toolResult: { callId: "c2", tool: "git" }, durationMs: 40 });
   const read = entry("0:4", "toolResult", answer({ content: "a\n" }), { toolResult: { callId: "c1", tool: "read_file" } });
   const stray = entry("0:5", "toolResult", "answers nothing here", { toolResult: { callId: "c9" } });
@@ -99,7 +95,6 @@ test("each tool call shows with the result that answered it, by its id or in ord
   assert.equal(rows[0]!.args, "path: a.ts");
   assert.equal(resultOutput(rows[1]!.result!), "clean\n");
 
-  // An older host names no calls: results answer them in order, and a call still running has none yet.
   const older = entry("1:2", "assistant", `${call("bash", { command: "ls" })}\n${call("bash", { command: "pwd" })}`, { conversationId: "1" });
   const first = entry("1:3", "toolResult", "a b", { conversationId: "1" });
   const running = pairToolResults([older, first]);
@@ -107,7 +102,6 @@ test("each tool call shows with the result that answered it, by its id or in ord
   assert.deepEqual(running.results.get("1:2"), [first, undefined]);
   assert.deepEqual(toolCallRows(older, running.results.get("1:2")).map(row => row.outcome?.text), ["a b", undefined]);
 
-  // A result whose call is on an earlier page, or in another conversation, stays an entry of its own.
   const alone = pairToolResults([entry("0:9", "toolResult", "orphan"), entry("0:10", "assistant", call("bash", { command: "ls" })), entry("2:1", "toolResult", "other", { conversationId: "2" })]);
   assert.deepEqual(alone.entries.map(item => item.id), ["0:9", "0:10", "2:1"]);
   assert.deepEqual(alone.results.get("0:10"), [undefined]);
@@ -117,7 +111,6 @@ test("each call's auto-approve mark goes with its own row", () => {
   const calls = entry("0:1", "assistant", [call("read_file", { path: "a" }), call("node", { program: "npm", args: ["test"] }), call("git", { args: ["log"] })].join("\n"),
     { autoApproved: [{ tool: "node", status: "executed" }, { tool: "git", status: "failed" }] });
   assert.deepEqual(toolCallRows(calls).map(row => row.autoApproved?.status), [undefined, "executed", "failed"]);
-  // Two calls of one tool, only the second auto-approved: the mark names it.
   const twice = entry("0:2", "assistant", [call("bash", { command: "a" }), call("bash", { command: "b" })].join("\n"),
     { toolCalls: [{ id: "c1", name: "bash" }, { id: "c2", name: "bash" }], autoApproved: [{ tool: "bash", callId: "c2", status: "executed", unbounded: true }] });
   assert.deepEqual(toolCallRows(twice).map(row => row.autoApproved?.callId), [undefined, "c2"]);

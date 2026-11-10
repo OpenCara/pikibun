@@ -6,60 +6,32 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { GitProvider } from "../../../packages/shared/src/repositories.js";
 import { GitRemote, GitRemoteError, ProgressLines, parseGitProgress, type GitProgressPhase } from "./git-remote.js";
 
-/**
- * Host repository cache (docs/design/repository-cache.md). One bare mirror per provider repository identity,
- * holding full history with every blob, so clones in sandboxed sessions borrow its objects through
- * `objects/info/alternates` and fetch only what is new.
- *
- * Only the runner writes here, outside any sandbox. Fills read the repository straight from its provider through
- * `MirrorTarget.remote`: for clone sessions, with this host's own Git credentials. The cache decides no access: a session
- * borrows a mirror only once the control plane's relay confirms that its owner may read the repository (see
- * RunnerSession.mirror).
- */
-
 export type RepositoryCacheScope = "host" | "owner";
 
 export type RepositoryCachePhase = "waiting" | "connecting" | GitProgressPhase | "verifying" | "done";
 
-/** Progress of one repository; only structured numbers, never remote text. */
 export interface RepositoryCacheProgress {
   path: string;
   phase: RepositoryCachePhase;
   percent: number | null;
   done: number | null;
   total: number | null;
-  /** Pack bytes received so far by this fetch. */
   bytes: number;
 }
 
 export interface RepositoryCacheOptions {
-  /** Absolute, runner-owned, private directory. */
   root: string;
   scope?: RepositoryCacheScope;
-  /** Minimum interval between progress callbacks of the same phase. */
   progressIntervalMs?: number;
-  /**
-   * Pauses before each further attempt at a ref listing or a fetch that failed in a way another attempt may get past (a
-   * connection that failed or broke off, a busy or failing remote); one attempt more than there are pauses.
-   */
   retryDelaysMs?: readonly number[];
 }
 
-/** A workspace repository a clone session's mirror is kept for: the provider identity, never a pin. */
 export interface MirrorRepository { provider: GitProvider; host: string; repositoryId: string; fullName: string }
 export interface MirrorTarget {
   repository: MirrorRepository; ownerId: string; sessionId: string;
-  /** Reads the repository from its provider; for clone sessions, directly with this host's own Git credentials. */
   remote: GitRemote;
-  /**
-   * The branches and tags to mirror, as the session owner's own ref listing named them (through the control plane's
-   * relay, which checks the repository's identity): the mirror then fetches only these tips' history through `remote`,
-   * so it never holds what that listing didn't reach, whosever credential `remote` reads with. Without it, `remote`'s
-   * own listing.
-   */
   refs?: ReadonlyMap<string, string>;
 }
-/** One cached repository as `pikibun cache list` shows it. */
 export interface CachedRepository { directory: string; bytes: number; sessions: number; pins: number }
 
 export class RepositoryCacheError extends Error {
@@ -72,14 +44,10 @@ const FETCH_TIMEOUT_MS = 60 * 60 * 1000;
 const GIT_TIMEOUT_MS = 60 * 60 * 1000;
 const LOCK_POLL_MS = 250;
 const LOCK_NAME = "pikibun.lock";
-/** Pin refs of sessions from before every session cloned; they are listed and kept, but no longer written. */
 const PIN_PREFIX = "refs/pikibun/pins/";
-/** A clone session's keep ref: a commit whose parents are the branch tips it saw, so its borrowed objects stay. */
 const SESSION_PREFIX = "refs/pikibun/sessions/";
-/** Parents per keep commit; more tips chain several, so no command line grows past the system's limit. */
 const KEEP_PARENTS = 500;
 
-/** A repository's place in the cache, and in every sandbox that mounts its mirror: `<provider>/<host>/<id>.git`. */
 export function mirrorPath(repository: { provider: string; host: string; repositoryId: string }): string {
   if (!/^[a-z0-9-]{1,32}$/.test(repository.provider) || !/^[a-z0-9.-]{1,253}(?::[0-9]{1,5})?$/.test(repository.host)
     || !/^[A-Za-z0-9{}_-]{1,100}$/.test(repository.repositoryId)) {
@@ -97,7 +65,6 @@ export class RepositoryCache {
   readonly #scope: RepositoryCacheScope;
   readonly #interval: number;
   readonly #retryDelays: readonly number[];
-  /** Per cache repository: the tail of its serialized operations, and who is watching the current one. */
   readonly #queues = new Map<string, { tail: Promise<void>; listeners: Set<Listener>; last: RepositoryCacheProgress | undefined }>();
 
   constructor(options: RepositoryCacheOptions) {
@@ -111,7 +78,6 @@ export class RepositoryCache {
 
   get scope(): RepositoryCacheScope { return this.#scope; }
 
-  /** Bare repository directory of a clone session's mirror; owner-scoped caches never share one across owners. */
   mirrorDirectory(repository: MirrorRepository, ownerId: string): string {
     return this.#directory(repository.provider, repository.host, repository.repositoryId, ownerId);
   }
@@ -121,17 +87,12 @@ export class RepositoryCache {
     return join(base, mirrorPath({ provider, host, repositoryId: id }));
   }
 
-  /**
-   * Creates a mirror's bare repository, empty, unless it exists: a session gets its mirrors' directories before its first
-   * command, so that command can mount the mirror its clone then waits to fill.
-   */
   async prepare(repository: MirrorRepository, ownerId: string): Promise<string> {
     const directory = this.mirrorDirectory(repository, ownerId);
     await this.#prepare(directory);
     return directory;
   }
 
-  /** Whether a fill of the mirror has ever completed: it mirrors at least one of the remote's branches or tags. */
   async filled(repository: MirrorRepository, ownerId: string): Promise<boolean> {
     const directory = this.mirrorDirectory(repository, ownerId);
     try { await lstat(join(directory, "HEAD")); }
@@ -139,12 +100,6 @@ export class RepositoryCache {
     return (await cacheGit(directory).capture(["for-each-ref", "--count=1", "--format=%(refname)", UPSTREAM_PREFIX])).trim() !== "";
   }
 
-  /**
-   * The mirror of `target`'s repository, ready to borrow from. A mirror no fill has completed yet is filled first, however
-   * long that takes, and a failure to fill it is thrown. A filled one is refreshed as well, but answered as it is once
-   * `wait` milliseconds have passed or its refresh failed: a clone borrows what it has and fetches only the rest. Either
-   * way the refresh goes on to its end. `fresh` tells whether it was answered up to date.
-   */
   async ready(target: MirrorTarget, options: { onProgress?: Listener; wait?: number } = {}): Promise<{ directory: string; fresh: boolean }> {
     const directory = this.mirrorDirectory(target.repository, target.ownerId);
     const filled = await this.filled(target.repository, target.ownerId);
@@ -162,11 +117,6 @@ export class RepositoryCache {
     return { directory, fresh };
   }
 
-  /**
-   * Brings a clone session's mirror up to date with every branch and tag the remote advertises, and records the
-   * session's keep ref. Fetches only what is new; serialized with every other operation on the repository. A ref listing
-   * or fetch that fails in a way another attempt may get past is tried again (RepositoryCacheOptions.retryDelaysMs).
-   */
   async refresh(target: MirrorTarget, options: { onProgress?: Listener; signal?: AbortSignal } = {}): Promise<{ directory: string; fetched: boolean }> {
     const directory = this.mirrorDirectory(target.repository, target.ownerId);
     return this.#serialized(directory, target.repository.fullName, throttle(options.onProgress, this.#interval), options.signal, async (emit) => {
@@ -177,11 +127,8 @@ export class RepositoryCache {
       const advertised = target.refs ? listed(target.refs) : await this.#retrying(() => target.remote.listRefs(), options.signal, connecting);
       const before = await git.objectTypes([...advertised.values()]);
       const wants = [...before].filter(([, type]) => type === null).map(([id]) => id);
-      // A fetch that broke off starts again from what the mirror had: nothing of it is kept.
       const bytes = wants.length ? await this.#retrying(() => this.#fetchObjects(directory, git, target.remote, wants, emit), options.signal, connecting) : 0;
       await this.#updateUpstream(git, advertised);
-      // Its branch tips as of now, on top of those it saw before: whatever its clones borrowed stays until prune drops
-      // the keep ref.
       const heads = [...new Set([...advertised].filter(([ref]) => ref.startsWith("refs/heads/")).map(([, id]) => id))];
       const present = await git.objectTypes(heads);
       await keep(git, target.sessionId, heads.filter(id => present.get(id) === "commit"));
@@ -190,7 +137,6 @@ export class RepositoryCache {
     });
   }
 
-  /** Marks a clone session's keep ref as used now, so prune counts its idle time from here. Fetches nothing. */
   async touch(repository: MirrorRepository, ownerId: string, sessionId: string): Promise<void> {
     const directory = this.mirrorDirectory(repository, ownerId);
     try { await lstat(join(directory, "HEAD")); }
@@ -198,7 +144,6 @@ export class RepositoryCache {
     await this.#serialized(directory, repository.fullName, undefined, undefined, async () => { await keep(cacheGit(directory), sessionId, []); });
   }
 
-  /** Every cached repository, with its size and how many sessions and pins keep objects in it. */
   async list(): Promise<CachedRepository[]> {
     const repositories: CachedRepository[] = [];
     for (const directory of await cacheRepositories(this.#root)) {
@@ -209,10 +154,6 @@ export class RepositoryCache {
     return repositories;
   }
 
-  /**
-   * Drops clone sessions' keep refs older than `age` and collects what no ref reaches any more, past the same age.
-   * A clone in a session idle for longer loses the objects it borrowed. Pin refs are never dropped.
-   */
   async prune(age: number): Promise<{ repositories: number; sessions: number }> {
     if (!Number.isSafeInteger(age) || age < 0) throw new RepositoryCacheError("Invalid prune age");
     const cutoff = Math.floor((Date.now() - age) / 1000);
@@ -232,10 +173,6 @@ export class RepositoryCache {
     return { repositories, sessions };
   }
 
-  /**
-   * Runs `attempt` again after a failure another attempt may get past (see retryable), after each of the cache's retry
-   * pauses, telling `again` before each new attempt; the last failure is thrown.
-   */
   async #retrying<T>(attempt: () => Promise<T>, signal: AbortSignal | undefined, again: () => void): Promise<T> {
     for (let failures = 0; ; failures++) {
       try { return await attempt(); }
@@ -248,10 +185,7 @@ export class RepositoryCache {
     }
   }
 
-  /** Fetches `wants` and their history into the cache, checked complete like `git fetch` does; returns the pack's size. */
   async #fetchObjects(directory: string, git: CacheGit, remote: GitRemote, wants: string[], emit: (progress: Omit<RepositoryCacheProgress, "path">) => void): Promise<number> {
-    // Only ever with the mirror's lock held, so no fetch is writing these: what one that broke off left, here or in a
-    // runner that died, would otherwise stay until a prune.
     await removeTemporaryPacks(directory);
     try { return await this.#fetchPack(git, remote, wants, emit); }
     catch (error) {
@@ -280,16 +214,12 @@ export class RepositoryCache {
         yield chunk;
       }
     })();
-    // index-pack -v reports "Receiving objects" and "Resolving deltas" on stderr.
     await git.run(["index-pack", "--stdin", "-v", "--fix-thin"], counted, update);
     emit({ phase: "verifying", percent: null, done: null, total: null, bytes });
-    // The same connectivity check `git fetch` performs: everything new must be complete in this repository.
-    // "^oid" lines rather than "--not", which older Git does not accept on rev-list's stdin.
     await git.run(["rev-list", "--objects", "--quiet", "--stdin"], [...wants, ...haves.map(id => `^${id}`), ""].join("\n"));
     return bytes;
   }
 
-  /** Mirrors the advertised branches and tags as refs/upstream/*, keeping only those whose objects are here. */
   async #updateUpstream(git: CacheGit, advertised: Map<string, string>): Promise<void> {
     const after = await git.objectTypes([...advertised.values()]);
     const current = new Map((await git.capture(["for-each-ref", "--format=%(refname) %(objectname)", UPSTREAM_PREFIX]))
@@ -297,18 +227,14 @@ export class RepositoryCache {
     const updates: string[] = [];
     for (const [ref, id] of advertised) {
       const local = `${UPSTREAM_PREFIX}${ref.slice("refs/".length)}`;
-      // A tip the remote refused to send (e.g. a hidden ref) is simply not mirrored.
       if (current.get(local) !== id && after.get(id)) updates.push(`update ${local} ${id}`);
       current.delete(local);
     }
     const deletes = [...current.keys()].map(ref => `delete ${ref}`);
-    // Deletes commit first, on their own: a branch renamed from feature/login to feature (or back) is a file/directory
-    // conflict that Git refuses inside one transaction, in either order.
     if (deletes.length) await git.run(["update-ref", "--no-deref", "--stdin"], `${deletes.join("\n")}\n`);
     if (updates.length) await git.run(["update-ref", "--no-deref", "--stdin"], `${updates.join("\n")}\n`);
   }
 
-  /** Creates the cache root privately and initializes the bare repository atomically. */
   async #prepare(directory: string): Promise<void> {
     await mkdir(this.#root, { recursive: true, mode: 0o700 });
     const root = await lstat(this.#root);
@@ -330,16 +256,11 @@ export class RepositoryCache {
       await rename(staging, directory);
     } catch (error) {
       await rm(staging, { recursive: true, force: true });
-      // Another runner process may have won the race; its repository is as good as ours.
       if (errorCode(error) === "ENOTEMPTY" || errorCode(error) === "EEXIST") return;
       throw error;
     }
   }
 
-  /**
-   * Serializes operations per cache repository: in-process with a promise chain, and across runner processes
-   * with an exclusive lock file holding the owner's pid (stale locks of dead processes are taken over).
-   */
   async #serialized<T>(directory: string, path: string, listener: Listener | undefined, signal: AbortSignal | undefined,
     operation: (emit: (progress: Omit<RepositoryCacheProgress, "path">) => void) => Promise<T>): Promise<T> {
     let queue = this.#queues.get(directory);
@@ -347,7 +268,6 @@ export class RepositoryCache {
     const state = queue;
     if (listener) {
       state.listeners.add(listener);
-      // Someone else's fetch is running: show it rather than a blank wait.
       listener(state.last ? { ...state.last, path } : { path, phase: "waiting", percent: null, done: null, total: null, bytes: 0 });
     }
     const emit = (progress: Omit<RepositoryCacheProgress, "path">) => {
@@ -371,10 +291,6 @@ export class RepositoryCache {
   }
 }
 
-/**
- * Moves a session's keep ref to a new commit, dated now, whose parents are its previous keep commit and `tips`: what its
- * clones borrowed earlier stays reachable as long as the ref does.
- */
 async function keep(git: CacheGit, sessionId: string, tips: readonly string[]): Promise<void> {
   const ref = `${SESSION_PREFIX}${digest(sessionId)}`;
   const previous = (await git.capture(["for-each-ref", "--format=%(objectname)", ref])).trim();
@@ -391,7 +307,6 @@ async function keep(git: CacheGit, sessionId: string, tips: readonly string[]): 
   await git.run(["update-ref", "--no-deref", ref, head!]);
 }
 
-/** The bare repositories below a cache root: `<provider>/<host>/<id>.git`, also under `owners/<owner>/`. */
 async function cacheRepositories(root: string): Promise<string[]> {
   const found: string[] = [];
   const children = async (directory: string): Promise<string[]> => {
@@ -423,7 +338,6 @@ function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
-/** A ref listing given to a refresh (MirrorTarget.refs): only branches and tags, each at an object id. */
 function listed(refs: ReadonlyMap<string, string>): Map<string, string> {
   for (const [ref, id] of refs) {
     if (!/^refs\/(?:heads|tags)\/./.test(ref) || !OID.test(id)) throw new RepositoryCacheError("Invalid ref listing");
@@ -431,10 +345,6 @@ function listed(refs: ReadonlyMap<string, string>): Map<string, string> {
   return new Map(refs);
 }
 
-/**
- * Removes what a pack download that broke off leaves in a mirror's objects/pack: index-pack's `tmp_pack_*`, `tmp_idx_*`
- * and the like, which Git itself collects only once they are older than a prune's cutoff.
- */
 async function removeTemporaryPacks(directory: string): Promise<void> {
   const pack = join(directory, "objects", "pack");
   let names: string[];
@@ -443,11 +353,6 @@ async function removeTemporaryPacks(directory: string): Promise<void> {
   await Promise.all(names.filter(name => /^(?:tmp_|\.tmp-)/.test(name)).map(name => rm(join(pack, name), { force: true })));
 }
 
-/**
- * Whether another attempt at a ref listing or fetch may get past `error`: only what GitRemote says may, a connection that
- * failed or broke off mid-pack, or a busy or failing remote. Git refusing what it received, a refusal, a time limit or a
- * cancellation of the cache's own, and anything unforeseen, are final.
- */
 function retryable(error: unknown): boolean {
   return error instanceof GitRemoteError && error.retryable;
 }
@@ -456,7 +361,6 @@ function errorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
 }
 
-/** Forwards every phase change and "done" at once, otherwise at most one update per interval. */
 function throttle(listener: Listener | undefined, interval: number): Listener | undefined {
   if (!listener) return undefined;
   let last = 0;
@@ -471,12 +375,6 @@ function throttle(listener: Listener | undefined, interval: number): Listener | 
   };
 }
 
-/**
- * One lock file per cache repository holding its owner's pid. The connector's lease already keeps a second runner off
- * the same state directory, so this guards custom roots and tests. The lock appears atomically with its pid (written to
- * a private file, then hard-linked into place), so it is never seen empty. A dead or own pid is stale; content that is
- * not a pid is stale only if the very same file still holds it one poll later.
- */
 async function acquireLock(directory: string, signal?: AbortSignal): Promise<() => Promise<void>> {
   const parent = resolve(directory, "..");
   await mkdir(parent, { recursive: true, mode: 0o700 });
@@ -505,7 +403,6 @@ async function acquireLock(directory: string, signal?: AbortSignal): Promise<() 
       throw error;
     }
     const holder = /^[1-9][0-9]{0,9}\n$/.test(held.content) ? Number(held.content) : 0;
-    // In-process callers are already serialized, so our own pid here can only be a lock left by a crash.
     const stale = holder ? holder === process.pid || !alive(holder) : suspect?.ino === held.ino && suspect.content === held.content;
     if (stale) {
       await unlink(path).catch(() => undefined);
@@ -526,7 +423,6 @@ interface CacheGit {
   run(args: string[], input?: string | AsyncIterable<Uint8Array>, onProgress?: (line: string) => void): Promise<void>;
   capture(args: string[]): Promise<string>;
   objectType(id: string): Promise<string | null>;
-  /** Types of many objects in one process; null for a missing object. */
   objectTypes(ids: readonly string[]): Promise<Map<string, string | null>>;
 }
 
@@ -554,15 +450,10 @@ function cacheGit(directory: string, signal?: AbortSignal): CacheGit {
   };
 }
 
-/**
- * Git against one cache repository with the same hardening as push scratch repositories: no global or system
- * config, no hooks, no credential helpers, no protocols (all network traffic goes through GitRemote).
- */
 function runGit(directory: string, args: string[], options: {
   input?: string | AsyncIterable<Uint8Array>; onProgress?: (line: string) => void;
   signal?: AbortSignal; allowFailure?: boolean; cwd?: string;
 }): Promise<{ code: number | null; stdout: Buffer }> {
-  // A signal can be aborted before it is ever listened to; then Git must not start at all.
   if (options.signal?.aborted) return Promise.reject(new RepositoryCacheError("Repository cache operation was cancelled"));
   const child = spawn("git", ["--no-pager",
     "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
@@ -596,7 +487,7 @@ function runGit(directory: string, args: string[], options: {
   });
   const progress = options.onProgress ? new ProgressLines(options.onProgress) : undefined;
   child.stderr.on("data", (chunk: Buffer) => progress?.push(chunk));
-  child.stdin.on("error", () => { /* Early exit closes stdin; the exit status is authoritative. */ });
+  child.stdin.on("error", () => { });
   child.once("error", () => { clearTimeout(timer); reject(new RepositoryCacheError("Git could not be started on this host")); });
   child.once("close", (code, signal) => {
     clearTimeout(timer);
@@ -611,7 +502,6 @@ function runGit(directory: string, args: string[], options: {
     const input = options.input;
     let exited = false;
     child.once("close", () => { exited = true; });
-    // Resolves on drain, or when Git exits or its stdin closes or fails: a full pipe to a dead process never drains.
     const writable = () => new Promise<void>(resolveWritable => {
       const settle = () => {
         child.stdin.off("drain", settle).off("close", settle).off("error", settle);
@@ -622,7 +512,6 @@ function runGit(directory: string, args: string[], options: {
       child.once("close", settle);
     });
     void (async () => {
-      // Leaving the loop early returns the source, which closes the download behind it.
       for await (const chunk of input) {
         if (exited || child.stdin.destroyed) break;
         if (!child.stdin.write(chunk)) await writable();

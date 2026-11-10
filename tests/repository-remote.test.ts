@@ -26,7 +26,6 @@ test("repository remotes are credential-free https clone URLs for every provider
     const url = new URL(remote);
     assert.equal(url.protocol, "https:");
     assert.deepEqual([url.username, url.password, url.search, url.hash], ["", "", "", ""]);
-    // The host's fetch client accepts exactly these URLs.
     assert.doesNotThrow(() => new GitRemote({ url: remote, authorization: "Basic eDp5" }));
   }
 });

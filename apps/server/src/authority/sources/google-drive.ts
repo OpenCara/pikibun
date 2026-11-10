@@ -4,12 +4,6 @@ import { fail } from '../../http.js';
 import { accountRejected, clean, json, notFound, outsideSource, rateLimited, textBody, upstream, type DocumentAdapter, type ItemView } from './document-http.js';
 import { docxFile, docxText } from './office.js';
 
-/**
- * Google Drive as a service account: its owner shares a folder or file with the account's email, as with a Notion
- * integration, and sessions read what is shared under the bound item (drive.readonly). The key is signed into a
- * short-lived token here; neither ever leaves the control plane. Google Docs read as Markdown, Sheets as CSV, Slides
- * as text, text files as they are; folders list their files.
- */
 export const googleTokenUri = 'https://oauth2.googleapis.com/token';
 export const driveApi = 'https://www.googleapis.com/drive/v3';
 const scope = 'https://www.googleapis.com/auth/drive.readonly';
@@ -27,11 +21,9 @@ function parseKey(secret: string): ServiceKey {
 
 const base64url = (value: Buffer | string) => Buffer.from(value).toString('base64url');
 
-/** Access tokens by key, until shortly before they expire; at most 100 kept. */
 const tokens = new Map<string, { token: string; expires: number }>();
 
 async function accessToken(secret: string): Promise<string> {
-  // A member who signed in to Google: the control plane already refreshed the token.
   const signedIn = JSON.parse(secret) as { mode?: string; accessToken?: string };
   if (signedIn.mode === 'oauth' && typeof signedIn.accessToken === 'string') return signedIn.accessToken;
   const cacheKey = createHash('sha256').update(secret).digest('hex');
@@ -97,7 +89,6 @@ async function metadata(secret: string, id: string): Promise<DriveFile> {
   return file(await driveJson(secret, `/files/${encodeURIComponent(id)}?fields=${fileFields}&supportsAllDrives=true`));
 }
 
-/** Requires `target` to be `root` or in a folder under it, following Drive parents a bounded way up. */
 async function requireUnder(secret: string, root: string, target: DriveFile): Promise<void> {
   if (target.id === root) return;
   let parents = target.parents;
@@ -114,7 +105,6 @@ async function requireUnder(secret: string, root: string, target: DriveFile): Pr
 const textTypes = /^(text\/|application\/(json|xml|x-yaml|yaml|javascript|x-sh|sql|toml|x-toml|csv)\b)/;
 const textNames = /\.(md|markdown|txt|csv|tsv|json|ya?ml|toml|xml|html?|css|js|ts|py|sh|sql|ini|cfg|log)$/i;
 
-/** The export in `mimeType`; 'unsupported' where Drive doesn't export it so (400), 'refused' where it won't (403, too large). */
 async function exported(secret: string, item: DriveFile, mimeType: string): Promise<{ text: string; truncated: boolean } | 'unsupported' | 'refused'> {
   const answer = await drive(secret, `/files/${encodeURIComponent(item.id)}/export?mimeType=${encodeURIComponent(mimeType)}`, 'text', textLimit);
   if (answer.status === 200) return textBody(answer);
@@ -126,7 +116,6 @@ async function exported(secret: string, item: DriveFile, mimeType: string): Prom
 
 async function content(secret: string, item: DriveFile): Promise<{ content?: string; note?: string; truncated: boolean }> {
   if (item.type === 'document') {
-    // Markdown where Drive exports it; plain text otherwise.
     let body = await exported(secret, item, 'text/markdown');
     if (body === 'unsupported') body = await exported(secret, item, 'text/plain');
     return typeof body === 'object' ? { content: body.text, truncated: body.truncated } : { note: 'Google Drive could not export this document (it may be too large).', truncated: true };
@@ -143,7 +132,6 @@ async function content(secret: string, item: DriveFile): Promise<{ content?: str
   if (answer.status === 403 || answer.status === 404) notFound('Google Drive', share);
   if (answer.status !== 200) fail(502, 'source_unavailable', 'Google Drive could not download the file. Try again later.');
   if (word) {
-    // A Word file uploaded to Drive (not a Google Doc): its paragraphs.
     const text = answer.headers.get('x-pikibun-truncated') ? null : docxText(answer.bytes);
     return text === null ? { note: 'This Word document is too large or unreadable.', truncated: true } : { content: text, truncated: false };
   }
@@ -181,7 +169,6 @@ export const googleDriveAdapter: DocumentAdapter = {
       || (key.private_key_id !== undefined && (typeof key.private_key_id !== 'string' || !/^[0-9a-f]{1,64}$/.test(key.private_key_id)))) {
       fail(400, 'invalid_source_account', 'Paste the JSON key of a Google Cloud service account (type service_account).');
     }
-    // Only what signing needs is kept; the key's other fields are dropped.
     const secret = JSON.stringify({ client_email: key.client_email, private_key: key.private_key, ...(key.private_key_id ? { private_key_id: key.private_key_id } : {}) });
     await driveJson(secret, '/about?fields=user');
     return { secret, name: key.client_email };

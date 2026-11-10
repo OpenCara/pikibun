@@ -58,7 +58,6 @@ test('binding a repository adds its source; removing it, or its workspace, remov
   assert.deepEqual(sources(sqlite).map(row => row.id), ['r2', 'r3']);
   sqlite.exec("DELETE FROM workspaces WHERE id = 'one'");
   assert.deepEqual(sources(sqlite).map(row => row.id), ['r3']);
-  // A repository that can't be bound (the per-workspace limit) leaves no source behind.
   for (const index of [4, 5, 6, 7]) insertRepository(sqlite, `r${index}`, 'two', String(index));
   assert.throws(() => insertRepository(sqlite, 'r8', 'two', '8'), /limit/);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM workspace_sources WHERE workspace_id = 'two'").get()!.n, 5);
@@ -76,13 +75,11 @@ test('sources are immutable, and a git source needs its own repository in its ow
   assert.throws(() => insert.run('no-binding', 'one', 'git', null), /needs its workspace repository|CHECK/);
   assert.throws(() => insert.run('notion-with-repository', 'one', 'notion', 'r1'), /CHECK/);
   assert.throws(() => insert.run('other-kind', 'one', 'drive', null), /CHECK/);
-  // Other kinds have no repository; their details are in their own table, which needs a source of that kind.
   insert.run('notion', 'one', 'notion', null);
   const detail = sqlite.prepare(`INSERT INTO document_sources (source_id, workspace_id, kind, item_id, item_type, title, url, created_by) VALUES (?, ?, ?, ?, 'page', 'Specs', 'https://www.notion.so/x', 'owner')`);
   const page = '0123abcd-0123-4567-89ab-0123456789ab';
   assert.throws(() => detail.run('r1', 'one', 'git', page), /CHECK|needs its workspace source/);
   assert.throws(() => detail.run('notion', 'two', 'notion', page), /needs its workspace source/);
-  // A source's details are of its own kind.
   assert.throws(() => detail.run('notion', 'one', 'google-drive', page), /needs its workspace source/);
   detail.run('notion', 'one', 'notion', page);
   assert.throws(() => sqlite.exec("UPDATE document_sources SET title = 'Other'"), /immutable/);
@@ -99,7 +96,6 @@ test('a workspace has at most 20 document sources, whatever inserts them', () =>
   const add = (workspace: string, index: number) => { source.run(`${workspace}-${index}`, workspace); detail.run(`${workspace}-${index}`, workspace, `item-${index}`); };
   for (let index = 0; index < 20; index++) add('one', index);
   assert.throws(() => add('one', 20), /document source limit reached/);
-  // Another workspace has its own 20.
   add('two', 0);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM document_sources WHERE workspace_id = 'one'").get()!.n, 20);
 });

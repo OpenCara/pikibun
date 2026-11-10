@@ -29,7 +29,7 @@ RUN node --input-type=module -e "import { nshBinary } from './scripts/nsh.mjs'; 
 COPY apps/nsh apps/nsh
 COPY packages/shared packages/shared
 COPY packages/client packages/client
-RUN pnpm build:preview
+RUN pnpm build:client
 
 FROM base AS build
 # Only the server and connector manifests: pnpm installs just the workspaces present.
@@ -41,7 +41,7 @@ COPY packages/shared packages/shared
 COPY packages/client packages/client
 COPY tsconfig.json ./
 RUN pnpm build:server
-COPY --from=web /app/dist/preview dist/preview
+COPY --from=web /app/dist/client dist/client
 
 FROM base AS runtime
 ENV NODE_ENV=production

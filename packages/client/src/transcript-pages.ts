@@ -1,21 +1,11 @@
 import type { EntryView, SessionView } from "../../shared/src/types";
 
-/**
- * Earlier entries a client holds for a paged view (a workspace that loads transcripts latest first), per conversation,
- * oldest first. Each list ends with the entry just before that conversation's first entry in the view
- * (`previousEntryId`), so it and the view read as one transcript.
- */
 export type EarlierEntries = ReadonlyMap<string, readonly EntryView[]>;
 
 function entriesOf(view: SessionView | null, conversationId: string): EntryView[] {
   return (view?.entries ?? []).filter(entry => entry.conversationId === conversationId);
 }
 
-/**
- * The earlier entries to keep when `next` replaces `previous`: those held already, plus the entries that slid out of the
- * view's window as new ones arrived, so nothing a reader saw disappears from the top. A conversation whose entries no
- * longer join up with its window (after a compaction, say) starts again from its window alone.
- */
 export function carryEarlier(earlier: EarlierEntries, previous: SessionView | null, next: SessionView): EarlierEntries {
   const kept = new Map<string, readonly EntryView[]>();
   for (const conversation of next.conversations ?? []) {
@@ -32,10 +22,6 @@ export function carryEarlier(earlier: EarlierEntries, previous: SessionView | nu
   return kept;
 }
 
-/**
- * The view as a reader sees it: each conversation's earlier entries before its window, and `olderEntries` counting only
- * what is still to load (absent once nothing is). The view itself when there are none.
- */
 export function withEarlier(view: SessionView, earlier: EarlierEntries): SessionView {
   if (!earlier.size) return view;
   const entries: EntryView[] = [];
@@ -61,7 +47,6 @@ export function withEarlier(view: SessionView, earlier: EarlierEntries): Session
   };
 }
 
-/** The entry a page of `conversationId`'s earlier entries is read before: the first one the reader holds. */
 export function firstHeld(view: SessionView, earlier: EarlierEntries, conversationId: string): string | undefined {
   return earlier.get(conversationId)?.[0]?.id ?? entriesOf(view, conversationId)[0]?.id;
 }

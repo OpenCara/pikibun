@@ -37,7 +37,9 @@ are `piki:<name>`, workspace extensions that a workspace chooses like any other 
    bound of a tool result (its first 50 KiB or 2000 lines, which would drop a log's end); a longer one is saved whole
    (up to 1 MiB, its start and end beyond that) in the worktree's `tool-output/`, and the call returns its start and,
    mostly, its end, where a failure's reason is, with a line between them naming the file (`apps/runner/src/tool-output.ts`;
-   the program tools' results get the same). A non-zero exit is the call's error, with the output.
+   the program tools' results get the same). The connector keeps the newest 40 saved outputs of a session and deletes
+   older ones as new ones are saved, and does the same for code mode's `codemode-output/`; backups and packs carry
+   what is kept. A non-zero exit is the call's error, with the output.
 4. **Never a token in sight.** In the sandbox the command holds only the proxy's placeholder (`GH_TOKEN`,
    `GITHUB_TOKEN`, `GITLAB_TOKEN`, `AZURE_DEVOPS_EXT_PAT`), never a credential. On the host (rule 9) it gets the host's
    `PATH`, `HOME`, `XDG_*` directories, D-Bus session (for keyrings), proxies and CA bundles, and its own variables
@@ -342,7 +344,7 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
       `piki:files`, and `piki:sources`, which the kinds replace (`connectorWorkspaceExtensions` still sends it to a
       connector from before the split as whether any kind is on). The listed ones take none of the 32 places, and a
       connector gets only those it reports, so no parser of before gets more than it takes.
-    - **Existing workspaces keep their tools.** Migration sqlite/0057 (postgres/0050) gives each, turned on, the
+    - **Existing workspaces keep their tools.** Migration sqlite/0058 (postgres/0051) gives each, turned on, the
       session-tool extensions it didn't list (they were on), but `piki:github` only with a GitHub repository and a
       kind's only with a source of that kind and unless it had turned `piki:sources` off: without one they offer
       nothing. Retired `piki:shell` and `piki:host-shell` are kept on where they were, for the connectors that still
@@ -578,7 +580,7 @@ kept by the session rather than the agent, so a long one survives the session cl
 | The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/authority/api-access.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
 | Added on binding; a connector's list; install requests refused | `apps/server/src/authority/extension-policy.ts` (`addPikiExtensions`), called from `authority/repositories.ts`; `apps/server/src/extensions.ts`; migrations `0048`/`0041` |
-| Session tools added with a source or by hand, listed off until then (note 38) | `packages/shared/src/host-extensions.ts` (`withSessionToolsListed`); `extension-policy.ts` (`workspaceExtensions`, `addPikiExtensions`, `addDocumentSourceExtension`, called from `authority/sources/sources.ts`); migrations `0057`/`0050`; tests in `tests/extensions.test.ts`, `tests/session-tool-extensions-migration.test.ts` |
+| Session tools added with a source or by hand, listed off until then (note 38) | `packages/shared/src/host-extensions.ts` (`withSessionToolsListed`); `extension-policy.ts` (`workspaceExtensions`, `addPikiExtensions`, `addDocumentSourceExtension`, called from `authority/sources/sources.ts`); migrations `0058`/`0051`; tests in `tests/extensions.test.ts`, `tests/session-tool-extensions-migration.test.ts` |
 | Workspace and host pages | `apps/nsh/src/settings/workspace-extensions.tsx`, `host-extensions.tsx` |
 | Tests | `tests/piki-extensions.test.ts`, `api-access.test.ts`, and in `push-broker`, `host-extensions`, `extensions`, `repositories`, `local-connector` |
 

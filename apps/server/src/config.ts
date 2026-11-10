@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { adminUserId } from './authority/index.js';
 import { ConnectorHubRegistry } from './connector-hub.js';
@@ -10,14 +11,10 @@ export interface ServerConfig {
   env: Env;
   host: string;
   port: number;
-  /** Honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a TLS-terminating proxy. */
   trustProxy: boolean;
-  /** The web client's build: the Native Shell client, `dist/preview` by default. */
   staticDir: string;
-  /** Optional, exact origin serving the NSH preview, with the same API and separate host-only cookies. */
   preview?: { origin: string; staticDir: string };
   databaseUrl: string;
-  /** `STORAGE_URL`, or null when it is unset: the server then stores no session backups. */
   storageUrl: string | null;
 }
 
@@ -37,15 +34,18 @@ const stringVars = [
   'LOCAL_MODE', 'LOCAL_CLAIM_SECRET', 'LOCAL_OWNER_ID', 'PASSWORD_AUTH', 'SIGNUP',
   'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'NOTION_CLIENT_ID', 'NOTION_CLIENT_SECRET', 'DROPBOX_CLIENT_ID', 'DROPBOX_CLIENT_SECRET',
   'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'MICROSOFT_TENANT', 'TENCENT_DOCS_CLIENT_ID', 'TENCENT_DOCS_CLIENT_SECRET',
-  'WEB_PUSH_CONTACT', 'EXPO_ACCESS_TOKEN', 'PIKIBUN_VERSION',
+  'WEB_PUSH_CONTACT', 'PIKIBUN_VERSION',
 ] as const;
 const LOOPBACK = ['127.0.0.1', '::1', 'localhost'];
+const CLIENT_BUILD = 'dist/client';
+const CLIENT_BUILD_BEFORE_RENAME = 'dist/preview';
 
-/**
- * Builds `Env` from process environment variables: opens the database named by `DATABASE_URL` and, only when it is set,
- * the backup storage named by `STORAGE_URL`, creates the connector hub and copies the documented string settings.
- * Throws `ConfigurationError` naming the offending variable; values are never included.
- */
+function clientBuildDirectory(configured: string | undefined): string {
+  const directory = resolve(configured || CLIENT_BUILD);
+  const namesMovedBuild = directory === resolve(CLIENT_BUILD_BEFORE_RENAME) && (!existsSync(directory) || existsSync(resolve(CLIENT_BUILD)));
+  return namesMovedBuild ? resolve(CLIENT_BUILD) : directory;
+}
+
 export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): Promise<ServerConfig> {
   const env = { APP_ORIGIN: '' } as Env;
   for (const name of stringVars) {
@@ -74,7 +74,6 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
     throw new ConfigurationError('SIGNUP must be "open", "invite" or "off" (unset: GitHub sign-ups are open and password sign-ups need an invite).');
   }
   const listenHost = processEnv.HOST || (env.LOCAL_MODE === 'true' ? '127.0.0.1' : '0.0.0.0');
-  // A local server is reachable from this machine only, and admits only the GitHub account that claimed it.
   if (env.LOCAL_MODE !== undefined) {
     if (!['true', 'false'].includes(env.LOCAL_MODE)) throw new ConfigurationError('LOCAL_MODE must be "true" or "false".');
     if (env.LOCAL_MODE === 'true') {
@@ -84,17 +83,16 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
       if (env.LOCAL_OWNER_ID !== undefined && !/^github:[1-9][0-9]*$/.test(env.LOCAL_OWNER_ID)) throw new ConfigurationError('LOCAL_OWNER_ID must be a GitHub user ID such as github:12345.');
     }
   }
-  const staticDir = resolve(processEnv.STATIC_DIR || 'dist/preview');
-  // The React web client is gone: a server still set to serve it says so rather than serving its build as NSH.
+  const staticDir = clientBuildDirectory(processEnv.STATIC_DIR);
   if (processEnv.STATIC_CLIENT && processEnv.STATIC_CLIENT !== 'nsh') {
     throw new ConfigurationError('STATIC_CLIENT: the React web client was removed. Remove STATIC_CLIENT, and STATIC_DIR if it names dist/web, to serve the Native Shell client.');
   }
   if (webBuild(staticDir) === 'other') {
-    throw new ConfigurationError(`STATIC_DIR (${staticDir}) holds a web page that isn't the Native Shell client, such as the removed React client's. Point STATIC_DIR at the NSH build (pnpm build writes it to dist/preview), or leave it unset.`);
+    throw new ConfigurationError(`STATIC_DIR (${staticDir}) holds a web page that isn't the Native Shell client, such as the removed React client's. Point STATIC_DIR at the NSH build (pnpm build writes it to dist/client), or leave it unset.`);
   }
   let preview: ServerConfig['preview'];
   if (processEnv.PREVIEW_ORIGIN) {
-    const previewDir = resolve(processEnv.PREVIEW_STATIC_DIR || 'dist/preview');
+    const previewDir = clientBuildDirectory(processEnv.PREVIEW_STATIC_DIR);
     try {
       const origin = new URL(processEnv.PREVIEW_ORIGIN);
       if (origin.origin !== processEnv.PREVIEW_ORIGIN || origin.protocol !== 'https:' || origin.origin === env.APP_ORIGIN || env.LOCAL_MODE === 'true') throw new Error();
@@ -103,7 +101,7 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
       throw new ConfigurationError('PREVIEW_ORIGIN must be a distinct https origin (no path or trailing slash), on a shared server.');
     }
     if (webBuild(previewDir) === 'other') {
-      throw new ConfigurationError(`PREVIEW_STATIC_DIR (${previewDir}) holds a web page that isn't the Native Shell client. Point it at the NSH build (dist/preview).`);
+      throw new ConfigurationError(`PREVIEW_STATIC_DIR (${previewDir}) holds a web page that isn't the Native Shell client. Point it at the NSH build (dist/client).`);
     }
   } else if (processEnv.PREVIEW_STATIC_DIR) {
     throw new ConfigurationError('PREVIEW_STATIC_DIR requires PREVIEW_ORIGIN.');
@@ -112,17 +110,12 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new ConfigurationError('PORT must be a TCP port number.');
   const trustProxyValue = processEnv.TRUST_PROXY ?? 'false';
   if (!['true', 'false'].includes(trustProxyValue)) throw new ConfigurationError('TRUST_PROXY must be "true" or "false".');
-  // Workspace owners may connect their own Postgres for session backups only when the operator opts in: the server then
-  // opens connections to hosts they choose, public ones unless private hosts are allowed as well.
   const workspaceDatabases = flag(processEnv, 'WORKSPACE_DATABASES');
   const workspaceDatabasePrivateHosts = flag(processEnv, 'WORKSPACE_DATABASE_PRIVATE_HOSTS');
   const databaseUrl = processEnv.DATABASE_URL || defaultDatabaseUrl;
-  // A backup holds a whole session, its owner's personal environment values included, so none is stored anywhere unless
-  // the operator names the store. Without one, only workspaces whose owner connected a database can keep backups.
   const storageUrl = processEnv.STORAGE_URL || null;
   if (storageUrl) env.BUCKET = openStorage(storageUrl, processEnv);
   env.DB = await openDatabase(databaseUrl);
-  // Loaded only when enabled, so a server without them (a local one, say) needs no Postgres driver installed.
   if (workspaceDatabases) {
     const { PostgresWorkspaceDatabases } = await import('./workspace-databases/postgres.js');
     env.WORKSPACE_DATABASES = new PostgresWorkspaceDatabases({ privateHosts: workspaceDatabasePrivateHosts });

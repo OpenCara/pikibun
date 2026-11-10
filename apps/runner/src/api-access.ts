@@ -11,36 +11,13 @@ import { fakeIpAddress, publicAddress } from "./egress.js";
 import { interceptionAuthority, type InterceptionAuthority } from "./interception-ca.js";
 import { RunnerError } from "./protocol.js";
 
-/*
- * Credentialed APIs (see `credentialedApiHosts`): HTTPS to these hosts ends at the session's egress proxy, which answers
- * with a certificate from the connector's own authority (interception-ca.ts), checks each request, and makes it at the
- * API itself with the session's credential from the control plane. The sandbox holds only API_TOKEN_PLACEHOLDER.
- *
- * Reads go with the session's read credential: for api.github.com a GitHub App installation token that can only read
- * the workspace's repositories the session owner can read; for gitlab.com and dev.azure.com the session owner's own
- * personal access token, which the control plane gives only to the owner's own hosts. Writes go only with a write lease
- * (`lease`): one approved call of a Pikibun extension's command (gh, glab, az) gets a placeholder naming it, and its
- * requests then go with the session owner's own credential, which again only the owner's own hosts get. Every other
- * write is refused here: comments, issues, merges and pushes stay with Pikibun's approved tools.
- */
-
-/** A GraphQL request's body; GitHub's own limit on a query is far below this. */
 const GRAPHQL_BYTES = 1024 * 1024;
-/** Another request's body (a write's JSON, a form of the website): read whole, as the upstream wants its length. */
 const BODY_BYTES = 16 * 1024 * 1024;
 const PATH_LENGTH = 8192;
-/** An answer's headers must arrive within this; its body may then take as long as it streams. */
 const UPSTREAM_TIMEOUT_MS = 60_000;
-/** An unavailable credential is asked for again after this, not at every request. */
 const UNAVAILABLE_CACHE_MS = 10_000;
-/** A credential isn't used within this much of its expiry. */
 const EXPIRY_MARGIN_MS = 5 * 60_000;
 const REDIRECTS = 3;
-/**
- * Where GitHub's API sends downloads (Actions logs and artifacts, release assets, archives): the proxy follows its
- * redirects there itself, without the credential, so `gh run view --log` works whatever the network policy. Redirects
- * anywhere else reach the client as they are.
- */
 const GITHUB_DOWNLOAD_HOSTS = [/^codeload\.github\.com$/, /\.githubusercontent\.com$/, /\.blob\.core\.windows\.net$/];
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer",
   "transfer-encoding", "upgrade", "host", "authorization", "private-token", "cookie", "content-length", "expect"]);
@@ -51,33 +28,23 @@ export interface UpstreamResponse { status: number; headers: IncomingHttpHeaders
 export type ApiUpstream = (request: UpstreamRequest) => Promise<UpstreamResponse>;
 
 export interface ApiAccessOptions {
-  /** Asks the control plane for the session's `access` credential for `host` (an ApiCredentialGrant); refusals throw. */
   credential: (host: string, access: ApiAccessKind) => Promise<unknown>;
-  /** The session's current grant, for its network policy. */
   grant: () => Promise<EgressGrant>;
   record: (entry: ApiEntry) => void;
-  /** Overridable for tests: the authority, and requests to the API (by default, to its public addresses only). */
   authority?: InterceptionAuthority;
   upstream?: ApiUpstream;
 }
 
-/** What one credentialed API host is, for the proxy: which of its requests are the API's, and how a credential is chosen. */
 export interface ApiRules {
   provider: CredentialedApiProvider;
   name: string;
-  /** Whether a request to `pathname` is the API's; others go on as through a tunnel, without a credential. */
   api(pathname: string): boolean;
-  /** Whether `pathname` is its GraphQL endpoint, where a POST of a query only reads. */
   graphql(pathname: string): boolean;
-  /** What picks the credential for `pathname`: the repository (owner/name) or the account (an organization) it is about. */
   scope(pathname: string): { repository?: string; account?: string };
-  /** Only requests that carry the placeholder (from a tool Pikibun set up) get a credential, not every request to the host. */
   placeholderOnly: boolean;
-  /** Where its API redirects downloads: fetched here, without the credential. */
   downloads: readonly RegExp[];
 }
 
-/** The owner/name a REST path is about, as `/repos/{owner}/{name}/...` names it. */
 export function restRepository(pathname: string): string | undefined {
   const parts = pathname.split("/");
   if (parts[1] !== "repos" || !parts[2] || !parts[3]) return undefined;
@@ -90,12 +57,10 @@ export const apiRules: Readonly<Record<string, ApiRules>> = Object.freeze({
     scope: (pathname: string) => { const repository = restRepository(pathname); return repository ? { repository } : {}; },
     placeholderOnly: false, downloads: GITHUB_DOWNLOAD_HOSTS,
   },
-  // gitlab.com is its website too: only /api/ is the API, and only what carries the placeholder (glab's GITLAB_TOKEN) gets a credential.
   "gitlab.com": {
     provider: "gitlab", name: "GitLab", api: (pathname: string) => pathname.startsWith("/api/"), graphql: (pathname: string) => pathname === "/api/graphql",
     scope: () => ({}), placeholderOnly: true, downloads: [],
   },
-  // dev.azure.com/{organization}/...: a personal access token is per organization.
   "dev.azure.com": {
     provider: "azure-devops", name: "Azure DevOps", api: () => true, graphql: () => false,
     scope: (pathname: string) => { const account = pathname.split("/")[1]; return account ? { account: account.toLowerCase() } : {}; },
@@ -103,7 +68,6 @@ export const apiRules: Readonly<Record<string, ApiRules>> = Object.freeze({
   },
 } satisfies Record<string, ApiRules>);
 
-/** A credential grant as the control plane sends it; anything else is refused rather than half-used. */
 export function parseApiCredentialGrant(value: unknown): ApiCredentialGrant {
   const invalid = () => new RunnerError(502, "Invalid API credential from the control plane");
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
@@ -130,25 +94,18 @@ export function parseApiCredentialGrant(value: unknown): ApiCredentialGrant {
 const READ_ONLY = "sandboxed commands only read through the GitHub API. Comments, issues, merges and pushes go through Pikibun's approved tools "
   + "(github_comment, github_issue, github_merge, git_push)";
 
-/** What a request may do: read (GET, HEAD), what its GraphQL document says (a POST to the GraphQL endpoint), or write. */
 export function apiRule(rules: Pick<ApiRules, "graphql">, method: string, pathname: string): "read" | "graphql" | "write" {
   if (method === "GET" || method === "HEAD") return "read";
   if (method === "POST" && rules.graphql(pathname)) return "graphql";
   return "write";
 }
 
-/** Why a write without a write lease is refused. */
 function unleasedWrite(rules: ApiRules, what: string): string {
   if (rules.provider === "github") return `${what}: ${READ_ONLY}, or the gh tool (piki:gh), approved, on the session owner's own host`;
   const tool = rules.provider === "gitlab" ? "the glab tool (piki:glab)" : "the az tool (piki:azure-cli)";
   return `${what}: sandboxed commands only read through the ${rules.name} API; it writes only with ${tool}, approved, on the session owner's own host`;
 }
 
-/**
- * Whether a request carries Pikibun's placeholder, and the write lease it names: in its Authorization (`Bearer`, `token`,
- * or Basic with it as the password, as az devops sends a PAT) or GitLab's PRIVATE-TOKEN. `own`: a credential of the
- * command's own instead.
- */
 export function placeholderOf(headers: IncomingHttpHeaders): { placeholder: boolean; lease?: string; own: boolean } {
   const values: string[] = [];
   const authorization = headers.authorization;
@@ -166,7 +123,6 @@ export function placeholderOf(headers: IncomingHttpHeaders): { placeholder: bool
 
 function json(response: ServerResponse, status: number, message: string): void {
   if (response.headersSent) { response.destroy(); return; }
-  // GitHub's own error shape, which gh and Octokit show as they are; glab and az show `message` too.
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
   response.end(`${JSON.stringify({ message, documentation_url: "https://github.com/OpenCara/pikibun#network-access" })}\n`);
 }
@@ -182,13 +138,6 @@ async function body(request: IncomingMessage, limit: number): Promise<Uint8Array
   return Buffer.concat(chunks);
 }
 
-/**
- * The addresses the proxy connects to for `host`, an API host or a download host of its redirects: public ones only,
- * or the fake-IP addresses of a proxy on the host (fakeIpAddress). Those are let through here, unlike for tunnels: these
- * hosts are fixed names, and the request goes over TLS checked against the name with Node's own roots, so a fake-IP
- * proxy can only pass it on to the API itself, while tunnels go wherever the workspace's network policy lets a session
- * name. Hosts behind such a proxy (where DNS answers 198.18.0.1 for api.github.com) otherwise get no API at all.
- */
 export async function upstreamAddresses(host: string, lookup: (host: string) => Promise<{ address: string; family: number }[]>
   = name => dnsLookup(name, { all: true, verbatim: true })): Promise<{ address: string; family: number }[]> {
   let addresses: { address: string; family: number }[];
@@ -202,7 +151,6 @@ export async function upstreamAddresses(host: string, lookup: (host: string) => 
   return addresses.slice(0, 8);
 }
 
-/** A request to `url` at its public addresses only, connected to exactly the addresses checked, without redirects. */
 export const publicUpstream: ApiUpstream = async ({ url, method, headers, body, signal }) => {
   const host = url.hostname.replace(/^\[|\]$/g, "");
   const checked = await upstreamAddresses(host);
@@ -211,7 +159,6 @@ export const publicUpstream: ApiUpstream = async ({ url, method, headers, body, 
     else callback(null, checked[0]!.address, checked[0]!.family);
   };
   return new Promise((resolve, reject) => {
-    // Its own agent: never a proxy from the connector's environment, which would resolve the name itself.
     const request = httpsRequest(url, { method, headers: body ? { ...headers, "content-length": String(body.byteLength) } : headers,
       lookup, agent: new HttpsAgent({ keepAlive: false, lookup }), ...(signal ? { signal } : {}) }, response => {
       request.setTimeout(0);
@@ -223,11 +170,6 @@ export const publicUpstream: ApiUpstream = async ({ url, method, headers, body, 
   });
 };
 
-/**
- * The credential for a request: about `repository` (owner/name), the one that covers it, or none; about `account` (an
- * Azure DevOps organization the path names), that account's, or none; otherwise the one for the owner a GraphQL query
- * names, `owner`, or the first.
- */
 export function credentialFor(credentials: ApiCredential[], scope: { repository?: string; account?: string }, owner?: string): ApiCredential | undefined {
   if (scope.repository) {
     const name = scope.repository.toLowerCase();
@@ -241,7 +183,6 @@ export function credentialFor(credentials: ApiCredential[], scope: { repository?
   return credentials.find(credential => credential.account.toLowerCase() === wanted) ?? credentials[0];
 }
 
-/** One session's credentialed APIs, inside its egress proxy (see EgressProxy's tunnels). */
 export class ApiAccess {
   readonly #options: ApiAccessOptions;
   readonly #authority: InterceptionAuthority;
@@ -250,7 +191,6 @@ export class ApiAccess {
   readonly #hosts = new WeakMap<object, string>();
   readonly #credentials = new Map<string, { grant: ApiCredentialGrant; until: number }>();
   readonly #pending = new Map<string, Promise<ApiCredentialGrant>>();
-  /** The write leases of the calls running now (see `lease`). */
   readonly #leases = new Set<string>();
 
   constructor(options: ApiAccessOptions) {
@@ -261,20 +201,14 @@ export class ApiAccess {
     this.#server.on("clientError", (_error, socket) => socket.destroy());
   }
 
-  /** Whether the proxy answers for `host` itself. */
   handles(host: string): boolean { return this.#authority.hosts.includes(host) && apiRules[host] !== undefined; }
 
-  /**
-   * A write lease for one approved call: the placeholder its command gets instead of the plain one, whose requests may
-   * write as the session owner (where the control plane gives this host the owner's credential) until it is released.
-   */
   lease(): { token: string; release(): void } {
     const lease = randomBytes(32).toString("base64url");
     this.#leases.add(lease);
     return { token: apiWriteToken(lease), release: () => { this.#leases.delete(lease); } };
   }
 
-  /** Takes over a tunnel to `host` the client asked for, answered by the proxy itself over TLS. */
   intercept(client: Duplex, head: Buffer, host: string): void {
     if (head.length) client.unshift(head);
     const socket = new TLSSocket(client, { isServer: true, secureContext: this.#authority.context(host), ALPNProtocols: ["http/1.1"] });
@@ -328,8 +262,6 @@ export class ApiAccess {
     if (!path.startsWith("/") || path.length > PATH_LENGTH) return refuse(400, "Invalid API request path");
     const carried = placeholderOf(request.headers);
     const leased = carried.lease !== undefined && this.#leases.has(carried.lease);
-    // The API's requests, as its rules and the placeholder say; anything else to the host (gitlab.com's website) goes on as
-    // through a tunnel, where the policy allows the host, without a credential.
     const isApi = rules.api(pathname) && (!rules.placeholderOnly || carried.placeholder);
     const rule = isApi ? apiRule(rules, method, pathname) : "read";
     if (isApi && rule === "write" && !leased) return refuse(403, unleasedWrite(rules, `${method} ${pathname.slice(0, 200)}`));
@@ -364,26 +296,21 @@ export class ApiAccess {
     let access: ApiAccessKind = "read";
     if (!isApi) {
       if (!open) return refuse(403, `This workspace's network policy doesn't allow ${host}; Pikibun answers only its API (${rules.name}'s command-line tool) for this session`);
-      // As it would have gone through a tunnel; only the placeholder is held back.
       if (carried.own) {
         if (request.headers.authorization) headers.authorization = request.headers.authorization;
         if (request.headers["private-token"] !== undefined) headers["private-token"] = [request.headers["private-token"]].flat().join(", ");
       }
       reason = "not the API, without a credential";
     } else if (carried.own) {
-      // A credential the command brought itself, as it could have sent through a tunnel the policy allows.
       if (!open) return refuse(403, `This request carries its own credential, and this workspace's network policy doesn't allow ${host}; leave the token Pikibun sets (GH_TOKEN, GITLAB_TOKEN, AZURE_DEVOPS_EXT_PAT) as it is`);
       if (request.headers.authorization) headers.authorization = request.headers.authorization;
       if (request.headers["private-token"] !== undefined) headers["private-token"] = [request.headers["private-token"]].flat().join(", ");
       reason = "the command's own credential";
     } else {
       const scope = rules.scope(pathname);
-      // Only a grant that names the API comes with a credential for it; the placeholder goes no further either way.
       const named = grant.apis?.some(api => api.host === host) === true;
       const none = (what: string): ApiCredentialGrant => ({ available: false, cacheSeconds: 0,
         reason: `Pikibun gives this session no credential for the ${rules.name} API (only sessions that clone their workspace's ${what} repositories get one)` });
-      // An approved call's requests all go as the session owner where this host gets their credential; its reads otherwise
-      // as any other.
       let available: ApiCredentialGrant = named ? await this.#credential(host, "read") : none(rules.name);
       if (leased && named) {
         const write = await this.#credential(host, "write");
@@ -405,8 +332,6 @@ export class ApiAccess {
     let upstream: UpstreamResponse;
     try {
       upstream = await this.#upstream({ url: new URL(`https://${host}${path}`), method, headers, ...(payload ? { body: payload } : {}) });
-      // Downloads the API points elsewhere are fetched here, without the credential.
-      // Each hop's Location is relative to the URL that answered it.
       let current = new URL(`https://${host}${path}`);
       for (let hop = 0; isApi && method === "GET" && hop < REDIRECTS && [301, 302, 303, 307, 308].includes(upstream.status); hop++) {
         let location: URL;
@@ -422,7 +347,6 @@ export class ApiAccess {
     } catch (error) {
       return refuse(502, error instanceof RunnerError ? error.message : `${host} could not be reached`);
     }
-    // A credential the API no longer takes is asked for again at the next request.
     if (upstream.status === 401 && credential) this.#credentials.delete(`${access} ${host}`);
     this.#options.record({ target, outcome: "allowed", reason: `${reason} (${upstream.status})` });
     const answer: Record<string, string | string[]> = {};
@@ -436,17 +360,8 @@ export class ApiAccess {
   }
 }
 
-/**
- * Whether a GraphQL document may define a mutation or subscription: strings and comments are set aside, then any word
- * `mutation` or `subscription` outside every selection set (`{ ... }`) counts, wherever it stands. GraphQL ignores
- * commas and a byte order mark as it does spaces, so an operation needn't start a line or follow a `}` (`,mutation{...}`,
- * `query{a},mutation{b}`). A document it can't read as balanced braces counts too: the proxy rather refuses a read than
- * lets a write through as one, and for gitlab.com and dev.azure.com, nothing but this stands between the session owner's
- * own token and a write no one approved.
- */
 export function graphqlWrites(query: string): boolean {
   const text = query.replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|#[^\n\r]*/g, " ");
-  // A string or block string left open is no document to read.
   if (/"/.test(text)) return true;
   let depth = 0;
   let outside = "";

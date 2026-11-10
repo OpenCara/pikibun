@@ -12,9 +12,6 @@ import { Card } from "../settings/accounts";
 import { CodeView, filesHref, filesUnavailable, ImageView } from "./Files";
 import { TabPage, type PanelTabProps } from "./parts";
 
-// The session panel's Browser tab, as the web app's (session-browser.tsx): what the agent's browser tool saw, read from
-// the reports and screenshots it leaves in the worktree's browser-output directory. It follows the newest call.
-
 const missing = (error: string) => /no such file|not found/i.test(error);
 function stampTime(stamp: string): string {
   const match = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(\d{3})$/.exec(stamp);
@@ -51,7 +48,6 @@ function BrowserCalls(props: PanelTabProps) {
   const index = () => (shown() ? stamps().indexOf(shown()!) : -1);
   const older = () => (index() >= 0 && index() < stamps().length - 1 ? stamps()[index() + 1] : undefined);
   const newer = () => (index() > 0 ? stamps()[index() - 1] : undefined);
-  // The agent's calls change the directory: read it again as the conversation moves on.
   let seen = "";
   effect(() => {
     const watched = `${props.session()?.activity ?? ""}|${props.view()?.entries.at(-1)?.id ?? ""}|${props.view()?.entries.length ?? 0}`;
@@ -126,7 +122,6 @@ function ReportView(props: { sessionId: string; report: BrowserReport; stamp: st
   );
   return (
     <View style={{ gap: 12 }}>
-      {/* .browser-address: the page's address, like a browser's. */}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.medium, borderWidth: 1, borderColor: palette().border,
         backgroundColor: palette().surface }}>
         <Icon name={/^https:/i.test(url()) ? "lock" : "globe"} size={14} color={palette().muted} />

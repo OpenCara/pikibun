@@ -8,15 +8,10 @@ import { ImageView } from "../session-panel/Files";
 import { palette, radius, text } from "../theme";
 import { Banner, Button, FormSheet } from "../ui";
 
-// A transcript entry's images, as the web app's (entry-images.tsx): a thumbnail for each, read from the host as its row
-// is drawn (the transcript's list draws only rows near the screen), and the whole image in a sheet when it is pressed.
-
 const caches = entryImageCaches(href => untracked(session).api<{ image: EntryImage }>(href));
 
-/** Thumbnails this tall, at their own aspect ratio up to twice as wide. */
 const HEIGHT = 120;
 
-/** The image at `href()`, of `size`, as a data: URL once loaded, or why it couldn't be. Rows are recycled, so `href` may change. */
 function createEntryImage(href: () => string, size: EntryImageSize) {
   const cache = caches[size];
   const source = signal<string | undefined>(undefined);
@@ -39,7 +34,6 @@ function createEntryImage(href: () => string, size: EntryImageSize) {
 
 const href = (sessionId: string, entryId: string, index: number, size: EntryImageSize) => entryImageHref(sessionId, entryId, index, size);
 
-/** Thumbnails of the images an entry gave the model, in its order; pressing one shows it whole. `end`: a user message's, on the right. */
 export function EntryImages(props: { sessionId: string; entryId: string; images: { mimeType: string }[]; end?: boolean }) {
   const open = signal<number | null>(null);
   const indexed = () => props.images.map((image, index) => ({ mimeType: image.mimeType, index }));
@@ -70,7 +64,6 @@ export function EntryImages(props: { sessionId: string; entryId: string; images:
 function Thumbnail(props: { href: string; label: string; onOpen: () => void }) {
   const image = createEntryImage(() => props.href, "thumbnail");
   const size = signal<{ width: number; height: number } | null>(null);
-  // A recycled row's new image has its own size.
   effect(() => { void props.href; size.set(null); });
   const width = () => {
     const known = size();

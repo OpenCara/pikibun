@@ -16,9 +16,6 @@ import { HostAdminsSection, HostCommandGrantsSection, HostCompactionSection, Hos
 import { HostExtensionsSection } from "./host-extensions";
 import { SectionPage, type SectionProps } from "./parts";
 
-// Settings → Hosts, as the web app's (settings/HostsSettings.tsx): the hosts you pair, those shared with you, and
-// each host's own page.
-
 const hostsInfo = "Hosts are the Pis you pair. A paired host is yours, not a workspace's: it runs a dedicated app runtime you can use in every workspace you belong to, and stays private to you until you share it with one. Whoever operates a host sees the prompts and repository files processed on it, including private source, but never receives a GitHub token. Model credentials stay in Pi on the host. Status refreshes every 10 seconds.";
 
 const count = (value: number, singular: string, plural: string) => `${value} ${value === 1 ? singular : plural}`;
@@ -63,7 +60,6 @@ function HostList(props: { connectors: ConnectorInfo[]; loading: boolean; error:
   );
 }
 
-/** Hosts other members shared into your workspaces. */
 function SharedWithYou() {
   const data = useAppData();
   return (
@@ -103,7 +99,6 @@ function PairHostSheet(props: { open: boolean; onClose: () => void; refresh: () 
   const pairing = signal<ConnectorPairing | null>(null);
   const expired = signal(false);
   const action = createAction();
-  // A code is cleared as it expires.
   effect(() => {
     const current = pairing();
     if (!current) return;
@@ -170,7 +165,6 @@ function HostDetail(props: { id: string; connectors: ConnectorInfo[] | null; loa
       </View>
       <ResourceState inline loading={props.loading && !props.connectors} error={props.error} retry={props.refresh}>
         <If when={connector()} else={<EmptyState title="Host not found" />}>
-          {/* Keyed by host: another host is another form. */}
           <Each of={[props.id]} key={id => id}>{() => <HostSections connector={connector()!} connectorOf={connector} refresh={props.refresh} go={props.go} />}</Each>
         </If>
       </ResourceState>
@@ -180,7 +174,6 @@ function HostDetail(props: { id: string; connectors: ConnectorInfo[] | null; loa
 
 function HostSections(props: { connector: ConnectorInfo; connectorOf: () => ConnectorInfo | undefined; refresh: () => void; go: SectionProps["go"] }) {
   const data = useAppData();
-  // The newest listing of this host (status refreshes every 10 seconds).
   const connector = () => props.connectorOf() ?? props.connector;
   const share = createAction();
   const revokeAction = createAction();

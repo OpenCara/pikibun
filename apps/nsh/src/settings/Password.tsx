@@ -7,10 +7,6 @@ import { Field, TextField } from "../form";
 import { Banner, Button, CardBody, confirm, Feedback, Row, Section, Small } from "../ui";
 import { SectionPage, SettingsActions, type SectionProps } from "./parts";
 
-// Settings → Password, as the web app's (settings/PasswordSettings.tsx): how the account signs in, and setting,
-// changing or removing its password.
-
-/** An action that may need a recent GitHub sign-in, and says so for the "Sign in with GitHub again" offer. */
 function createGuardedAction() {
   const action = createAction();
   const signInAgain = signal(false);
@@ -33,7 +29,6 @@ function SignInAgain() {
   );
 }
 
-/** Only for an account without a username yet, such as a test account: GitHub accounts choose theirs before using the app. */
 function ChooseUsernameSection() {
   const username = signal(suggestedUsername(untracked(session).user.githubLogin));
   const action = createAction();
@@ -52,7 +47,6 @@ function ChooseUsernameSection() {
   );
 }
 
-/** How this account signs in: its username, GitHub, and whether it has a password. */
 function SignInSection(props: { passwords: boolean }) {
   const user = () => session().user;
   return (
@@ -66,10 +60,6 @@ function SignInSection(props: { passwords: boolean }) {
   );
 }
 
-/**
- * Sets the first password, or changes it. A password account needs its current one; a GitHub account can leave it
- * out within 15 minutes of signing in with GitHub.
- */
 function PasswordForm() {
   const user = () => session().user;
   const changing = () => Boolean(user().hasPassword);
@@ -113,7 +103,6 @@ function PasswordForm() {
   );
 }
 
-/** A GitHub account goes back to signing in with GitHub only. */
 function RemovePasswordSection() {
   const current = signal("");
   const action = createGuardedAction();
@@ -144,7 +133,6 @@ function RemovePasswordSection() {
   );
 }
 
-/** Whether the server takes passwords, from its health check. */
 export function createPasswordAuth() {
   return createResource<{ passwordAuth?: boolean }>(() => "/api/health");
 }

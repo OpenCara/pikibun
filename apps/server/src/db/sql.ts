@@ -1,31 +1,10 @@
-/**
- * Dialect translation. Application SQL is written once in SQLite syntax; the Postgres provider rewrites each
- * statement text through `translateToPostgres` (memoized per text). The rewrite is token based so string
- * literals, comments and quoted identifiers are never touched.
- *
- * Rules (see the migration plan):
- *  - `?` placeholders → `$1, $2, …`; `? IS [NOT] NULL` gets a `::text` cast so Postgres can type the parameter.
- *  - `json_extract(x, '$.a.b')` → `((x)::jsonb #>> '{a,b}')`; `json_each(x)` → `jsonb_array_elements_text((x)::jsonb)`
- *    (a bare `JOIN json_each(...)` without ON becomes `CROSS JOIN`); `json_group_array(x)` → `COALESCE(jsonb_agg(x), '[]'::jsonb)::text`;
- *    `json_array(...)` → `jsonb_build_array(...)::text`; `json(x)` → canonical text `((x)::jsonb::text)`;
- *    `json_type(x, '$.a')` → SQLite type names; `json_set(x, '$.a', v)` → `jsonb_set(...)::text`.
- *  - `a IS b` / `a IS NOT b` with a non-NULL operand → `IS [NOT] DISTINCT FROM`.
- *  - `changes()` → one extra parameter the provider binds to the previous statement's row count.
- *  - `lower(hex(randomblob(16)))` → `replace(gen_random_uuid()::text, '-', '')`.
- *  - `COLLATE NOCASE` is dropped (NOCASE columns are `citext` in the Postgres schema).
- *  - Unaliased `FROM (subquery)` gets an alias; mixed-case aliases are double-quoted so Postgres keeps their case.
- */
-
 export interface PostgresStatement {
   text: string;
-  /** Number of `?` placeholders in the source statement. */
   placeholders: number;
-  /** True when the statement reads `changes()`; the provider binds the previous row count as parameter `placeholders + 1`. */
   changes: boolean;
 }
 
 export interface StatementShape {
-  /** INSERT, UPDATE, DELETE or REPLACE at the top level (possibly after a WITH prefix). */
   write: boolean;
   returning: boolean;
 }
@@ -112,7 +91,6 @@ function previous(tokens: Token[], from: number): number {
   while (i >= 0 && tokens[i]!.kind === 'space') i--;
   return i;
 }
-/** Index of the `)` closing the `(` at `open`. */
 function closing(tokens: Token[], open: number): number {
   let depth = 0;
   for (let i = open; i < tokens.length; i++) {
@@ -121,7 +99,6 @@ function closing(tokens: Token[], open: number): number {
   }
   throw new Error('Unbalanced parentheses in SQL statement.');
 }
-/** Top-level argument ranges `[from, to)` of the call whose `(` is at `open`. */
 function callArguments(tokens: Token[], open: number, close: number): [number, number][] {
   const ranges: [number, number][] = [];
   let start = open + 1, depth = 0;
@@ -152,7 +129,6 @@ class Translator {
   placeholders = 0;
   changes = false;
   private subqueries = 0;
-  /** Indices of `)` closing an unaliased FROM/JOIN subquery that needs an alias appended. */
   private readonly aliasAfter = new Set<number>();
   constructor(private readonly tokens: Token[]) {}
 
@@ -298,7 +274,6 @@ export function translateToPostgres(sql: string): PostgresStatement {
 
 const shapeCache = new Map<string, StatementShape>();
 
-/** Whether a statement writes rows and whether it has a RETURNING clause (used by the SQLite provider to compute `changes`). */
 export function statementShape(sql: string): StatementShape {
   const cached = shapeCache.get(sql);
   if (cached) return cached;

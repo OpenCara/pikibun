@@ -20,9 +20,7 @@ const remote = `https://${host}/team/app.git`;
 const credential: GitCredential = { id: 'acct', provider: 'git', host, organization: '', username: 'dev', token: 's3cret' };
 const basic = `Basic ${Buffer.from('dev:s3cret').toString('base64')}`;
 
-/** One pkt-line: four hex digits of length, then the (ASCII) payload. */
 const pkt = (line: string) => `${(line.length + 4).toString(16).padStart(4, '0')}${line}`;
-/** A protocol v0 advertisement as git http-backend sends it. */
 function advertisement(service: string, refs: [string, string][], capabilities = 'multi_ack symref=HEAD:refs/heads/main agent=git/2.45'): string {
   const lines = refs.map(([id, name], index) => pkt(`${id} ${name}${index === 0 ? `\0${capabilities}` : ''}\n`));
   return `${pkt(`# service=${service}\n`)}0000${lines.join('')}0000`;
@@ -35,7 +33,6 @@ const smart = (service: string, body: string): () => Response =>
   () => new Response(body, { headers: { 'Content-Type': `application/x-${service}-advertisement` } });
 
 interface Call { url: string; authorization: string | null; redirect: RequestRedirect | undefined }
-/** Serves Git's advertisements by URL; `anonymous` answers requests without credentials. */
 function server(t: TestContext, routes: Record<string, { authorized?: () => Response; anonymous?: () => Response }>): Call[] {
   const calls: Call[] = [];
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -66,12 +63,10 @@ test('a smart HTTP advertisement is parsed for refs, HEAD, peeled tags and the e
   assert.equal(defaultBranch(parsed), 'main');
   assert.equal(resolveRef(parsed, 'main'), main);
   assert.equal(resolveRef(parsed, 'feature/x'), feature);
-  // Annotated tags resolve to the commit they peel to; lightweight ones to what they name.
   assert.equal(resolveRef(parsed, 'v1'), feature);
   assert.equal(resolveRef(parsed, 'light'), main);
   assert.equal(resolveRef(parsed, 'missing'), null);
 
-  // Without a symref, HEAD's tip picks the branch; main before others sharing it.
   const plain = parseAdvertisement(new TextEncoder().encode(advertisement('git-upload-pack',
     [[feature, 'HEAD'], [main, 'refs/heads/main'], [feature, 'refs/heads/trunk']], 'multi_ack')), 'git-upload-pack')!;
   assert.equal(plain.head, null);
@@ -99,14 +94,12 @@ test('a plain Git server is read with Git smart HTTP and Basic auth, never follo
   assert.match(id, /^[0-9a-f]{40}$/);
   assert.notEqual(id, await plainRepositoryId('team/app'));
 
-  // There's no account to check: the user name is the login, and nothing is fetched.
   assert.deepEqual(await adapter.verify(credential), { login: 'dev' });
   assert.equal((await failure(adapter.verify({ ...credential, username: null }))).code, 'invalid_git_username');
   assert.equal((await failure(adapter.verify({ ...credential, host: 'localhost' }))).code, 'invalid_git_host');
   assert.deepEqual(await adapter.list(credential), { repositories: [], truncated: false });
   assert.equal(calls.length, 0);
 
-  // Private: the server refuses the anonymous read.
   assert.deepEqual(await adapter.repository(credential, { id, fullName: 'team/app.git' }),
     { id, fullName: 'team/app.git', defaultBranch: 'main', private: true });
   assert.deepEqual(calls.map(call => [call.url, call.authorization, call.redirect]), [[upload, basic, 'manual'], [upload, null, 'manual']]);
@@ -161,10 +154,8 @@ test('plain Git server paths, remotes and push access', () => {
   ] as const) assert.equal(plainRepositoryPath(host, input), path, input);
   assert.equal(validRepositoryName('git', 'a/b/c/d'), true);
   assert.equal(validRepositoryName('git', '.git'), false);
-  // The clone URL is the path as given: ".git" is never added or taken away.
   assert.equal(bindingRemote({ provider: 'git', host, fullName: 'team/app.git' }), remote);
   assert.equal(bindingRemote({ provider: 'git', host: `${host}:8443`, fullName: 'repo' }), `https://${host}:8443/repo`);
-  // A Git server's path is exact: `team/app` and `team/app.git` are two repositories, both bound at once.
   const plain = { bindingId: 'plain', provider: 'git' as const, host, repositoryId: 'x', fullName: 'team/app', lfs: true };
   const dotted = { bindingId: 'dotted', provider: 'git' as const, host, repositoryId: 'y', fullName: 'team/app.git', lfs: true };
   assert.equal(repositoryForRemote([plain, dotted], `https://${host}/team/app`)?.bindingId, 'plain');
@@ -174,11 +165,9 @@ test('plain Git server paths, remotes and push access', () => {
   assert.equal(repositoryForRemote([plain], `https://${host}/Team/App`), undefined);
   assert.equal(repositoryForRemote([plain], `https://${host.toUpperCase()}/team/app/`)?.bindingId, 'plain');
   assert.equal(repositoryForRemote([plain, dotted], `https://${host}/team/other.git`), undefined);
-  // git-lfs asks `<remote>.git/info/lfs` for a remote without ".git": that is the plain one, unless `.git` is bound too.
   assert.equal(findRepository([plain], `${host}/team/app.git`, true)?.bindingId, 'plain');
   assert.equal(findRepository([plain, dotted], `${host}/team/app.git`, true)?.bindingId, 'dotted');
   assert.equal(findRepository([plain], `${host}/team/app.git`)?.bindingId, undefined);
-  // Forges keep matching without case or ".git".
   const forge = { bindingId: 'forge', provider: 'gitlab' as const, host: 'gitlab.com', repositoryId: '1', fullName: 'Team/App', lfs: false };
   assert.equal(repositoryForRemote([forge, plain], 'https://gitlab.com/team/app')?.bindingId, 'forge');
 });
@@ -204,7 +193,6 @@ test('pushes to a plain Git server check receive-pack with the owner account, an
   assert.equal(await plainPushAllowed(credential, fullName), false);
   assert.equal((await pushTarget(access, pin, 'feature/x')).canPush, false);
   assert.ok(calls.filter(call => call.url.endsWith('git-receive-pack')).every(call => call.authorization === basic));
-  // Another host's pin never gets this account.
   assert.equal((await failure(pushTarget(access, { ...pin, host: 'other.example.com' }, 'main'))).code, 'repository_identity_changed');
   assert.equal(await branchTip(access, pin, 'feature/x'), feature);
   assert.equal(await branchTip(access, pin, 'missing'), null);

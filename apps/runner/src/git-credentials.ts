@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { killTree, windows } from "./platform.js";
 import { spawn } from "node:child_process";
 
-/** A definite failure to read the host's Git credential. Messages are fixed and never carry the credential. */
 export class HostCredentialError extends Error {
   constructor(message: string) { super(message); this.name = "HostCredentialError"; }
 }
@@ -11,11 +10,6 @@ export class HostCredentialError extends Error {
 const TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 
-/**
- * The host user's Git credential for a push remote, as an Authorization header. `git credential fill` asks the credential
- * helpers the owner configured (gh, the macOS keychain, Git Credential Manager, a store file) as their own `git push`
- * would, outside any repository, and never prompts: no terminal, askpass program or credential manager window.
- */
 export async function hostGitAuthorization(remote: string, options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {}): Promise<string> {
   let url: URL;
   try { url = new URL(remote); } catch { throw new HostCredentialError("Git remote URL is invalid"); }
@@ -23,7 +17,6 @@ export async function hostGitAuthorization(remote: string, options: { env?: Node
   if ((url.protocol !== "https:" && !loopback) || url.username || url.password || url.search || url.hash || /[\0\r\n]/.test(remote)) {
     throw new HostCredentialError("Git remote URL is invalid");
   }
-  // An empty GIT_ASKPASS also stops Git falling back to core.askPass and SSH_ASKPASS.
   const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "", GCM_INTERACTIVE: "never" };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete env[name];
   const fields = new Map<string, string>();
@@ -43,7 +36,6 @@ export async function hostGitAuthorization(remote: string, options: { env?: Node
 function fill(input: string, env: NodeJS.ProcessEnv, host: string, signal?: AbortSignal): Promise<string> {
   if (signal?.aborted) return Promise.reject(new HostCredentialError("Reading the host's Git credentials was interrupted"));
   const { promise, resolve, reject } = Promise.withResolvers<string>();
-  // Its own process group, so a credential helper that hangs is killed with Git. "/" keeps repository config out.
   const child = spawn("git", ["credential", "fill"], { cwd: windows ? homedir() : "/", env, detached: !windows, windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
   const chunks: Buffer[] = [];
   let size = 0;
@@ -61,12 +53,11 @@ function fill(input: string, env: NodeJS.ProcessEnv, host: string, signal?: Abor
     if (size > MAX_OUTPUT_BYTES) stop(new HostCredentialError("Git returned too much credential data"));
     else chunks.push(chunk);
   });
-  child.stdin.on("error", () => { /* Early exit closes stdin; the exit status is authoritative. */ });
+  child.stdin.on("error", () => { });
   child.once("error", () => { settle(); reject(new HostCredentialError("Git could not be started on this host")); });
   child.once("close", code => {
     settle();
     if (failure) reject(failure);
-    // Without a helper that knows the remote, Git would prompt; prompts are off, so it exits non-zero instead.
     else if (code !== 0) reject(new HostCredentialError(`No Git credentials for ${host} are set up on this host (for example with gh auth setup-git or a credential helper)`));
     else resolve(Buffer.concat(chunks).toString("utf8"));
   });

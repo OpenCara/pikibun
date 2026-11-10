@@ -28,41 +28,33 @@ type Route =
   | { name: "session"; id: string }
   | { name: "new"; workspaceId?: string }
   | { name: "open" }
-  /** Every session, searchable (the web app's Sessions screen). */
   | { name: "all-sessions" }
-  /** The sections, with the one `settingsAt` names beside them in the wide layout. */
   | { name: "settings" }
-  /** One section as a page of its own (phones). */
   | { name: "settings-section"; section: string; id?: string }
   | { name: "join"; token: string };
 
-/** Phones stack the list and the session; wider windows (tablets, desktops, the web) show a sidebar beside them. */
 const WIDE = 700;
 
 export function Root() {
   startPage();
   void applyStoredAppearance();
   void restore();
-  // This computer's host, where it was running when the app quit (desktops only).
   resumeThisComputer();
   const signedIn = () => auth().status === "signedIn";
   const shared = () => {
     const route = pageRoute();
     return route.name === "shared" ? route.token : null;
   };
-  /** An invite link opened while signed out: signing in asks to join its workspace. */
   const invite = () => {
     const route = pageRoute();
     return route.name === "join" ? route.token : undefined;
   };
   return (
     <View style={{ flex: 1, backgroundColor: palette().background }}>
-      {/* A share link needs no sign-in: its token is the access. */}
       <If when={shared()}
         else={
           <If when={auth().status !== "loading"} else={<Loading />}>
             <If when={signedIn()} else={<SignIn inviteToken={invite()} />}>
-              {/* A new GitHub account chooses its username before anything else; the route waits, invite links included. */}
               <If when={!(auth().status === "signedIn" && (auth() as { user: { usernameRequired?: boolean } }).user.usernameRequired)} else={<UsernameSetup />}>
                 <Shell />
               </If>
@@ -75,14 +67,10 @@ export function Root() {
   );
 }
 
-/** Everything behind sign-in. Created per sign-in, so lists never carry over to another account. */
 function Shell() {
   const data = createAppData();
-  // Where notifications are on for this browser: shown while the app is open, and pushes kept on this sign-in.
   createNotificationDelivery(untracked(session).user.id);
   const nav = createNavStack<Route>([{ name: "sessions" }]);
-  // A size of zero is no layout to follow (a minimized window; NSH 0.4's headless engine also reports 0×0 after an
-  // appearance change): the last real width stands.
   let lastWidth = 0;
   const width = computed(() => {
     const current = windowSize().width;
@@ -90,18 +78,10 @@ function Shell() {
     return lastWidth;
   });
   const wide = () => width() >= WIDE;
-  /** The session beside the sidebar in the wide layout; none shows the new-session home there. */
   const selected = signal<string | null>(null);
-  /** The workspace the wide layout's home starts a session in, when a link named one. */
   const homeWorkspace = signal<string | undefined>(undefined);
-  /** Bumped to start the home's form afresh (a new session after another, a link to a workspace's new session). */
   const homeKey = signal(0);
-  /**
-   * The section (and item) the wide layout's settings show beside their list. Choosing another changes it in place:
-   * replacing the page slid all of Settings in again, and swallowed a Back pressed while it did.
-   */
   const settingsAt = signal<{ section?: string; id?: string }>({});
-  /** The New workspace sheet, from the sidebar or the session list; once created, a session starts in it. */
   const creatingWorkspace = signal(false);
 
   function openSession(id: string) {
@@ -112,7 +92,6 @@ function Shell() {
       nav.push({ name: "session", id });
     }
   }
-  /** From a page above the list (new session, open by ID): the session takes that page's place. */
   function openFromPage(id: string) {
     if (wide()) {
       nav.popToRoot();
@@ -121,7 +100,6 @@ function Shell() {
       nav.replace({ name: "session", id });
     }
   }
-  /** A new session: the wide layout's home, or a page of its own on phones. */
   function startNew(workspaceId?: string) {
     if (wide()) {
       nav.popToRoot();
@@ -144,7 +122,6 @@ function Shell() {
       nav.push({ name: "settings" });
     }
   }
-  /** Goes where a link points: the address the app was opened at, a link inside the app. */
   function go(route: PageRoute) {
     switch (route.name) {
       case "home": nav.popToRoot(); break;
@@ -156,13 +133,10 @@ function Shell() {
       case "shared": break;
     }
   }
-  // The address the page was opened at, and any the user goes to by editing it or following a link.
   effect(() => {
     const route = pageRoute();
     untracked(() => go(route));
   });
-  // A browser sign-in started from an invite link returns to the app's root; pick the invite up where it left off. So
-  // does one started again for what needs a recent GitHub sign-in, such as setting a password: back to where it was.
   if (usesBrowserSession) {
     void Promise.all([takeRememberedInvite(), takeReturn()]).then(([token, back]) => {
       const at = untracked(pageRoute);
@@ -170,7 +144,6 @@ function Shell() {
       else if (back && at.name === "home") go(back);
     });
   }
-  // The address follows where the app is, so it can be shared or bookmarked.
   effect(() => {
     const top = nav.routes().at(-1);
     const beside = selected();
@@ -189,8 +162,6 @@ function Shell() {
       }
     });
   });
-  // A window narrowed while a session is open beside the sidebar keeps it open, as its own page; widened, the page goes
-  // back beside the sidebar. A new-session page becomes the wide layout's home the same way.
   effect(() => {
     const isWide = wide();
     untracked(() => {
@@ -246,7 +217,6 @@ function Shell() {
                               {() => <NewSessionForm home workspaceId={untracked(homeWorkspace)} onStarted={openFromPage} go={go} />}
                             </Each>
                           }>
-                          {/* Keyed by id: another session is another view, with its own stream, drafts and picks. */}
                           <Each of={selected() ? [selected()!] : []} key={id => id}>
                             {id => <SessionView id={id()} page={false} openSession={openSession} go={go} />}
                           </Each>
@@ -304,10 +274,6 @@ function Shell() {
   );
 }
 
-/**
- * The wide layout's sidebar, as the web app's (Sidebar.tsx): the app, a new session and opening one by ID; every session
- * by workspace; and the signed-in person, hosts and settings along its foot.
- */
 function Sidebar(props: {
   selectedId: string | null; home: boolean; onOpen: (id: string) => void; onNew: () => void; onOpenById: () => void; onAll: () => void; onSettings: (section?: string) => void;
   onNewIn: (workspaceId: string) => void; onWorkspaceSettings: (workspaceId: string) => void; onNewWorkspace: () => void;
@@ -333,7 +299,6 @@ function Sidebar(props: {
   );
 }
 
-/** The settings: the sections, and in the wide layout the chosen one beside them. */
 function SettingsPage(props: { section?: string; id?: string; wide: boolean; onOpen: (section: string) => void; go: (route: PageRoute) => void }) {
   const current = () => findSection(props.section);
   return (
@@ -343,7 +308,6 @@ function SettingsPage(props: { section?: string; id?: string; wide: boolean; onO
           <SectionList selected={current().id} onOpen={props.onOpen} />
         </View>
         <View style={{ flex: 1 }}>
-          {/* Keyed by section and item: each is made when it is chosen. */}
           <Each of={[`${current().id}\u0000${props.id ?? ""}`]} key={value => value}>
             {() => {
               const section = untracked(current);

@@ -4,7 +4,6 @@ import { workspaceDatabaseTlsModes, type WorkspaceDatabaseTls } from '../../../.
 import { fail } from '../http.js';
 import type { WorkspaceDatabaseTarget } from './types.js';
 
-/** Room for a CA bundle (a cloud provider's regional bundle is well within it). */
 export const maxCaCertificateLength = 262_144;
 const fields = ['host', 'port', 'database', 'user', 'password', 'tls', 'caCertificate'];
 const hostLabel = /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/;
@@ -14,7 +13,6 @@ function invalid(message: string): never {
   return fail(400, 'invalid_workspace_database', message);
 }
 
-/** A host name or IP address, lowercase, IPv6 without brackets. Whether it may be reached is decided once it is resolved. */
 export function databaseHost(value: unknown): string {
   if (typeof value !== 'string') invalid('Enter the database host name or IP address.');
   let host = value.trim().toLowerCase();
@@ -27,14 +25,12 @@ export function databaseHost(value: unknown): string {
   return host;
 }
 
-/** A database or role name: at most 63 bytes, as Postgres keeps them, without control characters. */
 function name(value: unknown, label: string): string {
   const text = typeof value === 'string' ? value.trim() : '';
   if (!text || Buffer.byteLength(text) > 63 || /[\x00-\x1f\x7f]/.test(text)) invalid(`Enter the ${label} (at most 63 bytes).`);
   return text;
 }
 
-/** Keeps only the PEM certificate blocks of a pasted CA bundle; each must parse. */
 function caCertificates(value: unknown): string {
   if (typeof value !== 'string' || value.length > maxCaCertificateLength) invalid('Paste the CA certificate in PEM format, at most 256 KiB.');
   const blocks = value.match(certificateBlock) ?? [];
@@ -47,11 +43,6 @@ function caCertificates(value: unknown): string {
   return `${blocks.join('\n')}\n`;
 }
 
-/**
- * Validated connection settings. The owner gives the host, port, database, user and password separately: a connection
- * string would also accept options that read files on the server (sslrootcert, sslkey) or name a unix socket.
- * The password is required on every save, so new settings never send the stored one to a different host.
- */
 export function databaseSettings(input: Record<string, unknown>): WorkspaceDatabaseTarget {
   if (Object.keys(input).some(key => !fields.includes(key))) invalid('Only host, port, database, user, password, tls and caCertificate may be set.');
   const host = databaseHost(input.host);

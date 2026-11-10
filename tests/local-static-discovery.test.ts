@@ -15,7 +15,6 @@ test("a packaged local server discovers its build without --static-dir, and serv
   t.after(() => rm(root, { recursive: true, force: true }));
   const dist = join(root, "dist"), web = join(dist, "web");
   await mkdir(web, { recursive: true });
-  // Match the published CLI's layout, with dependencies external to the server bundle.
   await symlink(join(repository, "node_modules"), join(root, "node_modules"), "junction");
   await cp(join(repository, "apps/server/migrations"), join(dist, "migrations"), { recursive: true });
   const bundle = join(dist, "local-server.mjs");
@@ -23,7 +22,6 @@ test("a packaged local server discovers its build without --static-dir, and serv
     bundle: true, splitting: false, platform: "node", format: "esm", target: "node24", packages: "external", logLevel: "silent" });
   const { defaultStaticDir, startLocalServer } = await import(pathToFileURL(bundle).href) as typeof import("../apps/server/src/local/launch.js");
   assert.equal(defaultStaticDir(), undefined);
-  // The NSH build the published CLI ships: its page, Native Shell's runtime and a web manifest.
   await writeFile(join(web, "index.html"), '<!doctype html><html><head></head><body>Packaged NSH</body></html>');
   assert.equal(defaultStaticDir(), undefined, "a page without its build artifacts is not a client build");
   await writeFile(join(web, "manifest.webmanifest"), '{}');

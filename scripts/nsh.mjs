@@ -1,15 +1,4 @@
 #!/usr/bin/env node
-/**
- * Runs the Native Shell CLI the client (apps/nsh) is built with, at the version pinned here, in apps/nsh:
- *
- *   node scripts/nsh.mjs <nsh arguments...>      # e.g. check, test, run --target ios
- *   node scripts/nsh.mjs --build-web [out]       # the web app into dist/preview (or out), as the server serves it
- *
- * The CLI is `NSH_BIN` when set; otherwise the pinned release, downloaded once into .cache/nsh/<version> (Linux x86_64,
- * Apple-silicon macOS and x86_64 Windows, which NSH publishes) and checked against its SHA-256; otherwise `nsh` on PATH.
- * Each release packages for its own platforms: Linux's for Linux, Android and the web, macOS's for macOS, iOS and the
- * web, Windows's for Windows and the web.
- */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -19,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import { fixWebSite } from "./nsh-web-fixes.mjs";
 
 export const NSH_VERSION = "v0.4.0";
-/** The commit NSH_VERSION's tag names, for what is built from its source (release-app.yml's iPhone runner). */
 export const NSH_COMMIT = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,14 +40,12 @@ async function apiAsset(source) {
   return new URL(url);
 }
 
-/** Retry upstream failures, including gateways that return an HTML error page with HTTP 200 for a checksum. */
 export async function releaseAsset(url, { checksum = false, attempts = 4, delayMs = 2000 } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       const source = new URL(url);
       const viaApi = attempt % 2 === 0 && source.origin === 'https://github.com'
         && source.pathname.startsWith(`/longbridge/nsh/releases/download/${NSH_VERSION}/`);
-      // GitHub's release API gives us another route to the same published bytes if its browser download gateway fails.
       const request = viaApi ? await apiAsset(source) : source;
       if (attempt > 1) request.searchParams.set('_pikibun_retry', `${Date.now()}-${attempt}`);
       const response = await fetch(request, { headers: { 'Cache-Control': 'no-cache', ...(viaApi ? { Accept: 'application/octet-stream' } : {}) } });
@@ -88,7 +74,6 @@ async function download(asset, directory) {
   mkdirSync(partial, { recursive: true });
   const archive = path.join(partial, asset);
   writeFileSync(archive, bytes);
-  // Windows' own tar (bsdtar) reads the zip too.
   const untar = spawnSync("tar", [asset.endsWith(".zip") ? "-xf" : "-xzf", archive, "-C", partial], { stdio: "inherit" });
   if (untar.status !== 0) throw new Error(`extracting ${asset} failed`);
   rmSync(archive);
@@ -96,7 +81,6 @@ async function download(asset, directory) {
   renameSync(partial, directory);
 }
 
-/** The nsh executable to run. */
 export async function nshBinary() {
   if (process.env.NSH_BIN) return process.env.NSH_BIN;
   const asset = release();
@@ -120,19 +104,15 @@ function run(bin, args) {
   return result.status ?? 1;
 }
 
-/** Packages the web app into `out` (dist/preview by default): the static site the server and `pikibun serve` serve. */
-export async function buildWeb(out = path.join(repository, "dist", "preview")) {
+export async function buildWeb(out = path.join(repository, "dist", "client")) {
   const bin = await nshBinary();
   const staging = path.join(repository, "dist", ".nsh-web");
   rmSync(staging, { recursive: true, force: true });
   const status = run(bin, ["package", "App.tsx", "--target", "web", "--out", staging]);
   if (status !== 0) throw new Error(`nsh package exited with ${status}`);
-  // nsh writes the site into a directory named after the app.
   const [site] = readdirSync(staging);
   if (!site || !existsSync(path.join(staging, site, "index.html"))) throw new Error(`nsh package wrote no site into ${staging}`);
-  // Firefox and older Safari: the import map before the first module (longbridge/nsh#582).
   fixWebSite(path.join(staging, site));
-  // The service worker that shows the notifications the server pushes, and their icon (apps/nsh/web).
   for (const name of ["sw.js", "favicon.svg"]) cpSync(path.join(app, "web", name), path.join(staging, site, name));
   rmSync(out, { recursive: true, force: true });
   mkdirSync(path.dirname(out), { recursive: true });

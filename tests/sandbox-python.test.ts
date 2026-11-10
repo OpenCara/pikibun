@@ -11,11 +11,6 @@ import { BROWSER_KEPT, BROWSER_OUTPUT } from "../packages/shared/src/browser.js"
 import { NODE_ENVIRONMENT, nodePrograms } from "../apps/runner/src/node-command.js";
 import { PYTHON_ENVIRONMENT, pythonPrograms } from "../apps/runner/src/python-command.js";
 
-/*
- * The sandbox's Python programs are .py files (apps/runner/src/sandbox-python), linted and type-checked as Python
- * (`pnpm python:check`), and embedded in the connector by scripts/embed-python.mjs.
- */
-
 const source = (file: string) => readFileSync(new URL(`../apps/runner/src/sandbox-python/${file}`, import.meta.url), "utf8");
 const python = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout?.trim() ?? "";
 
@@ -33,13 +28,11 @@ test("the constants the Python programs share with the connector agree", () => {
   assert.match(source("git_shim.py"), new RegExp(`^EGRESS_PORT = ${EGRESS_PORT}$`, "m"));
   assert.match(source("browser.py"), new RegExp(`^OUTPUT = '${BROWSER_OUTPUT}'$`, "m"));
   assert.match(source("browser.py"), new RegExp(`^KEPT = ${BROWSER_KEPT}$`, "m"));
-  // What serve starts, and with what, as the node and python tools would.
   const tuple = (items: readonly string[]) => `\\(${items.map(item => `'${item}'`).join(", ")}\\)`;
   assert.match(source("browser.py"), new RegExp(`^NODE_PROGRAMS = ${tuple(nodePrograms)}$`, "m"));
   assert.match(source("browser.py"), new RegExp(`^PYTHON_PROGRAMS = ${tuple(pythonPrograms)}$`, "m"));
   assert.ok(source("browser.py").includes(`\nNODE_ENVIRONMENT = '${NODE_ENVIRONMENT}'\n`));
   assert.ok(source("browser.py").includes(`\nPYTHON_ENVIRONMENT = '${PYTHON_ENVIRONMENT}'\n`));
-  // The session service's driver starts its server as the browser's serve does, and marks its own notices.
   assert.match(source("service.py"), new RegExp(`^NODE_PROGRAMS = ${tuple(nodePrograms)}$`, "m"));
   assert.match(source("service.py"), new RegExp(`^PYTHON_PROGRAMS = ${tuple(pythonPrograms)}$`, "m"));
   assert.ok(source("service.py").includes(`\nNODE_ENVIRONMENT = '${NODE_ENVIRONMENT}'\n`));

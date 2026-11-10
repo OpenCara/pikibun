@@ -187,7 +187,6 @@ test('test auth is disabled by default, secret gated, isolated, and expires exis
   assert.equal(response.status, 400);
   response = await alice.request('PATCH', '/api/me', { env: { APP_API_KEY: 'forbidden' } });
   assert.equal(response.status, 400);
-  // Keep a secure configured origin after disabling test-mode HTTP allowances.
   f.env.APP_ORIGIN = 'https://app.example.test';
   f.env.TEST_AUTH_EXPIRES_AT = new Date(Date.now() - 1000).toISOString();
   response = await app.request('/api/me', { headers: { Cookie: alice.cookie.replace('test-auth=', '__Host-auth=') } }, f.env);
@@ -211,7 +210,6 @@ test('agents are gone; saved versions are immutable and do not grant authors acc
   assert.equal((await alice.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: bob.user.id, role: 'member' })).status, 200);
   assert.equal((await alice.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: carol.user.id, role: 'member' })).status, 200);
   const model = (await (await alice.request('POST', `/api/workspaces/${workspace.id}/models`, { name: 'fixture', provider: 'faux', modelId: 'faux-1' })).json() as { model: { id: string } }).model;
-  // A version carol, a plain member, published before agents were removed. Nothing lists, revises, publishes or starts one any more.
   const published = seedAgentVersion(f.sqlite, { authorId: carol.user.id, workspaceId: workspace.id, modelId: model.id, tools: ['identity'] });
   const routes: [string, string][] = [['GET', '/api/agents'], ['GET', `/api/workspaces/${workspace.id}/agents`], ['POST', '/api/agents'],
     ['POST', `/api/agents/${published.agentId}/versions`], ['POST', `/api/agents/${published.agentId}/publish`]];
@@ -225,7 +223,6 @@ test('agents are gone; saved versions are immutable and do not grant authors acc
   assert.throws(() => f.sqlite.prepare('UPDATE agent_versions SET name = ? WHERE id = ?').run('changed', published.id), /immutable/);
   f.sqlite.prepare("INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, title, policy_version, status, created_at, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'private')")
     .run('bob-session', workspace.id, bob.user.id, published.id, 'private session', 1, 'ready', new Date().toISOString());
-  // Authoring the agent the session runs gives carol nothing; alice opens it only because she owns the workspace.
   assert.equal((await carol.request('GET', '/api/sessions/bob-session')).status, 404);
   assert.equal((await eve.request('GET', '/api/sessions/bob-session')).status, 404);
   const workspaceOwner = await alice.request('GET', '/api/sessions/bob-session');
@@ -261,33 +258,27 @@ test('workspace rename: its owner and admins rename it, everyone else is refused
   const path = `/api/workspaces/${workspace.id}`;
   const name = () => (f.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspace.id) as { name: string }).name;
 
-  // The owner renames it; the name is trimmed, and the response is the workspace as its list shows it.
   const renamed = await owner.request('PATCH', path, { name: '  Field studio  ' });
   assert.equal(renamed.status, 200);
   assert.deepEqual((await renamed.json() as { workspace: unknown }).workspace, { id: workspace.id, name: 'Field studio', ownerId: owner.user.id, role: 'owner', personal: false });
-  // An admin renames it too, and every member sees the new name.
   const byAdmin = await admin.request('PATCH', path, { name: 'Studio' });
   assert.equal(byAdmin.status, 200);
   assert.equal((await byAdmin.json() as { workspace: { role: string } }).workspace.role, 'admin');
   const listed = (await (await viewer.request('GET', '/api/workspaces')).json() as { workspaces: { id: string; name: string }[] }).workspaces;
   assert.equal(listed.find(item => item.id === workspace.id)?.name, 'Studio');
 
-  // Collaborators, members and viewers are refused; someone outside the workspace doesn't learn it exists.
   for (const client of [collaborator, member, viewer]) assert.equal((await client.request('PATCH', path, { name: 'Taken over' })).status, 403);
   assert.equal((await outsider.request('PATCH', path, { name: 'Taken over' })).status, 404);
   assert.equal((await owner.request('PATCH', '/api/workspaces/missing-workspace', { name: 'Nowhere' })).status, 404);
-  // A blank, missing, non-string or too-long name, or any other field, changes nothing.
   for (const body of [{ name: '   ' }, {}, { name: 7 }, { name: 'x'.repeat(201) }, { name: 'Studio 2', ownerId: admin.user.id }]) {
     assert.equal((await owner.request('PATCH', path, body)).status, 400);
   }
   assert.equal(name(), 'Studio');
 
-  // Each rename is audited, without the names.
   const audited = f.sqlite.prepare("SELECT actor_id AS actorId, detail_json AS detail FROM audit WHERE workspace_id = ? AND action = 'workspace.renamed'").all(workspace.id) as { actorId: string; detail: string }[];
   assert.deepEqual(audited.map(item => item.actorId).sort(), [owner.user.id, admin.user.id].sort());
   assert.ok(audited.every(item => item.detail === '{}'));
 
-  // Its owner renames their private workspace too, which stays private; nobody else can, not even to learn it exists.
   const own = (await (await owner.request('GET', '/api/workspaces')).json() as { workspaces: { id: string; personal: boolean }[] }).workspaces.find(item => item.personal)!;
   const privately = await owner.request('PATCH', `/api/workspaces/${own.id}`, { name: 'Sketchbook' });
   assert.equal(privately.status, 200);
@@ -501,9 +492,8 @@ test('poll SSE deadline remains effective while a consumer applies backpressure'
   t.mock.timers.tick(1000);
   await third;
   await new Promise<void>(resolve => setImmediate(resolve));
-  // Leave the second snapshot queued and the third write blocked behind it.
   t.mock.timers.tick(6000);
-  while (!(await reader.read()).done) { /* Drain already-authorized buffered bytes after abort. */ }
+  while (!(await reader.read()).done) { }
   assert.equal(polls, 3);
 });
 
@@ -537,7 +527,7 @@ async function readSnapshots(t: TestContext, response: Response, count: number):
     await new Promise<void>(resolve => setImmediate(resolve));
     t.mock.timers.tick(1000);
   }
-  while (!(await reader.read()).done) { /* The stream ends after its snapshots. */ }
+  while (!(await reader.read()).done) { }
   return body;
 }
 
@@ -573,13 +563,11 @@ test('a runner that reports revisions is asked only for what changed, and one th
   const three = await read();
   assert.equal(three.revision, two.revision, 'An unchanged host view keeps its revision');
   assert.deepEqual(paths, ['/v1/sessions/poll-session/view', `/v1/sessions/poll-session/view/${first}`, `/v1/sessions/poll-session/view/${second}`]);
-  // A runner that does not know the path (an older one) answers the whole view instead.
   refuse = true;
   paths.length = 0;
   const four = await read();
   assert.deepEqual(four.view.entries.map(item => item.id), ['0:1']);
   assert.deepEqual(paths, [`/v1/sessions/poll-session/view/${second}`, '/v1/sessions/poll-session/view']);
-  // A patch that does not fit the view the server holds is replaced by the whole view, not asked for again.
   refuse = false;
   misfit = true;
   paths.length = 0;
@@ -609,7 +597,6 @@ test('viewers of one session share a host read, and a message makes the next rea
   assert.ok(new TextDecoder().decode(a.value).includes('event: view'));
   assert.ok(new TextDecoder().decode(b.value).includes('event: view'));
   assert.equal(polls, 1, 'Two viewers at once cost one host read');
-  // A third read within the same second is served the same view.
   assert.equal((await (await f.reader.request('GET', '/api/sessions/poll-session/events')).body!.getReader().read()).done, false);
   assert.equal(polls, 1);
   const submitted = await f.owner.request('POST', '/api/sessions/poll-session/submit', { content: 'go', requestId: 'request-1' });
@@ -644,7 +631,6 @@ test('a client holding a revision gets patches: nothing while nothing changed, t
   assert.deepEqual(applyViewPatch(loaded.view, patch).entries, current.entries);
   await reader.cancel();
 
-  // A revision the server does not hold, or none at all, starts again from a whole view with its revision.
   for (const since of ['f'.repeat(32), '']) {
     const body = await readSnapshots(t, await f.reader.request('GET', `/api/sessions/poll-session/events?since=${since}`), 4);
     const [whole, next] = events(body);
@@ -676,17 +662,13 @@ test('workspace roles: viewers read and create nothing, members read, collaborat
   insert.run('roles-private', workspace.id, owner.user.id, agent.id, 'private', 'ready', new Date().toISOString(), 'private');
   const held = async (client: { user: { id: string } }, sessionId: string) => (await sessionAccess(f.env, sessionId, client.user.id))?.permissions ?? null;
 
-  // A shared session: viewers and members follow it read-only; collaborators can also send messages; admins manage it too.
   assert.deepEqual(await held(viewer, 'roles-shared'), ['read']);
   assert.deepEqual(await held(member, 'roles-shared'), ['read']);
   assert.deepEqual(await held(collaborator, 'roles-shared'), ['read', 'ask', 'write']);
   assert.deepEqual(await held(admin, 'roles-shared'), ['read', 'ask', 'write', 'manage']);
-  // A private session stays private from every role below admin; admins manage it as they do every session, but
-  // never approve without a session role.
   for (const client of [viewer, member, collaborator]) assert.equal(await held(client, 'roles-private'), null);
   assert.deepEqual(await held(admin, 'roles-private'), ['read', 'ask', 'write', 'manage']);
 
-  // Members are read-only by default, so they can be granted more; a viewer is read-only whatever it is granted.
   assert.equal((await owner.request('POST', '/api/sessions/roles-shared/grants', { userId: member.user.id, permissions: ['read', 'write'] })).status, 200);
   assert.deepEqual(await held(member, 'roles-shared'), ['read', 'write']);
   const refused = await owner.request('POST', '/api/sessions/roles-shared/grants', { userId: viewer.user.id, permissions: ['read', 'write'] });
@@ -696,19 +678,15 @@ test('workspace roles: viewers read and create nothing, members read, collaborat
     .run('roles-private', viewer.user.id, JSON.stringify(['read', 'ask', 'write', 'approve', 'manage']), new Date().toISOString());
   assert.deepEqual(await held(viewer, 'roles-private'), ['read']);
 
-  // Viewers can't start sessions; the role check comes before anything about the model or host.
   const created = await viewer.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: model.id, title: 'mine' });
   assert.equal(created.status, 403);
   assert.equal((await created.json() as { code: string }).code, 'viewer_role');
 
-  // Admins manage collaborators, members and viewers; only the owner manages admins.
   assert.equal((await admin.request('POST', members, { userId: other.user.id, role: 'collaborator' })).status, 200);
   assert.equal((await admin.request('POST', members, { userId: other.user.id, role: 'viewer' })).status, 200);
   assert.equal((await admin.request('POST', members, { userId: other.user.id, role: 'admin' })).status, 403);
   assert.equal((await admin.request('POST', members, { userId: admin.user.id, role: 'member' })).status, 403);
   assert.equal((await collaborator.request('POST', members, { userId: other.user.id, role: 'member' })).status, 403);
-  // A role change takes effect at once and invalidates what was issued under the previous one; re-saving a member's
-  // current role, or adding someone new, takes nothing away and leaves the workspace's sessions alone.
   const version = () => (f.sqlite.prepare("SELECT policy_version FROM sessions WHERE id = 'roles-shared'").get() as { policy_version: number }).policy_version;
   const before = version();
   const resaved = await admin.request('POST', members, { userId: collaborator.user.id, role: 'collaborator' });
@@ -722,7 +700,6 @@ test('workspace roles: viewers read and create nothing, members read, collaborat
   assert.equal((f.sqlite.prepare("SELECT policy_version FROM sessions WHERE id = 'roles-shared'").get() as { policy_version: number }).policy_version, before + 1);
   assert.equal((await admin.request('DELETE', `${members}/${other.user.id}`)).status, 204);
 
-  // PATCH changes an existing member's role, under the same authority, and never adds anyone.
   const change = (client: typeof admin, userId: string, body: unknown) => client.request('PATCH', `${members}/${userId}`, body);
   const patchedBefore = version();
   const patched = await change(admin, collaborator.user.id, { role: 'viewer' });
@@ -732,14 +709,11 @@ test('workspace roles: viewers read and create nothing, members read, collaborat
   assert.deepEqual(await held(collaborator, 'roles-shared'), ['read']);
   const audited = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'workspace.member.role' ORDER BY created_at DESC LIMIT 1").get() as { detail_json: string };
   assert.deepEqual(JSON.parse(audited.detail_json), { userId: collaborator.user.id, from: 'member', role: 'viewer' });
-  // The same role again changes nothing.
   assert.equal((await change(admin, collaborator.user.id, { role: 'viewer' })).status, 200);
   assert.equal(version(), patchedBefore + 1);
   assert.equal((await change(admin, collaborator.user.id, { role: 'collaborator' })).status, 200);
-  // A removed or never-added user isn't re-added.
   assert.equal((await change(admin, other.user.id, { role: 'member' })).status, 404);
   assert.equal(f.sqlite.prepare('SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(workspace.id, other.user.id), undefined);
-  // Admins can't make or unmake admins, change themselves or the owner; non-admins change nothing.
   assert.equal((await change(admin, collaborator.user.id, { role: 'admin' })).status, 403);
   const self = await change(admin, admin.user.id, { role: 'member' });
   assert.equal(self.status, 403);
@@ -750,11 +724,9 @@ test('workspace roles: viewers read and create nothing, members read, collaborat
     assert.equal((await change(owner, member.user.id, body)).status, 400);
   }
   assert.equal((await change(owner, owner.user.id, { role: 'admin' })).status, 403);
-  // The owner promotes and demotes admins.
   assert.equal((await change(owner, collaborator.user.id, { role: 'admin' })).status, 200);
   assert.equal((await change(owner, collaborator.user.id, { role: 'collaborator' })).status, 200);
   assert.equal((await owner.request('POST', members, { userId: admin.user.id, role: 'collaborator' })).status, 200);
-  // An admin no longer, they lose what managing the workspace's sessions gave them at once.
   assert.equal(await held(admin, 'roles-private'), null);
   assert.deepEqual(await held(admin, 'roles-shared'), ['read', 'ask', 'write']);
 });
@@ -776,7 +748,6 @@ test('session roles: an owner gives a member one of four tiers, capped by their 
   const held = async (client: { user: { id: string } }) => (await sessionAccess(f.env, 'tiers-private', client.user.id))?.permissions ?? null;
   const code = async (response: Response) => (await response.json() as { code: string }).code;
 
-  // Each tier is the permissions of the one below it and more.
   const tiers = [['viewer', ['read']], ['member', ['read', 'ask']], ['collaborator', ['read', 'ask', 'write']], ['admin', ['read', 'ask', 'write', 'approve', 'manage']]] as const;
   for (const [role, permissions] of tiers) {
     const saved = await owner.request('POST', grants, { userId: member.user.id, role });
@@ -784,20 +755,17 @@ test('session roles: an owner gives a member one of four tiers, capped by their 
     assert.deepEqual((await saved.json() as { grant: unknown }).grant, { userId: member.user.id, permissions, workspaceRole: 'member', sessionRole: role });
     assert.deepEqual(await held(member), permissions, role);
   }
-  // A role or permissions, never both or neither; an unknown tier is refused.
   for (const body of [{ userId: member.user.id }, { userId: member.user.id, role: 'viewer', permissions: ['read'] }, { userId: member.user.id, role: 'owner' }, { userId: member.user.id, role: 1 }]) {
     assert.equal((await owner.request('POST', grants, body)).status, 400, JSON.stringify(body));
   }
   assert.deepEqual(await held(member), ['read', 'ask', 'write', 'approve', 'manage']);
 
-  // A workspace viewer can only be a session viewer.
   assert.equal((await owner.request('POST', grants, { userId: viewer.user.id, role: 'viewer' })).status, 200);
   const refused = await owner.request('POST', grants, { userId: viewer.user.id, role: 'member' });
   assert.equal(refused.status, 400);
   assert.equal(await code(refused), 'viewer_role');
   assert.deepEqual(await held(viewer), ['read']);
 
-  // A session admin who isn't its owner can't give a tier above what it holds.
   f.sqlite.prepare('INSERT INTO session_grants (session_id,user_id,permissions_json,created_at) VALUES (?,?,?,?)')
     .run('tiers-private', manager.user.id, JSON.stringify(['read', 'ask', 'manage']), new Date().toISOString());
   assert.equal((await manager.request('POST', grants, { userId: collaborator.user.id, role: 'member' })).status, 200);
@@ -805,7 +773,6 @@ test('session roles: an owner gives a member one of four tiers, capped by their 
   assert.equal(escalated.status, 403);
   assert.equal(await code(escalated), 'grant_escalation');
 
-  // The listing names each grantee's workspace role and tier; a grant matching no tier is custom (null).
   const listed = (await (await owner.request('GET', grants)).json() as { grants: { userId: string; sessionRole: string | null; workspaceRole?: string }[] }).grants;
   const tier = (client: { user: { id: string } }) => listed.find(grant => grant.userId === client.user.id);
   assert.deepEqual(tier(owner), { userId: owner.user.id, permissions: ['read', 'ask', 'write', 'approve', 'manage'], workspaceRole: 'owner', sessionRole: 'admin' });

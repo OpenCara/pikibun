@@ -48,7 +48,6 @@ test("attached files' names are made safe for every host, and their chunks are c
   assert.equal(uploadFileName("  notes.  "), "notes");
   for (const name of ["", ".", "..", "...", ".git", ".GIT", "   "]) assert.equal(uploadFileName(name), "", name);
   assert.equal(uploadFileName("CON.txt"), "_CON.txt");
-  // Cut to 200 bytes of UTF-8, keeping a short extension and never half a character.
   const long = uploadFileName(`${"é".repeat(300)}.tar`);
   assert.ok(new TextEncoder().encode(long).length <= 200);
   assert.ok(long.endsWith(".tar"));
@@ -90,23 +89,19 @@ test("an import request carries only a safe name, and a helper's answer must be 
   for (const path of ["attachments/b.txt", "elsewhere/a.txt", "attachments/../a.txt", "a.txt"]) assert.throws(() => importedPath({ path }, request), /Invalid sandbox import response/);
 });
 
-/** Imports through `workspace` as an attached file goes in, and checks what lands in its worktree. */
 async function imports(workspace: SessionWorkspace): Promise<void> {
   const data = Buffer.from([0, 1, 2, 255, 10, 13]);
   assert.equal(await workspace.importFile("attachments", "data.bin", data, allow), "attachments/data.bin");
   assert.deepEqual(await readFile(join(workspace.worktree, "attachments", "data.bin")), data);
-  // A name that is taken gets the next free one; nothing is replaced.
   assert.equal(await workspace.importFile("attachments", "data.bin", Buffer.from("second"), allow), "attachments/data (2).bin");
   assert.equal(await workspace.importFile("attachments", "data.bin", Buffer.alloc(0), allow), "attachments/data (3).bin");
   assert.deepEqual(await readFile(join(workspace.worktree, "attachments", "data.bin")), data);
   assert.equal(await readFile(join(workspace.worktree, "attachments", "data (2).bin"), "utf8"), "second");
   assert.equal((await readFile(join(workspace.worktree, "attachments", "data (3).bin"))).length, 0);
-  // Large files go whole.
   const large = Buffer.alloc(3 * 1024 * 1024 + 5, 7);
   assert.equal(await workspace.importFile("attachments", "large.bin", large, allow), "attachments/large.bin");
   assert.equal((await readFile(join(workspace.worktree, "attachments", "large.bin"))).length, large.length);
   await assert.rejects(workspace.importFile("attachments", "../escape", data, allow), /Invalid file import/);
-  // A directory that is a symlink, even to another directory in the worktree, gets nothing: no stray file is left there.
   await mkdir(join(workspace.worktree, "src"));
   await symlink("src", join(workspace.worktree, "linked"));
   await assert.rejects(workspace.importFile("linked", "a.txt", data, allow), /not a real directory/);
@@ -119,7 +114,6 @@ test("the unsandboxed host imports attached files into the worktree, never over 
   t.after(() => workspace.close());
   await workspace.initialize();
   await imports(workspace);
-  // An attachments path the session turned into a symlink out of the worktree is refused.
   const other = new HostWorkspace(binding("uploads-host-2"), join(base, "other"));
   t.after(() => other.close());
   await other.initialize();
@@ -129,7 +123,6 @@ test("the unsandboxed host imports attached files into the worktree, never over 
   assert.deepEqual(await readdir(join(base, "outside")), []);
 });
 
-/** A backend that runs a helper with no boundary at all, as tests/native-sandboxes.test.ts does. */
 class Unconfined implements HelperBackend {
   readonly path = "/usr/bin:/bin";
   readonly limitedShell = true;
@@ -153,7 +146,6 @@ for (const helper of ["python", "node"] as const) {
     t.after(() => workspace.close());
     await workspace.initialize();
     await imports(workspace);
-    // The worktree's Git metadata is never written.
     await assert.rejects(workspace.importFile(".git", "x", Buffer.from("x"), allow), /Invalid file import/);
   });
 }
@@ -182,28 +174,21 @@ test("a session takes an attached file in order, one chunk per ticket, and write
 
   const first = await send(part(0, fileUploadLimits.chunkBytes));
   assert.deepEqual([first.status, first.body], [200, { received: fileUploadLimits.chunkBytes }]);
-  // A ticket goes in once.
   assert.equal((await send(part(0, fileUploadLimits.chunkBytes), { replay: first.token })).status, 409);
-  // Out of order, or another actor's upload of the same id, isn't this upload.
   assert.equal((await send(part(fileUploadLimits.chunkBytes + 1, file.length))).status, 409);
   assert.equal((await send(part(fileUploadLimits.chunkBytes, file.length), { actorId: "test:bob" })).status, 409);
   assert.equal((await send({ ...part(0, 3), name: "../x" })).status, 400);
   const last = await send(part(fileUploadLimits.chunkBytes, file.length));
   assert.deepEqual([last.status, last.body], [200, { received: file.length, path: "attachments/data.bin" }]);
   assert.deepEqual(await readFile(join(session.sandbox.worktree, "attachments", "data.bin")), file);
-  // Nothing of it is left outside the worktree.
   assert.deepEqual(await readdir(join(session.directory, "uploads")), []);
-  // The same file again goes beside it.
   const again = await send({ uploadId: "upload-0002", name: "data.bin", size: 2, offset: 0, data: "aGk=" });
   assert.deepEqual(again.body, { received: 2, path: "attachments/data (2).bin" });
 
-  // Unfinished uploads count the whole size they declared from their first chunk, so several started small can't grow
-  // past what the host holds at once (four files of the largest size).
   const big = (index: number) => ({ uploadId: `upload-big-${index}`, name: `big-${index}.bin`, size: fileUploadLimits.maxBytes, offset: 0, data: "aGk=" });
   for (let index = 0; index < 4; index++) assert.deepEqual((await send(big(index))).body, { received: 2 });
   const refused = await send(big(4));
   assert.equal(refused.status, 429);
   assert.equal((await readdir(join(session.directory, "uploads"))).length, 4);
-  // Starting the same upload again doesn't count it twice.
   assert.equal((await send(big(3))).status, 200);
 });

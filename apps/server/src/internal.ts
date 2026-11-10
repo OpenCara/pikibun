@@ -1,6 +1,6 @@
 import type { Hono, MiddlewareHandler } from 'hono';
 import { constantTimeEqual } from '../../../packages/shared/src/crypto.js';
-import type { WorkerEnv } from './types.js';
+import type { AppEnv } from './types.js';
 import { fail } from './http.js';
 import {
   apiCredential, authorizeSession, egressGrant, gitDirect, githubComment, githubIssue, githubMerge, githubRead, gitRelay, pushComplete,
@@ -11,7 +11,7 @@ import { agentSessions } from './cross-session.js';
 import { legacyRestoreDownload } from './restore-routes.js';
 import { webSearchRetired } from './connectors.js';
 
-const internalAuthentication: MiddlewareHandler<WorkerEnv> = async (c, next) => {
+const internalAuthentication: MiddlewareHandler<AppEnv> = async (c, next) => {
   const configured = c.env.RUNNER_SHARED_SECRET;
   const authorization = c.req.header('authorization');
   if (!configured || configured.length < 32) fail(503, 'internal_unavailable', 'Internal authorization is not configured.');
@@ -21,7 +21,7 @@ const internalAuthentication: MiddlewareHandler<WorkerEnv> = async (c, next) => 
   await next();
 };
 
-export function registerInternal(app: Hono<WorkerEnv>): void {
+export function registerInternal(app: Hono<AppEnv>): void {
   app.use('/api/internal/*', internalAuthentication);
   app.post('/api/internal/authorize', c => authorizeSession(c, null));
   app.post('/api/internal/github/comment', c => githubComment(c, null));

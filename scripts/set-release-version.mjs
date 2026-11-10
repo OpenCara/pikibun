@@ -1,7 +1,3 @@
-// Sets a release's version, taken from its tag, in the packages the Release workflow builds; nothing is committed.
-//   node scripts/set-release-version.mjs <version> cli
-// Targets:
-//   cli      packages/cli/package.json and npm-shrinkwrap.json (prepublishOnly checks they agree)
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +9,6 @@ if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/.test(version)) {
 }
 if (targets.length === 0) throw new Error("Name the target: cli.");
 
-// Only the top-level version field changes; the manifest keeps its own formatting.
 function setManifestVersion(path) {
   const manifest = readFileSync(path, "utf8").replace(/^(  "version": )"[^"]*"/m, (_, key) => key + JSON.stringify(version));
   if (JSON.parse(manifest).version !== version) throw new Error(`${path} has no top-level version field`);

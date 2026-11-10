@@ -11,7 +11,7 @@ import { performClonePush, PushError, pushSummary } from "../apps/runner/src/pus
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
 import { parsePushCommands, pushRejection, readPushCommands, sessionBranch, sessionBranchName, sessionBranchRefusal, validSessionBranch } from "../packages/shared/src/git-push.js";
-import { hostAllowed, parseNetworkPolicy } from "../packages/shared/src/network.js";
+import { hostAllowed, hostNamed, parseNetworkPolicy } from "../packages/shared/src/network.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 import { startGitHttpServer } from "./helpers/git-http.js";
 import { CA_BUNDLE, CA_BUNDLE_VARIABLES, trustedCertificates } from "../apps/runner/src/trust-store.js";
@@ -74,15 +74,12 @@ test("session branches are named for the session's work, with a short id", () =>
   assert.equal(sessionBranchName("Add dark mode toggle to settings", id), "pikibun/add-dark-mode-toggle-to-settings-1a2b3c4d5e6f");
   assert.equal(sessionBranchName("  Fix: crash on `pikibun connect` (#42)!  ", id), "pikibun/fix-crash-on-pikibun-connect-42-1a2b3c4d5e6f");
   assert.equal(sessionBranchName("Résumé café naïve", id), "pikibun/resume-cafe-naive-1a2b3c4d5e6f");
-  // Nothing to slug, or the default title: a generic name, still unique.
   for (const title of ["", "修复登录", "!!!", "Untitled session"]) assert.equal(sessionBranchName(title, id), "pikibun/session-1a2b3c4d5e6f");
-  // Long titles are cut at a word boundary.
   const long = sessionBranchName("Refactor the egress proxy so that pushes of the session branch stream without buffering", id);
   assert.equal(long, "pikibun/refactor-the-egress-proxy-so-that-pushes-of-the-1a2b3c4d5e6f");
   assert.equal(sessionBranchName("x".repeat(100), id), `pikibun/${"x".repeat(48)}-1a2b3c4d5e6f`);
   for (const title of ["Add dark mode", "", "x".repeat(100), long, "a -- b"]) assert.ok(validSessionBranch(sessionBranchName(title, id), id), title);
   assert.ok(!validSessionBranch("pikibun/add-dark-mode-1a2b3c4d5e6f", "ffffffff-0000-4000-8000-000000000000"));
-  // Sessions without a named branch keep pikibun/<session-id>.
   assert.equal(sessionBranch({ id: "s1" }), "pikibun/s1");
   assert.equal(sessionBranch({ id: "s1", branch: null }), "pikibun/s1");
   assert.equal(sessionBranch({ id: "s1", branch: "pikibun/add-dark-mode-1a2b3c4d5e6f" }), "pikibun/add-dark-mode-1a2b3c4d5e6f");
@@ -110,6 +107,13 @@ test("network policies parse strictly and match hosts by mode", () => {
   assert.equal(hostAllowed({ ...policy, packageRegistries: false }, "registry.npmjs.org"), false);
   assert.equal(hostAllowed({ ...policy, mode: "off" }, "docs.example.com"), false);
   assert.equal(hostAllowed({ ...policy, mode: "open" }, "anything.example.org"), true);
+  assert.equal(hostNamed(policy, "docs.example.com"), true);
+  assert.equal(hostNamed(policy, "a.cdn.example.net"), false);
+  assert.equal(hostNamed(policy, "registry.npmjs.org"), true);
+  assert.equal(hostNamed({ ...policy, packageRegistries: false }, "registry.npmjs.org"), false);
+  assert.equal(hostNamed({ ...policy, mode: "open" }, "anything.example.org"), false);
+  assert.equal(hostNamed({ ...policy, mode: "open", packageRegistries: false }, "registry.npmjs.org"), true);
+  assert.equal(hostNamed({ ...policy, mode: "off" }, "registry.npmjs.org"), false);
   assert.throws(() => parseEgressGrant({ policy, repositories: [{ ...repository, host: "127.0.0.1" }] }), /Invalid repositories/);
   assert.deepEqual(parseEgressGrant({ policy, repositories: [repository] }), { policy, repositories: [repository] });
 });
@@ -121,7 +125,6 @@ test("sandboxed commands get the proxy and Git rewrites, without credentials", (
   assert.deepEqual(rewrites[0], ["url.http://127.0.0.1:41080/git/.insteadOf", "https://"]);
   assert.ok(rewrites.some(([key, value]) => key === "url.http://127.0.0.1:41080/git/github.com/.insteadOf" && value === "git@github.com:"));
   assert.ok(!Object.values(env).some(value => /token|password|authorization/i.test(value)));
-  // HTTPS clients find the host's certificates where the sandbox mounts them (#63).
   for (const name of ["SSL_CERT_FILE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"]) assert.equal(env[name], CA_BUNDLE);
   assert.equal(CA_BUNDLE_VARIABLES.length, 5);
 });
@@ -131,12 +134,9 @@ test("the sandbox's certificates are the host's system store, else Node's bundle
   const store = (stores: Partial<Record<"system" | "bundled" | "extra", string[]>>) => (type: "system" | "bundled" | "extra") => stores[type] ?? [];
   assert.equal(trustedCertificates(store({ system: [pem("system")], bundled: [pem("bundled")], extra: [pem("company")] }), "linux"),
     `${pem("system")}\n${pem("company")}\n`);
-  // A host without a system store gets Node's bundled roots; duplicates and anything but certificates are dropped.
   assert.equal(trustedCertificates(store({ system: [], bundled: [pem("bundled"), `${pem("bundled")}\n`], extra: ["not a certificate"] }), "linux"), `${pem("bundled")}\n`);
-  // macOS's "system" store is only the keychain's certificates with trust settings, without the system roots.
   assert.equal(trustedCertificates(store({ system: [pem("keychain")], bundled: [pem("bundled")], extra: [pem("company")] }), "darwin"),
     `${pem("bundled")}\n${pem("keychain")}\n${pem("company")}\n`);
-  // A store that can't be read counts as empty, and the bundle is never empty.
   const certificates = trustedCertificates(() => { throw new Error("unreadable"); });
   assert.ok(certificates.split("-----BEGIN CERTIFICATE-----").length > 50);
   assert.ok(trustedCertificates().includes("-----BEGIN CERTIFICATE-----"));
@@ -150,7 +150,6 @@ test("Git reads of workspace repositories go to the relay; pushes and other repo
   assert.equal(refs.body, "advertisement");
   assert.equal(refs.headers["content-type"], "application/x-git-upload-pack-advertisement");
   assert.deepEqual(relayed[0], { bindingId: "binding-app", service: "info-refs", userAgent: "git/2.43.0", gitProtocol: "version=2", contentType: undefined, contentEncoding: undefined });
-  // Without ".git" and in another case it is the same repository.
   const fetched = await get(instance.socketPath, "/git/github.com/ACME/App/git-upload-pack",
     { method: "POST", headers: { "content-type": "application/x-git-upload-pack-request" }, body: "0000" });
   assert.equal(fetched.status, 200);
@@ -169,7 +168,6 @@ test("Git reads of workspace repositories go to the relay; pushes and other repo
   assert.deepEqual(status.recent.map(entry => entry.outcome), ["allowed", "allowed", "refused", "refused"]);
 });
 
-/** One pkt-line of `text`. */
 function pkt(text: string): string { return (Buffer.byteLength(text, "latin1") + 4).toString(16).padStart(4, "0") + text; }
 const zero = "0".repeat(40), tip = "c".repeat(40);
 
@@ -182,7 +180,6 @@ test("push requests are parsed up to their first flush, and only the session bra
   assert.equal(parsePushCommands(new TextEncoder().encode(commands.slice(0, 30))), undefined);
   assert.throws(() => parsePushCommands(new TextEncoder().encode(pkt("push-cert\0\n"))), /Signed pushes/);
   assert.throws(() => parsePushCommands(new TextEncoder().encode(pkt("not a command\n"))), /Invalid Git push request/);
-  // The stream is rebuilt unchanged, however its chunks fell.
   const bytes = new TextEncoder().encode(commands + "PACK-DATA");
   const chunked = new ReadableStream<Uint8Array>({ start(controller) { for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.subarray(i, i + 7)); controller.close(); } });
   const read = await readPushCommands(chunked);
@@ -196,7 +193,6 @@ test("push requests are parsed up to their first flush, and only the session bra
   assert.match(sessionBranchRefusal([{ old: tip, new: zero, ref: "refs/heads/pikibun/s1" }], "pikibun/s1")!, /can't be deleted/);
   assert.match(sessionBranchRefusal([...parsed.commands, ...parsed.commands], "pikibun/s1")!, /once per push/);
 
-  // A refusal reads like a forge's: one "ng" per command, on band 1 when the client multiplexes.
   const plain = new TextDecoder().decode(pushRejection([{ old: zero, new: tip, ref: "refs/heads/main" }], ["report-status"], "Not this branch"));
   assert.equal(plain, `${pkt("unpack ok\n")}${pkt("ng refs/heads/main Not this branch\n")}0000`);
   const banded = new TextDecoder().decode(pushRejection([{ old: zero, new: tip, ref: "refs/heads/main" }], ["report-status", "side-band-64k"], "Not this branch"));
@@ -227,11 +223,9 @@ test("a clone session's proxy relays pushes of its own branch, streaming the pac
   const rejected = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: main + "PACK-DATA" });
   assert.equal(rejected.status, 200);
   assert.match(rejected.body, /ng refs\/heads\/main Only this session's branch pikibun\/s1 can be pushed without approval, not main/);
-  // Git's probe before a chunked upload is answered here; neither reaches the control plane.
   const probe = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: "0000" });
   assert.equal(probe.status, 200);
   assert.equal(probe.body, "");
-  // Without a status report Git can't show a rejection's reason; it gets the reason as text, after its pack is read.
   const bare = pkt(`${zero} ${tip} refs/heads/main\0side-band-64k\n`) + "0000";
   const plain = await get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers, body: bare + "P".repeat(200_000) });
   assert.equal(plain.status, 403);
@@ -278,7 +272,6 @@ test("tunnels follow the network policy and never reach private addresses", asyn
   assert.match(off.body!, /network access is off/);
 
   policy = { mode: "allowlist", domains: ["docs.example.com", "internal.example.com"], packageRegistries: false };
-  // The grant is cached for a minute; a fresh proxy sees the new policy.
   const { instance: allowlist } = await proxy(t, {
     grant: async () => ({ policy, repositories: [] }),
     lookup: async host => [{ address: lookups[host] ?? "93.184.216.35", family: 4 }],
@@ -300,6 +293,60 @@ test("tunnels follow the network policy and never reach private addresses", asyn
   assert.match(plain.body, /Plain HTTP/);
 });
 
+test("tunnels take a local proxy's fake-IP answers for hosts the policy names, never for any host (#248)", async t => {
+  const echo: Server = createTcpServer(socket => socket.pipe(socket));
+  await new Promise<void>(resolve => echo.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>(resolve => { echo.close(() => resolve()); }));
+  const lookups: Record<string, string[]> = {
+    "registry.npmjs.org": ["198.18.0.206"], "pypi.org": ["198.18.3.32"], "docs.example.com": ["198.18.0.7", "93.184.216.34"],
+    "anything.example.org": ["198.18.0.9"], "mixed.example.com": ["198.18.0.10", "10.0.0.8"], "x.cdn.example.net": ["198.18.0.11"],
+    "y.cdn.example.net": ["93.184.216.36"],
+  };
+  const connected: string[] = [];
+  const open = async (policy: EgressGrant["policy"]) => {
+    const directory = await mkdtemp(join(tmpdir(), "egress-"));
+    const instance = new EgressProxy({
+      socketPath: join(directory, "proxy.sock"),
+      grant: async () => ({ policy, repositories: [] }),
+      relay: async () => new Response("", { status: 404 }),
+      lookup: async host => (lookups[host] ?? ["93.184.216.35"]).map(address => ({ address, family: 4 })),
+      connect: (port, address) => { connected.push(address); return tcpConnect({ port: (echo.address() as AddressInfo).port, host: "127.0.0.1" }); },
+    });
+    await instance.start();
+    t.after(async () => { await instance.close(); await rm(directory, { recursive: true, force: true }); });
+    return instance;
+  };
+  const through = async (instance: EgressProxy, target: string) => {
+    const result = await tunnel(instance.socketPath, target);
+    result.socket?.destroy();
+    return result;
+  };
+
+  const allowlist = await open({ mode: "allowlist", domains: ["docs.example.com", "mixed.example.com", "*.cdn.example.net"], packageRegistries: true });
+  assert.equal((await through(allowlist, "registry.npmjs.org:443")).status, 200);
+  assert.equal((await through(allowlist, "pypi.org:443")).status, 200);
+  assert.equal((await through(allowlist, "docs.example.com:443")).status, 200);
+  assert.deepEqual(connected, ["198.18.0.206", "198.18.3.32", "198.18.0.7"]);
+  const mixed = await through(allowlist, "mixed.example.com:443");
+  assert.equal(mixed.status, 403);
+  assert.match(mixed.body!, /does not resolve to a public address/);
+  assert.equal((await through(allowlist, "198.18.0.206:443")).status, 403);
+  const wildcard = await through(allowlist, "x.cdn.example.net:443");
+  assert.equal(wildcard.status, 403);
+  assert.match(wildcard.body!, /x\.cdn\.example\.net resolves to 198\.18\.0\.11, a fake-IP address/);
+  assert.equal((await through(allowlist, "y.cdn.example.net:443")).status, 200);
+  assert.deepEqual(connected, ["198.18.0.206", "198.18.3.32", "198.18.0.7", "93.184.216.36"]);
+
+  connected.length = 0;
+  const anything = await open({ mode: "open", domains: [], packageRegistries: false });
+  assert.equal((await through(anything, "registry.npmjs.org:443")).status, 200);
+  const refused = await through(anything, "anything.example.org:443");
+  assert.equal(refused.status, 403);
+  assert.match(refused.body!, /anything\.example\.org resolves to 198\.18\.0\.9, a fake-IP address of a proxy on this host/);
+  assert.equal((await through(anything, "public.example.org:443")).status, 200);
+  assert.deepEqual(connected, ["198.18.0.206", "93.184.216.35"]);
+});
+
 function binding(id: string): RunnerBinding {
   return {
     session: { id, workspaceId: "workspace", ownerId: "test:alice", agentVersionId: "version-1", title: "Egress test", policyVersion: 1,
@@ -318,7 +365,6 @@ test("a sandboxed git clone of a workspace repository goes through the proxy and
   const directory = await mkdtemp(join(tmpdir(), "egress-sandbox-"));
   await chmod(directory, 0o700);
   t.after(() => rm(directory, { recursive: true, force: true }));
-  // The upstream repository, served by git http-backend in place of the control plane's relay to GitHub.
   const projects = join(directory, "projects");
   await mkdir(join(projects, "acme"), { recursive: true });
   const work = join(directory, "upstream");
@@ -347,7 +393,6 @@ test("a sandboxed git clone of a workspace repository goes through the proxy and
   await sandbox.initialize();
   const shell = (command: string) => sandbox.execute({ kind: "bash", command }, false, async () => {}, { allowTestShell: true });
 
-  // Shell commands see the host's certificates and nothing else of its /etc, and OpenSSL loads them (#63).
   await shell(`test "$(ls -A /etc)" = ssl && test "$(ls -A /etc/ssl/certs)" = ca-certificates.crt && test "$SSL_CERT_FILE" = ${CA_BUNDLE}`);
   await shell("python3 -c \"import ssl, sys; sys.exit(0 if ssl.create_default_context().cert_store_stats()['x509_ca'] > 0 else 1)\"");
   await assert.rejects(shell("echo changed > /etc/ssl/certs/ca-certificates.crt"), /Read-only|Permission denied/);
@@ -355,10 +400,8 @@ test("a sandboxed git clone of a workspace repository goes through the proxy and
   await shell("git clone -q https://github.com/acme/app.git clones/app");
   assert.equal(await sandbox.readFile("clones/app/README.md", async () => {}), "from upstream\n");
   assert.deepEqual([...new Set(relayed.map(request => request.service))].sort(), ["info-refs", "upload-pack"]);
-  // SSH remotes of GitHub take the same way.
   await shell("git ls-remote git@github.com:acme/app.git > ssh-refs.txt");
   assert.match(await sandbox.readFile("ssh-refs.txt", async () => {}), /refs\/heads\/main/);
-  // Anything else is refused by the proxy, with its reason.
   await assert.rejects(shell("git ls-remote https://github.com/acme/secret.git"), /not one of this workspace's repositories/);
   await assert.rejects(shell("python3 -c \"import urllib.request; urllib.request.urlopen('https://example.com', timeout=5)\""), /403|Forbidden|Tunnel/);
   assert.ok(instance.entries().some(entry => entry.kind === "connect" && entry.target.startsWith("example.com") && entry.outcome === "refused"));
@@ -416,7 +459,6 @@ test("a clone's commit is pushed as it is, fast-forward only", { skip: !sandboxe
   assert.match(pushSummary(pushed), /^Pushed 1 commit to feature \(new branch at [0-9a-f]{12}\)\.$/m);
   assert.equal((await performClonePush({ workspace: sandbox, operation, credential, authorize })).outcome, "up-to-date");
 
-  // Someone else moved the branch: the clone's next commit is refused until it fetches.
   git(["fetch", "-q", bare, "feature:feature"], work);
   git(["switch", "-q", "feature"], work);
   await writeFile(join(work, "other.txt"), "other\n");
@@ -428,7 +470,6 @@ test("a clone's commit is pushed as it is, fast-forward only", { skip: !sandboxe
   await assert.rejects(performClonePush({ workspace: sandbox, operation: { ...operation, commit: next.commit }, credential, authorize }),
     (error: Error) => error instanceof PushError && /fetch and merge or rebase/.test(error.message));
 
-  // A tag for a commit already on main: created at it, with no branch moved; up to date once there.
   const mainTip = git(["rev-parse", "refs/heads/main"], bare);
   const featureTip = git(["rev-parse", "refs/heads/feature"], bare);
   await shell("cd app && git switch -q main");
@@ -442,14 +483,12 @@ test("a clone's commit is pushed as it is, fast-forward only", { skip: !sandboxe
   assert.equal(git(["rev-parse", "refs/heads/feature"], bare), featureTip);
   assert.match(pushSummary(created), /^Created tag cli-v1\.0\.0 at [0-9a-f]{12}, on main \(at [0-9a-f]{12}\)\.$/);
   assert.equal((await performClonePush({ workspace: sandbox, operation: tag, credential, authorize })).outcome, "up-to-date");
-  // A commit main doesn't reach is refused, and so is moving a tag.
   await assert.rejects(performClonePush({ workspace: sandbox, operation: { ...tag, tag: "cli-v1.0.1", commit: next.commit }, credential, authorize }),
     (error: Error) => error instanceof PushError && /is not on main/.test(error.message));
   await assert.rejects(performClonePush({ workspace: sandbox, operation: { ...tag, commit: next.commit }, credential, authorize }),
     (error: Error) => error instanceof PushError && /already exists .*never moved/.test(error.message));
   await assert.rejects(performClonePush({ workspace: sandbox, operation: { ...tag, branch: "missing", tag: "cli-v1.0.1" }, credential, authorize }),
     (error: Error) => error instanceof PushError && /Remote branch missing does not exist/.test(error.message));
-  // main moved on upstream: the clone has to fetch its tip before tagging.
   git(["switch", "-q", "main"], work);
   await writeFile(join(work, "later.txt"), "later\n");
   git(["add", "later.txt"], work);
@@ -472,7 +511,6 @@ test("closing the proxy lets a push under way finish before its connection goes"
   const body = pkt(`${zero} ${tip} refs/heads/pikibun/s1\0report-status\n`) + "0000PACK";
   const pushed = get(instance.socketPath, "/git/github.com/acme/app.git/git-receive-pack", { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body });
   await new Promise(resolve => setTimeout(resolve, 50));
-  // However long the forge takes to answer.
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const closing = instance.close();
   t.mock.timers.tick(10 * 60_000);
@@ -504,7 +542,6 @@ test("a sandboxed git push of the session branch goes through the proxy; other b
   git(["clone", "-q", "--bare", work, bare], directory);
   const server = await startGitHttpServer(projects);
   t.after(() => server.close());
-  // The control plane's relay, here straight to git http-backend: reads and pushes alike.
   const paths: Record<string, string> = { "info-refs": "info/refs?service=git-upload-pack", "upload-pack": "git-upload-pack",
     "receive-refs": "info/refs?service=git-receive-pack", "receive-pack": "git-receive-pack" };
   const { instance, relayed } = await proxy(t, { sessionBranch: "pikibun/branch-push", relay: async request => fetch(`${server.url("acme/app.git")}/${paths[request.service]}`, {
@@ -520,13 +557,10 @@ test("a sandboxed git push of the session branch goes through the proxy; other b
     + ' && git push -q origin "HEAD:$PIKIBUN_SESSION_BRANCH"');
   assert.equal(git(["show", "refs/heads/pikibun/branch-push:change.txt"], bare), "change");
   assert.ok(relayed.some(request => request.service === "receive-pack"));
-  // Moving it again is a plain fast-forward push too.
   await shell("cd app && echo more >> change.txt && git commit -q -am 'More' && git push -q origin HEAD:pikibun/branch-push");
   assert.equal(git(["show", "refs/heads/pikibun/branch-push:change.txt"], bare), "change\nmore");
-  // A pack larger than Git's post buffer streams in chunks, after Git's probe.
   await shell("cd app && head -c 3000000 /dev/urandom > large.bin && git add large.bin && git commit -q -m 'Large' && git push -q origin HEAD:pikibun/branch-push");
   assert.equal(git(["cat-file", "-s", "refs/heads/pikibun/branch-push:large.bin"], bare), "3000000");
-  // Any other branch is rejected the way a forge rejects it, naming the session branch.
   await assert.rejects(shell("cd app && git push origin HEAD:main"), /remote rejected.*Only this session's branch pikibun\/branch-push can be pushed without approval/);
   assert.equal(git(["rev-parse", "refs/heads/main"], bare), git(["rev-parse", "main"], work));
 });
@@ -550,7 +584,6 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   await writeFile(join(work, ".gitignore"), "*.log\n");
   git(["add", "README.md", ".gitignore"], work);
   git(["commit", "-q", "-m", "initial"], work);
-  // A branch someone else pushed, which the clone builds on and which is deleted (merged, say) before the restore.
   git(["switch", "-q", "-c", "topic"], work);
   await writeFile(join(work, "topic.txt"), "topic\n");
   git(["add", "topic.txt"], work);
@@ -558,7 +591,6 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   git(["switch", "-q", "main"], work);
   const bare = join(projects, "acme", "app.git");
   git(["clone", "-q", "--bare", work, bare], directory);
-  // As forges serve commits their pull requests still reach, by commit.
   git(["config", "uploadpack.allowAnySHA1InWant", "true"], bare);
   const server = await startGitHttpServer(projects);
   t.after(() => server.close());
@@ -574,8 +606,6 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   t.after(() => source.close());
   await source.initialize();
   const shell = (sandbox: Sandbox, command: string) => sandbox.execute({ kind: "bash", command }, false, authorize, { allowTestShell: true });
-  // A local commit on a branch, an untracked file, a changed tracked file, an ignored file, a branch on top of the
-  // upstream topic branch, a clean clone with an SSH origin, a clone inside the first, and ordinary files beside them.
   await shell(source, "git clone -q https://github.com/acme/app.git app && cd app && git switch -q -c feature && echo one > one.txt && git add one.txt"
     + " && git commit -q -m 'Local commit' && git branch -q 'fix+retry' origin/topic && echo changed >> README.md && echo new > untracked.txt"
     + " && echo noise > build.log && git clone -q https://github.com/acme/app.git vendor/app && echo inner > vendor/app/inner.txt"
@@ -590,18 +620,15 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   ]);
   assert.equal(clones[0]!.head, local.commit);
   assert.deepEqual(clones[0]!.branches.map(([name]) => name).sort(), ["feature", "fix+retry", "main"]);
-  // A clean clone is its HEAD, which its origin already has.
   assert.equal(clones[2]!.worktree, clones[2]!.head);
   const files = await source.snapshot(authorize, found);
   assert.ok(files.some(file => file.path === "worktree/notes.txt"));
   assert.ok(!files.some(file => file.path.startsWith("worktree/app/") || file.path.startsWith("worktree/libs/app/")));
-  // The clone itself is untouched.
   await shell(source, "cd app && git status --porcelain > ../status.txt && git for-each-ref --format='%(refname)' refs/pikibun > ../refs.txt");
   assert.equal(await source.readFile("status.txt", authorize), " M README.md\n?? untracked.txt\n?? vendor/\n");
   assert.equal(await source.readFile("refs.txt", authorize), "");
   git(["branch", "-q", "-D", "topic"], bare);
 
-  // What a restore stages (see restore.ts), then the restored session clones again.
   const target = new Sandbox(binding("backup-target"), join(directory, "target"), undefined, { egressSocket: instance.socketPath });
   t.after(() => target.close());
   await target.initialize();
@@ -624,30 +651,25 @@ test("a backup keeps a clone's local work as a bundle, and a restore clones it a
   assert.equal(await target.readFile("branch.txt", authorize), "feature\n");
   assert.equal(await target.readFile("log.txt", authorize), "Local commit\n");
   assert.equal(await target.readFile("refs.txt", authorize), "refs/heads/feature\nrefs/heads/fix+retry\nrefs/heads/main\n");
-  // The deleted upstream branch's commit came back by commit.
   assert.equal(await target.readFile("topic.txt", authorize), "Topic\n");
   assert.equal(await target.readFile("app/untracked.txt", authorize), "new\n");
   assert.equal(await target.readFile("app/vendor/app/inner.txt", authorize), "inner\n");
   await assert.rejects(target.readFile("app/build.log", authorize));
-  // Something already at a clone's path is never overwritten, and the restoration stays pending.
   await shell(target, "mkdir -p libs && echo mine > libs/app");
   await assert.rejects(target.cloneRestore("libs/app", url, null, authorize));
   assert.equal((await target.clonePending(authorize)).length, 1);
   assert.equal(await target.readFile("libs/app", authorize), "mine\n");
-  // The pending restoration goes into the next backup as it was restored; what is at its path stays as files.
   const again = await target.cloneBackup(authorize);
   assert.deepEqual(again.found, ["app", "app/vendor/app"]);
   assert.deepEqual(again.clones.map(clone => [clone.path, clone.branch, clone.origin]),
     [["app", "feature", url], ["app/vendor/app", "main", url], ["libs/app", "main", "git@github.com:acme/app.git"]]);
   assert.equal(again.clones[2]!.bundle, null);
   assert.ok((await target.snapshot(authorize, again.found)).some(file => file.path === "worktree/libs/app"));
-  // Once the path is free it restores, past what an interrupted attempt left, keeping the clone's own origin.
   await shell(target, "rm libs/app && mkdir -p libs/.app.pikibun-restore/.git && echo stale > libs/.app.pikibun-restore/stale");
   await target.cloneRestore("libs/app", url, null, authorize);
   assert.deepEqual(await target.clonePending(authorize), []);
   assert.match(await shell(target, "cd libs/app && git config --get remote.origin.url && git status --porcelain && ls -a .. | grep -c pikibun-restore || true"),
     /^git@github\.com:acme\/app\.git\n0\n$/);
-  // A restoration that finished but whose entry the runner stopped before dropping is recognised, not refused.
   await writeFile(join(state, "manifest.json"), JSON.stringify({ version: 1, clones: [pending[2]] }));
   await writeFile(join(directory, "target", "worktree", "libs", "app", ".git", "pikibun-restored"), `${clones[2]!.worktree}\n`);
   await target.cloneRestore("libs/app", url, null, authorize);
@@ -689,8 +711,6 @@ test("a backup keeps local changes to LFS-tracked files as their content, not as
   const source = new Sandbox(binding("lfs-backup-source"), join(directory, "source"), undefined, { egressSocket: instance.socketPath });
   t.after(() => source.close());
   await source.initialize();
-  // A clean filter standing in for git-lfs's: it turns content into a pointer, keeping the content elsewhere in .git, as
-  // git-lfs keeps it in .git/lfs/objects, which backups don't carry.
   await shell(source, "git clone -q https://github.com/acme/app.git app && cd app"
     + " && git config filter.lfs.clean \"sh -c 'cat >/dev/null; echo pointer'\" && git config filter.lfs.required true"
     + " && echo local > model.bin");
@@ -706,7 +726,6 @@ test("a backup keeps local changes to LFS-tracked files as their content, not as
   await writeFile(join(state, "0.bundle"), Buffer.from(clones[0]!.bundle!, "base64"));
   await writeFile(join(state, "manifest.json"), JSON.stringify({ version: 1, clones: [{ ...clones[0]!, bundle: "0.bundle" }] }));
   await target.cloneRestore("app", "https://github.com/acme/app.git", null, authorize);
-  // The local change comes back as it was, not as a pointer whose object nothing holds.
   assert.equal(await target.readFile("app/model.bin", authorize), "local\n");
   assert.match(await shell(target, "cd app && git status --porcelain"), /^ M model\.bin\n$/);
 });
@@ -721,7 +740,6 @@ test("https://user@host remotes are the same repository, and a refused grant end
   assert.equal((await get(instance.socketPath, "/git/someone@github.com/acme/app.git/info/refs?service=git-upload-pack")).status, 200);
   assert.equal(relayed[0]!.bindingId, "binding-app");
   refuse = true;
-  // Still within the grant's minute: the cached grant serves.
   assert.equal((await get(instance.socketPath, "/git/github.com/acme/app.git/info/refs?service=git-upload-pack")).status, 200);
   t.mock.timers.tick(61_000);
   const refused = await get(instance.socketPath, "/git/github.com/acme/app.git/info/refs?service=git-upload-pack");
@@ -742,7 +760,6 @@ test("a tunnel tries the host's next address when one can't be reached", async t
     grant: async () => ({ policy: { mode: "open", domains: [], packageRegistries: true }, repositories: [] }),
     relay: async () => { throw new Error("unused"); },
     lookup: async () => [{ address: "2606:4700::6810:1", family: 6 }, { address: "104.16.0.1", family: 4 }],
-    // The IPv6 address is unreachable from this host; the IPv4 one answers.
     connect: (_port, address) => { tried.push(address); return tcpConnect({ port: address.includes(":") ? 1 : (echo.address() as AddressInfo).port, host: "127.0.0.1" }); },
   });
   await instance.start();
@@ -759,7 +776,6 @@ test("a client that drops while its tunnel is being set up doesn't take the prox
   const request = httpRequest({ socketPath: instance.socketPath, method: "CONNECT", path: "docs.example.com:443" });
   request.on("error", () => {});
   request.end();
-  // The proxy is still waiting for the grant when the client goes away; its refusal then meets a closed socket.
   await new Promise(resolve => setTimeout(resolve, 50));
   request.destroy();
   await new Promise(resolve => setTimeout(resolve, 50));

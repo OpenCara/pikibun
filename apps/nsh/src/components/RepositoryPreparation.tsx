@@ -6,10 +6,6 @@ import { createAction } from "../lib/resource";
 import { monospace, palette } from "../theme";
 import { Banner, Button, Card, Feedback, Small } from "../ui";
 
-/**
- * A cache host preparing this session's repositories: one bar per repository while it clones or fetches, checks and
- * checks out. If that failed, its reason, and for the owner a way to try again.
- */
 export function RepositoryPreparationCard(props: { sessionId: string; preparation: RepositoryPreparationView; canRestart: boolean; onRestarted: () => void }) {
   const action = createAction();
   const restart = () => void action.run(async () => {

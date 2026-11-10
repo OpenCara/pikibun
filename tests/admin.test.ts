@@ -40,7 +40,6 @@ async function denied(response: Response, status: number, code: string) {
 async function fixture(t: TestContext): Promise<Fixture> {
   const { db, sqlite } = await testDatabase();
   t.after(() => db.close());
-  // Session creation asks the host to start the session; nothing else is relayed in these tests.
   const hub = fakeHub({ rpc: (_connectorId, envelope) => envelope.request.ticket.action === 'create'
     ? Response.json({ ok: true }, { status: 201 }) : Response.json({ error: 'Unsupported test relay request' }, { status: 503 }) });
   const env: Env = { DB: db, APP_ORIGIN: origin, TEST_AUTH_ENABLED: 'true', TEST_AUTH_SECRET: testSecret,
@@ -70,7 +69,6 @@ async function connect(f: Fixture, owner: Client, workspaceId: string): Promise<
   const { credentials } = await json<{ credentials: ConnectorCredentials }>(
     await f.request('POST', `/api/connectors/pairings/${pairing.id}/claim`, { code: pairing.code, ...manifest }), 201);
   const connectionToken = token();
-  // The socket hub normally installs this generation; these tests exercise HTTP routes.
   f.sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   return { ...credentials, connectionToken };
 }
@@ -79,7 +77,6 @@ function self(f: Fixture, connector: Connected, path: string, body: unknown) {
   return f.request('POST', `/api/connectors/self/${path}`, body, { Authorization: `Bearer ${connector.token}`, 'X-Connection-Token': connector.connectionToken });
 }
 
-/** Alice runs a host in her workspace and shares it; she and Bob each have a session on it. */
 async function team(f: Fixture) {
   const operator = await f.client('operator'); const alice = await f.client('alice'); const bob = await f.client('bob');
   const { id: workspaceId } = await workspace(alice);
@@ -106,9 +103,7 @@ test('only the administrators ADMIN_USER_IDS lists reach the admin API, and thei
     await denied(await alice.request(method, path), 403, 'forbidden');
     await denied(await f.request(method, path), 401, 'unauthorized');
   }
-  // Changes need the CSRF token like every other browser request.
   await denied(await f.request('POST', `/api/admin/users/${alice.user.id}/suspend`, undefined, { Cookie: operator.cookie }), 403, 'invalid_csrf');
-  // A test identity counts only while test mode lasts.
   assert.deepEqual([...instanceAdmins(f.env)], ['github:1', 'test:operator']);
   assert.deepEqual([...instanceAdmins({ ...f.env, TEST_AUTH_ENABLED: 'false' })], ['github:1']);
 });
@@ -152,7 +147,6 @@ test('the admin lists every account, workspace and host, without what anyone wor
   assert.deepEqual(hosts.items.map(item => ({ ...item, createdAt: '' })), [{ id: connector.connectorId, name: 'Local Pi', ownerId: alice.user.id,
     ownerName: 'alice', ownerGithubLogin: null, createdAt: '', lastSeenAt: null, revokedAt: null, online: true, workspaces: 1, sessions: 2 }]);
 
-  // Nothing about the work itself: no session titles, models, emails or credentials.
   const listed = await usersResponse.text() + await hostsResponse.text();
   for (const secret of ['Private work', 'local/model-v1', 'alice@example.test', connector.token]) assert.equal(listed.includes(secret), false, secret);
 });
@@ -169,22 +163,18 @@ test('suspending an account signs it out, refuses its hosts and its sessions, an
   assert.deepEqual(f.hub.revoked, [connector.connectorId]);
   assert.deepEqual(f.sqlite.prepare('SELECT action, actor_id, workspace_id, detail_json FROM audit WHERE action LIKE ?').all('user.%').map(row => ({ ...row })),
     [{ action: 'user.suspended', actor_id: operator.user.id, workspace_id: null, detail_json: JSON.stringify({ userId: alice.user.id }) }]);
-  // Signed out everywhere, and no new sign-in.
   await denied(await alice.request('GET', '/api/me'), 401, 'unauthorized');
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM auth_sessions WHERE user_id = ?').get(alice.user.id)!.n, 0);
   await denied(await f.request('POST', '/api/auth/test', { id: 'alice' }, { Authorization: `Bearer ${testSecret}` }), 403, 'account_suspended');
-  // Her host is refused, also for Bob's session on it, and her models are no longer offered.
   await denied(await activity(bobSession.id), 401, 'connector_authentication_required');
   await assert.rejects(authenticateConnectorSocket(f.env, new Headers({ 'sec-websocket-protocol': `opencara-pi-v1, bearer.${connector.token}` }),
     new URL(`${origin}/api/connectors/socket`)), (error: unknown) => error instanceof HTTPException && error.status === 401);
   assert.deepEqual(await models(bob), []);
-  // Nobody opens the sessions she owns; Bob still reads his own.
   await denied(await bob.request('GET', `/api/sessions/${aliceSession.id}`), 404, 'not_found');
   assert.equal((await bob.request('GET', `/api/sessions/${bobSession.id}`)).status, 200);
   const { overview } = await json<{ overview: AdminOverview }>(await operator.request('GET', '/api/admin/overview'));
   assert.equal(overview.suspendedUsers, 1);
 
-  // Suspending again changes nothing.
   await json(await operator.request('POST', `/api/admin/users/${alice.user.id}/suspend`));
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'user.suspended'").get()!.n, 1);
 
@@ -213,7 +203,6 @@ test('only the request that changes an account\'s suspension records it, also wh
   const f = await fixture(t);
   const operator = await f.client('operator'); const alice = await f.client('alice');
   const audited = (action: string) => f.sqlite.prepare('SELECT COUNT(*) AS n FROM audit WHERE action = ?').get(action)!.n;
-  // Both requests check the account before either writes: each batch waits until the other request reaches its own.
   const db = f.env.DB;
   let waiting: (() => void) | null = null;
   f.env.DB = { ...db, async batch(statements) {

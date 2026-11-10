@@ -8,9 +8,6 @@ import { fixes } from "../apps/runner/src/prerequisite-fixes.js";
 import { ExtensionSourceError, npmFailure } from "../apps/runner/src/extensions/store.js";
 import { listedPrerequisites } from "../packages/shared/src/host-prerequisites.js";
 
-// Installing extensions needs npm on the host's PATH: the host lists npm as an optional prerequisite, and a missing npm
-// says so.
-
 test("npm missing from PATH says so and how to get it; other failures keep npm's own output", () => {
   const missing = Object.assign(new Error("spawn npm ENOENT"), { code: "ENOENT" });
   const mac = npmFailure(missing, ["install"], "darwin", "/usr/bin:/bin");
@@ -27,7 +24,6 @@ test("npm missing from PATH says so and how to get it; other failures keep npm's
   assert.equal(failed.message, "npm install failed:\nnpm error 404 Not Found - GET https://registry.npmjs.org/nope");
   assert.equal(npmFailure({ code: 1 }, ["install"], "darwin").message, "npm install failed.");
 
-  // Only npm or node itself missing counts: an install script's missing command, or npm's own 127, keeps npm's output.
   const script = "npm error code 127\nnpm error command failed\nnpm error command sh -c node-gyp rebuild\nnpm error sh: 1: node-gyp: not found";
   assert.equal(npmFailure({ code: 127, stderr: script }, ["install"], "linux").message, `npm install failed:\n${script}`);
   const windowsScript = "npm error 'python' is not recognized as an internal or external command,";

@@ -1,44 +1,27 @@
-// The page's host (nsh.json `web.host`), on the web only: the address the client is opened at and where it goes. Links
-// into the app keep the routes the web app had, in the fragment (#/s/<id>, #/settings/hosts, #/shared/<token>,
-// #/join/<token>), so a share or invite token never reaches the server; sign-in goes to the server's own pages.
-// Native Shell copies this module as it is into the site (host.<digest>.js) and runs createHost before the app starts.
-
 const page = typeof location !== "undefined" && typeof history !== "undefined";
 
-/** The fragment, or "" where there is no page (nsh test runs this module headless too). */
 const route = () => (page ? location.hash : "");
 
-/** The address the app last showed: where it is now. */
 let shown = null;
-/** How many of Native Shell's pages were open over the first, as the history entry the page is on says. */
 const depthOf = state => (typeof state?.nsh === "number" ? state.nsh : 0);
 let depth = 0;
-/** When Back or Forward moved between Native Shell's pages, until its hashchange comes (0: none pending). */
 let traversedAt = 0;
 
 const functions = new Map([
   ["page.route", () => route()],
-  // Shows the app's route in the address bar without a history entry of its own: Native Shell keeps the entries of
-  // its pages and dialogs, whose state stays as it is.
   ["page.setRoute", args => {
     const hash = typeof args?.hash === "string" && /^#\/[^\s]*$/.test(args.hash) ? args.hash : "#/";
     shown = hash;
-    // Marks the entry as one the app has been on (Native Shell's entries copy the state of the one they're pushed from),
-    // so Back to it later isn't mistaken for a link just followed.
     if (page && (location.hash !== hash || !history.state?.pikibun)) history.replaceState({ ...(history.state ?? {}), pikibun: true }, "", hash);
     return null;
   }],
-  // Only this server's own pages (/api/auth/github, say), never another site's.
   ["page.open", args => {
     const path = args?.path;
     if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//") || path.includes("\\")) throw new Error("Only this server's own paths open.");
     if (page) location.assign(path);
     return null;
   }],
-  // The query the server's GitHub sign-in comes back with when it refused (`?error=…`).
   ["page.query", () => (page ? location.search : "")],
-  // GitHub's authorization page, which a sign-in from an invite link is sent to (the server answers with its address);
-  // nowhere else.
   ["page.authorize", args => {
     const url = args?.url;
     if (typeof url !== "string" || !url.startsWith("https://github.com/login/oauth/authorize?")) throw new Error("Only GitHub's authorization page opens.");
@@ -47,7 +30,6 @@ const functions = new Map([
   }],
   ["page.pickFiles", args => pickFiles(args)],
   ["page.encodeImage", args => encodeImage(args)],
-  // Notifications on this device (docs/notifications.md), as the web app's notifications.ts shows them.
   ["page.notifications.support", args => notificationSupport(args?.webPushKey)],
   ["page.notifications.permit", () => notificationPermission()],
   ["page.notifications.subscribe", args => subscribePush(args?.webPushKey)],
@@ -55,17 +37,12 @@ const functions = new Map([
   ["page.notifications.show", args => showNotification(args)],
 ]);
 
-/**
- * How this browser shows notifications: `push` (the service worker shows what the server pushes, even with no tab open),
- * `page` (while a tab is open), or `unsupported` with why; and whether the person allowed them.
- */
 function notificationSupport(webPushKey) {
   if (!page || typeof Notification === "undefined") return { kind: "unsupported", reason: "This browser can't show notifications.", permission: "denied" };
   const push = typeof webPushKey === "string" && webPushKey && isSecureContext && "serviceWorker" in navigator && "PushManager" in window;
   return { kind: push ? "push" : "page", permission: Notification.permission };
 }
 
-/** Asks the person to allow notifications where they haven't decided yet; answers what they chose. */
 async function notificationPermission() {
   if (!page || typeof Notification === "undefined") return "denied";
   return Notification.permission === "default" ? Notification.requestPermission() : Notification.permission;
@@ -77,7 +54,6 @@ function keyBytes(base64url) {
   return Uint8Array.from(binary, char => char.charCodeAt(0));
 }
 
-/** A short name for this device, so the device list tells browsers apart. */
 function deviceName() {
   const agent = navigator.userAgent;
   const browser = /Edg\//.test(agent) ? "Edge" : /Firefox\//.test(agent) ? "Firefox" : /Chrome\//.test(agent) ? "Chrome" : /Safari\//.test(agent) ? "Safari" : "Browser";
@@ -86,11 +62,6 @@ function deviceName() {
   return system ? `${browser} on ${system}` : browser;
 }
 
-/**
- * This browser's push subscription for the server's key (one made for another key is replaced), through the service
- * worker the server serves at /sw.js; the app registers it as this person's device. Answers its endpoint and keys, and
- * this device's name, or with `name` only where no push subscription can be made.
- */
 async function subscribePush(webPushKey) {
   if (!page) throw new Error("Notifications need a browser.");
   if (typeof webPushKey !== "string" || !("serviceWorker" in navigator)) return { name: deviceName() };
@@ -109,7 +80,6 @@ async function subscribePush(webPushKey) {
   return { endpoint, keys: { p256dh: keys?.p256dh, auth: keys?.auth }, name: deviceName() };
 }
 
-/** The browser's push subscription goes, whatever the server said; nothing is pushed to it after. */
 async function unsubscribePush() {
   if (!page || !("serviceWorker" in navigator)) return null;
   const registration = await navigator.serviceWorker.getRegistration("/sw.js").catch(() => undefined);
@@ -117,10 +87,6 @@ async function unsubscribePush() {
   return null;
 }
 
-/**
- * A notification the app received while its tab is open (no push here), unless the person is looking at that very
- * session; clicking it opens the session in this tab. Tabs that each show it replace one another's: one, by its id.
- */
 function showNotification(args) {
   if (!page || typeof Notification === "undefined" || Notification.permission !== "granted") return false;
   const { id, title, body, path, sessionId } = args ?? {};
@@ -136,17 +102,12 @@ function showNotification(args) {
   return true;
 }
 
-/** Bytes as base64, a block at a time so no call gets too many arguments. */
 function base64(bytes) {
   let binary = "";
   for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
   return btoa(binary);
 }
 
-/**
- * The browser's own file chooser (NSH's picker takes photos only): the files picked, each with its bytes as base64, or
- * without them when it is larger than `maxBytes`; `[]` when the person cancels. `accept` narrows what it offers.
- */
 function pickFiles(args) {
   if (!page || typeof document === "undefined") return [];
   const maxBytes = typeof args?.maxBytes === "number" ? args.maxBytes : Infinity;
@@ -173,11 +134,6 @@ function pickFiles(args) {
   });
 }
 
-/**
- * An image drawn again, as the web app's chat box does (attachments.tsx): within `maxEdge` pixels and `budget`
- * characters of base64, a PNG (a screenshot, usually) staying lossless if it fits, JPEG otherwise, a little more
- * compressed and smaller each time.
- */
 async function encodeImage(args) {
   if (!page || typeof document === "undefined") throw new Error("Images can't be drawn here.");
   const { data, maxEdge, budget } = args ?? {};
@@ -202,7 +158,6 @@ async function encodeImage(args) {
         canvas.height = height;
         const context = canvas.getContext("2d");
         if (!context) continue;
-        // JPEG has no transparency: transparent pixels become white, as on a page, rather than black.
         if (mimeType === "image/jpeg") {
           context.fillStyle = "#fff";
           context.fillRect(0, 0, width, height);
@@ -221,13 +176,6 @@ async function encodeImage(args) {
 
 export async function createHost(player) {
   if (page && typeof addEventListener === "function") {
-    // Native Shell pushes and pops its pages' history entries on its own time, after the app has shown the new page's
-    // address, so an entry can hold another page's address. Back or Forward to an entry of another of its pages (from
-    // the app's Back or the browser's) is Native Shell's to follow: the entry gets the app's address back rather than
-    // being taken as a link, which reopened the page just left (Settings, Back, Settings again), and the app then shows
-    // where it went. Anything else goes where the entry points, as it always did: a link followed or an address typed
-    // (a new entry, without state), and Back or Forward between entries of the same page (two addresses typed one after
-    // the other). The depth of the page an entry is of is followed through Native Shell's own calls.
     depth = depthOf(history.state);
     for (const name of ["pushState", "replaceState"]) {
       const original = history[name].bind(history);
@@ -241,7 +189,6 @@ export async function createHost(player) {
       depth = depthOf(event.state);
       const known = Boolean(event.state?.pikibun || event.state?.nshSession);
       const between = known && depth !== left;
-      // A move that leaves the address as it is has no hashchange to come: the mark lapses rather than swallow a link.
       traversedAt = between ? Date.now() : 0;
       if (between && shown && location.hash !== shown) history.replaceState(history.state, "", shown);
     });
@@ -251,7 +198,6 @@ export async function createHost(player) {
       if (traversed) return;
       player.hostEvent("page.route", route());
     });
-    // A notification the service worker showed was clicked with this tab open: it opens the session here.
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.addEventListener("message", event => {
         const data = event.data;

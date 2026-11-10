@@ -1,8 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { ORIGIN, server, sessionRecord, signedIn, view } from "./fixtures";
 
-// The screens ported from the web app: a share link, an invite link and the list of every session.
-
 const shared = (overrides: Record<string, unknown>) => open("./harness/shared.tsx", { network: server(overrides) });
 
 describe("a share link", () => {

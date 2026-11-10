@@ -33,7 +33,6 @@ async function vaultKey(env: Env): Promise<CryptoKey> {
   }
 }
 
-// Check configuration before initiating OAuth or exchanging a one-use authorization code.
 export async function assertVaultConfigured(env: Env): Promise<void> {
   await vaultKey(env);
 }

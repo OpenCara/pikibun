@@ -31,8 +31,6 @@ import {
   connectionLabel, createWorkspaceConnections, DocumentSources, gitConnectionFor, gitProviderLabel, PushAccess, ReadAsControl, WorkspaceConnections,
 } from "./workspace-sources";
 
-// Settings → Workspaces, as the web app's (settings/WorkspacesSettings.tsx): your workspaces, and each one's page.
-
 const roleLabel: Record<WorkspaceRole, string> = { owner: "Owner", admin: "Admin", collaborator: "Collaborator", member: "Member", viewer: "Viewer" };
 const roleHint: Record<AssignableWorkspaceRole, string> = {
   admin: "Collaborator, and manages the workspace: members, models, repositories and settings",
@@ -129,7 +127,6 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
   );
 }
 
-/** The workspace's name, which its owner and admins can change, and the person's role, as the web app's General. */
 function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceRole }) {
   const data = useAppData();
   const action = createAction();
@@ -148,7 +145,6 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
   }
   return (
     <Section title="General">
-      {/* The name is always drawn as text: a bare string in a View (as an If's branch would leave it) shows nothing. */}
       <Row title="Name" trailing={<>
         <Text style={{ fontSize: text.body, color: palette().muted, textAlign: "right" }}>{props.workspace.name}</Text>
         <If when={props.admin}>
@@ -172,7 +168,6 @@ function General(props: { workspace: Workspace; admin: boolean; role: WorkspaceR
   );
 }
 
-/** What a workspace still needs before work starts there: a source, a host, a first session. */
 function Setup(props: { workspace: Workspace; admin: boolean; sourceCount: number | null; go: SectionProps["go"] }) {
   const data = useAppData();
   const { user } = untracked(session);
@@ -183,7 +178,6 @@ function Setup(props: { workspace: Workspace; admin: boolean; sourceCount: numbe
       go: () => props.go({ name: "settings", section: "hosts" }) },
     { label: "Start a session", done: data.sessions().some(item => item.workspaceId === props.workspace.id), go: () => props.go({ name: "new", workspaceId: props.workspace.id }) },
   ];
-  // Only once every signal is known, so it never flashes in and out.
   const known = () => props.sourceCount !== null && Boolean(connectors.data()) && !data.sessionsLoading();
   return (
     <If when={known() && !steps().every(step => step.done)}>
@@ -205,7 +199,6 @@ function connectionAccount(connection: WorkspaceConnection): GitAccount {
     organization: connection.organization, login: connection.name, createdAt: connection.createdAt };
 }
 
-/** The workspace's Git repositories, under Sources (the documents follow, in DocumentSources). */
 function Repositories(props: {
   workspace: Workspace; admin: boolean; repositories: WorkspaceRepository[] | null; sourceCount: number | null; loading: boolean; error: string; refresh: () => void;
   connections: WorkspaceConnection[] | null; changed: () => void; go: SectionProps["go"];
@@ -589,7 +582,6 @@ function AddMember(props: { open: boolean; path: string; owner: boolean; close: 
   function save() {
     if (action.busy() || !userId().trim()) return;
     void action.run(async () => {
-      // Profiles show the ID as "username(id)", so a pasted label names its ID.
       await session().api(props.path, { method: "POST", body: { userId: userIdFromInput(userId()), role: role() } });
       userId.set("");
       props.saved();

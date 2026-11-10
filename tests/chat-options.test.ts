@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import type { ConnectorInfo } from "../packages/shared/src/connector.js";
 import type { SessionView } from "../packages/shared/src/types.js";
 import {
-  accessUnavailable, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, initialSelection, modelUnavailable, mustConfirmAutoApprove, parseChatPreference,
-  preferredSelection, type ChatSelection,
+  accessHint, accessLabels, accessUnavailable, autoApproveMerges, autoApproveWarning, chatOptionsBody, chatPreference, initialSelection, memberAutoApproveHint,
+  memberAutoApproveWarning, modelUnavailable, mustConfirmAutoApprove, offersMemberAutoApprove, parseChatPreference, preferredSelection, type ChatSelection,
 } from "../packages/client/src/chat-options.js";
 
 const host = { capabilities: { chatOptions: true }, models: [] } as unknown as ConnectorInfo;
@@ -13,11 +13,9 @@ const auto: ChatSelection = { access: "auto" };
 test("a chosen access goes with every shared message, or the message waits until it can", () => {
   assert.deepEqual(chatOptionsBody(host, auto, "submit"), { access: "auto" });
   assert.equal(accessUnavailable(host, auto, "submit"), undefined);
-  // Without the host the options can't be sent, and the message would run as "Ask before acting".
   assert.equal(chatOptionsBody(undefined, auto, "submit"), undefined);
   assert.match(accessUnavailable(undefined, auto, "submit") ?? "", /Auto-approve/);
   assert.match(accessUnavailable(undefined, { access: "read" }, "submit") ?? "", /Read only/);
-  // The default access needs no options, and side asks are read-only whatever is picked.
   assert.equal(accessUnavailable(undefined, { access: "approval" }, "submit"), undefined);
   assert.equal(accessUnavailable(undefined, auto, "ask"), undefined);
 });
@@ -26,14 +24,10 @@ test("a message waits for a model its host offers, once the conversation's own o
   const offering = { name: "Bob's Pi", capabilities: { chatOptions: true }, models: [{ provider: "p", modelId: "fast", name: "Fast" }] } as unknown as ConnectorInfo;
   const fast = { provider: "p", modelId: "fast" };
   assert.equal(modelUnavailable(offering, { model: fast, access: "approval" }), undefined);
-  // The conversation's current model, or an earlier pick, that the host no longer offers, as when an admin disabled it.
   assert.match(modelUnavailable(offering, { model: { provider: "p", modelId: "deep" }, access: "approval" }) ?? "", /Bob's Pi no longer offers deep\. Choose another model/);
-  // Without a model the message runs on the conversation's own one, which the server checks.
   assert.equal(modelUnavailable(offering, { access: "approval" }), undefined);
-  // A host that offers none runs nothing, whether Pi on it offers none or each one is disabled, so it says neither.
   assert.equal(modelUnavailable({ ...offering, models: [] }, { model: fast, access: "approval" }), "Bob's Pi offers no models right now.");
   assert.equal(modelUnavailable({ ...offering, models: [] }, { access: "approval" }), "Bob's Pi offers no models right now.");
-  // One that can't switch models, or isn't known yet, is left to the server.
   assert.equal(modelUnavailable({ ...offering, capabilities: {} } as unknown as ConnectorInfo, { model: { provider: "p", modelId: "deep" }, access: "approval" }), undefined);
   assert.equal(modelUnavailable(undefined, { model: fast, access: "approval" }), undefined);
 });
@@ -50,26 +44,20 @@ test("the last chatted model and reasoning start the next new chat where the hos
   } as unknown as ConnectorInfo;
   const fast = { provider: "p", modelId: "fast" };
 
-  // What ran is remembered: the picked model at the level it actually applied.
   const preference = chatPreference(remembering, { model: { provider: "p", modelId: "deep" }, thinkingLevel: "high", access: "auto" });
   assert.deepEqual(preference, { connectorId: "host-a", provider: "p", modelId: "deep", thinkingLevel: "high" });
   assert.deepEqual(parseChatPreference(JSON.stringify(preference)), preference);
   assert.equal(chatPreference(remembering, { model: { provider: "p", modelId: "gone" }, access: "approval" }), undefined);
   assert.equal(chatPreference({ ...remembering, capabilities: {} } as unknown as ConnectorInfo, { model: fast, access: "approval" }), undefined);
 
-  // A new chat starts on it, on Auto-approve (the chat is its owner's) rather than the remembered run's access.
   assert.deepEqual(preferredSelection(remembering, preference, fast), { model: { provider: "p", modelId: "deep" }, thinkingLevel: "high", access: "auto" });
-  // Where the model isn't offered or usable, the fallback runs at the remembered level when it supports it...
   const elsewhere = { ...preference!, modelId: "gone" };
   assert.deepEqual(preferredSelection(remembering, elsewhere, fast), { model: fast, thinkingLevel: "high", access: "auto" });
   assert.deepEqual(preferredSelection(remembering, preference, fast, model => model.modelId !== "deep"), { model: fast, thinkingLevel: "high", access: "auto" });
-  // ...else at the level the host's Pi starts it at.
   assert.deepEqual(preferredSelection(remembering, { ...preference!, thinkingLevel: "max" }, fast, () => false), { model: fast, thinkingLevel: "low", access: "auto" });
-  // Nothing remembered: the fallback at its own level.
   assert.deepEqual(preferredSelection(remembering, undefined, fast), { model: fast, thinkingLevel: "low", access: "auto" });
   assert.deepEqual(preferredSelection(undefined, preference, fast), { access: "auto" });
 
-  // Stored junk is ignored, and an unknown level is dropped.
   assert.equal(parseChatPreference(null), undefined);
   assert.equal(parseChatPreference("{"), undefined);
   assert.equal(parseChatPreference(JSON.stringify({ provider: "p" })), undefined);
@@ -83,16 +71,13 @@ test("a message sent without picking a model remembers the conversation's curren
   } as unknown as ConnectorInfo;
   const current = { provider: "p", modelId: "deep", thinkingLevel: "high" as const };
   assert.deepEqual(chatPreference(host, { access: "approval" }, current), { connectorId: "host-a", provider: "p", modelId: "deep", thinkingLevel: "high" });
-  // A level picked on its own applies to the current model.
   assert.deepEqual(chatPreference(host, { thinkingLevel: "off", access: "approval" }, current), { connectorId: "host-a", provider: "p", modelId: "deep", thinkingLevel: "off" });
-  // Without either, there is nothing to remember.
   assert.equal(chatPreference(host, { access: "approval" }), undefined);
 });
 
 test("the owner's chat box starts on Auto-approve before the first shared message, then keeps that message's access", () => {
   const view = (access?: SessionView["access"], entries: SessionView["entries"] = []) => ({ entries, ...(access ? { access } : {}) }) as SessionView;
   assert.equal(initialSelection(view(), true).access, "auto");
-  // An older runner leaves "approval" out of the view; a conversation with messages then keeps asking before acting.
   assert.equal(initialSelection(view(undefined, [{ id: "1", kind: "message", role: "user", text: "Hi" }]), true).access, "approval");
   assert.equal(initialSelection(view(), false).access, "approval");
   assert.equal(initialSelection(view("approval"), true).access, "approval");
@@ -108,7 +93,6 @@ test("Auto-approve merges too, on hosts that run GitHub effects automatically, o
   assert.deepEqual(chatOptionsBody(automatic, { access: "approval" }, "submit"), { access: "approval" });
   assert.deepEqual(chatOptionsBody(automatic, auto, "ask"), {});
   assert.deepEqual([autoApproveMerges(automatic), autoApproveMerges(host), autoApproveMerges(undefined)], [true, false, false]);
-  // The owner's chat box starts on Auto-approve without asking, so its first message that would merge asks first.
   assert.equal(mustConfirmAutoApprove(merging, false), true);
   assert.equal(mustConfirmAutoApprove(merging, true), false, "confirmed on this device");
   assert.equal(mustConfirmAutoApprove(chatOptionsBody(host, auto, "submit"), false), false, "nothing merges without asking there");
@@ -125,4 +109,29 @@ test("the Auto-approve warning says what runs without asking on this host", () =
   assert.match(autoApproveWarning({ ...base, hostCommandAccess: "auto" }, false), /granted you automatic host commands, so host commands, such as its extensions' tools, also run OUTSIDE the sandbox on Bob's Pi/);
   assert.match(autoApproveWarning({ ...base, hostCommandAccess: "owner" }, false), /On someone else's host they still need their approval/);
   assert.match(autoApproveWarning(base, false), /or one whose owner granted you automatic host commands/);
+});
+
+test("a workspace owner, admin or collaborator may choose Auto-approve in someone else's session, for their sandboxed commands only", () => {
+  const automatic = { name: "Bob's Pi", capabilities: { chatOptions: true, automaticGitHub: true, memberAutoApprove: true }, models: [] } as unknown as ConnectorInfo;
+  const older = { name: "Bob's Pi", capabilities: { chatOptions: true, automaticGitHub: true }, models: [] } as unknown as ConnectorInfo;
+  const session = { ownerId: "owner" };
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "collaborator", true, false), true);
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "admin", true, false), true);
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "owner", true, false), true);
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "member", true, false), false, "a plain member asks");
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "viewer", true, false), false);
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", undefined, true, false), false, "until the role is known");
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "collaborator", false, false), false, "only someone who writes to it");
+  assert.equal(offersMemberAutoApprove(session, automatic, "teammate", "collaborator", true, true), false, "never on an unsandboxed host");
+  assert.equal(offersMemberAutoApprove(session, older, "teammate", "collaborator", true, false), false, "an older connector takes it from the owner only");
+  assert.equal(offersMemberAutoApprove(session, undefined, "teammate", "collaborator", true, false), false);
+  assert.equal(offersMemberAutoApprove(session, automatic, "owner", "collaborator", true, false), false, "the owner has their own Auto-approve");
+  assert.deepEqual(chatOptionsBody(automatic, auto, "submit", false), { access: "auto" });
+  assert.deepEqual(chatOptionsBody(automatic, auto, "submit", true), { access: "auto", autoMerge: true });
+  assert.equal(mustConfirmAutoApprove(chatOptionsBody(automatic, auto, "submit", false), false), false);
+  assert.equal(accessHint("auto", false), memberAutoApproveHint);
+  assert.equal(accessHint("auto", true), accessLabels.auto.hint);
+  assert.equal(accessHint("approval", false), accessLabels.approval.hint);
+  assert.match(memberAutoApproveWarning(automatic), /in the sandbox .* will run immediately on Bob's Pi, as the session's owner/);
+  assert.match(memberAutoApproveWarning(automatic), /Pushes, GitHub comments, issues and merges, host commands, commands without resource limits, and tools the session doesn't allow yet still need approval/);
 });

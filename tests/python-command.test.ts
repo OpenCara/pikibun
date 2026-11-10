@@ -20,10 +20,8 @@ test("the python tool refuses commands that act on a package index as an account
     ["python3", ["-m", "twine", "upload", "dist/*"]], ["python3", ["-mtwine", "upload", "dist/*"]], ["python3", ["-W", "ignore", "-m", "twine", "register"]],
     ["uvx", ["twine", "upload", "dist/*"]], ["uvx", ["twine==5.0", "upload"]], ["uvx", ["--from", "x", "twine", "upload"]], ["uv", ["tool", "run", "twine", "upload"]],
     ["uv", ["run", "twine", "upload"]], ["poetry", ["run", "twine", "upload"]], ["uv", ["run", "python3", "-m", "twine", "upload"]],
-    // Past a "--", and through Python by any of its names (review of #186).
     ["uv", ["run", "--", "twine", "upload"]], ["uv", ["tool", "run", "--", "twine", "upload"]], ["uvx", ["--", "twine", "upload"]], ["poetry", ["run", "--", "twine", "upload"]],
     ["uv", ["run", "python", "-m", "twine", "upload"]], ["poetry", ["run", "python3.12", "-m", "twine", "register"]], ["uv", ["run", "--with", "x", "python", "-m", "twine", "upload"]],
-    // Options that take a value, written either way, and uv's own credentials (review of #186).
     ["uv", ["run", "--with-requirements", "r.txt", "twine", "upload"]], ["uv", ["run", "--with-requirements=r.txt", "twine", "upload"]],
     ["uv", ["--package", "p", "publish"]], ["uv", ["--package=p", "publish"]], ["uv", ["run", "--extra", "dev", "--env-file", ".env", "twine", "upload"]],
     ["uvx", ["--with-editable", ".", "twine", "upload"]], ["uv", ["auth", "login", "example.com"]], ["uv", ["auth", "token", "example.com"]],

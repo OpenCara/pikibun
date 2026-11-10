@@ -5,9 +5,6 @@ import { session } from "./auth";
 import { createAction, createResource, type Action, type Resource } from "./resource";
 import { confirm } from "../ui";
 
-// What can be done to a session as a whole, shared by its header's menu and its panel (the web app's
-// useSessionActions, session-panel.tsx).
-
 export type Backup = { id: string; sessionId: string; size: number; sha256: string; createdAt: string; location?: BackupLocation; unavailable?: boolean;
   automatic?: boolean; conversationOnly?: boolean };
 export type BackupDatabase = { id: string; host: string; port: number; database: string; confirm: boolean; consented?: boolean };
@@ -19,13 +16,11 @@ export const backupDatabaseLabel = (database: BackupDatabase) => `${database.hos
 
 export interface SessionActions {
   action: Action;
-  /** The backup just created here. */
   backup: Accessor<Backup | null>;
   backups: Resource<BackupListing>;
   backupsOff: Accessor<boolean>;
   backupsPending: Accessor<boolean>;
   conversationOnlyOff: Accessor<boolean>;
-  /** Backups need an idle session whose live state is confirmed. */
   backupBlocked: Accessor<boolean>;
   changeVisibility: () => void;
   createBackup: (options?: { conversationOnly?: boolean }) => void;
@@ -37,10 +32,6 @@ export interface SessionActions {
 
 type Visibility = NonNullable<SessionRecord["visibility"]>;
 
-/**
- * Asks before turning `current` workspace-visible or private (its header's menu, a list's right-click menu); resolves
- * the visibility to set, or null when the person changed their mind.
- */
 export async function confirmVisibilityChange(current: SessionRecord): Promise<Visibility | null> {
   const next: Visibility = (current.visibility ?? "private") === "workspace" ? "private" : "workspace";
   const confirmed = await confirm(next === "workspace" ? {
@@ -61,10 +52,6 @@ export const confirmArchive = (): Promise<boolean> => confirm({ title: "Archive 
 
 export const unarchiveNotice = (current: SessionRecord): string => (current.packed ? "Session unarchived, its files unpacked" : "Session unarchived");
 
-/**
- * `manages`: its owner, or its workspace's owner or an admin, who rename, archive and unarchive it and change its
- * visibility. Backups stay the owner's alone, and need an idle session (`backupBlocked`).
- */
 export function createSessionActions(options: { session: Accessor<SessionRecord | null>; manages: Accessor<boolean>; backupBlocked: Accessor<boolean>; onChange: () => void }): SessionActions {
   const action = createAction();
   const backup = signal<Backup | null>(null);
@@ -93,14 +80,13 @@ export function createSessionActions(options: { session: Accessor<SessionRecord 
     backup.set(null);
     let trustedDatabaseId: string | undefined;
     try {
-      // A backup saved where someone else can read it waits for the owner's explicit confirmation of that database.
       const { workspaceDatabase } = await session().api<{ workspaceDatabase?: BackupDatabase }>(`${base()}/backups`);
       if (workspaceDatabase?.confirm) {
         if (!await confirm({ title: "Save to the workspace database?", confirmLabel: "Save backup",
           message: `This backup is saved in ${backupDatabaseLabel(workspaceDatabase)}, the database the workspace owner connected. Whoever can read it can read this session: its prompts, output${conversationOnly ? "" : " and files"}, and your personal environment values.` })) return;
         trustedDatabaseId = workspaceDatabase.id;
       }
-    } catch { /* The backup request repeats the check and explains a refusal. */ }
+    } catch { }
     await action.run(async () => {
       const body = { ...(trustedDatabaseId ? { trustedDatabaseId } : {}), ...(conversationOnly ? { conversationOnly: true } : {}) };
       const result = await session().api<{ backup: Backup }>(`${base()}/backup`, { method: "POST", ...(Object.keys(body).length ? { body } : {}) });

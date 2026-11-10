@@ -72,10 +72,8 @@ test('private keys lose their body but keep their markers, raw, JSON-escaped, in
     `  ${pem('EC ', REDACTED)}`);
   const encrypted = pem('RSA ', `Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123456789ABCDEF\n\n${keyBody}`);
   assert.equal(redactSecrets(encrypted), pem('RSA ', REDACTED));
-  // `head key.pem` cuts the END line off.
   assert.equal(redactSecrets('-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ\n'),
     '-----BEGIN PRIVATE KEY-----\n[redacted]\n');
-  // Prose about keys is not a key.
   const prose = 'Look for -----BEGIN RSA PRIVATE KEY----- at the top of the file and all lines below';
   assert.equal(redactSecrets(prose), prose);
 });
@@ -91,7 +89,6 @@ test('code, identifiers, types, numbers, references and prose stay exactly as th
     'http://localhost:5173/@fs/src/main.tsx', 'https://example.com:8443/path@v2', 'Password: <your password>', 'api_key: "your-api-key"',
     'token: xxxxxxxx', 'password: "********"', 'the token is valid until tomorrow', '| password | hunter22 |', 'task-sk-learn-pipeline-name-here',
     `a long base64 blob ${'QUJD'.repeat(40)}`, 'echo $SECRET_KEY', '--token-file ~/.token', 'gh auth login --with-token < token.txt',
-    // Plain words after a password key that are code or prose, not the password.
     'password: string', '  password: Password', 'password: SecretStr', 'password: userPassword', 'password: user_password',
     'password: password', 'password: hash', '    password: Optional[str]', 'password: required', 'the password is incorrect.',
     'The password is required', 'the password is stored in the vault', 'Your password is too short.', 'token: expired',
@@ -114,7 +111,6 @@ test('in commands, only single shell-safe words are hidden, so what runs always 
     ["TOKEN='a b' && reboot", 'reboot'],
     ['Authorization: Bearer $(cat ~/.token)', '$(cat ~/.token)'],
   ]) assert.ok(command(text).includes(visible), `${text} -> ${command(text)}`);
-  // What command mode hides is whole words: without them, every space, quote and metacharacter is where it was.
   const structure = (text: string) => text.replaceAll(REDACTED, '').replace(/[A-Za-z0-9._~+/=:@%^!#,-]/g, '');
   for (const text of [`export GITHUB_TOKEN=${github} && git push`, 'curl -H "Authorization: Bearer abc123def456" https://x',
     "PASSWORD='hunter22' psql", 'mysql --password hunter22 -h db', `git remote set-url origin https://me:${github}@github.com/o/r.git`]) {
@@ -165,7 +161,6 @@ test('views and approvals keep their shape, review hash and structural fields; o
   assert.deepEqual(redactOperation({ kind: 'github.comment', repository: 'o/r', issue: 1, body: 'TOKEN=abc123' }), { kind: 'github.comment', repository: 'o/r', issue: 1, body: 'TOKEN=[redacted]' });
   assert.deepEqual(redactOperation({ kind: 'github.issue', repository: 'o/r', title: `Leaked ${github}`, body: 'TOKEN=abc123' }),
     { kind: 'github.issue', repository: 'o/r', title: 'Leaked ghp_[redacted]', body: 'TOKEN=[redacted]' });
-  // Commands and permission targets are redacted word by word only.
   assert.deepEqual(redactOperation({ kind: 'bash', command: pem('', keyBody) }), { kind: 'bash', command: pem('', keyBody) });
   assert.deepEqual(redactOperation({ kind: 'permission', tool: 'bash', target: `GH_TOKEN=${github} gh pr list`, needs: ['tool'] }),
     { kind: 'permission', tool: 'bash', target: 'GH_TOKEN=[redacted] gh pr list', needs: ['tool'] });
@@ -188,7 +183,6 @@ test('views and approvals keep their shape, review hash and structural fields; o
   assert.deepEqual(shown, { ...view, entries: [{ ...view.entries[0]!, text: 'Use ghp_[redacted]' }, view.entries[1]], approvals: [redactApproval(push)] });
   assert.deepEqual(Object.keys(shown), Object.keys(view));
   assert.ok(view.entries[0]!.text.includes(github), 'The runner\'s view is never modified in place');
-  // Malformed runner output passes through rather than failing the request.
   for (const malformed of [{ ...view, entries: 'nope' }, { ...view, approvals: null }, { ...view, entries: [null, { id: 'x', text: 5 }] }]) {
     assert.doesNotThrow(() => redactView(malformed as unknown as SessionView));
   }

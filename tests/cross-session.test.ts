@@ -28,14 +28,11 @@ test('a delivered message names its origin and sender, and its outcome is the an
   assert.deepEqual(messageOutcome(view, message), { status: 'running', done: false, reply: 'Done: it works.' });
   view.queue[0]!.status = 'settled';
   assert.deepEqual(messageOutcome(view, message), { status: 'settled', done: true, reply: 'Done: it works.' });
-  // A message id that is the prefix of another's never matches it.
   assert.equal(messageOutcome(view, { ...message, id: 'm' }).reply, undefined);
-  // An older runner lists no queue: the message is done once an answer is the last thing after it, and no card waits.
   const older = { entries: view.entries.slice(0, 6), approvals: [] as SessionView['approvals'] };
   assert.deepEqual(messageOutcome(older, message), { status: 'unknown', done: true, reply: 'Done: it works.' });
   assert.equal(messageOutcome({ ...older, entries: view.entries.slice(0, 5) }, message).done, false, 'a tool result last: still at work');
   assert.equal(messageOutcome({ ...older, approvals: [{ status: 'pending' } as SessionView['approvals'][number]] }, message).done, false);
-  // What a permission card shows stays within what the host and the control plane both keep whole.
   const long = sessionsToolTarget({ action: 'send', targetSessionId: 'b', message: 'x'.repeat(100_000) });
   assert.ok(long.length < 8192 && long.startsWith('send · session b · message:\n'));
   assert.equal(sessionsToolTarget({ action: 'read', targetSessionId: 'b', messageId: 'm1' }), 'read · session b · message m1');
@@ -69,13 +66,11 @@ async function fixture(t: TestContext) {
   const workspace = (await (await owner.request('POST', '/api/workspaces', { name: 'cross-session' })).json() as { workspace: { id: string } }).workspace;
   await owner.request('POST', `/api/workspaces/${workspace.id}/members`, { userId: collaborator.user.id, role: 'collaborator' });
   const model = (await (await owner.request('POST', `/api/workspaces/${workspace.id}/models`, { name: 'faux', provider: 'faux', modelId: 'faux-1' })).json() as { model: { id: string } }).model;
-  // Agents from before the sessions tool: they lack it.
   const agent = seedAgentVersion(sqlite, { authorId: owner.user.id, modelId: model.id, tools: ['identity'] });
   const seed = (id: string, title: string, visibility = 'private') => sqlite.prepare("INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,visibility,repository_mode) VALUES (?,?,?,?,?,?,?,?,'clone')")
     .run(id, workspace.id, owner.user.id, agent.id, title, 'ready', new Date().toISOString(), visibility);
   seed('session-a', 'Coordinator');
   seed('session-b', 'Worker');
-  // The host of each session: a view per session, recording what it is sent.
   const fakes = new Map<string, Fake>();
   const fake = (id: string): Fake => {
     let entry = fakes.get(id);
@@ -103,7 +98,6 @@ async function fixture(t: TestContext) {
     return Response.json({ submissionId, conversationId, status: 'queued' });
   };
   const admit = (sessionId: string, actorId: string, options: { access?: string; requestId?: string } = {}) => {
-    // A delivered message's own admission, as the control plane issued it with the message.
     const issued = options.requestId && sqlite.prepare('SELECT id FROM run_admissions WHERE session_id = ? AND actor_id = ? AND request_id = ?').get(sessionId, actorId, options.requestId);
     if (issued) return String(issued.id);
     const admission = randomBytes(32).toString('base64url');
@@ -127,14 +121,12 @@ async function fixture(t: TestContext) {
   return { env, sqlite, owner, collaborator, workspace, model, agent, fake, admit, tool, allow, refused, seed };
 }
 
-/** Views are shared about a second apart (view-feed.ts): a test that changes one waits for the next. */
 const nextView = () => delay(1000);
 
 test('an agent lists and reads the sessions its sender can see, and a read never shows people what they can\'t open', async t => {
   const f = await fixture(t);
   const ownerId = f.owner.user.id;
   const write = f.admit('session-a', ownerId);
-  // The agent lacks the tool and the owner hasn't allowed it.
   await f.refused(f.tool('session-a', ownerId, write, { action: 'list' }), 403, 'tool_not_allowed');
   f.allow('session-a', 'sessions');
   for (const [body, code] of [[{ action: 'read' }, 'invalid_input'], [{ action: 'list', targetSessionId: 'session-b' }, 'invalid_input'],
@@ -142,7 +134,6 @@ test('an agent lists and reads the sessions its sender can see, and a read never
     [{ action: 'ask', targetSessionId: 'session-b', message: 'hi', access: 'auto' }, 'invalid_input']] as const) {
     await f.refused(f.tool('session-a', ownerId, write, body), 400, code);
   }
-  // Another person's admission, an expired one, or one of another session admit nothing.
   await f.refused(f.tool('session-a', ownerId, f.admit('session-b', ownerId), { action: 'list' }), 403, 'sessions_not_admitted');
   await f.refused(f.tool('session-a', f.collaborator.user.id, write, { action: 'list' }), 403, 'permission_revoked');
 
@@ -152,7 +143,6 @@ test('an agent lists and reads the sessions its sender can see, and a read never
   assert.deepEqual(sessions.map(session => [session.id, session.self ?? false]).sort(), [['session-a', true], ['session-b', false]]);
   assert.deepEqual((listed.body.models as { id: string }[]).map(model => model.id), [f.model.id]);
 
-  // The collaborator can open the coordinator, not the worker: a read of the worker into the coordinator needs the owner's consent.
   assert.equal((await f.owner.request('POST', '/api/sessions/session-a/grants', { userId: f.collaborator.user.id, role: 'collaborator' })).status, 200);
   const worker = f.fake('session-b');
   worker.view.entries.push({ id: '0:1', kind: 'message', role: 'user', text: 'Build it', conversationId: '0', actorId: ownerId },
@@ -164,7 +154,6 @@ test('an agent lists and reads the sessions its sender can see, and a read never
     admissionId: f.admit('session-b', ownerId) } as SessionView['approvals'][number]);
   const consent = await f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-b' }, 'read-1');
   assert.deepEqual(consent.body, { consent: 'audience', target: audienceTarget({ id: 'session-b', title: 'Worker' }), reason: 'This session\'s readers include people who can\'t read that session.' });
-  // The owner allows it for that call: the host records the card, and the control plane its decision.
   f.sqlite.prepare("INSERT INTO approval_reviews (session_id,approval_id,requested_by,operation_json,source,admission_id,review_hash,created_at) VALUES (?,?,?,?,?,?,?,?)")
     .run('session-a', 'permission-read-1_audience', ownerId, JSON.stringify({ kind: 'permission', tool: 'sessions', target: audienceTarget({ id: 'session-b', title: 'Worker' }), needs: ['audience'] }),
       'model', write, 'r'.repeat(43), new Date().toISOString());
@@ -176,13 +165,10 @@ test('an agent lists and reads the sessions its sender can see, and a read never
   assert.deepEqual(entries.map(entry => entry.id), ['0:1', '0:2'], 'the shared conversation only');
   assert.ok(entries[1]!.text.length < 2100 && entries[1]!.text.endsWith('3000 more characters'));
   assert.deepEqual(read.body.pendingApprovals, [{ id: 'permission-1', kind: 'permission', tool: 'bash', requestedBy: ownerId }]);
-  // The grant covers that call only.
   assert.ok('consent' in (await f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-b' }, 'read-2')).body);
-  // Without the collaborator, the same people read both: no consent is needed.
   assert.equal((await f.owner.request('DELETE', `/api/sessions/session-a/grants/${f.collaborator.user.id}`)).status, 200);
   assert.equal((await f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-b', limit: 1 })).status, 200);
 
-  // People reach only what they can open themselves, and never this session as another.
   await f.refused(f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-a' }), 409, 'same_session');
   await f.refused(f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'missing' }), 404, 'not_found');
 });
@@ -209,7 +195,6 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   assert.deepEqual(audits.map(row => [row.action, row.session_id, row.actor_id]), [['session.submit', 'session-b', ownerId], ['session.cross_session.sent', 'session-a', ownerId]]);
   assert.equal((JSON.parse(String(audits[0]!.detail_json)) as { crossSession: string }).crossSession, message.id);
 
-  // Its outcome, read back by its id.
   worker.view.entries.push({ id: '0:90', kind: 'message', role: 'assistant', text: 'All 12 tests pass.', conversationId: '0' });
   worker.view.queue!.find(item => item.submissionId === message.submissionId)!.status = 'settled';
   await nextView();
@@ -217,7 +202,6 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   assert.deepEqual(outcome.body.outcome, { status: 'settled', done: true, reply: 'All 12 tests pass.' });
   await f.refused(f.tool('session-a', ownerId, write, { action: 'read', targetSessionId: 'session-b', messageId: 'unknown' }), 404, 'not_found');
 
-  // A session at work or waiting on a card is busy; a side ask still goes, read-only.
   f.sqlite.prepare("UPDATE sessions SET activity = 'working' WHERE id = 'session-b'").run();
   await f.refused(f.tool('session-a', ownerId, write, { action: 'send', targetSessionId: 'session-b', message: 'More' }), 409, 'session_busy');
   const asked = await f.tool('session-a', ownerId, write, { action: 'ask', targetSessionId: 'session-b', message: 'How far along?' });
@@ -225,10 +209,8 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   assert.equal(worker.submitted.at(-1)!.mode, 'ask');
   f.sqlite.prepare("UPDATE sessions SET activity = 'done' WHERE id = 'session-b'").run();
 
-  // Auto-approve passes on only from the owner's Auto-approve message; this runner takes no options at all.
   await f.refused(f.tool('session-a', ownerId, write, { action: 'send', targetSessionId: 'session-b', message: 'Go', access: 'auto' }), 403, 'automatic_message_not_admitted');
   await f.refused(f.tool('session-a', ownerId, f.admit('session-a', ownerId, { access: 'auto' }), { action: 'send', targetSessionId: 'session-b', message: 'Go', access: 'auto' }), 400, 'options_unsupported');
-  // A Read-only message changes nothing elsewhere until the owner allows it; reads and asks need nothing more.
   const readOnly = f.admit('session-a', ownerId, { access: 'read' });
   await f.refused(f.tool('session-a', ownerId, readOnly, { action: 'send', targetSessionId: 'session-b', message: 'Go' }), 403, 'write_not_allowed');
   await f.refused(f.tool('session-a', ownerId, readOnly, { action: 'stop', targetSessionId: 'session-b' }), 403, 'write_not_allowed');
@@ -236,7 +218,6 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   f.allow('session-a', 'sessions:write');
   assert.equal((await f.tool('session-a', ownerId, readOnly, { action: 'send', targetSessionId: 'session-b', message: 'Go' })).status, 202);
 
-  // The worker's agent, working on that message, can't send it back the way it came: notifications and reads answer it.
   const inWorker = f.admit('session-b', ownerId, { requestId: `xs:${message.id}` });
   await f.refused(f.tool('session-b', ownerId, inWorker, { action: 'send', targetSessionId: 'session-a', message: 'Back to you' }), 409, 'session_loop');
   f.seed('session-c', 'Third');
@@ -245,11 +226,9 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   const second = onward.body.message as CrossSessionMessage;
   assert.equal(second.hops, 2);
   assert.match(String(f.fake('session-c').submitted.at(-1)!.body.content), /from session "Worker" \(session-b\) · sent by test:xs-owner through its agent · hop 2\]/);
-  // Two sessions down, the third still can't loop back to either.
   f.allow('session-c', 'sessions');
   const inThird = f.admit('session-c', ownerId, { requestId: `xs:${second.id}` });
   for (const back of ['session-a', 'session-b']) await f.refused(f.tool('session-c', ownerId, inThird, { action: 'send', targetSessionId: back, message: 'loop' }), 409, 'session_loop');
-  // At the last hop a run reads, but sends nothing further; a request id typed to look like one counts as that far.
   f.sqlite.prepare('UPDATE session_messages SET hops = ? WHERE id = ?').run(crossSessionLimits.maxHops, second.id);
   f.seed('session-d', 'Fourth');
   await f.refused(f.tool('session-c', ownerId, inThird, { action: 'send', targetSessionId: 'session-d', message: 'further' }), 403, 'hop_limit');
@@ -257,25 +236,21 @@ test('messages go out as their sender, named, recorded and bounded: access, busy
   assert.equal((await f.tool('session-c', ownerId, inThird, { action: 'read', targetSessionId: 'session-d' })).status, 200);
   await f.refused(f.tool('session-a', ownerId, f.admit('session-a', ownerId, { requestId: 'xs:made-up' }), { action: 'send', targetSessionId: 'session-d', message: 'x' }), 403, 'hop_limit');
 
-  // One message sends at most so many, even when its calls come at once.
   const busy = f.admit('session-a', ownerId);
   const burst = await Promise.all(Array.from({ length: crossSessionLimits.perMessage + 3 }, (_, index) =>
     f.tool('session-a', ownerId, busy, { action: 'ask', targetSessionId: 'session-d', message: `q${index}` })));
   assert.equal(burst.filter(result => result.status === 202).length, crossSessionLimits.perMessage);
   assert.deepEqual([...new Set(burst.filter(result => result.status !== 202).map(result => result.body.code))], ['cross_session_limit']);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM session_messages WHERE origin_admission_id = ?").get(busy)!.n, crossSessionLimits.perMessage);
-  // A refused send gives its place back.
   const refusedOnce = f.admit('session-a', ownerId);
   f.sqlite.prepare("UPDATE sessions SET activity = 'working' WHERE id = 'session-d'").run();
   await f.refused(f.tool('session-a', ownerId, refusedOnce, { action: 'send', targetSessionId: 'session-d', message: 'busy' }), 409, 'session_busy');
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM session_messages WHERE origin_admission_id = ?").get(refusedOnce)!.n, 0);
   f.sqlite.prepare("UPDATE sessions SET activity = NULL WHERE id = 'session-d'").run();
 
-  // A collaborator's message acts with the collaborator's own access: none to a private session of the owner's.
   assert.equal((await f.owner.request('POST', '/api/sessions/session-a/grants', { userId: f.collaborator.user.id, role: 'collaborator' })).status, 200);
   const theirs = f.admit('session-a', f.collaborator.user.id);
   await f.refused(f.tool('session-a', f.collaborator.user.id, theirs, { action: 'send', targetSessionId: 'session-b', message: 'hi' }), 404, 'not_found');
-  // What it starts is the collaborator's own session, linked to this one.
   const started = await f.tool('session-a', f.collaborator.user.id, theirs, { action: 'create', title: 'Their sub-task' });
   assert.equal(started.status, 201, JSON.stringify(started.body));
   assert.deepEqual([(started.body.session as CrossSessionSummary).ownerId, (started.body.session as CrossSessionSummary).parentSessionId], [f.collaborator.user.id, 'session-a']);
@@ -290,7 +265,6 @@ test('an agent stops and archives sessions as its sender may, and starts linked 
   assert.deepEqual([stopped.status, stopped.body], [200, { stopped: 1 }]);
   assert.equal(f.fake('session-b').stopped, 1);
 
-  // A Read-only message starts a session once the owner allowed that very call, its title shown as the agent sent it.
   const readOnly = f.admit('session-a', ownerId, { access: 'read' });
   const spaced = { action: 'create', title: '  Spaced title  ' } as const;
   f.sqlite.prepare("INSERT INTO approval_reviews (session_id,approval_id,requested_by,operation_json,source,admission_id,review_hash,created_at) VALUES (?,?,?,?,?,?,?,?)")
@@ -302,7 +276,6 @@ test('an agent stops and archives sessions as its sender may, and starts linked 
   assert.equal((spacedChild.body.session as CrossSessionSummary).title, 'Spaced title');
   await f.refused(f.tool('session-a', ownerId, readOnly, spaced, 'create-2'), 403, 'write_not_allowed');
 
-  // A private session starts only private ones.
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', title: 'Wide', visibility: 'workspace' }), 403, 'visibility_wider');
   const created = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Write the docs', message: 'Document the API', notify: true });
   assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -311,7 +284,6 @@ test('an agent stops and archives sessions as its sender may, and starts linked 
   assert.deepEqual([child.title, child.parentSessionId, child.visibility, child.ownerId, child.status], ['Write the docs', 'session-a', 'private', ownerId, 'ready']);
   assert.deepEqual([opening.kind, opening.targetSessionId, opening.notify], ['create', child.id, 'pending']);
   assert.match(String(f.fake(child.id).submitted[0]!.body.content), /^\[Pikibun cross-session opening message xs:\S+ · from session "Coordinator"/);
-  // Lists show the link both ways.
   const record = (await (await f.owner.request('GET', `/api/sessions/${child.id}`)).json() as { session: SessionRecord }).session;
   assert.equal(record.parentSessionId, 'session-a');
   const connections = await (await f.owner.request('GET', '/api/sessions/session-a/connections')).json() as SessionConnections;
@@ -320,7 +292,6 @@ test('an agent stops and archives sessions as its sender may, and starts linked 
   const fromChild = await (await f.owner.request('GET', `/api/sessions/${child.id}/connections`)).json() as SessionConnections;
   assert.equal(fromChild.parent?.id, 'session-a');
 
-  // Archiving takes ownership, and never this session itself.
   await f.refused(f.tool('session-a', ownerId, write, { action: 'archive', targetSessionId: 'session-a' }), 409, 'same_session');
   const archived = await f.tool('session-a', ownerId, write, { action: 'archive', targetSessionId: child.id });
   assert.deepEqual([archived.status, archived.body], [200, { archived: child.id }]);
@@ -328,14 +299,12 @@ test('an agent stops and archives sessions as its sender may, and starts linked 
   const actions = f.sqlite.prepare("SELECT action FROM audit WHERE action LIKE 'session.cross_session.%' ORDER BY rowid").all().map(row => row.action);
   assert.deepEqual(actions, ['session.cross_session.stopped', 'session.cross_session.created', 'session.cross_session.created', 'session.cross_session.sent', 'session.cross_session.archived']);
 
-  // Its outcome would come back to people the new session isn't shown to: the owner decides first, and nothing starts.
   assert.equal((await f.owner.request('POST', '/api/sessions/session-a/grants', { userId: f.collaborator.user.id, role: 'viewer' })).status, 200);
   const before = f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
   const consent = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Secret', message: 'Look', notify: true });
   assert.equal(consent.body.consent, 'audience', JSON.stringify(consent.body));
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, before);
 
-  // A session starts only so many.
   f.sqlite.prepare("UPDATE sessions SET parent_session_id = 'session-a' WHERE id = 'session-b'").run();
   for (let index = 3; index < crossSessionLimits.children; index++) {
     f.seed(`filler-${index}`, 'filler');
@@ -361,27 +330,21 @@ test('the workspace\'s owner and admins read every session there, so content pas
   own('member-private', memberId);
   own('admin-private', adminId);
 
-  // The admin's agent lists and reads the member's private session: everyone who reads the admin's private session (its
-  // owner, and the workspace's owner and admins) reads that one too.
   const adminWrite = f.admit('admin-private', adminId);
   const listed = await f.tool('admin-private', adminId, adminWrite, { action: 'list' });
   assert.deepEqual((listed.body.sessions as CrossSessionSummary[]).find(item => item.id === 'member-private')?.permissions, ['read', 'ask', 'write', 'manage']);
   const read = await f.tool('admin-private', adminId, adminWrite, { action: 'read', targetSessionId: 'member-private' });
   assert.equal(read.status, 200, JSON.stringify(read.body));
   assert.ok(!('consent' in read.body), JSON.stringify(read.body));
-  // Sending it the admin's session's content would show it to the member, who can't open the admin's: the admin's owner decides first.
   const sent = await f.tool('admin-private', adminId, adminWrite, { action: 'send', targetSessionId: 'member-private', message: 'Look at this' });
   assert.equal(sent.body.consent, 'audience', JSON.stringify(sent.body));
   assert.deepEqual(f.fake('member-private').submitted, []);
-  // Once allowed, it goes as the admin's own message, which they may send to every session there, private ones included.
   f.allow('admin-private', 'sessions:audience');
   const delivered = await f.tool('admin-private', adminId, adminWrite, { action: 'send', targetSessionId: 'member-private', message: 'Look at this' });
   assert.equal(delivered.status, 202, JSON.stringify(delivered.body));
   assert.equal(f.fake('member-private').submitted.length, 1);
   assert.equal(f.sqlite.prepare("SELECT actor_id FROM run_admissions WHERE session_id = 'member-private' AND request_id LIKE 'xs:%'").get()!.actor_id, adminId);
 
-  // The member's agent can't open the admin's session, and its own private sub-task is read by the same people as its
-  // session, so its outcome comes back without asking.
   const memberWrite = f.admit('member-private', memberId);
   await f.refused(f.tool('member-private', memberId, memberWrite, { action: 'read', targetSessionId: 'admin-private' }), 404, 'not_found');
   const created = await f.tool('member-private', memberId, memberWrite, { action: 'create', title: 'Sub-task', message: 'Do it', notify: true });
@@ -407,7 +370,6 @@ test('a notification brings a finished message\'s outcome back to its origin, on
   worker.view.entries.push({ id: '0:50', kind: 'message', role: 'assistant', text: 'Fixed: the test waited on a timer.', conversationId: '0' });
   worker.view.queue![0]!.status = 'settled';
   await nextView();
-  // The coordinator is at work: the notification waits for it.
   f.sqlite.prepare("UPDATE sessions SET activity = 'working' WHERE id = 'session-a'").run();
   assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: message.id, waiting: 'session_busy' }]);
   f.sqlite.prepare("UPDATE sessions SET activity = 'done' WHERE id = 'session-a'").run();
@@ -422,13 +384,11 @@ test('a notification brings a finished message\'s outcome back to its origin, on
   const notification = f.sqlite.prepare('SELECT kind, origin_session_id, target_session_id, hops, reply_to FROM session_messages WHERE id = ?').get(`${message.id}-n`)!;
   assert.deepEqual({ ...notification }, { kind: 'notify', origin_session_id: 'session-b', target_session_id: 'session-a', hops: 2, reply_to: message.id });
 
-  // A run working on the notification can send the worker a follow-up: it came from there, but not as a loop.
   const followUp = f.admit('session-a', ownerId, { requestId: `xs:${message.id}-n` });
   const again = await f.tool('session-a', ownerId, followUp, { action: 'ask', targetSessionId: 'session-b', message: 'Which timer?' });
   assert.equal(again.status, 202, JSON.stringify(again.body));
   assert.equal((again.body.message as CrossSessionMessage).hops, 3);
 
-  // One its sender can no longer deliver fails; one never finished expires.
   const pending = await f.tool('session-a', ownerId, write, { action: 'ask', targetSessionId: 'session-b', message: 'Anything else?', notify: true });
   const later = (pending.body.message as CrossSessionMessage).id;
   f.sqlite.prepare("UPDATE session_messages SET created_at = ? WHERE id = ?").run(new Date(Date.now() - 25 * 3600_000).toISOString(), later);
@@ -448,13 +408,11 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   f.allow('session-a', 'sessions');
   const childModel = (sessionId: string) => f.sqlite.prepare('SELECT a.model_id FROM sessions s JOIN agent_versions a ON a.id = s.agent_version_id WHERE s.id = ?').get(sessionId)!.model_id;
 
-  // On by default; every member sees it, and only owners and admins change it.
   assert.deepEqual(await (await f.collaborator.request('GET', path)).json(), { settings: { childModels: true } });
   assert.equal((await f.collaborator.request('PUT', path, { childModels: false })).status, 403);
   assert.equal((await f.owner.request('PUT', path, { childModels: 'no' })).status, 400);
   assert.equal((await f.owner.request('PUT', path, { childModels: false, other: 1 })).status, 400);
 
-  // The parent has switched to another of the workspace's models, at its own reasoning level.
   const deep = (await (await f.owner.request('POST', `/api/workspaces/${f.workspace.id}/models`, { name: 'deep', provider: 'faux', modelId: 'faux-2' })).json() as { model: { id: string } }).model;
   f.fake('session-a').view.agent = { provider: 'faux', modelId: 'faux-2', thinkingLevel: 'high' };
   const write = f.admit('session-a', ownerId);
@@ -462,26 +420,21 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   assert.equal(listed.body.childModels, true);
   assert.deepEqual((listed.body.models as { id: string }[]).map(model => model.id).sort(), [f.model.id, deep.id].sort());
 
-  // What the agent leaves out is its parent's current model, rather than the one the parent started on.
   const inherited = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Inherits', message: 'Go' });
   assert.equal(inherited.status, 201, JSON.stringify(inherited.body));
   const inheritedId = (inherited.body.session as CrossSessionSummary).id;
   assert.equal(childModel(inheritedId), deep.id);
-  // A host that can't set reasoning gets none: the opening message names no level.
   assert.deepEqual(inherited.body.model, { id: deep.id, provider: 'faux', modelId: 'faux-2' });
   assert.equal((f.fake(inheritedId).submitted[0]!.body.options as Record<string, unknown> | undefined)?.thinkingLevel, undefined);
 
-  // The agent picks the model for its sub-task, with the level on its card.
   const chosen = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Chosen', modelId: f.model.id });
   assert.equal(chosen.status, 201, JSON.stringify(chosen.body));
   assert.equal(childModel((chosen.body.session as CrossSessionSummary).id), f.model.id);
   assert.equal(sessionsToolTarget({ action: 'create', modelId: 'm', thinkingLevel: 'low', message: 'Go' }), 'create · model m · thinking low · message:\nGo');
-  // A reasoning level is the opening message's, from the levels the model's host offers; nothing starts otherwise.
   const before = f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n;
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', thinkingLevel: 'low' }), 400, 'invalid_input');
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'huge' }), 400, 'invalid_input');
   await f.refused(f.tool('session-a', ownerId, write, { action: 'create', message: 'Go', thinkingLevel: 'low' }), 409, 'thinking_unsupported');
-  // A host of the owner's that sets reasoning levels and offers its model at off and low.
   f.sqlite.prepare('INSERT INTO connectors (id, owner_id, name, credential_hash, connection_hash, capabilities_json, models_json, created_at) VALUES (?,?,?,?,?,?,?,?)')
     .run('levels-host', ownerId, 'Levels', 'h'.repeat(43), 'c'.repeat(43), JSON.stringify({ platform: 'linux', sandbox: true, productionShell: true, chatOptions: true, plainGit: true }),
       JSON.stringify([{ provider: 'faux', modelId: 'faux-3', name: 'Faux 3', thinkingLevels: ['off', 'low'], thinkingLevel: 'low' }]), new Date().toISOString());
@@ -493,8 +446,6 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   assert.match(String((unsupported.body as { message?: string }).message ?? JSON.stringify(unsupported.body)), /off, low/);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()!.n, before);
 
-  // An agent that names a model but no level gets its parent's level where that model runs at it, and the host's own
-  // level where it doesn't. Only an omitted model is recorded as inherited.
   const hostedSubmits: Record<string, unknown>[] = [];
   f.env.CONNECTOR_HUB = fakeHub({ rpc(_connectorId, envelope) {
     const { action, sessionId } = envelope.request.ticket;
@@ -516,7 +467,6 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   assert.equal((hostedSubmits[0]!.options as Record<string, unknown>).thinkingLevel, 'low');
   const offeredAudit = createdAudit((offered.body.session as CrossSessionSummary).id);
   assert.deepEqual([offeredAudit.modelId, offeredAudit.thinkingLevel, offeredAudit.inheritedThinking, offeredAudit.inheritedModel], ['hosted-model', 'low', true, undefined]);
-  // The parent at a level that model doesn't offer: the opening message names none, and its host starts it at its own.
   f.fake('session-a').view.agent = { provider: 'faux', modelId: 'faux-2', thinkingLevel: 'high' };
   await nextView();
   const notOffered = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Not offered', modelId: 'hosted-model', message: 'Go' });
@@ -525,14 +475,12 @@ test('a session an agent starts runs on the model and reasoning level it chose, 
   assert.equal((hostedSubmits[1]!.options as Record<string, unknown> | undefined)?.thinkingLevel, undefined);
   const notOfferedAudit = createdAudit((notOffered.body.session as CrossSessionSummary).id);
   assert.deepEqual([notOfferedAudit.thinkingLevel, notOfferedAudit.inheritedThinking, notOfferedAudit.inheritedModel], [undefined, undefined, undefined]);
-  // A level the agent chose is never replaced by its parent's.
   const own = await f.tool('session-a', ownerId, write, { action: 'create', title: 'Own level', modelId: 'hosted-model', message: 'Go', thinkingLevel: 'off' });
   assert.equal(own.status, 201, JSON.stringify(own.body));
   assert.equal((hostedSubmits[2]!.options as Record<string, unknown>).thinkingLevel, 'off');
   assert.equal(createdAudit((own.body.session as CrossSessionSummary).id).inheritedThinking, undefined);
   assert.equal(createdAudit(inheritedId).inheritedModel, true);
 
-  // Turned off, agents choose neither, and every session they start runs on its parent's current model.
   const off = await f.owner.request('PUT', path, { childModels: false });
   assert.deepEqual(await off.json(), { settings: { childModels: false } });
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.child_sessions.updated'").get()!.n, 1);

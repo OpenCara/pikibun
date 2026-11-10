@@ -9,25 +9,15 @@ import {
   requireInvitedWorkspace, requireMember, requireSharedWorkspace,
 } from './authority/index.js';
 import { appOrigin, fail, identifier, id, jsonObject, now, randomToken, userIdentifier } from './http.js';
-import type { Env, WorkerEnv } from './types.js';
+import type { Env, AppEnv } from './types.js';
 import { ownerHostStatements } from './connectors.js';
-
-/**
- * Invite links: a workspace's owner and admins can share one link with anyone. A registered user who opens it while
- * signed in can ask to join, which makes them a pending member: they are not in workspace_members, so they see and do
- * nothing in the workspace until an owner or admin accepts them with a role (or declines them). A link names no user
- * and admits nobody on its own; turning it off stops new requests but leaves the pending ones for a decision, and their
- * requesters can still withdraw them through /api/join-requests.
- */
 
 const roleList = (roles: readonly string[]) => roles.map(role => `'${role}'`).join(', ');
 
 interface LinkRow { token_hash: string; token_ciphertext: string; created_at: string }
 
-/** The vault's associated data binds each encrypted token to its own workspace. */
 const linkIdentity = (workspaceId: string) => `workspace-invite:${workspaceId}`;
 
-/** The token rides in the URL fragment, so opening the link sends it to neither the server nor a proxy's access log. */
 const linkUrl = (env: Env, token: string) => `${appOrigin(env)}/#/join/${token}`;
 
 function currentLink(env: Env, workspaceId: string): Promise<LinkRow | null> {
@@ -67,15 +57,12 @@ function joinRequests(env: Env, workspaceId: string) {
 
 const requireManager = (env: Env, workspaceId: string, actorId: string) => requireMember(env, workspaceId, actorId, workspaceManagerRoles);
 
-/** Signed-in routes: register after the cookie authentication and CSRF guard. */
-export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
-  // What the link opens, for the person holding it. The token comes in a header so it stays out of URLs and logs.
+export function registerWorkspaceInvites(app: Hono<AppEnv>): void {
   app.get('/api/invite', async c => {
     const workspace = await requireInvitedWorkspace(c.env, c.req.header('x-invite-token'));
     return c.json({ invite: await inviteFor(c.env, workspace, c.get('auth').userId) });
   });
 
-  // Asking to join is idempotent: a member stays a member and a pending member keeps their place in the queue.
   app.post('/api/invite', async c => {
     const body = await jsonObject(c, 1024);
     if (Object.keys(body).some(key => key !== 'token')) fail(400, 'invalid_input', 'Unexpected request field.');
@@ -97,7 +84,6 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     return c.json({ invite: { workspaceName: workspace.name, status: 'pending' } satisfies WorkspaceInvite }, 201);
   });
 
-  // Withdrawing one's own request.
   app.delete('/api/invite', async c => {
     const workspace = await requireInvitedWorkspace(c.env, c.req.header('x-invite-token'));
     const userId = c.get('auth').userId;
@@ -108,8 +94,6 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     return c.json({ invite: await inviteFor(c.env, workspace, userId) });
   });
 
-  // One's own pending requests, without a link: a request outlives the link it came through (turned off or replaced),
-  // and its requester can still see and withdraw it.
   app.get('/api/join-requests', async c => {
     const requests = await c.env.DB.query<OwnJoinRequest>(`SELECT r.workspace_id AS workspaceId, w.name AS workspaceName,
         r.created_at AS createdAt
@@ -125,7 +109,6 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
       c.env.DB.query('DELETE FROM workspace_join_requests WHERE workspace_id = ? AND user_id = ?').bind(workspaceId, userId),
       auditAfterChange(c.env, userId, 'workspace.join.withdraw', workspaceId, { userId }),
     ]);
-    // One answer for a workspace that doesn't exist and one the caller isn't waiting to join.
     if (result[0].changes !== 1) fail(404, 'not_found', 'You are not waiting to join this workspace.');
     return c.body(null, 204);
   });
@@ -137,19 +120,16 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     return c.json({ link: link ? await presentLink(c.env, workspaceId, link) : null });
   });
 
-  // Turning the link on is idempotent: while a link exists, every owner and admin asking gets that same link.
   app.put('/api/workspaces/:id/invite-link', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;
     await requireManager(c.env, workspaceId, actorId);
-    // Nobody joins a private workspace.
     await requireSharedWorkspace(c.env, workspaceId);
     const existing = await currentLink(c.env, workspaceId);
     if (existing) return c.json({ link: await presentLink(c.env, workspaceId, existing) });
     const token = randomToken();
     const createdAt = now();
     const ciphertext = await encryptToken(c.env, linkIdentity(workspaceId), token);
-    // Admit the link only while the actor still manages the workspace.
     const created = await c.env.DB.query(`INSERT INTO workspace_invite_links (workspace_id, token_hash, token_ciphertext, created_by, created_at)
       SELECT workspace_id, ?, ?, user_id, ? FROM workspace_members
       WHERE workspace_id = ? AND user_id = ? AND role IN (${roleList(workspaceManagerRoles)})
@@ -157,7 +137,6 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
       ON CONFLICT (workspace_id) DO NOTHING RETURNING workspace_id`)
       .bind(await sha256(token), ciphertext, createdAt, workspaceId, actorId).first();
     if (!created) {
-      // A concurrent request turned the link on first: answer with its link rather than a second one.
       const raced = await currentLink(c.env, workspaceId);
       if (raced) return c.json({ link: await presentLink(c.env, workspaceId, raced) });
       fail(409, 'membership_changed', 'Membership changed. Refresh and try again.');
@@ -166,7 +145,6 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     return c.json({ link: { url: linkUrl(c.env, token), createdAt } satisfies WorkspaceInviteLink }, 201);
   });
 
-  // Turning the link off stops new requests at once; people already waiting stay pending for a decision.
   app.delete('/api/workspaces/:id/invite-link', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;
@@ -182,7 +160,6 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     return c.json({ requests: await joinRequests(c.env, workspaceId).all() });
   });
 
-  // Accepting makes a pending member a member with the role chosen here; admins assign the roles below their own.
   app.post('/api/workspaces/:id/join-requests/:userId/accept', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const targetId = userIdentifier(c.req.param('userId'));
@@ -192,14 +169,12 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
     const role = body.role;
     if (typeof role !== 'string' || !(assignableWorkspaceRoles as readonly string[]).includes(role)) fail(400, 'invalid_input', 'Invalid role.');
     const actor = await requireManager(c.env, workspaceId, actorId);
-    // Nobody joins a private workspace.
     await requireSharedWorkspace(c.env, workspaceId);
     if (actor.role !== 'owner' && !adminManagedRoles.includes(role as AssignableWorkspaceRole)) {
       fail(403, 'forbidden', 'Only the workspace owner can make someone an administrator.');
     }
     const auditId = id();
     const result = await c.env.DB.batch([
-      // From the pending request only, by an actor who still holds the authority checked above.
       c.env.DB.query(`INSERT INTO workspace_members (workspace_id, user_id, role, created_at)
         SELECT r.workspace_id, r.user_id, ?, ?
         FROM workspace_join_requests r
@@ -213,8 +188,6 @@ export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
       auditAfterChange(c.env, actorId, 'workspace.join.accept', workspaceId, { userId: targetId, role }, auditId),
       c.env.DB.query(`DELETE FROM workspace_join_requests WHERE workspace_id = ? AND user_id = ?
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`).bind(workspaceId, targetId, auditId),
-      // As for a member added directly, their own hosts follow them in, for their private use only. These statements
-      // act only while the membership exists, so a refused accept attaches nothing.
       ...ownerHostStatements(c.env, targetId, workspaceId),
     ]);
     if (result[0].changes !== 1) {

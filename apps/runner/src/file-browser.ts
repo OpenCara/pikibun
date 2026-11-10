@@ -4,38 +4,24 @@ import { fileBrowserLimits, type FileEntry } from "../../../packages/shared/src/
 import { imageType } from "./images.js";
 import { OPEN_DIRECTORY, OPEN_FILE, windows } from "./platform.js";
 
-/**
- * The session panel's read-only file browser (the `files` runner action). The sandbox helper (`browse` in sandbox.ts)
- * and the unsandboxed host workspace (below) read the same thing, within fileBrowserLimits: a directory's entries,
- * lstat-ed and never followed, or a preview of a file. Whatever comes back is checked again here.
- */
 export type { BrowseResult };
 
 const FILE_FLAGS = OPEN_FILE;
 const DIRECTORY_FLAGS = OPEN_DIRECTORY;
-/** More entries than this in one directory are refused rather than listed in part: listing them would take too long. */
 const MAX_LISTED = 100_000;
 
-/** Sorts directories first, then by name in code-unit order, as the sandbox helper does. */
 export function sortEntries(entries: FileEntry[]): FileEntry[] {
   return entries.sort((a, b) => Number(a.type !== "directory") - Number(b.type !== "directory") || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
-/** Checks a browse result from the sandbox helper or the host workspace before it leaves the runner. */
 export function checkedBrowse(value: unknown): BrowseResult {
   const result = checkBrowseResult(value);
-  // The signature is checked again here, like every image read_file returns.
   if (result.type === "file" && result.image && imageType(Buffer.from(result.image.data, "base64")) !== result.image.mimeType) {
     throw new Error("Invalid file browser response");
   }
   return result;
 }
 
-/**
- * Where to read an open directory from. On Linux, the descriptor's own /proc path: what is read is what was opened,
- * whatever the path names by then. Elsewhere (macOS hosts), the path itself, once it is checked to still name the
- * directory that was opened.
- */
 async function readablePath(directory: string, handle: FileHandle): Promise<{ path: string; check(): Promise<void> }> {
   if (process.platform === "linux") return { path: `/proc/self/fd/${handle.fd}`, check: async () => {} };
   const opened = await handle.stat({ bigint: true });
@@ -47,13 +33,7 @@ async function readablePath(directory: string, handle: FileHandle): Promise<{ pa
   return { path: directory, check };
 }
 
-/**
- * The entries of `directory`, which the caller confined to the worktree. It is opened once without following a symlink,
- * and listed through that descriptor: a symlink swapped in after the caller's checks can't redirect the listing.
- */
 export async function browseDirectory(directory: string): Promise<BrowseResult> {
-  // Windows can't open a directory as a file: there the path is listed, and checked before and after to still be the
-  // same real directory.
   const handle = windows ? undefined : await open(directory, DIRECTORY_FLAGS);
   try {
     const { path: opened, check } = handle ? await readablePath(directory, handle) : await windowsDirectory(directory);
@@ -85,7 +65,6 @@ async function windowsDirectory(directory: string): Promise<{ path: string; chec
   return { path: directory, check };
 }
 
-/** A preview of `file`, which the caller confined to the worktree; opened without following a symlink. */
 export async function browseFile(file: string): Promise<BrowseResult> {
   const handle = await open(file, FILE_FLAGS);
   try {
@@ -118,12 +97,11 @@ export async function browseFile(file: string): Promise<BrowseResult> {
   }
 }
 
-/** UTF-8 text, or binary for anything with a NUL or invalid UTF-8; a preview cut inside a character ends before it. */
 export function textPreview(data: Uint8Array, truncated: boolean): { text: string } | { binary: true } {
   if (data.includes(0)) return { binary: true };
   const decoder = new TextDecoder("utf-8", { fatal: true });
   for (let cut = 0; cut <= (truncated ? 3 : 0) && cut <= data.length; cut++) {
-    try { return { text: decoder.decode(data.subarray(0, data.length - cut)) }; } catch { /* try a shorter cut */ }
+    try { return { text: decoder.decode(data.subarray(0, data.length - cut)) }; } catch { }
   }
   return { binary: true };
 }

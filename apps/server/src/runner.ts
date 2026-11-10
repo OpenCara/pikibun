@@ -9,10 +9,6 @@ export async function runnerRequest(c: AppContext, row: SessionRow, action: Runn
   return actorRequest(c, c.get('auth').userId, row, action, suffix, body, pin);
 }
 
-/**
- * The committed view as the session owner sees it, for a share link the caller has just checked. This read is the only
- * request ever made as the owner on someone else's behalf; the owner's own access is still checked here and on the host.
- */
 export function ownerViewRequest(c: AppContext, row: SessionRow): Promise<Response> {
   return actorRequest(c, row.owner_id, row, 'view');
 }
@@ -44,7 +40,6 @@ async function actorRequest(c: AppContext, actorId: string, row: SessionRow, act
   const authorization = await signToken(ticket, secret);
   let response: Response;
   try {
-    // Do not forward the browser abort signal: a disconnected SSE consumer must not cancel a run.
     response = await fetch(new URL(paths[action], base), {
       method: action === 'view' || action === 'events' ? 'GET' : 'POST',
       headers: { Authorization: `Bearer ${authorization}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },

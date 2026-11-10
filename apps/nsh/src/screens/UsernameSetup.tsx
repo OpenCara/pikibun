@@ -7,11 +7,6 @@ import { palette, text, weight } from "../theme";
 import { Field, TextField } from "../form";
 import { Banner, Button, Feedback, Loading, Logo } from "../ui";
 
-/**
- * The step after a GitHub sign-up, before anything else in the app (the web app's UsernameSetup): a unique username,
- * which teammates know the person by and which can't be changed later, and, where the server takes passwords, an
- * optional password to sign in with that username later, next to GitHub.
- */
 export function UsernameSetup() {
   const user = () => session().user;
   const health = createResource<{ passwordAuth?: boolean }>(() => "/api/health");

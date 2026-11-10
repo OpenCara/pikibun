@@ -1,22 +1,14 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './hosts.js';
 import type { ConnectorAdmin, ConnectorCapabilities, HostCommandGrant } from '../../../../packages/shared/src/connector.js';
 import { hasPermission, readOnlyRoles } from '../../../../packages/shared/src/policy.js';
 import { grantedShell, type HostCommandSession } from '../../../../packages/shared/src/host-operations.js';
 import { hostCommandLevels, type HostCommandLevel, type Permission, type RunnerAction } from '../../../../packages/shared/src/types.js';
-import type { AppContext, Env, SessionAccess, SessionRow, WorkerEnv } from '../types.js';
+import type { AppContext, Env, SessionAccess, SessionRow, AppEnv } from '../types.js';
 import type { ConnectorRow } from './hosts.js';
 import { auditStatement } from './audit.js';
 import { requireMember } from './access.js';
 import { fail, identifier, jsonObject, now, text, userIdentifier } from '../http.js';
-
-/*
- * A host is its owner's machine. Its owner may let other members manage its sharing and which of its models it offers
- * (admins, see host-models.ts for the models), and let members of a workspace it is shared with decide host commands, or
- * run those of their own Auto-approve messages without asking (host command grants), and, with a grant that includes it,
- * start their own sessions directly on the host, without the sandbox. Admins manage shares and grants but
- * hold no host command authority of their own until a grant gives it to them, so each one is visible in the host's grant
- * list. Only the owner adds admins, revokes or removes the host.
- */
 
 const maxAdmins = 20;
 const maxGrants = 200;
@@ -24,36 +16,23 @@ const sqlList = (values: readonly string[]) => values.map(value => `'${value}'`)
 
 export type ManagedConnector = ConnectorRow & { role: 'owner' | 'admin' };
 
-/**
- * SQL true while a user owns connector `c` or is one of its admins, as managedConnectorFor reads it; binds the user's id
- * twice. Writes that need that authority check it again in their own statement.
- */
 export const managesConnectorSQL = `(c.owner_id = ? OR EXISTS (SELECT 1 FROM connector_admins a JOIN users u ON u.id = a.user_id
   WHERE a.connector_id = c.id AND a.user_id = ? AND u.suspended_at IS NULL))`;
 
-/** The connector `id` names, when `userId` owns it or is one of its admins. */
 export async function managedConnectorFor(env: Env, connectorId: string, userId: string): Promise<ManagedConnector | null> {
   const row = await env.DB.query<ConnectorRow>(`SELECT c.* FROM connectors c WHERE c.id = ? AND c.removed_at IS NULL
     AND ${managesConnectorSQL}`).bind(connectorId, userId, userId).first();
   return row ? { ...row, role: row.owner_id === userId ? 'owner' : 'admin' } : null;
 }
 
-/** The route's connector, for its owner or an admin: sharing is managed by either. */
 export async function managedConnector(c: AppContext): Promise<ManagedConnector> {
   const row = await managedConnectorFor(c.env, identifier(c.req.param('id')), c.get('auth').userId);
   if (!row) fail(404, 'not_found', 'Connector not found.');
   return row;
 }
 
-/** What a member holds on a host in one workspace: their host command level, and whether they may run sessions on it. */
 export type HostAuthority = { level: 'owner' | HostCommandLevel; sessions: boolean };
 
-/**
- * What `userId` may do on the host of `row`, a session (or a workspace) on a connector: everything for the host's owner,
- * else what their unexpired grants in the workspace give, for them or for all its members, while the host is still
- * shared there and they are a member who can write: the highest level of those grants, and sessions on the host when
- * any of them includes that. Undefined when they hold none.
- */
 export async function hostAuthority(env: Env, row: Pick<SessionRow, 'connector_id' | 'connector_owner_id' | 'workspace_id'>,
   userId: string): Promise<HostAuthority | undefined> {
   if (!row.connector_id || !row.connector_owner_id) return undefined;
@@ -71,18 +50,11 @@ export async function hostAuthority(env: Env, row: Pick<SessionRow, 'connector_i
   return { level: grants.some(grant => grant.level === 'auto') ? 'auto' : 'approve', sessions: grants.some(grant => Number(grant.host_sessions) === 1) };
 }
 
-/** What `userId` may do with host commands in `row`: `owner` for the host's owner, else their grants' highest level. */
 export async function hostCommandAuthority(env: Env, row: Pick<SessionRow, 'connector_id' | 'connector_owner_id' | 'workspace_id'>,
   userId: string): Promise<'owner' | HostCommandLevel | undefined> {
   return (await hostAuthority(env, row, userId))?.level;
 }
 
-/**
- * Whether the sessions `ownerId` owns run shell commands on the host of `row` (its connector and owner, in the session's
- * workspace): a host with resource limits (`productionShell`), or one that runs without the sandbox, runs everyone's; one
- * without limits runs its owner's, and those of members its owner or one of its admins granted host commands there,
- * without the limits it lacks, on a connector that honors that (`unboundedShellGrants`).
- */
 export async function runsShellCommands(env: Env, capabilities: ConnectorCapabilities,
   row: Pick<SessionRow, 'connector_id' | 'connector_owner_id' | 'workspace_id'>, ownerId: string): Promise<boolean> {
   if (capabilities.productionShell === true || capabilities.unsandboxed === true) return true;
@@ -90,39 +62,23 @@ export async function runsShellCommands(env: Env, capabilities: ConnectorCapabil
   return capabilities.unboundedShellGrants === true && await hostAuthority(env, row, ownerId) !== undefined;
 }
 
-/** Session `row` as deciding its operations sees it, by the rule the host and the apps apply too (see decidedAsHostCommand). */
 export function hostCommandSession(row: Pick<SessionRow, 'owner_id' | 'connector_owner_id' | 'host_environment'>): HostCommandSession {
   return { ownerId: row.owner_id, connectorOwnerId: row.connector_owner_id, hostEnvironment: Number(row.host_environment ?? 0) === 1 };
 }
 
-/** Whether `userId` may decide host commands in `row` (the owner, or a grant of either level). */
 export async function mayDecideHostCommands(env: Env, row: SessionRow, userId: string): Promise<boolean> {
   return (await hostCommandAuthority(env, row, userId)) !== undefined;
 }
 
-/** Whether `userId` owns the host session `row` runs on. */
 export function ownsSessionHost(row: Pick<SessionRow, 'connector_id' | 'connector_owner_id'>, userId: string): boolean {
   return !!row.connector_id && !!row.connector_owner_id && row.connector_owner_id === userId;
 }
 
-/**
- * Whether `userId` decides the host commands of session `row` as its host's owner with any access to the session,
- * without approve permission on it: a host command runs as the host's OS user, so deciding it is theirs. Members granted
- * host commands still need approve permission, as does everything else. Only on a connector that checks decisions so
- * (`hostOwnerDecides`); an older one asks for approve permission on every decision, its owner's included.
- */
 export async function hostOwnerDecides(env: Env, row: Pick<SessionRow, 'connector_id' | 'connector_owner_id'>, userId: string): Promise<boolean> {
   if (!row.connector_id || !ownsSessionHost(row, userId)) return false;
-  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(row.connector_id).first();
-  try { return (JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities).hostOwnerDecides === true; }
-  catch { return false; }
+  return (await hostCapabilities(env, row.connector_id))?.hostOwnerDecides === true;
 }
 
-/**
- * Whether `access` lets its actor send the runner `action`, which needs `permission`. A decision also goes for the
- * session's host owner with any access to it, on a host that lets its owner decide host commands so (hostOwnerDecides):
- * the approvals route and the host check that it decides a host command.
- */
 export async function mayRequestAction(env: Env, access: SessionAccess, actorId: string, action: RunnerAction, permission: Permission): Promise<boolean> {
   if (hasPermission(access.permissions, permission)) return true;
   return action === 'approve' && await hostOwnerDecides(env, access.row, actorId);
@@ -134,10 +90,6 @@ export async function connectorAdmins(env: Env, connectorId: string): Promise<Co
     .bind(connectorId).all()).map(item => ({ userId: item.user_id, name: item.display_name, createdAt: item.created_at }));
 }
 
-/**
- * The host's grants, as `viewer` may see them: all of them for its owner, an admin only those in workspaces they belong
- * to too, as their listing shows.
- */
 export async function visibleHostGrants(env: Env, row: ManagedConnector, viewer: string): Promise<HostCommandGrant[]> {
   const grants = await connectorHostGrants(env, row.id);
   if (row.role === 'owner') return grants;
@@ -146,7 +98,6 @@ export async function visibleHostGrants(env: Env, row: ManagedConnector, viewer:
   return grants.filter(grant => memberships.has(grant.workspaceId));
 }
 
-/** An admin acts on a host's sharing only in workspaces they belong to; its owner, in any of theirs. */
 export async function requireManagedWorkspace(env: Env, row: ManagedConnector, workspaceId: string, actorId: string): Promise<void> {
   if (row.role === 'admin') await requireMember(env, workspaceId, actorId);
 }
@@ -162,12 +113,10 @@ export async function connectorHostGrants(env: Env, connectorId: string): Promis
     createdBy: item.created_by, createdAt: item.created_at }));
 }
 
-/** The viewer's own authority on a connector in `workspaceId`, as listings show it. */
 export async function viewerHostAuthority(env: Env, connector: Pick<ConnectorRow, 'id' | 'owner_id'>, workspaceId: string, userId: string): Promise<HostAuthority | undefined> {
   return hostAuthority(env, { connector_id: connector.id, connector_owner_id: connector.owner_id, workspace_id: workspaceId }, userId);
 }
 
-/** An optional grant expiry: an ISO time in the future, or null/absent for none. */
 function expiry(value: unknown): number | null {
   if (value === undefined || value === null) return null;
   const at = Date.parse(text(value, 'expiresAt', 64));
@@ -175,8 +124,7 @@ function expiry(value: unknown): number | null {
   return Math.floor(at / 1000);
 }
 
-export function registerHostAccess(app: Hono<WorkerEnv>): void {
-  // Only the owner adds admins: a member who shares a workspace with the host, other than as a viewer there.
+export function registerHostAccess(app: Hono<AppEnv>): void {
   app.put('/api/connectors/:id/admins/:userId', async c => {
     const actorId = c.get('auth').userId;
     const row = await managedConnector(c);
@@ -197,7 +145,6 @@ export function registerHostAccess(app: Hono<WorkerEnv>): void {
     await auditStatement(c.env, actorId, 'connector.admin.added', null, null, { connectorId: row.id, userId }).run();
     return c.json({ admins: await connectorAdmins(c.env, row.id) });
   });
-  // The owner removes any admin; an admin may step down.
   app.delete('/api/connectors/:id/admins/:userId', async c => {
     const actorId = c.get('auth').userId;
     const row = await managedConnector(c);
@@ -210,7 +157,6 @@ export function registerHostAccess(app: Hono<WorkerEnv>): void {
     return c.body(null, 204);
   });
 
-  // Grants host command authority in a workspace the host is shared with: to one member, or to all of them.
   app.put('/api/connectors/:id/host-grants/:workspaceId', async c => {
     const actorId = c.get('auth').userId;
     const row = await managedConnector(c);
@@ -220,9 +166,6 @@ export function registerHostAccess(app: Hono<WorkerEnv>): void {
     if (Object.keys(input).some(key => !['userId', 'level', 'hostSessions', 'expiresAt'].includes(key))) fail(400, 'invalid_grant', 'Unexpected grant field.');
     if (!hostCommandLevels.includes(input.level as HostCommandLevel)) fail(400, 'invalid_grant', 'A grant is approve or auto.');
     const level = input.level as HostCommandLevel;
-    // Sessions on the host: theirs run as the host's OS user, as the owner's own do there. Only the owner, who alone lets
-    // the host accept those (HostConfig.hostSessions), grants them; an admin may take them away. Absent, a grant keeps
-    // what it had (none for a new one).
     if (input.hostSessions !== undefined && typeof input.hostSessions !== 'boolean') fail(400, 'invalid_grant', 'hostSessions must be true or false.');
     if (input.hostSessions === true && row.role !== 'owner') fail(403, 'host_owner_required', 'Only the host\'s owner grants sessions on the host.');
     const keepSessions = input.hostSessions === undefined;
@@ -230,7 +173,6 @@ export function registerHostAccess(app: Hono<WorkerEnv>): void {
     const userId = input.userId === undefined || input.userId === null ? '' : userIdentifier(input.userId, 'userId');
     if (userId === row.owner_id) fail(400, 'invalid_grant', 'The host\'s owner already decides its host commands.');
     const expiresAt = expiry(input.expiresAt);
-    // An admin grants only where they are a member; the owner, where the host is shared (checked by the insert).
     await requireManagedWorkspace(c.env, row, workspaceId, actorId);
     if (userId) {
       const member = await requireMember(c.env, workspaceId, userId);
@@ -251,7 +193,6 @@ export function registerHostAccess(app: Hono<WorkerEnv>): void {
       ...(Number(inserted.host_sessions) === 1 ? { hostSessions: true } : {}), expiresAt }).run();
     return c.json({ hostGrants: await visibleHostGrants(c.env, row, actorId) });
   });
-  // `?userId=` names the member's grant; without it, the workspace-wide one.
   app.delete('/api/connectors/:id/host-grants/:workspaceId', async c => {
     const actorId = c.get('auth').userId;
     const row = await managedConnector(c);

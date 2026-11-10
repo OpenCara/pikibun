@@ -1,20 +1,4 @@
 #!/usr/bin/env node
-/**
- * Measures how large hosts' session views are, from the hosts' own session databases, to size paging and compression
- * work. It rebuilds each view's transcript entries as the runner does (apps/runner/src/session.ts: the active entries
- * of each branch, from its latest compaction or reset, side asks with the history they forked from), then reports
- * their size raw, gzipped and brotli-compressed, and how much loading only the latest entries or capping tool output
- * would send instead.
- *
- * It only reads: every database is opened read-only, and it prints sizes and counts, never transcript text, tool
- * arguments or file paths. Approvals, the queue and run markers are left out; transcript entries are most of a view.
- *
- *   node scripts/measure-session-views.mjs [--json] [--tail N] [PATH...]
- *
- * PATH is a session.sqlite file or a directory searched for them; the default is the connector's state directory,
- * ~/.local/share/pikibun/connector. Needs Node 22.13 or newer (node:sqlite), as any host's connector has.
- * --rows FILE reads one session's rows from JSON ({ conversations: [...], entries: [...] }) instead, for tests.
- */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -44,7 +28,6 @@ function fail(message) {
   process.exit(2);
 }
 
-/** Session databases under `path`, without following symbolic links. */
 function findDatabases(path, found = []) {
   let stat;
   try { stat = statSync(path, { throwIfNoEntry: false }); } catch { return found; }
@@ -57,7 +40,6 @@ function findDatabases(path, found = []) {
   let names;
   try { names = readdirSync(path, { withFileTypes: true }); } catch { return found; }
   for (const entry of names) {
-    // Worktrees and repository caches hold no session databases and can be huge.
     if (entry.isSymbolicLink() || ["node_modules", ".git", "sandbox", "worktree", "repo-cache"].includes(entry.name)) continue;
     const child = join(path, entry.name);
     if (entry.isDirectory()) findDatabases(child, found);
@@ -82,10 +64,8 @@ async function readDatabase(path) {
 
 const bytes = text => Buffer.byteLength(text);
 const gzip = text => gzipSync(text).length;
-// A quality a server can afford on every response; 11 is for static assets.
 const brotli = text => brotliCompressSync(text, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }).length;
 
-/** The runner's entry view (session.ts entryView), with a typical actor ID; text is never printed. */
 function entryView(entry, branch, cap) {
   const messages = entry.model ?? [];
   const parts = messages.flatMap(message => {
@@ -111,7 +91,6 @@ function measure({ conversations, entries }) {
     own.get(entry.conversationId).push(entry);
   }
   const visibleCache = new Map();
-  /** A conversation's entries and, for a fork, its parent's through the fork point, oldest first. */
   const visible = id => {
     if (visibleCache.has(id)) return visibleCache.get(id);
     const conversation = byId.get(id);
@@ -120,13 +99,11 @@ function measure({ conversations, entries }) {
     visibleCache.set(id, result);
     return result;
   };
-  /** Pi's active entries: the latest head marker, then the entries from its head (harness/context.ts selectActive). */
   const active = id => {
     const all = visible(id);
     const marker = all.findLast(entry => entry.head !== undefined);
     return { all, shown: marker ? [marker, ...all.filter(entry => entry.head === undefined && entry.id >= marker.head)] : all };
   };
-  // The runner's branches: the shared conversation and side asks. Conversations a task owns (subagents) are not shown.
   const branches = conversations.filter(conversation => !conversation.owner).map(conversation => {
     const { all, shown } = active(conversation.id);
     return { id: conversation.id, ask: Boolean(conversation.parent), all, shown };
@@ -154,7 +131,6 @@ function measure({ conversations, entries }) {
   const largest = full.map(view => ({ role: view.role, kind: view.kind, raw: bytes(JSON.stringify(view)) }))
     .sort((a, b) => b.raw - a.raw).slice(0, 5);
   const tailViews = branches.flatMap(branch => branch.shown.slice(-tail).map(entry => entryView(entry, branch.id)));
-  // Paging side asks too: each fork's latest entries only, without the history it inherited unless that is the latest.
   return {
     conversations: { branches: branches.length, asks: branches.filter(branch => branch.ask).length, subagents: conversations.length - branches.length },
     entries: { stored: entries.length, shown: full.length, hiddenByCompaction: branches.reduce((total, branch) => total + branch.all.length - branch.shown.length, 0),

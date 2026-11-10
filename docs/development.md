@@ -5,9 +5,9 @@ Requires Node 24 and pnpm.
 ```sh
 pnpm install
 cp apps/server/.env.example apps/server/.env   # see below
-pnpm build                                      # the web client into dist/preview
+pnpm build                                      # the web client into dist/client
 pnpm dev:server                                 # API and web client on :8787
-pnpm dev:preview                                # or the app in a window of this desktop, with hot reload
+pnpm dev:client                                # or the app in a window of this desktop, with hot reload
 ```
 
 For local development, set in `apps/server/.env`: `APP_ORIGIN=http://localhost:8787`, `DATABASE_URL=sqlite:./data/dev.sqlite` (the default `/data` path is the container's), `SESSION_SECRET`, `VAULT_KEY`, and the test mode that allows plain HTTP on localhost: `TEST_AUTH_ENABLED=true`, a `TEST_AUTH_SECRET` of at least 32 characters and a future `TEST_AUTH_EXPIRES_AT` (such as `2030-01-01T00:00:00Z`). Sign in with a GitHub OAuth app whose callback is `http://localhost:8787/api/auth/github/callback`, or as a test user by running this in the browser console on `http://localhost:8787`, then reloading:
@@ -16,7 +16,7 @@ For local development, set in `apps/server/.env`: `APP_ORIGIN=http://localhost:8
 await fetch("/api/auth/test", { method: "POST", headers: { Authorization: "Bearer YOUR_TEST_AUTH_SECRET", "Content-Type": "application/json" }, body: JSON.stringify({ displayName: "Dev" }) });
 ```
 
-- `pnpm typecheck` (also typechecks the apps), `pnpm test` (set `TEST_DATABASE_URL=postgres://…` to also run the provider suite against Postgres), `pnpm build` (the NSH web client, as `pnpm build:preview`), `pnpm build:server` (bundled server in `dist/server`), `pnpm build:cli` (the connector package).
+- `pnpm typecheck` (also typechecks the apps), `pnpm test` (set `TEST_DATABASE_URL=postgres://…` to also run the provider suite against Postgres), `pnpm test:coverage` (the same tests with Node's own coverage of `apps`, `packages` and `extensions`: a summary after the results, and `lcov.info` for editors and coverage services), `pnpm build` (the NSH web client, as `pnpm build:client`), `pnpm build:server` (bundled server in `dist/server`), `pnpm build:cli` (the connector package).
 - The sandbox's Python programs are `.py` files in `apps/runner/src/sandbox-python` (the helper every sandboxed step of the Linux and macOS sandboxes runs, and the `git` shim). The connector embeds them through `apps/runner/src/sandbox-python.generated.ts`: after changing one, run `pnpm python:embed` (`tests/sandbox-python.test.ts` fails while it is out of date). `pnpm python:check` lints them with Ruff and type-checks them with Pyright, both from npm, for Python 3.9 (macOS's own `python3`). `tests/sandbox-conformance.test.ts` holds every implementation of a session's files (those two helpers, the Windows sandbox's Node helper and the unsandboxed host's TypeScript) to one table of cases: a new file operation, or a fix to one, adds its cases there.
 - `pnpm connect …` runs the connector from source, with the same options as `pikibun connect`; add `--allow-insecure-loopback` to pair with a local `http://` server.
 - `pnpm test:connected` runs the end-to-end suite against a real server and connector (Linux with bubblewrap).
@@ -45,7 +45,7 @@ await fetch("/api/auth/test", { method: "POST", headers: { Authorization: "Beare
 ## Layout
 
 - `apps/server`: the control plane (Hono on Node); `src/local` runs it on one person's own computer (`pikibun serve`). `src/authority` is the [authority](design/authority.md), which the rest of the server uses only through `src/authority/index.ts`. It holds who people and hosts are (`auth.ts` for GitHub and session sign-in, `password-auth.ts` for password accounts, `admin.ts` for the server administration API, `hosts.ts`), who may do what (`access.ts`, `host-access.ts`, `runner-access.ts`, `authorize.ts`), approvals, the credentials (`git/` for the Git providers and accounts, `push/` for push identities and credentials, `network.ts`, `api-access.ts`, `github-broker.ts`, `sources/`) and the audit log. `src/password-accounts-cli.ts` provides `--create-admin` and `--reset-password`; `src/db` holds the database providers and the SQLite→Postgres dialect translation; `src/storage` the backup storage providers; `src/workspace-databases` the owner-connected session databases; `src/data-export.ts` the session and workspace exports; `src/connector-hub.ts` the WebSocket relay to connected hosts.
-- `apps/nsh`: the client for the web, phones, tablets and desktops on [Native Shell](https://nsh.dev). `pnpm build:preview` builds it into `dist/preview`, which `pikibun.com` serves (see [the web client](self-hosting.md#the-web-client)). See [its README](../apps/nsh/README.md) for `pnpm dev:preview`, `pnpm test:client`, `pnpm test:client-live` and `pnpm test:client-web`; `scripts/nsh.mjs` fetches the pinned CLI they use.
+- `apps/nsh`: the client for the web, phones, tablets and desktops on [Native Shell](https://nsh.dev). `pnpm build:client` builds it into `dist/client`, which `pikibun.com` serves (see [the web client](self-hosting.md#the-web-client)). See [its README](../apps/nsh/README.md) for `pnpm dev:client`, `pnpm test:client`, `pnpm test:client-live` and `pnpm test:client-web`; `scripts/nsh.mjs` fetches the pinned CLI they use.
 - `apps/runner`: the connector runtime that runs on each host, published as the `pikibun` CLI from `packages/cli` (with the server, for `pikibun serve`).
 - `packages/shared`: types and policy shared by all of the above. `packages/client`: the API client, live session updates and chat-option rules the client uses.
 - `docs/design`: design notes, such as the [repository cache](design/repository-cache.md).

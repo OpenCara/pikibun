@@ -24,13 +24,11 @@ Run "pikibun connect --help" or "pikibun serve --help" for their options.
 `;
 
 const [command, ...args] = process.argv.slice(2);
-// The server is loaded only for `serve`, so connecting a host never loads it.
 const serveMain = async (args: string[]) => (await import("../../../apps/server/src/local/cli.js")).serveMain(args);
 const run = command === "connect" ? connectMain : command === "cache" ? cacheMain : command === "extensions" ? extensionsMain : command === "serve" ? serveMain
   : command === "host" ? hostMain : undefined;
 if (run) {
   run(args).catch((error: unknown) => {
-    // Only connector-authored preflight text is printed: SDK/HTTP errors can contain auth/config detail.
     process.stderr.write(error instanceof ConnectorSetupError
       ? `${error.message}\n`
       : command === "serve" ? "Pikibun failed. Check --help, the state directory's permissions, the port, local Pi configuration and sandbox prerequisites.\n"

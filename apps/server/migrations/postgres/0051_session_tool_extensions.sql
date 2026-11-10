@@ -1,4 +1,4 @@
--- Postgres translation of sqlite/0057_session_tool_extensions.sql.
+-- Postgres translation of sqlite/0058_session_tool_extensions.sql.
 -- Pikibun's session-tool extensions (piki:git, piki:node, ...; packages/shared/src/piki-extensions.ts) were on in every
 -- workspace that didn't list them turned off. From now on a workspace has one only once it is added: with its first
 -- repository (piki:git, and piki:github for GitHub), its first document source of a kind (piki:notion, ...), or by its

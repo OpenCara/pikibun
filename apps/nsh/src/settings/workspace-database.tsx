@@ -11,9 +11,6 @@ import { Field, Select, TextField } from "../form";
 import { palette, radius } from "../theme";
 import { Badge, Banner, Button, CardBody, confirm, DropdownMenu, Feedback, FormSheet, Note, ResourceState, Row, Section, Small, type MenuAction } from "../ui";
 
-// A workspace's session database, as the web app's (settings/WorkspaceDatabase.tsx).
-
-/** What the server reports after importing a dump into the workspace database. */
 interface ImportSummary {
   format: "session" | "workspace";
   exportedAt: string;
@@ -23,7 +20,6 @@ interface ImportSummary {
   workspaceSettings: boolean;
 }
 
-/** The largest dump the server takes from the app; the operator imports larger ones with --import-dump. */
 const maxUploadBytes = 32 * 1024 * 1024;
 
 interface WorkspaceDatabaseResponse {
@@ -44,7 +40,6 @@ const withoutDatabase = (backupStorage: boolean) => (backupStorage ? "session ba
 const tlsLabel: Record<WorkspaceDatabaseTls, string> = { "verify-full": "TLS, server certificate verified", require: "TLS, server certificate not verified", disable: "Unencrypted" };
 const databaseLabel = (database: WorkspaceDatabase) => `${database.host.includes(":") ? `[${database.host}]` : database.host}:${database.port}/${database.database}`;
 
-/** Splits a postgres:// connection URL into the form's fields; the server only ever receives the fields. */
 function connectionUrl(value: string) {
   const textValue = value.trim();
   const scheme = /^postgres(?:ql)?:\/\//i.exec(textValue);
@@ -77,7 +72,6 @@ export function WorkspaceDatabaseSection(props: { workspace: Workspace; owner: b
   }
   const items = (): MenuAction[] => [
     ...(data()?.available ? [
-      // A browser's page picks the file; a desktop takes it dropped on the sheet; phones pick only photos (longbridge/nsh#162).
       pageAvailable() || platform.desktop
         ? { label: "Import dump", icon: "folder" as const, hint: "A session or workspace export", disabled: action.busy(), onSelect: () => importing.set(true) }
         : { label: "Import dump", icon: "folder" as const, hint: "From Pikibun on the web or a computer: this phone can't pick files yet", disabled: true, onSelect: () => undefined },
@@ -129,10 +123,6 @@ export function WorkspaceDatabaseSection(props: { workspace: Workspace; owner: b
   );
 }
 
-/**
- * Imports an export of this workspace, or of one of its sessions, into the connected database. A browser's page picks
- * the file; NSH's desktop apps, which have no chooser of any file, take it dropped on the sheet.
- */
 function ImportSheet(props: { path: string; database: WorkspaceDatabase; close: () => void }) {
   const file = signal<PageFile | null>(null);
   const imported = signal<ImportSummary | null>(null);

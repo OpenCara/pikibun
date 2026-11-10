@@ -1,6 +1,4 @@
 #!/usr/bin/python3 -I
-# The sandbox's git shim (see GIT_SHIM in apps/runner/src/sandbox.ts), embedded in the connector through
-# sandbox-python.generated.ts (`pnpm python:embed` writes it; tests/sandbox-python.test.ts checks it is current).
 import json
 import os
 import sys
@@ -9,7 +7,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-# egress.ts EGRESS_PORT and sandbox.ts GIT_LFS_PATHS (tests/sandbox-python.test.ts checks them).
 EGRESS_PORT = 41080
 GIT_LFS_PATHS = ('/usr/bin/git-lfs', '/usr/local/bin/git-lfs')
 
@@ -63,11 +60,6 @@ def described(progress):
 
 
 def mirror(url):
-    # The host's mirror of a workspace repository once it is ready to borrow from, however long its fill takes; None where
-    # the host keeps no mirror of the repository, or can't fill it at all. The proxy streams one JSON object per line, with
-    # a heartbeat. A connection that drops while the fill goes on is asked again, which joins it; a failure that may pass,
-    # or a proxy that doesn't answer, is asked again twice more. Then the clone stops, to be run again, rather than
-    # downloading the repository without the cache.
     started, shown, failures, reason = time.monotonic(), None, 0, 'it did not answer'
     while True:
         progressed = transient = False
@@ -101,7 +93,6 @@ def mirror(url):
                         note('repository cache: ' + described(progress))
                         shown = now
         except urllib.error.HTTPError:
-            # No repository cache on this host, or not one of the workspace's repositories: a clone as any other.
             return None
         except Exception:
             reason = 'it did not answer'
@@ -133,7 +124,6 @@ if index < len(args) and args[index] == 'clone':
     if url and not borrowing:
         path = mirror(url)
         if path and not os.path.isdir(path):
-            # Mounted from the next command on: cloning without it would download the whole repository again.
             note('the repository cache of ' + url + ' is ready, but this command started before it could see it; run the clone again')
             sys.exit(128)
         if path:

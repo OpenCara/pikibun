@@ -27,7 +27,6 @@ async function directory(t: { after: (fn: () => Promise<void>) => void }, name: 
   return path;
 }
 
-/** A Unix socket path short enough for the 107-byte limit wherever the test's temporary directory is: relative to here. */
 function shortSocket(path: string): string {
   const short = relative(process.cwd(), path);
   return short.length < path.length ? short : path;
@@ -122,13 +121,11 @@ test("a service runs as one quoted command: the driver, the socket it listens on
   assert.equal(serviceShellCommand(serve, { nodeBin: "/opt/pikibun/node/bin" }),
     `'/opt/pikibun/service/pikibun-service' '--socket' '/run/pikibun-service/http.sock' '--node-bin' '/opt/pikibun/node/bin' '${JSON.stringify(serve).replaceAll("'", `'\\''`)}' </dev/null 2>&1`);
   assert.ok(!serviceShellCommand({ program: "python3", port: 8000 }, { nodeBin: "/opt/pikibun/node/bin" }).includes("--node-bin"));
-  // Its limits are a long command's, for the whole lifetime, within a day.
   assert.deepEqual(serviceLimits(3600, 4), { seconds: 3600, cpuSeconds: 14_400, fileBytes: 16 * 1024 ** 3, openFiles: 8192 });
   assert.equal(serviceLimits(10, 1).seconds, 300);
   assert.equal(serviceLimits(1e9, 1).seconds, 86_400);
 });
 
-/** A service process that a test drives: its output, and its exit. */
 function fakeProcess() {
   const exit = Promise.withResolvers<ServiceExit>();
   let output: (chunk: Buffer) => void = () => {};
@@ -143,7 +140,6 @@ function fakeProcess() {
 }
 
 test("a session service keeps its last lines, says when its port answers, and stops once, for its first reason: stop, its lifetime or its exit", async () => {
-  // Stopped by its tool: the first reason stands.
   const one = fakeProcess();
   const service = await SessionService.start({ start: one.start, lifetimeMs: 60_000 });
   one.print("listening on 4173\nhalf a li");
@@ -155,12 +151,10 @@ test("a session service keeps its last lines, says when its port answers, and st
   assert.deepEqual([first.reason, second.reason], ["stop", "stop"]);
   assert.equal(service.running, false);
   assert.ok(one.killed() >= 1);
-  // Its lifetime ends it, whatever else.
   const two = fakeProcess();
   const timed = await SessionService.start({ start: two.start, lifetimeMs: 30 });
   assert.equal((await timed.stopped).reason, "lifetime");
   assert.ok(timed.expiresAt - timed.startedAt === 30);
-  // Its program exiting ends it, and says why it never answered.
   const three = fakeProcess();
   const exited = await SessionService.start({ start: three.start, lifetimeMs: 60_000 });
   three.print(`Error: listen EADDRINUSE\n${SERVICE_MARK}{"kind":"error","message":"node exited (1) before port 4173 answered"}\n`);
@@ -168,7 +162,6 @@ test("a session service keeps its last lines, says when its port answers, and st
   await assert.rejects(exited.ready, /node exited \(1\) before port 4173 answered/);
   assert.deepEqual(await exited.stopped, { reason: "exited", exit: { code: 1, signal: null } });
   assert.deepEqual(exited.lines(), ["Error: listen EADDRINUSE"]);
-  // Only the last lines, each within bounds.
   const four = fakeProcess();
   const chatty = await SessionService.start({ start: four.start, lifetimeMs: 60_000 });
   for (let index = 0; index < 100; index++) four.print(`line ${index}\n`);
@@ -177,11 +170,9 @@ test("a session service keeps its last lines, says when its port answers, and st
   assert.equal(chatty.lines().at(-1)!.length, serviceOutputLimits.lineLength);
   assert.equal(chatty.lines()[0], `line ${100 - serviceOutputLimits.lines + 1}`);
   await chatty.stop("closed");
-  // One that fails to start is no service.
   await assert.rejects(SessionService.start({ start: async () => { throw new Error("Sandbox is closed"); }, lifetimeMs: 60_000 }), /Sandbox is closed/);
 });
 
-/** A quick tunnel a test drives. */
 function fakeTunnel(url = "https://test-tunnel.trycloudflare.com") {
   const closed = Promise.withResolvers<void>();
   let closes = 0;
@@ -218,42 +209,36 @@ test("a session's tunnel starts its server and tunnel together, and whatever sto
   assert.ok(reports[0]!.expiresAt);
   assert.deepEqual(sessionTunnel.status().output, ["serving"]);
 
-  // A new start replaces it.
   await sessionTunnel.start(serve, "test:bob");
   assert.deepEqual(reports.slice(1).map(report => [report.event, report.url, report.reason ?? report.actorId]),
     [["stopped", "https://tunnel-0.trycloudflare.com", "replaced"], ["started", "https://tunnel-1.trycloudflare.com", "test:bob"]]);
   assert.equal(tunnels[0]!.closes(), 1);
   assert.ok(services[0]!.killed() >= 1);
 
-  // Its tool's stop, by someone.
   assert.deepEqual(await sessionTunnel.stop("stop", "test:carol"), { stopped: true, url: "https://tunnel-1.trycloudflare.com" });
   assert.deepEqual(reports.at(-1), { event: "stopped", url: "https://tunnel-1.trycloudflare.com", reason: "stop", actorId: "test:carol" });
   assert.equal(sessionTunnel.view(), undefined);
   assert.deepEqual(sessionTunnel.status().stopped?.reason, "stop");
   assert.deepEqual(await sessionTunnel.stop("stop"), { stopped: false }, "nothing online to stop");
 
-  // The server exiting takes the tunnel offline.
   await sessionTunnel.start(serve, "test:alice");
   services.at(-1)!.exit(0);
   await until(() => reports.at(-1)?.event === "stopped" ? reports.at(-1) : undefined, "the exit's report");
   assert.equal(reports.at(-1)!.reason, "exited");
   assert.equal(tunnels.at(-1)!.closes(), 1);
 
-  // cloudflared exiting takes the server down.
   await sessionTunnel.start(serve, "test:alice");
   tunnels.at(-1)!.fail();
   await until(() => reports.at(-1)?.event === "stopped" ? reports.at(-1) : undefined, "the tunnel's report");
   assert.equal(reports.at(-1)!.reason, "failed");
   assert.ok(services.at(-1)!.killed() >= 1);
 
-  // Its starter losing the session (it was archived, say) takes it offline within a recheck.
   await sessionTunnel.start(serve, "test:alice");
   allowed = false;
   await until(() => reports.at(-1)?.event === "stopped" ? reports.at(-1) : undefined, "the recheck's report");
   assert.equal(reports.at(-1)!.reason, "revoked");
   allowed = true;
 
-  // Stopping the session's work, then the session closing.
   await sessionTunnel.start(serve, "test:alice");
   await sessionTunnel.stop("session-stop", "test:alice");
   assert.equal(reports.at(-1)!.reason, "session-stop");
@@ -261,7 +246,6 @@ test("a session's tunnel starts its server and tunnel together, and whatever sto
   await sessionTunnel.close();
   assert.equal(reports.at(-1)!.reason, "closed");
   await assert.rejects(sessionTunnel.start(serve, "test:alice"), /closing/);
-  // Each stop was reported once.
   const stops = reports.filter(report => report.event === "stopped").map(report => report.url);
   assert.equal(new Set(stops).size, stops.length);
   assert.equal(reports.filter(report => report.event === "started").length, stops.length);
@@ -271,7 +255,6 @@ test("a stop or a close while a start waits for the one it replaces to go offlin
   const reports: Omit<SessionTunnelReport, "sessionId">[] = [];
   let services = 0;
   let opened = 0;
-  // The first tunnel's close is held until the test lets it go.
   const release = Promise.withResolvers<void>();
   let held = true;
   const sessionTunnel = new SessionTunnel({
@@ -296,7 +279,6 @@ test("a stop or a close while a start waits for the one it replaces to go offlin
   });
   const serve = { program: "node", args: ["server.js"], port: 4173 };
   await sessionTunnel.start(serve, "test:alice");
-  // A replacement waits on the first tunnel's close; Stop comes meanwhile.
   const replacement = sessionTunnel.start(serve, "test:bob");
   await until(() => reports.some(report => report.event === "stopped") || opened === 1 ? true : undefined, "the replacement to wait");
   await delay(20);
@@ -308,11 +290,9 @@ test("a stop or a close while a start waits for the one it replaces to go offlin
   assert.deepEqual([services, opened], [1, 1], "the replacement never started its server or tunnel");
   assert.deepEqual(reports.map(report => report.event), ["started", "stopped"]);
 
-  // A start waiting its turn behind another is cancelled by a stop too, and one stopped before it starts never does.
   const aborted = new AbortController();
   aborted.abort();
   await assert.rejects(sessionTunnel.start(serve, "test:alice", aborted.signal), /The start was stopped/);
-  // And by the session closing.
   const late = sessionTunnel.start(serve, "test:alice");
   const closing = sessionTunnel.close();
   await assert.rejects(late, /stopped|closing/);
@@ -336,14 +316,11 @@ test("the connector reaches the socket the service bound, never what the sandbox
     request.end();
   });
   assert.throws(() => pinServiceSocket(shared), /isn't there/);
-  // What a host service would be: a socket outside the sandbox.
   const host = shortSocket(join(root, "host.sock"));
   await listen(host, "the host's own service");
-  // A link in the socket's place is refused.
   await symlink(resolve(host), join(shared, "http.sock"));
   assert.throws(() => pinServiceSocket(shared), /replaced with something else/);
   await rm(join(shared, "http.sock"));
-  // The service's own socket is taken, and stays taken whatever the sandbox does to the shared directory afterwards.
   await listen(join(shared, "http.sock"), "the session's server");
   const pinned = pinServiceSocket(shared);
   assert.equal(pinned, join(`${shared}.connector`, "http.sock"));
@@ -386,7 +363,6 @@ test("the service's driver relays its Unix socket to the declared port only, pri
   const root = await directory(t, "service-driver");
   const driver = join(root, "pikibun-service");
   await writeFile(driver, SERVICE_DRIVER, { mode: 0o755 });
-  // The served program, as a session would write it: answers on its port, and logs.
   await writeFile(join(root, "server.js"), `require("node:http").createServer((q, s) => { console.log("GET " + q.url); s.end("hello from " + q.headers.host); })
     .listen(Number(process.argv[2]), "127.0.0.1", () => console.log("listening"));`);
   const port = await new Promise<number>(resolve => { const probe = createServer(); probe.listen(0, "127.0.0.1", () => { const { port } = probe.address() as { port: number }; probe.close(() => resolve(port)); }); });
@@ -399,7 +375,6 @@ test("the service's driver relays its Unix socket to the declared port only, pri
   child.stderr.on("data", chunk => { output += chunk; });
   await until(() => output.includes(`${SERVICE_MARK}{"port": ${port}, "kind": "ready"}`) ? true : undefined, "the driver to be ready");
   assert.ok(existsSync(socket));
-  // A request through the socket reaches the server on its port.
   const answer = await new Promise<string>((resolve, reject) => {
     const request = httpRequest({ socketPath: socket, path: "/hello", headers: { host: "x.trycloudflare.com" } }, response => {
       let body = "";
@@ -412,7 +387,6 @@ test("the service's driver relays its Unix socket to the declared port only, pri
   assert.equal(answer, "hello from x.trycloudflare.com");
   await until(() => output.includes("GET /hello") ? true : undefined, "the program's output");
   assert.match(output, /^listening$/m);
-  // Ended by the runner (SIGTERM): it stops the program's process group and exits.
   child.kill("SIGTERM");
   const code = await new Promise<number | null>(resolve => child.once("close", resolve));
   assert.equal(code, 0);
@@ -445,7 +419,6 @@ test("the service's driver says when the port never answers, and leaves nothing 
 test("the connector's quick tunnel runs cloudflared on the host, pointed at a loopback port it forwards to the service's socket, with nothing of its environment", async t => {
   const root = await directory(t, "quick-tunnel");
   const executable = await fakeCloudflared(root);
-  // The session's service, as its socket appears to the connector.
   const socket = shortSocket(join(root, "http.sock"));
   const service: Server = createServer((request, response) => response.end(`served ${request.url}`));
   await new Promise<void>(resolve => service.listen(socket, resolve));
@@ -458,7 +431,6 @@ test("the connector's quick tunnel runs cloudflared on the host, pointed at a lo
   assert.equal(tunnel.url, "https://fake-quick-tunnel.trycloudflare.com", "the address, never api.trycloudflare.com from its errors");
   await until(() => tunnel.connected() || undefined, "the edge connection");
   const edge = Number(await until(() => lines.map(line => /^FAKE_EDGE=(\d+)$/.exec(line)?.[1]).find(Boolean), "the fake edge"));
-  // A request to the public address reaches the service through the forwarding.
   const response = await fetch(`http://127.0.0.1:${edge}/page?x=1`);
   assert.equal(await response.text(), "served /page?x=1");
   const call = JSON.parse((await readFile(join(root, "calls.jsonl"), "utf8")).trim().split("\n").at(-1)!) as { args: string[]; env: Record<string, string>; cwd: string };
@@ -468,7 +440,6 @@ test("the connector's quick tunnel runs cloudflared on the host, pointed at a lo
   assert.equal(await readFile(join(root, "state", "config.yml"), "utf8"), "{}\n", "no host configuration applies");
   assert.equal(call.env.PIKIBUN_TUNNEL_TEST_SECRET, undefined, "nothing of the connector's environment");
   assert.equal(call.env.HOME, join(root, "state", "home"));
-  // The loopback port goes to the service's socket only.
   assert.equal(await (await fetch(`${url}/other`)).text(), "served /other");
   await tunnel.close();
   await tunnel.closed;
@@ -489,7 +460,6 @@ test("a cloudflared that gives no address is ended, and the call says what the h
   const silent = await fakeCloudflared(silentRoot, "silent");
   const slow = new HostTunnels({ cloudflared: () => ({ executable: silent }), directory: join(root, "state2"), addressMs: 300 });
   await assert.rejects(slow.open(shortSocket(join(root, "none.sock"))), error => error instanceof Error && error.message === NO_ADDRESS);
-  // It was ended: no process of it is left recorded.
   assert.deepEqual(await (await import("node:fs/promises")).readdir(join(root, "state2", "processes")), []);
   const none = new HostTunnels({ cloudflared: () => undefined, directory: join(root, "state3") });
   assert.equal(none.available, false);
@@ -505,7 +475,6 @@ test("a host's cloudflared stands as its owner chose: found, at a path, download
   const script = join(root, "bin", "wrapper");
   await writeFile(script, "#!/bin/sh\nexec cloudflared \"$@\"\n", { mode: 0o755 });
   const base = { root: join(root, "downloads"), supported: true, platform: "linux" as const, arch: "x64" };
-  // Found, or a path the owner gave, or none.
   const found = new HostTunnelSource({ ...base, detect: () => ({ executable: installed }) });
   assert.deepEqual(await found.apply({ source: "auto" }), { source: "auto", state: "ready", executable: installed, downloadable: true });
   assert.equal(found.current()?.executable, installed);
@@ -524,7 +493,6 @@ test("a host's cloudflared stands as its owner chose: found, at a path, download
   assert.equal(cloudflaredAsset("darwin", "arm64"), undefined);
   assert.equal(new HostTunnelSource({ ...base, arch: "riscv64" }).downloadable, false);
 
-  // Downloaded: the latest release's asset, checked against the SHA-256 its notes list.
   const asset = "cloudflared-linux-amd64";
   let body = elf;
   let sha = createHash("sha256").update(elf).digest("hex");
@@ -544,7 +512,6 @@ test("a host's cloudflared stands as its owner chose: found, at a path, download
   await download.settled();
   assert.deepEqual(download.status(), { source: "download", state: "ready", executable: join(base.root, "2026.1.0", "cloudflared"), version: "2026.1.0", downloadable: true });
   assert.deepEqual((await downloadedCloudflareds(base.root)).map(item => item.version), ["2026.1.0"]);
-  // A download that doesn't match is refused, and tried again later.
   await rm(base.root, { recursive: true, force: true });
   body = Buffer.concat([elf, Buffer.from("tampered")]);
   const tampered = new HostTunnelSource({ ...base, fetch: fakeFetch, now: () => now, detect: () => undefined });
@@ -553,7 +520,6 @@ test("a host's cloudflared stands as its owner chose: found, at a path, download
   assert.equal(tampered.status().state, "failed");
   assert.match(tampered.status().error!, /doesn't match its release's SHA-256/);
   assert.equal(tampered.current(), undefined);
-  // A release that lists no checksum for it is refused before anything is downloaded.
   sha = "";
   await assert.rejects(latestCloudflared(asset, { fetch: fakeFetch }), /lists no SHA-256/);
   now += 11 * 60_000;
@@ -563,12 +529,10 @@ test("a host's cloudflared stands as its owner chose: found, at a path, download
 test("a connector that stopped without ending its cloudflareds ends those it recorded as it starts again", { skip: process.platform !== "linux" && "reaping reads /proc" }, async t => {
   const root = await directory(t, "tunnel-reap");
   const executable = await fakeCloudflared(root, "silent");
-  // A cloudflared left running, recorded as the connector records its own.
   const left = spawn(executable, ["tunnel", "--url", "http://127.0.0.1:1"], { stdio: "ignore" });
   t.after(() => { left.kill("SIGKILL"); });
   await until(() => existsSync(join(root, "calls.jsonl")) || undefined, "the stray cloudflared");
   await mkdir(join(root, "state", "processes"), { recursive: true });
-  // /proc/<pid>/exe is the interpreter for a script: record what it shows, as the connector would for a real binary.
   const { readlinkSync } = await import("node:fs");
   await writeFile(join(root, "state", "processes", String(left.pid)), readlinkSync(`/proc/${left.pid}/exe`));
   await writeFile(join(root, "state", "processes", "999999"), "/nowhere/cloudflared");

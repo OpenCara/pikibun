@@ -32,6 +32,6 @@ A workspace's page lists the tools its sessions can use, with what each does and
 
 There is no shell tool: `bash` and `host_bash` were removed (#163). Sessions run Git, Node.js and Python with their own tools, move, copy and delete with the file tools, and chain tools with code mode. Saved agents and approvals that name them stay readable.
 
-"Approval" is skipped for messages the session owner sends with **Auto-approve**: always for commands, pushes, GitHub comments, merges and issues, and for extension tools only on the owner's own host or one whose owner granted them automatic host commands. Side asks offer only the read-only tools.
+"Approval" is skipped for messages the session owner sends with **Auto-approve**: always for commands, pushes, GitHub comments, merges and issues, and for extension tools only on the owner's own host or one whose owner granted them automatic host commands. A workspace owner, admin or collaborator's **Auto-approve** messages to a session they don't own skip it only for commands that stay in the sandbox, within the host's limits (`bash` and the `git`, `node`, `python`, `rust` and `browser` tools); see [Auto-approve in someone else's session](approvals.md#auto-approve-in-someone-elses-session). Side asks offer only the read-only tools.
 
 Sessions started from a saved agent, before agents were removed, keep that agent's instructions and tools; any other tool they call first asks the session owner with a [permission request](approvals.md#permission-requests).

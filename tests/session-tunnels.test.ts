@@ -10,12 +10,6 @@ import type { HostConfig } from '../packages/shared/src/host-config.js';
 import type { ModelDefinition, SessionRecord } from '../packages/shared/src/types.js';
 import { fakeHub, testDatabase } from './helpers/control-plane.js';
 
-/*
- * The control plane's side of the tunnel tool (piki:tunnel): its host's reports of a session's tunnel starting and
- * stopping (the audit log, and the session list's mark), the session panel's Stop button, archiving, and the host's
- * configuration of it.
- */
-
 const origin = 'http://localhost:8787';
 const testSecret = 'session-tunnels-test-secret-not-for-deployment';
 const manifest = {
@@ -36,7 +30,6 @@ async function json<T>(response: Response, status = 200): Promise<T> {
 async function fixture(t: TestContext) {
   const { db, sqlite } = await testDatabase();
   t.after(() => db.close());
-  // What the session's host is asked: each tunnel request, answered as a host with a tunnel online would.
   const relayed: { action: string; body: unknown; actorId: string }[] = [];
   let online = true;
   const env: Env = { DB: db, APP_ORIGIN: origin, TEST_AUTH_ENABLED: 'true', TEST_AUTH_SECRET: testSecret,
@@ -73,7 +66,6 @@ async function fixture(t: TestContext) {
   sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(await sha256(connectionToken), credentials.connectorId);
   const { models } = await json<{ models: ModelDefinition[] }>(await alice.request('GET', `/api/workspaces/${workspace.id}/models`));
   const { session } = await json<{ session: SessionRecord }>(await alice.request('POST', '/api/sessions', { workspaceId: workspace.id, modelId: models[0]!.id, title: 'Preview', visibility: 'private' }), 201);
-  // Bob writes to it; Dave only follows it; Carol, a member too, can't read Alice's private session.
   await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: bob.user.id, role: 'collaborator' }));
   await json(await alice.request('POST', `/api/sessions/${session.id}/grants`, { userId: dave.user.id, role: 'viewer' }));
   const host = { Authorization: `Bearer ${credentials.token}`, 'X-Connection-Token': connectionToken };
@@ -108,13 +100,10 @@ test('a stop reported after a newer start leaves that one\'s mark, an expired on
   await json(await f.report({ sessionId: f.session.id, event: 'started', url: 'https://second-one.trycloudflare.com', actorId: f.alice.user.id, expiresAt: later }));
   await json(await f.report({ sessionId: f.session.id, event: 'stopped', url: 'https://first-one.trycloudflare.com', reason: 'replaced' }));
   assert.equal((await f.listed(f.alice))?.tunnel?.url, 'https://second-one.trycloudflare.com');
-  // A host that went away without saying so leaves no mark past the service lifetime.
   f.sqlite.prepare('UPDATE sessions SET tunnel_expires_at = ? WHERE id = ?').run(new Date(Date.now() - 1000).toISOString(), f.session.id);
   assert.equal((await f.listed(f.alice))?.tunnel, undefined);
-  // Someone the host names who isn't in the workspace is no one.
   await json(await f.report({ sessionId: f.session.id, event: 'stopped', url: 'https://second-one.trycloudflare.com', reason: 'stop', actorId: 'github:999' }));
   assert.equal((await f.audit()).at(-1)!.actorId, null);
-  // Only a quick tunnel's address, and only from the session's own host.
   for (const body of [{ sessionId: f.session.id, event: 'started', url: 'https://evil.example.com', expiresAt: later },
     { sessionId: f.session.id, event: 'started', url: 'https://api.trycloudflare.com', expiresAt: later },
     { sessionId: f.session.id, event: 'stopped', url: 'https://second-one.trycloudflare.com', reason: 'because' }]) {
@@ -129,28 +118,22 @@ test('the session panel\'s Stop asks the session\'s host to take its server offl
   const f = await fixture(t);
   const expiresAt = new Date(Date.now() + 3600_000).toISOString();
   await json(await f.report({ sessionId: f.session.id, event: 'started', url: 'https://quiet-river.trycloudflare.com', actorId: f.alice.user.id, expiresAt }));
-  // A viewer, or someone the session isn't shared with, can't.
   assert.equal((await f.dave.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})).status, 403);
   assert.equal((await f.carol.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})).status, 404);
   assert.deepEqual(f.relayed, []);
-  // A collaborator can, as they can stop its work.
   assert.deepEqual(await json(await f.bob.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})), { stopped: true });
   assert.deepEqual(f.relayed, [{ action: 'tunnel', body: { action: 'stop' }, actorId: f.bob.user.id }]);
   assert.deepEqual(await json(await f.bob.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})), { stopped: false }, 'nothing was online any more');
 
-  // Archiving a session online asks its host to take it offline first, as the archiver, and says why; it is no longer
-  // marked online, even where its host never answers.
   f.setOnline(true);
   await json(await f.report({ sessionId: f.session.id, event: 'started', url: 'https://other-river.trycloudflare.com', actorId: f.alice.user.id, expiresAt }));
   await json(await f.alice.request('POST', `/api/sessions/${f.session.id}/archive`, {}));
   assert.deepEqual({ ...f.sqlite.prepare('SELECT tunnel_url, tunnel_expires_at FROM sessions WHERE id = ?').get(f.session.id) }, { tunnel_url: null, tunnel_expires_at: null });
-  // A start its host reports late marks nothing on an archived session, though the audit log keeps it.
   await json(await f.report({ sessionId: f.session.id, event: 'started', url: 'https://late-river.trycloudflare.com', actorId: f.alice.user.id, expiresAt }));
   assert.equal((await json<{ session: SessionRecord }>(await f.alice.request('GET', `/api/sessions/${f.session.id}`))).session.tunnel, undefined);
   assert.equal((await f.audit()).at(-1)!.detail.url, 'https://late-river.trycloudflare.com');
   assert.deepEqual(f.relayed.at(-1), { action: 'tunnel', body: { action: 'stop', reason: 'archived' }, actorId: f.alice.user.id });
   assert.equal((await json<{ session: SessionRecord }>(await f.alice.request('GET', `/api/sessions/${f.session.id}`))).session.status, 'archived');
-  // An archived session's host takes no tunnel request.
   assert.equal((await f.alice.request('POST', `/api/sessions/${f.session.id}/tunnel/stop`, {})).status, 409);
 });
 

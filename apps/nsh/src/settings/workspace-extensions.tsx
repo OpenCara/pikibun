@@ -19,8 +19,6 @@ import { Checkbox, Field, TextField } from "../form";
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, EmptyState, Feedback, FormSheet, Note, ResourceState, Row, Section, Segmented, Small } from "../ui";
 import { ExtensionSettingsFields } from "./extension-fields";
 
-// A workspace's extensions, as the web app's (settings/WorkspaceExtensions.tsx; docs/design/host-extensions.md).
-
 interface ExtensionHost {
   id: string; name: string; ownerId: string; ownerName: string;
   report?: HostExtensionsReport; reportedAt?: string; availability?: Record<string, ExtensionAvailability>;
@@ -49,7 +47,6 @@ function AvailabilityBadge(props: { availability?: ExtensionAvailability; source
   );
 }
 
-/** Tools, one per line, with what each does and, with `sources`, the extension it comes with; those left out say so. */
 function ToolList(props: { tools: readonly Pick<WorkspaceTool, "name" | "description" | "source" | "mode">[]; sources?: boolean; shadowed?: ReadonlyMap<string, string> }) {
   return (
     <View>
@@ -100,7 +97,6 @@ function ToolsOverview(props: { usable: WorkspaceTools }) {
   );
 }
 
-/** What an extension is and the tools it offers, then how the workspace runs it: its row's hint. */
 function extensionHint(offer: ExtensionOffer | undefined, shadowed?: ReadonlyMap<string, string>, limit = 300, note?: string, extra?: string): string {
   const parts: string[] = [];
   if (offer?.description) parts.push(`${descriptionSummary(offer.description, limit)}${note ? ` ${note}` : ""}`);
@@ -138,8 +134,6 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
       resource.refresh();
     }, "Extension removed.");
   }
-  // Pikibun's session-tool extensions are in a workspace once added (with a repository or a source, or here), and
-  // removing one turns it off: the server lists those it hasn't added as turned off.
   function removeSessionTools(source: string) {
     void action.run(async () => {
       await session().api(`${path()}?source=${encodeURIComponent(source)}`, { method: "DELETE" });
@@ -148,7 +142,6 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
   }
   const sessionToolSources = new Set<string>(pikiSessionToolExtensions().map(item => item.source));
   const listed = () => (data()?.extensions ?? []).filter(extension => !sessionToolSources.has(extension.source));
-  /** Those it has (piki:files always), then those its admins can add. */
   const sessionToolsOn = () => pikiSessionToolExtensions().filter(item => !item.retired && (item.core || sessionToolExtensionOn(data()?.extensions ?? [], item.source)));
   const sessionToolsOff = () => pikiSessionToolExtensions().filter(item => !item.retired && !item.core && !sessionToolExtensionOn(data()?.extensions ?? [], item.source));
   const installed = () => installedOn(data()?.hosts ?? []);
@@ -280,7 +273,6 @@ export function WorkspaceExtensions(props: { workspace: Workspace }) {
 }
 
 function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly WorkspaceExtension[]; installed: readonly InstalledExtension[]; flags?: ExtensionFlag[];
-  /** Pikibun's session-tool extensions the workspace hasn't added, which the sheet offers. */
   sessionTools: readonly PikiExtensionInfo[];
   close: () => void; save: (extension: WorkspaceExtension) => Promise<void>; busy: boolean; error: string }) {
   const existing = untracked(() => props.extension);
@@ -293,7 +285,6 @@ function ExtensionSheet(props: { extension?: WorkspaceExtension; taken: readonly
   };
   const normalized = () => parsed().normalized;
   const cli = () => (normalized() ? pikiExtension(normalized()!) : undefined);
-  // A session-tool extension the workspace hasn't added is listed turned off, which adding it doesn't replace.
   const sessionTool = () => Boolean(cli()?.sessionTools);
   const replacing = () => (!existing && normalized() && !sessionTool() ? props.taken.find(item => extensionPackageKey(item.source) === extensionPackageKey(normalized()!)) : undefined);
   const offer = () => (normalized() ? extensionOffer(normalized()!, props.installed) : undefined);

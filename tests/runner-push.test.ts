@@ -39,7 +39,6 @@ function git(args: string[], options: { cwd?: string; input?: string; env?: Reco
   return result.stdout;
 }
 
-/** A bare upstream served over smart HTTP to requests with `authorization`. */
 async function upstream(t: TestContext, authorization = AUTHORIZATION) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-push-")));
   const source = join(directory, "source");
@@ -67,9 +66,7 @@ function binding(id: string): RunnerBinding {
   };
 }
 
-/** Commits `content` to the session's clone `app` of the upstream (cloning it first), as the agent would with Git in bash. */
 function commitToClone(session: RunnerSession, bare: string, content: string, message: string): string {
-  // The sandbox's host storage, not its in-sandbox path.
   const clone = join(session.directory, "sandbox", "worktree", "app");
   if (!existsSync(clone)) {
     git(["clone", "-q", "--no-hardlinks", bare, clone]);
@@ -93,7 +90,6 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-/** The card a tool call waits on for a person's decision. */
 async function pendingApproval(session: RunnerSession) {
   for (let count = 0; count < 1000; count++) {
     const approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
@@ -137,7 +133,6 @@ test("sessions run approved clone pushes in the background, auto-push only with 
   const session = await service.provision(binding(id), await ticket(id, "create"));
   const tip = commitToClone(session, bare, "from the agent\n", "Agent change");
 
-  // Auto access with a Worker admission pushes synchronously inside the tool call.
   const admissionId = await sha256("push admission");
   await session.submit(await ticket(id, "submit"), { content: "Push.", requestId: "auto", admissionId, options: { access: "auto" } }, "write");
   await idle(session);
@@ -151,7 +146,6 @@ test("sessions run approved clone pushes in the background, auto-push only with 
   assert.equal(git(["--git-dir", bare, "show", "refs/heads/auto:README.md"]), "from the agent\n");
   assert.deepEqual(completions[0], { sessionId: id, approvalId: automatic.id, credentialId: "credential-1", outcome: "pushed", tip });
 
-  // Auto access without an admission waits for a human, whose decision returns while the push runs.
   commitToClone(session, bare, "for review\n", "Review change");
   await session.submit(await ticket(id, "submit"), { content: "Push for review.", requestId: "review", options: { access: "auto" } }, "write");
   const reviewed = await pendingApproval(session);
@@ -169,7 +163,6 @@ test("sessions run approved clone pushes in the background, auto-push only with 
   assert.equal(credentialRequests[1]!.admissionId, undefined);
   assert.ok((await session.view()).entries.some(entry => entry.role === "toolResult" && entry.text.includes("Pushed 1 commit to reviewed")), "the agent learns the push went through");
 
-  // A definite failure is reported as failed, and completion still revokes the credential.
   const base = git(["--git-dir", bare, "rev-parse", "refs/heads/main"]).trim();
   const other = git(["--git-dir", bare, "commit-tree", `${base}^{tree}`, "-p", base, "-m", "elsewhere"], { env: IDENTITY }).trim();
   git(["--git-dir", bare, "update-ref", "refs/heads/moved", other]);
@@ -188,7 +181,6 @@ test("close() during an automatic push aborts it, awaits settlement and reports 
   const { bare, credential } = await upstream(t);
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-push-close-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  // A forge that accepts the connection and never answers: the push is in flight until aborted.
   let requests = 0;
   const hanging = createServer(() => { requests++; });
   hanging.listen(0, "127.0.0.1");
@@ -227,7 +219,6 @@ test("close() during an automatic push aborts it, awaits settlement and reports 
     "close() waits for the aborted push, which reports an ambiguous outcome");
 });
 
-/** A Git configuration whose only credential helper runs `helper` for `get` (none when null); a prompt would run an askpass that leaves a marker. */
 async function credentialConfig(directory: string, helper: string | null): Promise<NodeJS.ProcessEnv> {
   const askpass = join(directory, "askpass.sh");
   await writeFile(askpass, `#!/bin/sh\ntouch '${join(directory, "prompted")}'\necho prompted\n`, { mode: 0o755 });
@@ -238,7 +229,6 @@ async function credentialConfig(directory: string, helper: string | null): Promi
 test("the host's Git credentials come from its credential helpers, never from a prompt", hostMode, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-credentials-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  // Without a helper Git would ask for a user name; prompts are off, so the read fails at once and no askpass runs.
   const none = await credentialConfig(directory, null);
   await assert.rejects(hostGitAuthorization("https://forge.example/acme/alpha.git", { env: none }),
     (error: unknown) => error instanceof HostCredentialError && /No Git credentials for forge\.example are set up/.test(error.message));
@@ -247,7 +237,6 @@ test("the host's Git credentials come from its credential helpers, never from a 
   const userOnly = await credentialConfig(directory, "echo username=alice");
   await assert.rejects(hostGitAuthorization("https://forge.example/acme/alpha.git", { env: userOnly }), HostCredentialError);
   assert.equal(existsSync(join(directory, "prompted")), false, "no askpass program ever ran");
-  // Credentials go only to HTTPS remotes (plain HTTP only on loopback, for local forges).
   await assert.rejects(hostGitAuthorization("http://forge.example/acme/alpha.git", { env }), /Git remote URL is invalid/);
 });
 
@@ -290,11 +279,9 @@ test("pushes with the host's Git credentials run only in its owner's sessions wh
   assert.equal(own.status, "executed");
   assert.match(own.result ?? "", /Pushed 1 commit to own/);
   assert.equal(git(["--git-dir", bare, "show", "refs/heads/own:README.md"]), "host-own change\n");
-  // A teammate's session on alice's host never pushes with alice's credentials.
   const shared = await run("host-shared", "test:bob");
   assert.equal(shared.status, "failed");
   assert.match(shared.result ?? "", /Only the host's owner can push with its Git credentials\. Nothing was pushed/);
-  // A runner that can't read the host's credentials says where the owner turns them on.
   delete config.hostGitCredential;
   const off = await run("host-off", "test:alice");
   assert.equal(off.status, "failed");

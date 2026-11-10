@@ -1,7 +1,3 @@
-// The app's theme tokens, under the names the React web client's stylesheet gave its CSS custom properties: theme.ts
-// builds this app's palettes from them. Colors are #rrggbb, or #rrggbbaa when translucent; the shadows are one layer
-// (NSH draws a single box shadow).
-
 export type ThemeName = "light" | "dark" | "pikibun";
 
 export const colorTokens = [
@@ -16,7 +12,6 @@ export type ColorToken = (typeof colorTokens)[number];
 export interface ThemeTokens {
   scheme: "light" | "dark";
   colors: Record<ColorToken, string>;
-  /** This app's single-layer stand-in for --shadow. */
   shadow: string;
 }
 

@@ -6,16 +6,15 @@ import { withSessionToolsListed, type WorkspaceExtension } from '../packages/sha
 import { documentKindsOff, sessionToolsOff } from '../packages/shared/src/piki-extensions.js';
 
 const migrations = new URL('../apps/server/migrations/sqlite/', import.meta.url);
-const migration = '0057_session_tool_extensions.sql';
+const migration = '0058_session_tool_extensions.sql';
 
-/** Those the migration keeps on in every workspace that didn't list them: they offer something without a source. */
 const kept = ['piki:browser', 'piki:dotnet', 'piki:git', 'piki:go', 'piki:host-shell', 'piki:make', 'piki:node', 'piki:python', 'piki:rust',
   'piki:schedule', 'piki:sessions', 'piki:shell'];
 
 test('existing workspaces keep the session tools they had on, now that a workspace has one only once it is added', () => {
   const files = readdirSync(migrations).filter(name => name.endsWith('.sql')).sort();
   assert.ok(files.includes(migration));
-  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0050_session_tool_extensions.sql'), 'Postgres has the same migration');
+  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0051_session_tool_extensions.sql'), 'Postgres has the same migration');
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
   for (const file of files.filter(name => name < migration)) sqlite.exec(readFileSync(new URL(file, migrations), 'utf8'));
@@ -42,24 +41,18 @@ test('existing workspaces keep the session tools they had on, now that a workspa
   const rows = (workspace: string) => sqlite.prepare('SELECT source, enabled, updated_by FROM workspace_extensions WHERE workspace_id = ? ORDER BY source').all(workspace)
     .map(row => [row.source, row.enabled, row.updated_by]);
   const on = (sources: string[]) => sources.map(source => [source, 1, 'owner']);
-  // As SQLite orders text: by code point.
   const byName = (a: unknown[], b: unknown[]) => (String(a[0]) < String(b[0]) ? -1 : String(a[0]) > String(b[0]) ? 1 : 0);
-  // GitHub's tools with a GitHub repository, Notion's with a Notion source; schedule stays off, tunnel as it was.
   assert.deepEqual(rows('code'), [...on([...kept.filter(source => source !== 'piki:schedule'), 'piki:github', 'piki:notion']), ['npm:pi-memory@1.0.0', 1, 'owner'],
     ['piki:schedule', 0, 'owner'], ['piki:tunnel', 1, 'owner']].sort(byName));
-  // piki:sources off kept its kinds off; one it chose since is as chosen. No GitHub repository: no GitHub tools.
   assert.deepEqual(rows('docs'), [...on([...kept, 'piki:dropbox']), ['piki:sources', 0, 'owner']].sort(byName));
   assert.deepEqual(rows('empty'), on(kept));
 
-  // What sessions are offered stays as it was, but for tools without anything to act on (github_* without a GitHub
-  // repository, source_read without a source of a kind that is on).
   const after = { code: listed(sqlite, 'code'), docs: listed(sqlite, 'docs'), empty: listed(sqlite, 'empty') };
   assert.deepEqual([...sessionToolsOff(withSessionToolsListed(after.code))].sort(), [...sessionToolsOff(was.code)].sort());
   assert.deepEqual([...documentKindsOff(withSessionToolsListed(after.code))].sort(), ['dropbox', 'feishu', 'google-drive', 'onedrive', 'tencent-docs'], 'kinds it has no source of');
   assert.deepEqual([...documentKindsOff(withSessionToolsListed(after.docs))].sort(), [...documentKindsOff(was.docs)].sort());
   assert.deepEqual([...sessionToolsOff(withSessionToolsListed(after.empty))].sort(),
     [...sessionToolsOff(was.empty), 'github_comment', 'github_issue', 'github_merge', 'github_read', 'source_read'].sort());
-  // Run again, it changes nothing.
   const count = () => sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_extensions').get()!.n;
   const total = count();
   sqlite.exec(readFileSync(new URL(migration, migrations), 'utf8'));

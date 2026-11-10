@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig } from "../apps/server/src/config.js";
+import { InstanceLockedError } from "../apps/server/src/db/index.js";
 import { startServer } from "../apps/server/src/serve.js";
 
 const production = "https://pikibun.com";
@@ -18,16 +19,21 @@ test("preview configuration is explicit: an exact, distinct HTTPS origin, never 
   for (const origin of [production, `${preview}/`, `${preview}/app`, `http://preview.pikibun.com`, `https://user@preview.pikibun.com`, "*.pikibun.com", "null"]) {
     await assert.rejects(loadConfig({ ...environment, PREVIEW_ORIGIN: origin }), /PREVIEW_ORIGIN/, origin);
   }
-  await assert.rejects(loadConfig({ ...environment, PREVIEW_STATIC_DIR: "dist/preview" }), /requires PREVIEW_ORIGIN/);
-  // The React client is gone: a server still set to serve it says so.
+  await assert.rejects(loadConfig({ ...environment, PREVIEW_STATIC_DIR: "dist/client" }), /requires PREVIEW_ORIGIN/);
   await assert.rejects(loadConfig({ ...environment, STATIC_CLIENT: "web" }), /React web client was removed/);
   await assert.rejects(loadConfig({ ...environment, APP_ORIGIN: "http://127.0.0.1", LOCAL_MODE: "true",
     LOCAL_CLAIM_SECRET: "x".repeat(43), PREVIEW_ORIGIN: preview }), /PREVIEW_ORIGIN/);
+  const renamed = await loadConfig({ ...environment, STATIC_DIR: "dist/preview" });
+  try {
+    assert.equal(renamed.staticDir, resolve("dist/client"), "a server still set to the build's former directory serves the build where it is now");
+  } finally {
+    await renamed.env.CONNECTOR_HUB!.close();
+    await renamed.env.DB.close();
+  }
   const config = await loadConfig({ ...environment, PREVIEW_ORIGIN: preview });
   try {
-    // Unset, the server serves the NSH build (dist/preview), whether it's built yet or not.
-    assert.equal(config.staticDir, resolve("dist/preview"));
-    assert.deepEqual(config.preview, { origin: preview, staticDir: resolve("dist/preview") });
+    assert.equal(config.staticDir, resolve("dist/client"));
+    assert.deepEqual(config.preview, { origin: preview, staticDir: resolve("dist/client") });
   } finally {
     await config.env.CONNECTOR_HUB!.close();
     await config.env.DB.close();
@@ -44,7 +50,6 @@ test("each origin serves its own NSH build, and each host's authentication keeps
   await writeFile(join(web, "nsh.abcdef0123.wasm"), new Uint8Array([0, 97, 115, 109]));
   await writeFile(join(nsh, "index.html"), '<html><head></head><body>NSH preview</body></html>');
   await writeFile(join(nsh, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
-  // A page without Native Shell's runtime, such as an old React build, is refused rather than served as NSH.
   const react = join(root, "react");
   await mkdir(react);
   await writeFile(join(react, "index.html"), '<div id="root"></div>');
@@ -114,4 +119,30 @@ test("each origin serves its own NSH build, and each host's authentication keeps
     assert.equal(auth.status, 302);
     assert.equal(new URL(auth.headers.get("location")!).searchParams.get("redirect_uri"), `${production}/api/auth/github/callback`);
   });
+});
+
+test("a second server on a database another one serves is refused before it migrates, and starts once the first has stopped", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pikibun-instance-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const migrations = join(root, "migrations");
+  await mkdir(join(migrations, "sqlite"), { recursive: true });
+  await writeFile(join(migrations, "sqlite", "0001_first.sql"), "CREATE TABLE first (id TEXT PRIMARY KEY);\n");
+  const previous = process.env.MIGRATIONS_DIR;
+  process.env.MIGRATIONS_DIR = migrations;
+  t.after(() => { if (previous === undefined) delete process.env.MIGRATIONS_DIR; else process.env.MIGRATIONS_DIR = previous; });
+  const settings = { ...environment, DATABASE_URL: `sqlite://${join(root, "db.sqlite")}`, STATIC_DIR: join(root, "web") };
+  const first = await startServer(await loadConfig(settings));
+  await writeFile(join(migrations, "sqlite", "0002_second.sql"), "CREATE TABLE second (id TEXT PRIMARY KEY);\n");
+  const second = await loadConfig(settings);
+  await assert.rejects(startServer(second), InstanceLockedError);
+  const reader = await loadConfig(settings);
+  try {
+    assert.deepEqual(await reader.env.DB.query<{ name: string }>("SELECT name FROM schema_migrations ORDER BY name").all(), [{ name: "0001_first.sql" }]);
+  } finally {
+    await reader.env.CONNECTOR_HUB!.close();
+    await reader.env.DB.close();
+  }
+  await first.close();
+  const next = await startServer(await loadConfig(settings));
+  await next.close();
 });

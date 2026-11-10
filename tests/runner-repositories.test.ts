@@ -11,7 +11,6 @@ import type { RunnerAction, RunnerBinding, RunnerTicket } from "../packages/shar
 import { RunnerError, validateBinding, validateRepositories } from "../apps/runner/src/protocol.js";
 import { RunnerSession, type RunnerConfig } from "../apps/runner/src/session.js";
 
-// Real lifecycle cases require the same Linux bwrap/user-namespace setup as runner.test.ts.
 const linux = { skip: process.platform !== "linux", timeout: 60_000 };
 const SECRET = "repository-test-secret-not-a-production-secret-123456";
 const OWNER = "test:alice";
@@ -204,7 +203,6 @@ test("a clone session's binding carries the branch named for its work, and only 
     clone.session.branch = branch;
     assert.throws(() => validateBinding(clone, id), runnerError(400, /Invalid session branch/), branch);
   }
-  // Only a clone session has a branch of its own.
   const pinned = binding(id);
   pinned.session.branch = "pikibun/add-dark-mode-1a2b3c4d0000";
   assert.throws(() => validateBinding(pinned, id), runnerError(400, /Invalid session branch/));
@@ -255,7 +253,6 @@ test("clone sessions pin nothing, commit with Git and push a clone's directory",
   assert.doesNotMatch(instructions, /pinned commit/);
   await assert.rejects(session.createApproval(OWNER, { kind: "git.commit", message: "x" }), /Commit and switch branches with the git tool/);
   await assert.rejects(session.createApproval(OWNER, { kind: "git.push", repository: "acme/project-1", branch: "feature", commit: "a".repeat(40) }), /a push names a clone.s directory/);
-  // A session without pins or clones (from before either) can't name a clone directory.
   const plain = new RunnerSession(binding("plain-session", []), join(root, "plain"), config(join(root, "plain")));
   t.after(() => plain.sandbox.close());
   await assert.rejects(plain.createApproval(OWNER, { kind: "git.push", repository: "acme/project-1", directory: "app", branch: "feature", commit: "a".repeat(40) }), /Only clone sessions/);

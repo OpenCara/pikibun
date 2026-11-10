@@ -6,22 +6,11 @@ import type { Env, WorkspaceRow } from '../types.js';
 import { workspaceDatabaseTarget, type WorkspaceDatabaseRow } from './store.js';
 import type { ImportedAuditEntry, ImportedSession, WorkspaceDatabaseProvider, WorkspaceImport } from './types.js';
 
-/*
- * Imports a session or workspace dump (data-export.ts) into the database a workspace's owner connected. A dump is
- * untrusted input, checked before anything is written: it must belong to that workspace, its session records and
- * activity entries are checked field by field, and the workspace's settings (members, models, agents, repositories, push
- * identities, database connection) must be lists of objects, kept as JSON for the owner's reference. Only the workspace
- * database changes; the control plane records the import in the workspace's activity.
- */
-
-/** The largest dump the web app uploads; the command line (`--import-dump`) takes larger ones. */
 export const maxUploadedDumpBytes = 32 * 1024 * 1024;
-/** Dumps nest a few levels; operation details a few more. */
 const maxDepth = 64;
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const detailKeys = ['grants', 'toolGrants', 'backups', 'restores', 'approvals', 'pushes'] as const;
 
-/** The dump can't be imported; the message says why without repeating the dump's contents. */
 export class DumpImportError extends Error {
   constructor(message: string) {
     super(message);
@@ -32,9 +21,7 @@ export class DumpImportError extends Error {
 export interface ImportSummary {
   format: 'session' | 'workspace';
   exportedAt: string;
-  /** Session records written, with or without details. */
   sessions: number;
-  /** Sessions whose grants, approvals, pushes, backups and restores came with the dump. */
   sessionDetails: number;
   auditEntries: number;
   workspaceSettings: boolean;
@@ -44,10 +31,6 @@ function invalid(message: string): never {
   throw new DumpImportError(message);
 }
 
-/**
- * A copy Postgres can store: text and JSONB can't hold NUL characters, so they become U+FFFD. Keys are defined as own
- * properties, so a "__proto__" key stays data, as JSON.parse leaves it. Nesting deeper than any dump is refused.
- */
 function storable(value: unknown, depth = 0): unknown {
   if (depth > maxDepth) invalid('The dump is nested too deeply.');
   if (typeof value === 'string') return value.replaceAll('\u0000', '\uFFFD');
@@ -73,7 +56,6 @@ function list(value: unknown, what: string): unknown[] {
   return value;
 }
 
-/** Workspace settings a dump carries: kept as they are, but only as a list of objects. */
 function objects(value: unknown, what: string): unknown[] {
   const items = list(value, what);
   if (items.some(item => !item || typeof item !== 'object' || Array.isArray(item))) invalid(`The dump's ${what} are not all objects.`);
@@ -90,7 +72,6 @@ function identifier(value: unknown, what: string): string {
   return value;
 }
 
-/** An ISO time between 1970 and 9999, as Postgres reads it. */
 function timestamp(value: unknown, what: string): string {
   const time = typeof value === 'string' && value.length <= 64 ? Date.parse(value) : Number.NaN;
   const iso = Number.isFinite(time) && time >= 0 ? new Date(time).toISOString() : '';
@@ -101,7 +82,6 @@ function timestamp(value: unknown, what: string): string {
 function sessionOf(value: unknown, workspaceId: string): Omit<ImportedSession, 'data'> {
   const session = object(value, 'session');
   if (session.workspaceId !== workspaceId) invalid("The dump holds a session of another workspace. Import it into that workspace's database.");
-  // The exporter's permissions describe who exported it, not the session.
   const { permissions: _permissions, ...record } = session;
   return {
     id: identifier(session.id, 'session id'),
@@ -126,7 +106,6 @@ function auditEntry(value: unknown, sessionId: string | null): ImportedAuditEntr
   };
 }
 
-/** Which workspace a dump belongs to; a DumpImportError when it is not a Pikibun dump. */
 export function dumpWorkspaceId(document: unknown): string {
   const dump = object(document, 'contents');
   if (dump.format === workspaceExportFormat) return identifier(object(dump.workspace, 'workspace').id, 'workspace id');
@@ -134,14 +113,12 @@ export function dumpWorkspaceId(document: unknown): string {
   return invalid(`This is not a Pikibun dump: its format is neither ${sessionExportFormat} nor ${workspaceExportFormat}.`);
 }
 
-/** Checks a dump and shapes it for `workspace`'s database. */
 export function importFromDump(document: unknown, workspace: { id: string; name: string; ownerId: string }): WorkspaceImport {
   if (dumpWorkspaceId(document) !== workspace.id) invalid("This dump is of another workspace. Import it into that workspace's database.");
   const dump = object(storable(document), 'contents');
   const exportedAt = timestamp(dump.exportedAt, 'export time');
   const sessions: ImportedSession[] = [];
   const audit: ImportedAuditEntry[] = [];
-  // A full session: its record, details and activity (a session dump is one at its top level).
   const addFull = (value: unknown) => {
     const data = object(value, 'session');
     const session = sessionOf(data.session, workspace.id);
@@ -157,7 +134,6 @@ export function importFromDump(document: unknown, workspace: { id: string; name:
       repositories: objects(dump.repositories, 'repositories'), pushIdentities: objects(dump.pushIdentities, 'push identities'),
       database: dump.database === undefined || dump.database === null ? null : object(dump.database, 'database connection') };
     for (const entry of list(dump.sessions, 'sessions')) addFull(entry);
-    // Sessions the exporter could only view come as records.
     for (const entry of list(dump.otherSessions, 'other sessions')) sessions.push({ ...sessionOf(entry, workspace.id), data: null });
     for (const entry of list(dump.audit, 'workspace activity')) audit.push(auditEntry(entry, null));
   }
@@ -166,7 +142,6 @@ export function importFromDump(document: unknown, workspace: { id: string; name:
     if (ids.has(session.id)) invalid(`The dump lists session ${session.id} twice.`);
     ids.add(session.id);
   }
-  // Activity entries never change: a repeated one is written once, like one already in the database.
   const seen = new Set<string>();
   const entries: ImportedAuditEntry[] = [];
   for (const entry of audit) {
@@ -183,11 +158,6 @@ function summarize(data: WorkspaceImport): ImportSummary {
     workspaceSettings: data.workspaceData !== null };
 }
 
-/**
- * Imports a dump into the database `workspace`'s owner connected, and records the import in the workspace's activity
- * (`actorId` is null for the operator's command line). Throws DumpImportError for a dump that can't be imported and
- * WorkspaceDatabaseError when the database fails.
- */
 export async function importDump(env: Env, provider: WorkspaceDatabaseProvider, workspace: WorkspaceRow, database: WorkspaceDatabaseRow,
   document: unknown, actorId: string | null): Promise<ImportSummary> {
   const data = importFromDump(document, { id: workspace.id, name: workspace.name, ownerId: workspace.owner_id });
@@ -197,11 +167,6 @@ export async function importDump(env: Env, provider: WorkspaceDatabaseProvider, 
   return summary;
 }
 
-/**
- * The operator's import (main.ts `--import-dump`): the dump names its workspace, which needs a connected database. Uses
- * the server's own settings: WORKSPACE_DATABASES, WORKSPACE_DATABASE_PRIVATE_HOSTS and the VAULT_KEY that reads the
- * password. `provider` replaces the Postgres connection in tests.
- */
 export async function importDumpFromCommandLine(db: Database, processEnv: NodeJS.ProcessEnv, document: unknown,
   provider?: WorkspaceDatabaseProvider): Promise<{ summary: ImportSummary; database: WorkspaceDatabaseRow }> {
   const workspaceId = dumpWorkspaceId(document);
@@ -212,7 +177,6 @@ export async function importDumpFromCommandLine(db: Database, processEnv: NodeJS
   let connection = provider;
   if (!connection) {
     if (processEnv.WORKSPACE_DATABASES !== 'true') invalid('Workspace databases are turned off on this server (WORKSPACE_DATABASES).');
-    // Loaded only here: the routes import this module, and a server without workspace databases needs no Postgres driver.
     const { PostgresWorkspaceDatabases } = await import('./postgres.js');
     connection = new PostgresWorkspaceDatabases({ privateHosts: processEnv.WORKSPACE_DATABASE_PRIVATE_HOSTS === 'true' });
   }
@@ -220,7 +184,6 @@ export async function importDumpFromCommandLine(db: Database, processEnv: NodeJS
   try {
     return { summary: await importDump(env, connection, workspace, database, document, null), database };
   } catch (error) {
-    // The only HTTP failure on this path is the vault's.
     if (error instanceof HTTPException) invalid('The database password could not be read: run with the VAULT_KEY this server uses.');
     throw error;
   }

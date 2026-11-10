@@ -7,7 +7,6 @@ import { Icon } from "../icons";
 import { palette, radius, text } from "../theme";
 import { IconButton } from "../ui";
 
-/** A small round button on an attachment that removes it (.composer-attachment-remove). */
 function RemoveButton(props: { label: string; disabled?: boolean; onPress: () => void }) {
   return (
     <BaseButton accessibilityLabel={props.label} disabled={props.disabled} onPress={props.onPress} hitSlop={6}
@@ -19,7 +18,6 @@ function RemoveButton(props: { label: string; disabled?: boolean; onPress: () =>
   );
 }
 
-/** Thumbnails of a chat box's images and chips of its files, each with a button that removes it (.composer-attachments). */
 export function AttachmentStrip(props: { attachments: Attachments; disabled?: boolean }) {
   const status = (id: string, size: number, uploaded: boolean) => {
     const sent = props.attachments.progress()[id];
@@ -55,11 +53,6 @@ export function AttachmentStrip(props: { attachments: Attachments; disabled?: bo
   );
 }
 
-/**
- * The button that attaches files from the platform's picker: in a browser, any file where the chat box takes files;
- * elsewhere (NSH picks only photos there, longbridge/nsh#162), images. Pasting works too, and on the desktops any file
- * dropped on the chat box or copied in a file manager, which its label says where files are taken.
- */
 export function AttachButton(props: { attachments: Attachments; disabled?: boolean }) {
   const files = () => props.attachments.takesFiles() && pageAvailable();
   const label = () => files() ? "Attach files"

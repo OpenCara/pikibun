@@ -27,24 +27,14 @@ const DIRECTORY_FLAGS = OPEN_DIRECTORY;
 const queues = new Map<string, Promise<void>>();
 
 type Captured = { code: number | null; stdout: string; stderr: string };
-/** `hostCommand`: the process is bash spawned with hostBashArgs, started with startHostBash rather than given `input`. */
 type SpawnOptions = { env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal; hostCommand?: string };
 
-/**
- * Owner-consented host mode for macOS or Linux without bubblewrap. It runs as the
- * connector user with network access and no resource limits. File tools apply the
- * sandbox helper's path rules in-process; bash and commits still require exact
- * per-command approval. Operations are serialized per session, so the only actor
- * that could race these checks is an approved command, which already has full user
- * authority on the host.
- */
 export class HostWorkspace implements SessionWorkspace {
   readonly isolated = false;
   readonly #root: string;
   readonly #identity: Readonly<SandboxIdentity>;
   readonly #environment: Readonly<Record<string, string>>;
   readonly #testProvider: boolean;
-  /** A clone session: the agent clones and pushes with the host's own Git, credentials included. */
   readonly #clone: boolean;
   #initialization: Promise<void> | undefined;
   #ready = false;
@@ -69,9 +59,7 @@ export class HostWorkspace implements SessionWorkspace {
       ownerId, githubLogin, gitName, gitEmail, home: join(this.#root, "home"), worktree: join(this.#root, "worktree"),
       env: Object.freeze({ ...binding.owner.env }),
     });
-    // Approved commands need the owner's own tools; runner secrets are still never inherited.
     this.#environment = Object.freeze({
-      // Windows programs need the system's own variables to start; POSIX ones need none of the runner's.
       ...(windows ? windowsSystemEnvironment() : {}),
       ...sessionEnvironment(this.#identity, { path: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin", gitConfig: join(this.#root, "owner.gitconfig") }),
     });
@@ -113,12 +101,10 @@ export class HostWorkspace implements SessionWorkspace {
       if (!parts.length) throw hostError("a file path is required");
       const parent = await directoryAt(this.worktree, parts.slice(0, -1));
       const data = (await readAt(parent, parts.at(-1)!, MAX_FILE_BYTES)).data;
-      // Strict, like the Linux helper: edit_file writes the text back, so a lossy decode would corrupt the file.
       try { return new TextDecoder("utf-8", { fatal: true }).decode(data); } catch { throw hostError("the file is not UTF-8 text"); }
     });
   }
 
-  /** Like `readFile`, but an image (by signature, up to `MAX_IMAGE_BYTES`) comes back as its bytes. */
   async readContent(path: string, authorize: SandboxAuthorize): Promise<FileContent> {
     const value = text(path, "path", 1024);
     return this.#operation(authorize, async () => {
@@ -141,12 +127,10 @@ export class HostWorkspace implements SessionWorkspace {
     });
   }
 
-  /** A file attached to a message, as a new file in `directory`, under the same path rules as the file tools. */
   async importFile(directory: string, name: string, data: Buffer, authorize: SandboxAuthorize): Promise<string> {
     const request = importRequest(directory, name, data);
     return this.#operation(authorize, async () => {
       const parts = await this.#parts(request.directory, true);
-      // The directory itself, never a symlink to another one in the worktree: the file goes only where it was asked to.
       if (!parts.length || parts.join("/") !== request.directory) throw hostError("path component is not a real directory");
       const parent = await directoryAt(this.worktree, parts, true);
       for (let index = 1; index <= ATTACHMENT_CANDIDATES; index++) {
@@ -180,7 +164,6 @@ export class HostWorkspace implements SessionWorkspace {
     });
   }
 
-  /** The file browser's read-only look at one worktree path, under the same path rules as the file tools. */
   async browse(path: string, authorize: SandboxAuthorize): Promise<BrowseResult> {
     const value = text(path, "path", 1024);
     return this.#operation(authorize, async () => {
@@ -192,10 +175,6 @@ export class HostWorkspace implements SessionWorkspace {
     });
   }
 
-  /**
-   * The search tool's search, under the same path rules as the file tools: in a worker thread (search.ts), since this
-   * runs in the connector, so a pattern that backtracks without end stops the worker, not the connector.
-   */
   async search(request: SearchRequest, authorize: SandboxAuthorize): Promise<SearchResult> {
     const value = text(request.path, "path", 1024);
     return this.#operation(authorize, async () => {
@@ -211,11 +190,9 @@ export class HostWorkspace implements SessionWorkspace {
       case "program":
       case "bash": {
         if (options.allowTestShell === true && !this.#testProvider) throw new Error("Test shell bypass is restricted to the explicit faux provider");
-        // Nothing can be mounted read-only on the host, so only writable approved commands run.
         if (readOnly) throw new Error("Unsandboxed hosts cannot run read-only shell commands");
         const command = text(operation.command, "shell command", 64 * 1024, true);
         return this.#operation(authorize, async () => {
-          // The host's command time limit applies here too; nothing else does (there is no sandbox to set limits in).
           if (options.signal?.aborted) throw new SandboxProcessError("Command stopped before it started", null, null, "", "");
           const bash = bashPath();
           if (!bash) throw hostError(windows ? "bash commands need Git for Windows' bash.exe" : "bash commands need /bin/bash");
@@ -248,33 +225,27 @@ export class HostWorkspace implements SessionWorkspace {
         if (names.length > MAX_ENTRIES) throw hostError("directory has too many entries");
         for (const name of names.sort()) {
           if (skip.includes(name)) continue;
-          // A clone in the worktree: its history and objects have no bound a backup could keep. On a host with the
-          // sandbox, backups keep a clone's local work as a bundle instead.
           if (name === ".git" && prefix.startsWith("worktree/")) {
             throw hostError("backups of sessions with a clone in the worktree need a host with the sandbox; push the clone's work instead");
           }
           const info = await lstat(join(directory, name));
           if (info.isDirectory()) await visit(join(directory, name), `${prefix}/${name}`, [], depth + 1);
           else if (info.isFile()) await add(directory, name, `${prefix}/${name}`);
-          // Never follow symlinks or serialize devices/sockets for later restoration.
           else throw hostError("snapshot refuses symlinks and special files");
         }
       };
       await visit(this.home, "home");
       await add(this.#root, "owner.gitconfig", "owner.gitconfig");
       await visit(this.worktree, "worktree", [".git"]);
-      // Push scratch repositories are transient and never belong in a backup.
       await visit(join(this.worktree, ".git"), "git", ["pikibun-push"]);
       return files;
     });
   }
 
-  /** The branches the worktree's clones have checked out (clone-branches.ts), in turn with the session's other work. */
   cloneBranches(authorize: SandboxAuthorize): Promise<CloneBranch[]> {
     return this.#operation(authorize, () => readCloneBranches(this.worktree));
   }
 
-  /** Explicit host-owner-approved execution, serialized with sandbox file/Git operations; never a fallback. */
   async executeHost(operation: HostCommandOperation, authorize: SandboxAuthorize, signal: AbortSignal): Promise<string> {
     if (typeof authorize !== "function") throw new Error("Host command authorization is required");
     return this.#operation(authorize, async () => {
@@ -316,7 +287,6 @@ export class HostWorkspace implements SessionWorkspace {
     await this.initialize();
     return this.#exclusive(async () => {
       if (this.#closed || !this.#ready) throw new Error("Sandbox is closed");
-      // Admission-time permission may have been revoked while this operation waited.
       await authorize();
       if (this.#closed) throw new Error("Sandbox is closed");
       try {
@@ -327,8 +297,6 @@ export class HostWorkspace implements SessionWorkspace {
     });
   }
 
-  /** Lexical checks, then symlink resolution: the resolved path must stay inside the worktree. */
-  /** An entry itself (file-operations.ts): its directory resolved as any written path is, its last component never. */
   async #entry(value: string): Promise<{ parts: string[]; path: string }> {
     if (!value || value.startsWith("/") || value.includes("\\") || /[\x00-\x1f\x7f]/.test(value)) throw hostError("invalid relative path");
     if (value.length >= 2 && value[1] === ":") throw hostError("absolute paths are not allowed");
@@ -337,13 +305,11 @@ export class HostWorkspace implements SessionWorkspace {
     const index = value.lastIndexOf("/");
     const name = value.slice(index + 1);
     if (name.toLowerCase() === ".git") throw hostError("Git metadata is protected");
-    // Windows drops trailing dots and spaces and reads a colon as a stream: ".git." and ".git:x" would be .git there.
     if (windows && (/[ .]$/.test(name) || name.includes(":"))) throw hostError("invalid Windows file name");
     const parts = await this.#parts(index < 0 ? "." : value.slice(0, index), true);
     return { parts: [...parts, name], path: join(await realpath(this.worktree), ...parts, name) };
   }
 
-  /** move_file, copy_file and delete_file: in a worker thread (file-operations.ts), since this runs in the connector. */
   async fileOperation(request: FileOperationRequest, authorize: SandboxAuthorize): Promise<FileOperationResult> {
     return this.#operation(authorize, async () => {
       let resolved: ResolvedFileOperation;
@@ -397,7 +363,6 @@ export class HostWorkspace implements SessionWorkspace {
   }
 
   #capture(args: string[], input?: string, options: SpawnOptions = {}): Promise<Captured> {
-    // Host mode uses the owner's Git from PATH (Xcode tools or Homebrew on macOS).
     return this.#spawn("git", this.#gitArgs(args), input, options);
   }
 
@@ -431,7 +396,7 @@ export class HostWorkspace implements SessionWorkspace {
     };
     child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk));
     child.stderr.on("data", (chunk: Buffer) => capture(stderr, chunk));
-    child.stdin.on("error", () => { /* Early exit closes stdin; the exit status is authoritative. */ });
+    child.stdin.on("error", () => { });
     child.once("error", (error) => {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", stop);
@@ -446,7 +411,6 @@ export class HostWorkspace implements SessionWorkspace {
       if (failure || signal) reject(new SandboxProcessError(`${failure ?? `Command killed by ${signal}`}${err ? `: ${err.slice(0, 4096).trim()}` : ""}`, code, signal, out, err));
       else resolveResult({ code, stdout: out, stderr: err });
     });
-    // A command cancelled before it starts never gets to bash, which then ends at once.
     if (options.hostCommand === undefined) child.stdin.end(input ?? "");
     else if (failure) child.stdin.end();
     else startHostBash(child, options.hostCommand);
@@ -454,12 +418,6 @@ export class HostWorkspace implements SessionWorkspace {
   }
 }
 
-/**
- * Lets a clone session's Git use the host user's own credential helpers (gh, the keychain, Git Credential Manager, a
- * store file), as their own clone or push would, though its commands get a session HOME and Git config. The helper asks
- * `git credential fill` in the host user's environment, never prompting; it answers only `get`. Only the host's owner
- * runs commands on an unsandboxed host, so this lends their credentials to nobody else.
- */
 export function hostCredentialConfig(home: string): string {
   const shell = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
   const helper = `!f() { test "$1" = get || exit 0; exec env -i PATH="$PATH" HOME=${shell(home)} GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GCM_INTERACTIVE=never git credential fill; }; f`;
@@ -485,7 +443,6 @@ function errorCode(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
 }
 
-/** Filesystem errors would otherwise disclose absolute host paths in the transcript. */
 function describe(error: unknown): string {
   const known: Record<string, string> = {
     ENOENT: "no such file or directory", ELOOP: "symlinks are not followed", ENOTDIR: "not a directory",
@@ -507,7 +464,6 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-/** Walks real directories only: a symlinked or non-directory component is refused. */
 async function directoryAt(root: string, parts: readonly string[], create = false): Promise<string> {
   let current = root;
   for (const part of parts) {
@@ -569,7 +525,6 @@ async function writeAt(root: string, parts: readonly string[], content: string):
     } finally {
       await handle.close();
     }
-    // rename replaces the directory entry; it never follows a symlink at the target.
     await rename(temporary, target);
     created = false;
     await syncPath(parent);
@@ -579,7 +534,6 @@ async function writeAt(root: string, parts: readonly string[], content: string):
 }
 
 async function syncPath(path: string): Promise<void> {
-  // Windows can't open a directory to flush it; NTFS journals the rename itself.
   if (windows) return;
   const handle = await open(path, DIRECTORY_FLAGS);
   try { await handle.sync(); } finally { await handle.close(); }

@@ -9,9 +9,6 @@ import { Banner, EmptyState, IconButton, ResourceState, Row, Segmented, Small } 
 import { Card } from "../settings/accounts";
 import { TabPage, type PanelTabProps } from "./parts";
 
-// The session panel's Files tab, as the web app's (session-files.tsx): the session's worktree on its host, read-only,
-// one directory or file at a time, read from the host as each path is opened.
-
 const childPath = (directory: string, name: string) => (directory === "." ? name : `${directory}/${name}`);
 const parentPath = (path: string) => { const index = path.lastIndexOf("/"); return index < 0 ? "." : path.slice(0, index); };
 export const filesHref = (sessionId: string, path: string) => `/api/sessions/${segment(sessionId)}/files?path=${encodeURIComponent(path)}`;
@@ -27,7 +24,6 @@ export function formatBytes(size: number): string {
 
 const entryIcon: Record<FileEntry["type"], IconName> = { directory: "folder", file: "file", symlink: "link", other: "file" };
 
-/** Why a session's files can't be shown to this person, or nothing when they can. */
 export function filesUnavailable(current: SessionRecord, what: string): string | null {
   if (current.status === "archived") return `Archived sessions don't show their files. Unarchive the session to ${what}.`;
   if (!(current.permissions ?? []).includes("write")) return "Browsing the session's files takes the session collaborator role, as collaborators can already have the agent read any of them. Viewers follow the conversation.";
@@ -54,7 +50,6 @@ export function Files(props: PanelTabProps) {
   );
 }
 
-/** The path as links to each directory in it (.file-breadcrumbs). */
 function Breadcrumbs(props: { path: string; onOpen: (path: string) => void }) {
   const parts = () => (props.path === "." ? [] : props.path.split("/"));
   const crumb = (label: string, target: string, last: boolean) => (
@@ -79,7 +74,6 @@ function Breadcrumbs(props: { path: string; onOpen: (path: string) => void }) {
 function DirectoryListing(props: { sessionId: string; path: string; onOpen: (path: string) => void; onFile: (path: string) => void }) {
   const listing = createResource<{ files: SessionFiles }>(() => filesHref(props.sessionId, props.path));
   const files = () => listing.data()?.files;
-  // A symlink opened as a directory that is a file: preview it.
   effect(() => { if (files()?.type === "file") untracked(() => props.onFile(props.path)); });
   const directory = () => (files()?.type === "directory" ? files() as Extract<SessionFiles, { type: "directory" }> : null);
   return (
@@ -155,13 +149,11 @@ function FilePreview(props: { sessionId: string; path: string; onBack: () => voi
   );
 }
 
-/** Files named for what they are, without an extension that names their language (the web app's code-highlight.tsx). */
 const namedFiles: Record<string, string> = {
   makefile: "makefile", gnumakefile: "makefile", gemfile: "ruby", rakefile: "ruby", podfile: "ruby", vagrantfile: "ruby",
   "cmakelists.txt": "plaintext", ".bashrc": "bash", ".zshrc": "bash", ".profile": "bash", ".env": "bash",
   ".gitconfig": "ini", ".editorconfig": "ini", ".npmrc": "ini", "pipfile": "ini",
 };
-/** Extensions that aren't a language's own name. */
 const extensions: Record<string, string> = {
   h: "c", hh: "cpp", hxx: "cpp", ipp: "cpp", mdx: "markdown", md: "markdown", jsonc: "json", json5: "json", geojson: "json", webmanifest: "json",
   lock: "plaintext", txt: "plaintext", log: "plaintext", csv: "plaintext", svelte: "xml", vue: "xml", astro: "xml", html: "html", svg: "xml",
@@ -170,10 +162,8 @@ const extensions: Record<string, string> = {
   rs: "rust", sh: "bash", bash: "bash", zsh: "bash", fish: "bash", ksh: "bash", yml: "yaml", conf: "ini", cfg: "ini", properties: "ini",
   env: "bash", pem: "plaintext", tf: "plaintext", proto: "plaintext", cs: "csharp", hpp: "cpp", cc: "cpp",
 };
-/** Larger text shows plain, as in the web app: highlighting it would hold the view up. */
 const HIGHLIGHT_LIMIT = 128 * 1024;
 
-/** The language a file's text is highlighted as, by its name; null for plain text. */
 export function languageFor(path: string): string | null {
   const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
   if (namedFiles[name]) return namedFiles[name] === "plaintext" ? null : namedFiles[name]!;
@@ -186,10 +176,6 @@ export function languageFor(path: string): string | null {
   return language === "plaintext" ? null : language;
 }
 
-/**
- * A file's text, selectable, in the code block's look; with `path`, as the web app's Files tab shows it: with line
- * numbers, highlighted for its language, in NSH's read-only editor. Text over 128 KB shows plain, as there.
- */
 export function CodeView(props: { text: string; path?: string }) {
   const language = () => (props.path ? languageFor(props.path) : null);
   const tooLarge = () => props.text.length > HIGHLIGHT_LIMIT;
@@ -214,10 +200,6 @@ export function CodeView(props: { text: string; path?: string }) {
   );
 }
 
-/**
- * An image fit to the panel; pressing it switches to its actual size and back. Its size in pixels shows below it, and
- * one that can't be decoded says so.
- */
 export function ImageView(props: { src: string; path: string }) {
   const actual = signal(false);
   const size = signal<{ width: number; height: number } | null>(null);
@@ -236,7 +218,6 @@ export function ImageView(props: { src: string; path: string }) {
   );
 }
 
-/** An SVG drawn as an image, or its source. */
 function SvgPreview(props: { text: string; path: string }) {
   const mode = signal<"preview" | "source">("preview");
   return (
