@@ -15,7 +15,8 @@ This file is maintained by a daily scheduled session, which distils lessons from
 ## Building and testing
 
 - For one test, run `node --import tsx --test --test-name-pattern "<words>" tests/<file>.test.ts` instead of the whole suite.
-- The network-proxy tests fail when the temporary directory's path is too long for their sockets, or when there is no usable temporary directory. Run them with a short `TMPDIR` before treating that as a regression.
+- The network-proxy tests fail when the temporary directory's path is too long for their sockets, or when there is no usable temporary directory. Run them with a short `TMPDIR` before treating that as a regression. In the Linux sandbox, `TMPDIR` is `/tmp` (the session's `~/.tmp`) on connectors from #264 on; older ones give the long `~/.tmp` and no `/tmp`. `/tmp` is a symlink there, so don't `realpath` a temporary directory you will put sockets in: that gives the long path back.
+- Tests that start a Linux sandbox skip themselves where bubblewrap can't make one (`linuxSandboxMissing()` in `tests/helpers/workspaces.ts`), as inside a session's own sandbox. Gate new ones on that probe, not on `bwrap --version`.
 - A sandbox may not reach the npm registry. If dependencies can't be installed, say so in the pull request and treat its CI as the only typecheck and full test run.
 - `node --check` finds syntax errors only. A duplicate declaration or a type error shows up first in CI's typecheck, so reread new code for names already used in the same block.
 - To show that a new test covers a fix, run it once with the fix removed and see it fail.
