@@ -5,7 +5,7 @@ import {
   sourceReadAsValues, workspaceDocumentProviders, workspaceGitProviders, workspaceConnectionLimit,
   type SourceReadAs, type WorkspaceConnection, type WorkspaceConnectionFamily, type WorkspaceConnectionList,
 } from '../../../../packages/shared/src/workspace-connections.js';
-import type { Env, RepositoryRow, WorkerEnv } from '../types.js';
+import type { Env, RepositoryRow, AppEnv } from '../types.js';
 import { auditStatement } from './audit.js';
 import { requireMember } from './access.js';
 import { fail, id, identifier, jsonObject, now } from '../http.js';
@@ -137,7 +137,7 @@ async function connectionInput(input: Record<string, unknown>): Promise<{ family
   return fail(400, 'invalid_workspace_connection', 'Choose a Git or document connection.');
 }
 
-export function registerWorkspaceConnections(app: Hono<WorkerEnv>): void {
+export function registerWorkspaceConnections(app: Hono<AppEnv>): void {
   // Every member sees which accounts the workspace reads with, never their secrets.
   app.get('/api/workspaces/:id/connections', async c => {
     const workspaceId = identifier(c.req.param('id'));

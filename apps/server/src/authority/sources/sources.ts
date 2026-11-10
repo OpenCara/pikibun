@@ -4,7 +4,7 @@ import {
   documentKind, documentKindNames, secretKinds, sourceLimits, validSourceItem,
   type DocumentItemType, type DocumentKind, type GrantSource, type SourceAccountList, type SourceReadView, type WorkspaceDocumentSource, type WorkspaceSourceList,
 } from '../../../../../packages/shared/src/sources.js';
-import type { AppContext, Env, SessionRow, WorkerEnv } from '../../types.js';
+import type { AppContext, Env, SessionRow, AppEnv } from '../../types.js';
 import { auditStatement } from '../audit.js';
 import { requireMember, sessionAccess } from '../access.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../../http.js';
@@ -168,7 +168,7 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
   return c.json(view);
 }
 
-export function registerSources(app: Hono<WorkerEnv>): void {
+export function registerSources(app: Hono<AppEnv>): void {
   app.get('/api/source-accounts', async c => {
     const rows = await c.env.DB.query<SourceAccountRow>('SELECT * FROM source_accounts WHERE user_id = ? ORDER BY provider').bind(c.get('auth').userId).all();
     return c.json({ accounts: rows.map(row => ({ provider: row.provider, method: row.method, name: row.account_name, createdAt: row.created_at })),

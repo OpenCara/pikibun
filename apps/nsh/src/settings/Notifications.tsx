@@ -77,7 +77,7 @@ export function Notifications(_props: SectionProps) {
     <SectionPage testID="settings-notifications">
       <Section title="This device" info={<View style={{ gap: 8 }}>
         <Note>Pikibun tells you when one of your sessions waits for an approval, finishes or fails: sessions you own, and those you sent the latest message to.</Note>
-        <Note>Turn notifications on in each browser, and in the Pikibun apps, where you want them. In a browser they come through its push service (Google's, Mozilla's, Apple's or Microsoft's), encrypted so that only your browser can read them.</Note>
+        <Note>Turn notifications on in each browser where you want them. They come through its push service (Google's, Mozilla's, Apple's or Microsoft's), encrypted so that only your browser can read them.</Note>
       </View>}>
         <ResourceState inline loading={config.loading() && !config.data()} error={config.error()} retry={config.refresh}>
           <If when={support()}>
@@ -106,13 +106,13 @@ export function Notifications(_props: SectionProps) {
         </ResourceState>
         <If when={preferences.error()}><CardBody><Feedback error={preferences.error()} /></CardBody></If>
       </Section>
-      <Section title="Devices" info="The browsers and apps that get your notifications even when Pikibun isn't open. Signing out of one stops its notifications."
+      <Section title="Devices" info="The browsers that get your notifications even when Pikibun isn't open. Signing out of one stops its notifications."
         action={<Button small variant="outline" icon="bell" label="Send a test" disabled={devices.busy()} onPress={sendTest} />}>
-        <If when={config.data()?.devices.length} else={<Row title="No devices yet" hint={support()?.kind === "unsupported" ? "Turn notifications on in Pikibun on the web, or in a browser" : "Turn notifications on above, or in the Pikibun app's settings"} />}>
+        <If when={config.data()?.devices.length} else={<Row title="No devices yet" hint={support()?.kind === "unsupported" ? "Turn notifications on in Pikibun on the web, or in a browser" : "Turn notifications on above"} />}>
           <Each of={config.data()?.devices ?? []} key={item => item.id}>
             {item => (
-              <Row title={`${item().name ?? (item().kind === "expo" ? "Pikibun app" : "Browser")}${item().current ? " · This device" : ""}`}
-                hint={`${item().kind === "expo" ? "App" : "Browser"} · since ${timestamp(item().createdAt)}`}
+              <Row title={`${item().name ?? "Browser"}${item().current ? " · This device" : ""}`}
+                hint={`Browser · since ${timestamp(item().createdAt)}`}
                 trailing={<Button small variant="outline" label="Remove" disabled={devices.busy()} onPress={() => remove(item())} />} />
             )}
           </Each>

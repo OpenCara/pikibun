@@ -1,8 +1,8 @@
-import type { PrerequisiteFix } from "./desktop-protocol.js";
+import type { PrerequisiteFix } from "./app-host-protocol.js";
 import { MXC_SDK_VERSION, mxcInstallHint } from "./sandbox-backend.js";
 
 // How to get what a host lacks (connect-setup.ts checkPrerequisites): advice the CLI and the app show alike, and the
-// action it names (desktop-protocol.ts SetupAction). Pure, so tests read it without Pi.
+// action it names (app-host-protocol.ts SetupAction). Pure, so tests read it without Pi.
 
 /** How to get each missing prerequisite: the same advice in a terminal (its command) and in the app (its action). */
 export const fixes = {

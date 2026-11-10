@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import { adminListLimit, type AdminHost, type AdminList, type AdminOverview, type AdminUser, type AdminWorkspace } from '../../../../packages/shared/src/admin.js';
 import { auditAfterChange } from './audit.js';
 import { fail, now, PASSWORD_USER_ID, testMode, userIdentifier } from '../http.js';
-import type { Env, WorkerEnv } from '../types.js';
+import type { Env, AppEnv } from '../types.js';
 
 /**
  * Instance administration: the user IDs the operator lists in ADMIN_USER_IDS see every account, workspace and host on
@@ -87,7 +87,7 @@ async function requireUser(env: Env, userId: string): Promise<void> {
   if (!await env.DB.query('SELECT 1 FROM users WHERE id = ?').bind(userId).first()) fail(404, 'not_found', 'User not found.');
 }
 
-export function registerAdmin(app: Hono<WorkerEnv>): void {
+export function registerAdmin(app: Hono<AppEnv>): void {
   app.use('/api/admin/*', async (c, next) => {
     if (!isInstanceAdmin(c.env, c.get('auth').userId)) fail(403, 'forbidden', 'Instance administrator access is required.');
     await next();

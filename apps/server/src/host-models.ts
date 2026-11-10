@@ -1,7 +1,8 @@
 import type { Hono } from 'hono';
+import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import type { ConnectorCapabilities, HostModelSettings, LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import type { ChatOptions } from '../../../packages/shared/src/types.js';
-import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import { auditAfterChange, managedConnector, managedConnectorFor, managesConnectorSQL } from './authority/index.js';
 import { fail, jsonObject, now, text } from './http.js';
 
@@ -76,7 +77,7 @@ async function hostDisabledModels(env: Env, row: SessionRow): Promise<{ disabled
   if (!host) return null;
   return {
     disabled: hostModelSettings(JSON.parse(host.models_json) as LocalModelSummary[], await disabledModelKeys(env, row.connector_id)).disabledModels,
-    switchesModels: (JSON.parse(host.capabilities_json) as ConnectorCapabilities).chatOptions === true,
+    switchesModels: parseCapabilities(host.capabilities_json).chatOptions === true,
   };
 }
 
@@ -90,7 +91,7 @@ export async function messageNeedsModel(env: Env, row: SessionRow): Promise<bool
   return !!host && host.switchesModels && host.disabled.length > 0;
 }
 
-export function registerHostModels(app: Hono<WorkerEnv>): void {
+export function registerHostModels(app: Hono<AppEnv>): void {
   // The host's owner or an admin enables or disables one of its models, for everyone who uses the host.
   app.patch('/api/connectors/:id/models', async c => {
     const actorId = c.get('auth').userId;

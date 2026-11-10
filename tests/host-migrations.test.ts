@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { Env, WorkerEnv } from '../apps/server/src/types.js';
+import type { Env, AppEnv } from '../apps/server/src/types.js';
 import type { RestoreInput } from '../packages/shared/src/connector.js';
 import type { RunnerBinding } from '../packages/shared/src/types.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
@@ -64,7 +64,7 @@ async function fixture(t: TestContext, options: { targetCapabilities?: Record<st
     model: { id: 'old-model', workspaceId: 'workspace', name: 'Old model', provider: 'faux', modelId: 'faux-v1', ...route },
   };
   const snapshot = JSON.stringify({ format: 'pi-runner-backup-v1', binding, manifest: { version: 1 }, sqlite: 'c25hcHNob3Q=', files: [], createdAt: '2026-01-01' });
-  const app = new Hono<WorkerEnv>();
+  const app = new Hono<AppEnv>();
   app.use('/api/sessions/*', async (c, next) => {
     c.set('auth', { userId: c.req.header('x-test-user') ?? 'test:owner', tokenHash: 'test', csrfToken: 'test', client: 'browser' });
     await next();

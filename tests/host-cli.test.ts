@@ -8,7 +8,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { writeConnectorState } from "../apps/runner/src/connector.js";
 import { unsandboxedWarning } from "../apps/runner/src/connect-setup.js";
-import { STDIO_FRAME, type HostEvent } from "../apps/runner/src/desktop-protocol.js";
+import { STDIO_FRAME, type HostEvent } from "../apps/runner/src/app-host-protocol.js";
 import { acquireRunnerLease } from "../apps/runner/src/lease.js";
 
 // `pikibun host --stdio`: the host the Native Shell app's This Computer runs (apps/nsh/src/lib/this-computer.ts), from

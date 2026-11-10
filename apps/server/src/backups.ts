@@ -1,9 +1,10 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './authority/index.js';
 import type { BackupLocation } from '../../../packages/shared/src/types.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { bindingForSession } from './sessions.js';
-import type { AppContext, Env, SessionRow, WorkerEnv, WorkspaceRow } from './types.js';
+import type { AppContext, Env, SessionRow, AppEnv, WorkspaceRow } from './types.js';
 import { auditStatement, requireSession } from './authority/index.js';
 import { sessionRecord } from './db.js';
 import { fail, id, identifier, jsonObject, now } from './http.js';
@@ -26,9 +27,7 @@ function backupInfo(row: BackupRow, location: BackupLocation) {
  */
 async function conversationBackupsSupported(env: Env, row: SessionRow): Promise<boolean> {
   if (!row.connector_id) return true;
-  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(row.connector_id).first();
-  try { return (JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities).conversationBackups === true; }
-  catch { return false; }
+  return (await hostCapabilities(env, row.connector_id))?.conversationBackups === true;
 }
 
 /** Whether `userId` gave their standing confirmation of this workspace database (see workspace_database_consents). */
@@ -181,7 +180,7 @@ export async function createBackup(c: AppContext, row: SessionRow, options: Crea
   return { backup: backupInfo(record, destination) };
 }
 
-export function registerBackups(app: Hono<WorkerEnv>): void {
+export function registerBackups(app: Hono<AppEnv>): void {
   app.post('/api/sessions/:id/backup', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'manage');
     if (c.get('auth').userId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can create its backups.');

@@ -1,9 +1,10 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './authority/index.js';
 import { constantTimeEqual, sha256 } from '../../../packages/shared/src/crypto.js';
 import type { RunnerBinding } from '../../../packages/shared/src/types.js';
 import { permissions } from '../../../packages/shared/src/types.js';
 import type { ConnectorCapabilities, RestoreInput } from '../../../packages/shared/src/connector.js';
-import type { AgentRow, AppContext, SessionRow, WorkerEnv } from './types.js';
+import type { AgentRow, AppContext, SessionRow, AppEnv } from './types.js';
 import { agentVersion, modelDefinition, requireNoMigration, requireUnfrozen, runnerSessionRecord, sessionRecord, successorBranch } from './db.js';
 import {
   auditStatement, authenticateConnector, requireConnectorSession, requireSessionCreator, runsShellCommands, sessionAccess, sessionCreatorSQL,
@@ -88,10 +89,8 @@ async function startMigration(c: AppContext, input: { sourceId: string; requestI
   if (model.connector_owner_id !== ownerId && input.trusted !== model.connector_id) {
     fail(400, 'connector_trust_required', 'Explicitly acknowledge that this host can access this session before continuing.');
   }
-  const host = await c.env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
-    .bind(model.connector_id).first();
-  if (!host) fail(409, 'connector_unavailable', 'The target host is no longer available.');
-  const capabilities = JSON.parse(host.capabilities_json) as ConnectorCapabilities;
+  const capabilities = await hostCapabilities(c.env, model.connector_id, { active: true });
+  if (!capabilities) fail(409, 'connector_unavailable', 'The target host is no longer available.');
   if (capabilities.hostMigration !== true) {
     fail(409, 'connector_update_required', 'Update the target host\'s connector (npx pikibun@latest connect, on Linux) to move sessions to it.');
   }
@@ -165,7 +164,7 @@ async function startMigration(c: AppContext, input: { sourceId: string; requestI
   return job;
 }
 
-export function registerHostMigrations(app: Hono<WorkerEnv>): void {
+export function registerHostMigrations(app: Hono<AppEnv>): void {
   app.post('/api/sessions/:sourceId/migrate', async c => {
     const sourceId = identifier(c.req.param('sourceId'));
     const body = await jsonObject(c, 4096);

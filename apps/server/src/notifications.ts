@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { Hono } from 'hono';
-import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import { decryptToken, encryptToken, sessionAccess } from './authority/index.js';
 import { appOrigin, fail, identifier, jsonObject, now, randomToken, text } from './http.js';
 import { allowedPushEndpoint, encryptPushPayload, generateVapidKeys, validP256Point, vapidAuthorization, type VapidKeys } from './web-push.js';
@@ -16,22 +17,20 @@ import type { SessionActivity } from '../../../packages/shared/src/types.js';
  * can still read the session) are notified, as each of them chose (NotificationPreferences):
  *
  * - in their notification feed, which open web pages and desktop windows poll and show as system notifications;
- * - through Web Push, to each browser they turned notifications on in;
- * - through Expo's push service, to each iPhone or iPad app they turned them on in.
+ * - through Web Push, to each browser they turned notifications on in.
  *
  * A device belongs to the sign-in that registered it (`auth_token_hash`): signing out, the sign-in expiring, or signing
  * an app out from the web stops its notifications. Push endpoints are the client's to give, so the server sends Web
- * Push only to the browsers' own push services (web-push.ts allowedPushEndpoint), and Expo pushes only to Expo.
+ * Push only to the browsers' own push services (web-push.ts allowedPushEndpoint).
  */
 
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const EXPO_TOKEN = /^Expo(?:nent)?PushToken\[[A-Za-z0-9_-]{10,200}\]$/;
 /** A person's devices beyond this many: the oldest registrations go. */
 const MAX_DEVICES = 20;
 const FEED_LIMIT = 50;
 /** Who sent a session its latest message is only worth notifying while that message can still be the one at work. */
 const SENDER_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PUSH_TIMEOUT_MS = 10_000;
+const MAX_CONCURRENT_PUSHES = 16;
 const VAPID_KEY_NAME = 'web-push-vapid';
 const VAPID_VAULT_IDENTITY = 'server:web-push';
 
@@ -114,34 +113,50 @@ function webPushContact(env: Env): string {
   return env.APP_ORIGIN.startsWith('https://') ? env.APP_ORIGIN : 'mailto:webpush@localhost';
 }
 
-interface DeviceRow { id: string; user_id: string; kind: 'web' | 'expo'; endpoint: string; p256dh: string | null; auth: string | null }
+interface DeviceRow { id: string; user_id: string; endpoint: string; p256dh: string; auth: string }
 
 /** The devices of `userIds` whose sign-ins are still valid. */
 async function liveDevices(env: Env, userIds: readonly string[]): Promise<DeviceRow[]> {
   if (!userIds.length) return [];
-  return env.DB.query<DeviceRow>(`SELECT d.id, d.user_id, d.kind, d.endpoint, d.p256dh, d.auth FROM notification_devices d
+  return env.DB.query<DeviceRow>(`SELECT d.id, d.user_id, d.endpoint, d.p256dh, d.auth FROM notification_devices d
     JOIN auth_sessions a ON a.token_hash = d.auth_token_hash AND a.user_id = d.user_id
-    WHERE d.user_id IN (SELECT value FROM json_each(?)) AND a.expires_at > ?`).bind(JSON.stringify([...new Set(userIds)]), Date.now()).all();
+    WHERE d.kind = 'web' AND d.user_id IN (SELECT value FROM json_each(?)) AND a.expires_at > ?`).bind(JSON.stringify([...new Set(userIds)]), Date.now()).all();
 }
 
 // Pushes still on their way, so tests (and a server shutting down) can wait for them: activity reports don't.
 const inFlight = new Set<Promise<unknown>>();
-export async function settleNotificationDeliveries(): Promise<void> {
-  while (inFlight.size) await Promise.allSettled([...inFlight]);
+export async function settleNotificationDeliveries(withinMs = Infinity): Promise<void> {
+  const deadline = Date.now() + withinMs;
+  while (inFlight.size && Date.now() < deadline) {
+    const settled = Promise.allSettled([...inFlight]);
+    await (Number.isFinite(deadline) ? Promise.race([settled, sleep(deadline - Date.now(), undefined, { ref: false })]) : settled);
+  }
+}
+
+let activePushes = 0;
+const waitingPushes: (() => void)[] = [];
+async function withPushSlot<T>(send: () => Promise<T>): Promise<T> {
+  if (activePushes < MAX_CONCURRENT_PUSHES) activePushes++;
+  else await new Promise<void>(resolve => { waitingPushes.push(resolve); });
+  try { return await send(); } finally {
+    const next = waitingPushes.shift();
+    if (next) next();
+    else activePushes--;
+  }
 }
 function background(work: Promise<unknown>): void {
   const tracked = work.catch(() => {}).finally(() => inFlight.delete(tracked));
   inFlight.add(tracked);
 }
 
-export interface DeliveryCount { web: number; expo: number }
+export interface DeliveryCount { web: number }
 
 /**
  * Records `notification` in each person's feed and pushes it to their devices. Pushes go on in the background unless
  * `wait`; what comes back counts the devices a push service accepted it for.
  */
 async function notify(env: Env, items: { userId: string; notification: PikibunNotification }[], options: { wait?: boolean } = {}): Promise<DeliveryCount> {
-  if (!items.length) return { web: 0, expo: 0 };
+  if (!items.length) return { web: 0 };
   const cutoff = new Date(Date.now() - NOTIFICATION_FEED_RETENTION_MS).toISOString();
   await env.DB.batch(items.flatMap(({ userId, notification: n }) => [
     env.DB.query('DELETE FROM notifications WHERE user_id = ? AND created_at < ?').bind(userId, cutoff),
@@ -151,23 +166,17 @@ async function notify(env: Env, items: { userId: string; notification: PikibunNo
   const delivery = deliver(env, items);
   if (options.wait) return delivery;
   background(delivery);
-  return { web: 0, expo: 0 };
+  return { web: 0 };
 }
 
 async function deliver(env: Env, items: { userId: string; notification: PikibunNotification }[]): Promise<DeliveryCount> {
   const devices = await liveDevices(env, items.map(item => item.userId));
-  if (!devices.length) return { web: 0, expo: 0 };
+  if (!devices.length) return { web: 0 };
   let origin: string;
-  try { origin = appOrigin(env); } catch { return { web: 0, expo: 0 }; }
+  try { origin = appOrigin(env); } catch { return { web: 0 }; }
   const payloadFor = (notification: PikibunNotification): NotificationPayload => ({ ...notification, origin, path: notificationPath(notification) });
   const forUser = new Map(items.map(item => [item.userId, item.notification]));
-  const web = devices.filter(device => device.kind === 'web');
-  const expo = devices.filter(device => device.kind === 'expo');
-  const [webSent, expoSent] = await Promise.all([
-    web.length ? sendWebPushes(env, web.map(device => ({ device, payload: payloadFor(forUser.get(device.user_id)!) }))) : 0,
-    expo.length ? sendExpoPushes(env, expo.map(device => ({ device, payload: payloadFor(forUser.get(device.user_id)!) }))) : 0,
-  ]);
-  return { web: webSent, expo: expoSent };
+  return { web: await sendWebPushes(env, devices.map(device => ({ device, payload: payloadFor(forUser.get(device.user_id)!) }))) };
 }
 
 async function forgetDevices(env: Env, ids: string[]): Promise<void> {
@@ -180,9 +189,9 @@ async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: Not
   if (!keys) return 0;
   const contact = webPushContact(env);
   const gone: string[] = [];
-  const results = await Promise.allSettled(pushes.map(async ({ device, payload }) => {
+  const results = await Promise.allSettled(pushes.map(({ device, payload }) => withPushSlot(async () => {
     if (!allowedPushEndpoint(device.endpoint)) { gone.push(device.id); return false; }
-    const body = encryptPushPayload(new TextEncoder().encode(JSON.stringify(payload)), device.p256dh!, device.auth!);
+    const body = encryptPushPayload(new TextEncoder().encode(JSON.stringify(payload)), device.p256dh, device.auth);
     const response = await fetch(device.endpoint, {
       method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(PUSH_TIMEOUT_MS), body,
       headers: {
@@ -196,41 +205,9 @@ async function sendWebPushes(env: Env, pushes: { device: DeviceRow; payload: Not
     await response.body?.cancel().catch(() => {});
     if (response.status === 404 || response.status === 410) gone.push(device.id);
     return response.ok;
-  }));
+  })));
   await forgetDevices(env, gone);
   return results.filter(result => result.status === 'fulfilled' && result.value).length;
-}
-
-interface ExpoTicket { status: 'ok' | 'error'; details?: { error?: string } }
-
-/** Expo pushes, a hundred to a request as Expo takes them; a token Expo says is no longer registered is removed. */
-async function sendExpoPushes(env: Env, pushes: { device: DeviceRow; payload: NotificationPayload }[]): Promise<number> {
-  let sent = 0;
-  const gone: string[] = [];
-  for (let start = 0; start < pushes.length; start += 100) {
-    const batch = pushes.slice(start, start + 100);
-    try {
-      const response = await fetch(EXPO_PUSH_URL, {
-        method: 'POST', signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(env.EXPO_ACCESS_TOKEN ? { Authorization: `Bearer ${env.EXPO_ACCESS_TOKEN}` } : {}) },
-        body: JSON.stringify(batch.map(({ device, payload }) => ({
-          to: device.endpoint, title: payload.title, body: payload.body, data: payload, sound: 'default',
-          priority: payload.kind === 'approval' ? 'high' : 'default', ttl: payload.kind === 'approval' ? 86400 : 14400,
-          // Notifications about one session group together on the lock screen.
-          ...(payload.sessionId ? { threadId: payload.sessionId } : {}),
-        }))),
-      });
-      if (!response.ok) { await response.body?.cancel().catch(() => {}); continue; }
-      const tickets = (await response.json() as { data?: ExpoTicket[] }).data ?? [];
-      batch.forEach(({ device }, index) => {
-        const ticket = tickets[index];
-        if (ticket?.status === 'ok') sent++;
-        else if (ticket?.details?.error === 'DeviceNotRegistered') gone.push(device.id);
-      });
-    } catch { /* Expo unreachable: the feed still has it. */ }
-  }
-  await forgetDevices(env, gone);
-  return sent;
 }
 
 /**
@@ -272,36 +249,27 @@ function preferencesInput(input: Record<string, unknown>, current: NotificationP
 
 async function devicesOf(c: AppContext): Promise<NotificationDevice[]> {
   const auth = c.get('auth');
-  const rows = await c.env.DB.query<{ id: string; kind: 'web' | 'expo'; name: string | null; created_at: string; auth_token_hash: string }>(
-    `SELECT d.id, d.kind, d.name, d.created_at, d.auth_token_hash FROM notification_devices d
+  const rows = await c.env.DB.query<{ id: string; name: string | null; created_at: string; auth_token_hash: string }>(
+    `SELECT d.id, d.name, d.created_at, d.auth_token_hash FROM notification_devices d
     JOIN auth_sessions a ON a.token_hash = d.auth_token_hash AND a.user_id = d.user_id
-    WHERE d.user_id = ? AND a.expires_at > ? ORDER BY d.created_at DESC, d.id`).bind(auth.userId, Date.now()).all();
-  return rows.map(row => ({ id: row.id, kind: row.kind, name: row.name, createdAt: row.created_at, current: row.auth_token_hash === auth.tokenHash }));
+    WHERE d.kind = 'web' AND d.user_id = ? AND a.expires_at > ? ORDER BY d.created_at DESC, d.id`).bind(auth.userId, Date.now()).all();
+  return rows.map(row => ({ id: row.id, kind: 'web', name: row.name, createdAt: row.created_at, current: row.auth_token_hash === auth.tokenHash }));
 }
 
-/** A device to register: a browser's push subscription, or the app's Expo push token. */
-function deviceInput(input: Record<string, unknown>): { kind: 'web' | 'expo'; endpoint: string; p256dh: string | null; auth: string | null; name: string | null } {
+function deviceInput(input: Record<string, unknown>): { endpoint: string; p256dh: string; auth: string; name: string | null } {
+  if (input.kind !== 'web') fail(400, 'invalid_input', 'Invalid device kind.');
+  if (Object.keys(input).some(key => !['kind', 'endpoint', 'keys', 'name'].includes(key))) fail(400, 'invalid_input', 'Invalid device.');
   const name = input.name === undefined || input.name === null ? null : oneLine(text(input.name, 'name', 100), 100) || null;
-  if (input.kind === 'web') {
-    if (Object.keys(input).some(key => !['kind', 'endpoint', 'keys', 'name'].includes(key))) fail(400, 'invalid_input', 'Invalid device.');
-    const endpoint = text(input.endpoint, 'endpoint', 1024);
-    if (!allowedPushEndpoint(endpoint)) fail(400, 'unsupported_push_service', 'This browser\'s push service isn\'t one Pikibun sends to.');
-    const keys = input.keys as Record<string, unknown> | undefined;
-    const p256dh = typeof keys?.p256dh === 'string' ? keys.p256dh.replace(/=+$/, '') : '';
-    const auth = typeof keys?.auth === 'string' ? keys.auth.replace(/=+$/, '') : '';
-    if (!validP256Point(p256dh) || !/^[A-Za-z0-9_-]{22}$/.test(auth)) fail(400, 'invalid_input', 'Invalid subscription keys.');
-    return { kind: 'web', endpoint, p256dh, auth, name };
-  }
-  if (input.kind === 'expo') {
-    if (Object.keys(input).some(key => !['kind', 'token', 'name'].includes(key))) fail(400, 'invalid_input', 'Invalid device.');
-    const token = text(input.token, 'token', 256);
-    if (!EXPO_TOKEN.test(token)) fail(400, 'invalid_input', 'Invalid push token.');
-    return { kind: 'expo', endpoint: token, p256dh: null, auth: null, name };
-  }
-  fail(400, 'invalid_input', 'Invalid device kind.');
+  const endpoint = text(input.endpoint, 'endpoint', 1024);
+  if (!allowedPushEndpoint(endpoint)) fail(400, 'unsupported_push_service', 'This browser\'s push service isn\'t one Pikibun sends to.');
+  const keys = input.keys as Record<string, unknown> | undefined;
+  const p256dh = typeof keys?.p256dh === 'string' ? keys.p256dh.replace(/=+$/, '') : '';
+  const auth = typeof keys?.auth === 'string' ? keys.auth.replace(/=+$/, '') : '';
+  if (!validP256Point(p256dh) || !/^[A-Za-z0-9_-]{22}$/.test(auth)) fail(400, 'invalid_input', 'Invalid subscription keys.');
+  return { endpoint, p256dh, auth, name };
 }
 
-export function registerNotifications(app: Hono<WorkerEnv>): void {
+export function registerNotifications(app: Hono<AppEnv>): void {
   app.get('/api/notifications/config', async c => {
     const userId = c.get('auth').userId;
     const keys = await webPushKeys(c.env);
@@ -324,12 +292,12 @@ export function registerNotifications(app: Hono<WorkerEnv>): void {
   app.post('/api/notifications/devices', async c => {
     const auth = c.get('auth');
     const device = deviceInput(await jsonObject(c, 4096));
-    if (device.kind === 'web' && !await webPushKeys(c.env)) fail(503, 'web_push_unavailable', 'This server can\'t send Web Push: it needs a VAULT_KEY.');
+    if (!await webPushKeys(c.env)) fail(503, 'web_push_unavailable', 'This server can\'t send Web Push: it needs a VAULT_KEY.');
     await c.env.DB.query(`INSERT INTO notification_devices (id, user_id, auth_token_hash, kind, endpoint, p256dh, auth, name, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, auth_token_hash = excluded.auth_token_hash, kind = excluded.kind,
         p256dh = excluded.p256dh, auth = excluded.auth, name = excluded.name, created_at = excluded.created_at`)
-      .bind(randomToken().slice(0, 24), auth.userId, auth.tokenHash, device.kind, device.endpoint, device.p256dh, device.auth, device.name, now()).run();
+      .bind(randomToken().slice(0, 24), auth.userId, auth.tokenHash, 'web', device.endpoint, device.p256dh, device.auth, device.name, now()).run();
     // The oldest go beyond MAX_DEVICES.
     await c.env.DB.query(`DELETE FROM notification_devices WHERE user_id = ? AND id NOT IN (
       SELECT id FROM notification_devices WHERE user_id = ? ORDER BY created_at DESC, id LIMIT ?)`).bind(auth.userId, auth.userId, MAX_DEVICES).run();

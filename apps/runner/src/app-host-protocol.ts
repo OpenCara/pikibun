@@ -54,7 +54,7 @@ export const pairingIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 export const pairingCodePattern = /^[A-Za-z0-9_-]{8,256}$/;
 
 /**
- * Marks each message line on a --stdio host's stdout (desktop-transport.ts stdioTransport). Anything else there (a
+ * Marks each message line on a --stdio host's stdout (app-host-transport.ts stdioTransport). Anything else there (a
  * library's console.log, say) reaches the app as output, never as a message: the app reads only lines that start with it.
  */
 export const STDIO_FRAME = "\u001epikibun ";

@@ -8,7 +8,7 @@ import { getUser } from '../db.js';
 import { ConstraintError, type Database } from '../db/types.js';
 import { fail, id, jsonObject, now, PASSWORD_USERNAME, passwordAuthEnabled, requireOrigin, signupMode, testMode } from '../http.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
-import type { AppContext, Env, UserRow, WorkerEnv } from '../types.js';
+import type { AppContext, Env, UserRow, AppEnv } from '../types.js';
 import type { NativeSignIn } from '../../../../packages/shared/src/types.js';
 
 /**
@@ -493,7 +493,7 @@ async function chooseUsername(c: AppContext) {
 }
 
 // Register before the /api/* authenticate + csrfGuard stack, like registerAuth: sign-up and sign-in have no session yet.
-export function registerPasswordAuth(app: Hono<WorkerEnv>): void {
+export function registerPasswordAuth(app: Hono<AppEnv>): void {
   app.post('/api/auth/password/signup', privateResponse, signUp);
   app.post('/api/auth/password/login', privateResponse, signIn);
   app.post('/api/auth/native/password', privateResponse, nativeSignIn);

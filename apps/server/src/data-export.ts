@@ -9,7 +9,7 @@ import type {
 import type { NetworkPolicy } from '../../../packages/shared/src/network.js';
 import type { WorkspaceRepository } from '../../../packages/shared/src/repositories.js';
 import type { Database, SqlValue } from './db/types.js';
-import type { AgentRow, ModelRow, PushIdentityRow, SessionRow, WorkerEnv, WorkspaceRow } from './types.js';
+import type { AgentRow, ModelRow, PushIdentityRow, SessionRow, AppEnv, WorkspaceRow } from './types.js';
 import { agentVersion, modelDefinition, sessionRecord } from './db.js';
 import { fail, identifier, now } from './http.js';
 import { publicWorkspaceDatabase, type WorkspaceDatabaseRow } from './workspace-databases/store.js';
@@ -199,7 +199,7 @@ function attachment(document: unknown, filename: string): Response {
   } });
 }
 
-export function registerDataExports(app: Hono<WorkerEnv>): void {
+export function registerDataExports(app: Hono<AppEnv>): void {
   // The session owner's copy of the session's records, also while it is archived.
   app.get('/api/sessions/:id/export', async c => {
     const actor = c.get('auth').userId;

@@ -9,7 +9,7 @@ import {
   requireInvitedWorkspace, requireMember, requireSharedWorkspace,
 } from './authority/index.js';
 import { appOrigin, fail, identifier, id, jsonObject, now, randomToken, userIdentifier } from './http.js';
-import type { Env, WorkerEnv } from './types.js';
+import type { Env, AppEnv } from './types.js';
 import { ownerHostStatements } from './connectors.js';
 
 /**
@@ -68,7 +68,7 @@ function joinRequests(env: Env, workspaceId: string) {
 const requireManager = (env: Env, workspaceId: string, actorId: string) => requireMember(env, workspaceId, actorId, workspaceManagerRoles);
 
 /** Signed-in routes: register after the cookie authentication and CSRF guard. */
-export function registerWorkspaceInvites(app: Hono<WorkerEnv>): void {
+export function registerWorkspaceInvites(app: Hono<AppEnv>): void {
   // What the link opens, for the person holding it. The token comes in a header so it stays out of URLs and logs.
   app.get('/api/invite', async c => {
     const workspace = await requireInvitedWorkspace(c.env, c.req.header('x-invite-token'));

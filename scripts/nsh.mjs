@@ -3,7 +3,7 @@
  * Runs the Native Shell CLI the client (apps/nsh) is built with, at the version pinned here, in apps/nsh:
  *
  *   node scripts/nsh.mjs <nsh arguments...>      # e.g. check, test, run --target ios
- *   node scripts/nsh.mjs --build-web [out]       # the web app into dist/preview (or out), as the server serves it
+ *   node scripts/nsh.mjs --build-web [out]       # the web app into dist/client (or out), as the server serves it
  *
  * The CLI is `NSH_BIN` when set; otherwise the pinned release, downloaded once into .cache/nsh/<version> (Linux x86_64,
  * Apple-silicon macOS and x86_64 Windows, which NSH publishes) and checked against its SHA-256; otherwise `nsh` on PATH.
@@ -120,8 +120,8 @@ function run(bin, args) {
   return result.status ?? 1;
 }
 
-/** Packages the web app into `out` (dist/preview by default): the static site the server and `pikibun serve` serve. */
-export async function buildWeb(out = path.join(repository, "dist", "preview")) {
+/** Packages the web app into `out` (dist/client by default): the static site the server and `pikibun serve` serve. */
+export async function buildWeb(out = path.join(repository, "dist", "client")) {
   const bin = await nshBinary();
   const staging = path.join(repository, "dist", ".nsh-web");
   rmSync(staging, { recursive: true, force: true });

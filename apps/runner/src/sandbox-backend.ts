@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { MXC_SDK_VERSION } from "./desktop-protocol.js";
+import { MXC_SDK_VERSION } from "./app-host-protocol.js";
 
 /**
  * Which sandbox a host's sessions run in, besides the bubblewrap sandbox Linux (and WSL2) hosts use:
@@ -25,7 +25,7 @@ export interface WindowsJobLimits {
 
 export const DEFAULT_WINDOWS_LIMITS: Readonly<WindowsJobLimits> = Object.freeze({ memoryBytes: 4 * 1024 ** 3, processes: 256, cpuPercent: 50 });
 
-/** The MXC SDK version the Windows backend is written against (desktop-protocol.ts); others may change the request contract. */
+/** The MXC SDK version the Windows backend is written against (app-host-protocol.ts); others may change the request contract. */
 export { MXC_SDK_VERSION };
 
 /** Where the connector looks for MXC: PIKIBUN_MXC_RUNTIME, else a directory beside its state. */

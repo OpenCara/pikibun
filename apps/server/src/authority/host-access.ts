@@ -1,9 +1,10 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './hosts.js';
 import type { ConnectorAdmin, ConnectorCapabilities, HostCommandGrant } from '../../../../packages/shared/src/connector.js';
 import { hasPermission, readOnlyRoles } from '../../../../packages/shared/src/policy.js';
 import { grantedShell, type HostCommandSession } from '../../../../packages/shared/src/host-operations.js';
 import { hostCommandLevels, type HostCommandLevel, type Permission, type RunnerAction } from '../../../../packages/shared/src/types.js';
-import type { AppContext, Env, SessionAccess, SessionRow, WorkerEnv } from '../types.js';
+import type { AppContext, Env, SessionAccess, SessionRow, AppEnv } from '../types.js';
 import type { ConnectorRow } from './hosts.js';
 import { auditStatement } from './audit.js';
 import { requireMember } from './access.js';
@@ -113,9 +114,7 @@ export function ownsSessionHost(row: Pick<SessionRow, 'connector_id' | 'connecto
  */
 export async function hostOwnerDecides(env: Env, row: Pick<SessionRow, 'connector_id' | 'connector_owner_id'>, userId: string): Promise<boolean> {
   if (!row.connector_id || !ownsSessionHost(row, userId)) return false;
-  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(row.connector_id).first();
-  try { return (JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities).hostOwnerDecides === true; }
-  catch { return false; }
+  return (await hostCapabilities(env, row.connector_id))?.hostOwnerDecides === true;
 }
 
 /**
@@ -175,7 +174,7 @@ function expiry(value: unknown): number | null {
   return Math.floor(at / 1000);
 }
 
-export function registerHostAccess(app: Hono<WorkerEnv>): void {
+export function registerHostAccess(app: Hono<AppEnv>): void {
   // Only the owner adds admins: a member who shares a workspace with the host, other than as a viewer there.
   app.put('/api/connectors/:id/admins/:userId', async c => {
     const actorId = c.get('auth').userId;

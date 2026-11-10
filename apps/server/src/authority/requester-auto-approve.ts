@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import type { Database } from '../db/types.js';
-import type { Env, SessionRow, WorkerEnv } from '../types.js';
+import type { Env, SessionRow, AppEnv } from '../types.js';
 import { auditStatement } from './audit.js';
 import { requireMember, requireSession, sessionAccess } from './access.js';
 import { fail, identifier, jsonObject, now, userIdentifier } from '../http.js';
@@ -77,7 +77,7 @@ export async function chooseAutoApprovedRequester(env: Env, row: SessionRow, act
   await auditStatement(env, actorId, 'session.requester_auto_approve.started', row.workspace_id, row.id, { userId, approvalId }).run();
 }
 
-export function registerRequesterAutoApprove(app: Hono<WorkerEnv>): void {
+export function registerRequesterAutoApprove(app: Hono<AppEnv>): void {
   // Every member may see whether session owners can auto-approve other members' requests; owners and admins change it.
   app.get('/api/workspaces/:id/approvals', async c => {
     const workspaceId = identifier(c.req.param('id'));

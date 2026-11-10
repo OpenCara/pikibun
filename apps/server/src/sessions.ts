@@ -1,4 +1,6 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './authority/index.js';
+import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import type { ApprovalRecord, ChatOptions, Operation, Permission, RunnerBinding, SessionRole, SessionView, SubmitResult, WithdrawResult, WorkspaceRole } from '../../../packages/shared/src/types.js';
@@ -9,7 +11,7 @@ import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { isRevision } from '../../../packages/shared/src/view-patch.js';
 import { hasPermission, managesSession, normalizePermissions, roleSessionCeiling, sessionRoleOf, sessionRolePermissions, validateUserEnv } from '../../../packages/shared/src/policy.js';
 import { redactApproval } from '../../../packages/shared/src/redaction.js';
-import type { AgentRow, AppContext, Env, ModelRow, SessionAccess, SessionRow, WorkerEnv } from './types.js';
+import type { AgentRow, AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
 import { agentVersion, getUser, modelDefinition, requireActiveSession, requireUnfrozen, runnerSessionRecord, sessionRecord, userProfile } from './db.js';
 import {
   auditStatement, autoApprovedRequesters, chooseAutoApprovedRequester, cloneRepositories, crossSessionCall, hostAuthority, hostCommandSession,
@@ -48,7 +50,7 @@ async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask
   const host = await c.env.DB.query<{ models_json: string; capabilities_json: string }>('SELECT models_json, capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
     .bind(row.connector_id).first();
   if (!host) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
-  const capabilities = JSON.parse(host.capabilities_json) as ConnectorCapabilities;
+  const capabilities = parseCapabilities(host.capabilities_json);
   if (capabilities.chatOptions !== true) {
     fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to choose model, reasoning or access.');
   }
@@ -101,10 +103,9 @@ async function chatImages(c: AppContext, row: SessionRow, value: unknown): Promi
   if ('error' in parsed) fail(400, 'invalid_images', parsed.error);
   if (!parsed.images.length) return undefined;
   if (!row.connector_id) fail(400, 'images_unsupported', 'This session\'s runner cannot take images.');
-  const host = await c.env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
-    .bind(row.connector_id).first();
-  if (!host) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
-  if ((JSON.parse(host.capabilities_json) as ConnectorCapabilities).chatImages !== true) {
+  const capabilities = await hostCapabilities(c.env, row.connector_id, { active: true });
+  if (!capabilities) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
+  if (capabilities.chatImages !== true) {
     fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to send images.');
   }
   return parsed.images;
@@ -185,10 +186,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   }
   const session = { id: id(), workspace_id: workspaceId, owner_id: ownerId, title, visibility, policy_version: 1, status: 'provisioning' as const,
     created_at: now(), connector_id: model.connector_id ?? null, connector_owner_id: model.connector_owner_id ?? null };
-  const host = session.connector_id
-    ? await c.env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(session.connector_id).first()
-    : null;
-  const capabilities = JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities;
+  const capabilities = await hostCapabilities(c.env, session.connector_id) ?? parseCapabilities(null);
   // Every session clones its repositories with plain Git; a connector from before that can't run one.
   if (session.connector_id && capabilities.plainGit !== true) {
     fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect): sessions now clone their repositories with plain Git.');
@@ -528,7 +526,7 @@ export async function cloneUnavailable(env: Env, capabilities: ConnectorCapabili
   return undefined;
 }
 
-export function registerSessions(app: Hono<WorkerEnv>): void {
+export function registerSessions(app: Hono<AppEnv>): void {
   app.get('/api/sessions', async c => {
     const actorId = c.get('auth').userId;
     const sessions = (await listSessionAccess(c.env, actorId))
@@ -544,10 +542,7 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
   app.get('/api/sessions/:id', async c => {
     const access = await requireSession(c, identifier(c.req.param('id')), 'read');
     // Readers who cannot see a private host in the catalog still learn that it runs without isolation.
-    const host = access.row.connector_id
-      ? await c.env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(access.row.connector_id).first()
-      : null;
-    const capabilities: unknown = host ? JSON.parse(host.capabilities_json) : null;
+    const capabilities: unknown = await hostCapabilities(c.env, access.row.connector_id);
     // A session that runs directly on its host is as unsandboxed as one on an unsandboxed host.
     const hostUnsandboxed = (typeof capabilities === 'object' && capabilities !== null && 'unsandboxed' in capabilities && capabilities.unsandboxed === true)
       || Number(access.row.host_environment ?? 0) === 1;
@@ -759,9 +754,7 @@ export function registerSessions(app: Hono<WorkerEnv>): void {
       if (!(await workspaceApprovalSettings(c.env.DB, row.workspace_id)).requesterAutoApprove) {
         fail(403, 'requester_auto_approve_disabled', 'This workspace doesn\'t let session owners auto-approve other members\' requests. Its owner or an admin can turn that on in its settings.');
       }
-      const host = row.connector_id ? await c.env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
-        .bind(row.connector_id).first() : null;
-      if (!host || (JSON.parse(host.capabilities_json) as ConnectorCapabilities).requesterAutoApprove !== true) {
+      if ((await hostCapabilities(c.env, row.connector_id, { active: true }))?.requesterAutoApprove !== true) {
         fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to auto-approve other members\' requests.');
       }
     }

@@ -5,6 +5,8 @@ import { rejectUpgrade } from './connector-hub.js';
 import { connectorError } from './connector-transport.js';
 import { authenticateConnectorSocket, refreshPullRequestStates, settlePushCredentials } from './authority/index.js';
 import type { Database } from './db/types.js';
+import { lockInstance } from './db/index.js';
+import { settleNotificationDeliveries } from './notifications.js';
 import { requestUrl, trustForwardedHeaders } from './forwarded.js';
 import { app } from './index.js';
 import { createStaticHandler } from './static.js';
@@ -20,6 +22,7 @@ function errorCode(error: unknown): string | undefined {
   return undefined;
 }
 
+const NOTIFICATION_DRAIN_MS = 15_000;
 const transientDatabaseCodes = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', '57P03'];
 
 /**
@@ -73,6 +76,7 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
   const environment = (url: string) => preview && new URL(url).origin === preview.origin ? previewEnv! : env;
   const hub = env.CONNECTOR_HUB!;
   await migrateWhenReachable(env.DB);
+  const instanceLock = await lockInstance(env.DB);
 
   const timers = [
     // Push credentials no completion settled: pushes their host never reported, and owner-token resets to retry.
@@ -134,6 +138,7 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
   try { await listening.promise; } catch (error) {
     for (const timer of timers) clearInterval(timer);
     await hub.close();
+    await instanceLock.release();
     await env.DB.close();
     throw error;
   }
@@ -150,6 +155,8 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
         if ('closeAllConnections' in server) server.closeAllConnections();
         await hub.close();
         await closed;
+        await settleNotificationDeliveries(NOTIFICATION_DRAIN_MS);
+        await instanceLock.release();
         await env.DB.close();
       })();
       return closing;

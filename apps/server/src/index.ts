@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { WorkerEnv } from './types.js';
+import type { AppEnv } from './types.js';
 import {
   assertVaultConfigured, authenticate, csrfGuard, localOwner, registerAdmin, registerAuth, registerGitAccounts, registerHostAccess,
   registerNetworkPolicies, registerOidc, registerPasswordAuth, registerPushIdentities, registerRepositories, registerRequesterAutoApprove,
@@ -32,7 +32,7 @@ import { registerWorkspaceInvites } from './workspace-invites.js';
 import { compression } from './compression.js';
 import { buildVersion, validVersion } from '../../../packages/shared/src/version.js';
 
-export const app = new Hono<WorkerEnv>();
+export const app = new Hono<AppEnv>();
 
 app.use('*', compression);
 app.use('*', async (c, next) => {

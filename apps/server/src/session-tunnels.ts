@@ -3,7 +3,7 @@ import { parseSessionTunnelReport, type SessionTunnelReport } from '../../../pac
 import { auditStatement, requireCallbackScope, requireSession } from './authority/index.js';
 import { fail, identifier, jsonObject } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
-import type { AppContext, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, SessionRow, AppEnv } from './types.js';
 import { invalidateSessionView } from './view-feed.js';
 
 /*
@@ -52,7 +52,7 @@ export async function stopSessionTunnel(c: AppContext, row: SessionRow, reason?:
   return result.stopped;
 }
 
-export function registerSessionTunnels(app: Hono<WorkerEnv>): void {
+export function registerSessionTunnels(app: Hono<AppEnv>): void {
   // The session panel's Stop button: anyone who can write to the session takes its server offline, as they can stop its work.
   app.post('/api/sessions/:id/tunnel/stop', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'write');

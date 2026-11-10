@@ -1,13 +1,14 @@
 import pg from 'pg';
 import { readMigrations } from './migrations.js';
 import { translateToPostgres } from './sql.js';
-import { ConstraintError, type Database, type ExecResult, type Query, type SqlValue, type Transaction } from './types.js';
+import { ConstraintError, InstanceLockedError, type Database, type ExecResult, type InstanceLock, type Query, type SqlValue, type Transaction } from './types.js';
 
-const { Pool, types } = pg;
+const { Client, Pool, types } = pg;
 // SQLite INTEGER columns are bigint in Postgres; the application reads them as JS numbers (all values are < 2^53).
 types.setTypeParser(types.builtins.INT8, Number);
 
 const MIGRATION_LOCK = 0x70697374; // 'pist'
+const INSTANCE_LOCK = 0x70696b69;
 
 /**
  * Pistead became Pikibun: 0001_schema.sql creates the trigger function as pikibun_raise(), but a database migrated before
@@ -64,7 +65,7 @@ export class PostgresDatabase implements Database {
   private readonly pool: pg.Pool;
   private readonly session: Session;
 
-  constructor(url: string, private readonly migrationsDirectory: string) {
+  constructor(private readonly url: string, private readonly migrationsDirectory: string) {
     this.pool = new Pool({ connectionString: url });
     this.session = { executor: this.pool, changes: 0 };
   }
@@ -109,6 +110,21 @@ export class PostgresDatabase implements Database {
         await executor.query({ text: 'INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)', values: [file.name, new Date().toISOString()] });
       });
     }
+  }
+
+  async lockInstance(): Promise<InstanceLock> {
+    const holder = new Client({ connectionString: this.url });
+    holder.on('error', error => { console.error('pikibun: the single-instance lock connection failed:', error.message); });
+    await holder.connect();
+    let held = false;
+    try {
+      held = (await holder.query('SELECT pg_try_advisory_lock($1) AS held', [INSTANCE_LOCK])).rows[0]?.held === true;
+    } finally {
+      if (!held) await holder.end();
+    }
+    if (!held) throw new InstanceLockedError();
+    let released = false;
+    return { release: async () => { if (!released) { released = true; await holder.end(); } } };
   }
 
   async close(): Promise<void> {

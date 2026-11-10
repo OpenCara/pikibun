@@ -3,9 +3,11 @@ import { dirname } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import { readMigrations, type MigrationFile } from './migrations.js';
 import { statementShape } from './sql.js';
-import { ConstraintError, type Database, type ExecResult, type Query, type SqlValue, type Transaction } from './types.js';
+import { ConstraintError, InstanceLockedError, type Database, type ExecResult, type InstanceLock, type Query, type SqlValue, type Transaction } from './types.js';
 
 const SQLITE_CONSTRAINT = 19;
+const SQLITE_BUSY = 5;
+const IN_MEMORY = ':memory:';
 
 /** `sqlite::memory:`, `sqlite:///abs/path.sqlite` or `sqlite:./relative.sqlite` → the path `DatabaseSync` opens. */
 export function sqlitePath(url: string): string {
@@ -40,10 +42,10 @@ export class SqliteDatabase implements Database {
   private locked = false;
   private closed = false;
 
-  constructor(path: string, private readonly migrationsDirectory: string) {
-    if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
+  constructor(private readonly path: string, private readonly migrationsDirectory: string) {
+    if (path !== IN_MEMORY) mkdirSync(dirname(path), { recursive: true });
     this.handle = new DatabaseSync(path);
-    if (path !== ':memory:') this.handle.exec('PRAGMA journal_mode = WAL');
+    if (path !== IN_MEMORY) this.handle.exec('PRAGMA journal_mode = WAL');
     this.handle.exec('PRAGMA foreign_keys = ON');
     this.handle.exec('PRAGMA busy_timeout = 5000');
     this.changesStatement = this.handle.prepare('SELECT changes() AS changes');
@@ -117,6 +119,21 @@ export class SqliteDatabase implements Database {
     // PRAGMA foreign_keys inside a transaction is a no-op (already ON); PRAGMA defer_foreign_keys must run inside it.
     this.handle.exec(file.sql);
     this.handle.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(file.name, new Date().toISOString());
+  }
+
+  async lockInstance(): Promise<InstanceLock> {
+    if (this.path === IN_MEMORY) return { release: async () => {} };
+    const guard = new DatabaseSync(`${this.path}.lock`);
+    try {
+      guard.exec('PRAGMA busy_timeout = 0');
+      guard.exec('BEGIN EXCLUSIVE');
+    } catch (error) {
+      guard.close();
+      if (error instanceof Error && 'errcode' in error && typeof error.errcode === 'number' && (error.errcode & 0xff) === SQLITE_BUSY) throw new InstanceLockedError();
+      throw error;
+    }
+    let released = false;
+    return { release: async () => { if (!released) { released = true; guard.close(); } } };
   }
 
   async close(): Promise<void> {

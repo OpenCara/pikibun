@@ -3,7 +3,7 @@ import type { Hono } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import { constantTimeEqual, sha256 } from '../../../../../packages/shared/src/crypto.js';
 import { documentKindNames, oauthKinds, type DocumentKind } from '../../../../../packages/shared/src/sources.js';
-import type { AppContext, Env, WorkerEnv } from '../../types.js';
+import type { AppContext, Env, AppEnv } from '../../types.js';
 import { auditStatement } from '../audit.js';
 import { fail, id, now } from '../../http.js';
 import { encryptToken } from '../vault.js';
@@ -180,7 +180,7 @@ function kindParam(c: AppContext): DocumentKind {
   return kind;
 }
 
-export function registerSourceOAuth(app: Hono<WorkerEnv>): void {
+export function registerSourceOAuth(app: Hono<AppEnv>): void {
   app.get('/api/source-accounts/:provider/oauth/start', async c => {
     const kind = kindParam(c);
     const provider = oauthProvider(kind)!;

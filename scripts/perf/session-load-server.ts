@@ -42,7 +42,7 @@ try {
     ...process.env, DATABASE_URL: `sqlite://${join(temporary, "pikibun.sqlite")}`, STORAGE_URL: `file://${join(temporary, "backups")}`,
     APP_ORIGIN: origin, HOST: "127.0.0.1", PORT: String(Number(values.port)), TRUST_PROXY: "false", RUNNER_URL: "",
     TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: testSecret, TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 24 * 3600_000).toISOString(),
-    SESSION_SECRET: secret(), RUNNER_SHARED_SECRET: secret(), VAULT_KEY: secret(), STATIC_DIR: join(repository, "dist", "preview"),
+    SESSION_SECRET: secret(), RUNNER_SHARED_SECRET: secret(), VAULT_KEY: secret(), STATIC_DIR: join(repository, "dist", "client"),
   } });
   for (const deadline = Date.now() + 90_000; ;) {
     if (server.exitCode !== null) throw new Error("The server exited during start-up");

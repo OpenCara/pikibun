@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import type { AuthEvent, AuthInteraction, AuthPrompt, LoginOptions } from "@earendil-works/pi-ai";
-import type { LoginEvent, LoginMethodType, LoginPrompt, LoginProvider } from "./desktop-protocol.js";
+import type { LoginEvent, LoginMethodType, LoginPrompt, LoginProvider } from "./app-host-protocol.js";
 
 // Signing Pi in to a provider from the app (`pikibun host --stdio`), as `pi`'s /login does: the provider's own sign-in
 // flow (a browser page, a device code, an API key) runs here on the host, through Pi's ModelRuntime, and saves its

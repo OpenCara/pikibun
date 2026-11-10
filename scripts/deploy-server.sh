@@ -2,7 +2,7 @@
 # Runs on the deployment server, over Tailscale SSH from .github/workflows/deploy-server.yml:
 #   ssh user@host bash -s -- IMAGE DIR [CLIENT] < scripts/deploy-server.sh
 # DIR holds the server's docker-compose.yml (whose pikibun service has `image: ${PIKIBUN_IMAGE...}`) and its .env.
-# CLIENT, when given, is the web client the server's origin serves: nsh (the Native Shell build, dist/preview), the only
+# CLIENT, when given, is the web client the server's origin serves: nsh (the Native Shell build, dist/client), the only
 # one. It is written to .env as STATIC_DIR, a leftover STATIC_CLIENT is dropped, and any separate preview origin
 # (PREVIEW_ORIGIN, PREVIEW_STATIC_DIR) is removed: the one origin serves the one client. Without it, .env keeps them.
 # Pulls IMAGE, records it as PIKIBUN_IMAGE in .env (so a later `docker compose up -d` keeps it), recreates the pikibun
@@ -17,7 +17,7 @@ timeout=${DEPLOY_HEALTH_TIMEOUT:-180}
 
 case "$client" in
   '') ;;
-  nsh) static_dir=dist/preview ;;
+  nsh) static_dir=dist/client ;;
   *)
     echo "CLIENT must be nsh." >&2
     exit 1

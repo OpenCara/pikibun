@@ -28,12 +28,11 @@ These are observations on this machine, not a claim that every target or the com
 | Additional AppKit smoke test against a disposable local fixture server | Native app displayed its fixture session |
 | NSH native macOS packaging | Built an ad-hoc signed `.app`; strict, deep `codesign` verification passed |
 | NSH web packaging | Built successfully; this does **not** mean it works in a browser |
-| Existing React web, Electron compilation and terminal CLI builds | Built successfully |
-| Existing React web in real Chrome with a disposable browser session | Rendered the fixture workspace without browser errors |
+| Terminal CLI build | Built successfully |
 
 The fixture model is deterministic, not an LLM. Its macOS fixture host is unsandboxed: approving its shell commands
 can run them as the local user. No production session, repository change or model invocation was needed.
-The full repository test suite and a packaged Electron release were not tested.
+The full repository test suite was not tested.
 
 ## Native GitHub OAuth: not passing end-to-end
 

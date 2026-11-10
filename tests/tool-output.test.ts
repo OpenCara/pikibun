@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { boundOutput, excerpt, fitsModel, MODEL_OUTPUT, SAVED_OUTPUT_BYTES, savedOutput, toolOutputPath } from '../apps/runner/src/tool-output.js';
+import { boundOutput, excerpt, fitsModel, KEPT_OUTPUTS, MODEL_OUTPUT, outputsToPrune, SAVED_OUTPUT_BYTES, SavedOutputs, savedOutput, toolOutputPath } from '../apps/runner/src/tool-output.js';
 
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
 const lines = (text: string) => text.split('\n').length;
@@ -89,4 +89,33 @@ test('where even the smallest excerpt doesn\'t fit, the call gets the line sayin
   const shown = await boundOutput(log(20_000), { fits, save: async () => 'tool-output/gh-call.txt' });
   assert.ok(fits(shown));
   assert.match(shown, /^\[… \d+ bytes left out here\. The whole output is in tool-output\/gh-call\.txt/);
+});
+
+test('saved outputs beyond the newest are pruned, oldest first, and only the files the tools name themselves', async () => {
+  assert.deepEqual(outputsToPrune(['a', 'b', 'c'], ['a', 'b', 'c'], 3), []);
+  assert.deepEqual(outputsToPrune(['a', 'b', 'c', 'old'], ['b', 'a', 'c'], 2), ['old', 'b']);
+
+  const name = (index: number) => toolOutputPath('gh', `call-${index}`).split('/')[1]!;
+  const files = new Set(['notes.md', name(1000), name(1001)]);
+  const removed: string[] = [];
+  const directories = {
+    list: async (directory: string) => { assert.equal(directory, 'tool-output'); return [...files]; },
+    remove: async (path: string) => { removed.push(path); files.delete(path.split('/')[1]!); },
+  };
+  const outputs = new SavedOutputs();
+  for (let index = 0; index < KEPT_OUTPUTS; index++) {
+    files.add(name(index));
+    await outputs.saved(`tool-output/${name(index)}`, directories);
+  }
+  assert.deepEqual(removed.sort(), [`tool-output/${name(1000)}`, `tool-output/${name(1001)}`].sort(), 'files from before this process go first');
+  files.add(name(KEPT_OUTPUTS));
+  await outputs.saved(`tool-output/${name(KEPT_OUTPUTS)}`, directories);
+  assert.equal(removed.at(-1), `tool-output/${name(0)}`);
+  assert.ok(files.has('notes.md'));
+  assert.equal(files.size, KEPT_OUTPUTS + 1);
+
+  const calls: string[] = [];
+  await outputs.saved('src/index.ts', { list: async directory => { calls.push(directory); return []; }, remove: async () => {} });
+  await outputs.saved('codemode-output/0a1b2c3d/output.txt', { list: async directory => { calls.push(directory); return ['0a1b2c3d']; }, remove: async () => {} });
+  assert.deepEqual(calls, ['codemode-output']);
 });

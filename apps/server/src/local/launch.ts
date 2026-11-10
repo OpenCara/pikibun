@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { instanceAdmins, localOwner } from '../authority/index.js';
 import { loadConfig } from '../config.js';
+import { InstanceLockedError } from '../db/index.js';
 import { PasswordCommandError, runPasswordCommand } from '../password-accounts-cli.js';
 import { startServer } from '../serve.js';
 import { webBuild } from '../static.js';
@@ -19,12 +20,12 @@ export const githubCallbackPath = '/api/auth/github/callback';
 
 /**
  * The client built for the web: `web/` beside the bundle (the published CLI stages the NSH build there), else the
- * repository's `dist/preview` (`pnpm build`) when running from source: the first that holds Native Shell's web build.
+ * repository's `dist/client` (`pnpm build`) when running from source: the first that holds Native Shell's web build.
  */
 export function defaultStaticDir(): string | undefined {
   let directory = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 6; depth++) {
-    for (const candidate of [join(directory, 'web'), join(directory, 'dist', 'preview')]) {
+    for (const candidate of [join(directory, 'web'), join(directory, 'dist', 'client')]) {
       if (webBuild(candidate) === 'nsh') return candidate;
     }
     directory = dirname(directory);
@@ -114,7 +115,7 @@ async function start(options: LocalServerOptions): Promise<LocalServer> {
   let server;
   try { server = await startServer(config); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+    if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE' || error instanceof InstanceLockedError) {
       throw new LocalServerError(`Port ${state.port} is in use: another Pikibun may already be running here. Stop it, or choose another port with --port.`);
     }
     throw error;

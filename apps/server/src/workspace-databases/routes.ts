@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import type { Env, WorkerEnv, WorkspaceRow } from '../types.js';
+import type { Env, AppEnv, WorkspaceRow } from '../types.js';
 import { assertVaultConfigured, auditStatement, encryptToken, requireMember } from '../authority/index.js';
 import { fail, id, identifier, jsonObject, now } from '../http.js';
 import { DumpImportError, importDump, maxUploadedDumpBytes, type ImportSummary } from './import.js';
@@ -27,7 +27,7 @@ async function requireWorkspaceOwner(env: Env, workspaceId: string, actorId: str
   }
 }
 
-export function registerWorkspaceDatabases(app: Hono<WorkerEnv>): void {
+export function registerWorkspaceDatabases(app: Hono<AppEnv>): void {
   // Every member sees where backups of the workspace's sessions go before creating one; the password never leaves the server.
   app.get('/api/workspaces/:id/database', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');

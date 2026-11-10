@@ -3,7 +3,7 @@ import type { GitProvider } from '../../../../../packages/shared/src/repositorie
 import { gitProviders, pushIdentityKindsByProvider } from '../../../../../packages/shared/src/repositories.js';
 import type { PushIdentity, PushIdentityKind } from '../../../../../packages/shared/src/types.js';
 import { sha256 } from '../../../../../packages/shared/src/crypto.js';
-import type { PushIdentityRow, WorkerEnv } from '../../types.js';
+import type { PushIdentityRow, AppEnv } from '../../types.js';
 import { auditStatement } from '../audit.js';
 import { requireMember } from '../access.js';
 import { appOrigin, fail, id, identifier, jsonObject, now, randomToken } from '../../http.js';
@@ -86,7 +86,7 @@ export function publicIdentity(row: PushIdentityRow): PushIdentity {
     config: JSON.parse(row.config_json) as Record<string, string>, status: row.status, createdBy: row.created_by, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
-export function registerPushIdentities(app: Hono<WorkerEnv>): void {
+export function registerPushIdentities(app: Hono<AppEnv>): void {
   app.get('/api/workspaces/:id/push-identities', async c => {
     const workspaceId = identifier(c.req.param('id'));
     await requireMember(c.env, workspaceId, c.get('auth').userId);

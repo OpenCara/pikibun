@@ -18,16 +18,23 @@ test("preview configuration is explicit: an exact, distinct HTTPS origin, never 
   for (const origin of [production, `${preview}/`, `${preview}/app`, `http://preview.pikibun.com`, `https://user@preview.pikibun.com`, "*.pikibun.com", "null"]) {
     await assert.rejects(loadConfig({ ...environment, PREVIEW_ORIGIN: origin }), /PREVIEW_ORIGIN/, origin);
   }
-  await assert.rejects(loadConfig({ ...environment, PREVIEW_STATIC_DIR: "dist/preview" }), /requires PREVIEW_ORIGIN/);
+  await assert.rejects(loadConfig({ ...environment, PREVIEW_STATIC_DIR: "dist/client" }), /requires PREVIEW_ORIGIN/);
   // The React client is gone: a server still set to serve it says so.
   await assert.rejects(loadConfig({ ...environment, STATIC_CLIENT: "web" }), /React web client was removed/);
   await assert.rejects(loadConfig({ ...environment, APP_ORIGIN: "http://127.0.0.1", LOCAL_MODE: "true",
     LOCAL_CLAIM_SECRET: "x".repeat(43), PREVIEW_ORIGIN: preview }), /PREVIEW_ORIGIN/);
+  const renamed = await loadConfig({ ...environment, STATIC_DIR: "dist/preview" });
+  try {
+    assert.equal(renamed.staticDir, resolve("dist/client"), "a server still set to the build's former directory serves the build where it is now");
+  } finally {
+    await renamed.env.CONNECTOR_HUB!.close();
+    await renamed.env.DB.close();
+  }
   const config = await loadConfig({ ...environment, PREVIEW_ORIGIN: preview });
   try {
-    // Unset, the server serves the NSH build (dist/preview), whether it's built yet or not.
-    assert.equal(config.staticDir, resolve("dist/preview"));
-    assert.deepEqual(config.preview, { origin: preview, staticDir: resolve("dist/preview") });
+    // Unset, the server serves the NSH build (dist/client), whether it's built yet or not.
+    assert.equal(config.staticDir, resolve("dist/client"));
+    assert.deepEqual(config.preview, { origin: preview, staticDir: resolve("dist/client") });
   } finally {
     await config.env.CONNECTOR_HUB!.close();
     await config.env.DB.close();

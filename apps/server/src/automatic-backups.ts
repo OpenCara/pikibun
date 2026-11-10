@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { createBackup } from './backups.js';
-import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 
 /**
  * Automatic backups: a workspace whose owner connected a database of their own can have its sessions backed up there on
@@ -43,7 +43,7 @@ function minutesLater(from: number, minutes: number): string {
  * messages this way too, as `as`: the owner made those schedules.
  */
 export async function asSessionOwner<T>(env: Env, row: Pick<SessionRow, 'owner_id'>, work: (c: AppContext) => Promise<T>, as = 'automatic-backup'): Promise<T> {
-  const app = new Hono<WorkerEnv>();
+  const app = new Hono<AppEnv>();
   // A holder rather than a `let`: TypeScript doesn't see assignments made inside the handler.
   const result: { outcome?: { value: T } | { error: unknown } } = {};
   app.post('/', async c => {

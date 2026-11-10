@@ -1,5 +1,5 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
-import type { HostInspection, LoginProvider } from "../../../runner/src/desktop-protocol";
+import type { HostInspection, LoginProvider } from "../../../runner/src/app-host-protocol";
 import { appCliFolder, installCommand, setHostLauncher, setInstaller, thisComputer, type HostLink, type InstallRun } from "../../src/lib/this-computer";
 import { Button } from "../../src/ui";
 import { ThisComputerPanel } from "../../src/settings/ThisComputer";

@@ -5,7 +5,7 @@ import type { SessionLink, SharedSession, SharedSessionView } from '../../../pac
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
 import { briefEntry, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
-import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import {
   auditStatement, decryptToken, encryptToken, requireConnectorSession, requireSession, requireSessionManager, sessionAccess,
 } from './authority/index.js';
@@ -105,7 +105,7 @@ export function sharedView(view: SessionView, toolOutput: ToolOutput = 'full'): 
 }
 
 /** Public and read-only: register before the cookie authentication every other `/api/*` route requires. */
-export function registerSharedSessions(app: Hono<WorkerEnv>): void {
+export function registerSharedSessions(app: Hono<AppEnv>): void {
   // The token comes in a header rather than the path, so it stays out of URLs and access logs here too.
   app.get('/api/shared', async c => {
     const row = await requireLinkedSession(c, c.req.header('x-share-token'));
@@ -137,7 +137,7 @@ async function requireOwner(c: AppContext, permission: 'read' | 'manage', messag
  * Share links expose a session beyond its workspace, so only its owner can see or create its link. Turning one off only
  * takes that away, which its workspace's owner and admins, who manage every session there, can do too.
  */
-export function registerSessionLinks(app: Hono<WorkerEnv>): void {
+export function registerSessionLinks(app: Hono<AppEnv>): void {
   app.get('/api/sessions/:id/link', async c => {
     const row = await requireOwner(c, 'read', 'Only the session owner can see its share link.');
     const link = await currentLink(c.env, row.id);

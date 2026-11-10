@@ -1,10 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { migrationsDirectory } from './migrations.js';
 import { SqliteDatabase, sqlitePath } from './sqlite.js';
-import type { Database } from './types.js';
+import type { Database, InstanceLock } from './types.js';
 
-export { ConstraintError } from './types.js';
-export type { Database, DatabaseProviderName, ExecResult, Query, SqlValue, Transaction } from './types.js';
+export { ConstraintError, InstanceLockedError } from './types.js';
+export type { Database, DatabaseProviderName, ExecResult, InstanceLock, Query, SqlValue, Transaction } from './types.js';
 
 /**
  * Opens the provider named by the URL scheme: `sqlite:` (`sqlite::memory:`, `sqlite:///abs/path.sqlite`,
@@ -18,6 +18,11 @@ export async function openDatabase(url: string): Promise<Database> {
     return new PostgresDatabase(url, migrationsDirectory('postgres'));
   }
   throw new Error('DATABASE_URL must start with sqlite:, postgres: or postgresql:.');
+}
+
+export async function lockInstance(db: Database): Promise<InstanceLock> {
+  const lockable = db as Database & { lockInstance?: () => Promise<InstanceLock> };
+  return await lockable.lockInstance?.() ?? { release: async () => {} };
 }
 
 /** Test seam: the underlying `node:sqlite` connection of a SQLite database, for synchronous fixture setup and PRAGMA checks. */

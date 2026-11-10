@@ -103,7 +103,7 @@ async function start() {
   if (readState()) stop();
   // The server's dependencies, then the client built for the web.
   run("npx", ["--yes", "pnpm@10.32.1", "install", "--frozen-lockfile"]);
-  await buildWeb(path.join(repo, "dist", "preview"));
+  await buildWeb(path.join(repo, "dist", "client"));
 
   const port = await freePort();
   let url = `http://127.0.0.1:${port}`;
@@ -138,7 +138,7 @@ async function start() {
     DATABASE_URL: `sqlite://${path.join(data, "pikibun.sqlite")}`,
     SESSION_SECRET: secrets.SESSION_SECRET, VAULT_KEY: secrets.VAULT_KEY,
     PASSWORD_AUTH: "true", SIGNUP: "off", ADMIN_USER_IDS: "password:admin",
-    STATIC_DIR: path.join(repo, "dist/preview"), STATIC_CLIENT: "nsh",
+    STATIC_DIR: path.join(repo, "dist/client"), STATIC_CLIENT: "nsh",
   };
   const server = ["--import", "tsx", "apps/server/src/main.ts"];
   // The administrator, its password on standard input (never in argv); already there after a restart.

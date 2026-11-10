@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { ChildSessionSettings } from '../../../packages/shared/src/cross-session.js';
 import type { Database } from './db/types.js';
-import type { WorkerEnv } from './types.js';
+import type { AppEnv } from './types.js';
 import { auditStatement, requireMember } from './authority/index.js';
 import { fail, identifier, jsonObject, now } from './http.js';
 
@@ -21,7 +21,7 @@ export async function workspaceChildSessionSettings(db: Database, workspaceId: s
   return { childModels: Number(row?.child_models ?? 1) === 1 };
 }
 
-export function registerChildSessionSettings(app: Hono<WorkerEnv>): void {
+export function registerChildSessionSettings(app: Hono<AppEnv>): void {
   // Every member may see what their sessions' agents may choose; owners and admins change it.
   app.get('/api/workspaces/:id/child-sessions', async c => {
     const workspaceId = identifier(c.req.param('id'));

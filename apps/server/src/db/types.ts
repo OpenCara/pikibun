@@ -34,6 +34,17 @@ export interface Database {
   close(): Promise<void>;
 }
 
+export interface InstanceLock {
+  release(): Promise<void>;
+}
+
+export class InstanceLockedError extends Error {
+  constructor() {
+    super('Another Pikibun server already serves this database. Pikibun runs as a single instance: stop the other server first.');
+    this.name = 'InstanceLockedError';
+  }
+}
+
 export interface Transaction {
   query<T = Record<string, SqlValue>>(sql: string): Query<T>;
 }

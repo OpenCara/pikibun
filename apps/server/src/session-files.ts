@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './authority/index.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
 import { checkBrowseResult, InvalidBrowseResult, type BrowseResult } from '../../../packages/shared/src/file-browser.js';
@@ -7,7 +8,7 @@ import { checkEntryImage, entryImageRequest } from '../../../packages/shared/src
 import { requireSession } from './authority/index.js';
 import { fail, identifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
-import type { Env, SessionRow, WorkerEnv } from './types.js';
+import type { Env, SessionRow, AppEnv } from './types.js';
 
 /**
  * A worktree path as the file browser asks for it: relative, with no empty, `.` or `..` segment; the worktree's root is
@@ -25,9 +26,7 @@ export function worktreePath(value: string | undefined): string {
 /** Whether the session's host browses files; the configured external runner is trusted to. */
 async function fileBrowserSupported(env: Env, row: SessionRow): Promise<boolean> {
   if (!row.connector_id) return true;
-  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(row.connector_id).first();
-  try { return (JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities).fileBrowser === true; }
-  catch { return false; }
+  return (await hostCapabilities(env, row.connector_id))?.fileBrowser === true;
 }
 
 /**
@@ -52,7 +51,7 @@ function checkedFiles(value: unknown, path: string): SessionFiles {
   return { path, ...result };
 }
 
-export function registerSessionFiles(app: Hono<WorkerEnv>): void {
+export function registerSessionFiles(app: Hono<AppEnv>): void {
   /**
    * The session panel's file browser: one path of the session's worktree on its host, read-only. It takes `write`, as a
    * collaborator could already have the agent read any file there; viewers and share links see only the conversation.

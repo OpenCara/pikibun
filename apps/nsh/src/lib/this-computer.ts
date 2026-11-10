@@ -3,11 +3,11 @@ import { homedir } from "os";
 import nshProcess from "process";
 import type {
   HostEvent, HostInspection, HostRequest, HostState, LoginEvent, LoginMethodType, LoginPrompt, LoginProvider,
-} from "../../../runner/src/desktop-protocol";
+} from "../../../runner/src/app-host-protocol";
 
 // This computer as a host, in the desktop builds (Settings › This Mac, or This Computer): the app runs `pikibun host
 // --stdio` (apps/runner/src/host-cli.ts) and talks to it with JSON lines on its stdin and framed events on its stdout
-// (desktop-protocol.ts). The host's connector state is the CLI's own, so a computer paired with `pikibun connect` (or
+// (app-host-protocol.ts). The host's connector state is the CLI's own, so a computer paired with `pikibun connect` (or
 // the former Electron app's primary server) is adopted as it is; only one of them runs at a time. Hosting lasts while
 // the app is open, and resumes when it opens again if it was running when it quit.
 //
@@ -26,7 +26,7 @@ export const computerTitle = platform.os === "macos" ? "This Mac" : "This Comput
 /** "this Mac" or "this computer", within a sentence. */
 export const computerName = platform.os === "macos" ? "this Mac" : "this computer";
 
-/** desktop-protocol.ts's STDIO_FRAME: the host's own lines on its stdout start with it; anything else is output. */
+/** app-host-protocol.ts's STDIO_FRAME: the host's own lines on its stdout start with it; anything else is output. */
 const STDIO_FRAME = "\u001epikibun ";
 /**
  * The login shells the app may start the command with, and cmd on Windows: bare names, as nsh.json grants them, which

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { adminUserId } from './authority/index.js';
 import { ConnectorHubRegistry } from './connector-hub.js';
@@ -12,7 +13,7 @@ export interface ServerConfig {
   port: number;
   /** Honour `X-Forwarded-Proto`/`X-Forwarded-Host` from a TLS-terminating proxy. */
   trustProxy: boolean;
-  /** The web client's build: the Native Shell client, `dist/preview` by default. */
+  /** The web client's build: the Native Shell client, `dist/client` by default. */
   staticDir: string;
   /** Optional, exact origin serving the NSH preview, with the same API and separate host-only cookies. */
   preview?: { origin: string; staticDir: string };
@@ -37,9 +38,17 @@ const stringVars = [
   'LOCAL_MODE', 'LOCAL_CLAIM_SECRET', 'LOCAL_OWNER_ID', 'PASSWORD_AUTH', 'SIGNUP',
   'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'NOTION_CLIENT_ID', 'NOTION_CLIENT_SECRET', 'DROPBOX_CLIENT_ID', 'DROPBOX_CLIENT_SECRET',
   'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'MICROSOFT_TENANT', 'TENCENT_DOCS_CLIENT_ID', 'TENCENT_DOCS_CLIENT_SECRET',
-  'WEB_PUSH_CONTACT', 'EXPO_ACCESS_TOKEN', 'PIKIBUN_VERSION',
+  'WEB_PUSH_CONTACT', 'PIKIBUN_VERSION',
 ] as const;
 const LOOPBACK = ['127.0.0.1', '::1', 'localhost'];
+const CLIENT_BUILD = 'dist/client';
+const CLIENT_BUILD_BEFORE_RENAME = 'dist/preview';
+
+function clientBuildDirectory(configured: string | undefined): string {
+  const directory = resolve(configured || CLIENT_BUILD);
+  const namesMovedBuild = directory === resolve(CLIENT_BUILD_BEFORE_RENAME) && !existsSync(directory);
+  return namesMovedBuild ? resolve(CLIENT_BUILD) : directory;
+}
 
 /**
  * Builds `Env` from process environment variables: opens the database named by `DATABASE_URL` and, only when it is set,
@@ -84,17 +93,17 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
       if (env.LOCAL_OWNER_ID !== undefined && !/^github:[1-9][0-9]*$/.test(env.LOCAL_OWNER_ID)) throw new ConfigurationError('LOCAL_OWNER_ID must be a GitHub user ID such as github:12345.');
     }
   }
-  const staticDir = resolve(processEnv.STATIC_DIR || 'dist/preview');
+  const staticDir = clientBuildDirectory(processEnv.STATIC_DIR);
   // The React web client is gone: a server still set to serve it says so rather than serving its build as NSH.
   if (processEnv.STATIC_CLIENT && processEnv.STATIC_CLIENT !== 'nsh') {
     throw new ConfigurationError('STATIC_CLIENT: the React web client was removed. Remove STATIC_CLIENT, and STATIC_DIR if it names dist/web, to serve the Native Shell client.');
   }
   if (webBuild(staticDir) === 'other') {
-    throw new ConfigurationError(`STATIC_DIR (${staticDir}) holds a web page that isn't the Native Shell client, such as the removed React client's. Point STATIC_DIR at the NSH build (pnpm build writes it to dist/preview), or leave it unset.`);
+    throw new ConfigurationError(`STATIC_DIR (${staticDir}) holds a web page that isn't the Native Shell client, such as the removed React client's. Point STATIC_DIR at the NSH build (pnpm build writes it to dist/client), or leave it unset.`);
   }
   let preview: ServerConfig['preview'];
   if (processEnv.PREVIEW_ORIGIN) {
-    const previewDir = resolve(processEnv.PREVIEW_STATIC_DIR || 'dist/preview');
+    const previewDir = clientBuildDirectory(processEnv.PREVIEW_STATIC_DIR);
     try {
       const origin = new URL(processEnv.PREVIEW_ORIGIN);
       if (origin.origin !== processEnv.PREVIEW_ORIGIN || origin.protocol !== 'https:' || origin.origin === env.APP_ORIGIN || env.LOCAL_MODE === 'true') throw new Error();
@@ -103,7 +112,7 @@ export async function loadConfig(processEnv: NodeJS.ProcessEnv = process.env): P
       throw new ConfigurationError('PREVIEW_ORIGIN must be a distinct https origin (no path or trailing slash), on a shared server.');
     }
     if (webBuild(previewDir) === 'other') {
-      throw new ConfigurationError(`PREVIEW_STATIC_DIR (${previewDir}) holds a web page that isn't the Native Shell client. Point it at the NSH build (dist/preview).`);
+      throw new ConfigurationError(`PREVIEW_STATIC_DIR (${previewDir}) holds a web page that isn't the Native Shell client. Point it at the NSH build (dist/client).`);
     }
   } else if (processEnv.PREVIEW_STATIC_DIR) {
     throw new ConfigurationError('PREVIEW_STATIC_DIR requires PREVIEW_ORIGIN.');

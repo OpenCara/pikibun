@@ -1,7 +1,7 @@
 // Notifications (docs/notifications.md, apps/server/src/notifications.ts): when a session's agent needs an approval,
 // finishes or fails, its owner and whoever sent it the latest message hear about it on the devices they turned
-// notifications on for: browsers through Web Push, the iPhone and iPad app through Expo's push service, and any open
-// web page or desktop window through the notification feed it polls.
+// notifications on for: browsers through Web Push, and any open web page or desktop window through the notification
+// feed it polls.
 
 /** What a notification says happened to a session. */
 export const notificationKinds = ["approval", "finished", "failed", "test"] as const;
@@ -35,7 +35,7 @@ export interface PikibunNotification {
   createdAt: string;
 }
 
-/** The payload of a Web Push message (the service worker's `push` event) and of an Expo push's `data`. */
+/** The payload of a Web Push message (the service worker's `push` event). */
 export interface NotificationPayload extends PikibunNotification {
   /** The server it came from, so an app signed in elsewhere since doesn't open a session of the wrong server. */
   origin: string;
@@ -43,11 +43,11 @@ export interface NotificationPayload extends PikibunNotification {
   path: string;
 }
 
-/** A device that gets this person's notifications: a browser's push subscription, or the app's push token. */
+/** A device that gets this person's notifications: a browser's push subscription. */
 export interface NotificationDevice {
   id: string;
-  kind: "web" | "expo";
-  /** As the device named itself when it registered ("Chrome on macOS", "iPhone"). */
+  kind: "web";
+  /** As the device named itself when it registered ("Chrome on macOS"). */
   name: string | null;
   createdAt: string;
   /** The device registered through the sign-in this request came with. */

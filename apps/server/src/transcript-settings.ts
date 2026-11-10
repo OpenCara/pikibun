@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import type { Database } from './db/types.js';
-import type { WorkerEnv } from './types.js';
+import type { AppEnv } from './types.js';
 import { auditStatement, requireMember } from './authority/index.js';
 import { fail, identifier, jsonObject, now } from './http.js';
 import { toolOutputs, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
@@ -36,7 +36,7 @@ export async function newSessionToolOutput(db: Database, workspaceId: string): P
   return (await workspaceTranscriptSettings(db, workspaceId)).toolOutput;
 }
 
-export function registerTranscriptSettings(app: Hono<WorkerEnv>): void {
+export function registerTranscriptSettings(app: Hono<AppEnv>): void {
   // Every member may see how transcripts load; owners and admins change it.
   app.get('/api/workspaces/:id/transcripts', async c => {
     const workspaceId = identifier(c.req.param('id'));

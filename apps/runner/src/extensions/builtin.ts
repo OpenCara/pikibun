@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { CODEMODE_OUTPUT_DIRECTORY } from "../tool-output.js";
 import { CodemodeSandbox, type CodemodeResult, type CodemodeRun, type CodemodeRunOptions } from "@earendil-works/pi-codemode";
 import type { Extension, ToolExecutionApi, ToolRegistration } from "@earendil-works/pi-durable";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
@@ -27,8 +28,7 @@ export const CODEMODE_SESSION_WORKERS = 2;
  * that spins (`while (true) {}`) ends here instead of holding its worker and a CPU for good. Scripts can't raise it.
  */
 export const CODEMODE_COMPUTE_LIMIT_MS = 120_000;
-/** Where scripts' full output and images go, in the worktree, for read_file. */
-export const CODEMODE_OUTPUT_DIRECTORY = "codemode-output";
+export { CODEMODE_OUTPUT_DIRECTORY };
 
 let codemodeWorkers = 0;
 

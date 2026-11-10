@@ -1,4 +1,5 @@
 import { constantTimeEqual, sha256 } from '../../../../packages/shared/src/crypto.js';
+import { parseCapabilities, type ConnectorCapabilities } from '../../../../packages/shared/src/connector.js';
 import type { AppContext, Env, SessionRow } from '../types.js';
 import { appOrigin, fail, localMode, localOwnerQuery, loopbackHttp, testMode } from '../http.js';
 
@@ -15,6 +16,13 @@ export interface ConnectorRow {
   models_json: string; capabilities_json: string; removed_at: string | null;
   /** The version its connector reported when it last connected; null where it reported none. */
   connector_version?: string | null;
+}
+
+export async function hostCapabilities(env: Env, connectorId: string | null | undefined, options: { active?: boolean } = {}): Promise<ConnectorCapabilities | null> {
+  if (!connectorId) return null;
+  const host = await env.DB.query<{ capabilities_json: string }>(`SELECT capabilities_json FROM connectors WHERE id = ?${options.active ? ' AND revoked_at IS NULL' : ''}`)
+    .bind(connectorId).first();
+  return host ? parseCapabilities(host.capabilities_json) : null;
 }
 
 export function requireConnectorTLS(env: Env, url: URL): void {

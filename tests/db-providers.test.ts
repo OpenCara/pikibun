@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { ConstraintError, openDatabase, sqliteHandle, type Database } from '../apps/server/src/db/index.js';
+import { ConstraintError, InstanceLockedError, lockInstance, openDatabase, sqliteHandle, type Database } from '../apps/server/src/db/index.js';
 
 // Conformance suite: every provider must give application code the same observable behaviour.
 
@@ -342,4 +342,40 @@ test('sqlite file databases use WAL, foreign keys and relative URLs', async t =>
   await assert.rejects(openDatabase('sqlite://host/db'), /sqlite::memory:/);
   await assert.rejects(openDatabase('mysql://x'), /DATABASE_URL/);
   assert.throws(() => sqliteHandle({ provider: 'postgres' } as unknown as Database), /sqlite provider/);
+});
+
+test('both providers end with the same tables and columns', { skip: postgresUrl ? false : 'TEST_DATABASE_URL is not set; skipping the schema comparison with Postgres' }, async t => {
+  const sqlite = await open(t, 'sqlite::memory:');
+  const postgres = await open(t, postgresUrl!);
+  const sqliteColumns = sqliteHandle(sqlite).prepare(`SELECT m.name AS table_name, p.name AS column_name FROM sqlite_master m JOIN pragma_table_info(m.name) p
+    WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'`).all() as { table_name: string; column_name: string }[];
+  const postgresColumns = await postgres.query<{ table_name: string; column_name: string }>(
+    "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'").all();
+  const named = (columns: { table_name: string; column_name: string }[]) => columns.map(column => `${column.table_name}.${column.column_name}`).sort();
+  assert.deepEqual(named(postgresColumns), named(sqliteColumns));
+});
+
+async function refusesSecondInstance(t: TestContext, url: string): Promise<void> {
+  const first = await openDatabase(url);
+  const second = await openDatabase(url);
+  t.after(() => Promise.all([first.close(), second.close()]));
+  const lock = await lockInstance(first);
+  await assert.rejects(lockInstance(second), InstanceLockedError);
+  await lock.release();
+  await lock.release();
+  const next = await lockInstance(second);
+  await next.release();
+}
+
+test('a database file serves one server at a time', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'pikibun-instance-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  await refusesSecondInstance(t, `sqlite://${join(directory, 'db.sqlite')}`);
+  const memory = await openDatabase('sqlite::memory:');
+  t.after(() => memory.close());
+  await (await lockInstance(memory)).release();
+});
+
+test('a Postgres database serves one server at a time', { skip: postgresUrl ? false : 'TEST_DATABASE_URL is not set; skipping the Postgres instance lock' }, async t => {
+  await refusesSecondInstance(t, postgresUrl!);
 });

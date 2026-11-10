@@ -126,9 +126,8 @@ async function fixture(t: TestContext) {
     const { csrfToken } = await json<{ csrfToken: string }>(await request('GET', '/api/auth/csrf', undefined, { Cookie: cookie }));
     return { user, cookie, request: (method, path, body, headers = {}) => request(method, path, body, { Cookie: cookie, 'X-CSRF-Token': csrfToken, ...headers }) };
   }
-  // The push services: Web Push endpoints and Expo, recorded; `answer` decides what each says.
   const pushes: Push[] = [];
-  let answer = (_url: string): Response => _url.startsWith('https://exp.host/') ? Response.json({ data: [] }) : new Response(null, { status: 201 });
+  let answer = (_url: string): Response => new Response(null, { status: 201 });
   const previousFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = previousFetch; });
   globalThis.fetch = async (input, init) => {
@@ -174,9 +173,8 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   const { device } = await json<{ device: NotificationDevice }>(await f.alice.request('POST', '/api/notifications/devices',
     { kind: 'web', endpoint: browser.endpoint, keys: { p256dh: browser.p256dh, auth: browser.auth }, name: 'Firefox on Linux' }), 201);
   assert.deepEqual({ kind: device.kind, name: device.name, current: device.current }, { kind: 'web', name: 'Firefox on Linux', current: true });
-  await json(await f.alice.request('POST', '/api/notifications/devices', { kind: 'expo', token: 'ExponentPushToken[abcdefghijklmnop]', name: 'iPhone' }), 201);
   const config = await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'));
-  assert.equal(config.devices.length, 2);
+  assert.equal(config.devices.length, 1);
   assert.ok(config.webPushKey && Buffer.from(config.webPushKey, 'base64url').length === 65);
   assert.deepEqual(config.preferences, { approvals: true, finished: true, failed: true, details: true });
   // The same key every time: browsers subscribed with it.
@@ -195,7 +193,6 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   assert.deepEqual((await f.feed(f.carol, carolFrom)).notifications, []);
   assert.deepEqual((await f.feed(f.bob, bobFrom)).notifications, []);
 
-  // Alice's browser and phone got it.
   const web = f.pushes.find(push => push.url === browser.endpoint)!;
   assert.equal(web.headers.get('content-encoding'), 'aes128gcm');
   assert.equal(web.headers.get('urgency'), 'high');
@@ -203,10 +200,6 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   const payload = JSON.parse(browser.decrypt(web.body)) as NotificationPayload;
   assert.deepEqual({ kind: payload.kind, title: payload.title, sessionId: payload.sessionId, origin: payload.origin, path: payload.path },
     { kind: 'approval', title: 'Fix the build', sessionId: f.session.id, origin, path: `/#/s/${f.session.id}` });
-  const expo = f.pushes.find(push => push.url === 'https://exp.host/--/api/v2/push/send')!;
-  const [message] = JSON.parse(new TextDecoder().decode(expo.body)) as { to: string; title: string; body: string; data: NotificationPayload; threadId: string }[];
-  assert.deepEqual({ to: message!.to, title: message!.title, body: message!.body, sessionId: message!.data.sessionId, threadId: message!.threadId },
-    { to: 'ExponentPushToken[abcdefghijklmnop]', title: 'Fix the build', body: 'Waiting for an approval · Team', sessionId: f.session.id, threadId: f.session.id });
 
   // Bob sends the next message: he hears how it ends, as Alice does.
   f.sent(f.bob);
@@ -214,7 +207,7 @@ test('an approval to wait for, a finish and a failure reach the session\'s owner
   await f.reportAll('working', 'done');
   assert.deepEqual((await f.feed(f.alice, aliceFeed.cursor)).notifications.map(n => n.kind), ['finished']);
   assert.deepEqual((await f.feed(f.bob, bobFrom)).notifications.map(n => [n.kind, n.body]), [['finished', 'Finished · Team']]);
-  assert.equal(f.pushes.length, 2, 'Bob has no devices');
+  assert.equal(f.pushes.length, 1, 'Bob has no devices');
   await f.reportAll('working', 'failed');
   assert.deepEqual((await f.feed(f.bob, bobFrom)).notifications.map(n => n.kind), ['finished', 'failed']);
 });
@@ -269,16 +262,11 @@ test('devices are checked, belong to their sign-in, and go when the push service
   await json(await f.bob.request('DELETE', `/api/notifications/devices/${device.id}`));
   assert.deepEqual((await json<NotificationConfig>(await f.bob.request('GET', '/api/notifications/config'))).devices, []);
 
-  // A test notification reaches Alice's devices; a subscription its push service no longer knows, or a token Expo
-  // says isn't registered, is removed.
   await json(await register(f.alice, valid), 201);
-  await json(await register(f.alice, { kind: 'expo', token: 'ExpoPushToken[zyxwvutsrqponmlk]' }), 201);
-  f.setAnswer(url => url.startsWith('https://exp.host/') ? Response.json({ data: [{ status: 'ok', id: 'ticket' }] }) : new Response(null, { status: 201 }));
-  const tested = await json<{ delivered: { web: number; expo: number } }>(await f.alice.request('POST', '/api/notifications/test'));
-  assert.deepEqual(tested.delivered, { web: 1, expo: 1 });
-  f.setAnswer(url => url.startsWith('https://exp.host/') ? Response.json({ data: [{ status: 'error', details: { error: 'DeviceNotRegistered' } }] })
-    : new Response(null, { status: 410 }));
-  assert.deepEqual((await json<{ delivered: { web: number; expo: number } }>(await f.alice.request('POST', '/api/notifications/test'))).delivered, { web: 0, expo: 0 });
+  const tested = await json<{ delivered: { web: number } }>(await f.alice.request('POST', '/api/notifications/test'));
+  assert.deepEqual(tested.delivered, { web: 1 });
+  f.setAnswer(() => new Response(null, { status: 410 }));
+  assert.deepEqual((await json<{ delivered: { web: number } }>(await f.alice.request('POST', '/api/notifications/test'))).delivered, { web: 0 });
   assert.deepEqual((await json<NotificationConfig>(await f.alice.request('GET', '/api/notifications/config'))).devices, []);
 
   // Signing out takes the sign-in's devices with it.

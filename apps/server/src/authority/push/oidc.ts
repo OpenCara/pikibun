@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import type { Env, WorkerEnv } from '../../types.js';
+import type { Env, AppEnv } from '../../types.js';
 import { appOrigin, fail } from '../../http.js';
 import { importRsaPrivateKey, publicJwk, signJwt, type RsaPublicJwk } from './jwt.js';
 
@@ -31,7 +31,7 @@ export async function issuerAssertion(env: Env, input: { subject: string; audien
 }
 
 /** Public discovery documents (no authentication or CSRF); registered before the /api auth middleware. */
-export function registerOidc(app: Hono<WorkerEnv>): void {
+export function registerOidc(app: Hono<AppEnv>): void {
   app.get('/.well-known/openid-configuration', async c => {
     await signingKey(c.env, 404);
     const issuer = appOrigin(c.env);

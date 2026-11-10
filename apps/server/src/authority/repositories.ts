@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { GitProvider, ProviderRepository, ProviderRepositoryList, SessionRepository, TokenGitProvider, WorkspaceRepository, WorkspaceRepositoryList } from '../../../../packages/shared/src/repositories.js';
 import { gitProviderNames, gitProviders, repositoryLimits, repositoryPath, validRepositoryId, validRepositoryName } from '../../../../packages/shared/src/repositories.js';
-import type { Env, RepositoryRow, SessionRow, WorkerEnv } from '../types.js';
+import type { Env, RepositoryRow, SessionRow, AppEnv } from '../types.js';
 import { auditStatement } from './audit.js';
 import { getUser } from '../db.js';
 import { requireMember } from './access.js';
@@ -228,7 +228,7 @@ export async function cloneRepositories(env: Env, workspaceId: string, ownerId: 
   if (!sources.length && !sourcesOptional && !await legacyRepositoryFixture(env, ownerId)) fail(409, sourcesRequired, 'Add at least one source, such as a repository, before starting a session.');
   return { repositories: [], sourceIds: JSON.stringify(sources), githubAuthority: null, credentials: [], sourcesOptional };
 }
-export function registerRepositories(app: Hono<WorkerEnv>): void {
+export function registerRepositories(app: Hono<AppEnv>): void {
   app.get('/api/workspaces/:id/repositories', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;
     await requireMember(c.env, workspaceId, actor);

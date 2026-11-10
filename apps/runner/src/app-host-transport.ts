@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import { STDIO_FRAME } from "./desktop-protocol.js";
+import { STDIO_FRAME } from "./app-host-protocol.js";
 
 // The channel between the Pikibun app and the connector host it runs (`pikibun host --stdio`): JSON lines over stdin
 // and stdout. Messages are plain JSON objects, validated by the receiver.

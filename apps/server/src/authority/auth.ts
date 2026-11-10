@@ -8,7 +8,7 @@ import { isInstanceAdmin } from './admin.js';
 import { getUser, userProfile } from '../db.js';
 import type { Database, Query, SqlValue } from '../db/types.js';
 import { appOrigin, fail, id, identifier, jsonObject, localMode, localOwnerQuery, now, passwordAuthEnabled, randomToken, requireOrigin, signupMode, testMode, text } from '../http.js';
-import type { AppContext, AuthIdentity, Env, UserRow, WorkerEnv } from '../types.js';
+import type { AppContext, AuthIdentity, Env, UserRow, AppEnv } from '../types.js';
 import { assertVaultConfigured, encryptToken } from './vault.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 
@@ -57,7 +57,7 @@ export async function dbResult<T>(operation: Promise<T>): Promise<T> {
   catch { fail(503, 'auth_unavailable', 'Authentication storage is temporarily unavailable.'); }
 }
 
-export const authenticate: MiddlewareHandler<WorkerEnv> = async (c, next) => {
+export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
   // A native app sends only its bearer token: a browser cookie never stands in for it, nor a bearer for a browser.
   // Other Authorization schemes (e.g. a reverse proxy's Basic auth) leave the browser's cookie in charge.
   const authorization = c.req.header('authorization');
@@ -102,7 +102,7 @@ function requireTestBearer(c: AppContext): void {
   }
 }
 
-export const csrfGuard: MiddlewareHandler<WorkerEnv> = async (c, next) => {
+export const csrfGuard: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
     requireOrigin(c);
     // Only this public endpoint authenticates independently of ambient cookies.
@@ -123,7 +123,7 @@ export const csrfGuard: MiddlewareHandler<WorkerEnv> = async (c, next) => {
   await next();
 };
 
-export const privateResponse: MiddlewareHandler<WorkerEnv> = async (c, next) => {
+export const privateResponse: MiddlewareHandler<AppEnv> = async (c, next) => {
   c.header('Cache-Control', 'no-store');
   c.header('Pragma', 'no-cache');
   c.header('Referrer-Policy', 'no-referrer');
@@ -700,7 +700,7 @@ async function testLogin(c: AppContext) {
 }
 
 // Register before a parent's /api/* authenticate + csrfGuard stack. These routes own their guards.
-export function registerAuth(app: Hono<WorkerEnv>): void {
+export function registerAuth(app: Hono<AppEnv>): void {
   app.get('/api/auth/github', privateResponse, c => githubStart(c));
   app.post('/api/auth/github/start', privateResponse, githubInviteStart);
   app.get(CALLBACK_PATH, privateResponse, githubCallback);

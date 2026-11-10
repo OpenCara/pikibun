@@ -10,7 +10,7 @@ import {
 } from './authority/index.js';
 import { modelDefinition } from './db.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
-import type { AgentRow, Env, ModelRow, WorkerEnv } from './types.js';
+import type { AgentRow, Env, ModelRow, AppEnv } from './types.js';
 import { ConstraintError, type Query } from './db/types.js';
 import { ownerHostStatements } from './connectors.js';
 import { modelEnabledSQL } from './host-models.js';
@@ -267,7 +267,7 @@ export async function ensurePersonalWorkspace(env: Env, userId: string): Promise
   }
 }
 
-export function registerCatalog(app: Hono<WorkerEnv>): void {
+export function registerCatalog(app: Hono<AppEnv>): void {
   // The caller's workspaces, their private one first (made here if they have none yet), then the others oldest first.
   app.get('/api/workspaces', async c => {
     const userId = c.get('auth').userId;

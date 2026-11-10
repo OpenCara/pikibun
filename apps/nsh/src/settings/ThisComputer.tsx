@@ -1,7 +1,7 @@
 import { effect, signal, untracked, View } from "nsh";
 import type { ConnectorPairing } from "../../../../packages/shared/src/connector";
 import { listedPrerequisites } from "../../../../packages/shared/src/host-prerequisites";
-import type { HostInspection, HostState, LoginMethodType, PrerequisiteFix } from "../../../runner/src/desktop-protocol";
+import type { HostInspection, HostState, LoginMethodType, PrerequisiteFix } from "../../../runner/src/app-host-protocol";
 import { session } from "../lib/auth";
 import { openExternal } from "../lib/links";
 import { createAction } from "../lib/resource";

@@ -23,7 +23,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ExtensionPrompts, SessionExtensions, settleToolNames, type ExtensionHost, type InputOutcome, type SessionExtension } from "./extensions/adapter.js";
 import { sandboxShellCommand, type CliRun, type PikiSandboxRun, type PikiSession } from "./extensions/piki/command.js";
 import { SessionBuiltins, type OutputFiles } from "./extensions/builtin.js";
-import { boundOutput, MODEL_OUTPUT, toolOutputPath } from "./tool-output.js";
+import { boundOutput, MODEL_OUTPUT, SavedOutputs, toolOutputPath } from "./tool-output.js";
 import type { LoadedSource } from "./extensions/load.js";
 import { messageHash, parseChatImages, type ChatImage } from "../../../packages/shared/src/chat-images.js";
 import { parseUploadChunk, type UploadResult } from "../../../packages/shared/src/file-uploads.js";
@@ -412,6 +412,7 @@ export class RunnerSession {
    * the sandbox, and `write` says whether a person (or the owner's Auto-approve) approved the call, which lets it write
    * through the forge's API as the session owner.
    */
+  readonly #savedOutputs = new SavedOutputs();
   readonly #pikiCalls = new Map<string, { write: boolean; attribution: { initiatedBy: string; mode: "write" | "ask" } }>();
   /** The session's Pi extensions (docs/design/host-extensions.md), where the host has any. */
   #hostExtensions?: SessionExtensions;
@@ -1649,7 +1650,15 @@ export class RunnerSession {
     const state = await this.metadata();
     const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;
     if (run.options?.access === "read") return undefined;
-    return { writeFile: (path, content) => this.sandbox.writeFile(path, content, async () => { await this.recheckTool(attribution); }) };
+    return { writeFile: (path, content) => this.saveOutput(path, content, async () => { await this.recheckTool(attribution); }) };
+  }
+
+  private async saveOutput(path: string, content: string, authorize: SandboxAuthorize): Promise<void> {
+    await this.sandbox.writeFile(path, content, authorize);
+    await this.#savedOutputs.saved(path, {
+      list: directory => this.sandbox.listFiles(directory, authorize),
+      remove: async entry => { await this.sandbox.fileOperation({ kind: "delete", path: entry, recursive: true }, authorize); },
+    }).catch(() => {});
   }
 
   /** What the session gives its extensions: its worktree, their state and settings, and the gate of their tool calls. */
@@ -1699,7 +1708,7 @@ export class RunnerSession {
     const call = this.#pikiCalls.get(callId);
     if (!call) throw new RunnerError(403, "its call no longer runs");
     const path = toolOutputPath(tool, callId);
-    await this.sandbox.writeFile(path, output, async () => { await this.recheckTool(call.attribution); });
+    await this.saveOutput(path, output, async () => { await this.recheckTool(call.attribution); });
     return path;
   }
 

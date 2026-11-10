@@ -338,3 +338,14 @@ export interface RestoreInput {
   binding: RunnerBinding;
   restore: RestoreDescriptor;
 }
+
+export function parseCapabilities(json: string | null | undefined): ConnectorCapabilities {
+  const none = {} as ConnectorCapabilities;
+  if (!json) return none;
+  try {
+    const value: unknown = JSON.parse(json);
+    return value && typeof value === "object" && !Array.isArray(value) ? value as ConnectorCapabilities : none;
+  } catch {
+    return none;
+  }
+}

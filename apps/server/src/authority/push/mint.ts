@@ -1,4 +1,5 @@
 import type { ConnectorCapabilities } from '../../../../../packages/shared/src/connector.js';
+import { parseCapabilities } from '../../../../../packages/shared/src/connector.js';
 import type { GitProvider } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviderNames } from '../../../../../packages/shared/src/repositories.js';
 import type { PushIdentityKind } from '../../../../../packages/shared/src/types.js';
@@ -346,7 +347,7 @@ export async function mintPushToken(env: Env, target: MintTarget): Promise<Minte
       const host = await env.DB.query<{ capabilities_json: string; git_credentials: number | null }>(`SELECT c.capabilities_json, cfg.git_credentials
         FROM connectors c LEFT JOIN connector_configs cfg ON cfg.connector_id = c.id WHERE c.id = ? AND c.owner_id = ?`)
         .bind(target.connectorId, target.ownerId).first();
-      const capabilities = JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities;
+      const capabilities = parseCapabilities(host?.capabilities_json);
       // A connector configured in Pikibun offers them once its owner turned them on there; an older one, once started with
       // --git-credentials.
       const offered = capabilities.hostConfig ? Number(host?.git_credentials ?? 0) === 1 : capabilities.gitCredentials === true;

@@ -4,7 +4,7 @@ import { bundledToolDefinitions as toolDefinitions } from '../../../packages/sha
 import { extensionAvailability, extensionLimits, extensionPackageKey, isPikiExtensionSource, normalizeExtensionSource, parseExtensionsSync, parseHostExtensionsReport,
   parseWorkspaceExtension, type ExtensionAvailability, type ExtensionRequest, type HostExtensionsReport, type InstalledExtension,
   type WorkspaceExtension } from '../../../packages/shared/src/host-extensions.js';
-import type { Env, WorkerEnv } from './types.js';
+import type { Env, AppEnv } from './types.js';
 import {
   auditStatement, authenticateConnector, automaticTools, managedConnector, requireMember, sessionToolSources, workspaceExtensions,
 } from './authority/index.js';
@@ -92,7 +92,7 @@ function withReplacedSwitches(shown: readonly WorkspaceExtension[], extensions: 
 }
 
 /** The connector's routes, authenticated by its own credential (registered before the apps' authentication). */
-export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
+export function registerConnectorExtensions(app: Hono<AppEnv>): void {
   // The connector's sync: what it has installed and how its last requests went; the answer lists those still to do.
   app.post('/api/connectors/self/extensions', async c => {
     const row = await authenticateConnector(c);
@@ -139,7 +139,7 @@ export function registerConnectorExtensions(app: Hono<WorkerEnv>): void {
   });
 }
 
-export function registerExtensions(app: Hono<WorkerEnv>): void {
+export function registerExtensions(app: Hono<AppEnv>): void {
 
   // Every member sees the workspace's extensions, and where its hosts stand with them; owners and admins change them.
   app.get('/api/workspaces/:id/extensions', async c => {

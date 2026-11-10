@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './authority/index.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { base64Bytes, fileUploadLimits, formatBytes, parseUploadChunk, type UploadResult } from '../../../packages/shared/src/file-uploads.js';
 import { signToken, verifyToken } from '../../../packages/shared/src/crypto.js';
@@ -10,7 +11,7 @@ import {
 import { fail, id, identifier, jsonObject, now } from './http.js';
 import { connectorPath } from './connector-transport.js';
 import { runnerJSON, runnerRequest } from './runner.js';
-import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 
 /**
  * Files attached to messages (packages/shared/src/file-uploads.ts). The browser uploads each into the session's
@@ -41,11 +42,8 @@ export async function workspaceAttachmentSettings(db: Database, workspaceId: str
 /** Whether the session's host takes uploads (and, with `direct`, from the desktop app beside it); the configured external runner is trusted to. */
 async function hostUploads(env: Env, row: SessionRow, direct = false): Promise<boolean> {
   if (!row.connector_id) return !direct;
-  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(row.connector_id).first();
-  try {
-    const capabilities = JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities;
-    return capabilities.fileUploads === true && (!direct || capabilities.directUploads === true);
-  } catch { return false; }
+  const capabilities = await hostCapabilities(env, row.connector_id);
+  return capabilities?.fileUploads === true && (!direct || capabilities.directUploads === true);
 }
 
 async function requireUploads(env: Env, row: SessionRow, direct = false): Promise<void> {
@@ -88,7 +86,7 @@ function requireWithinLimit(size: number, settings: AttachmentSettings): void {
   }
 }
 
-export function registerFileUploads(app: Hono<WorkerEnv>): void {
+export function registerFileUploads(app: Hono<AppEnv>): void {
   // Every member may see the limit, which their chat boxes apply; owners and admins change it.
   app.get('/api/workspaces/:id/attachments', async c => {
     const workspaceId = identifier(c.req.param('id'));

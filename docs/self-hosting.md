@@ -58,7 +58,7 @@ Put a reverse proxy with TLS in front of it (Caddy, nginx, Traefik, a cloud load
 
 ## The web client
 
-Servers serve the Native Shell client (`apps/nsh`, built by `pnpm build` into `dist/preview`), the only web client the
+Servers serve the Native Shell client (`apps/nsh`, built by `pnpm build` into `dist/client`), the only web client the
 Docker image and `pikibun serve` ship. The page gets the policy NSH's web runtime needs (`'wasm-unsafe-eval'`, inline
 and `blob:` scripts).
 
@@ -69,7 +69,7 @@ and `blob:` scripts).
 > no longer contain `dist/web`.
 
 A server can also serve the NSH client at a second hostname, with `PREVIEW_ORIGIN` (an exact
-HTTPS origin) and optionally `PREVIEW_STATIC_DIR` (`dist/preview`). Route both hosts to the same listener with TLS,
+HTTPS origin) and optionally `PREVIEW_STATIC_DIR` (`dist/client`). Route both hosts to the same listener with TLS,
 preserving each host in `X-Forwarded-Host`, and register the second origin's `/api/auth/github/callback` (and other
 OAuth callbacks) too. Its sign-in cookies stay host-only, so people sign in separately on each hostname. pikibun.com
 no longer does this: its deploy removes `PREVIEW_ORIGIN` and `PREVIEW_STATIC_DIR`.
@@ -93,9 +93,9 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `VAULT_KEY` | required | Base64url 32-byte key that encrypts stored tokens and secrets; keep it stable, since secrets stored with one key can't be read with another |
 | `HOST`, `PORT` | `0.0.0.0` (`127.0.0.1` with `LOCAL_MODE`), `8787` | Listening address |
 | `TRUST_PROXY` | `false` | Honor `X-Forwarded-Proto`/`X-Forwarded-Host` from a trusted proxy |
-| `STATIC_DIR` | `dist/preview` | The web client's build (Native Shell) |
+| `STATIC_DIR` | `dist/client` | The web client's build (Native Shell) |
 | `PREVIEW_ORIGIN` | none | A second exact HTTPS origin serving NSH with the same backend; register its OAuth callbacks too |
-| `PREVIEW_STATIC_DIR` | `dist/preview` | That origin's NSH build; requires `PREVIEW_ORIGIN` |
+| `PREVIEW_STATIC_DIR` | `dist/client` | That origin's NSH build; requires `PREVIEW_ORIGIN` |
 | `DATABASE_URL` | `sqlite:///data/pikibun.sqlite` | Control-plane database |
 | `DATABASE_WAIT_SECONDS` | `60` | How long start-up retries an unreachable database |
 | `STORAGE_URL` | none | Session backup storage; none means no backups |
@@ -108,7 +108,7 @@ Settings are environment variables, read once at start-up; secrets are never log
 | `OIDC_SIGNING_KEY` | none | RSA private key (PKCS#8 PEM) for Pikibun's OIDC issuer |
 | `GIT_DIRECT` | `on` | Where sessions' Git data goes (see [Network access](hosts.md#network-access)): `on` lets hosts fetch from Git hosts themselves with credentials limited to a repository, `own-hosts` gives credentials only to session owners' own hosts, `off` relays every Git request through the server |
 | `SANDBOX_GITHUB_API` | `on` | Whether sessions' `gh` and other GitHub API clients read the workspace's github.com repositories (see [Network access](hosts.md#network-access)): `on` gives every host running a session a read-only GitHub App token for them, which its egress proxy adds, `own-hosts` only session owners' own hosts, `off` none. It applies to gitlab.com and dev.azure.com too, whose credentials (the session owner's own access tokens) only owners' own hosts ever get |
-| `WEB_PUSH_CONTACT`, `EXPO_ACCESS_TOKEN` | none | [Notifications](notifications.md#for-operators): the contact push services are given with Web Push (the server's `https://` origin by default), and an Expo access token where the app's Expo project requires one |
+| `WEB_PUSH_CONTACT` | none | [Notifications](notifications.md#for-operators): the contact push services are given with Web Push (the server's `https://` origin by default) |
 | `ADMIN_USER_IDS` | none | Comma-separated user IDs of the server's administrators (see [Administration](#administration)) |
 | `RUNNER_URL`, `RUNNER_EVENT_TRANSPORT`, `RUNNER_SHARED_SECRET` | none | Legacy operator-managed runner, for development only; leave empty |
 | `TEST_AUTH_ENABLED`, `TEST_AUTH_SECRET`, `TEST_AUTH_EXPIRES_AT` | off | Local test mode, for development only |
@@ -147,6 +147,14 @@ Every provider is chosen by a URL:
 Migrations run automatically at start-up on whichever database is configured; `pnpm db:migrate` (or `node dist/server/main.js --migrate-only`) applies them without starting the server. Switching providers later means starting with an empty database: there is no data migration between SQLite and Postgres.
 
 Without `STORAGE_URL` the server keeps no session backups, and session owners can't create any, except in workspaces whose owner connected a database of their own. A backup holds a session's conversation, its files and its owner's personal environment values, so whoever can read the backup store can read those sessions. A server that saved backups before `STORAGE_URL` became optional kept them in `/data/backups`: set `STORAGE_URL=file:///data/backups` to download and restore them again.
+
+### One server per database
+
+Run exactly one Pikibun server against a database. The server keeps live state in memory that a second instance would not share: which hosts are connected and the requests in flight to them, live session updates to open pages, the queue that hashes passwords, and notifications still being pushed. Two servers behind one load balancer would each see only some hosts and some sessions.
+
+The server enforces this at start-up, after applying migrations. On SQLite it holds an exclusive lock on `<database file>.lock` beside the database; on Postgres it holds a session-level advisory lock on a connection of its own (so a pooler in transaction mode, which shares connections, can't be between the server and Postgres). A second server on the same database stops at once with `Another Pikibun server already serves this database`. The lock goes when the server stops or its process dies, so a restart needs nothing cleared. Maintenance commands (`--migrate-only`, `--create-admin`, `--reset-password`, `--dump`, `--import-dump`) don't take the lock.
+
+To scale, give the one server more CPU and memory; to stay available, restart it quickly (hosts reconnect by themselves) rather than running a second copy. Replace a running server by stopping it before the new one starts, as `docker compose up -d` does: a rolling update that starts the new one first fails until the old one is gone.
 
 ## Workspace session databases
 

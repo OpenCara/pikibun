@@ -1,9 +1,11 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './authority/index.js';
+import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import { constantTimeEqual, sha256 } from '../../../packages/shared/src/crypto.js';
 import type { RunnerBinding } from '../../../packages/shared/src/types.js';
 import { permissions } from '../../../packages/shared/src/types.js';
 import type { RestoreInput } from '../../../packages/shared/src/connector.js';
-import type { AppContext, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, SessionRow, AppEnv } from './types.js';
 import {
   auditStatement, authenticateConnector, requireConnectorSession, requireSessionCreator, sessionAccess, sessionCreatorSQL,
 } from './authority/index.js';
@@ -58,7 +60,7 @@ function result(c: AppContext, job: RestoreJob, target: SessionRow, created: boo
   } }, created ? 201 : 200);
 }
 
-export function registerRestoreRoutes(app: Hono<WorkerEnv>): void {
+export function registerRestoreRoutes(app: Hono<AppEnv>): void {
   app.post('/api/sessions/:sourceId/backups/:backupId/restore', async c => {
     const sourceId = identifier(c.req.param('sourceId'));
     const backupId = identifier(c.req.param('backupId'), 'backupId');
@@ -93,8 +95,7 @@ export function registerRestoreRoutes(app: Hono<WorkerEnv>): void {
         // Like a move to another host, a restored copy shows tool output as its source does.
         status: 'provisioning', created_at: now(), tool_output: source.tool_output === 'brief' ? 'brief' : 'full' };
       if (target.connector_id) {
-        const host = await c.env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(target.connector_id).first();
-        target.branch = successorBranch(target, JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities);
+        target.branch = successorBranch(target, await hostCapabilities(c.env, target.connector_id) ?? parseCapabilities(null));
       }
       const binding: RunnerBinding = { ...sourceBinding, session: runnerSessionRecord(target) };
       const restoreId = id();

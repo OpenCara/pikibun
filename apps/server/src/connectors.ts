@@ -1,4 +1,5 @@
 import {
+import { parseCapabilities } from '../../../packages/shared/src/connector.js';
   apiCredential, auditStatement, authenticateConnector, authorizeSession, connectorAdmins, connectorHostGrants, type ConnectorRow, egressGrant,
   gitDirect, githubComment, githubIssue, githubMerge, githubRead, gitRelay, legacyRepositoryFixture, managedConnector, pushComplete,
   personalWorkspaceSQL, pushCredential, requireCallbackScope, requireConfiguredWorkspace, requireConnectorTLS, requireManagedWorkspace, requireMember,
@@ -13,8 +14,8 @@ import { sessionActivities, thinkingLevels, type SessionActivity, type ThinkingL
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 // This release's definitions are the ones this server serves: connectors of any later release take them as they are.
 import { bundledToolDefinitions as toolDefinitions } from '../../../packages/shared/src/tool-definitions.js';
-import { CONNECTOR_VERSION_HEADER, validVersion } from '../../../packages/shared/src/version.js';
-import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
+import { CONNECTOR_VERSION_HEADER, connectorTooOld, MINIMUM_CONNECTOR_VERSION, validVersion } from '../../../packages/shared/src/version.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 import type { Query } from './db/types.js';
 import { appOrigin, fail, id, identifier, jsonObject, now, randomToken, requireOrigin, testMode, text } from './http.js';
 import { markSessionChanged } from './session-changes.js';
@@ -180,7 +181,7 @@ async function connectorInfo(env: Env, row: ConnectorInfoRow, viewer?: InfoViewe
   const visible = (workspaceId: string) => !memberships || memberships.has(workspaceId);
   const hostGrants = grants?.filter(grant => visible(grant.workspaceId));
   const { models, disabledModels } = hostModelSettings(JSON.parse(row.models_json), disabled);
-  const capabilities = JSON.parse(row.capabilities_json) as ConnectorCapabilities;
+  const capabilities = parseCapabilities(row.capabilities_json);
   const hostCommandAccess = authority?.level;
   const hostSessions = (owner || authority?.sessions === true) && !row.revoked_at && config?.hostSessions === true
     && hostSessionsSupported(capabilities, !owner);
@@ -252,7 +253,7 @@ export function ownerHostStatements(env: Env, userId: string, workspaceId: strin
   ];
 }
 
-export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
+export function registerConnectorCredentials(app: Hono<AppEnv>): void {
   app.post('/api/connectors/pairings/:id/claim', async c => {
     requireConnectorTLS(c.env, new URL(c.req.url));
     requireOrigin(c);
@@ -310,6 +311,9 @@ export function registerConnectorCredentials(app: Hono<WorkerEnv>): void {
     // The version it names (a header, which servers before it ignore), recorded at every connection: one that names none,
     // or one that isn't a version, clears an earlier one, so the host's page never shows a version it no longer runs.
     const version = validVersion(c.req.header(CONNECTOR_VERSION_HEADER)) ?? null;
+    if (connectorTooOld(version)) {
+      fail(409, 'connector_update_required', `Update this host's connector (npx pikibun@latest connect): this server needs pikibun ${MINIMUM_CONNECTOR_VERSION} or newer.`);
+    }
     const updated = await c.env.DB.query<ConnectorRow>(`UPDATE connectors SET models_json = ?, capabilities_json = ?, connector_version = ? WHERE id = ?
       AND revoked_at IS NULL AND connection_hash = ? RETURNING *`)
       .bind(JSON.stringify(manifest.models), JSON.stringify(manifest.capabilities), version, row.id, row.connection_hash).first();
@@ -370,7 +374,7 @@ export async function createPairing(env: Env, ownerId: string, name: string): Pr
   return { id: pairingId, code, expiresAt: new Date(expires * 1000).toISOString() };
 }
 
-export function registerConnectors(app: Hono<WorkerEnv>): void {
+export function registerConnectors(app: Hono<AppEnv>): void {
   app.post('/api/connectors/pairings', async c => {
     const input = await jsonObject(c, 4096);
     // `workspaceId` is accepted, and ignored, from pages that predate it: a host is no longer paired into a workspace.

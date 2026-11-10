@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
-import type { HostInspection, LoginEvent } from "../apps/runner/src/desktop-protocol.js";
+import type { HostInspection, LoginEvent } from "../apps/runner/src/app-host-protocol.js";
 import { aptFix, fixes } from "../apps/runner/src/prerequisite-fixes.js";
 import { LoginError, LoginSession, loginEvent, loginFailure, loginProviders, runLogin, type LoginRuntime } from "../apps/runner/src/pi-login.js";
 import { listedPrerequisites } from "../packages/shared/src/host-prerequisites.js";

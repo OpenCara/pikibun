@@ -31,7 +31,7 @@ else if (a[0] === 'inspect' || (a[0] === 'image' && a[1] === 'inspect')) console
 }
 
 test("Actions deployment serves NSH from the origin, removes the preview origin and keeps other settings", { skip: process.platform === "win32" }, async t => {
-  const f = await fixture(t, "APP_ORIGIN=https://pikibun.com\nPREVIEW_ORIGIN=https://preview.pikibun.com\nPREVIEW_STATIC_DIR=dist/preview\nSESSION_SECRET=keep-this-setting\n");
+  const f = await fixture(t, "APP_ORIGIN=https://pikibun.com\nPREVIEW_ORIGIN=https://preview.pikibun.com\nPREVIEW_STATIC_DIR=dist/client\nSESSION_SECRET=keep-this-setting\n");
   const result = f.run("nsh");
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const env = await readFile(join(f.root, ".env"), "utf8");

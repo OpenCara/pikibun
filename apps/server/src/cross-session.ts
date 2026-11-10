@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import { accessModes, thinkingLevels, type AccessMode, type ChatOptions, type SessionView, type SubmitResult, type ThinkingLevel, type WorkspaceRole } from '../../../packages/shared/src/types.js';
 import type { ConnectorCapabilities, LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { hasPermission, workspaceSessionPermissions } from '../../../packages/shared/src/policy.js';
@@ -18,7 +19,7 @@ import { isLinkShared } from './session-links.js';
 import { sessionView, transcriptDisplay } from './view-feed.js';
 import { usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
-import type { AppContext, Env, ModelRow, SessionAccess, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
 
 /**
  * Cross-session communication: the sessions tool (packages/shared/src/cross-session.ts), with which a session's agent
@@ -423,7 +424,7 @@ async function advertised(env: Env, model: Pick<ModelRow, 'provider' | 'model_id
       .bind(model.connector_id).first();
     let offer: HostOffer | null = null;
     try {
-      if (host) offer = { chatOptions: (JSON.parse(host.capabilities_json) as ConnectorCapabilities).chatOptions === true, models: JSON.parse(host.models_json) as LocalModelSummary[] };
+      if (host) offer = { chatOptions: parseCapabilities(host.capabilities_json).chatOptions === true, models: JSON.parse(host.models_json) as LocalModelSummary[] };
     } catch { offer = null; }
     offers.set(model.connector_id, offer);
   }
@@ -552,7 +553,7 @@ async function notify(env: Env, message: MessageRow): Promise<{ delivered: strin
   });
 }
 
-export function registerCrossSession(app: Hono<WorkerEnv>): void {
+export function registerCrossSession(app: Hono<AppEnv>): void {
   // Only what the viewer can read themselves: a linked session they can't open isn't named.
   app.get('/api/sessions/:id/connections', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');

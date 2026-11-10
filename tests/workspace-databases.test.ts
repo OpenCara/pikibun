@@ -6,7 +6,7 @@ import test, { type TestContext } from 'node:test';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import pg from 'pg';
-import type { Env, WorkerEnv } from '../apps/server/src/types.js';
+import type { Env, AppEnv } from '../apps/server/src/types.js';
 import type { RunnerBinding, WorkspaceDatabase } from '../packages/shared/src/types.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { registerBackups } from '../apps/server/src/backups.js';
@@ -130,7 +130,7 @@ async function fixture(t: TestContext) {
     'owner-session': snapshotOf('owner-session', 'test:owner', 'Owner', 'Owner session'),
   };
   const snapshot = snapshots.session!;
-  const app = new Hono<WorkerEnv>();
+  const app = new Hono<AppEnv>();
   // Cookie/CSRF are covered by control-plane tests; this seam supplies an authenticated actor.
   app.use('/api/*', async (c, next) => {
     c.set('auth', { userId: c.req.header('x-test-user') ?? 'test:owner', tokenHash: 'test', csrfToken: 'test', client: 'browser' });

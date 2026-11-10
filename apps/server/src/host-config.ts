@@ -5,7 +5,7 @@ import { isPikiExtensionSource } from '../../../packages/shared/src/host-extensi
 import { defaultHostBrowserConfig, parseHostBrowserConfig } from '../../../packages/shared/src/browser.js';
 import { defaultHostTunnelConfig, parseHostTunnelConfig } from '../../../packages/shared/src/tunnel.js';
 import { pikiExtension } from '../../../packages/shared/src/piki-extensions.js';
-import type { Env, WorkerEnv } from './types.js';
+import type { Env, AppEnv } from './types.js';
 import { auditStatement, managedConnector } from './authority/index.js';
 import { fail, jsonObject, now } from './http.js';
 
@@ -100,7 +100,7 @@ function upsert(settings: readonly (keyof HostConfig)[]): string {
   RETURNING connector_id`;
 }
 
-export function registerHostConfig(app: Hono<WorkerEnv>): void {
+export function registerHostConfig(app: Hono<AppEnv>): void {
   // The settings to change, as the host's page sends what its user changed; the rest keep their values. Compaction is
   // one setting, sent whole. Applying them is the connector's: it reads them within a minute.
   app.patch('/api/connectors/:id/config', async c => {

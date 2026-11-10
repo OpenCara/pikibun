@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './authority/index.js';
 import { accessModes, scheduleToolActions, type AccessMode, type ScheduleToolAction, type ScheduleToolResult, type SessionSchedule, type SubmitResult } from '../../../packages/shared/src/types.js';
 import { CronError, isTimeZone, nextCronTime, parseCron, scheduleToolTarget } from '../../../packages/shared/src/cron.js';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
@@ -7,7 +8,7 @@ import { auditStatement, requireCallbackScope, requireSession, requireToolCall, 
 import { requireUnfrozen } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
 import { submitMessage } from './sessions.js';
-import type { AppContext, Env, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, Env, SessionRow, AppEnv } from './types.js';
 
 /**
  * Scheduled prompts: messages the server sends a session's agent on a cron schedule, so that a session can wake up and
@@ -95,10 +96,9 @@ async function ownSession(c: AppContext): Promise<SessionRow> {
 async function requireAccessSupported(env: Env, row: SessionRow, access: AccessMode): Promise<void> {
   if (access === 'approval') return;
   if (!row.connector_id) fail(400, 'options_unsupported', 'This session\'s runner cannot change access; schedule it with approval.');
-  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ? AND revoked_at IS NULL')
-    .bind(row.connector_id).first();
-  if (!host) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
-  if ((JSON.parse(host.capabilities_json) as { chatOptions?: unknown }).chatOptions !== true) {
+  const capabilities = await hostCapabilities(env, row.connector_id, { active: true });
+  if (!capabilities) fail(409, 'connector_unavailable', 'The session\'s host is no longer available.');
+  if (capabilities.chatOptions !== true) {
     fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to schedule read-only or auto-approved prompts.');
   }
 }
@@ -330,7 +330,7 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
   return c.json({ schedule: scheduleRecord(await updateSchedule(c.env, row, change, current, fields)) } satisfies ScheduleToolResult);
 }
 
-export function registerScheduledPrompts(app: Hono<WorkerEnv>) {
+export function registerScheduledPrompts(app: Hono<AppEnv>) {
   app.get('/api/sessions/:id/schedules', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');
     const rows = await c.env.DB.query<ScheduleRow>('SELECT * FROM session_schedules WHERE session_id = ? ORDER BY created_at, id').bind(row.id).all();

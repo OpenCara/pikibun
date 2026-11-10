@@ -1,4 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
+import { hostCapabilities } from './authority/index.js';
 import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import type { AppContext, Env, SessionAccess, SessionRow } from './types.js';
 import { auditStatement, requireSessionManager } from './authority/index.js';
@@ -15,11 +16,6 @@ import { invalidateSessionView } from './view-feed.js';
  * nothing. It is cleared at once only when the host refused, as it does before changing anything.
  */
 
-async function hostCapabilities(env: Env, connectorId: string): Promise<ConnectorCapabilities | null> {
-  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(connectorId).first();
-  try { return JSON.parse(host?.capabilities_json ?? 'null') as ConnectorCapabilities | null; }
-  catch { return null; }
-}
 
 /** The host's answer to a pack. */
 interface PackResult { packed: true; files?: number; clones?: number; bytes?: number }

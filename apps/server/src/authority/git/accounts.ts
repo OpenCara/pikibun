@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { GitAccount, GitProvider, ProviderRepository, ProviderRepositoryList, TokenGitProvider } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviderHosts, gitProviderNames, gitProviders, plainRepositoryPath, repositoryLimits, validGitHost, validRepositoryId, validRepositoryName } from '../../../../../packages/shared/src/repositories.js';
-import type { Env, GitCredentialRow, WorkerEnv } from '../../types.js';
+import type { Env, GitCredentialRow, AppEnv } from '../../types.js';
 import { auditAfterChange, auditStatement } from '../audit.js';
 import { revokeGitHubToken } from '../auth.js';
 import { getUser } from '../../db.js';
@@ -140,7 +140,7 @@ export function accountInput(input: Record<string, unknown>) {
   return { provider, host, organization, username, token };
 }
 
-export function registerGitAccounts(app: Hono<WorkerEnv>): void {
+export function registerGitAccounts(app: Hono<AppEnv>): void {
   app.get('/api/git/accounts', async c => {
     const userId = c.get('auth').userId;
     const user = await getUser(c.env, userId);

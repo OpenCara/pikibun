@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './hosts.js';
 import { bindingRemote, gitProviderNames } from '../../../../packages/shared/src/repositories.js';
 import { defaultNetworkPolicy, egressGitServices, egressGrantPolicy, egressLfsService, egressPushService, GIT_DIRECT_CACHE_SECONDS, packageRegistryDomains, parseNetworkPolicy,
   type EgressGitService, type EgressGrant, type GitDirectAccess, type GitDirectGrant, type NetworkPolicy } from '../../../../packages/shared/src/network.js';
@@ -6,7 +7,7 @@ import { sessionBranchRefusal, type PushCommand } from '../../../../packages/sha
 import { fetchGit, gitUpstreamHeaders } from '../../../../packages/shared/src/git-transfer.js';
 import { hasPermission } from '../../../../packages/shared/src/policy.js';
 import type { ConnectorCapabilities } from '../../../../packages/shared/src/connector.js';
-import type { AppContext, Env, RepositoryRow, SessionRow, WorkerEnv } from '../types.js';
+import type { AppContext, Env, RepositoryRow, SessionRow, AppEnv } from '../types.js';
 import type { Database } from '../db/types.js';
 import { auditStatement } from './audit.js';
 import { requireMember, sessionAccess } from './access.js';
@@ -42,7 +43,7 @@ function policyResponse(policy: NetworkPolicy) {
   return { policy, packageRegistryDomains };
 }
 
-export function registerNetworkPolicies(app: Hono<WorkerEnv>): void {
+export function registerNetworkPolicies(app: Hono<AppEnv>): void {
   // Every member may see what their sessions can reach; owners and admins change it.
   app.get('/api/workspaces/:id/network-policy', async c => {
     const workspaceId = identifier(c.req.param('id'));
@@ -68,9 +69,7 @@ export function registerNetworkPolicies(app: Hono<WorkerEnv>): void {
 }
 
 async function connectorAcceptsGitServers(env: Env, connectorId: string): Promise<boolean> {
-  const host = await env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(connectorId).first();
-  try { return (JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities).gitServers === true; }
-  catch { return false; }
+  return (await hostCapabilities(env, connectorId))?.gitServers === true;
 }
 
 /**

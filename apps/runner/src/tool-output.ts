@@ -17,6 +17,13 @@ export const SHOWN_OUTPUT = { bytes: 44 * 1024, lines: 1600 } as const;
 export const SAVED_OUTPUT_BYTES = 1024 * 1024 - 1024;
 /** Where long outputs are saved, in the worktree. */
 export const TOOL_OUTPUT_DIRECTORY = "tool-output";
+export const CODEMODE_OUTPUT_DIRECTORY = "codemode-output";
+export const KEPT_OUTPUTS = 40;
+
+const PRUNED_ENTRIES = new Map<string, RegExp>([
+  [TOOL_OUTPUT_DIRECTORY, /^[A-Za-z0-9_-]+-[0-9a-f]{8}\.txt$/],
+  [CODEMODE_OUTPUT_DIRECTORY, /^[0-9a-f]{8}$/],
+]);
 
 export type OutputLimits = { readonly bytes: number; readonly lines: number };
 
@@ -144,4 +151,31 @@ export async function boundOutput(text: string, options: BoundOptions = {}): Pro
   }
   // Where even that doesn't fit, only the line saying where the output is: never one pi-durable would cut again.
   return fits(shown) ? shown : note(byteLength(text));
+}
+
+export function outputsToPrune(existing: readonly string[], savedNewestLast: readonly string[], keep = KEPT_OUTPUTS): string[] {
+  if (existing.length <= keep) return [];
+  const savedOrder = new Map(savedNewestLast.map((name, index) => [name, index]));
+  const savedBeforeThisProcess = -1;
+  const oldestFirst = [...existing].sort((a, b) => (savedOrder.get(a) ?? savedBeforeThisProcess) - (savedOrder.get(b) ?? savedBeforeThisProcess));
+  return oldestFirst.slice(0, existing.length - keep);
+}
+
+export interface OutputDirectories {
+  list(directory: string): Promise<string[]>;
+  remove(path: string): Promise<void>;
+}
+
+export class SavedOutputs {
+  readonly #savedNewestLast = new Map<string, string[]>();
+
+  async saved(path: string, directories: OutputDirectories): Promise<void> {
+    const [directory, entry] = path.split("/");
+    const prunable = directory ? PRUNED_ENTRIES.get(directory) : undefined;
+    if (!directory || !entry || !prunable?.test(entry)) return;
+    const order = [...(this.#savedNewestLast.get(directory) ?? []).filter(name => name !== entry), entry].slice(-KEPT_OUTPUTS);
+    this.#savedNewestLast.set(directory, order);
+    const existing = (await directories.list(directory)).filter(name => prunable.test(name));
+    for (const name of outputsToPrune(existing, order)) await directories.remove(`${directory}/${name}`);
+  }
 }

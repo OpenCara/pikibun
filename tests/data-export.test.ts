@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { Hono } from 'hono';
-import type { Env, WorkerEnv } from '../apps/server/src/types.js';
+import type { Env, AppEnv } from '../apps/server/src/types.js';
 import { exportSession, exportWorkspace, registerDataExports, type SessionExport, type WorkspaceExport } from '../apps/server/src/data-export.js';
 import { testDatabase } from './helpers/control-plane.js';
 
@@ -70,7 +70,7 @@ async function fixture(t: TestContext) {
       ('audit-private','workspace','member-private','test:member','session.created','{"note":"${memberPrivateActivity}"}','2026-01-04'),
       ('audit-other','other',NULL,'test:outsider','workspace.create','{}','2026-01-01');
   `);
-  const app = new Hono<WorkerEnv>();
+  const app = new Hono<AppEnv>();
   // Cookie/CSRF are covered by control-plane tests; this seam supplies an authenticated actor.
   app.use('/api/*', async (c, next) => {
     c.set('auth', { userId: c.req.header('x-test-user') ?? 'test:owner', tokenHash: 'test', csrfToken: 'test', client: 'browser' });

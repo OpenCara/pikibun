@@ -15,7 +15,7 @@ export { adminUserId, instanceAdmins, registerAdmin } from './admin.js';
 export { INVALID_LINK, INVITE_TOKEN, joinRequestStatement, requireInvitedWorkspace } from './invites.js';
 
 // Hosts: who a connector is, and whether it still serves a session.
-export { authenticateConnector, authenticateConnectorSocket, type ConnectorRow, requireCallbackScope, requireConnectorSession, requireConnectorTLS } from './hosts.js';
+export { authenticateConnector, authenticateConnectorSocket, type ConnectorRow, hostCapabilities, requireCallbackScope, requireConnectorSession, requireConnectorTLS } from './hosts.js';
 
 // Access: membership and roles, each person's access to a session, and what the relay may ask a session's host.
 export {

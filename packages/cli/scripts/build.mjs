@@ -3,7 +3,7 @@
 //   for that command. Dependencies stay external, installed from npm-shrinkwrap.json; code splitting keeps the server's
 //   optional drivers (Postgres, S3), which a local server never loads, out of the code every command runs.
 // - dist/pikibun.js: the launcher that checks the Node.js version before loading the rest.
-// - dist/web and dist/migrations: the web app (the Native Shell client, the repository's dist/preview) and the database
+// - dist/web and dist/migrations: the web app (the Native Shell client, the repository's dist/client) and the database
 //   migrations the local server serves and applies.
 import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -30,8 +30,8 @@ await Promise.all([
   }),
 ]);
 
-const web = join(repository, "dist", "preview");
-if (!existsSync(join(web, "index.html"))) throw new Error("dist/preview is missing: run `pnpm build` at the repository root first.");
+const web = join(repository, "dist", "client");
+if (!existsSync(join(web, "index.html"))) throw new Error("dist/client is missing: run `pnpm build` at the repository root first.");
 // Without the build's precompressed copies (.br, .gz): the server compresses what it sends itself and never serves them.
 cpSync(web, join(out, "web"), { recursive: true, filter: source => !/\.(?:br|gz)$/.test(source) });
 cpSync(join(repository, "apps", "server", "migrations"), join(out, "migrations"), { recursive: true });
