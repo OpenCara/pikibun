@@ -430,6 +430,8 @@ test('a sandboxed session an agent starts, messages or notifies runs on Auto-app
   const worker = (started.body.session as CrossSessionSummary).id;
   assert.equal((started.body.message as CrossSessionMessage).access, 'auto');
   assert.deepEqual(sentAccess(), ['auto', true], 'it merges without asking too, as the message that started it does');
+  const audited = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'session.cross_session.sent' ORDER BY rowid DESC LIMIT 1").get()!;
+  assert.deepEqual([JSON.parse(String(audited.detail_json)).inheritedAccess, JSON.parse(String(audited.detail_json)).inheritedAutoMerge], ['auto', true]);
 
   const sent = await f.tool('session-a', ownerId, auto, { action: 'send', targetSessionId: worker, message: 'And test it' });
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
@@ -452,7 +454,7 @@ test('a sandboxed session an agent starts, messages or notifies runs on Auto-app
   f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?').run(JSON.stringify(capabilities), 'sandbox-host');
 
   // The worker's own Auto-approve message asked session-b for a review, to be notified of its outcome.
-  const inWorker = f.admit(worker, ownerId, { access: 'auto' });
+  const inWorker = f.admit(worker, ownerId, { access: 'auto', autoMerge: true });
   const message = { id: 'review-1', submissionId: 'review-sub' };
   f.sqlite.prepare(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, origin_admission_id, origin_call_id,
       submission_id, conversation_id, hops, chain_json, access, notify_status, created_at, updated_at) VALUES (?,?,?,?,?,'send',?,'call-review',?,'0',1,?,'approval','pending',?,?)`)
@@ -465,7 +467,20 @@ test('a sandboxed session an agent starts, messages or notifies runs on Auto-app
   assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: message.id, delivered: `${message.id}-n` }]);
   assert.equal(last().sessionId, worker);
   assert.equal(last().body.requestId, `xs:${message.id}-n`);
-  assert.deepEqual(sentAccess(), ['auto', undefined], 'its outcome comes back on Auto-approve, as the message that sent it went');
+  assert.deepEqual(sentAccess(), ['auto', undefined], 'its outcome comes back on Auto-approve, as the message that sent it went, but never merges without asking');
+
+  const asked = { id: 'side-1', submissionId: 'side-sub' };
+  f.sqlite.prepare(`INSERT INTO session_messages (id, workspace_id, origin_session_id, target_session_id, actor_id, kind, origin_admission_id, origin_call_id,
+      submission_id, conversation_id, hops, chain_json, notify_status, created_at, updated_at) VALUES (?,?,?,?,?,'ask',?,'call-side',?,'7',1,?,'pending',?,?)`)
+    .run(asked.id, f.workspace.id, worker, 'session-b', ownerId, inWorker, asked.submissionId, JSON.stringify([worker]), at, at);
+  reviewer.view.conversations.push({ id: '7', mode: 'ask' });
+  reviewer.view.entries.push({ id: '7:80', kind: 'message', role: 'user', text: `[Pikibun cross-session side ask xs:${asked.id} \u00b7 \u2026]\n\nHow?`, conversationId: '7' },
+    { id: '7:81', kind: 'message', role: 'assistant', text: 'Like this.', conversationId: '7' });
+  reviewer.view.queue!.push({ submissionId: asked.submissionId, actorId: ownerId, mode: 'ask', status: 'settled' });
+  await nextView();
+  assert.deepEqual(await runCrossSessionNotifications(f.env), [{ messageId: asked.id, delivered: `${asked.id}-n` }]);
+  assert.equal(last().body.requestId, `xs:${asked.id}-n`);
+  assert.deepEqual(sentAccess(), [undefined, undefined], 'a side ask\'s answer comes back asking, as a side ask never carries access');
 });
 
 type ChatOptionsSent = { access?: string; autoMerge?: boolean };

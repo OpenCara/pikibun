@@ -250,10 +250,10 @@ async function sandboxedWithAccess(env: Env, row: Pick<SessionRow, 'connector_id
 }
 
 /**
- * A sandboxed session runs the messages an agent sends it, starts it with or notifies it with on Auto-approve by default,
- * as its chat box does, when they come from the session owner's own Auto-approve message (merging without asking too where
- * that message did) and go to a session of theirs. Any other message keeps asking: none runs with more than the one that
- * sent it.
+ * A sandboxed session runs the messages an agent sends it or starts it with on Auto-approve by default, as its chat box
+ * does, when they come from the session owner's own Auto-approve message (merging without asking too where that message
+ * did) and go to a session of theirs; a notification of their outcome comes back the same way, without the merges. Any
+ * other message keeps asking: none runs with more than the one that sent it.
  */
 async function inheritedAccess(env: Env, admission: Pick<AdmissionRow, 'access' | 'auto_merge' | 'actor_id'>, origin: Pick<SessionRow, 'owner_id'>,
   target: Pick<SessionRow, 'owner_id' | 'connector_id' | 'host_environment'>): Promise<Pick<ChatOptions, 'access' | 'autoMerge'>> {
@@ -304,7 +304,7 @@ async function deliver(call: Call, target: SessionRow, kind: 'ask' | 'send' | 'c
     c.env.DB.query('UPDATE session_messages SET submission_id = ?, conversation_id = ?, notify_status = ?, updated_at = ? WHERE id = ?')
       .bind(result.submissionId, result.conversationId, notify ? 'pending' : null, updated, messageId),
     auditStatement(c.env, actorId, 'session.cross_session.sent', origin.workspace_id, origin.id, { messageId, kind, targetSessionId: target.id, hops, callId,
-      ...(notify ? { notify: true } : {}) }),
+      ...(notify ? { notify: true } : {}), ...(inherited.access ? { inheritedAccess: inherited.access } : {}), ...(inherited.autoMerge ? { inheritedAutoMerge: true } : {}) }),
   ]);
   const row: MessageRow = { id: messageId, workspace_id: origin.workspace_id, origin_session_id: origin.id, target_session_id: target.id, actor_id: actorId, kind,
     origin_admission_id: admission.id, origin_call_id: callId, submission_id: result.submissionId, conversation_id: result.conversationId, hops,
@@ -465,9 +465,11 @@ async function notify(env: Env, message: MessageRow): Promise<{ delivered: strin
       if (!granted) fail(403, 'audience_changed', 'The two sessions\' readers changed since the message was sent.');
     }
     const notifyId = `${message.id}-n`;
-    const sender = message.origin_admission_id ? await env.DB.query<Pick<AdmissionRow, 'access' | 'auto_merge' | 'actor_id'>>(
-      'SELECT access, auto_merge, actor_id FROM run_admissions WHERE id = ? AND session_id = ?').bind(message.origin_admission_id, origin.id).first() : null;
-    const inherited = sender && sender.actor_id === message.actor_id ? await inheritedAccess(env, sender, origin, origin) : {};
+    // The outcome of a message (not a side ask) comes back on Auto-approve as that message went, but never merges without
+    // asking: its reply is the other session's, which other people writing there may steer.
+    const sender = message.kind !== 'ask' && message.origin_admission_id ? await env.DB.query<Pick<AdmissionRow, 'access' | 'actor_id'>>(
+      'SELECT access, actor_id FROM run_admissions WHERE id = ? AND session_id = ?').bind(message.origin_admission_id, origin.id).first() : null;
+    const inherited = sender && sender.actor_id === message.actor_id ? { access: (await inheritedAccess(env, sender, origin, origin)).access } : {};
     const actor = await getUser(env, message.actor_id);
     const header = crossSessionHeader({ id: notifyId, kind: 'notify', hops: Number(message.hops) + 1 }, target, { id: message.actor_id, login: actor?.github_login }, { id: message.id });
     const body = `Its ${message.kind === 'ask' ? 'side ask' : 'message'} ended: ${outcome.status}${outcome.failed ? ' (its model request failed)' : ''}.`

@@ -36,8 +36,10 @@ session's owner on someone else's behalf. The control plane checks, on each call
 5. `access: auto` only from the owner's Auto-approve message, and only to a session the actor owns.
 6. A `send` or `create` that names no access inherits Auto-approve (`inheritedAccess`) only where rule 5 would allow it
    and the target session is sandboxed (no unsandboxed host, not run on its host) on a host taking chat options; the
-   origin admission's `auto_merge` comes with it. Its notification inherits it from the same admission, delivered into
-   the origin under the same conditions. Anything else stays `approval`, so no message runs with more than its sender's.
+   origin admission's `auto_merge` comes with it, and the audit records `inheritedAccess`. Its notification (not a side
+   ask's) inherits the access, never `auto_merge`, from the same admission, delivered into the origin under the same
+   conditions: the reply it carries may be steered by others writing in the target. Anything else stays `approval`, so no
+   message runs with more than its sender's.
 
 Work in the other session then runs through `asActor` (a request context of the actor's own), through the same
 functions as the apps' routes: `submitMessage`, `createSession`, `stopSession`, `archiveSession`, `sessionView`. Each

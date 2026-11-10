@@ -429,14 +429,15 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const permitted = () => !readOnly() && (actualMode() === "write" ? canWrite() : canAsk());
   const unsandboxed = () => Boolean(current().hostUnsandboxed || props.host()?.capabilities.unsandboxed);
   // Until the person picks an access themselves, the chat box follows the default, which can change once the session's host
-  // is known: Auto-approve in a sandboxed session for its owner, or for a member the host and workspace let auto-approve there.
+  // is known and as messages arrive: Auto-approve in a sandboxed session for its owner, or for a member the host and workspace
+  // let auto-approve there. A session counts as sandboxed only once its host is known.
   let accessPicked = false;
   const chooseSelection = (value: ChatSelection) => {
     if (value.access !== untracked(selection).access) accessPicked = true;
     selection.set(value);
   };
   effect(() => {
-    const access = defaultAccess(untracked(view), owner(), { sandboxed: !unsandboxed(), memberAutoApprove: memberAutoApprove() });
+    const access = defaultAccess(view(), owner(), { sandboxed: Boolean(props.host()) && !unsandboxed(), memberAutoApprove: memberAutoApprove() });
     untracked(() => { if (!accessPicked && selection().access !== access) selection.set({ ...selection(), access }); });
   });
   const queue = () => view().queue ?? [];
