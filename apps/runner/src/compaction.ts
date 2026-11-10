@@ -36,6 +36,25 @@ export function hostCompaction(host: CompactionSettings | undefined, models: Ite
   return { ...host, modelOverrides };
 }
 
+/**
+ * The context size at which Pi compacts a conversation on `model`, as Pi decides it: once its context holds more than the
+ * model's window less the reserve its settings keep (a model's own override first, then the harness-wide one, then Pi's
+ * default). Undefined where compaction is off for the model, or its window is unknown.
+ */
+export function compactionThreshold(settings: CompactionSettings | undefined, model: { provider: string; modelId: string }, contextWindow: number | undefined): number | undefined {
+  if (!Number.isSafeInteger(contextWindow) || contextWindow! <= 0) return undefined;
+  const override = settings?.modelOverrides?.[`${model.provider}/${model.modelId}`];
+  if ((override?.enabled ?? settings?.enabled) === false) return undefined;
+  const reserve = override?.reserveTokens ?? settings?.reserveTokens ?? PI_RESERVE_TOKENS;
+  return Math.max(0, contextWindow! - reserve);
+}
+
+/**
+ * The host's Pi `compaction` setting with the token counts its owner and admins set in Pikibun (HostConfig.compaction)
+ * over it: each count set there replaces Pi's, for every model and for each model by itself, and Pi's other fields
+ * (`enabled`, say) stay. A count set for every model in Pikibun still gives way to a model's own one in Pi's settings,
+ * as Pi's model overrides always win over its harness-wide counts.
+ */
 export function configuredCompaction(pi: CompactionSettings | undefined, configured: HostCompaction | undefined): CompactionSettings | undefined {
   if (!configured || (configured.reserveTokens === undefined && configured.keepRecentTokens === undefined && !configured.modelOverrides)) return pi;
   const { modelOverrides: overrides, ...overall } = configured;

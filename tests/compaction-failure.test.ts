@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compactionFailure, configuredCompaction, hostCompaction, reasoningReserveTokens } from "../apps/runner/src/compaction.js";
+import { compactionFailure, compactionThreshold, configuredCompaction, hostCompaction, reasoningReserveTokens } from "../apps/runner/src/compaction.js";
+import { contextTokens } from "../apps/runner/src/model-failure.js";
 import { sharedView } from "../apps/server/src/session-links.js";
 import { compactionFailureText } from "../packages/client/src/compaction.js";
 import type { SessionView } from "../packages/shared/src/types.js";
@@ -65,6 +66,42 @@ test("the host's own compaction settings win over the reasoning default", () => 
     enabled: true,
     modelOverrides: { "anthropic/opus": { reserveTokens: 16_384 }, "anthropic/sonnet": { reserveTokens: 20_000, keepRecentTokens: 1000 } },
   });
+});
+
+test("the panel's context compacts where Pi does: the window less the reserve the model keeps", () => {
+  const sonnet = { provider: "anthropic", modelId: "sonnet" };
+  assert.equal(compactionThreshold(undefined, sonnet, 200_000), 200_000 - 16_384, "Pi's own reserve");
+  assert.equal(compactionThreshold({ reserveTokens: 32_768 }, sonnet, 200_000), 200_000 - 32_768);
+  // A model's own override wins over the harness-wide reserve, as in Pi; the reasoning default is one.
+  const models = [{ provider: "anthropic", id: "sonnet", reasoning: true, contextWindow: 200_000 }];
+  assert.equal(compactionThreshold(hostCompaction({ keepRecentTokens: 4000 }, models), sonnet, 200_000), 180_000);
+  assert.equal(compactionThreshold({ reserveTokens: 32_768, modelOverrides: { "anthropic/sonnet": { reserveTokens: 50_000 } } }, sonnet, 200_000), 150_000);
+  // Off for every model, or for this one, it never compacts on its own; a model's own setting wins either way.
+  assert.equal(compactionThreshold({ enabled: false }, sonnet, 200_000), undefined);
+  assert.equal(compactionThreshold({ modelOverrides: { "anthropic/sonnet": { enabled: false } } }, sonnet, 200_000), undefined);
+  assert.equal(compactionThreshold({ enabled: false, modelOverrides: { "anthropic/sonnet": { enabled: true } } }, sonnet, 200_000), 200_000 - 16_384);
+  // Without a window there is nothing to tell, and a reserve larger than the window compacts at once.
+  assert.equal(compactionThreshold(undefined, sonnet, undefined), undefined);
+  assert.equal(compactionThreshold(undefined, sonnet, 0), undefined);
+  assert.equal(compactionThreshold(undefined, sonnet, 8192), 0);
+});
+
+test("a context's tokens are the provider's last count, and about 4 characters a token since", () => {
+  const usage = (input: number, output: number) => ({ input, output, cacheRead: 1000, cacheWrite: 0, totalTokens: input + output + 1000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+  const messages = [
+    { role: "user", content: "x".repeat(400), timestamp: 0 },
+    { role: "assistant", content: [{ type: "text", text: "ok" }], usage: usage(5000, 200), stopReason: "stop", timestamp: 0 },
+    { role: "user", content: "y".repeat(400), timestamp: 0 },
+  ];
+  assert.equal(contextTokens(messages as never), 5000 + 1000 + 200 + 100);
+  assert.equal(contextTokens([messages[0]] as never), 100, "no answered request: characters alone");
+});
+
+test("a share link leaves out the session's context", () => {
+  const view = { sessionId: "s", owner: { id: "o", displayName: "Owner", gitName: "Owner", gitEmail: "o@example.test", githubLogin: null },
+    approvals: [], busy: false, conversations: [{ id: "0", mode: "write" }], entries: [], context: { tokens: 84_210, window: 200_000, compactsAt: 183_616 } };
+  assert.equal("context" in sharedView(view as unknown as SessionView), false);
 });
 
 test("token counts set in Pikibun replace the host's Pi settings, count by count and model by model", () => {

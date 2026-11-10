@@ -159,6 +159,10 @@ when the app quit, with the consent given then (`src/lib/this-computer.ts`).
 - **The web runtime**: NSH 0.4's has no `lifecycle` (its import is undefined there), so `src/lib/lifecycle.ts` stands in
   for it and counts a page as always active. Its loader inserts an import map and `blob:` modules no hash can allow, so
   the page's policy allows inline scripts (`apps/server/src/static.ts`).
+- **Text widths on the web**: NSH 0.4 lays text out with widths the browser's canvas measures and draws it as page
+  text, so where a browser's canvas measures a font otherwise (another face for the system font, a minimum font size,
+  text-only zoom) each run overlaps the next: inline code over the words before it. `scripts/nsh-web-fixes.mjs` patches
+  the built runtime to measure such a font as the page draws it; drop the patch once NSH measures so itself.
 - **Secure storage**: native sign-ins are kept in NSH's `Storage`, a plain file in the app's data, not the Keychain or
   Keystore ([nsh#1061](https://github.com/longbridge/nsh/issues/1061)).
 - **GitHub sign-in**: NSH has neither a system authentication session nor deep links

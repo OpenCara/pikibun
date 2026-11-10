@@ -15,7 +15,7 @@ import {
 import { getUser } from './db.js';
 import { fail, id, identifier, jsonObject, now, text, userIdentifier } from './http.js';
 import { archiveSession, createSession, stopSession, submitMessage } from './sessions.js';
-import { isLinkShared } from './session-links.js';
+import { entryError, isLinkShared } from './session-links.js';
 import { sessionView, transcriptDisplay } from './view-feed.js';
 import { usableModels } from './catalog.js';
 import { workspaceChildSessionSettings } from './child-session-settings.js';
@@ -216,7 +216,9 @@ async function read(call: Call, targetId: string, messageId: string | undefined,
   if (!fresh || !hasPermission(fresh.permissions, 'read')) fail(403, 'permission_revoked', 'Session access is no longer authorized.');
   const shared = new Set(view.conversations.filter(conversation => conversation.mode === 'write').map(conversation => conversation.id));
   const entries = view.entries.filter(entry => entry.conversationId === undefined || shared.has(entry.conversationId)).slice(-limit)
-    .map(entry => ({ id: entry.id, role: entry.role, kind: entry.kind, ...(entry.actorId ? { actorId: entry.actorId } : {}), text: cut(entry.text, crossSessionLimits.entryChars) }));
+    // A failed model turn keeps its codes, as the session's screen shows them, so the reading agent can tell why it failed.
+    .map(entry => ({ id: entry.id, role: entry.role, kind: entry.kind, ...(entry.actorId ? { actorId: entry.actorId } : {}), text: cut(entry.text, crossSessionLimits.entryChars),
+      ...(entry.error ? { error: entryError(entry.error) } : {}) }));
   const pendingApprovals = view.approvals.filter(approval => approval.status === 'pending').map(approval => ({ id: approval.id, kind: approval.operation.kind,
     ...(approval.operation.kind === 'permission' ? { tool: approval.operation.tool } : {}), requestedBy: approval.requestedBy }));
   const record = message ? messageRecord(message) : undefined;

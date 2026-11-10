@@ -112,6 +112,8 @@ export async function buildWeb(out = path.join(repository, "dist", "client")) {
   if (status !== 0) throw new Error(`nsh package exited with ${status}`);
   const [site] = readdirSync(staging);
   if (!site || !existsSync(path.join(staging, site, "index.html"))) throw new Error(`nsh package wrote no site into ${staging}`);
+  // Firefox and older Safari: the import map before the first module (longbridge/nsh#582); and text measured as the
+  // page draws it where a browser's canvas measures a font otherwise.
   fixWebSite(path.join(staging, site));
   for (const name of ["sw.js", "favicon.svg"]) cpSync(path.join(app, "web", name), path.join(staging, site, name));
   rmSync(out, { recursive: true, force: true });

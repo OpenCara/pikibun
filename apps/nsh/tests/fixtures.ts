@@ -45,6 +45,7 @@ export const view = {
   stoppable: true,
   rewindable: true,
   agent: { provider: "anthropic", modelId: "claude-sonnet", thinkingLevel: "medium" },
+  context: { tokens: 84_210, window: 200_000, compactsAt: 183_616 },
 };
 
 type Request = { method: string; url: string; body?: string | null };

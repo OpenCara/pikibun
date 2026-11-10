@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { COMPACTION_FAILURES, type EntryView, type SessionView } from '../../../packages/shared/src/types.js';
+import { COMPACTION_FAILURES, MODEL_FAILURE_CAUSES, type EntryView, type SessionView } from '../../../packages/shared/src/types.js';
 import type { SessionLink, SharedSession, SharedSessionView } from '../../../packages/shared/src/sharing.js';
 import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { redactSecrets } from '../../../packages/shared/src/redaction.js';
@@ -58,6 +58,23 @@ async function requireLinkedSession(c: AppContext, token: string | undefined): P
   return row;
 }
 
+/**
+ * An entry's model failure with only the fields a transcript shows, for a reader outside the session's own screen (a
+ * share link, another session's `sessions` read): its codes only when they are known fixed ones, so a newer or
+ * misbehaving runner can't put text there.
+ */
+export function entryError(error: NonNullable<EntryView['error']>): NonNullable<EntryView['error']> {
+  return {
+    ...(error.provider !== undefined ? { provider: error.provider } : {}),
+    ...(error.modelId !== undefined ? { modelId: error.modelId } : {}),
+    ...(error.status !== undefined ? { status: error.status } : {}),
+    ...(error.compaction !== undefined && COMPACTION_FAILURES.includes(error.compaction) ? { compaction: error.compaction } : {}),
+    ...(error.cause !== undefined && MODEL_FAILURE_CAUSES.includes(error.cause) ? { cause: error.cause } : {}),
+    ...(error.compacting === true ? { compacting: true as const } : {}),
+  };
+}
+
+/** Short strings only: a call's id or a tool's name, from what a host sent. */
 const label = (value: unknown, limit: number): value is string => typeof value === 'string' && value.length > 0 && value.length <= limit;
 
 function sharedToolFields({ toolCalls, toolResult }: EntryView): Pick<EntryView, 'toolCalls' | 'toolResult'> {
@@ -75,12 +92,7 @@ function sharedToolFields({ toolCalls, toolResult }: EntryView): Pick<EntryView,
 function sharedEntry(entry: EntryView): EntryView {
   const { id, kind, role, text, error, durationMs } = entry;
   return { id, kind, role, text: redactSecrets(text), ...sharedToolFields(entry),
-    ...(error ? { error: {
-      ...(error.provider !== undefined ? { provider: error.provider } : {}),
-      ...(error.modelId !== undefined ? { modelId: error.modelId } : {}),
-      ...(error.status !== undefined ? { status: error.status } : {}),
-      ...(error.compaction !== undefined && COMPACTION_FAILURES.includes(error.compaction) ? { compaction: error.compaction } : {}),
-    } } : {}),
+    ...(error ? { error: entryError(error) } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}) };
 }
 

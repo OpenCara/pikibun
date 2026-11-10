@@ -138,6 +138,14 @@ async function body(request: IncomingMessage, limit: number): Promise<Uint8Array
   return Buffer.concat(chunks);
 }
 
+/**
+ * The addresses the proxy connects to for `host`, an API host or a download host of its redirects: public ones only,
+ * or the fake-IP addresses of a proxy on the host (fakeIpAddress). Those are let through here for any of these hosts:
+ * they are fixed names, and the request goes over TLS checked against the name with Node's own roots, so a fake-IP
+ * proxy can only pass it on to the API itself. Tunnels take them only for hosts the network policy names itself
+ * (hostNamed), as a session may name any host in open mode. Hosts behind such a proxy (where DNS answers 198.18.0.1 for
+ * api.github.com) otherwise get no API at all.
+ */
 export async function upstreamAddresses(host: string, lookup: (host: string) => Promise<{ address: string; family: number }[]>
   = name => dnsLookup(name, { all: true, verbatim: true })): Promise<{ address: string; family: number }[]> {
   let addresses: { address: string; family: number }[];

@@ -14,7 +14,7 @@ import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOpt
 import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../../../packages/shared/src/cron.js";
 import { crossSessionLimits, sessionsToolActions, sessionsToolTarget, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
-import type { CompactionFailure } from "../../../packages/shared/src/types.js";
+import type { CompactionFailure, ModelFailureCause } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
@@ -77,7 +77,8 @@ import type { ResourceConfig } from "./resources.js";
 import type { RestoreManifest } from "./restore.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { applyEdits } from "./edits.js";
-import { compactionFailure, configuredCompaction, hostCompaction } from "./compaction.js";
+import { compactionFailure, compactionThreshold, configuredCompaction, hostCompaction } from "./compaction.js";
+import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "./model-failure.js";
 import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
 import { autoApprovedCalls, viewApprovals, type StoredApproval } from "./approval-view.js";
 import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
@@ -100,7 +101,14 @@ export type Run = {
   options?: ChatOptions;
   images?: { count: number; bytes: number };
   inputsLost?: true;
-  failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure };
+  /**
+   * Pi ended the run without an answer or any entry: its model was unavailable, or its context could not be compacted.
+   * `cause` is which fixed cause Pi's own text gave; `compacting`, that the host started compacting the conversation's
+   * context for it (see compactsAfterFailure).
+   */
+  failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure;
+    cause?: ModelFailureCause; compacting?: true };
+  /** Who stopped it (see stop); `pending` until its conversation's work has ended, which holds the queue. */
   stopped?: { by: string; pending?: true };
   crashed?: true;
   screening?: true;
@@ -139,7 +147,7 @@ const readOnlyTools = ["identity", "read_file", "list_files", "search"];
 const WAIT_POLL_MS = 3000;
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
   + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
-  + "read {session, limit?, message_id?}: a session's latest shared-conversation entries and pending approvals; with message_id, also the outcome of a message this session sent it (status, done, reply). "
+  + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells) and pending approvals; with message_id, also the outcome of a message this session sent it (status, done, reply). "
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access approval, the default: its commands wait for people there; read: inspect only; auto: only in a message the session owner sent with auto-approve, to a session they own); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
@@ -258,6 +266,9 @@ export class RunnerSession {
   #drainAgain = false;
   private modelRef!: { provider: string; modelId: string };
   private models!: Models;
+  /** The compaction settings the harness runs by now, which the view's context reads (see `contextView`). */
+  #compaction: () => CompactionSettings | undefined = () => undefined;
+  /** Pushes (approved ones settle after decide() returns; automatic ones inline); close() aborts and awaits them. */
   private pushes = new Set<{ controller: AbortController; done: Promise<void> }>();
   #failed = false;
   #recovery: Promise<void> | undefined;
@@ -714,6 +725,7 @@ export class RunnerSession {
       }
       return current.settings;
     };
+    this.#compaction = () => settings()?.compaction;
     const storage = await this.openStorage();
     try {
       this.harness = await Harness.open(storage, { models, registry, settings,
@@ -940,11 +952,23 @@ export class RunnerSession {
       const conversation = await harness.conversation(state.runs[key]!.conversationId as ConversationId, context);
       await conversation?.waitForIdle(context);
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
-      const failure: Run["failure"] = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model")
-        ? { reason: compaction ? "compaction_failed" : settled.reason, ...(await conversation?.agent(context))?.model, ...(compaction ? { compaction } : {}) } : undefined;
+      const cause = settled.status === "unanswered" && settled.reason === "model_error" && !compaction ? modelFailureCause(settled.detail) : undefined;
+      const failed = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model");
+      // Only a failure names its model: a run that answered asks the conversation nothing more.
+      const model = failed ? (await conversation?.agent(context))?.model : undefined;
+      const failure: Run["failure"] = failed
+        ? { reason: compaction ? "compaction_failed" : settled.reason, ...model, ...(compaction ? { compaction } : {}), ...(cause ? { cause } : {}) } : undefined;
+      const compacts = !!failure && !!conversation && await this.compactsAfterFailure(conversation, state.runs[key]!.mode, cause, model);
+      // Pi ends a run that host crashes cut off again and again rather than crash the host once more; sending it again runs
+      // it afresh.
       const crashed = settled.status === "unanswered" && (settled.reason === "restart_limit" || settled.reason === "interrupted");
       await this.exclusive(async () => {
         if (generation !== this.generation || this.closing) return;
+        // Compaction starts only for a run nobody stopped: `stop` holds the same lock, so none can come between.
+        if (compacts && !(await this.metadata()).runs[key]?.stopped) {
+          try { await conversation!.compact(undefined, context); failure!.compacting = true; }
+          catch { /* A compaction that can't start leaves the failure as it was. */ }
+        }
         await this.mutate(meta => {
           const run = meta.runs[key]!;
           if (run.stopped) return;
@@ -955,6 +979,22 @@ export class RunnerSession {
       });
       if (generation === this.generation && !this.closing) this.drainQueue();
     })().catch(() => { });
+  }
+
+  /**
+   * Whether a conversation whose run just failed should start compacting (see compactsAfterFailure): a dropped stream on a
+   * large context, so the next message sends less. Pi then summarizes in the background and places the summary while the
+   * conversation is idle. A context it can't read compacts nothing.
+   */
+  private async compactsAfterFailure(conversation: Conversation, mode: Run["mode"], cause: ModelFailureCause | undefined,
+    model: { provider: string; modelId: string } | undefined): Promise<boolean> {
+    if (cause !== "incomplete_stream" || mode !== "write") return false;
+    try {
+      const enabled = compactionEnabled(configuredCompaction(this.config.compaction, this.#configuredCompaction), model);
+      const tokens = contextTokens((await conversation.context(context)).messages);
+      return compactsAfterFailure({ cause, mode, tokens, enabled });
+    }
+    catch { return false; }
   }
 
   private drainQueue(): void {
@@ -2680,11 +2720,15 @@ export class RunnerSession {
   async view(): Promise<SessionView> {
     const tunnel = this.#tunnel?.view();
     const initial = await this.metadata();
-    const snapshots: { branch: Branch; entries: readonly EntryRecord[] }[] = [];
+    const snapshots: { branch: Branch; entries: readonly EntryRecord[]; messages: readonly Message[] }[] = [];
+    // A shared conversation someone went back from stays on the host, out of the view: its fork shows what was kept.
     for (const branch of initial.branches.filter(item => !item.superseded)) {
       const conversation = await this.harness.conversation(branch.id as ConversationId, context);
       if (!conversation) continue;
-      snapshots.push({ branch, entries: (await conversation.context(context)).entries });
+      // The active transcript, from the newest head marker (a compaction's summary) on, as the model sees it. A watch's
+      // view would hold only a window of the newest entries.
+      const active = await conversation.context(context);
+      snapshots.push({ branch, entries: active.entries, messages: active.messages });
     }
     const state = await this.metadata();
     const stored = Object.values(state.approvals);
@@ -2711,6 +2755,8 @@ export class RunnerSession {
       if (ending) entries.push(ending);
     }
     const agent = await this.#shared.agent(context);
+    const shared = snapshots.find(snapshot => snapshot.branch.mode === "write");
+    const usage = shared && this.contextView(shared.messages, agent.model);
     const latestWrite = Object.values(state.runs).filter(run => run.mode === "write" && !run.withdrawn).sort((a, b) => (b.sequence ?? 0) - (a.sequence ?? 0))[0];
     const access = latestWrite && (latestWrite.options?.access ?? "approval");
     const repositories = this.repositoryView();
@@ -2728,16 +2774,37 @@ export class RunnerSession {
       rewindable: true,
       memberForks: true,
       ...(agent.model ? { agent: { provider: agent.model.provider, modelId: agent.model.modelId, thinkingLevel: agent.thinkingLevel } } : {}),
+      ...(usage ? { context: usage } : {}),
       ...(access ? { access } : {}),
       ...(repositories ? { repositories } : {}),
       activity: repositories ? (repositories.status === "preparing" ? "working" : "failed")
         : sessionActivity(Object.values(state.runs).filter(tellsActivity), Object.values(state.approvals),
-          activityEntry(snapshots.find(snapshot => snapshot.branch.mode === "write")?.entries.at(-1))),
+          activityEntry(shared?.entries.at(-1))),
       ...await this.extensionView(),
       ...(tunnel ? { tunnel } : {}),
     };
   }
 
+  /**
+   * How full the shared conversation's context is (SessionView.context): about how many tokens its messages hold, its
+   * model's context window from the host's catalog, and where Pi compacts it under the settings the harness runs by.
+   * A conversation without a model of its own is on the session's.
+   */
+  private contextView(messages: readonly Message[], model: { provider: string; modelId: string } | undefined): SessionView["context"] {
+    const tokens = contextTokens(messages);
+    if (!Number.isFinite(tokens) || tokens < 0) return undefined;
+    const current = model ?? this.modelRef;
+    let window: number | undefined;
+    try {
+      const found = current && this.models?.getModel(current.provider, current.modelId)?.contextWindow;
+      window = Number.isSafeInteger(found) && found! > 0 ? found : undefined;
+    }
+    catch { window = undefined; }
+    const compactsAt = current ? compactionThreshold(this.#compaction(), current, window) : undefined;
+    return { tokens, ...(window !== undefined ? { window } : {}), ...(compactsAt !== undefined ? { compactsAt } : {}) };
+  }
+
+  /** What the view tells of the session's extensions: those it runs with now, and its workspace's enabled ones its host lacks. */
   private async extensionView(): Promise<Pick<SessionView, "extensions">> {
     const config = this.config.extensions;
     const enabled = this.#builtins ? (await this.hostConfig().catch(() => undefined))?.builtinExtensions ?? [] : [];

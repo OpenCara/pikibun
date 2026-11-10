@@ -11,7 +11,7 @@ import { performClonePush, PushError, pushSummary } from "../apps/runner/src/pus
 import { Sandbox } from "../apps/runner/src/sandbox.js";
 import type { EgressGrant } from "../packages/shared/src/network.js";
 import { parsePushCommands, pushRejection, readPushCommands, sessionBranch, sessionBranchName, sessionBranchRefusal, validSessionBranch } from "../packages/shared/src/git-push.js";
-import { hostAllowed, parseNetworkPolicy } from "../packages/shared/src/network.js";
+import { hostAllowed, hostNamed, parseNetworkPolicy } from "../packages/shared/src/network.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 import { startGitHttpServer } from "./helpers/git-http.js";
 import { CA_BUNDLE, CA_BUNDLE_VARIABLES, trustedCertificates } from "../apps/runner/src/trust-store.js";
@@ -107,6 +107,15 @@ test("network policies parse strictly and match hosts by mode", () => {
   assert.equal(hostAllowed({ ...policy, packageRegistries: false }, "registry.npmjs.org"), false);
   assert.equal(hostAllowed({ ...policy, mode: "off" }, "docs.example.com"), false);
   assert.equal(hostAllowed({ ...policy, mode: "open" }, "anything.example.org"), true);
+  // The hosts a policy names itself, exactly: never a subdomain a `*.` entry lets a session pick; in open mode, only the
+  // package registries.
+  assert.equal(hostNamed(policy, "docs.example.com"), true);
+  assert.equal(hostNamed(policy, "a.cdn.example.net"), false);
+  assert.equal(hostNamed(policy, "registry.npmjs.org"), true);
+  assert.equal(hostNamed({ ...policy, packageRegistries: false }, "registry.npmjs.org"), false);
+  assert.equal(hostNamed({ ...policy, mode: "open" }, "anything.example.org"), false);
+  assert.equal(hostNamed({ ...policy, mode: "open", packageRegistries: false }, "registry.npmjs.org"), true);
+  assert.equal(hostNamed({ ...policy, mode: "off" }, "registry.npmjs.org"), false);
   assert.throws(() => parseEgressGrant({ policy, repositories: [{ ...repository, host: "127.0.0.1" }] }), /Invalid repositories/);
   assert.deepEqual(parseEgressGrant({ policy, repositories: [repository] }), { policy, repositories: [repository] });
 });
@@ -284,6 +293,64 @@ test("tunnels follow the network policy and never reach private addresses", asyn
   const plain = await get(allowlist.socketPath, "http://docs.example.com/");
   assert.equal(plain.status, 403);
   assert.match(plain.body, /Plain HTTP/);
+});
+
+test("tunnels take a local proxy's fake-IP answers for hosts the policy names, never for any host (#248)", async t => {
+  const echo: Server = createTcpServer(socket => socket.pipe(socket));
+  await new Promise<void>(resolve => echo.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>(resolve => { echo.close(() => resolve()); }));
+  // Clash, sing-box and Surge in fake-IP mode answer from 198.18.0.0/15 for every name.
+  const lookups: Record<string, string[]> = {
+    "registry.npmjs.org": ["198.18.0.206"], "pypi.org": ["198.18.3.32"], "docs.example.com": ["198.18.0.7", "93.184.216.34"],
+    "anything.example.org": ["198.18.0.9"], "mixed.example.com": ["198.18.0.10", "10.0.0.8"], "x.cdn.example.net": ["198.18.0.11"],
+    "y.cdn.example.net": ["93.184.216.36"],
+  };
+  const connected: string[] = [];
+  const open = async (policy: EgressGrant["policy"]) => {
+    const directory = await mkdtemp(join(tmpdir(), "egress-"));
+    const instance = new EgressProxy({
+      socketPath: join(directory, "proxy.sock"),
+      grant: async () => ({ policy, repositories: [] }),
+      relay: async () => new Response("", { status: 404 }),
+      lookup: async host => (lookups[host] ?? ["93.184.216.35"]).map(address => ({ address, family: 4 })),
+      connect: (port, address) => { connected.push(address); return tcpConnect({ port: (echo.address() as AddressInfo).port, host: "127.0.0.1" }); },
+    });
+    await instance.start();
+    t.after(async () => { await instance.close(); await rm(directory, { recursive: true, force: true }); });
+    return instance;
+  };
+  const through = async (instance: EgressProxy, target: string) => {
+    const result = await tunnel(instance.socketPath, target);
+    result.socket?.destroy();
+    return result;
+  };
+
+  const allowlist = await open({ mode: "allowlist", domains: ["docs.example.com", "mixed.example.com", "*.cdn.example.net"], packageRegistries: true });
+  assert.equal((await through(allowlist, "registry.npmjs.org:443")).status, 200);
+  assert.equal((await through(allowlist, "pypi.org:443")).status, 200);
+  assert.equal((await through(allowlist, "docs.example.com:443")).status, 200);
+  assert.deepEqual(connected, ["198.18.0.206", "198.18.3.32", "198.18.0.7"]);
+  // A name that also points inside the host's networks is still refused whole, as is a fake-IP address given as the host.
+  const mixed = await through(allowlist, "mixed.example.com:443");
+  assert.equal(mixed.status, 403);
+  assert.match(mixed.body!, /does not resolve to a public address/);
+  assert.equal((await through(allowlist, "198.18.0.206:443")).status, 403);
+  // Under a `*.` entry the session picks the name: its subdomains go to public addresses only.
+  const wildcard = await through(allowlist, "x.cdn.example.net:443");
+  assert.equal(wildcard.status, 403);
+  assert.match(wildcard.body!, /x\.cdn\.example\.net resolves to 198\.18\.0\.11, a fake-IP address/);
+  assert.equal((await through(allowlist, "y.cdn.example.net:443")).status, 200);
+  assert.deepEqual(connected, ["198.18.0.206", "198.18.3.32", "198.18.0.7", "93.184.216.36"]);
+
+  // In open mode a session names any host: only the package registries, fixed names, may go to fake-IP addresses.
+  connected.length = 0;
+  const anything = await open({ mode: "open", domains: [], packageRegistries: false });
+  assert.equal((await through(anything, "registry.npmjs.org:443")).status, 200);
+  const refused = await through(anything, "anything.example.org:443");
+  assert.equal(refused.status, 403);
+  assert.match(refused.body!, /anything\.example\.org resolves to 198\.18\.0\.9, a fake-IP address of a proxy on this host/);
+  assert.equal((await through(anything, "public.example.org:443")).status, 200);
+  assert.deepEqual(connected, ["198.18.0.206", "93.184.216.35"]);
 });
 
 function binding(id: string): RunnerBinding {
