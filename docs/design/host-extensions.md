@@ -208,6 +208,17 @@ The connector also carries workspace extensions of its own, `piki:gh`, `piki:gla
 has without installing them and a workspace gets with its first repository on that forge: see
 [Pikibun's built-in extensions](piki-extensions.md). Unlike Pi's built-ins above, the workspace chooses them, like any extension.
 
+## Context files (`extensions/context-files`)
+
+Pi adds a project's `AGENTS.md` or `CLAUDE.md` to its system prompt as its agent session starts. Pikibun's sessions
+don't run that session, so they load neither. `@opencara/pi-context-files` (`extensions/context-files/`, tests in
+`tests/context-files.test.ts`) brings them back. It is a separate Pi package, not built into the connector: a host
+installs it like any other extension. Its `context-files` setting chooses the files: paths in each clone (alternatives
+and wildcards), `host:` files from the host owner's context directory, and `https://` pages. Its `before_agent_start`
+adds them as a prompt section, and its `tool_result` adds a clone's files to the result of the call that cloned it
+during a message. It reads nothing that links outside the worktree or that context directory, and fetches no page from
+a private network address. See its [README](../../extensions/context-files/README.md).
+
 ## Later
 
 - Isolation in a worker or child process.

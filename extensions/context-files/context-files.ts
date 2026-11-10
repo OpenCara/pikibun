@@ -1,7 +1,7 @@
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import { existsSync } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
-import { request } from "node:https";
+import { Agent, request } from "node:https";
 import { BlockList, isIP } from "node:net";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
@@ -190,8 +190,8 @@ for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0",
   ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["224.0.0.0", 4], ["240.0.0.0", 4]] as const) {
   privateNetworks.addSubnet(network, prefix, "ipv4");
 }
-for (const [network, prefix] of [["::", 128], ["::1", 128], ["::ffff:0:0", 96], ["64:ff9b::", 96], ["fc00::", 7], ["fe80::", 10],
-  ["ff00::", 8]] as const) {
+// IPv4-mapped addresses (::ffff:a.b.c.d) are checked against the IPv4 rules; a ::ffff:0:0/96 rule would match all of IPv4.
+for (const [network, prefix] of [["::", 128], ["::1", 128], ["64:ff9b::", 96], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]] as const) {
   privateNetworks.addSubnet(network, prefix, "ipv6");
 }
 
@@ -219,19 +219,23 @@ export function blockedAddress(address: string, allowed: BlockList = allowedRang
 const TEXT_TYPE = /^(text\/|application\/(json|xml|yaml|x-yaml|markdown|toml)\b)/i;
 
 /** A page's text, from `https://` only, never from a blocked address (checked at each connection, redirects included). */
-export async function fetchText(url: string, signal?: AbortSignal): Promise<string> {
+export async function fetchText(url: string, signal?: AbortSignal, resolve: typeof dnsLookup = dnsLookup): Promise<string> {
   const allowed = allowedRanges();
   const lookup = ((hostname: string, options: unknown, callback: (...args: unknown[]) => void) => {
-    const base = typeof options === "number" ? { family: options } : (options ?? {}) as Record<string, unknown>;
-    dnsLookup(hostname, { ...base, all: true }, (error, addresses: LookupAddress[]) => {
+    const given = (typeof options === "object" && options !== null ? options : {}) as { family?: unknown; all?: unknown };
+    const family = typeof options === "number" ? options : given.family === 4 || given.family === "IPv4" ? 4 : given.family === 6 || given.family === "IPv6" ? 6 : 0;
+    resolve(hostname, { all: true, family }, (error, addresses: LookupAddress[]) => {
       if (error) return callback(error);
       const blocked = addresses.find(address => blockedAddress(address.address, allowed));
       if (blocked || !addresses.length) return callback(new Error(`${hostname} is on a private network (${blocked?.address ?? "no address"})`));
-      if (base.all) callback(null, addresses);
+      if (given.all === true) callback(null, addresses);
       else callback(null, addresses[0]!.address, addresses[0]!.family);
     });
   }) as unknown as typeof dnsLookup;
   const deadline = AbortSignal.any([AbortSignal.timeout(URL_TIMEOUT_MS), ...(signal ? [signal] : [])]);
+  // Its own agent connects directly, never through a proxy of the environment (NODE_USE_ENV_PROXY), which would resolve
+  // the name itself, past the check.
+  const agent = new Agent({ keepAlive: false });
   let current = new URL(url);
   for (let hop = 0; ; hop++) {
     if (current.protocol !== "https:") throw new Error("it redirects away from https");
@@ -239,7 +243,7 @@ export async function fetchText(url: string, signal?: AbortSignal): Promise<stri
     // An address in the URL itself is connected to without a lookup.
     if (isIP(host) && blockedAddress(host, allowed)) throw new Error(`${host} is on a private network`);
     const answer = await new Promise<{ location?: string; text?: string }>((resolve, reject) => {
-      const outgoing = request(current, { method: "GET", lookup, signal: deadline,
+      const outgoing = request(current, { method: "GET", agent, lookup, signal: deadline,
         headers: { "user-agent": "pi-context-files", accept: "text/markdown, text/plain;q=0.9, text/*;q=0.8, */*;q=0.1" } }, response => {
         const status = response.statusCode ?? 0;
         if (status >= 300 && status < 400 && response.headers.location) { response.resume(); resolve({ location: response.headers.location }); return; }
