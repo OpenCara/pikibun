@@ -233,7 +233,9 @@ export function registerExtensions(app: Hono<WorkerEnv>): void {
       requests: requests.map(item => ({ id: item.id, action: item.action, source: item.source, status: item.status, ...(item.error ? { error: item.error } : {}),
         requestedAt: item.requested_at, ...(item.finished_at ? { finishedAt: item.finished_at } : {}) })),
       workspaces: await Promise.all(workspaces.map(async workspace => {
-        const extensions = (await workspaceExtensions(c.env, workspace.id)).filter(item => item.enabled);
+        // Session-tool extensions are switches on the session's own tools, nothing a host installs or lacks: a connector
+        // that predates one offers its tools anyway.
+        const extensions = (await workspaceExtensions(c.env, workspace.id)).filter(item => item.enabled && !sessionToolSources.includes(item.source));
         return { id: workspace.id, name: workspace.name, shared: Number(workspace.shared) === 1,
           extensions: extensions.map(item => ({ source: item.source, availability: extensionAvailability(item.source, installed) })) };
       })),

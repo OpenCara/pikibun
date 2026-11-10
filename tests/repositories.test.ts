@@ -14,7 +14,7 @@ import { encryptToken } from '../apps/server/src/authority/vault.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/src/connector.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
-import { defaultWorkspaceExtensions } from '../packages/shared/src/host-extensions.js';
+import { defaultWorkspaceExtensions, withSessionToolsListed } from '../packages/shared/src/host-extensions.js';
 import type { LfsBatchResult } from '../packages/shared/src/network.js';
 import { repositoryLimits, type GitAccount, type ProviderRepository, type ProviderRepositoryList, type SessionRepository, type WorkspaceRepository, type WorkspaceRepositoryList } from '../packages/shared/src/repositories.js';
 import type { ModelDefinition, RunnerBinding, SessionRecord } from '../packages/shared/src/types.js';
@@ -266,7 +266,7 @@ test('repository API separates cookie/CSRF authentication, administrator writes,
   assert.equal(remote.calls.length, 1);
 });
 
-test('a workspace\'s first GitHub repository adds piki:gh to its extensions, once: owners and admins remove it like any other', async t => {
+test('a workspace\'s first GitHub repository adds piki:gh, piki:git and piki:github to its extensions, once: owners and admins remove them like any other', async t => {
   const f = await fixture(t); github(t);
   const owner = await f.client('owner');
   const team = await workspace(owner); const path = `/api/workspaces/${team.id}/repositories`;
@@ -274,16 +274,18 @@ test('a workspace\'s first GitHub repository adds piki:gh to its extensions, onc
     await owner.request('GET', `/api/workspaces/${team.id}/extensions`))).extensions;
   const bind = async () => json<{ repository: WorkspaceRepository; extensions?: string[] }>(await owner.request('POST', path, repositoryInput), 201);
   const first = await bind();
-  assert.deepEqual(first.extensions, ['piki:gh']);
-  // After the extensions every workspace starts with, turned off.
-  assert.deepEqual(await extensions(), [...defaultWorkspaceExtensions.map(source => ({ source, enabled: false, tools: 'approval', settings: {} })),
-    { source: 'piki:gh', enabled: true, tools: 'approval', settings: {} }]);
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.extension.updated'").get()!.n, 1);
+  assert.deepEqual(first.extensions, ['piki:gh', 'piki:git', 'piki:github']);
+  // After the extensions every workspace starts with, turned off, and before the session tools it hasn't added, listed off.
+  const on = (source: string) => ({ source, enabled: true, tools: 'approval', settings: {} });
+  assert.deepEqual(await extensions(), withSessionToolsListed([...defaultWorkspaceExtensions.map(source => ({ source, enabled: false, tools: 'approval' as const, settings: {} })),
+    on('piki:gh'), on('piki:git'), on('piki:github')]));
+  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.extension.updated'").get()!.n, 3);
   // Turned off, it stays off when the repository is bound again.
   await json(await owner.request('PUT', `/api/workspaces/${team.id}/extensions`, { source: 'piki:gh', enabled: false }));
   assert.equal((await owner.request('DELETE', `${path}/${first.repository.id}`)).status, 204);
   assert.equal((await bind()).extensions, undefined);
-  assert.deepEqual((await extensions()).filter(item => item.source.startsWith('piki:')).map(item => [item.source, item.enabled]), [['piki:gh', false]]);
+  assert.deepEqual((await extensions()).filter(item => ['piki:gh', 'piki:git', 'piki:github'].includes(item.source)).map(item => [item.source, item.enabled]),
+    [['piki:gh', false], ['piki:git', true], ['piki:github', true]]);
   // Removed, a later first GitHub repository brings it back.
   await json(await owner.request('DELETE', `/api/workspaces/${team.id}/extensions?source=piki:gh`));
   const again = (await json<{ repositories: WorkspaceRepository[] }>(await owner.request('GET', path))).repositories[0]!;

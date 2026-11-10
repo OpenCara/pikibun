@@ -4,7 +4,7 @@
  * version, and, in its host owner's own sessions, the host's dev extensions (installed from a local path).
  */
 
-import { pikiExtension, pikiSessionToolExtensions } from "./piki-extensions.js";
+import { pikiExtension, pikiExtensions, pikiSessionToolExtensions } from "./piki-extensions.js";
 import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
 import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 
@@ -166,6 +166,22 @@ export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([
   "npm:pi-web-search@1.7.0",
   "npm:cc-safety-net@2.7.2",
 ]);
+
+/**
+ * A workspace's extensions as the control plane gives them, to its pages and to connectors: as it stores them, then each
+ * of Pikibun's session-tool extensions (piki:git, piki:node, ...) it doesn't store, turned off. None but piki:files is in a
+ * workspace by default: it has one once it is added, with the workspace's first repository (piki:git, piki:github), its
+ * first source of a kind (piki:notion, ...), or by its owners and admins. Connectors, and pages from before this, read a
+ * session-tool extension a workspace doesn't list as on (`pikiExtensionOn`), so every one is listed. Left out: piki:files,
+ * always on, and piki:sources, which the extensions of each kind replace (connectors that have only it get it as whether
+ * any kind is on).
+ */
+export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]): WorkspaceExtension[] {
+  const listed = new Set(extensions.map(item => extensionPackageKey(item.source)));
+  const replaced = new Set<string>(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
+  const unlisted = pikiSessionToolExtensions().filter(item => !item.core && !replaced.has(item.source) && !listed.has(item.source));
+  return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "approval" as const, settings: {} }))];
+}
 
 export const extensionLimits = Object.freeze({
   /** Sources a workspace uses, and a host installs. */

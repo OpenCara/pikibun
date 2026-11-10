@@ -4004,9 +4004,10 @@ test('owners and admins bind Notion pages as workspace sources; sessions read th
   await denied(await s.host.request('POST', `/api/workspaces/${s.team.id}/sources`, { kind: 'notion', target: notion.ids.root }), 403, 'forbidden');
   await denied(await s.admin.request('POST', `/api/workspaces/${s.team.id}/sources`, { kind: 'notion', target: 'https://example.com/page' }), 400, 'invalid_source');
   await denied(await s.admin.request('POST', `/api/workspaces/${s.team.id}/sources`, { kind: 'drive', target: notion.ids.root }), 400, 'invalid_source');
-  const { source } = await json<{ source: WorkspaceDocumentSource }>(await s.admin.request('POST', `/api/workspaces/${s.team.id}/sources`,
+  const { source, extensions: added } = await json<{ source: WorkspaceDocumentSource; extensions?: string[] }>(await s.admin.request('POST', `/api/workspaces/${s.team.id}/sources`,
     { kind: 'notion', target: `https://www.notion.so/acme/Specs-${notion.ids.root.replace(/-/g, '')}?pvs=4` }), 201);
   assert.deepEqual([source.kind, source.itemId, source.itemType, source.title], ['notion', notion.ids.root, 'page', 'Specs']);
+  assert.deepEqual(added, ['piki:notion'], 'the workspace\'s first Notion source brings the extension that reads it');
   await denied(await s.admin.request('POST', `/api/workspaces/${s.team.id}/sources`, { kind: 'notion', target: notion.ids.root }), 409, 'source_exists');
   assert.deepEqual((await json<{ sources: WorkspaceDocumentSource[] }>(await s.creator.request('GET', `/api/workspaces/${s.team.id}/sources`))).sources.map(item => item.id), [source.id]);
   assert.equal((await json<{ sources: number }>(await s.creator.request('GET', `/api/workspaces/${s.team.id}/repositories`))).sources, 2);
@@ -4087,8 +4088,8 @@ test('a source an admin sets to read as the workspace reads with the workspace\'
   assert.deepEqual(audit.map(item => item.readAs), ['workspace']);
 
   // Each kind of source has its own switch, which the control plane holds whichever connector asks: Notion off, Notion
-  // sources aren't read, before anything reaches Notion; another kind off changes nothing; piki:sources, from before
-  // the split, turns off every kind the workspace hasn't chosen since.
+  // sources aren't read, before anything reaches Notion; another kind off changes nothing; removed, a kind is off, as in
+  // a workspace that never added it, and piki:sources, from before the split, doesn't turn it back on.
   const extensions = `/api/workspaces/${s.team.id}/extensions`;
   const turn = async (source: string, enabled: boolean) => json(await s.admin.request('PUT', extensions, { source, enabled, tools: 'approval', settings: {} }));
   await turn('piki:notion', false);
@@ -4100,11 +4101,12 @@ test('a source an admin sets to read as the workspace reads with the workspace\'
   await turn('piki:google-drive', false);
   assert.equal((await json<SourceReadView>(await read())).title, 'Specs');
   await json(await s.admin.request('DELETE', `${extensions}?source=piki%3Anotion`));
-  await turn('piki:sources', false);
+  await denied(await read(), 403, 'source_kind_off');
+  await turn('piki:sources', true);
   await denied(await read(), 403, 'source_kind_off');
   await turn('piki:notion', true);
-  assert.equal((await json<SourceReadView>(await read())).title, 'Specs', 'a kind chosen since is as chosen');
-  for (const source of ['piki:notion', 'piki:google-drive', 'piki:sources']) await json(await s.admin.request('DELETE', `${extensions}?source=${encodeURIComponent(source)}`));
+  assert.equal((await json<SourceReadView>(await read())).title, 'Specs', 'added again, it is on');
+  for (const source of ['piki:google-drive', 'piki:sources']) await json(await s.admin.request('DELETE', `${extensions}?source=${encodeURIComponent(source)}`));
   const reads = f.sqlite.prepare("SELECT detail_json FROM audit WHERE action = 'source.read'").all().length;
 
   // A switch while the read is in flight: what was read with the workspace's connection isn't returned.
