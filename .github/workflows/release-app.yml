@@ -645,7 +645,10 @@ jobs:
           ditto -c -k --norsrc --keepParent "$staging/Payload" "$RUNNER_TEMP/app/Pikibun.ipa"
           rm -rf "$staging"
       # Every app-v tag goes to TestFlight; submitting a build for App Store review stays manual. App Store Connect
-      # takes each version's build numbers only increasing: this workflow's run number.
+      # takes each version's build numbers only increasing: this workflow's run number. Apple's upload service fails
+      # now and then (a 504 on a file part, as app-v0.16.0's first attempt met), so the upload is tried up to three
+      # times. An attempt that Apple refuses as a build it already has means an earlier one (this run's, or a re-run's
+      # first run's) landed after all.
       - name: Upload to TestFlight
         if: steps.signing.outputs.configured == 'true' && github.event_name == 'push'
         env:
@@ -657,7 +660,23 @@ jobs:
           [ -n "$ipa" ] || { echo "::error::nsh package wrote no .ipa."; exit 1; }
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           printf '%s\n' "$API_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_$API_KEY_ID.p8"
-          xcrun altool --upload-app --type ios --file "$ipa" --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID"
+          set -o pipefail
+          log="$RUNNER_TEMP/altool.log"
+          for attempt in 1 2 3; do
+            if xcrun altool --upload-app --type ios --file "$ipa" --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID" 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if grep -qE 'Redundant Binary Upload|already uploaded a build' "$log"; then
+              echo "::notice::App Store Connect already has build $BUILD of $APP_VERSION: an earlier upload landed."
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Upload attempt $attempt failed; trying again in $((attempt * 60)) seconds."
+              sleep $((attempt * 60))
+            fi
+          done
+          echo "::error::The upload to TestFlight failed three times."
+          exit 1
       - name: Remove the signing material
         if: always()
         run: |
