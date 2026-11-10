@@ -23,7 +23,7 @@ import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
 import { fail, id, identifier, jsonObject, now, randomToken, testMode, text, userIdentifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { connectorUtf8Bytes } from './connector-transport.js';
-import { hostSessionsSupported } from './connectors.js';
+import { hostSessionsNeedConsent, hostSessionsSupported } from './connectors.js';
 import { connectorHostConfig } from './host-config.js';
 import { chatAgentVersion, requireModel } from './catalog.js';
 import { isLinkShared } from './session-links.js';
@@ -126,6 +126,10 @@ export async function submitMessage(c: AppContext, row: SessionRow, mode: 'submi
     ...(images ? { images } : {}) }));
   invalidateSessionView(c, row.id);
   if (typeof result?.submissionId !== 'string' || typeof result.conversationId !== 'string' || typeof result.status !== 'string') fail(502, 'invalid_runner_response', 'The runner returned an invalid submission.');
+  if (mode === 'submit' && Number(row.one_shot) === 1) {
+    await c.env.DB.query('UPDATE sessions SET one_shot = 0 WHERE id = ? AND one_shot = 1').bind(row.id).run();
+    row.one_shot = 0;
+  }
   await auditStatement(c.env, c.get('auth').userId, `session.${mode}`, row.workspace_id, row.id, { submissionId: result.submissionId, ...(options ? { options } : {}),
     ...(images ? { images: images.length } : {}), ...audit }).run();
   return result;
@@ -167,8 +171,9 @@ export async function createSession(c: AppContext, input: Record<string, unknown
   }
   if (input.hostEnvironment !== undefined && typeof input.hostEnvironment !== 'boolean') fail(400, 'invalid_input', 'hostEnvironment must be true or false.');
   const onHost = input.hostEnvironment === true;
+  const granted = session.connector_owner_id !== ownerId;
+  const needsConsent = onHost && hostSessionsNeedConsent(capabilities, granted);
   if (onHost) {
-    const granted = session.connector_owner_id !== ownerId;
     if (!session.connector_id || (granted && (await hostAuthority(c.env, session, ownerId))?.sessions !== true)) {
       fail(403, 'host_owner_required', 'Only a host\'s owner, or a member they granted sessions on the host, starts sessions that run directly on it.');
     }
@@ -176,7 +181,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
     if (!hostSessionsSupported(capabilities, granted)) {
       fail(409, 'connector_update_required', 'Update the host\'s connector (npx pikibun@latest connect) to run sessions directly on it.');
     }
-    if (!(await connectorHostConfig(c.env, session.connector_id)).hostSessions) {
+    if (needsConsent && !(await connectorHostConfig(c.env, session.connector_id)).hostSessions) {
       fail(409, 'host_sessions_off', 'This host doesn\'t accept sessions that run directly on it. Turn that on under Settings → Hosts → the host → Configuration.');
     }
   }
@@ -227,7 +232,7 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       JSON.stringify(resolved.credentials), ownerId, resolved.credentials.length,
       row.connector_id ?? null, model.id, row.connector_id ?? null, row.connector_owner_id ?? null, workspaceId, ownerId,
       testMode(c.env) ? 1 : 0, gitPush,
-      onHost ? 1 : 0, row.connector_id ?? null).first();
+      needsConsent ? 1 : 0, row.connector_id ?? null).first();
   if (!inserted) fail(409, 'session_configuration_changed', 'Workspace repositories, Git account access, membership, or connector authority changed. Try again.');
   link.inserted?.(row.id);
   if (link.parentSessionId) {
@@ -515,7 +520,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     const actorId = c.get('auth').userId;
     if (access.row.status !== 'archived') fail(409, 'session_not_archived', 'Session is not archived.');
     const row = await unpackSession(c, access);
-    const restored = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = COALESCE(archived_status, 'ready'), archived_status = NULL,
+    const restored = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = COALESCE(archived_status, 'ready'), archived_status = NULL, one_shot = 0,
         policy_version = policy_version + 1
       WHERE id = ? AND owner_id = ? AND policy_version = ? AND status = 'archived' AND packed_at IS NULL AND ${sessionManagerSQL('sessions')}
       RETURNING *`).bind(row.id, row.owner_id, row.policy_version, actorId).first();

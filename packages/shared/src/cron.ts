@@ -167,13 +167,14 @@ export function nextCronTime(schedule: CronSchedule | string, timeZone: string, 
 
 const SCHEDULE_TARGET_LIMIT = 4000;
 
-export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" | "scheduleId" | "name" | "cron" | "timeZone" | "content" | "access" | "runIn" | "enabled">): string {
+export function scheduleToolTarget(request: Pick<ScheduleToolRequest, "action" | "scheduleId" | "name" | "cron" | "timeZone" | "content" | "access" | "runIn" | "oneShot" | "enabled">): string {
   const parts: string[] = [request.action];
   if (request.scheduleId !== undefined) parts.push(request.scheduleId);
   if (request.cron !== undefined) parts.push(`cron ${request.cron}`);
   if (request.timeZone !== undefined) parts.push(`in ${request.timeZone}`);
   if (request.access !== undefined) parts.push(`access ${request.access}`);
   if (request.runIn !== undefined) parts.push(request.runIn === "child" ? "each run in a new child session" : "runs in this session");
+  if (request.oneShot !== undefined) parts.push(request.oneShot ? "each child archived once its run is done" : "each child kept open");
   if (request.enabled !== undefined) parts.push(request.enabled ? "enabled" : "paused");
   if (request.name !== undefined) parts.push(`name ${JSON.stringify(request.name)}`);
   let target = parts.join(" ");

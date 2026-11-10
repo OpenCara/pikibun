@@ -81,9 +81,11 @@ describe("This Mac", () => {
     expect(sent()).toContain("pairing My Mac");
     expect(sent()).toContain(JSON.stringify({ type: "start", server: SERVER, pairing: { id: PAIRING_ID, code: "<code>" }, replacePairing: false, unsandboxedConsent: true }));
     await app.waitUntil(() => showsText("Online"));
+    await app.waitUntil(() => showsText("this computer's host: c9"));
     await app.press("id:this-computer-stop");
     await app.waitFor("id:this-computer-start");
     expect(sent()).toContain(JSON.stringify({ type: "stop" }));
+    await app.waitUntil(() => showsText("this computer's host: none"));
   });
 
   test("declining the consent starts nothing", async () => {

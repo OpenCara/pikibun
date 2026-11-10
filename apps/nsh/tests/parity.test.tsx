@@ -75,8 +75,23 @@ describe("a new session", () => {
     }) });
     await app.press("id:new-session");
     await app.waitFor("id:new-environment");
+    expect(app.shows("id:new-on-host")).toBe(false);
     await app.press("id:new-environment");
     await app.press("text:On this host");
+    await app.waitFor("id:new-on-host");
+    await app.type("id:new-message", "Profile the GPU build");
+    await app.waitUntil(() => app.enabled("id:new-start"));
+    await app.press("id:new-start");
+    await app.waitUntil(() => bodyOf(app, "POST", "/api/sessions") !== undefined);
+    expect(bodyOf(app, "POST", "/api/sessions")).toMatchObject({ workspaceId: "w1", hostEnvironment: true });
+  });
+
+  test("in a private workspace runs on its host by default", async () => {
+    const app = await open("../App.tsx", { storage: signedIn, network: server({
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [{ ...workspace, name: "Private", personal: true }] } },
+      [`GET ${ORIGIN}/api/workspaces/w1/connectors`]: { body: { connectors: [capableHost] } },
+    }) });
+    await app.press("id:new-session");
     await app.waitFor("id:new-on-host");
     await app.type("id:new-message", "Profile the GPU build");
     await app.waitUntil(() => app.enabled("id:new-start"));

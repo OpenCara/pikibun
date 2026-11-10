@@ -358,6 +358,7 @@ export class RunnerSession {
         : this.controlPlane("/api/internal/api/credential", { sessionId: this.binding.session.id, host, ...(access === "write" ? { access } : {}) }),
       ...(this.#clone && this.config.repositoryCache ? { mirror: (repository: EgressRepository, onProgress: (progress: MirrorProgress) => void) => this.mirror(repository, onProgress) } : {}),
       ...(this.#clone ? { sessionBranch: sessionBranch(this.binding.session) } : {}),
+      fakeIpTunnels: async () => (await this.hostConfig()).fakeIpTunnels,
     });
   }
 
@@ -1693,11 +1694,11 @@ export class RunnerSession {
 
   private async requireHostEnvironment(automatic = false): Promise<void> {
     if (!this.#hostSession) return;
+    if (this.binding.session.connectorOwnerId === this.binding.owner.id) return;
     if (!(await this.hostConfig()).hostSessions) {
-      throw new RunnerError(403, "This host no longer runs sessions directly on it: its owner turned that off in Pikibun (Settings → Hosts → the host → Configuration). "
+      throw new RunnerError(403, "This host no longer runs members' sessions directly on it: its owner turned that off in Pikibun (Settings → Hosts → the host → Configuration). "
         + "Nothing ran. Start a new session to work in the sandbox.");
     }
-    if (this.binding.session.connectorOwnerId === this.binding.owner.id) return;
     const result = await this.authorize(this.binding.owner.id, "write", undefined, true, true);
     if (result.hostSessions !== true) {
       throw new RunnerError(403, "The session's owner may no longer run sessions directly on this host: the grant that let them has ended. "
@@ -2084,14 +2085,14 @@ export class RunnerSession {
         await this.permit(api, call, "github_issue", `${repository}: ${args.title}`, { write: true });
         return approvalText(await this.operationOutcome(await this.createApproval(attribution.initiatedBy, { kind: "github.issue", repository, title: args.title, body: args.body }, String(api.taskId), { permitted: true }), call));
       } }),
-      defineTool({ name: "schedule", description: "Manage this session's scheduled prompts: messages Pikibun sends this session's agent on a cron schedule, as the session owner, so the session wakes up and works on its own (a nightly check, a weekly report). Use it when the user asks to do something every hour, day or week, or at a later time. action list takes nothing; create takes message (what the agent is told each time) and cron (five fields: minute hour day-of-month month day-of-week, such as '0 9 * * 1-5'; runs at least 5 minutes apart), and optionally name, time_zone (IANA, such as Europe/Berlin; UTC otherwise, so ask the user for theirs when the time of day matters), access (approval, the default: commands wait for a human; read; auto, only in a message the owner sent with auto-approve), run_in (session, the default: each run prompts this session's agent, and is skipped while it is busy; child: each run starts a new session under this one, on its model and host, with the message as its opening message, so this session is never prompted and its own work goes on) and enabled; update takes id and only the fields to change (an auto-approved schedule is changed, other than paused or lowered in access, only in a message the owner sent with auto-approve); delete takes id. Only the session owner's messages can use it. A run due while the agent is busy is skipped, unless it runs in a child session. The owner sees and edits them in the session panel's Schedules tab.", parameters: obj({
+      defineTool({ name: "schedule", description: "Manage this session's scheduled prompts: messages Pikibun sends this session's agent on a cron schedule, as the session owner, so the session wakes up and works on its own (a nightly check, a weekly report). Use it when the user asks to do something every hour, day or week, or at a later time. action list takes nothing; create takes message (what the agent is told each time) and cron (five fields: minute hour day-of-month month day-of-week, such as '0 9 * * 1-5'; runs at least 5 minutes apart), and optionally name, time_zone (IANA, such as Europe/Berlin; UTC otherwise, so ask the user for theirs when the time of day matters), access (approval, the default: commands wait for a human; read; auto, only in a message the owner sent with auto-approve), run_in (session, the default: each run prompts this session's agent, and is skipped while it is busy; child: each run starts a new session under this one, on its model and host, with the message as its opening message, so this session is never prompted and its own work goes on), one_shot (for child runs: true, the default, archives each child once its run is done, unless someone sent it a message of their own; false keeps it open) and enabled; update takes id and only the fields to change (an auto-approved schedule is changed, other than paused or lowered in access, only in a message the owner sent with auto-approve); delete takes id. Only the session owner's messages can use it. A run due while the agent is busy is skipped, unless it runs in a child session. The owner sees and edits them in the session panel's Schedules tab.", parameters: obj({
         action: StringEnum(scheduleToolActions), id: opt(str()), message: opt(str()), cron: opt(str()),
-        time_zone: opt(str()), name: opt(str()), access: opt(StringEnum(accessModes)), run_in: opt(StringEnum(scheduleRunIns)), enabled: opt(bool()),
+        time_zone: opt(str()), name: opt(str()), access: opt(StringEnum(accessModes)), run_in: opt(StringEnum(scheduleRunIns)), one_shot: opt(bool()), enabled: opt(bool()),
       }, { open: true }), execute: async (args, api, call) => {
         await this.requireSessionTool("schedule");
         const attribution = await this.toolActor(api, true);
         const fields = Object.fromEntries(Object.entries({ scheduleId: args.id, name: args.name, cron: args.cron, timeZone: args.time_zone, content: args.message,
-          access: args.access, runIn: args.run_in, enabled: args.enabled }).filter(([, value]) => value !== undefined)) as Omit<ScheduleToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
+          access: args.access, runIn: args.run_in, oneShot: args.one_shot, enabled: args.enabled }).filter(([, value]) => value !== undefined)) as Omit<ScheduleToolRequest, "sessionId" | "actorId" | "admissionId" | "callId" | "action">;
         if (Object.values(fields).some(value => typeof value === "string" && value.includes("\0"))) throw new RunnerError(400, "Schedule fields must not contain NUL characters");
         const state = await this.metadata();
         const run = state.runs[state.toolActors[String(api.taskId)]!.runKey]!;

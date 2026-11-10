@@ -35,7 +35,7 @@ Approving tool calls still takes an explicit grant from the session's owner, wha
 Every account has one workspace that is its alone, named **Private** at first (you can rename it under **General → Rename**) and marked with a lock. It is pinned at the top of the sidebar, above the workspaces you create or join, and it is where **New session** starts until you choose another. Pikibun makes it the first time you open the app, for new accounts and existing ones alike.
 
 - Nobody else can join it: it takes no members (**Add member** is refused) and has no invite link, and your hosts can't be shared into it. Its page under **Settings → Workspaces** has no **Members** section.
-- Your own hosts are connected to it, as to every workspace you belong to, so you can start a session there as soon as a host is paired.
+- Your own hosts are connected to it, as to every workspace you belong to, so you can start a session there as soon as a host is paired. New sessions there run [directly on the host](hosts.md#sessions-on-the-host), without the sandbox, wherever the host can, and in the desktop app they go to **This Computer** (**This Mac**) while it is your host and online; choose another host, or **Where it runs → Sandbox**, when you start one.
 - Its sessions need no source: an agent starts in an empty worktree and works on what you give it, or on what it clones itself. Add repositories or documents under **Sources** as in any workspace if you want them.
 - New sessions there are private, and its sessions show to nobody but you unless you turn on a session's share link. The server's administrators still see that it exists, as they see every workspace (see [Administration](self-hosting.md#administration)).
 

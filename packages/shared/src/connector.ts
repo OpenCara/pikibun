@@ -38,6 +38,7 @@ export interface ConnectorCapabilities {
   hostGrants?: boolean;
   hostOwnerDecides?: boolean;
   hostSessionGrants?: boolean;
+  ownerHostSessions?: boolean;
   unboundedShellGrants?: boolean;
   fileBrowser?: boolean;
   fileUploads?: boolean;
@@ -46,6 +47,7 @@ export interface ConnectorCapabilities {
   extensions?: boolean;
   builtinExtensions?: boolean;
   requiredExtensions?: boolean;
+  fakeIpTunnels?: boolean;
   hostConfig?: boolean;
   compactionConfig?: boolean;
   gpu?: GpuKind;
