@@ -52,6 +52,7 @@ export function HostDetails(props: { connector: ConnectorInfo }) {
       <If when={config()?.gitCredentials || capabilities().gitCredentials}><Note>Git credentials: offered by the host owner for pushes in their own sessions, where a workspace's push access uses the host's Git credentials.</Note></If>
       <If when={capabilities().repositoryCache}><Note>Repository cache: this host fetches repositories into its own cache with the host owner's Git credentials, after Pikibun confirms that the session's owner can read them with their own account.</Note></If>
       <If when={config()?.hostSessions && capabilities().hostConfig && !capabilities().unsandboxed}><Note>Sessions on the host: its owner may start sessions that run directly on it, without the sandbox.</Note></If>
+      <If when={config()?.fakeIpTunnels && capabilities().fakeIpTunnels && !capabilities().unsandboxed}><Note>Fake-IP proxy: its owner trusts a local proxy's fake-IP addresses for every host a workspace's network policy allows, where Pikibun can't check where that proxy connects.</Note></If>
       <If when={config() && capabilities().hostConfig}>
         <Note>{`Commands: stopped after ${config()?.commandTimeoutSeconds} seconds${config()?.gpu && capabilities().gpu ? `, with the host's GPU (${capabilities().gpu === "dxg" ? "WSL /dev/dxg" : "render nodes"})` : ""}.`}</Note>
       </If>

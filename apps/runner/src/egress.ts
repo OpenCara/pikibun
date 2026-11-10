@@ -53,6 +53,9 @@ export interface EgressOptions {
   apiCredential?: (host: string, access: ApiAccessKind) => Promise<unknown>;
   apiAuthority?: InterceptionAuthority;
   apiUpstream?: ApiUpstream;
+  // The host owner's HostConfig.fakeIpTunnels: whether any host the policy allows may resolve to a local proxy's fake-IP
+  // addresses, not only those it names exactly. Asked on each such tunnel; an error counts as off.
+  fakeIpTunnels?: () => Promise<boolean>;
 }
 
 export function egressEnvironment(sessionBranch?: string, endpoint?: EgressEndpoint, caBundle = CA_BUNDLE): Record<string, string> {
@@ -367,15 +370,21 @@ export class EgressProxy {
     }
   }
 
+  async #fakeIpTunnels(): Promise<boolean> {
+    try { return await this.#options.fakeIpTunnels?.() === true; }
+    catch { return false; }
+  }
+
   async #addresses(host: string, policy: NetworkPolicy): Promise<{ addresses: string[] } | { reason: string }> {
     const refused = { reason: `${host} does not resolve to a public address` };
     if (isIP(host)) return publicAddress(host) ? { addresses: [host] } : refused;
     const results = await (this.#options.lookup ?? (name => dnsLookup(name, { all: true, verbatim: true })))(host);
     if (!results.length || results.some(result => !publicAddress(result.address) && !fakeIpAddress(result.address))) return refused;
     const fake = results.find(result => fakeIpAddress(result.address));
-    if (fake && !hostNamed(policy, host)) {
+    if (fake && !hostNamed(policy, host) && !await this.#fakeIpTunnels()) {
       return { reason: `${host} resolves to ${fake.address}, a fake-IP address of a proxy on this host; tunnels go to such addresses only for `
-        + `hosts the network policy names exactly (an allowlist entry without *. or a package registry), or exclude ${host} from the proxy's fake-IP mode` };
+        + `hosts the network policy names exactly (an allowlist entry without *. or a package registry), unless the host's owner trusts that proxy `
+        + `(Settings → Hosts → the host → Configuration → Fake-IP proxy), or exclude ${host} from the proxy's fake-IP mode` };
     }
     return { addresses: results.map(result => result.address) };
   }

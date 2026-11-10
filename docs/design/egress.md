@@ -79,7 +79,12 @@ it for a minute, and keeps a stale one for up to five minutes if the control pla
   policy names itself exactly (`hostNamed`: an allowlist's exact domains, not its `*.` entries, and package registries,
   and in open mode the package registries) may resolve to them, as the host's own traffic does; that proxy resolves the
   name again on its side, where nothing checks the address, so names a session picks (any host in open mode, any
-  subdomain under a `*.` entry) and bare 198.18 addresses are refused, saying why. The proxy never looks inside tunnels.
+  subdomain under a `*.` entry) and bare 198.18 addresses are refused, saying why. A host's owner who trusts that proxy
+  with every name turns on `HostConfig.fakeIpTunnels` (Settings → Hosts → the host → Configuration → Fake-IP proxy, off
+  by default, owner-only): then any host the policy allows may resolve to fake-IP addresses, accepting that a name a
+  session picks which really points at the host or its network is reached through that proxy on port 443. The proxy
+  asks for it on each such tunnel (the connector caches the host's configuration for 30 seconds) and counts an error as
+  off; bare 198.18 addresses stay refused. The proxy never looks inside tunnels.
   Other ports and plain-HTTP proxying are refused.
 - **`/__pikibun/status`** shows the policy, the relayed repositories and the last 50 decisions (the proxy keeps
   200 in memory).
