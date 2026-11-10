@@ -1309,15 +1309,22 @@ export class RunnerSession {
       await conversation?.waitForIdle(context);
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
       const cause = settled.status === "unanswered" && settled.reason === "model_error" && !compaction ? modelFailureCause(settled.detail) : undefined;
-      const model = (await conversation?.agent(context))?.model;
-      const failure: Run["failure"] = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model")
+      const failed = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model");
+      // Only a failure names its model: a run that answered asks the conversation nothing more.
+      const model = failed ? (await conversation?.agent(context))?.model : undefined;
+      const failure: Run["failure"] = failed
         ? { reason: compaction ? "compaction_failed" : settled.reason, ...model, ...(compaction ? { compaction } : {}), ...(cause ? { cause } : {}) } : undefined;
-      if (failure && conversation && await this.compactAfterFailure(conversation, state.runs[key]!.mode, cause, model)) failure.compacting = true;
+      const compacts = !!failure && !!conversation && await this.compactsAfterFailure(conversation, state.runs[key]!.mode, cause, model);
       // Pi ends a run that host crashes cut off again and again rather than crash the host once more; sending it again runs
       // it afresh.
       const crashed = settled.status === "unanswered" && (settled.reason === "restart_limit" || settled.reason === "interrupted");
       await this.exclusive(async () => {
         if (generation !== this.generation || this.closing) return;
+        // Compaction starts only for a run nobody stopped: `stop` holds the same lock, so none can come between.
+        if (compacts && !(await this.metadata()).runs[key]?.stopped) {
+          try { await conversation!.compact(undefined, context); failure!.compacting = true; }
+          catch { /* A compaction that can't start leaves the failure as it was. */ }
+        }
         await this.mutate(meta => {
           const run = meta.runs[key]!;
           // A stopped run stays stopped, whatever its aborted submission came to.
@@ -1332,19 +1339,17 @@ export class RunnerSession {
   }
 
   /**
-   * Starts compacting a conversation whose run just failed with a dropped stream on a large context (see
-   * compactsAfterFailure), so the next message sends less; Pi summarizes in the background and places the summary while
-   * the conversation is idle. Whether it started: a compaction it can't start leaves the failure as it was.
+   * Whether a conversation whose run just failed should start compacting (see compactsAfterFailure): a dropped stream on a
+   * large context, so the next message sends less. Pi then summarizes in the background and places the summary while the
+   * conversation is idle. A context it can't read compacts nothing.
    */
-  private async compactAfterFailure(conversation: Conversation, mode: Run["mode"], cause: ModelFailureCause | undefined,
+  private async compactsAfterFailure(conversation: Conversation, mode: Run["mode"], cause: ModelFailureCause | undefined,
     model: { provider: string; modelId: string } | undefined): Promise<boolean> {
     if (cause !== "incomplete_stream" || mode !== "write") return false;
     try {
       const enabled = compactionEnabled(configuredCompaction(this.config.compaction, this.#configuredCompaction), model);
       const tokens = contextTokens((await conversation.context(context)).messages);
-      if (!compactsAfterFailure({ cause, mode, tokens, enabled })) return false;
-      await conversation.compact(undefined, context);
-      return true;
+      return compactsAfterFailure({ cause, mode, tokens, enabled });
     }
     catch { return false; }
   }

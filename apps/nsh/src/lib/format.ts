@@ -47,7 +47,7 @@ export function modelFailure({ provider, modelId, status, cause, compacting }: N
     if (!advice) return compacting ? `${cut} The host started compacting the conversation's context.` : cut;
     const why = " A gateway or proxy between the host and the provider usually does this, and a very long conversation makes it more likely.";
     return compacting
-      ? `${cut}${why} The host started compacting this conversation's context so the next request is smaller: send the message again once the summary appears.`
+      ? `${cut}${why} The host started compacting this conversation's context so the next request is smaller: send the message again once a summary of the conversation appears. If none does, or the message fails again, continue in a new session.`
       : `${cut}${why} Send the message again to retry. If it keeps failing, continue in a new session.`;
   }
   if (!advice) {

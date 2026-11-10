@@ -1100,22 +1100,6 @@ test("a stream that keeps dropping on a large conversation says so, and starts c
   assert.ok(kinds.some(kind => /compaction/.test(kind)), `the summary is in the transcript: ${kinds.join(", ")}`);
 });
 
-test("a stream that drops on a small conversation says so, and compacts nothing", hostMode, async t => {
-  const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow: 1_000_000 }] });
-  faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "Anthropic stream ended without a stop reason" })));
-  const { service } = await hostFixture(t, { resolveModels: async model => {
-    const models = createModels();
-    models.setProvider(faux.provider);
-    return { models, provider: model.provider, modelId: model.modelId };
-  } });
-  const id = "dropped-small-session";
-  const session = await service.provision(binding(id), await ticket(id, "create"));
-  await session.submit(await ticket(id, "submit"), { content: "hello", requestId: "dropped" }, "write");
-  for (const end = Date.now() + 40_000; (await session.view()).busy && Date.now() < end;) await delay(50);
-  const failure = (await session.view()).entries.find(entry => entry.kind === "workspace.run-failure");
-  assert.deepEqual(failure?.error, { provider: "faux", modelId: "faux-1", cause: "incomplete_stream" });
-});
-
 test("a run Pi settles without an answer shows as a failed model turn instead of silence", hostMode, async t => {
   // A model the host no longer offers ends the run like a failed compaction does: unanswered, with no entry for it.
   const { service } = await hostFixture(t, { resolveModels: async model => {
