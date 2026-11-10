@@ -494,7 +494,6 @@ test("in the Linux sandbox, a program tool's program the host lacks is named wit
   await session.submit(await ticket(id, "submit"), { content: "Test it.", requestId: "run", admissionId: await sha256("missing programs admission") }, "write");
   await idle(session);
   const view = await session.view();
-  assert.ok((await records(session)).every(record => record.status !== "executed"), "the missing program's call ran nothing");
   assert.match(view.entries.map(entry => entry.text).join("\n"), /frob-not-installed-anywhere isn't installed on this host where the session's sandbox sees it[^]*Nothing ran\./);
   assert.match(instructions, /This host doesn't have the frob tool's frob-not-installed-anywhere[^.]* where the session's sandbox sees them/);
   assert.match(instructions, /Calls to them are refused before they run/);

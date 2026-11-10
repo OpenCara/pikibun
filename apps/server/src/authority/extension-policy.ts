@@ -10,7 +10,7 @@ interface ExtensionRow { source: string; enabled: number | string; tools_mode: E
 export async function workspaceExtensions(env: Env, workspaceId: string): Promise<WorkspaceExtension[]> {
   const rows = await env.DB.query<ExtensionRow>(`SELECT source, enabled, tools_mode, settings_json FROM workspace_extensions
     WHERE workspace_id = ? ORDER BY position, package_key`).bind(workspaceId).all();
-  return withSessionToolsListed(rows.map(row => ({ source: row.source, enabled: Number(row.enabled) === 1, tools: row.tools_mode, settings: JSON.parse(row.settings_json) })));
+  return withSessionToolsListed(rows.map(row => ({ source: row.source, enabled: Number(row.enabled) === 1, tools: 'automatic' as const, settings: JSON.parse(row.settings_json) })));
 }
 
 export async function automaticTools(env: Env, connectorId: string): Promise<boolean> {

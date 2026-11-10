@@ -97,7 +97,7 @@ test('a workspace\'s owners and admins choose its extensions, one version of eac
   await json(await s.carol.request('PUT', path, { source: 'npm:cc-safety-net@2.7.2', tools: 'automatic', settings: { strict: true } }));
   const changed = await json<Listing>(await s.alice.request('PUT', path, { source: 'npm:pi-memory@0.5.0', enabled: false }));
   assert.deepEqual(changed.extensions, withSessionToolsListed([
-    { source: 'npm:pi-memory@0.5.0', enabled: false, tools: 'approval', settings: {} },
+    { source: 'npm:pi-memory@0.5.0', enabled: false, tools: 'automatic', settings: {} },
     { source: 'npm:cc-safety-net@2.7.2', enabled: true, tools: 'automatic', settings: { strict: true } },
   ]));
   assert.deepEqual((await json<Listing>(await s.bob.request('GET', path))).extensions, changed.extensions);
@@ -108,7 +108,7 @@ test('a workspace\'s owners and admins choose its extensions, one version of eac
   for (let index = 1; index < 32; index++) await json(await s.alice.request('PUT', path, { source: `npm:extension-${index}@1.0.0` }));
   await denied(await s.alice.request('PUT', path, { source: 'npm:one-too-many@1.0.0' }), 409, 'extension_limit');
   const switched = await json<Listing>(await s.alice.request('PUT', path, { source: 'piki:schedule', enabled: false, tools: 'automatic', settings: { strict: true } }));
-  assert.deepEqual(switched.extensions.find(item => item.source === 'piki:schedule'), { source: 'piki:schedule', enabled: false, tools: 'approval', settings: {} });
+  assert.deepEqual(switched.extensions.find(item => item.source === 'piki:schedule'), { source: 'piki:schedule', enabled: false, tools: 'automatic', settings: {} });
   await denied(await s.alice.request('PUT', path, { source: 'piki:files', enabled: false }), 400, 'invalid_extension');
   await denied(await s.alice.request('PUT', path, { source: 'npm:one-too-many@1.0.0' }), 409, 'extension_limit');
   await json(await s.alice.request('PUT', path, { source: 'npm:extension-1@2.0.0' }), 200);
@@ -194,7 +194,7 @@ test('a host\'s sessions get their workspace\'s extensions and its owner\'s swit
   const ask = (workspaceId: string) => self(f, s.connector, 'extensions/workspace', { workspaceId });
   assert.deepEqual(await json<Answer>(await ask(s.workspaceId)), { extensions: [
     { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'automatic', settings: {} },
-    { source: 'npm:off@1.0.0', enabled: false, tools: 'approval', settings: {} },
+    { source: 'npm:off@1.0.0', enabled: false, tools: 'automatic', settings: {} },
   ], automaticTools: false, toolGroups: {
     'test:bob': { name: 'Members', off: ['git_push', 'tunnel', 'github_comment', 'github_issue', 'github_merge', 'schedule', 'sessions', ...retiredGroupTools] },
   } }, 'a member\'s sessions lack the tools their role leaves out, which the host learns with the extensions');
@@ -233,7 +233,7 @@ test('Pikibun extensions: hosts aren\'t asked to install them, and a connector t
 test('every workspace starts with popular extensions, turned off, and existing ones got them after their own', async t => {
   const f = await fixture(t);
   const alice = await f.client('alice');
-  const off = (source: string) => ({ source, enabled: false, tools: 'approval' as const, settings: {} });
+  const off = (source: string) => ({ source, enabled: false, tools: 'automatic' as const, settings: {} });
   const expected = ['npm:pi-web-access@0.46.0', 'npm:pi-web-search@1.7.0', 'npm:cc-safety-net@2.7.2'];
   assert.deepEqual(defaultWorkspaceExtensions, expected);
   const { workspace } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'New' }), 201);
@@ -252,8 +252,8 @@ test('every workspace starts with popular extensions, turned off, and existing o
   const listed = async (id: string) => (await json<{ extensions: WorkspaceExtension[] }>(await alice.request('GET', `/api/workspaces/${id}/extensions`))).extensions
     .filter(item => !item.source.startsWith('piki:'));
   assert.deepEqual(await listed(older.id), [
-    { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'approval', settings: {} },
-    { source: 'npm:pi-web-search@1.6.0', enabled: true, tools: 'approval', settings: {} },
+    { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'automatic', settings: {} },
+    { source: 'npm:pi-web-search@1.6.0', enabled: true, tools: 'automatic', settings: {} },
     off('npm:pi-web-access@0.46.0'),
     off('npm:cc-safety-net@2.7.2'),
   ]);
@@ -266,7 +266,7 @@ test('every workspace starts with popular extensions, turned off, and existing o
 
 test('piki:sources, split into one extension per kind of document source, reaches connectors that have only it as whether any kind is on', async () => {
   const { connectorWorkspaceExtensions } = await import('../apps/server/src/extensions.js');
-  const entry = (source: string, enabled: boolean) => ({ source, enabled, tools: 'approval' as const, settings: {} });
+  const entry = (source: string, enabled: boolean) => ({ source, enabled, tools: 'automatic' as const, settings: {} });
   const kinds = ['piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs'];
   const older = [{ source: 'piki:gh' }, { source: 'piki:sources' }];
   const current = [...older, ...kinds.map(source => ({ source }))];
@@ -281,9 +281,9 @@ test('piki:sources, split into one extension per kind of document source, reache
 test('a workspace at its 32 extensions that turned a session tool off: connectors that have it read all 33, older ones get the 32 (review of #168)', async () => {
   const { connectorWorkspaceExtensions } = await import('../apps/server/src/extensions.js');
   const { parseWorkspaceExtensions, parseWorkspaceExtensionsAnswer } = await import('../packages/shared/src/host-extensions.js');
-  const regular = Array.from({ length: 32 }, (_, index) => ({ source: `npm:extension-${index}@1.0.0`, enabled: true, tools: 'approval' as const, settings: {} }));
-  const off = { source: 'piki:schedule', enabled: false, tools: 'approval' as const, settings: {} };
-  const gh = { source: 'piki:gh', enabled: true, tools: 'approval' as const, settings: {} };
+  const regular = Array.from({ length: 32 }, (_, index) => ({ source: `npm:extension-${index}@1.0.0`, enabled: true, tools: 'automatic' as const, settings: {} }));
+  const off = { source: 'piki:schedule', enabled: false, tools: 'automatic' as const, settings: {} };
+  const gh = { source: 'piki:gh', enabled: true, tools: 'automatic' as const, settings: {} };
   const all = [...regular, off];
   const current = connectorWorkspaceExtensions(all, [{ source: 'piki:gh' }, { source: 'piki:schedule' }]);
   assert.equal(current.length, 33);
@@ -300,7 +300,7 @@ test('Pikibun\'s session tools are in no workspace by default: pages and connect
   const f = await fixture(t); const s = await team(f);
   const path = `/api/workspaces/${s.workspaceId}/extensions`;
   const page = async () => (await json<{ extensions: WorkspaceExtension[] }>(await s.bob.request('GET', path))).extensions;
-  const entry = (source: string, enabled: boolean) => ({ source, enabled, tools: 'approval', settings: {} });
+  const entry = (source: string, enabled: boolean) => ({ source, enabled, tools: 'automatic', settings: {} });
   assert.deepEqual(await page(), pikiSessionToolExtensions().filter(item => !item.core && item.source !== 'piki:sources').map(item => entry(item.source, false)));
   for (const source of ['piki:git', 'piki:node', 'piki:github', 'piki:notion', 'piki:schedule', 'piki:tunnel']) assert.equal(sessionToolExtensionOn(await page(), source), false, source);
   assert.equal(sessionToolExtensionOn(await page(), 'piki:files'), true, 'the file tools are always on');

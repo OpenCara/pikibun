@@ -121,7 +121,7 @@ export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]
   const listed = new Set(extensions.map(item => extensionPackageKey(item.source)));
   const replaced = new Set<string>(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
   const unlisted = pikiSessionToolExtensions().filter(item => !item.core && !replaced.has(item.source) && !listed.has(item.source));
-  return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "approval" as const, settings: {} }))];
+  return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "automatic" as const, settings: {} }))];
 }
 
 export const extensionLimits = Object.freeze({
