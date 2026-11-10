@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { ORIGIN, server, signedIn } from "./fixtures";
+import { ORIGIN, server, signedIn, view } from "./fixtures";
 
 // A session's panel and header menu, ported from the web app: its details, approvals, files, schedules and activity.
 
@@ -8,8 +8,8 @@ const bodyOf = (app: { requests(): { method: string; url: string; body?: string 
   return request?.body ? JSON.parse(request.body) : undefined;
 };
 
-async function openPanel() {
-  const app = await open("../App.tsx", { network: server(), storage: signedIn, platform: "macos", width: 1280, height: 820 });
+async function openPanel(routes: Parameters<typeof server>[0] = {}) {
+  const app = await open("../App.tsx", { network: server(routes), storage: signedIn, platform: "macos", width: 1280, height: 820 });
   await app.press("id:session-row-s1");
   await app.waitFor("id:session-details");
   await app.press("id:session-details");
@@ -23,6 +23,30 @@ describe("a session's panel", () => {
     for (const part of ["panel-details", "session-host", "panel-people", "panel-backups", "panel-access"]) await app.waitFor(`id:${part}`);
     await app.waitFor("text:Link sharing off");
     await app.waitFor("text:Runs as Ada Lovelace (you)");
+  });
+
+  test("Details shows how full the context window is, and where Pi compacts it", async () => {
+    const app = await openPanel();
+    await app.waitFor("id:panel-context");
+    await app.waitFor("text:84.2K of 200K tokens");
+    expect(app.shows("text:42%")).toBe(true);
+    expect(app.shows("text:Pi summarizes the older messages once it passes about 184K tokens")).toBe(true);
+    expect(app.shows("label:Context: 84.2K of 200K tokens, 42%")).toBe(true);
+  });
+
+  test("Details says when compaction is off, and leaves the meter out without a window", async () => {
+    const off = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, context: { tokens: 950, window: 8192 } }, revision: "r1" } } });
+    await off.waitFor("text:950 of 8.2K tokens");
+    await off.waitFor("text:Compaction is off for this model on its host: a conversation that outgrows the window fails until it is shortened");
+    off.dispose();
+    const unknown = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, context: { tokens: 1_250_000 } }, revision: "r1" } } });
+    await unknown.waitFor("text:About 1.3M tokens");
+    expect(unknown.shows("id:context-percent")).toBe(false);
+    unknown.dispose();
+    // A reserve as large as the window compacts at once: the meter warns as its words do.
+    const due = await openPanel({ [`GET ${ORIGIN}/api/sessions/s1/view`]: { body: { view: { ...view, context: { tokens: 1200, window: 8192, compactsAt: 0 } }, revision: "r1" } } });
+    await due.waitFor("text:Past where Pi compacts it, at about 0 tokens: Pi summarizes the older messages at its next step");
+    expect(due.shows("text:15%")).toBe(true);
   });
 
   test("Approvals lists the session's approvals, pending first", async () => {

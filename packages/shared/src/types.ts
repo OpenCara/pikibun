@@ -921,6 +921,8 @@ export interface SessionView {
   memberForks?: boolean;
   /** The shared conversation's current model and reasoning level. */
   agent?: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
+  /** How full the shared conversation's context window is, which the session panel shows. Absent from older runners. */
+  context?: SessionContextView;
   /**
    * Access mode of the latest shared-conversation submission ("approval" when it named none). Absent before the first
    * one; older runners also leave it out when the latest one asked before acting.
@@ -953,6 +955,18 @@ export interface SessionView {
    * runners that predate tunnels.
    */
   tunnel?: SessionTunnelView;
+}
+/**
+ * The shared conversation's context, as its model sees it now: about how many tokens it holds (what the provider counted
+ * for its last answered request, and about 4 characters a token for everything since), the context window of its current
+ * model when the host's catalog gives one, and the size at which Pi compacts it, its window less the reserve the host's
+ * compaction settings keep for that model. `compactsAt` is absent where compaction is off for the model, or its window
+ * unknown.
+ */
+export interface SessionContextView {
+  tokens: number;
+  window?: number;
+  compactsAt?: number;
 }
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
