@@ -15,6 +15,7 @@ import { createDraft, forgetSentDraft, newSessionDraftId, saveDraft } from "../l
 import { randomId } from "../lib/format";
 import type { PageRoute } from "../lib/page";
 import { createAction, createResource } from "../lib/resource";
+import { thisComputerHostId } from "../lib/this-computer";
 import { OwnJoinRequests } from "../settings/join-requests";
 import { control, palette, radius, text } from "../theme";
 import { Banner, Button, Chip, EmptyState, Feedback, IconButton, Loading, Logo, Note, Picker, Small } from "../ui";
@@ -93,7 +94,8 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const content = createDraft(draftId);
   const visibility = signal<"workspace" | "private">("workspace");
   const trustedHost = signal("");
-  const onHost = signal(false);
+  const onHost = signal<boolean | null>(null);
+  const personal = () => props.workspace.personal === true;
   const action = createAction();
 
   const modelList = () => models.data()?.models;
@@ -105,7 +107,9 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
     return (connectors() ?? []).filter(host => offering.has(host.id) && !host.revokedAt)
       .sort((a, b) => Number(b.ownerId === user.id) - Number(a.ownerId === user.id));
   });
-  const host = () => hosts().find(item => item.id === choice()) ?? hosts().find(item => item.id === data.lastChat()?.connectorId) ?? hosts().find(item => item.online) ?? hosts()[0];
+  const thisComputerHost = () => { const id = personal() ? thisComputerHostId() : undefined; return id ? hosts().find(item => item.id === id && item.online) : undefined; };
+  const host = () => hosts().find(item => item.id === choice()) ?? thisComputerHost() ?? hosts().find(item => item.id === data.lastChat()?.connectorId)
+    ?? hosts().find(item => item.online) ?? hosts()[0];
   const hostModel = (wanted?: { provider: string; modelId: string }) => {
     const current = host();
     return wanted && current && current.models.some(item => sameModel(item, wanted)) ? modelList()?.find(item => item.connectorId === current.id && sameModel(item, wanted)) : undefined;
@@ -128,7 +132,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   const repositoriesReady = () => Boolean(repositories() && !repos.error() && !repos.loading() && (sourceCount() || !repositoriesRequired()));
   const trusted = () => !foreign() || Boolean(host() && trustedHost() === host()!.id);
   const hostSessions = () => Boolean(host()?.hostSessions);
-  const runOnHost = () => hostSessions() && onHost();
+  const runOnHost = () => hostSessions() && (onHost() ?? personal());
   const unsandboxed = () => Boolean(host()?.capabilities.unsandboxed || runOnHost());
   const canStart = () => Boolean(model() && host() && available() && repositoriesReady() && trusted() && !action.busy());
   const attachments = createAttachments({ imagesUnavailable: () => imagesUnavailable(host()), fileOptions: createFileOptions(() => props.workspace.id, host) });
@@ -141,7 +145,7 @@ function Form(props: { workspace: Workspace; onStarted: (sessionId: string) => v
   let environmentHost: string | null | undefined;
   effect(() => {
     const id = host()?.id ?? null;
-    if (environmentHost !== undefined && id !== environmentHost) onHost.set(false);
+    if (environmentHost !== undefined && id !== environmentHost) onHost.set(null);
     environmentHost = id;
   });
 

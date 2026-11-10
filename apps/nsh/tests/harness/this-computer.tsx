@@ -1,6 +1,6 @@
 import { host as embedder, mount, signal, Text, View } from "nsh";
 import type { HostInspection, LoginProvider } from "../../../runner/src/app-host-protocol";
-import { appCliFolder, installCommand, setHostLauncher, setInstaller, thisComputer, type HostLink, type InstallRun } from "../../src/lib/this-computer";
+import { appCliFolder, installCommand, setHostLauncher, setInstaller, thisComputer, thisComputerHostId, type HostLink, type InstallRun } from "../../src/lib/this-computer";
 import { Button } from "../../src/ui";
 import { ThisComputerPanel } from "../../src/settings/ThisComputer";
 
@@ -119,6 +119,7 @@ mount(() => (
     }} />
     <Button testID="fake-terminal-install" label="Install in a terminal" onPress={() => { command = "ok"; }} />
     <Text>{`install error: ${host.installError()}`}</Text>
+    <Text>{`this computer's host: ${thisComputerHostId() ?? "none"}`}</Text>
     <View testID="fake-host-sent">
       <Each of={sent()} key="index">{line => <Text>{`sent ${line()}`}</Text>}</Each>
     </View>

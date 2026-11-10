@@ -460,6 +460,7 @@ test('claim and manifest updates reject malformed metadata and secret-bearing fi
     { name: 'GPU lent by an unsandboxed host', value: { ...manifest, capabilities: { platform: 'darwin', sandbox: false, productionShell: false, unsandboxed: true, gpu: 'render' } }, code: 'invalid_manifest' },
     { name: 'unbounded shell grants without host grants', value: { ...manifest, capabilities: { ...manifest.capabilities, hostCommands: true, unboundedShellGrants: true } }, code: 'invalid_manifest' },
     { name: 'non-boolean unbounded shell grants', value: { ...manifest, capabilities: { ...manifest.capabilities, hostCommands: true, hostGrants: true, unboundedShellGrants: 'yes' } }, code: 'invalid_manifest' },
+    { name: 'non-boolean owner host sessions', value: { ...manifest, capabilities: { ...manifest.capabilities, hostConfig: true, ownerHostSessions: 'yes' } }, code: 'invalid_manifest' },
   ];
   const before = f.sqlite.prepare('SELECT * FROM connectors WHERE id = ?').get(connector.connectorId);
   for (const entry of invalid) {
@@ -3655,7 +3656,7 @@ test('a desktop app hands a chunk to the session host on its own computer with a
   await denied(await self(f, s.connector, 'uploads/verify', { grant: granted.grant }), 403, 'permission_revoked');
 });
 
-test('a host\'s owner starts a session directly on the host only where its configuration accepts that, and its binding says so', async t => {
+test('a host\'s owner starts a session directly on the host, without its configuration accepting that once its connector allows it, and its binding says so', async t => {
   const f = await fixture(t); const s = await privateWorkspace(f);
   const id = s.connector.connectorId; const config = `/api/connectors/${id}/config`;
   const accept = (hostSessions: boolean) => s.owner.request('PATCH', config, { hostSessions });
@@ -3690,6 +3691,13 @@ test('a host\'s owner starts a session directly on the host only where its confi
   await denied(await start({ hostEnvironment: true }), 409, 'host_sessions_off');
   assert.equal((await listed())?.hostSessions, undefined);
   assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', `/api/sessions/${session.id}`))).session.hostEnvironment, true);
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...manifest.capabilities, hostConfig: true, ownerHostSessions: true } }));
+  assert.equal((await listed())?.hostSessions, true, 'its owner is offered sessions on the host whatever the host accepts from members');
+  const own = (await json<{ session: SessionRecord }>(await start({ hostEnvironment: true }), 201)).session;
+  assert.equal(own.hostEnvironment, true);
+  assert.equal((JSON.parse(s.hub.requests.at(-1)!.request.body) as RunnerBinding).session.hostEnvironment, true);
+  assert.equal((await json<{ connectors: ConnectorInfo[] }>(await s.member.request('GET', `/api/workspaces/${s.team.id}/connectors`))).connectors
+    .find(item => item.id === id)?.hostSessions, undefined);
   await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { platform: 'darwin', sandbox: false, productionShell: false, unsandboxed: true, plainGit: true, hostConfig: true } }));
   await json(await accept(true));
   await denied(await start({ hostEnvironment: true }), 400, 'host_unsandboxed');
@@ -3725,7 +3733,7 @@ test('a member it is shared with starts sessions directly on a host only with a 
   assert.equal(await offered(), undefined);
   await denied(await start(), 409, 'connector_update_required');
   assert.equal(onHost(), 0);
-  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostSessionGrants: true } }));
+  await json(await self(f, s.connector, 'manifest', { ...manifest, capabilities: { ...capabilities, hostSessionGrants: true, ownerHostSessions: true } }));
   assert.equal(await offered(), true);
   const { session } = await json<{ session: SessionRecord }>(await start(), 201);
   assert.equal(session.hostEnvironment, true);
