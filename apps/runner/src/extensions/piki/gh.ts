@@ -1,11 +1,6 @@
 import { pikiExtension } from "../../../../../packages/shared/src/piki-extensions.js";
 import { apiWrites, commandWords, hasOption, hasShortOption, positionals, type CliSpec } from "./command.js";
 
-/*
- * piki:gh, the GitHub CLI (docs/design/piki-extensions.md).
- */
-
-/** Commands that only read, by group: every subcommand of a group set to true. */
 const READS: Record<string, readonly string[] | true> = {
   pr: ["list", "view", "diff", "checks", "status"],
   issue: ["list", "view", "status"],
@@ -47,7 +42,6 @@ export const ghSpec: CliSpec = {
   passEnv: name => ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST", "GH_CONFIG_DIR"].includes(name),
   tokenEnv: ["GH_TOKEN", "GITHUB_TOKEN"],
   setEnv: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_NO_EXTENSION_UPDATE_NOTIFIER: "1", GH_SPINNER_DISABLED: "1", GH_PAGER: "cat" },
-  // Options may sit anywhere among the command's words, and short ones cluster (-at): these look at every argument.
   refused(args) {
     const words = positionals(args);
     if (words.includes("auth") && words.includes("token")) return "gh auth token would show its token";
@@ -56,7 +50,6 @@ export const ghSpec: CliSpec = {
     return undefined;
   },
   writes(args) {
-    // Help reads too, as gh help <command>: a --help among other options might be another option's value.
     if (args.length === 1 && args[0] === "--version") return undefined;
     const words = commandWords(args);
     const [group, command] = words;

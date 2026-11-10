@@ -31,7 +31,6 @@ const azurePin = { bindingId: 'binding-az', commit: pinnedCommit, fullName: 'con
 
 type Route = (url: URL, init: RequestInit) => Response | undefined;
 interface Call { method: string; url: string; authorization: string | null; redirect?: RequestRedirect; body?: unknown }
-/** The session runs on a connected host owned by `owner`, shared with the workspace when that is not the session owner. */
 interface Host { owner: string; gitCredentials?: boolean }
 const connectorToken = 'connector-token'.padEnd(43, 'x');
 const connectionToken = 'connection-token'.padEnd(43, 'y');
@@ -74,10 +73,8 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
     sqlite.prepare('INSERT INTO workspace_repositories (id,workspace_id,provider,host,repository_id,full_name,ref,private,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
       .run(bindingId, 'workspace', provider, host, repositoryId, fullName, 'main', 1, createdAt);
   }
-  // A clone session: it pushes a clone's directory to the workspace repository at the operation's path.
   sqlite.prepare('INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,repositories_json,connector_id,connector_owner_id,repository_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
     .run('session', 'workspace', owner, 'version', 'session', 'ready', createdAt, '[]', host ? 'connector' : null, host?.owner ?? null, 'clone');
-  // The approver may approve but not write; the viewer may only read.
   sqlite.prepare('INSERT INTO session_grants (session_id,user_id,permissions_json,created_at) VALUES (?,?,?,?)').run('session', approver, '["read","approve"]', createdAt);
   sqlite.prepare('INSERT INTO session_grants (session_id,user_id,permissions_json,created_at) VALUES (?,?,?,?)').run('session', viewer, '["read"]', createdAt);
   sqlite.prepare('INSERT INTO github_tokens (user_id,ciphertext,updated_at) VALUES (?,?,?)').run(owner, await encryptToken(env, owner, 'owner-oauth-token'), createdAt);
@@ -97,9 +94,7 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   const state = { canPush: options.canPush ?? true, bitbucketWrite: options.bitbucketWrite ?? true, githubTip: tip, githubPrivate: true, githubPullExists: false, bitbucketPullExists: false,
     githubBranch: null as Record<string, unknown> | null, gitlabBranch: null as Record<string, unknown> | null,
     giteaBranch: null as Record<string, unknown> | null, azureAllow: true, resetStatus: 200, resetToken: 'owner-oauth-token-2',
-    // Pull requests as GitHub reads them back (pull-request-states.ts), by number; a missing one is a 404. All have head `tip`.
     githubPulls: {} as Record<number, { state: string; merged: boolean; draft: boolean; reviews: unknown[]; checkRuns: unknown[]; statuses: unknown[] }>,
-    // Pull requests GitHub lists for a head (owner:branch), newest first (session-branches.ts).
     branchPulls: {} as Record<string, { number: number; html_url: string; created_at: string }[]> };
   const routes: Route[] = [
     (url, init) => {
@@ -118,7 +113,6 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
         return Response.json({ token: 'ghs_installation_token', expires_at: new Date(Date.now() + 3600000).toISOString() }, { status: 201 });
       }
       if (method === 'DELETE' && url.pathname === '/installation/token') return new Response(null, { status: 204 });
-      // Pikibun's OAuth app resets (PATCH) and deletes (DELETE) the owner's sign-in token.
       if (method === 'PATCH' && url.pathname === '/applications/oauth-client/token') {
         return state.resetStatus === 200 ? Response.json({ token: state.resetToken }) : Response.json({ message: 'unavailable' }, { status: state.resetStatus });
       }
@@ -177,7 +171,6 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
       if (url.origin === 'https://dev.azure.com' && url.pathname === `/contoso/_apis/git/repositories/${azureRepositoryId}`) {
         return Response.json({ id: azureRepositoryId, name: 'repo', defaultBranch: 'refs/heads/main', project: { id: azureProjectId, name: 'Project', visibility: 'private' } });
       }
-      // GenericContribute (4) for branches, CreateTag (32) for tags.
       if (url.origin === 'https://dev.azure.com' && /^\/contoso\/_apis\/permissions\/2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87\/(?:4|32)$/.test(url.pathname)) {
         return Response.json({ count: 1, value: [state.azureAllow] });
       }
@@ -195,13 +188,11 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   };
   t.after(() => { globalThis.fetch = previousFetch; });
 
-  // Sessions on a connected host call back through the connector-scoped routes with its credentials.
   const post = (path: string, body: unknown) => app.request(host ? path.replace('/api/internal/', '/api/connectors/self/') : path, {
     method: 'POST', body: JSON.stringify(body), headers: host
       ? { Authorization: `Bearer ${connectorToken}`, 'x-connection-token': connectionToken, 'Content-Type': 'application/json' }
       : { Authorization: `Bearer ${internalSecret}`, 'Content-Type': 'application/json' },
   }, env);
-  /** Sets the workspace push identity for one provider, host and scope. */
   function pushIdentity(provider: string, gitHost: string, scope: string, kind: string): void {
     sqlite.prepare(`INSERT INTO push_identities (id,workspace_id,provider,host,scope,kind,config_json,secret_ciphertext,status,created_by,created_at,updated_at)
       VALUES (?,?,?,?,?,?,'{}',NULL,'ready',?,?,?) ON CONFLICT (workspace_id, provider, host, scope) DO UPDATE SET kind = excluded.kind, config_json = '{}', secret_ciphertext = NULL`)
@@ -209,7 +200,6 @@ async function fixture(t: test.TestContext, options: { canPush?: boolean; bitbuc
   }
   const operation = (extra: Record<string, unknown> = {}, repository = githubPin.path) =>
     ({ kind: 'git.push', repository, directory: 'app', branch: 'feature', commit: sessionCommit, ...extra });
-  /** A human-approved request: the review row plus the capability minted at approval time. */
   async function approve(approvalId: string, op: Record<string, unknown>, actor = owner, requestedBy = owner): Promise<string> {
     const capability = `capability-${approvalId}`;
     sqlite.prepare(`INSERT INTO approval_reviews (session_id,approval_id,requested_by,operation_json,source,admission_id,review_hash,created_at)
@@ -285,7 +275,6 @@ test('allowing git_push for the session lets the owner\'s messages push automati
   const op = f.operation();
   const grant = (callId: string) => f.sqlite.prepare('INSERT INTO session_tool_grants (session_id,tool,call_id,approval_id,granted_by,created_at) VALUES (?,?,?,?,?,?)')
     .run('session', 'git_push', callId, `permission-${callId || 'all'}`, owner, new Date().toISOString());
-  // A one-call grant lets that call ask for approval, but never pushes without it.
   grant('grant-once');
   assert.equal(await code(await f.post(credential, { sessionId: 'session', approvalId: 'tool-grant-once', actorId: owner, operation: op, admissionId: f.admit('approval') })), 'automatic_push_not_admitted');
   grant('');
@@ -348,11 +337,9 @@ test('repository path, owner permission and default-branch policy gate minting',
 
 test('a tag push creates a tag for a commit on the default branch: no branch checks, no default-branch policy, no pull request', async t => {
   const f = await fixture(t);
-  // main is protected and the workspace forbids pushes to it; a tag moves neither.
   f.sqlite.prepare('INSERT INTO repository_push_policies (binding_id,workspace_id,forbid_default_branch,updated_by,updated_at) VALUES (?,?,?,?,?)')
     .run('binding-gh', 'workspace', 1, owner, new Date().toISOString());
   f.state.githubBranch = { name: 'main', protected: true };
-  // Canonical key order: tag after branch.
   const op = { kind: 'git.push', repository: githubPin.path, directory: 'app', branch: 'main', tag: 'cli-v1.2.0', commit: sessionCommit };
   const issued = await f.post(credential, { sessionId: 'session', approvalId: 'tool-tag-1', actorId: owner, operation: op, admissionId: f.admit('auto') });
   assert.equal(issued.status, 200);
@@ -360,7 +347,6 @@ test('a tag push creates a tag for a commit on the default branch: no branch che
   assert.equal(f.calls.find(call => call.url === 'https://api.github.com/repos/owner/repo')!.authorization, 'Bearer owner-oauth-token');
   assert.equal(f.ledger()[0]!.operation_json, JSON.stringify(op));
   assert.ok(JSON.stringify(f.audits('git.push.credential_issued')).includes('cli-v1.2.0'));
-  // An approval of the same push with the keys in another order is the same operation.
   const reordered = { kind: 'git.push', repository: githubPin.path, directory: 'app', branch: 'main', commit: sessionCommit, tag: 'cli-v1.2.0' };
   const capability = await f.approve('approval-tag', op);
   assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'approval-tag', actorId: owner, operation: reordered, capability })).status, 200);
@@ -379,7 +365,6 @@ test('a tag push creates a tag for a commit on the default branch: no branch che
   await refused('tool-tag-5', { ...op, tag: 'cli-v1.2.1' }, 403, 'push_permission_required');
   assert.ok(!f.calls.some(call => call.url.includes('/branches/')));
 
-  // Azure DevOps answers for the tag itself: CreateTag (32) on refs/tags/<tag>.
   const azure = await f.post(credential, { sessionId: 'session', approvalId: 'tool-tag-6', actorId: owner,
     operation: { kind: 'git.push', repository: azurePin.path, directory: 'repo', branch: 'main', tag: 'v1', commit: sessionCommit }, admissionId: f.admit('auto') });
   assert.notEqual(await code(azure.clone()).catch(() => ''), 'push_permission_required');
@@ -442,7 +427,6 @@ test('session lists and reads show the newest pull request a push from the sessi
   };
   await push('tool-l-1', true);
   assert.deepEqual(sessionRecord((await listed()).row).pullRequest, { url: 'https://github.com/owner/repo/pull/4', number: 4 });
-  // A plain push afterwards opens none and keeps the one already shown.
   const plain = await (await f.post(credential, { sessionId: 'session', approvalId: 'tool-l-2', actorId: owner, operation: f.operation(), admissionId: f.admit('auto') })).json() as { credentialId: string };
   await f.post(complete, { sessionId: 'session', approvalId: 'tool-l-2', credentialId: plain.credentialId, outcome: 'pushed', tip });
   await push('tool-l-3', false);
@@ -472,7 +456,6 @@ test('session lists show the state the control plane last read for their pull re
   };
   await push('tool-s-1');
   assert.equal(await state(), undefined, 'none until it is read');
-  /** Makes the last read stale, so the next sweep reads it again. */
   const stale = () => f.sqlite.prepare('UPDATE push_credentials SET pull_request_checked_at = ? WHERE pull_request_url IS NOT NULL').run('2000-01-01T00:00:00.000Z');
   const reads = () => f.calls.filter(call => call.url === 'https://api.github.com/repos/owner/repo/pulls/5').length;
 
@@ -496,7 +479,6 @@ test('session lists show the state the control plane last read for their pull re
   stale(); await refreshPullRequestStates(f.env);
   assert.equal(await state(), 'changes_requested', 'a requested change comes before failed CI');
 
-  // A new push to the same pull request keeps showing its state until the next sweep, which reads it first.
   await push('tool-s-2');
   assert.equal(await state(), 'changes_requested');
   pull.reviews.push({ user: { login: 'reviewer' }, state: 'APPROVED' });
@@ -505,7 +487,6 @@ test('session lists show the state the control plane last read for their pull re
   await refreshPullRequestStates(f.env);
   assert.equal(await state(), 'failing', 'a failed commit status is failed CI too');
 
-  // A read that fails keeps the last state.
   delete f.state.githubPulls[5];
   stale(); await refreshPullRequestStates(f.env);
   assert.equal(await state(), 'failing');
@@ -517,7 +498,6 @@ test('session lists show the state the control plane last read for their pull re
   stale(); await refreshPullRequestStates(f.env);
   assert.equal(reads(), before, 'merged pull requests are not read again');
 
-  // A github.com URL that names no pull request is never read, nor selected again.
   f.sqlite.prepare("UPDATE push_credentials SET pull_request_url = 'https://github.com/owner/repo/pulls', pull_request_state = NULL, pull_request_checked_at = NULL WHERE pull_request_url IS NOT NULL").run();
   const calls = f.calls.length;
   await refreshPullRequestStates(f.env);
@@ -578,7 +558,6 @@ test('a removed workspace binding blocks minting and pull request opening', asyn
   const [failure] = f.audits('git.push.pull_request_failed') as { metadata_json?: string }[];
   assert.ok(failure);
   assert.ok(JSON.stringify(failure).includes('repository_binding_mismatch'));
-  // A binding re-created for a different repository under the same id does not count either.
   f.sqlite.prepare('INSERT INTO workspace_repositories (id,workspace_id,provider,host,repository_id,full_name,ref,private,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
     .run('binding-gh', 'workspace', 'github', 'github.com', '999', 'owner/repo', 'main', 1, new Date().toISOString());
   const replaced = await f.post(credential, { sessionId: 'session', approvalId: 'tool-r-3', actorId: owner, operation: op, admissionId: f.admit('auto') });
@@ -631,7 +610,6 @@ test('branch-level owner checks block minting before any ledger row; new branche
   await passes(githubPin);
   f.state.githubBranch = { name: 'feature/x', protected: false };
   await passes(githubPin);
-  // A new branch still needs repository-level write access.
   f.state.githubBranch = null; f.state.canPush = false;
   const before = f.ledger().length;
   const response = await request(githubPin);
@@ -660,7 +638,6 @@ test('automatic credentials need a tool-call approval id and stop at 20 per admi
   assert.equal(await code(limited), 'automatic_push_limit');
   assert.equal(f.ledger().length, 20);
   assert.equal(f.calls.filter(call => call.url.endsWith('/access_tokens')).length, 1);
-  // Another admission has its own allowance; explicit credentials carry none.
   assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'tool-limit-other', actorId: owner, operation: op, admissionId: f.admit('auto') })).status, 200);
   const capability = await f.approve('approval-explicit', op);
   assert.equal((await f.post(credential, { sessionId: 'session', approvalId: 'approval-explicit', actorId: owner, operation: op, capability })).status, 200);
@@ -688,7 +665,6 @@ test('a completion without connector scope still closes and revokes the credenti
   const f = await fixture(t);
   const op = f.operation({ pullRequest: { title: 'Add feature', body: 'Details' } });
   const issued = await (await f.post(credential, { sessionId: 'session', approvalId: 'tool-scope-1', actorId: owner, operation: op, admissionId: f.admit('auto') })).json() as { credentialId: string };
-  // Simulate a session whose callbacks now require a connector scope this internal caller lacks.
   f.sqlite.exec('PRAGMA foreign_keys = OFF; DROP TRIGGER sessions_connector_immutable');
   f.sqlite.prepare("UPDATE sessions SET connector_id = 'connector-gone' WHERE id = 'session'").run();
   const response = await f.post(complete, { sessionId: 'session', approvalId: 'tool-scope-1', credentialId: issued.credentialId, outcome: 'pushed', tip });
@@ -719,7 +695,6 @@ test('an unknown outcome revokes the credential and opens no pull request', asyn
 });
 
 const basic = (user: string, secret: string) => `Basic ${Buffer.from(`${user}:${secret}`).toString('base64')}`;
-/** The owner's GitHub sign-in token as the vault holds it now. */
 async function vaultToken(f: { sqlite: DatabaseSync; env: Env }): Promise<string> {
   const vault = f.sqlite.prepare('SELECT ciphertext FROM github_tokens WHERE user_id = ?').get(owner);
   assert.ok(vault && typeof vault.ciphertext === 'string');
@@ -733,7 +708,6 @@ test('push access with the session owner\'s account hands the owner\'s own token
     [gitlabPin, 'gitlab', 'gitlab.com', '', basic('oauth2', 'owner-gitlab-token')],
     [giteaPin, 'gitea', 'git.acme.dev', '', basic('oauth2', 'owner-gitea-token')],
     [azurePin, 'azure-devops', 'dev.azure.com', 'contoso', basic('', 'owner-azure-devops-token')],
-    // An Atlassian API token connected with the account email pushes as Bitbucket's fixed API-token user.
     [bitbucketPin, 'bitbucket', 'bitbucket.org', 'team', basic('x-bitbucket-api-token-auth', 'owner-bitbucket-token')],
   ];
   let next = 0;
@@ -745,7 +719,6 @@ test('push access with the session owner\'s account hands the owner\'s own token
     assert.equal((await response.json() as { authorization: string }).authorization, authorization, pin.path);
   }
   assert.ok(!f.calls.some(call => call.method === 'POST'), 'no token is minted from an app or bot');
-  // Only the GitHub sign-in token can be reset; the record holds it vault-encrypted until the push ends.
   assert.ok(f.ledger().every(row => row.kind === 'owner-account'));
   assert.deepEqual(Object.fromEntries(f.ledger().map(row => [row.binding_id, row.revocation_ciphertext !== null])),
     { 'binding-gh': true, 'binding-gl': false, 'binding-gt': false, 'binding-az': false, 'binding-bb': false });
@@ -753,7 +726,6 @@ test('push access with the session owner\'s account hands the owner\'s own token
   assert.ok(!String(github.revocation_ciphertext).includes('owner-oauth-token'));
   const done = await f.post(complete, { sessionId: 'session', approvalId: github.approval_id, credentialId: github.id, outcome: 'pushed', tip });
   assert.deepEqual(await done.json(), { pullRequest: { url: 'https://github.com/owner/repo/pull/5', number: 5, created: true } });
-  // The host's copy stops working when the push ends; the vault keeps the replacement, which opens the pull request.
   const reset = f.calls.find(call => call.method === 'PATCH')!;
   assert.deepEqual([reset.url, reset.authorization, reset.body], ['https://api.github.com/applications/oauth-client/token',
     basic('oauth-client', 'oauth-secret'), { access_token: 'owner-oauth-token' }]);
@@ -772,7 +744,6 @@ test('owner-token resets that fail or whose push goes unreported are settled lat
   const row = (credentialId: string) => f.ledger().find(item => item.id === credentialId)!;
   const resets = () => f.calls.filter(call => call.method === 'PATCH').map(call => call.body);
 
-  // GitHub can't reset the token when the push ends: the record stays until the settlement sweep succeeds.
   f.state.resetStatus = 503;
   const first = await issue('tool-reset-1');
   assert.equal((await f.post(complete, { sessionId: 'session', approvalId: 'tool-reset-1', credentialId: first.credentialId, outcome: 'pushed', tip })).status, 200);
@@ -784,7 +755,6 @@ test('owner-token resets that fail or whose push goes unreported are settled lat
   assert.equal(row(first.credentialId).revocation_ciphertext, null);
   assert.deepEqual(resets(), [{ access_token: 'owner-oauth-token' }, { access_token: 'owner-oauth-token' }]);
 
-  // A push its host never reports keeps its token while it may still run, then is closed and its token reset.
   f.state.resetToken = 'owner-oauth-token-3';
   const unreported = await issue('tool-reset-2');
   await settlePushCredentials(f.env);
@@ -795,7 +765,6 @@ test('owner-token resets that fail or whose push goes unreported are settled lat
   assert.deepEqual(resets().at(-1), { access_token: 'owner-oauth-token-2' });
   assert.equal(await stored(), 'owner-oauth-token-3');
 
-  // The owner signed in again during the push: the vault keeps that token, and the unused replacement is deleted.
   f.state.resetToken = 'owner-oauth-token-4';
   const third = await issue('tool-reset-3');
   f.sqlite.prepare('UPDATE github_tokens SET ciphertext = ? WHERE user_id = ?').run(await encryptToken(f.env, owner, 'owner-signed-in-again'), owner);
@@ -805,7 +774,6 @@ test('owner-token resets that fail or whose push goes unreported are settled lat
   assert.deepEqual(f.calls.filter(call => call.method === 'DELETE').map(call => [call.url, call.body]),
     [['https://api.github.com/applications/oauth-client/token', { access_token: 'owner-oauth-token-4' }]]);
 
-  // A GitHub token is never handed out without the OAuth app that resets it.
   delete f.env.GITHUB_CLIENT_SECRET;
   const refused = await f.post(credential, { sessionId: 'session', approvalId: 'tool-reset-4', actorId: owner, operation: f.operation(), admissionId: f.admit('auto') });
   assert.equal(refused.status, 409);
@@ -813,7 +781,6 @@ test('owner-token resets that fail or whose push goes unreported are settled lat
 });
 
 test('the owner\'s account and the host\'s Git credentials push only from the session owner\'s own host', async t => {
-  // A teammate's host shared with the workspace, offering its Git credentials.
   const shared = await fixture(t, { host: { owner: approver, gitCredentials: true } });
   for (const kind of ['owner-account', 'host-credentials']) {
     shared.pushIdentity('github', 'github.com', '', kind);
@@ -824,7 +791,6 @@ test('the owner\'s account and the host\'s Git credentials push only from the se
     assert.ok(!text.includes('owner-oauth-token'));
   }
   assert.deepEqual(shared.ledger().map(row => row.outcome), ['failed', 'failed']);
-  // Sessions on the control plane's own runner have no host owner at all.
   const internal = await fixture(t);
   internal.pushIdentity('github', 'github.com', '', 'owner-account');
   const response = await internal.post(credential, { sessionId: 'session', approvalId: 'tool-internal', actorId: owner, operation: internal.operation(), admissionId: internal.admit('auto') });
@@ -854,7 +820,6 @@ test('push access with the host\'s Git credentials needs its owner\'s opt-in, th
 test('a host configured in Pikibun pushes with its Git credentials only while its owner has them on there, whatever it advertises', async t => {
   const f = await fixture(t, { host: { owner } });
   f.pushIdentity('github', 'github.com', '', 'host-credentials');
-  // Even claiming the old --git-credentials opt-in, a connector configured in Pikibun follows its configuration.
   f.sqlite.prepare("UPDATE connectors SET capabilities_json = json_set(capabilities_json, '$.hostConfig', json('true'), '$.gitCredentials', json('true')) WHERE id = 'connector'").run();
   const op = f.operation({});
   const attempt = (approvalId: string) => f.post(credential, { sessionId: 'session', approvalId, actorId: owner, operation: op, admissionId: f.admit('auto') });
@@ -876,7 +841,6 @@ test('a clone session pushes to the workspace repository at the operation path, 
   assert.equal(issued.status, 200);
   assert.equal((await issued.json() as { remote: string }).remote, 'https://github.com/owner/repo.git');
   assert.equal(f.ledger()[0]!.binding_id, 'binding-gh');
-  // Any repository of the workspace, by its path; nothing else.
   const gitlab = await f.post(credential, { sessionId: 'session', approvalId: 'tool-clone-1', actorId: owner,
     operation: { kind: 'git.push', repository: 'gitlab.com/group/project', directory: 'project', branch: 'feature', commit: op.commit }, admissionId: f.admit('auto') });
   assert.equal(f.ledger().at(-1)!.binding_id, 'binding-gl', String(gitlab.status));
@@ -887,13 +851,11 @@ test('a clone session pushes to the workspace repository at the operation path, 
   const traversal = await f.post(credential, { sessionId: 'session', approvalId: 'tool-clone-3', actorId: owner,
     operation: { kind: 'git.push', repository: 'owner/repo', directory: '../repo', branch: 'feature', commit: op.commit }, admissionId: f.admit('auto') });
   assert.equal(traversal.status, 400);
-  // A push names a clone's directory.
   const { directory: _directory, ...withoutDirectory } = f.operation();
   const pinnedShape = await f.post(credential, { sessionId: 'session', approvalId: 'tool-clone-4', actorId: owner, operation: withoutDirectory, admissionId: f.admit('auto') });
   assert.equal(pinnedShape.status, 400);
 });
 
-/** One pkt-line of `text`. */
 function pkt(text: string): string { return (Buffer.byteLength(text, 'latin1') + 4).toString(16).padStart(4, '0') + text; }
 
 test('a clone session pushes its own branch through the egress relay with the push identity, and nothing else', async t => {
@@ -927,8 +889,6 @@ test('a clone session pushes its own branch through the egress relay with the pu
   const pushed = await relay('receive-pack', command('refs/heads/pikibun/session') + 'PACK-DATA');
   assert.equal(pushed.status, 200);
   assert.equal(await pushed.text(), report);
-  // The workspace's push identity (here the operator's GitHub App) pushes; the host never sees its token, which is
-  // revoked once each answer has streamed.
   assert.deepEqual(forge.map(call => [call.method, call.url, call.authorization]), [
     ['GET', 'https://github.com/owner/repo.git/info/refs?service=git-receive-pack', installation],
     ['POST', 'https://github.com/owner/repo.git/git-receive-pack', installation],
@@ -940,7 +900,6 @@ test('a clone session pushes its own branch through the egress relay with the pu
   assert.equal(audit[0]!.actor_id, owner);
   assert.deepEqual(JSON.parse(audit[0]!.detail_json), { bindingId: 'binding-gh', branch: 'pikibun/session', old: '0'.repeat(40), new: tip, kind: 'github-app' });
 
-  // Anything but creating or moving the session branch is refused before a credential is minted.
   const mints = () => f.calls.filter(call => call.url === 'https://api.github.com/app/installations/55/access_tokens').length;
   const before = mints();
   for (const [body, status, expected] of [
@@ -955,14 +914,12 @@ test('a clone session pushes its own branch through the egress relay with the pu
     assert.equal(await code(refused), expected);
   }
   assert.equal((await relay('receive-pack', command('refs/heads/pikibun/session'), 'text/plain')).status, 415);
-  // Git's probe before a chunked upload is answered without a credential.
   const probe = await relay('receive-pack', '0000');
   assert.equal(probe.status, 200);
   assert.equal(await probe.text(), '');
   assert.equal(mints(), before);
   assert.equal(forge.length, 2);
 
-  // The owner must be able to push the repository, with an identity the control plane can push with.
   f.state.canPush = false;
   assert.equal(await code(await relay('receive-refs')), 'push_permission_required');
   f.state.canPush = true;
@@ -972,7 +929,6 @@ test('a clone session pushes its own branch through the egress relay with the pu
   assert.equal(await code(host), 'host_git_credentials_relay');
   f.pushIdentity('github', 'github.com', '', 'owner-account');
   assert.equal(await code(await relay('receive-refs')), 'push_identity_own_host_required');
-  // Pinned sessions push only with git_push.
   f.sqlite.prepare("UPDATE sessions SET repository_mode = NULL WHERE id = 'session'").run();
   assert.equal(await code(await relay('receive-refs')), 'session_branch_unavailable');
 });
@@ -1008,7 +964,6 @@ test('a clone session with a branch named for its work pushes that branch, not p
 
 test('a session that pinned its repositories is read-only: it gets no push credential', async t => {
   const f = await fixture(t);
-  // Sessions no longer pin, so this one is turned back into one that did.
   f.sqlite.exec("BEGIN; DROP TRIGGER sessions_repositories_immutable; DROP TRIGGER sessions_repository_mode_immutable;"
     + ` UPDATE sessions SET repositories_json = '${JSON.stringify([githubPin])}', repository_mode = NULL WHERE id = 'session'; COMMIT;`);
   const response = await f.post(credential, { sessionId: 'session', approvalId: 'tool-pinned-1', actorId: owner,
@@ -1027,7 +982,6 @@ test('a session on a host shows the pull request GitHub has for a branch its hos
   const stale = () => f.sqlite.prepare('UPDATE session_branches SET pull_request_checked_at = ?').run('2000-01-01T00:00:00.000Z');
   const lookups = () => f.calls.filter(call => call.url.startsWith('https://api.github.com/repos/owner/repo/pulls?')).length;
 
-  // Only the workspace's github.com repositories are kept, by the workspace's name for them.
   const reported = await f.post(branches, { sessionId: 'session', branches: [{ repository: 'Owner/Repo', branch: 'feature' }, { repository: 'other/repo', branch: 'x' }] });
   assert.equal(reported.status, 200);
   assert.deepEqual(rows().map(row => [row.repository, row.branch]), [['owner/repo', 'feature']]);
@@ -1039,7 +993,6 @@ test('a session on a host shows the pull request GitHub has for a branch its hos
     headers: { Authorization: `Bearer ${connectorToken}`, 'x-connection-token': 'stale'.padEnd(43, 'z'), 'Content-Type': 'application/json' } }, f.env);
   assert.notEqual(unscoped.status, 200, 'only over the connector\'s current connection');
 
-  // No pull request yet: the branch is looked up, and nothing shows.
   await refreshPullRequestStates(f.env);
   assert.equal(lookups(), 1);
   const lookup = f.calls.find(call => call.url.startsWith('https://api.github.com/repos/owner/repo/pulls?'))!;
@@ -1047,8 +1000,6 @@ test('a session on a host shows the pull request GitHub has for a branch its hos
   assert.equal(lookup.authorization, 'Bearer owner-oauth-token', 'looked up as the session owner');
   assert.equal(await record(), undefined);
 
-  // One opened before the session started is another session's, as is one whose time can't be read; the one opened
-  // since is this session's.
   const created = String(f.sqlite.prepare('SELECT created_at FROM sessions WHERE id = ?').get('session')!.created_at);
   f.state.branchPulls['owner:feature'] = [
     { number: 6, html_url: 'https://github.com/owner/repo/pull/6', created_at: 'not a time' },
@@ -1060,10 +1011,8 @@ test('a session on a host shows the pull request GitHub has for a branch its hos
   stale(); await refreshPullRequestStates(f.env);
   assert.deepEqual(await record(), { url: 'https://github.com/owner/repo/pull/5', number: 5, state: 'failing' });
 
-  // A branch no longer checked out keeps the pull request it found; one that found none is forgotten.
   assert.equal((await f.post(branches, { sessionId: 'session', branches: [{ repository: 'owner/repo', branch: 'other' }] })).status, 200);
   assert.deepEqual(rows().map(row => [row.branch, row.pull_request_url]), [['feature', 'https://github.com/owner/repo/pull/5'], ['other', null]]);
-  // Even when the next report comes within the same millisecond.
   const realNow = Date.prototype.toISOString;
   const frozen = new Date().toISOString();
   Date.prototype.toISOString = function () { return frozen; };
@@ -1081,7 +1030,6 @@ test('a session on a host shows the pull request GitHub has for a branch its hos
   assert.equal(lookups(), before, 'merged pull requests are not looked up again');
 });
 
-/** A direct Git grant request through the session's host (or the internal route), with its JSON answer. */
 async function direct(f: Awaited<ReturnType<typeof fixture>>, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, any> }> {
   const response = await f.post('/api/internal/git/direct', { sessionId: 'session', bindingId: 'binding-gh', ...body });
   return { status: response.status, body: await response.json() as Record<string, any> };
@@ -1098,26 +1046,20 @@ test('direct Git grants: a shared host reads private repositories with a token l
   const { expiresAt, ...grant } = read.body;
   assert.deepEqual(grant, { direct: true, remote: 'https://github.com/owner/repo.git', authorization: installationBasic, kind: 'repository-token', cacheSeconds: 60 });
   assert.ok(Date.parse(expiresAt) > Date.now());
-  // The token can read this one repository and nothing else, and it is shared until it nears its expiry.
   assert.deepEqual(mints().map(call => call.body), [{ repository_ids: [101], permissions: { contents: 'read' } }]);
   assert.equal((await direct(f, { access: 'read' })).body.authorization, installationBasic);
   assert.equal(mints().length, 1);
-  // Every grant re-verifies the repository with the owner's own account, as a relayed read does.
   assert.equal(f.calls.filter(call => call.url === 'https://api.github.com/repos/owner/repo').length, 2);
 
-  // A push token can't be limited to the session branch, so a shared host relays its pushes, before anything is minted.
   const push = await direct(f, { access: 'push' });
   assert.deepEqual(push.body, { direct: false, reason: 'Pushes from a host shared with the workspace go through Pikibun: a push token can\'t be limited to the session branch', cacheSeconds: 60 });
   assert.equal(mints().length, 1);
-  // LFS follows the workspace's switch, as relayed downloads do.
   assert.equal((await direct(f, { access: 'lfs' })).body.code, 'lfs_disabled');
 
-  // A public repository needs no credential at all.
   f.state.githubPrivate = false;
   const open = await direct(f, { access: 'read' });
   assert.deepEqual([open.body.direct, open.body.authorization, open.body.kind], [true, null, 'public']);
 
-  // Operators decide: own-hosts gives a shared host no credential (public reads stay direct), off relays everything.
   f.env.GIT_DIRECT = 'own-hosts';
   assert.equal((await direct(f, { access: 'read' })).body.kind, 'public');
   f.state.githubPrivate = true;
@@ -1127,7 +1069,6 @@ test('direct Git grants: a shared host reads private repositories with a token l
   assert.deepEqual((await direct(f, { access: 'read' })).body, { direct: false, reason: 'Direct Git transfers are off on this Pikibun server', cacheSeconds: 60 });
   delete f.env.GIT_DIRECT;
 
-  // Malformed requests, and sessions that lost their authority, get nothing.
   for (const body of [{ access: 'write' }, { access: 'read', command: { old: '0'.repeat(40), new: tip, ref: 'refs/heads/pikibun/session' } },
     { access: 'read', extra: true }, { access: 'push', command: { old: 'zz', new: tip, ref: 'refs/heads/x' } }]) {
     const refused = await direct(f, body);
@@ -1142,18 +1083,15 @@ test('direct Git grants: a shared host reads private repositories with a token l
 test('direct Git grants: the owner\'s own host reads with the owner\'s account where no app serves, and pushes its session branch itself', async t => {
   forgetRepositoryReadTokens();
   const f = await fixture(t, { host: { owner } });
-  // GitLab has no tokens limited to reading one repository; on their own host, the owner's own account serves.
   const gitlab = await direct(f, { bindingId: 'binding-gl', access: 'read' });
   assert.deepEqual([gitlab.body.direct, gitlab.body.kind, gitlab.body.authorization, gitlab.body.remote],
     [true, 'owner-account', 'Basic ' + Buffer.from('oauth2:owner-gitlab-token').toString('base64'), 'https://gitlab.com/group/project.git']);
 
-  // The advertisement: the workspace's push identity, which the host revokes once its answer is read; nothing is audited.
   const refs = await direct(f, { access: 'push' });
   assert.deepEqual([refs.body.direct, refs.body.kind, refs.body.authorization, refs.body.cacheSeconds, refs.body.remote],
     [true, 'push-identity', installationBasic, 0, 'https://github.com/owner/repo.git']);
   assert.deepEqual(refs.body.revoke, { url: 'https://api.github.com/installation/token', authorization: 'Bearer ghs_installation_token' });
   assert.deepEqual(f.audits('git.push.session_branch'), []);
-  // The push names its one command, which the control plane checks and audits before the host gets a token.
   const command = { old: '0'.repeat(40), new: tip, ref: 'refs/heads/pikibun/session' };
   assert.equal((await direct(f, { access: 'push', command })).body.direct, true);
   const audit = f.audits('git.push.session_branch') as { detail_json: string }[];
@@ -1162,15 +1100,11 @@ test('direct Git grants: the owner\'s own host reads with the owner\'s account w
   assert.deepEqual([other.status, other.body.code], [403, 'session_branch_only']);
   const deleted = await direct(f, { access: 'push', command: { ...command, new: '0'.repeat(40) } });
   assert.deepEqual([deleted.status, deleted.body.code], [403, 'session_branch_only']);
-  // The owner must still be able to push the repository themselves, as for a relayed push.
   f.state.canPush = false;
   assert.equal((await direct(f, { access: 'push' })).body.code, 'push_permission_required');
   f.state.canPush = true;
-  // The owner's GitHub sign-in token would have to be reset after a push that took it off the server, and the host's own
-  // Git credentials can't serve the proxy: those pushes stay relayed.
   f.pushIdentity('github', 'github.com', '', 'owner-account');
   assert.deepEqual((await direct(f, { access: 'push' })).body, { direct: false, reason: 'This push identity pushes through Pikibun', cacheSeconds: 0 });
-  // A pinned session pushes only with git_push.
   f.sqlite.exec("BEGIN; DROP TRIGGER sessions_repository_mode_immutable; UPDATE sessions SET repository_mode = NULL WHERE id = 'session'; COMMIT;");
   assert.equal((await direct(f, { access: 'push' })).body.code, 'session_branch_unavailable');
 });
@@ -1183,7 +1117,6 @@ test('direct Git grants: the control plane\'s own runner reads with the owner\'s
     [true, 'owner-account', 'Basic ' + Buffer.from('oauth2:owner-gitlab-token').toString('base64')]);
 });
 
-/** The credential a session's egress proxy adds to the GitHub API requests it answers, with its JSON answer. */
 async function apiCredential(f: Awaited<ReturnType<typeof fixture>>, body: Record<string, unknown> = {}): Promise<{ status: number; body: Record<string, any> }> {
   const response = await f.post('/api/internal/api/credential', { sessionId: 'session', host: 'api.github.com', ...body });
   return { status: response.status, body: await response.json() as Record<string, any> };
@@ -1195,7 +1128,6 @@ async function networkGrant(f: Awaited<ReturnType<typeof fixture>>): Promise<Rec
 test('sandboxed GitHub API reads: a read-only installation token for the workspace\'s repositories the owner can read, never the owner\'s own', async t => {
   forgetRepositoryReadTokens();
   const f = await fixture(t, { host: { owner: approver } });
-  // The session's grant names the APIs its proxy answers itself: those of its workspace's forges.
   assert.deepEqual((await networkGrant(f)).apis, [{ host: 'api.github.com', provider: 'github' }, { host: 'gitlab.com', provider: 'gitlab' },
     { host: 'dev.azure.com', provider: 'azure-devops' }]);
 
@@ -1207,17 +1139,13 @@ test('sandboxed GitHub API reads: a read-only installation token for the workspa
   const [credential] = answer.body.credentials;
   assert.deepEqual([credential.account, credential.authorization, credential.repositories], ['owner', 'Bearer ghs_installation_token', ['owner/repo']]);
   assert.ok(Date.parse(credential.expiresAt) > Date.now());
-  // Limited to the repository, and to reading what the installation may: never administration or secrets, never writes.
   const mints = f.calls.filter(call => call.url === 'https://api.github.com/app/installations/55/access_tokens');
   assert.deepEqual(mints.map(call => call.body), [{ repository_ids: [101], permissions: { actions: 'read', contents: 'read', issues: 'read', metadata: 'read' } }]);
-  // The owner's own account confirms the repository on every request; their token is never the one handed out.
   assert.equal(f.calls.filter(call => call.url === 'https://api.github.com/repos/owner/repo' && call.authorization === 'Bearer owner-oauth-token').length, 1);
   assert.doesNotMatch(JSON.stringify(answer.body), /owner-oauth-token/);
-  // Shared while it lasts, as read tokens are.
   assert.equal((await apiCredential(f)).body.credentials[0].authorization, 'Bearer ghs_installation_token');
   assert.equal(f.calls.filter(call => call.url === 'https://api.github.com/app/installations/55/access_tokens').length, 1);
 
-  // Only credentialed API hosts, and only the session.
   assert.equal((await apiCredential(f, { host: 'api.example.com' })).status, 400);
   assert.equal((await apiCredential(f, { extra: true })).status, 400);
 });
@@ -1226,7 +1154,6 @@ test('sandboxed GitHub API reads follow SANDBOX_GITHUB_API and the session\'s au
   forgetRepositoryReadTokens();
   const f = await fixture(t, { host: { owner: approver } });
   f.env.SANDBOX_GITHUB_API = 'own-hosts';
-  // A host shared with the workspace gets no token then; the grant still names the API, so the proxy says why.
   assert.deepEqual(await apiCredential(f).then(answer => answer.body), { available: false, reason: 'This Pikibun server gives GitHub API credentials only to session owners\' own hosts', cacheSeconds: 60 });
   f.env.SANDBOX_GITHUB_API = 'off';
   assert.equal((await networkGrant(f)).apis, undefined);
@@ -1234,7 +1161,6 @@ test('sandboxed GitHub API reads follow SANDBOX_GITHUB_API and the session\'s au
   assert.equal(f.calls.filter(call => call.url.includes('/access_tokens')).length, 0);
   delete f.env.SANDBOX_GITHUB_API;
 
-  // A repository the owner can no longer read is left out; with none left there is no token at all.
   f.state.canPush = false;
   const answer = await apiCredential(f);
   assert.equal(answer.body.available, true, 'reading needs no push permission');
@@ -1244,7 +1170,6 @@ test('sandboxed GitHub API reads follow SANDBOX_GITHUB_API and the session\'s au
     assert.deepEqual((await apiCredential(f)).body, { available: false, reason: 'The session owner can read none of this workspace\'s github.com repositories', cacheSeconds: 60 });
   } finally { globalThis.fetch = previousFetch; }
 
-  // An archived session has no access at all.
   f.sqlite.prepare("UPDATE sessions SET status = 'archived' WHERE id = 'session'").run();
   assert.equal((await apiCredential(f)).status, 403);
 });
@@ -1254,7 +1179,6 @@ test('sandboxed GitHub API reads: the owner\'s own host gets the token under own
   const f = await fixture(t, { host: { owner } });
   f.env.SANDBOX_GITHUB_API = 'own-hosts';
   assert.equal((await apiCredential(f)).body.available, true);
-  // A pinned session (no repository mode) on the same host.
   f.sqlite.prepare(`INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,status,created_at,repositories_json,connector_id,connector_owner_id,repository_mode)
     SELECT 'pinned',workspace_id,owner_id,agent_version_id,title,status,created_at,repositories_json,connector_id,connector_owner_id,NULL FROM sessions WHERE id = 'session'`).run();
   assert.equal((await (await f.post('/api/internal/network', { sessionId: 'pinned' })).json() as Record<string, unknown>).apis, undefined);
@@ -1264,7 +1188,6 @@ test('sandboxed GitHub API reads: the owner\'s own host gets the token under own
 test('sandboxed GitHub API reads: a repository the app wasn\'t installed on is covered within a minute of installing it', async t => {
   forgetRepositoryReadTokens();
   const f = await fixture(t, { host: { owner: approver } });
-  // The fixture's workspace is at its repository limit: an Azure DevOps one makes room.
   f.sqlite.prepare("DELETE FROM workspace_repositories WHERE id = 'binding-az'").run();
   f.sqlite.prepare('INSERT INTO workspace_repositories (id,workspace_id,provider,host,repository_id,full_name,ref,private,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
     .run('binding-gh2', 'workspace', 'github', 'github.com', '102', 'owner/other', 'main', 1, new Date().toISOString());
@@ -1283,9 +1206,7 @@ test('sandboxed GitHub API reads: a repository the app wasn\'t installed on is c
   const repositories = async () => (await apiCredential(f)).body.credentials.flatMap((item: { repositories: string[] }) => item.repositories);
   assert.deepEqual(await repositories(), ['owner/repo']);
   installed = true;
-  // Reused briefly, as a complete answer is...
   assert.deepEqual(await repositories(), ['owner/repo']);
-  // ...but asked again a minute later, now with both.
   Date.now = () => realNow() + 61_000;
   assert.deepEqual((await repositories()).sort(), ['owner/other', 'owner/repo']);
 });
@@ -1293,13 +1214,11 @@ test('sandboxed GitHub API reads: a repository the app wasn\'t installed on is c
 test('the session owner\'s own credentials: writes and personal access tokens go only to the owner\'s own host', async t => {
   forgetRepositoryReadTokens();
   const own = await fixture(t, { host: { owner } });
-  // An approved call's writes: the owner's own GitHub sign-in, for the workspace's repositories they can read.
   const write = await apiCredential(own, { access: 'write' });
   assert.equal(write.status, 200, JSON.stringify(write.body));
   assert.deepEqual(write.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization, item.repositories]),
     [['session-owner', 'Bearer owner-oauth-token', ['owner/repo']]]);
   assert.equal(own.calls.filter(call => call.url.includes('/access_tokens')).length, 0, 'no installation token for writes');
-  // gitlab.com: the owner's personal access token; Azure DevOps: one per organization, as Basic credentials.
   const gitlab = await apiCredential(own, { host: 'gitlab.com' });
   assert.deepEqual(gitlab.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization, item.repositories]),
     [['gitlab.com', 'Bearer owner-gitlab-token', []]]);
@@ -1307,11 +1226,9 @@ test('the session owner\'s own credentials: writes and personal access tokens go
   assert.deepEqual(azure.body.credentials.map((item: Record<string, unknown>) => [item.account, item.authorization]),
     [['contoso', `Basic ${Buffer.from(':owner-azure-devops-token').toString('base64')}`]]);
   assert.equal((await apiCredential(own, { access: 'admin' })).status, 400);
-  // Without an account for the forge, the proxy says which one to connect.
   own.sqlite.prepare("DELETE FROM git_credentials WHERE provider = 'gitlab'").run();
   assert.match((await apiCredential(own, { host: 'gitlab.com' })).body.reason, /no GitLab \(gitlab\.com\) account in Pikibun/);
 
-  // A host someone else owns gets none of them, only the read-only installation tokens.
   forgetRepositoryReadTokens();
   const shared = await fixture(t, { host: { owner: approver } });
   const refused = await apiCredential(shared, { access: 'write' });

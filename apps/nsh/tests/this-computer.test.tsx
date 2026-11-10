@@ -2,9 +2,6 @@ import { describe, expect, open, test } from "nsh/test";
 import { appCliFolder, hostCommand, installCommand, installFailure, launchProblem } from "../src/lib/this-computer";
 import { server, signedIn } from "./fixtures";
 
-// Settings › This Mac in the desktop builds: this computer as one of your hosts, through `pikibun host --stdio`, here a
-// stand-in that speaks its protocol (harness/this-computer.tsx).
-
 const SERVER = "https://pikibun.test";
 const PAIRING_ID = "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed";
 
@@ -17,10 +14,8 @@ async function openPanel(params: Record<string, unknown> = {}) {
 
 describe("starting Pikibun's command", () => {
   test("runs it through the owner's login shell, as Terminal would, or cmd.exe on Windows; never another program", () => {
-    // The owner's shell, by name: nsh.json grants names, found through the app's PATH.
     expect(hostCommand("macos", "/bin/zsh")).toEqual({ command: "zsh", args: ["-ilc", "exec pikibun host --stdio"] });
     expect(hostCommand("linux", "/usr/bin/bash")).toEqual({ command: "bash", args: ["-ilc", "exec pikibun host --stdio"] });
-    // A shell the app isn't granted (fish) falls back to the platform's own.
     expect(hostCommand("macos", "/opt/homebrew/bin/fish").command).toBe("zsh");
     expect(hostCommand("linux", undefined).command).toBe("bash");
     expect(hostCommand("windows", "/bin/zsh")).toEqual({ command: "cmd", args: ["/d", "/c", "pikibun", "host", "--stdio"] });
@@ -36,10 +31,8 @@ describe("starting Pikibun's command", () => {
     const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
     expect(hostCommand("macos", "/bin/zsh", mac)).toEqual({ command: "zsh",
       args: ["-ilc", "PATH='/Users/ada/Library/Application Support/com.pikibun.app/cli/node_modules/.bin':\"$PATH\"; export PATH; exec pikibun host --stdio"] });
-    // Any path is one word to the shell, a quote included.
     expect(hostCommand("linux", "/bin/bash", "/home/o'neil/.local/share/pikibun/cli").args[1])
       .toBe("PATH='/home/o'\\''neil/.local/share/pikibun/cli/node_modules/.bin':\"$PATH\"; export PATH; exec pikibun host --stdio");
-    // Windows names it from the data directory, cmd's working directory, so no quoting through cmd.
     expect(hostCommand("windows", undefined, "C:\\Users\\Ada Lovelace\\AppData\\Roaming\\com.pikibun.app\\cli")).toEqual({ command: "cmd",
       args: ["/d", "/c", "if", "exist", "cli\\node_modules\\.bin\\pikibun.cmd", "(", "cli\\node_modules\\.bin\\pikibun.cmd", "host", "--stdio", ")", "else", "pikibun", "host", "--stdio"] });
   });
@@ -48,7 +41,6 @@ describe("starting Pikibun's command", () => {
     const mac = "/Users/ada/Library/Application Support/com.pikibun.app/cli";
     expect(installCommand("macos", "/bin/zsh", mac)).toEqual({ command: "zsh",
       args: ["-ilc", "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest"],
-      // What the activity shows is what runs: copied into a terminal, it runs as it reads.
       line: "npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest" });
     expect(installCommand("macos", "/opt/homebrew/bin/fish", mac).command).toBe("zsh");
     expect(installCommand("windows", "/bin/zsh", "C:\\data\\cli").args).toEqual(["/d", "/c", "npm", "install", "--prefix", "cli", "--no-audit", "--no-fund", "pikibun@latest"]);
@@ -101,7 +93,6 @@ describe("This Mac", () => {
     await app.press("id:this-computer-pair-button");
     await app.waitUntil(() => showsText("Unsandboxed mode was not confirmed; nothing was started."));
     expect(sent().some(line => line.startsWith("{\"type\":\"start\""))).toBe(false);
-    // Nor did it make a pairing code it wouldn't use.
     expect(sent()).not.toContain("pairing My Mac");
   });
 
@@ -120,14 +111,12 @@ describe("This Mac", () => {
     await app.waitFor("id:this-computer-install-button");
     expect(showsText("Install Pikibun's command on this Mac")).toBe(true);
     expect(app.shows("text:Install pikibun")).toBe(true);
-    // The command to copy is a fallback, for when the button didn't work.
     expect(app.shows("id:this-computer-install")).toBe(false);
     expect(app.shows("id:this-computer-pair-button")).toBe(false);
     await app.press("id:this-computer-install-button");
     await app.waitFor("id:this-computer-pair-button");
     expect(sent()).toContain("install");
     expect(app.shows("id:this-computer-command")).toBe(false);
-    // What npm said is in the activity.
     await app.press("text:Recent activity");
     await app.waitUntil(() => showsText("added 1 package in 2s"));
     expect(showsText("Running npm install --prefix '/Users/ada/Library/Application Support/com.pikibun.app/cli' --no-audit --no-fund pikibun@latest.")).toBe(true);
@@ -169,7 +158,6 @@ describe("This Mac", () => {
     await app.waitFor("id:this-computer-install-button");
     await app.press("id:this-computer-install-button");
     await app.waitUntil(() => showsText("install error: npm couldn't write a folder it needs"));
-    // The owner installs it in a terminal, then chooses Refresh.
     await app.press("id:fake-terminal-install");
     await app.press("id:this-computer-retry");
     await app.waitFor("id:this-computer-pair-button");
@@ -195,7 +183,6 @@ describe("This Mac", () => {
     await app.press("id:this-computer-sign-in-submit");
     await app.waitUntil(() => showsText("Pi is signed in to Anthropic on this Mac. Its models are listed above."));
     expect(sent()).toContain(JSON.stringify({ type: "login", provider: "anthropic", method: "api_key" }));
-    // The key went to the host only: what the stand-in shows of it is its length.
     expect(sent().some(line => line.includes("\"type\":\"login-answer\"") && line.includes("<13 characters>"))).toBe(true);
     await app.waitFor("id:this-computer-model-anthropic/claude-opus");
     await app.press("id:this-computer-model-anthropic/claude-opus");
@@ -223,7 +210,6 @@ describe("This Mac", () => {
     await app.press("id:this-computer-model-anthropic/claude-sonnet");
     await app.press("id:this-computer-model-anthropic/claude-opus");
     await app.waitUntil(() => showsText("Check at least one model, or let Pi choose."));
-    // Its button is disabled: pressing it is refused.
     let refused = "";
     try { await app.press("id:this-computer-models-save"); } catch (error) { refused = String(error); }
     expect(refused.includes("is disabled")).toBe(true);
@@ -238,7 +224,6 @@ describe("This Mac", () => {
     app.onDialog(() => "Run unsandboxed");
     await app.press("id:this-computer-pair-button");
     await app.waitFor("id:this-computer-stop");
-    // The refresh after it connected kept the loopback allowance, so the pairing reads as this server's.
     await app.waitUntil(() => sent().filter(line => line === JSON.stringify({ type: "inspect", allowInsecureLoopback: true })).length >= 3);
     await app.press("id:this-computer-stop");
     await app.waitFor("id:this-computer-start");

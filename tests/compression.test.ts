@@ -30,7 +30,6 @@ function server() {
 
 test('JSON responses are gzipped for clients that accept it and left alone for others and for host callbacks', async () => {
   const { app } = server();
-  // An explicit coding outranks `*`; without one, `*` accepts gzip.
   for (const encoding of ['br;q=1, *;q=0.5', 'X-GZIP']) {
     assert.equal((await app.request('/api/view', { headers: { 'Accept-Encoding': encoding } })).headers.get('content-encoding'), 'gzip', encoding);
   }
@@ -45,7 +44,6 @@ test('JSON responses are gzipped for clients that accept it and left alone for o
     assert.equal(plain.headers.get('content-encoding'), null, String(encoding));
     assert.deepEqual(await plain.json(), view);
   }
-  // A restore or repository download is checked against its exact length.
   const callback = await app.request('/api/internal/download', { headers: { 'Accept-Encoding': 'gzip' } });
   assert.equal(callback.headers.get('content-encoding'), null);
   assert.equal(callback.headers.get('content-length'), String(JSON.stringify(view).length));
@@ -68,13 +66,11 @@ test('event streams are gzipped with every event decodable as soon as it is sent
       await new Promise<void>(resolve => gunzip.flush(() => resolve()));
     }
   };
-  // The first event arrives whole while the stream is still open and the second not yet written.
   await until(/event: view\ndata: .*\n\n/);
   assert.deepEqual(JSON.parse(/data: (.*)/.exec(text)![1]!), view);
   release();
   await until(/event: patch/);
   assert.match(text, /event: patch\ndata: \{\}/);
-  // Then the gzip trailer, and the end.
   let parts = 0;
   while (!(await reader.read()).done) parts++;
   assert.ok(parts <= 1);

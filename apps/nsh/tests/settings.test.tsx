@@ -1,8 +1,6 @@
 import { describe, expect, open, test } from "nsh/test";
 import { ORIGIN, server, signedIn, user } from "./fixtures";
 
-// Settings, ported from the web app: each section opens, shows what the server has, and sends what the person changes.
-
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);
   return request?.body ? JSON.parse(request.body) : undefined;
@@ -78,7 +76,6 @@ describe("settings", () => {
     await app.press("text:This path");
     await app.waitFor("text:Chromium executable");
     await app.type("id:browser-path", "/opt/chromium/chrome");
-    // Many refreshes, each with a new saved object of the same values.
     await new Promise(resolve => setTimeout(resolve, 500));
     expect(app.shows("text:Chromium executable")).toBe(true);
     expect(app.value("id:browser-path")).toBe("/opt/chromium/chrome");

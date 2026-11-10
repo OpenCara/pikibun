@@ -6,7 +6,7 @@ import test, { type TestContext } from 'node:test';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import pg from 'pg';
-import type { Env, WorkerEnv } from '../apps/server/src/types.js';
+import type { Env, AppEnv } from '../apps/server/src/types.js';
 import type { RunnerBinding, WorkspaceDatabase } from '../packages/shared/src/types.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { registerBackups } from '../apps/server/src/backups.js';
@@ -30,7 +30,6 @@ const runnerSecret = 'workspace-database-runner-secret-not-for-deployment';
 const password = 'owner-database-password-not-for-deployment';
 const settings = { host: 'db.example.com', port: 5432, database: 'pikibun', user: 'pikibun_app', password };
 const databasePath = '/api/workspaces/workspace/database';
-// A throwaway self-signed CA certificate (CN=pikibun-test-ca); only its PEM shape matters here.
 const testCa = `-----BEGIN CERTIFICATE-----
 MIIBWTCB/6ADAgECAhQMFylGgW/Qp9XXNeHqDtK7Xy5x5zAKBggqhkjOPQQDAjAa
 MRgwFgYDVQQDDA9waXN0ZWFkLXRlc3QtY2EwIBcNMjYxMDE1MTM1MzU2WhgPMjEy
@@ -42,7 +41,6 @@ SJz676JrCZH/xe6ij4ZMY8CyBBaEogkjciQCIQDdA24KFmHSPyc3Idi3rvu7qng+
 heFdOqiLS7rR47K8Wg==
 -----END CERTIFICATE-----`;
 
-/** A provider double: records every target, keeps saves in memory and fails on demand. */
 interface FakeDatabases extends WorkspaceDatabaseProvider {
   targets: WorkspaceDatabaseTarget[];
   saved: Map<string, WorkspaceBackupSave>;
@@ -96,7 +94,6 @@ async function fixture(t: TestContext) {
     TEST_AUTH_SECRET: 'workspace-database-auth-secret-not-for-deployment',
     TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600000).toISOString(), RUNNER_URL: 'http://localhost:9001',
     RUNNER_SHARED_SECRET: runnerSecret, VAULT_KEY: Buffer.alloc(32, 9).toString('base64url'), BUCKET: storage, WORKSPACE_DATABASES: databases };
-  // The session belongs to a member: their backups go to the database the workspace owner connects.
   sqlite.exec(`
     INSERT INTO users (id,display_name,git_name,git_email,env_json,auth_kind,created_at) VALUES
       ('test:owner','Owner','Owner','owner@example.test','{}','test','2026-01-01'),
@@ -130,8 +127,7 @@ async function fixture(t: TestContext) {
     'owner-session': snapshotOf('owner-session', 'test:owner', 'Owner', 'Owner session'),
   };
   const snapshot = snapshots.session!;
-  const app = new Hono<WorkerEnv>();
-  // Cookie/CSRF are covered by control-plane tests; this seam supplies an authenticated actor.
+  const app = new Hono<AppEnv>();
   app.use('/api/*', async (c, next) => {
     c.set('auth', { userId: c.req.header('x-test-user') ?? 'test:owner', tokenHash: 'test', csrfToken: 'test', client: 'browser' });
     await next();
@@ -142,7 +138,6 @@ async function fixture(t: TestContext) {
     return app.request(path, { method, headers: { 'x-test-user': user, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : JSON.stringify(body) }, env);
   }
-  /** The legacy runner answers each backup request with that session's snapshot; returns how many it served. */
   function runner(whilePreparing?: () => void): { calls: number } {
     const counter = { calls: 0 };
     t.mock.method(globalThis, 'fetch', async (url: unknown) => {
@@ -181,7 +176,6 @@ test('only the workspace owner connects, replaces and disconnects the session da
   const ciphertext = String(row.password_ciphertext);
   assert.ok(!JSON.stringify(row).includes(password));
   assert.equal(await decryptToken(f.env, databaseSecretContext(database.id), ciphertext), password);
-  // The ciphertext is bound to this connection and can't be read as another secret.
   await assert.rejects(decryptToken(f.env, 'test:owner', ciphertext));
   for (const user of ['test:admin', 'test:member']) {
     const view = await f.request('GET', databasePath, user);
@@ -192,7 +186,6 @@ test('only the workspace owner connects, replaces and disconnects the session da
       automaticBackups: { minutes: null, consented: false } });
   }
   assert.equal((await f.request('GET', databasePath, 'test:outsider')).status, 404);
-  // New credentials or TLS for the same database keep its id, which members' confirmations name; another database gets a new one.
   const rotated = await f.request('PUT', databasePath, 'test:owner', { ...settings, password: 'rotated-password', tls: 'require' });
   assert.equal(rotated.status, 201);
   const rotation = (await rotated.json() as { database: WorkspaceDatabase }).database;
@@ -290,7 +283,6 @@ test('a member confirms the workspace database before each backup goes there; th
   const ownerListing = await (await f.request('GET', '/api/sessions/owner-session/backups', 'test:owner')).json() as { workspaceDatabase: { confirm: boolean } };
   assert.equal(ownerListing.workspaceDatabase.confirm, false);
   assert.equal((await f.request('POST', '/api/sessions/owner-session/backup', 'test:owner')).status, 201);
-  // Rotating the password keeps the member's confirmation; pointing the connection at another database asks again.
   assert.equal((await f.request('PUT', databasePath, 'test:owner', { ...settings, password: 'rotated-password' })).status, 201);
   assert.equal((await f.request('POST', '/api/sessions/session/backup', 'test:member', { trustedDatabaseId: database.id })).status, 201);
   const moved = (await (await f.request('PUT', databasePath, 'test:owner', { ...settings, host: 'db2.example.com' })).json() as { database: WorkspaceDatabase }).database;
@@ -339,7 +331,6 @@ test('without backup storage the server saves no backup, and its listings say so
   assert.equal(await code(refused), 'backup_unavailable');
   assert.equal(runner.calls, 0);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM backups').get()!.n, 0);
-  // The session database settings say so too, so they don't promise storage the server lacks.
   assert.equal(((await (await f.request('GET', databasePath, 'test:member')).json()) as { backupStorage: boolean }).backupStorage, false);
 });
 
@@ -370,7 +361,6 @@ test('the listing marks backups saved where this server can no longer read them'
   f.env.WORKSPACE_DATABASES = f.databases;
   assert.equal((await f.request('DELETE', databasePath, 'test:owner')).status, 204);
   assert.deepEqual(await marks(), ['workspace-database:true']);
-  // Disconnected, new backups go to the server's storage, readable only while it is configured.
   const second = await f.request('POST', '/api/sessions/session/backup', 'test:member', {});
   assert.equal(second.status, 201);
   const inStorage = (await second.json() as { backup: { id: string } }).backup.id;
@@ -419,12 +409,9 @@ test('backups of a workspace with its own database are saved and read back there
   assert.equal(download.status, 200);
   assert.equal(await download.text(), f.snapshot);
   assert.deepEqual(f.databases.loads, [{ id: backup.id, sessionId: 'session', size: backup.size }]);
-  // Connecting the database gives the workspace owner no access to the member's backups through Pikibun, and neither
-  // does managing the member's session: its backups stay its owner's.
   const ownerDownload = await f.request('GET', downloadPath, 'test:owner');
   assert.equal(ownerDownload.status, 403);
   assert.equal(await code(ownerDownload), 'owner_required');
-  // A snapshot changed in the workspace database no longer matches the digest the control plane recorded.
   saved.snapshot = new TextEncoder().encode(f.snapshot.replace('Instructions', 'Instructionz'));
   assert.equal((await f.request('GET', downloadPath, 'test:member')).status, 502);
   f.databases.saved.delete(backup.id);
@@ -501,13 +488,11 @@ test('the workspace owner imports dumps of this workspace into its database; nob
   assert.equal(audit.actor_id, 'test:owner');
   assert.deepEqual(JSON.parse(String(audit.detail_json)), { databaseId: database.id, ...expected });
 
-  // A session export of this workspace imports too.
   const session = await f.request('POST', importPath, 'test:owner', await exportSession(f.env.DB, 'session', 'test:member'));
   assert.equal(session.status, 200);
   assert.deepEqual(((await session.json()) as { imported: ImportSummary }).imported.format, 'session');
   assert.deepEqual(f.databases.imports[1]?.sessions.map(entry => entry.id), ['session']);
 
-  // Other files, other workspaces' dumps and dumps holding another workspace's session are refused before connecting.
   const other = structuredClone(dump);
   other.workspace.id = 'other-workspace';
   const foreign = structuredClone(dump);
@@ -554,7 +539,6 @@ test('database settings are explicit fields, and hosts are checked once resolved
     return addresses;
   };
   assert.deepEqual(await resolveDatabaseHost('public.example.com', { privateHosts: false, lookup }), { address: '8.8.8.8', public: true });
-  // One private record is enough to refuse a name: it could otherwise reach the server's own network.
   await assert.rejects(resolveDatabaseHost('mixed.example.com', { privateHosts: false, lookup }), failed('host_not_allowed'));
   await assert.rejects(resolveDatabaseHost('10.0.0.5', { privateHosts: false, lookup }), failed('host_not_allowed'));
   assert.deepEqual(await resolveDatabaseHost('mixed.example.com', { privateHosts: true, lookup }), { address: '8.8.4.4', public: true });
@@ -579,7 +563,6 @@ test('the Postgres provider refuses private hosts and unencrypted public connect
 });
 
 test('a server sending more than the response limit is cut off, and that is the failure whatever pg reports next', async () => {
-  // pg's Connection reads its `stream`: the socket, then the TLS socket once the upgrade emits 'sslconnect'.
   const plain = new PassThrough();
   const connection = Object.assign(new EventEmitter(), { stream: plain });
   const client = { connection } as unknown as pg.Client;
@@ -589,7 +572,6 @@ test('a server sending more than the response limit is cut off, and that is the 
   const secure = new PassThrough();
   connection.stream = secure;
   connection.emit('sslconnect');
-  // pg no longer reads the raw socket after the upgrade, so its bytes don't count twice.
   plain.write(Buffer.alloc(100));
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(plain.destroyed, false);
@@ -598,10 +580,8 @@ test('a server sending more than the response limit is cut off, and that is the 
   const [error] = await cutOff as [unknown];
   assert.ok(error instanceof WorkspaceDatabaseError);
   assert.equal(error.failure, 'response_too_large');
-  // pg reports the dropped connection with an error of its own, without a cause.
   assert.equal(classify(new Error('Connection terminated unexpectedly'), client).failure, 'response_too_large');
   assert.equal(classify(new Error('Connection terminated unexpectedly')).failure, 'unreachable');
-  // A failure of ours wrapped in another error keeps its meaning.
   assert.equal(classify(new Error('wrapped', { cause: new WorkspaceDatabaseError('pikibun_database') })).failure, 'pikibun_database');
 });
 
@@ -611,7 +591,6 @@ test('the Postgres provider provisions, saves and reads back snapshots in a real
   skip: postgresUrl ? false : 'TEST_DATABASE_URL is not set; skipping the workspace database run against Postgres',
 }, async t => {
   const server = new URL(postgresUrl!);
-  // A database of its own: other suites reset the public schema of the shared test database.
   const name = `pikibun_workspace_test_${randomUUID().replaceAll('-', '')}`;
   const role = `pikibun_limited_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
   const admin = new pg.Client({ connectionString: postgresUrl });
@@ -658,7 +637,6 @@ test('the Postgres provider provisions, saves and reads back snapshots in a real
   const backups = await inspect.query("SELECT id, (convert_from(snapshot, 'UTF8')::jsonb ->> 'note') AS note FROM pikibun_session_backups ORDER BY id");
   assert.deepEqual(backups.rows, [{ id: 'backup', note: 'héllo ✓' }, { id: 'second', note: 'héllo ✓' }]);
 
-  // Imports: a record or detail replaces only an older one; activity entries are added once.
   const imported: WorkspaceImport = {
     workspace: { id: 'workspace', name: 'Workspace', ownerId: 'owner' },
     exportedAt: '2026-01-05T00:00:00.000Z',
@@ -695,13 +673,11 @@ test('the Postgres provider provisions, saves and reads back snapshots in a real
   ]);
   const workspaceRows = await inspect.query('SELECT name, owner_id, data FROM pikibun_workspaces');
   assert.deepEqual(workspaceRows.rows, [{ name: 'Workspace', owner_id: 'owner', data: { members: [{ userId: 'owner', role: 'owner' }] } }]);
-  // A later save updates the record and keeps the imported details.
   await provider.save(target, { ...save, session: { ...save.session, title: 'Saved later', record: { id: 'session', title: 'Saved later' } },
     backup: { ...save.backup, id: 'third', createdAt: '2026-01-06T00:00:00.000Z' } });
   const saved = await inspect.query<{ title: string; data: unknown }>("SELECT title, data FROM pikibun_sessions WHERE id = 'session'");
   assert.deepEqual(saved.rows, [{ title: 'Saved later', data: { grants: [{ userId: 'owner', permissions: ['read'] }] } }]);
 
-  // A user that may connect but was granted nothing on the tables is refused until the owner grants what saving needs.
   await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'limited-password'`);
   const limited = { ...target, user: role, password: 'limited-password' };
   await assert.rejects(provider.verify(limited), failed('permission_denied'));
@@ -711,11 +687,9 @@ test('the Postgres provider provisions, saves and reads back snapshots in a real
 
   await assert.rejects(provider.verify({ ...target, database: `${name}_missing` }), failed('database_not_found'));
   await assert.rejects(new PostgresWorkspaceDatabases({ privateHosts: false }).verify(target), failed('host_not_allowed'));
-  // Tables created beforehand must have every column Pikibun writes.
   await inspect.query('ALTER TABLE pikibun_audit DROP COLUMN detail');
   await assert.rejects(provider.verify(target), failed('schema_mismatch'));
   await assert.rejects(provider.import(target, imported), failed('schema_mismatch'));
-  // A Pikibun control plane's own database is never used as a workspace database.
   await inspect.query('CREATE TABLE workspace_databases (id TEXT); CREATE TABLE schema_migrations (name TEXT); CREATE TABLE auth_sessions (token_hash TEXT)');
   await assert.rejects(provider.verify(target), failed('pikibun_database'));
 });
@@ -745,7 +719,6 @@ test('only the workspace owner schedules automatic backups, and only into a conn
   const view = async () => (await (await f.request('GET', databasePath, 'test:member')).json() as
     { automaticBackups: { minutes: number | null; consented: boolean } | null }).automaticBackups;
   assert.deepEqual(await view(), { minutes: 60, consented: false });
-  // New credentials for the same database keep the schedule; disconnecting the database ends it.
   assert.equal((await f.request('PUT', databasePath, 'test:owner', { ...settings, password: 'rotated-password' })).status, 201);
   assert.equal((await view())?.minutes, 60);
   assert.deepEqual(await (await f.request('PUT', schedulePath, 'test:owner', { minutes: null })).json(), { automaticBackups: { minutes: null } });
@@ -785,9 +758,7 @@ test('automatic backups save changed, idle sessions into the workspace database,
   assert.equal(audit.actor_id, 'test:owner');
   assert.equal((JSON.parse(String(audit.detail_json)) as { automatic?: boolean }).automatic, true);
 
-  // Nothing changed since: nothing to save, however long it waits.
   assert.deepEqual(await runAutomaticBackups(f.env, at + 24 * 3600_000), []);
-  // Changed again: saved once the interval since the last attempt has passed.
   await markSessionChanged(f.env, 'owner-session');
   assert.deepEqual(await runAutomaticBackups(f.env, at + 5 * 60_000), []);
   assert.equal((await runAutomaticBackups(f.env, at + 15 * 60_000)).length, 1);
@@ -800,7 +771,6 @@ test('automatic backups save changed, idle sessions into the workspace database,
   assert.equal(listing.automaticBackups?.included, true);
   assert.equal(listing.automaticBackups?.pending, false);
   assert.equal(listing.automaticBackups?.error, null);
-  // A manual backup isn't marked automatic.
   const manual = await (await f.request('POST', '/api/sessions/owner-session/backup', 'test:owner')).json() as { backup: { automatic?: boolean } };
   assert.equal(manual.backup.automatic, undefined);
 });
@@ -819,7 +789,6 @@ test('a failed automatic backup keeps the change and is retried later; with data
   assert.equal(listing.automaticBackups?.error, 'workspace_database_unavailable');
   assert.equal(listing.automaticBackups?.pending, true);
   f.databases.failure = null;
-  // Retried after 15 minutes: not on every sweep, and not only after the workspace's hour.
   assert.deepEqual(await runAutomaticBackups(f.env, at + 60_000), []);
   const retried = await runAutomaticBackups(f.env, at + 15 * 60_000);
   assert.equal(retried.length, 1);
@@ -866,7 +835,6 @@ test("a member's sessions are backed up automatically only once they confirm tha
   assert.equal(f.databases.saved.get(outcome.backupId)?.session.ownerId, 'test:member');
   assert.equal((await f.request('POST', '/api/sessions/session/backup', 'test:member')).status, 201);
 
-  // Pointing the connection at another database asks again, for automatic and manual backups alike.
   const moved = (await (await f.request('PUT', databasePath, 'test:owner', { ...settings, host: 'db2.example.com' })).json() as { database: WorkspaceDatabase }).database;
   assert.notEqual(moved.id, database.id);
   await markSessionChanged(f.env, 'session');
@@ -874,7 +842,6 @@ test("a member's sessions are backed up automatically only once they confirm tha
   assert.equal(await code(await f.request('POST', '/api/sessions/session/backup', 'test:member')), 'workspace_database_trust_required');
   assert.equal((await f.request('PUT', consentPath, 'test:member', { databaseId: moved.id })).status, 200);
   assert.equal((await runAutomaticBackups(f.env, at + 2 * 3600_000)).length, 1);
-  // Withdrawing ends it.
   assert.equal((await f.request('DELETE', consentPath, 'test:member')).status, 204);
   await markSessionChanged(f.env, 'session');
   assert.deepEqual(await runAutomaticBackups(f.env, at + 4 * 3600_000), []);
@@ -913,7 +880,6 @@ test('a conversation-only backup asks the host for the conversation only, and is
   assert.equal(listed.backups.find(item => item.id === backup.id)?.conversationOnly, true);
   const exported = await exportSession(f.env.DB, 'session', 'test:member');
   assert.equal(exported?.backups.find(item => item.id === backup.id)?.conversationOnly, true);
-  // A full backup asks for nothing more and isn't marked; a host that answers a conversation-only request with files is refused.
   answer = 'full';
   const full = await f.request('POST', '/api/sessions/session/backup', 'test:member', {});
   assert.equal(full.status, 201);
@@ -926,7 +892,6 @@ test('a conversation-only backup asks the host for the conversation only, and is
   const unasked = await f.request('POST', '/api/sessions/session/backup', 'test:member', {});
   assert.equal(unasked.status, 502);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS count FROM backups').get()!.count, 2);
-  // A connector that doesn't advertise conversationBackups would take a full backup: it isn't asked.
   f.sqlite.exec(`
     INSERT INTO connectors (id,owner_id,name,credential_hash,created_at,capabilities_json) VALUES ('old-host','test:member','Old host','old-hash','2026-01-01','{}');
     INSERT INTO sessions (id,workspace_id,owner_id,agent_version_id,title,policy_version,status,created_at,connector_id,connector_owner_id)

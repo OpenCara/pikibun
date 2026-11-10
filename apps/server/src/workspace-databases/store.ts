@@ -10,11 +10,9 @@ export interface WorkspaceDatabaseRow {
   id: string; workspace_id: string; host: string; port: number; database_name: string; username: string;
   tls: WorkspaceDatabaseTarget['tls']; ca_certificate: string | null; password_ciphertext: string;
   created_by: string; created_at: string; updated_at: string;
-  /** How often the workspace's sessions are backed up there on their own (automatic-backups.ts); null: never. */
   automatic_backup_minutes?: number | null;
 }
 
-/** Vault associated data for a workspace database password. */
 export function databaseSecretContext(databaseId: string): string {
   return `workspace-database:${databaseId}`;
 }
@@ -29,7 +27,6 @@ export async function workspaceDatabaseRow(env: Env, workspaceId: string): Promi
   return env.DB.query<WorkspaceDatabaseRow>('SELECT * FROM workspace_databases WHERE workspace_id = ?').bind(workspaceId).first();
 }
 
-/** The connection settings with the password decrypted, for one operation. */
 export async function workspaceDatabaseTarget(env: Env, row: WorkspaceDatabaseRow): Promise<WorkspaceDatabaseTarget> {
   return { host: row.host, port: row.port, database: row.database_name, user: row.username, tls: row.tls,
     caCertificate: row.ca_certificate, password: await decryptToken(env, databaseSecretContext(row.id), row.password_ciphertext) };
@@ -50,15 +47,10 @@ const explanations: Record<WorkspaceDatabaseFailure, string> = {
   unavailable: 'The database could not complete the request.',
 };
 
-/** The fixed explanation of a failure, for the command line. */
 export function workspaceDatabaseExplanation(failure: WorkspaceDatabaseFailure): string {
   return explanations[failure];
 }
 
-/**
- * Answers a failed workspace database operation with a fixed explanation, never driver details. `verify`: the owner is
- * saving new settings; `use`: a backup is being saved or read with the stored ones.
- */
 export function workspaceDatabaseFailure(error: unknown, phase: 'verify' | 'use'): never {
   if (!(error instanceof WorkspaceDatabaseError)) throw error;
   const explanation = explanations[error.failure];
@@ -68,12 +60,10 @@ export function workspaceDatabaseFailure(error: unknown, phase: 'verify' | 'use'
   return fail(503, 'workspace_database_unavailable', `The workspace database could not be used. ${explanation} The workspace owner manages this connection.`);
 }
 
-/** The workspace keeps its session backups in its own database, but the operator turned workspace databases off. */
 export function workspaceDatabasesDisabled(): never {
   return fail(503, 'workspace_databases_disabled', "This workspace keeps its session backups in its own database, which this server no longer connects to. The workspace owner can disconnect it to use the server's backup storage again.");
 }
 
-/** Reads a snapshot saved in the workspace's database; null when that database no longer has it. */
 export async function loadWorkspaceBackup(env: Env, workspaceId: string, backup: WorkspaceBackupRef): Promise<{ body: Uint8Array; size: number } | null> {
   const provider = env.WORKSPACE_DATABASES;
   if (!provider) workspaceDatabasesDisabled();

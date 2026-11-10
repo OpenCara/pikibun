@@ -1,6 +1,5 @@
 import type { CompactionFailure } from "../../shared/src/types";
 
-/** The card title for a turn that failed because Pi could not compact the conversation's context first. */
 export const COMPACTION_FAILED_TITLE = "Context compaction failed";
 
 const causes: Record<CompactionFailure, string> = {
@@ -10,10 +9,6 @@ const causes: Record<CompactionFailure, string> = {
   aborted: "Compacting the conversation's context was aborted.",
 };
 
-/**
- * Why a turn failed when Pi could not compact the context first, and what to do about it. The conversation is past its
- * model's compaction threshold, so every message needs that compaction first: retrying as before fails the same way.
- */
 export function compactionFailureText(failure: CompactionFailure, options: { advice?: boolean } = {}): string {
   const cause = causes[failure] ?? "The conversation's context could not be compacted.";
   if (options.advice === false) return cause;

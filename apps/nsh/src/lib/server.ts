@@ -2,26 +2,14 @@ import { platform } from "nsh";
 
 export const DEFAULT_ORIGIN = "https://pikibun.com";
 
-/**
- * Addresses a server answered at once and no longer does, each with where it moved: the same server and database, so a
- * sign-in saved for the old address works at the new one as it is. preview.pikibun.com served this client from
- * pikibun.com's server until pikibun.com served it itself.
- */
 const movedOrigins: Record<string, string> = { "https://preview.pikibun.com": "https://pikibun.com" };
 
-/** Where a saved server is now: where it moved, or itself. */
 export const currentOrigin = (origin: string) => movedOrigins[origin] ?? origin;
 
-/** Hosts reachable over plain HTTP: a server running on this machine (a simulator shares its network). */
 const localHosts = ["localhost", "127.0.0.1"];
 
-/**
- * On the web the client is served by the Pikibun server and signs in with that host's browser
- * session: same-origin cookies and a CSRF token. Native platforms keep a bearer token.
- */
 export const usesBrowserSession = platform.os === "web";
 
-/** A server origin from what the user typed: scheme and host (with port), no path. HTTPS, or HTTP to this machine. */
 export function parseOrigin(input: string): { origin: string } | { error: string } {
   let text = input.trim().replace(/\/+$/, "");
   if (!text) return { error: "Enter the server address, e.g. https://pikibun.com." };
@@ -35,5 +23,4 @@ export function parseOrigin(input: string): { origin: string } | { error: string
   return { error: "Use https://, or http:// only for localhost or 127.0.0.1." };
 }
 
-/** The origin without its scheme, for compact display. */
 export const displayOrigin = (origin: string) => origin.replace(/^https:\/\//, "") || "this server";

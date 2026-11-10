@@ -2,25 +2,12 @@ import type { Hono } from 'hono';
 import { adminListLimit, type AdminHost, type AdminList, type AdminOverview, type AdminUser, type AdminWorkspace } from '../../../../packages/shared/src/admin.js';
 import { auditAfterChange } from './audit.js';
 import { fail, now, PASSWORD_USER_ID, testMode, userIdentifier } from '../http.js';
-import type { Env, WorkerEnv } from '../types.js';
+import type { Env, AppEnv } from '../types.js';
 
-/**
- * Instance administration: the user IDs the operator lists in ADMIN_USER_IDS see every account, workspace and host on
- * the server and can suspend accounts. The role comes only from the server's configuration, never from the API, and it
- * grants nothing inside workspaces or sessions: no session titles, prompts, repositories or credentials are shown here.
- */
-
-/**
- * Whether ADMIN_USER_IDS may list `value`: a GitHub user, a password account (`password:<username>`), or a test identity
- * while test mode lasts, where it can sign in at all. Nobody can sign up as a password account it lists (password-auth.ts),
- * so listing one before it exists reserves the name rather than handing the role to whoever registers it first; the
- * operator creates it with `--create-admin` (password-accounts-cli.ts).
- */
 export function adminUserId(env: Env, value: string): boolean {
   return /^github:[1-9][0-9]*$/.test(value) || PASSWORD_USER_ID.test(value) || (testMode(env) && /^test:[A-Za-z0-9_-]{1,128}$/.test(value));
 }
 
-/** The configured administrators. */
 export function instanceAdmins(env: Env): Set<string> {
   return new Set((env.ADMIN_USER_IDS ?? '').split(',').map(item => item.trim()).filter(item => adminUserId(env, item)));
 }
@@ -42,7 +29,6 @@ interface AdminHostRow {
   last_seen_at: string | null; revoked_at: string | null; workspaces: number; sessions: number;
 }
 
-/** Paired hosts count until they are revoked or removed. */
 const liveHost = 'c.revoked_at IS NULL AND c.removed_at IS NULL';
 
 function list<T>(rows: T[]): AdminList<T> {
@@ -64,7 +50,6 @@ function adminUser(admins: Set<string>, row: AdminUserRow): AdminUser {
     workspaces: Number(row.workspaces), hosts: Number(row.hosts), sessions: Number(row.sessions) };
 }
 
-/** Whether each host has a live, authorized connection, a few at a time like the hosts settings page. */
 async function onlineHosts(env: Env, ids: string[]): Promise<Set<string>> {
   const online = new Set<string>();
   const hub = env.CONNECTOR_HUB;
@@ -72,7 +57,7 @@ async function onlineHosts(env: Env, ids: string[]): Promise<Set<string>> {
   for (let offset = 0; offset < ids.length; offset += 8) {
     await Promise.all(ids.slice(offset, offset + 8).map(async id => {
       try { if (await hub.status(id, 2000)) online.add(id); }
-      catch { /* Offline is safe metadata; transport errors are not exposed. */ }
+      catch { }
     }));
   }
   return online;
@@ -87,7 +72,7 @@ async function requireUser(env: Env, userId: string): Promise<void> {
   if (!await env.DB.query('SELECT 1 FROM users WHERE id = ?').bind(userId).first()) fail(404, 'not_found', 'User not found.');
 }
 
-export function registerAdmin(app: Hono<WorkerEnv>): void {
+export function registerAdmin(app: Hono<AppEnv>): void {
   app.use('/api/admin/*', async (c, next) => {
     if (!isInstanceAdmin(c.env, c.get('auth').userId)) fail(403, 'forbidden', 'Instance administrator access is required.');
     await next();
@@ -140,16 +125,11 @@ export function registerAdmin(app: Hono<WorkerEnv>): void {
       online: online.has(row.id), workspaces: Number(row.workspaces), sessions: Number(row.sessions) }));
     return c.json(list(hosts) satisfies AdminList<AdminHost>);
   });
-  // Suspending signs the account out everywhere and closes its hosts' connections. While it lasts, sign-in, the
-  // account's hosts and every session it owns are refused (see `suspended_at` in auth, sessions and connectors), as
-  // though it had left its workspaces; nothing is deleted, so unsuspending restores it as it was.
   app.post('/api/admin/users/:id/suspend', async c => {
     const actor = c.get('auth').userId;
     const userId = userIdentifier(c.req.param('id'));
-    // Covers the actor too: administrators are removed from ADMIN_USER_IDS, never locked out from the panel.
     if (isInstanceAdmin(c.env, userId)) fail(409, 'instance_admin', 'Instance administrators can\'t be suspended. Remove them from ADMIN_USER_IDS first.');
     await requireUser(c.env, userId);
-    // Only the request that suspends the account records it; any repeat still signs it out again.
     await c.env.DB.batch([
       c.env.DB.query('UPDATE users SET suspended_at = ? WHERE id = ? AND suspended_at IS NULL').bind(now(), userId),
       auditAfterChange(c.env, actor, 'user.suspended', null, { userId }),
@@ -157,7 +137,6 @@ export function registerAdmin(app: Hono<WorkerEnv>): void {
       c.env.DB.query('DELETE FROM native_auth_codes WHERE user_id = ?').bind(userId),
       c.env.DB.query('DELETE FROM connector_pairings WHERE owner_id = ?').bind(userId),
     ]);
-    // Their hosts can't reconnect while the account is suspended; this closes the connections they already have.
     for (const hostId of await liveHostIds(c.env, userId)) await c.env.CONNECTOR_HUB?.revoke(hostId).catch(() => undefined);
     return c.json({ user: adminUser(instanceAdmins(c.env), (await adminUsers(c.env, userId))[0]) });
   });

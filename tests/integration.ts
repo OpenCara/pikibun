@@ -63,7 +63,6 @@ class Client {
     } while (Date.now() < deadline);
     throw new Error(`Session ${sessionId} did not settle${text ? ` with ${text}` : ""}`);
   }
-  /** Waits for card `id` to settle: an approved command runs in the background, so deciding reports it executing. */
   async settledCard(sessionId: string, id: string): Promise<ApprovalRecord> {
     const deadline = Date.now() + 30_000;
     do {
@@ -244,7 +243,7 @@ if (connectedRuntime) {
       await reader.read();
       const changed = (await alice.request("PATCH", `/api/sessions/${sessionId}`, { visibility: "private" })).session;
       assert.equal(changed.visibility, "private");
-      while (!(await reader.read()).done) { /* Privacy changes close an already-open viewer stream. */ }
+      while (!(await reader.read()).done) { }
       assert.equal(abort.signal.aborted, false);
     } finally { clearTimeout(timeout); abort.abort(); }
     await bob.request("GET", `/api/sessions/${sessionId}/view`, undefined, [403, 404]);
@@ -321,7 +320,6 @@ await check("the same model starts distinct owner-bound sessions", async () => {
   }
   assert.equal(aliceSession.ownerId, alice.user.id);
   assert.equal(bobSession.ownerId, bob.user.id);
-  // Each session has an agent of its own, authored by its owner.
   assert.notEqual(aliceSession.agentVersionId, bobSession.agentVersionId);
   await alice.submit(aliceSession.id, "TEST_IDENTITY");
   await bob.submit(bobSession.id, "TEST_IDENTITY");
@@ -334,7 +332,6 @@ await check("the same model starts distinct owner-bound sessions", async () => {
   await bob.request("GET", `/api/sessions/${aliceSession.id}/view`, undefined, [403, 404]);
   const bobVisible: SessionRecord[] = (await bob.request("GET", "/api/sessions")).sessions;
   assert.ok(!bobVisible.some((session) => session.id === aliceSession.id), "a member doesn't see another member's private session");
-  // Alice owns the workspace, so she manages every session in it, Bob's private one included, short of approving; it still runs as Bob.
   assert.equal((await alice.view(bobSession.id)).owner.id, bob.user.id);
   const visible: SessionRecord[] = (await alice.request("GET", "/api/sessions")).sessions;
   assert.deepEqual(visible.find((session) => session.id === bobSession.id)?.permissions, ["read", "ask", "write", "manage"]);
@@ -401,7 +398,6 @@ await check("collaborative writes execute as owner; another user's worktree stay
 });
 
 await check("write access does not grant approval; approved git commits use owner identity", async () => {
-  // The session's own Git metadata is read-only to commands: commits happen in repositories the agent makes or clones.
   const commit = `git init -q integration && cd integration && git commit -q --allow-empty -m 'Integration ${run}'`;
   const approval: ApprovalRecord = (await bob.request("POST", `/api/sessions/${aliceSession.id}/operations`, { kind: "program", tool: "git", command: commit })).approval;
   assert.equal(approval.status, "pending");

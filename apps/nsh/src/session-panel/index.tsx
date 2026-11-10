@@ -29,10 +29,8 @@ export interface PanelTab {
   Component: (props: PanelProps) => JSX.Element;
 }
 
-/** Commands auto-approve ran have no card; the transcript marks their calls. */
 const AUTO_APPROVED_NOTE = "Commands that ran under auto-approve are marked on their tool calls in the conversation.";
 
-/** Every approval of the session, pending first, as the web app's Approvals tab. */
 function Approvals(props: PanelProps) {
   const approvals = () => [...(props.view()?.approvals ?? [])].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending"));
   return (
@@ -51,7 +49,6 @@ function Approvals(props: PanelProps) {
 
 type AuditEvent = { id: string; actorId: string; action: string; detail: unknown; createdAt: string };
 
-/** An audit detail as indented JSON, with the user IDs in it written as "username(id)". */
 function detailText(detail: unknown, person: (id: string) => Person): string {
   let value = detail;
   if (typeof detail === "string") {
@@ -60,7 +57,6 @@ function detailText(detail: unknown, person: (id: string) => Person): string {
   return JSON.stringify(withUsernames(value, person), null, 2) ?? "";
 }
 
-/** The session's audit log, as the web app's Activity tab. */
 function Activity(props: PanelProps) {
   const audit = createResource<{ events: AuditEvent[] }>(() => `/api/sessions/${segment(props.sessionId)}/audit`);
   const people = createWorkspacePeople(() => props.session()?.workspaceId ?? null);
@@ -90,7 +86,6 @@ function DetailsTab(props: PanelProps) {
   return <TabPage testID="panel-overview"><Details {...props} /></TabPage>;
 }
 
-/** The tabs of a session's panel, in the web app's order. */
 export const panelTabs: readonly PanelTab[] = [
   { id: "details", label: "Details", Component: DetailsTab },
   { id: "approvals", label: "Approvals", Component: Approvals },
@@ -100,13 +95,10 @@ export const panelTabs: readonly PanelTab[] = [
   { id: "activity", label: "Activity", Component: Activity },
 ];
 
-/** A session's panel (.session-panel): its details and tools beside the conversation, from the edge of the window or the screen. */
 export function SessionPanel(props: PanelProps & { open: boolean; onClose: () => void }) {
   const tab = signal(panelTabs[0]!.id);
-  // Wide windows slide it in from the right, beside the conversation; phones from the bottom.
   const sideways = () => windowSize().width >= 700;
   const pendingCount = () => (props.view()?.approvals ?? []).filter(approval => approval.status === "pending").length;
-  // Files and the browser's screenshots need room.
   const wide = () => tab() === "files" || tab() === "browser";
   return (
     <Sheet open={props.open} side={sideways() ? "right" : "bottom"} closeOnSwipe onOpenChange={event => { if (!event.open) props.onClose(); }}
@@ -115,7 +107,6 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
         ? { width: wide() ? 720 : 480, maxWidth: "100%", height: "100%", backgroundColor: palette().background, borderLeftWidth: 1, borderColor: palette().border }
         : { height: "92%", borderTopLeftRadius: radius.large, borderTopRightRadius: radius.large, backgroundColor: palette().background }}>
       <View testID="session-panel" accessibilityLabel="Session details" style={{ flex: 1 }}>
-        {/* .session-panel-header: the tabs, scrolling sideways where they don't fit, and the close button. */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48, paddingHorizontal: 12, borderBottomWidth: 1, borderColor: palette().border }}>
           <Scroll horizontal scrollbar={false} style={{ flex: 1 }}>
             <Segmented small testID="session-panel-tabs" value={tab()} onChange={value => tab.set(value)}
@@ -123,7 +114,6 @@ export function SessionPanel(props: PanelProps & { open: boolean; onClose: () =>
           </Scroll>
           <IconButton testID="session-panel-close" icon="x" label="Close panel" size={28} onPress={props.onClose} />
         </View>
-        {/* Keyed by tab: each is made when it is chosen. */}
         <Each of={[tab()]} key={id => id}>
           {id => {
             const Tab = panelTabs.find(item => item.id === id())!.Component;

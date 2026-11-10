@@ -4,11 +4,6 @@ import { compress } from 'hono/compress';
 
 const responses = compress({ encoding: 'gzip' });
 
-/**
- * gzip for clients that accept it. Responses go through Hono's compress, which leaves event streams alone because it
- * would hold their events back; those are gzipped here with a flush after every write, so each event still arrives the
- * moment it is sent. Host and runner callbacks stay as they are: their downloads are checked against exact lengths.
- */
 export const compression: MiddlewareHandler = async (c, next) => {
   if (c.req.path.startsWith('/api/internal/') || c.req.path.startsWith('/api/connectors/self/') || !acceptsGzip(c.req.header('Accept-Encoding'))) return next();
   await responses(c, next);
@@ -22,7 +17,6 @@ export const compression: MiddlewareHandler = async (c, next) => {
   c.res.headers.append('Vary', 'Accept-Encoding');
 };
 
-/** Whether Accept-Encoding allows gzip: a gzip (or x-gzip) entry decides alone, and `*` only when gzip is not named. */
 function acceptsGzip(header: string | undefined): boolean {
   const qualities = new Map<string, number>();
   for (const part of (header ?? '').split(',')) {
@@ -33,7 +27,6 @@ function acceptsGzip(header: string | undefined): boolean {
   return (qualities.get('gzip') ?? qualities.get('*') ?? 0) > 0;
 }
 
-/** One gzip stream over the events, flushed after each write. Cancelling it cancels the events, as the client leaving does. */
 export function gzipEvents(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const gzip = createGzip({ flush: constants.Z_SYNC_FLUSH });

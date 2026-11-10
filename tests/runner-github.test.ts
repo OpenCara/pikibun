@@ -39,7 +39,6 @@ async function idle(session: RunnerSession): Promise<void> {
   assert.fail("runner did not settle");
 }
 
-/** The card a tool call waits on for a person's decision. */
 async function pendingApproval(session: RunnerSession) {
   for (let count = 0; count < 1000; count++) {
     const approval = (await session.view()).approvals.find(candidate => candidate.status === "pending");
@@ -87,11 +86,9 @@ test("agents read GitHub pull requests through the broker and merges always wait
   const id = "github-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
 
-  // Even an auto-approve message reads at once but only asks to merge.
   const admissionId = await sha256("github admission");
   await session.submit(await ticket(id, "submit"), { content: "Read the review and merge.", requestId: "auto", admissionId, options: { access: "auto" } }, "write");
   await pendingApproval(session);
-  // The name as written and the message's admission reach the broker, which decides whether the workspace has it.
   assert.equal(reads.length, 2);
   assert.deepEqual({ ...reads[0], callId: undefined }, { sessionId: id, actorId: "test:alice", admissionId, callId: undefined, repository: "ACME/Alpha", issue: 7 });
   assert.match(reads[0]!.callId, /^[A-Za-z0-9_-]+$/);
@@ -116,7 +113,6 @@ test("agents read GitHub pull requests through the broker and merges always wait
   await idle(session);
   assert.ok((await session.view()).entries.some(entry => entry.role === "toolResult" && entry.text.includes('\\"merged\\":true')), "the agent learns the merge went through");
 
-  // GitHub's refusal is definite, so the agent sees its reason; any other failure leaves the outcome open.
   for (const [requestId, failure, status, result] of [
     ["refused", new RunnerError(422, "GitHub did not merge acme/alpha#7: Head branch was modified. Review and try the merge again."), "failed", "GitHub did not merge acme/alpha#7: Head branch was modified. Review and try the merge again."],
     ["unknown", new RunnerError(502, "GitHub could not confirm the outcome."), "interrupted", "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."],
@@ -162,8 +158,6 @@ test("agents open GitHub issues through the broker, always after a human approve
   const base = binding(id);
   const session = await service.provision({ ...base, agent: { ...base.agent, tools: [...base.agent.tools, "github_issue"] } }, await ticket(id, "create"));
 
-  // A message that asks before acting only asks to open the issue (Auto-approve opens it at once, tested below); a
-  // multi-line title or a URL never becomes a card.
   const admissionId = await sha256("github issue admission");
   await session.submit(await ticket(id, "submit"), { content: "File the bug.", requestId: "asking", admissionId, options: { access: "approval" } }, "write");
   const pending = await pendingApproval(session);
@@ -186,7 +180,6 @@ test("agents open GitHub issues through the broker, always after a human approve
   await idle(session);
   assert.ok((await session.view()).entries.some(entry => entry.role === "toolResult" && entry.text.includes("issues/63")), "the agent learns the issue's URL");
 
-  // GitHub's refusal is definite, so the agent sees its reason; any other failure leaves the outcome open.
   for (const [requestId, failure, status, result] of [
     ["refused", new RunnerError(422, "GitHub did not open an issue in acme/alpha: Issues are disabled for this repo."), "failed", "GitHub did not open an issue in acme/alpha: Issues are disabled for this repo."],
     ["unknown", new RunnerError(502, "GitHub could not confirm the outcome."), "interrupted", "Effect failed or outcome is ambiguous. Inspect external state; automatic retry is prohibited."],
@@ -219,7 +212,6 @@ test("allowing github_issue for the rest of the session still leaves every issue
   await service.initialize();
   t.after(() => service.close());
   const id = "github-issue-grant";
-  // The agent lacks github_issue, so its first call asks the owner, who allows it for the rest of the session.
   const session = await service.provision(binding(id), await ticket(id, "create"));
   const admissionId = await sha256("github issue grant admission");
   await session.submit(await ticket(id, "submit"), { content: "File it.", requestId: "first", admissionId }, "write");
@@ -227,8 +219,6 @@ test("allowing github_issue for the rest of the session still leaves every issue
   assert.equal(permission.operation.kind, "permission");
   await session.decide(await ticket(id, "approve"), permission.id, { decision: "approve", operation: permission.operation, scope: "session" });
   for (const title of ["First", "Second"]) {
-    // A session grant lets the tool run without its permission card, never the issue itself without a person: only the
-    // owner's Auto-approve message does that.
     if (title === "Second") await session.submit(await ticket(id, "submit"), { content: "File another.", requestId: "second", admissionId }, "write");
     const card = await pendingApproval(session);
     assert.deepEqual([card.operation.kind, card.automatic], ["github.issue", undefined], `${title} waits for a human`);
@@ -242,7 +232,6 @@ test("allowing github_issue for the rest of the session still leaves every issue
 test("bash and host_bash are gone: an agent that names them gets neither, and nothing asks for a command on the host", hostMode, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-command-")));
   const target = binding("host-command-gone");
-  // A stored agent may still name the retired tools (#163).
   target.agent.tools = ["bash", "host_bash", "identity"];
   target.session.connectorId = target.model.connectorId = "host-connector";
   target.session.connectorOwnerId = target.model.connectorOwnerId = "test:alice";
@@ -290,8 +279,6 @@ test("the owner's Auto-approve posts comments, opens issues and merges at once w
   const session = await service.provision(target, await ticket(target.session.id, "create"));
 
   const admissionId = await sha256("github auto admission");
-  // Unmarked, as from an app of when Auto-merge was a separate option, left off: the comment and the issue ran at once,
-  // authorized by the message's admission, never a capability; the merge waits.
   await session.submit(await ticket(target.session.id, "submit"), { content: "Comment, file and merge.", requestId: "auto", admissionId, options: { access: "auto" } }, "write");
   const card = await pendingApproval(session);
   assert.equal(card.operation.kind, "github.merge");
@@ -310,7 +297,6 @@ test("the owner's Auto-approve posts comments, opens issues and merges at once w
   await idle(session);
   assert.equal(merges.length, 0);
 
-  // Marked, as the apps mark every Auto-approve message to a host like this one, the merge runs at once too.
   const mergeAdmission = await sha256("github auto-merge admission");
   await session.submit(await ticket(target.session.id, "submit"), { content: "Merge it.", requestId: "auto-merge", admissionId: mergeAdmission, options: { access: "auto", autoMerge: true } }, "write");
   await idle(session);
@@ -320,7 +306,6 @@ test("the owner's Auto-approve posts comments, opens issues and merges at once w
   const merged = (await session.view()).approvals.find(approval => approval.operation.kind === "github.merge" && approval.automatic);
   assert.equal(merged?.status, "executed");
 
-  // The mark never comes without Auto-approve.
   await assert.rejects(session.submit(await ticket(target.session.id, "submit"), { content: "Merge?", requestId: "asking-merge", admissionId: await sha256("asking"), options: { access: "approval", autoMerge: true } }, "write"),
     (error: unknown) => error instanceof RunnerError && error.status === 422);
 });
@@ -339,7 +324,6 @@ test("another member's comments run at once while the control plane says the own
   const models = createModels(); models.setProvider(faux.provider);
   const target = binding("github-requester");
   target.agent.tools = ["github_comment", "github_merge"];
-  // Whether alice auto-approves bob's requests, as the control plane would report it; asked only by name.
   let autoApproved = true;
   const asked: AuthorizationRequest[] = [];
   const service = new RunnerService({
@@ -368,7 +352,6 @@ test("another member's comments run at once while the control plane says the own
   await session.decide(await ticket(target.session.id, "approve"), card.id, { decision: "deny", operation: card.operation });
   await idle(session);
 
-  // Once the owner stops, or the workspace turns it off, their comments wait again.
   autoApproved = false;
   await session.submit(await bob("submit"), { content: "Comment again.", requestId: "bob-later", admissionId: await sha256("bob's later admission"), options: { access: "approval" } }, "write");
   const waiting = await pendingApproval(session);
@@ -386,7 +369,6 @@ test("github_read waits for checks by reading again, and says how the wait ended
     base: { ref: "main", sha: "b".repeat(40) }, reviews: [], reviewComments: [], checks: [{ name: "verify", status, conclusion: status === "completed" ? "success" : null }] });
   const views: GitHubIssueView[] = ["queued", "in_progress", "completed", "completed"].map(status => ({ repository: "acme/alpha", number: 7, url: "https://github.com/acme/alpha/pull/7",
     title: "Fix", state: "open", author: "alice", createdAt: "2026-01-01T00:00:00Z", body: "", labels: [], comments: [], pullRequest: pullRequest(status) }));
-  // Then a reviewer comments.
   views.push({ ...views[3]!, comments: [{ id: 9, author: "bot", createdAt: "2026-01-01T01:00:00Z", body: "Approved.", url: "https://github.com/acme/alpha/pull/7#c9" }] });
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
@@ -410,7 +392,6 @@ test("github_read waits for checks by reading again, and says how the wait ended
   await session.submit(await ticket(id, "submit"), { content: "Wait for CI.", requestId: "wait", admissionId: await sha256("github wait admission") }, "write");
   await idle(session);
   const results = (await session.view()).entries.filter(entry => entry.role === "toolResult").map(entry => entry.text);
-  // Three reads of the one call until the check completed; then the change wait reads until the comment.
   assert.equal(reads.length, 5);
   assert.equal(new Set(reads.slice(0, 3).map(read => read.callId)).size, 1, "one call's reads");
   assert.equal(new Set(reads.slice(3).map(read => read.callId)).size, 1);

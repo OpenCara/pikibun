@@ -2,9 +2,6 @@ import { open, test } from "nsh/test";
 import type { App } from "nsh/test";
 import { ORIGIN, server, signedIn } from "./fixtures";
 
-// Renders the main screens and saves them for review. Screenshots need a platform that draws the app, so run it with
-// one: `pnpm test:nsh-macos` from the repository (or create .nsh/screenshots here before running `nsh test --target`).
-// Headless, it only walks the screens.
 const out = ".nsh/screenshots";
 
 async function shot(app: App, name: string) {

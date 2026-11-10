@@ -41,7 +41,6 @@ export function connectorPath(action: RunnerAction, sessionId: string, suffix = 
 }
 
 export async function currentConnector(env: Env, connectorId: string): Promise<ConnectorConnection> {
-  // A suspended owner's host stays paired but is refused like a revoked one until the account is restored.
   const row = await env.DB.query<ConnectorConnection & { suspended_at: string | null }>(`SELECT c.id, c.credential_hash, c.connection_hash, c.revoked_at,
     u.suspended_at FROM connectors c JOIN users u ON u.id = c.owner_id WHERE c.id = ?`).bind(connectorId).first();
   if (!row || row.revoked_at || row.suspended_at) fail(403, 'connector_revoked', 'The connector is no longer authorized.');
@@ -71,7 +70,6 @@ export async function validateConnectorRpc(envelope: ConnectorRelayEnvelope): Pr
     fail(400, 'invalid_rpc', 'Invalid connector request.');
   }
   const parts = typeof request.path === 'string' ? request.path.split('/') : [];
-  // An approval's id, or the revision a view request asks for changes since (/v1/sessions/<id>/view/<revision>).
   const suffix = ticket.action === 'approve' || (ticket.action === 'view' && parts.length === 6) ? parts.at(-1) ?? '' : '';
   if (request.path !== connectorPath(ticket.action, ticket.sessionId, suffix) ||
       request.method !== (ticket.action === 'view' ? 'GET' : 'POST') ||
@@ -80,10 +78,6 @@ export async function validateConnectorRpc(envelope: ConnectorRelayEnvelope): Pr
       await sha256(request.body) !== ticket.bodyHash) fail(400, 'invalid_rpc', 'Invalid connector request.');
 }
 
-/**
- * The connection a request goes to. A set `hash` must still be the current one or the request is refused, with
- * `replaced` set; either way `hash` ends up naming the connection the request went to.
- */
 export interface ConnectionPin {
   hash?: string | null;
   replaced?: boolean;
@@ -114,18 +108,15 @@ export async function connectorRequest(c: AppContext, row: SessionRow, action: R
   await validateConnectorRpc(envelope);
   let response: Response;
   try {
-    // Never retry ambiguous effects, and do not tie admitted work to the browser's abort signal.
     response = await c.env.CONNECTOR_HUB.rpc(row.connector_id, envelope);
   } catch {
     fail(503, 'connector_unavailable', 'The connector is unavailable. An accepted operation may still be running; inspect the session before retrying.');
   }
   try {
-    // A dropped or replaced connection must be reported as such, not as lost session authority.
     await requireConnectorGeneration(c.env, envelope.connectorId, envelope.credentialHash, envelope.connectionHash);
     await authorizeConnectorTicket(c.env, ticket, envelope.connectionHash);
     if (!response.ok) {
       const status = [400, 403, 404, 409, 413, 422, 429, 503, 504].includes(response.status) ? response.status : 502;
-      // 422 carries a fixed, runner-authored reason (e.g. a repository limit); other runner text is not shown.
       const reason = response.status === 422 ? await runnerReason(response) : '';
       fail(status as 400 | 403 | 404 | 409 | 413 | 422 | 429 | 502 | 503 | 504, 'runner_error',
         reason ? `The connector could not complete the operation: ${reason}` : 'The connector could not complete the operation. Inspect the session before retrying.');
@@ -137,7 +128,6 @@ export async function connectorRequest(c: AppContext, row: SessionRow, action: R
   }
 }
 
-/** Reads a runner 422 `{error}` message for display: one short line of plain words, or nothing. */
 async function runnerReason(response: Response): Promise<string> {
   try {
     const parsed: unknown = JSON.parse((await response.clone().text()).slice(0, 2048));
@@ -153,7 +143,6 @@ export function connectorError(error: unknown): Response {
   return Response.json({ error: 'The connector is unavailable. Inspect the session before retrying.', code: 'connector_unavailable' }, { status: 503 });
 }
 
-// Size strings without allocating a second, potentially multi-megabyte UTF-8 buffer.
 export function connectorUtf8Bytes(value: string): number {
   let bytes = 0;
   for (let index = 0; index < value.length; index++) {
@@ -167,7 +156,6 @@ export function connectorUtf8Bytes(value: string): number {
   return bytes;
 }
 
-// Validate JSON syntax without constructing another object tree from an untrusted reply.
 export function connectorJsonValid(text: string, maxDepth = 128, maxNodes = 1000000): boolean {
   let at = 0;
   let nodes = 0;

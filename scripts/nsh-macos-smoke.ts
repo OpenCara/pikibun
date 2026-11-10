@@ -7,7 +7,6 @@ import { nshBinary } from './nsh.mjs';
 
 const app = fileURLToPath(new URL('../apps/nsh/', import.meta.url));
 
-/** Native runtime warnings can include the entire OAuth callback URL. */
 export function redactSmokeOutput(line: string): string {
   return line.replace(/\b(?:https?|pikibun):\/\/[^\s<>"']+/g, url => {
     const query = url.search(/[?#]/);

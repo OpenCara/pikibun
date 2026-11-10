@@ -71,8 +71,6 @@ async function absent(path: string) {
   await assert.rejects(lstat(path), { code: "ENOENT" });
 }
 
-// These are publication unit tests, not sandbox/kernel capability tests. The real
-// initializer is covered by sandbox tests; restore must invoke it, not import config.
 function fakeInitializer(t: TestContext, stage: () => string) {
   return t.mock.method(Sandbox.prototype, "initialize", async function () {
     const config = join(stage(), "sandbox", "owner.gitconfig");
@@ -386,14 +384,12 @@ test("completed metadata still binds every run and approval to the source owner 
   const prepare = t.mock.fn(async () => {});
   for (const change of [{ key: "different" }, { ownerId: "test:bob" }, { initiatedBy: "" }, { mode: "admin" },
     { conversationId: 99 }, { contentHash: "wrong" }, { sequence: -1 }, { startEntry: -1 },
-    // A stop still ending its work, or one that names nobody.
     { status: "interrupted", stopped: { by: "test:alice", pending: true } }, { status: "interrupted", stopped: { by: "" } }]) {
     const value = archive();
     value.manifest.runs[key] = { ...run, ...change };
     const saved = envelope(value);
     await assert.rejects(restoreSession({ ...f.config, readBackup: async () => saved.bytes }, f.target, saved.descriptor, prepare), /run binding/);
   }
-  // A message of images alone: its hash binds images the backup doesn't have, so only its form is checked.
   const imageKey = await sha256("image-receipt-key");
   const imageRun = { ...run, key: imageKey, content: "", contentHash: await messageHash("", [{ mimeType: "image/png", data: "iVBORw0KGgo=" }]), images: { count: 1, bytes: 12 } };
   for (const change of [{ images: undefined }, { images: { count: 0, bytes: 12 } }, { images: { count: 5, bytes: 12 } }, { images: { count: 1 } },
@@ -462,7 +458,6 @@ test("a clone session's backup stages its clones' bundles and what is pending; m
     return { ...input, clones };
   };
   const target = cloneBinding("target");
-  // Clones may nest, and a clone still pending may share its path with files (it stays pending there).
   const saved = envelope(value([clone, { ...clone, path: "lib", branch: null, branches: [], bundle: null }, { ...clone, path: "work/app/vendor/lib", bundle: null }],
     [{ path: "worktree/lib/NOTES.md", data: Buffer.from("notes").toString("base64"), mode: 0o600 }]));
   await restoreSession({ ...f.config, readBackup: async () => saved.bytes }, target, saved.descriptor, async stage => { staged = stage; });
@@ -486,9 +481,7 @@ test("a clone session's backup stages its clones' bundles and what is pending; m
     [{ ...clone, head: "x" }], [{ ...clone, bundle: Buffer.from("not a bundle").toString("base64") }], [{ ...clone, bundle: "%%%" }],
     [clone, { ...clone, bundle: null }], [{ ...clone, branches: [["main"]] }], [{ ...clone, branch: "refs/heads/main" }],
   ]) await refused(value(clones), other);
-  // The pending list comes only from the clones, never as files.
   await refused(value([clone], [{ path: "git/pikibun-clones/manifest.json", data: Buffer.from("{}").toString("base64"), mode: 0o600 }]), other);
-  // Only a clone session restores clones.
   const pinned = value([clone]);
   pinned.binding = binding("source");
   pinned.manifest.binding = structuredClone(pinned.binding);
@@ -510,7 +503,6 @@ test("a conversation-only backup restores into an empty worktree and tells prepa
     for (const name of ["home", "worktree", "git"]) assert.deepEqual(await readdir(join(stage, "sandbox", name)), []);
   });
   assert.deepEqual(seen, [{ conversationOnly: true }]);
-  // A full backup says it isn't one.
   const full = await fixture(t);
   let fullStage = "";
   t.mock.restoreAll();

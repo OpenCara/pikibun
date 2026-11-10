@@ -3,11 +3,6 @@ import { fail } from '../../http.js';
 import { accountRejected, clean, json, notFound, outsideSource, rateLimited, textBody, upstream, type BoundItem, type DocumentAdapter, type ItemView, type Upstream } from './document-http.js';
 import { docxFile, docxText, textFile } from './office.js';
 
-/**
- * Dropbox, signed in as its member (files.metadata.read, files.content.read, sharing.read). A bound folder or file is
- * kept by its id; "under" compares Dropbox paths, read again by id on every read so a move doesn't break it. Paper
- * documents export as Markdown, .docx files as their text, text files as they are; folders list.
- */
 export const dropboxApi = 'https://api.dropboxapi.com/2';
 export const dropboxContent = 'https://content.dropboxapi.com/2';
 const share = 'your Dropbox account (add shared folders to your Dropbox)';
@@ -22,7 +17,6 @@ function token(secret: string): string {
 function refused(answer: Upstream): void {
   if (answer.status === 401) accountRejected('Dropbox');
   if (answer.status === 429) rateLimited('Dropbox');
-  // 409 is Dropbox's "path not found", "restricted" and the like; 400 a malformed path.
   if (answer.status === 409 || answer.status === 400 || answer.status === 403 || answer.status === 404) notFound('Dropbox', share);
   if (answer.status !== 200) fail(502, 'source_unavailable', 'Dropbox could not complete the request. Try again later.');
 }
@@ -33,7 +27,6 @@ async function rpc(secret: string, path: string, body: unknown): Promise<Json> {
   return json('Dropbox', answer);
 }
 
-/** A content endpoint (download, export): its argument travels in a header, as ASCII-only JSON. */
 async function content(secret: string, path: string, argument: Json): Promise<Upstream> {
   const header = JSON.stringify(argument).replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
   const answer = await upstream('Dropbox', `${dropboxContent}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${token(secret)}`, 'Dropbox-API-Arg': header } }, textLimit);
@@ -58,7 +51,6 @@ function url(item: Entry): string {
 
 async function metadata(secret: string, item: { path: string } | { url: string }): Promise<Entry> {
   const found = entry('url' in item ? await rpc(secret, '/sharing/get_shared_link_metadata', { url: item.url }) : await rpc(secret, '/files/get_metadata', { path: item.path }));
-  // A shared link to something outside the member's Dropbox has no path, so nothing can be under it.
   if (!found.path) fail(409, 'source_not_in_account', 'Add this shared item to your Dropbox first; Pikibun reads Dropbox items by their place in your account.');
   return found;
 }

@@ -7,10 +7,8 @@ import type { GitCredential } from '../apps/server/src/authority/git/types.js';
 const sha = 'a'.repeat(40);
 
 interface Call { url: string; headers: Record<string, string>; redirect: RequestRedirect | undefined }
-/** A fresh Response per request (cancelling a cloned tee branch would never settle). */
 type Route = () => Response;
 
-/** Serves `routes` by exact URL; unknown URLs fail the test. */
 function mockFetch(t: TestContext, routes: Record<string, Route>): Call[] {
   const calls: Call[] = [];
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -82,7 +80,6 @@ test('GitHub Enterprise Server failures map to fixed errors', async t => {
   assert.deepEqual(await failure(adapter.repository(credential, { id: '8', fullName: 'acme/app' })), malformed);
   assert.deepEqual(await failure(adapter.repository(credential, { id: '9', fullName: 'acme/app' })), malformed);
   assert.equal(calls.filter(call => !call.url.startsWith(api)).length, 0);
-  // Hosts are validated before any request; private names are never fetched.
   assert.equal((await failure(adapter.verify({ ...credential, host: 'localhost' }))).code, 'invalid_git_host');
 });
 

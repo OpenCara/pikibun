@@ -72,7 +72,7 @@ Requires Node 24 and pnpm.
 ```sh
 pnpm install
 cp apps/server/.env.example apps/server/.env   # then set the local settings in docs/development.md
-pnpm build                                      # the web client into dist/preview
+pnpm build                                      # the web client into dist/client
 pnpm dev:server                                 # API and web client on :8787
 ```
 

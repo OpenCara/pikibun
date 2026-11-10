@@ -9,22 +9,14 @@ export interface RequestOptions {
   method?: string;
   body?: unknown;
   signal?: AbortSignal;
-  /** Extra headers, such as a share link's; Accept and the authentication headers always take precedence. */
   headers?: Record<string, string>;
 }
 
-/** One JSON request to the Pikibun API; `path` starts with /api/. Rejects with ApiError on an error answer. */
 export type Api = <T>(path: string, options?: RequestOptions) => Promise<T>;
 
 export interface ApiOptions {
-  /** The server origin, e.g. https://pikibun.com; empty for a browser page served by that server. */
   baseUrl?: string;
-  /**
-   * How requests authenticate. "cookie": the browser's session cookie, with a fresh CSRF token for every change.
-   * A function: the native app's bearer token, or null while signed out. Bearer requests send no cookies.
-   */
   auth: "cookie" | (() => string | null);
-  /** Defaults to the global fetch at call time. */
   fetch?: typeof fetch;
 }
 
@@ -37,43 +29,34 @@ const statusNames: Record<number, string> = {
 
 const DETAIL_LIMIT = 200;
 
-// Only real tags (a name after `<`), so a bare `<` in text such as `n < 3` doesn't swallow everything up to the next `>`.
 const stripTags = (html: string) => html.replace(/<\/?[a-z!][^>]*>/gi, " ");
 
-/** Decodes the common entities; `&amp;` last, so `&amp;lt;` stays the text `&lt;` instead of becoming `<`. */
 const decodeEntities = (text: string) => text.replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
   .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 
-/** One short line of plain text from an upstream answer: an HTML page's title or heading, else its text; never markup. */
 function plainDetail(raw: string): string {
   const looksLikeMarkup = (value: string) => /<[a-z!/]/i.test(value);
-  // Entities are decoded first, so entity-encoded tags are stripped like literal ones; then scripts, styles and tags go.
   const toText = (value: string) => {
     const decoded = decodeEntities(value);
     return looksLikeMarkup(decoded) ? stripTags(decoded.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ")) : decoded;
   };
   let source = raw;
   if (looksLikeMarkup(raw)) {
-    // An element's content, or nothing when it is missing or has no text, so an empty <title> falls back to the <h1>.
     const pick = (tag: string) => {
       const inner = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(raw)?.[1];
       return inner !== undefined && toText(inner).trim() ? inner : undefined;
     };
     source = pick("title") ?? pick("h1") ?? raw;
   }
-  // Any angle bracket left (a stray `<` in plain text, say) is dropped, so no markup survives.
   let text = toText(source).replace(/[<>]/g, "");
-  // Control characters (other than whitespace) are dropped so nothing odd reaches the page.
   text = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim();
   return text.length > DETAIL_LIMIT ? `${text.slice(0, DETAIL_LIMIT - 1)}…` : text;
 }
 
-/** The message in a JSON error answer that isn't Pikibun's own shape, such as a hosting proxy's `{message}`. */
 function foreignJsonDetail(body: unknown): string {
   if (typeof body === "string") return plainDetail(body);
   if (!body || typeof body !== "object" || Array.isArray(body)) return "";
   const record = body as Record<string, unknown>;
-  // Not `status`: proxies put words like "error" there, which say nothing the HTTP status doesn't.
   for (const key of ["message", "detail", "error_description", "title", "reason"]) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) return plainDetail(value);
@@ -81,10 +64,6 @@ function foreignJsonDetail(body: unknown): string {
   return "";
 }
 
-/**
- * Describes an answer that didn't come from Pikibun's API (its errors always carry a message): the HTTP status, what the
- * answering proxy said, and what that likely means, so the user sees exactly what failed instead of a bare status code.
- */
 function upstreamError(response: Response, detail: string): ApiError {
   const status = response.status;
   const name = response.statusText || statusNames[status] || "";
@@ -110,7 +89,6 @@ function upstreamError(response: Response, detail: string): ApiError {
 async function decode(response: Response): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
-    // A proxy or CDN in front of the server answers with an HTML or text page, e.g. when it rate limits or times out.
     const raw = await response.text().catch(() => "");
     throw upstreamError(response, plainDetail(raw));
   }
@@ -118,7 +96,6 @@ async function decode(response: Response): Promise<unknown> {
     try {
       return await response.json();
     } catch (error) {
-      // An abort stays an abort; a body cut off or garbled on the way is described, not thrown as a bare SyntaxError.
       if (error instanceof Error && error.name === "AbortError") throw error;
       throw new ApiError(response.status, "BACKEND_UNAVAILABLE", `The Pikibun API's answer arrived incomplete or garbled (HTTP ${response.status}). `
         + "The connection may have dropped; if the request changes something, check the result before retrying.");
@@ -133,7 +110,6 @@ async function decode(response: Response): Promise<unknown> {
     : error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string" ? (error as { message: string }).message : undefined;
   const code = error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code
     : typeof shaped.code === "string" ? shaped.code : undefined;
-  // Pikibun's own errors always name the problem; anything else came from in front of it, so say what it said.
   if (!message) throw upstreamError(response, foreignJsonDetail(body));
   throw new ApiError(response.status, code ?? "REQUEST_FAILED", message);
 }
@@ -148,7 +124,6 @@ export function createApi(options: ApiOptions): Api {
     if (options.auth === "cookie") {
       init.credentials = "same-origin";
       if (method !== "GET") {
-        // Obtain a fresh token so logout/login and another browser tab cannot leave stale CSRF state.
         const token = await decode(await call(`${base}/api/auth/csrf`, { credentials: "same-origin", signal: request.signal })) as { csrfToken: string };
         headers["x-csrf-token"] = token.csrfToken;
       }

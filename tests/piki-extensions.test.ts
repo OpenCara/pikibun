@@ -32,7 +32,6 @@ test('Pikibun extension sources parse as piki:<name>, are their own package, and
   assert.equal(normalizeExtensionSource('piki:gh'), 'piki:gh');
   assert.equal(extensionPackageKey('piki:azure-cli'), 'piki:azure-cli');
   for (const bad of ['piki:', 'piki:GH', 'piki:gh@1.0.0', 'piki:../x']) assert.throws(() => normalizeExtensionSource(bad), /./, bad);
-  // A name a newer connector may have still parses, so reports and lists that hold one are taken.
   assert.equal(normalizeExtensionSource('piki:some-future-cli'), 'piki:some-future-cli');
   assert.deepEqual(parseWorkspaceExtensions([{ source: 'piki:gh' }, { source: 'npm:a@1.0.0' }]).map(item => item.source), ['piki:gh', 'npm:a@1.0.0']);
   assert.deepEqual(parseHostExtensionsReport({ installed: [{ source: 'piki:gh', dev: false, modules: [] }], remoteInstalls: true }).installed[0]!.source, 'piki:gh');
@@ -68,19 +67,16 @@ test('every connector has its Pikibun extensions: each command-line one offers o
     const [module] = item.summary.modules;
     assert.equal(module!.error, undefined, item.summary.source);
     if (pikiExtension(item.summary.source)!.sessionTools) {
-      // A session-tool extension registers nothing in Pi: its tools are the session's own, which it switches.
       assert.deepEqual([module!.tools, module!.events, module!.flags, module!.noops, module!.ignored], [[], [], [], [], []], item.summary.source);
       continue;
     }
     if (item.summary.source === 'piki:prompt-audit') {
-      // No tool: it checks each message on Pi's input event, with its settings.
       assert.deepEqual([module!.tools, module!.events, module!.noops, module!.ignored], [[], ['input'], [], []]);
       assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['audit', 'string', 'others'], ['model', 'string', ''],
         ['audit-model', 'string', ''], ['policy', 'string', '']]);
       continue;
     }
     if (item.summary.source === 'piki:pr-flow') {
-      // No tool: the flow as a prompt section, and notes on tool results where a step is due, with its settings.
       assert.deepEqual([module!.tools, module!.events, module!.noops, module!.ignored], [[], ['before_agent_start', 'tool_result'], [], []]);
       assert.deepEqual(module!.flags.map(flag => [flag.name, flag.type, flag.default]), [['review-minutes', 'string', '30'], ['merge-method', 'string', 'squash'],
         ['wait-for-checks', 'boolean', true]]);
@@ -94,7 +90,6 @@ test('every connector has its Pikibun extensions: each command-line one offers o
   await host.load();
   assert.deepEqual(host.report().installed.map(item => item.source), ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow']);
   assert.deepEqual(host.reportWithoutPikiExtensions().installed, [], 'a control plane that predates them gets the report without them');
-  // Nothing is installed in the store: the CLI's changes are compared with what is installed only.
   await host.refreshIfChanged();
   assert.equal(host.loaded.length, pikiExtensions.length);
   assert.equal(connectorPikiExtensions.length, pikiExtensions.length);
@@ -181,7 +176,6 @@ test('refusals hold wherever options sit, clustered, abbreviated or in another c
   for (const args of [['account', 'show'], ['account', 'list'], ['devops', 'invoke', '--area', 'build', '--http-method', 'GET'], ['acr', 'show', '-n', 'registry']]) {
     assert.equal(azureCliSpec.refused(args), undefined, `az ${args.join(' ')}`);
   }
-  // gh keeps the last of repeated fields: a second query is refused, not left unchecked.
   assert.match(apiWrites(['api', 'graphql', '-f', 'query=query { viewer { login } }', '-f', 'query=mutation { addStar(input: {}) { clientMutationId } }'])!, /exactly one query/);
   assert.match(apiWrites(['api', 'graphql', '-f', 'owner=acme'])!, /exactly one query/);
   for (const args of [['pipelines', 'runs', 'artifact', 'list', '--output-f', 'x'], ['repos', 'list', '--fil', 'x'], ['repos', 'list', '--pat=x'], ['REPOS', 'PR', 'CREATE']]) {
@@ -209,15 +203,10 @@ test('the command gets its own sign-in and the host\'s tools from the connector\
   assert.equal(cliEnvironment(azureCliSpec, { GH_TOKEN: 'no' }).GH_TOKEN, undefined);
 });
 
-/**
- * The gh tool of a session in `worktree`, with a fake gh first on PATH, and the read-only setting as given; by default as
- * a session that may use the host's sign-in runs it.
- */
 async function ghTool(t: TestContext, readOnly = false, session: PikiSession = { hostSignIn: true }) {
   const root = await directory(t);
   const bin = join(root, 'bin');
   await mkdir(bin);
-  // Prints where it ran, its arguments and a variable it must get; exits with $GH_FAKE_EXIT, or as `fail` asks.
   await writeFile(join(bin, 'gh'), `#!/bin/sh\necho "cwd=$(pwd)"\nfor arg in "$@"; do echo "arg=$arg"; done\necho "prompt=$GH_PROMPT_DISABLED secret=$PIKIBUN_TEST_SECRET"\n` +
     `[ "$1" = fail ] && { echo "boom" >&2; exit 3; }\n[ "$1" = big ] && head -c 300000 /dev/zero | tr '\\0' x\nexit 0\n`);
   await chmod(join(bin, 'gh'), 0o755);
@@ -324,7 +313,6 @@ test('a long output: its start and end, which hold how it ended, and the whole o
   assert.ok(text.startsWith('ok 0 - passes') && text.endsWith('not ok 20000 - the failure'), 'its start and its end');
   assert.match(text, /bytes left out here\. The whole output is in tool-output\/gh-call\.txt/);
   assert.deepEqual(saved, [['call', 'gh', output.trim()]]);
-  // A failed command's reason, and its output's end, both fit too.
   session.sandbox = async () => ({ exitCode: 1, signal: null, output });
   await assert.rejects(call({ args: ['run', 'view', '7'] }), error => {
     const message = (error as Error).message;
@@ -344,7 +332,6 @@ test('in the sandbox, read-only: only commands that read, in the worktree mounte
 test('a session with neither a sandbox nor the host\'s sign-in doesn\'t run the command, and says why', async t => {
   const { call } = await ghTool(t, false, { hostSignIn: false });
   await assert.rejects(call({ args: ['status'] }), /gh can't run in this session: it runs in a session's sandbox, as the session owner/);
-  // The connector's own copy, which only reports what the extension offers, is such a session.
   const extension = connectorPikiExtensions.find(item => item.info.name === 'gh')!;
   const runtime = createExtensionRuntime();
   const result = await loadSource({ files: ['<piki:gh>'], factories: [{ path: '<piki:gh>', factory: extension.factory }] }, tmpdir(), createEventBus(), runtime);
@@ -377,7 +364,6 @@ test('the sandbox\'s shell command passes arguments and variables as they are, i
   const bin = join(root, 'bin');
   await mkdir(bin);
   await mkdir(join(root, 'app'));
-  // Named so that no real command, on the PATH or in /usr/local/bin, stands in for it.
   await writeFile(join(bin, 'pikibun-fake-gh'), '#!/bin/sh\necho "cwd=$(pwd)"\nfor arg in "$@"; do echo "arg=$arg"; done\necho "token=$GH_TOKEN"\necho oops >&2\n');
   await chmod(join(bin, 'pikibun-fake-gh'), 0o755);
   const args = ["it's", '$HOME', '`id`', 'a b', '; rm -rf /', '"quoted"'];
@@ -386,8 +372,6 @@ test('the sandbox\'s shell command passes arguments and variables as they are, i
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout, `cwd=${root}/app\n${args.map(arg => `arg=${arg}\n`).join('')}token=x'y $z\noops\n`, 'its errors come with its output');
   assert.throws(() => sandboxShellCommand('gh', [], { 'BAD NAME': 'x' }), /Invalid variable name/);
-  // A directory named like one of cd's own arguments is still that directory; /usr/local/bin is searched last, after the
-  // sandbox's own PATH, whose first entry may be its git shim (review of #158).
   await mkdir(join(root, '-'));
   await writeFile(join(bin, 'pikibun-fake-where'), '#!/bin/sh\necho "cwd=$(pwd) path=$PATH"\n');
   await chmod(join(bin, 'pikibun-fake-where'), 0o755);

@@ -1,20 +1,8 @@
-// Measures how long the NSH desktop client takes to open a session: from a click on its row in the sidebar to its
-// transcript on screen, on NSH's own engine (headless, as `nsh test` runs it) against a stubbed server.
-//
-//   node scripts/nsh.mjs test ../../scripts/perf/nsh-session-load.test.tsx      # from the repository root
-//
-// It lives outside apps/nsh, with an App.tsx and nsh.json of its own that mount the client, so `pnpm test:client` doesn't
-// run it. Add `--target linux` (or macos, windows) on a desktop
-// to time it in a real window, with native drawing.
-//
-// Each case prints one `PERF {...}` line. Network delays are real (wall clock), so the totals are what a person waits
-// for minus native drawing, which the headless engine doesn't do.
 import { describe, open, test } from "nsh/test";
 import { ORIGIN, server, sessionRecord, signedIn, view } from "../../apps/nsh/tests/fixtures";
 
 type Request = { method: string; url: string };
 
-/** A transcript of `count` entries, in turns as an agent writes them: a message, tool calls, their output, a reply. */
 function transcript(count: number) {
   const entries: Record<string, unknown>[] = [];
   const output = Array.from({ length: 40 }, (_, line) => `src/module-${line}.ts:${line + 1}:  export function step${line}(input: string) { return input.trim(); }`).join("\n");
@@ -40,7 +28,6 @@ async function measure(name: string, { entries: count, metaMs = 0, viewMs = 0, l
   const last = entries.filter(entry => entry.role === "user").at(-1)!.text as string;
   const big = { ...view, entries, approvals: [], busy: false, queue: [], activity: "idle" };
   const payload = JSON.stringify({ view: big, revision: "r1" });
-  // When each request reaches the server, relative to the click.
   let clicked = 0;
   const arrivals: string[] = [];
   const at = (label: string) => arrivals.push(`${label}@${clicked ? Date.now() - clicked : "pre"}`);
@@ -56,7 +43,6 @@ async function measure(name: string, { entries: count, metaMs = 0, viewMs = 0, l
         at("view");
         return { headers: { "content-type": "application/json" }, body: payload, delay: viewMs };
       },
-      // The stream's first snapshot is the whole view, as the server's is; it takes as long as /view to come.
       [`GET ${ORIGIN}/api/sessions/s1/events*`]: (_request: Request) => {
         at("events");
         return { status: 200, headers: { "content-type": "text/event-stream" }, body: `event: view\ndata: ${payload}\n\n`, delay: viewMs };
@@ -73,7 +59,6 @@ async function measure(name: string, { entries: count, metaMs = 0, viewMs = 0, l
   await app.waitFor(`text:${last}`, { timeout: 60_000 });
   const shown = Date.now() - clicked;
   const waterfall = arrivals.join(" ");
-  // Opening it again (another session, then back): the view it kept shows once the metadata confirms access.
   await app.press("id:session-row-s3");
   await app.waitFor("id:composer-input", { timeout: 20_000 });
   const again = Date.now();
@@ -85,12 +70,9 @@ async function measure(name: string, { entries: count, metaMs = 0, viewMs = 0, l
 }
 
 describe("session load", () => {
-  // The client's own cost: no network delay at all, so what is left is parsing, the live session and rendering.
   for (const entries of [10, 100, 500, 1000, 2000]) {
     test(`client only, ${entries} entries`, () => measure("client", { entries }), 120_000);
   }
-  // Production-like: pikibun.com answers an API request in about 170 ms (measured), and /view adds the server's round
-  // trip to the host through its connector plus moving the whole view from the host to the server and on to the app.
   const cases: [number, number][] = [[100, 400], [500, 800], [1000, 1500]];
   for (const [entries, viewMs] of cases) {
     test(`with latency, ${entries} entries`, () => measure("latency", { entries, metaMs: 170, viewMs }), 120_000);

@@ -8,9 +8,7 @@ export const MAX_BACKUP_BYTES = 24 * 1024 * 1024;
 export interface BackupRow {
   id: string; session_id: string; owner_id: string; object_key: string;
   sha256: string; size: number; created_at: string;
-  /** 1 when the server took it on the workspace's schedule (automatic-backups.ts); absent in rows read before. */
   automatic?: number;
-  /** 1 when it keeps only the session's conversation, without its files or clones; absent in rows read before. */
   conversation_only?: number;
 }
 
@@ -52,13 +50,11 @@ export function repositoryIdentity(repositories: RunnerBinding['session']['repos
         (provider && (typeof repository.provider !== 'string' || typeof repository.host !== 'string'))) {
       fail(409, 'invalid_restore', 'Invalid session repository pins.');
     }
-    // GitHub pins keep their original identity tuple; other providers add provider and host.
     const identity = [repository.bindingId, repository.repositoryId, repository.fullName, repository.ref, repository.commit, repository.path];
     return 'provider' in repository ? [...identity, repository.provider, repository.host] : identity;
   }));
 }
 
-// Ignore mutable display names and owner profile, but never execution routing or identity.
 export function bindingIdentity(binding: RunnerBinding): string {
   const { session: s, agent: a, model: m } = binding;
   return JSON.stringify([s.workspaceId, s.ownerId, s.agentVersionId, s.connectorId ?? null, s.connectorOwnerId ?? null,
@@ -67,12 +63,7 @@ export function bindingIdentity(binding: RunnerBinding): string {
     repositoryIdentity(s.repositories)]);
 }
 
-/**
- * Checks a snapshot against its session's binding. With `conversationOnly` set, the snapshot must also be of that kind:
- * a conversation-only one carries no files and no clones, and a host that ignored the request sends a full one instead.
- */
 export function validateSnapshot(raw: string, source: RunnerBinding, expected: { conversationOnly?: boolean } = {}): void {
-  // Untrusted JSON, checked field by field below.
   let snapshot: any;
   try {
     snapshot = JSON.parse(raw);
@@ -89,10 +80,6 @@ export function validateSnapshot(raw: string, source: RunnerBinding, expected: {
   }
 }
 
-/**
- * The stored snapshot: in the workspace's own database when the backup was saved there, else in the server's storage.
- * Either way it is untrusted until `loadBackupSnapshot` has checked its size, digest and binding.
- */
 async function readBackupObject(env: Env, record: BackupRow, workspaceId: string): Promise<{ body: Uint8Array; size: number } | null> {
   const location = await env.DB.query<{ workspace_id: string }>('SELECT workspace_id FROM workspace_database_backups WHERE backup_id = ?')
     .bind(record.id).first();

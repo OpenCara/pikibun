@@ -10,14 +10,6 @@ import { retiredToolNames, toolNames } from "../../../../packages/shared/src/typ
 import type { ExtensionStore, InstalledSource } from "./store.js";
 import { pikiModulePath, connectorPikiExtensions, type PikiExtension } from "./piki/index.js";
 
-/*
- * Loads Pi extensions through pi-coding-agent's own loader (docs/design/host-extensions.md): TypeScript, `pi` manifests and
- * the modules Pi provides its extensions (pi-coding-agent, pi-ai, pi-tui, typebox) work as they do in Pi. The connector
- * loads every installed source once to report what it offers; each session loads the ones it runs with again, so their
- * module state is the session's own (adapter.ts).
- */
-
-/** Pi events Pikibun runs (adapter.ts). Others an extension handles are reported as ignored. */
 export const supportedEvents = new Set(["session_start", "session_shutdown", "before_agent_start", "agent_start", "agent_end", "agent_settled",
   "turn_start", "turn_end", "message_end", "input", "tool_call", "tool_result", "tool_execution_start", "tool_execution_end", "context",
   "context_with_system", "agent_before_settle", "session_before_compact"]);
@@ -28,10 +20,6 @@ interface PiLoader {
 }
 
 let internals: Promise<PiLoader> | undefined;
-/**
- * pi-coding-agent's `loadExtensions`, which loads the given files only. Its exported `discoverAndLoadExtensions` also
- * loads `<cwd>/.pi/extensions`, which in a session's worktree would be the repository's code, so it is never used.
- */
 export function piLoader(): Promise<PiLoader> {
   internals ??= import(new URL("./core/extensions/loader.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href) as Promise<PiLoader>;
   return internals;
@@ -41,7 +29,6 @@ const ENTRY = /\.(?:ts|js|mts|mjs)$/;
 const isFile = (path: string) => stat(path).then(found => found.isFile(), () => false);
 const isDirectory = (path: string) => stat(path).then(found => found.isDirectory(), () => false);
 
-/** The extension modules of a package directory, as Pi finds them: its `pi.extensions`, its `extensions/` directory, or its index. */
 async function packageEntries(directory: string, requireManifest: boolean): Promise<{ files: string[]; name?: string; version?: string; description?: string }> {
   let manifest: { name?: unknown; version?: unknown; description?: unknown; keywords?: unknown; pi?: { extensions?: unknown } } = {};
   try { manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8")); }
@@ -74,10 +61,6 @@ async function packageEntries(directory: string, requireManifest: boolean): Prom
   return { files, ...about };
 }
 
-/**
- * Pi's discovery in a directory: its index, if it has one; otherwise its .ts/.js files, and subdirectories with an index.
- * A package's `"pi": { "extensions": ["./dist"] }` so loads `dist/index.js` alone, as in Pi, not the bundled CLIs next to it.
- */
 async function directoryEntries(directory: string): Promise<string[]> {
   for (const index of ["index.ts", "index.js"]) if (await isFile(join(directory, index))) return [join(directory, index)];
   const files: string[] = [];
@@ -92,21 +75,14 @@ async function directoryEntries(directory: string): Promise<string[]> {
   return files;
 }
 
-/** An installed source and its extension modules. */
 export interface LoadedSource {
   installed: InstalledSource;
-  /** Where its paths in the summary are relative to. */
   root: string;
-  /** Its modules' files; for a Pikibun extension, its module's path (`<piki:name>`), whose factory is `factories`'. */
   files: string[];
   factories?: { path: string; factory: ExtensionFactory }[];
   summary: InstalledExtension;
 }
 
-/**
- * Runs the factories of `loaded`'s modules, as Pi's loader does when it loads them: from their files, or a CLI
- * extension's from the connector's own code.
- */
 export async function loadSource(loaded: Pick<LoadedSource, "files" | "factories">, cwd: string, eventBus: EventBus = createEventBus(),
   runtime: ExtensionRuntime = createExtensionRuntime()): Promise<LoadExtensionsResult> {
   const loader = await piLoader();
@@ -119,7 +95,6 @@ export async function loadSource(loaded: Pick<LoadedSource, "files" | "factories
   return result;
 }
 
-/** A Pikibun extension as an installed source, which every connector of this version has. */
 async function loadPikiExtension(extension: PikiExtension, cwd: string): Promise<LoadedSource> {
   const path = pikiModulePath(extension.info.name);
   const factories = [{ path, factory: extension.factory }];
@@ -131,10 +106,6 @@ async function loadPikiExtension(extension: PikiExtension, cwd: string): Promise
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, extensionLimits.text);
 
-/**
- * What one source's Pi extensions offer Pikibun, from what loading them registered. A tool named like one of Pikibun's
- * own (not a retired one), or like one an earlier module of the source offers (`taken`), is ignored.
- */
 export function summarizeModules(root: string, files: string[], result: LoadExtensionsResult, taken: Set<string>): ExtensionModuleSummary[] {
   const modules: ExtensionModuleSummary[] = [];
   const providers = [...result.runtime.pendingProviderRegistrations.map(item => ({ path: item.extensionPath, name: item.name })),
@@ -173,10 +144,6 @@ export function summarizeModules(root: string, files: string[], result: LoadExte
   return modules;
 }
 
-/**
- * Loads the connector's Pikibun extensions (`pikiExtensions`), then every installed source, to learn what they offer, with
- * `cwd` an empty directory: each module's factory runs, as Pi runs it when it starts.
- */
 export async function loadInstalled(store: ExtensionStore, pikiExtensions: readonly PikiExtension[] = connectorPikiExtensions): Promise<LoadedSource[]> {
   const loaded: LoadedSource[] = [];
   let installed: InstalledSource[] = [];
@@ -203,7 +170,6 @@ export async function loadInstalled(store: ExtensionStore, pikiExtensions: reado
         } else if (await isFile(location) && ENTRY.test(location)) files = [location];
         else throw new Error(`${location} is not an extension file or package`);
         const result = await loadExtensions(files, cwd, undefined, createExtensionRuntime());
-        // Tools of different sources may share a name: a session that runs both keeps the first (SessionExtensions).
         summary.modules = summarizeModules(root, files, result, new Set());
       } catch (error) {
         summary.error = message(error);

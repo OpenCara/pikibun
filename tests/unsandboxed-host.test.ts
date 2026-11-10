@@ -11,9 +11,7 @@ import { isolatedWorkspace } from "../apps/runner/src/workspace.js";
 import type { SessionRepository } from "../packages/shared/src/repositories.js";
 import type { RunnerBinding } from "../packages/shared/src/types.js";
 
-// Host mode needs only Git on PATH (and on Windows Git for Windows' bash), so it runs on macOS, Linux and Windows alike.
 const hostMode = { skip: !["linux", "darwin", "win32"].includes(process.platform) || spawnSync("git", ["--version"]).status !== 0 };
-// Git for Windows' bash prints the working directory as /c/...; cygpath gives the Windows path the worktree has.
 const printWorkingDirectory = process.platform === "win32" ? 'cygpath -w "$PWD"' : "pwd";
 const authorize: SandboxAuthorize = async () => {};
 
@@ -79,7 +77,6 @@ test("approved unsandboxed commands run in the worktree without the connector en
 test("an unsandboxed clone session's Git uses the host user's own credential helpers, and no other session's does", hostMode, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-host-credentials-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  // The host user's own Git config, in their real HOME (with a quote in its path, to check the helper's quoting).
   const home = join(directory, "host user's home");
   await mkdir(home);
   await writeFile(join(home, ".gitconfig"), "[credential]\n\thelper = \"!f() { test \\\"$1\\\" = get && echo username=host-user && echo password=host-secret; }; f\"\n");
@@ -93,11 +90,10 @@ test("an unsandboxed clone session's Git uses the host user's own credential hel
   t.after(() => cloned.close());
   await cloned.initialize();
   assert.match(await cloned.execute({ kind: "bash", command: fill }, false, authorize), /username=host-user\npassword=host-secret/);
-  // A session from before sessions cloned keeps its owner configuration unchanged, without the host's credentials.
   const plain = new HostWorkspace(binding("host-plain"), join(directory, "plain"));
   t.after(() => plain.close());
   await plain.initialize();
-  assert.doesNotMatch(await plain.execute({ kind: "bash", command: fill }, false, authorize), /host-secret/);  // Its backups keep the worktree as files, which a clone's repository has no bound for: they are refused.
+  assert.doesNotMatch(await plain.execute({ kind: "bash", command: fill }, false, authorize), /host-secret/);
   assert.ok((await cloned.snapshot(authorize)).length > 0);
   await cloned.execute({ kind: "bash", command: "git init -q app" }, false, authorize);
   await assert.rejects(cloned.snapshot(authorize), /need a host with the sandbox/);
@@ -120,15 +116,12 @@ test("a host clone session reads the branches its clones have checked out, as Gi
     "a clone on its origin's default branch has no pull request of its own");
 });
 
-/** Whether a background loop that appends to `file` every 0.2 s is still running. */
 async function stillBeating(file: string): Promise<boolean> {
   const before = await readFile(file, "utf8").catch(() => "");
   await new Promise(resolve => setTimeout(resolve, 1500));
   return (await readFile(file, "utf8").catch(() => "")) !== before;
 }
 
-// Programs bash starts straight into the background (`sh -c ...`, `sleep 600`), as `cmd &` does: on Windows the bash process
-// that started each one has exited, so `taskkill /T` can't find them. With `wait` the command never finishes on its own.
 const beat = "sh -c 'while :; do echo . >> beat.txt; sleep 0.2; done' & sleep 600 & wait";
 
 test("a time limit ends what an unsandboxed command started in the background, not only bash", hostMode, async t => {

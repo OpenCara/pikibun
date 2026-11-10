@@ -47,7 +47,6 @@ async function idle(session: RunnerSession): Promise<void> {
   }
   assert.fail("runner did not settle");
 }
-/** Waits for the session's pending permission request: the card its owner answers. */
 async function permissionRequest(session: RunnerSession): Promise<ApprovalRecord> {
   for (let count = 0; count < 500; count++) {
     const request = (await session.view()).approvals.find(approval => approval.operation.kind === "permission" && approval.status === "pending");
@@ -56,9 +55,6 @@ async function permissionRequest(session: RunnerSession): Promise<ApprovalRecord
   }
   assert.fail("no permission request");
 }
-/** Waits for `count` pending operation cards: the tool calls waiting on a person's decision. */
-/** Commands auto-approve ran have no card: the view marks their tool calls instead (see EntryView.autoApproved). */
-// What a TEST_BASH <command> call asks for, now that it runs through the node tool (#163): its card's target, and its operation.
 function commandTarget(command: string) {
   return `.: node ${testCommandArgs(command).args.join(" ")}`;
 }
@@ -70,7 +66,6 @@ function autoApproved(view: SessionView) {
   assert.deepEqual(view.approvals.filter(approval => approval.automatic && approval.operation.kind === "program"), [], "no card repeats an auto-approved command");
   return marks(view);
 }
-/** Each entry's auto-approve marks, each checked to name one of its entry's calls, without that id. */
 function marks(view: SessionView) {
   return view.entries.flatMap(entry => (entry.autoApproved ?? []).map(({ callId, ...mark }) => {
     assert.ok(callId && entry.toolCalls?.some(call => call.id === callId && call.name === mark.tool), "the mark names its call");
@@ -87,10 +82,6 @@ async function operationRequests(session: RunnerSession, count = 1): Promise<App
   }
   assert.fail("no operation request");
 }
-/**
- * Waits for card `id` to settle and returns it as the session keeps it: an approved shell command runs in the background,
- * as host commands do, so deciding reports it executing.
- */
 async function settledCard(session: RunnerSession, id: string): Promise<ApprovalRecord> {
   const metadata = () => (session as unknown as { metadata(): Promise<{ approvals: Record<string, ApprovalRecord> }> }).metadata();
   for (let attempt = 0; attempt < 500; attempt++) {
@@ -134,7 +125,6 @@ test("path IDs, exact operations and composite dedup keys cannot collide", async
   assert.notEqual(await requestKey("alice", "write", "id"), await requestKey("alice", "ask", "id"));
   assert.throws(() => validateOperation({ kind: "git.commit", message: "ok", hidden: true }));
   assert.throws(() => validateOperation({ kind: "github.comment", repository: "../escape/repo", issue: 1, body: "x" }));
-  // Issues: a one-line title, a body that may be empty, and nothing else (labels, assignees) to approve unseen.
   const issue = { kind: "github.issue", repository: "owner/repo", title: "Bug", body: "" };
   assert.deepEqual(validateOperation(issue), issue);
   for (const invalid of [{ ...issue, title: "Two\nlines" }, { ...issue, title: " " }, { ...issue, title: "x".repeat(257) }, { ...issue, body: "x".repeat(60001) },
@@ -177,7 +167,6 @@ test("a view request naming a revision gets only what changed since it", { skip:
   const latest = await get("/v1/sessions/revision-session/view");
   assert.equal(latest.revision, patch.revision);
   assert.deepEqual(applyViewPatch(whole.view!, patch), latest.view);
-  // A revision the runner never issued gets the whole view.
   assert.deepEqual(await get(`/v1/sessions/revision-session/view/${"f".repeat(32)}`), latest);
   for (const path of ["view/abc", `view/${"A".repeat(32)}`, `view/${whole.revision}/x`]) {
     const response = await app.request(`/v1/sessions/revision-session/${path}`, { headers: { authorization: `Bearer ${await signToken(await ticket("revision-session", "view"), SECRET)}` } });
@@ -225,7 +214,6 @@ test("read-only durable ask inherits transcript but cannot write; restart preser
 test("writer cannot self-approve without approve permission; exact authorized operation uses owner git identity", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   const session = await service.provision(binding("approval-session"), await ticket("approval-session", "create"));
-  // The session's own Git metadata is read-only to commands; the agent commits in repositories it makes or clones.
   const operation = { kind: "bash" as const, command: "git init -q app && cd app && echo hello > hello.txt && git add -A && git commit -q -m 'Owner identity'" };
   const approval = await session.createApproval("test:bob", operation);
   await assert.rejects(session.decide(await ticket("approval-session", "approve", "test:bob"), approval.id, { decision: "approve", operation }));
@@ -277,7 +265,6 @@ test("owner restore publishes a new idle session, drops old authority and leaves
   const source = await service.provision(binding("restore-source"), await ticket("restore-source", "create"));
   await source.submit(await ticket("restore-source", "submit"), { requestId: "source-write", content: "TEST_WRITE evidence.txt\noriginal" }, "write");
   await idle(source);
-  // An allowed permission request is settled history; what it allowed for the rest of the session stays with the source.
   await source.submit(await ticket("restore-source", "submit"), { requestId: "source-read", content: "TEST_WRITE allowed.txt\nonce", options: { access: "read" } }, "write");
   const permission = await permissionRequest(source);
   await source.decide(await ticket("restore-source", "approve"), permission.id, { decision: "approve", operation: permission.operation, scope: "session" });
@@ -356,7 +343,6 @@ test("a conversation-only backup keeps the conversation, not the files, and its 
   assert.equal("clones" in backup, false);
   assert.equal((backup as { conversationOnly?: boolean }).conversationOnly, true);
   assert.equal(Buffer.from(backup.sqlite, "base64").subarray(0, 15).toString(), "SQLite format 3");
-  // The runner's HTTP route takes the request from the backup's body, and nothing else.
   const app = createRunnerApp(service);
   for (const [body, status] of [[JSON.stringify({ conversationOnly: true }), 200], [JSON.stringify({ conversationOnly: "yes" }), 400], [JSON.stringify({ files: false }), 400]] as const) {
     const response = await app.request("/v1/sessions/conversation-source/backup", { method: "POST",
@@ -380,8 +366,6 @@ test("a conversation-only backup keeps the conversation, not the files, and its 
   const instructions = (restored as unknown as { agentInstructions(mode: "write"): string }).agentInstructions("write");
   assert.match(instructions, /restored from a backup that kept only its conversation/);
   assert.doesNotMatch((source as unknown as { agentInstructions(mode: "write"): string }).agentInstructions("write"), /kept only its conversation/);
-  // The note follows the latest restore: a full backup of the restored session still carries it, and restoring that
-  // backup in full brings back its files, so the note goes.
   await restored.submit(await ticket(target.session.id, "submit"), { requestId: "conversation-again", content: "TEST_WRITE again.txt\nmade again" }, "write");
   await idle(restored);
   const again = await restored.backup(await ticket(target.session.id, "backup"));
@@ -464,7 +448,6 @@ test("connected writes durably bind Worker admission to every model approval wit
     const faux = fauxProvider({ models: [{ id: model.modelId }] });
     faux.setResponses([
       fauxAssistantMessage([
-        // Three calls that wait on their cards at once (the program tools run one call at a time, as bash didn't).
         fauxToolCall("github_comment", { repository: "example/repo", issue: 1, body: "Review this comment" }),
         fauxToolCall("github_comment", { repository: "example/repo", issue: 3, body: "And this one" }),
         fauxToolCall("github_comment", { repository: "example/repo", issue: 4, body: "And a third" }),
@@ -484,7 +467,6 @@ test("connected writes durably bind Worker admission to every model approval wit
   await assert.rejects(session.submit(writer, { ...input, admissionId: "malformed" }, "write"), /Worker write admission/);
   await assert.rejects(session.submit({ ...writer, action: "ask" }, input, "ask"), /Worker write admission/);
   const receipt = await session.submit(writer, input, "write");
-  // Each call waits on its own card.
   await operationRequests(session, 3);
   const view = await session.view();
   assert.equal(view.approvals.length, 3);
@@ -497,7 +479,6 @@ test("connected writes durably bind Worker admission to every model approval wit
   await session.restart();
   assert.ok((await session.view()).approvals.filter(approval => waiting.has(approval.id)).every(approval => approval.status === "interrupted"),
     "a restart ends the calls waiting on cards, and their cards with them");
-  // Told its calls were interrupted, this model asks again; the new cards carry the same admission.
   const retried = (await operationRequests(session, 4)).filter(approval => approval.id !== explicit.id);
   assert.equal(retried.length, 3);
   for (const approval of retried) await session.decide({ ...await ticket(target.session.id, "approve"), connectorId }, approval.id, { decision: "deny", operation: approval.operation });
@@ -527,7 +508,6 @@ test("connected writes durably bind Worker admission to every model approval wit
 test("the host's owner lets their own commands run without the resource limits the host lacks; nobody lifts them for a member without a host command grant", { skip: process.platform !== "linux" }, async t => {
   const { service } = await fixture(t);
   const connectorId = "limitless-connector";
-  // Neither provisioned limits nor the test shell: a command runs within limits, or with the host owner's consent.
   const limitless = new RunnerService({ ...service.config, connectorId, allowTestShell: false });
   await limitless.initialize();
   t.after(() => limitless.close());
@@ -540,8 +520,6 @@ test("the host's owner lets their own commands run without the resource limits t
     await session.submit({ ...await ticket(id, "submit"), connectorId }, { content: `TEST_BASH ${command}`, requestId: id, admissionId }, "write");
     return session;
   }
-  // On someone else's host, without a host command grant there, the call fails without a card: nobody in the session
-  // may lift the host's limits, and the agent learns who may run commands there.
   const shared = await start("limitless-shared", "test:host", "echo shared");
   await idle(shared);
   const sharedView = await shared.view();
@@ -553,7 +531,6 @@ test("the host's owner lets their own commands run without the resource limits t
   assert.deepEqual(request.operation, { kind: "permission", tool: "node", target: commandTarget("echo unlimited-marker"), needs: ["unbounded-shell"] });
   assert.equal(request.admissionId, admissionId);
   await own.decide({ ...await ticket("limitless-own", "approve"), connectorId }, request.id, { decision: "approve", operation: request.operation });
-  // The consent covers running unlimited; the command itself still waits for its approval.
   const [command] = await operationRequests(own);
   assert.equal(command!.operation.kind, "program");
   assert.equal(command!.unbounded, true);
@@ -563,7 +540,6 @@ test("the host's owner lets their own commands run without the resource limits t
   assert.match(ran.result ?? "", /unlimited-marker/);
   await idle(own);
 
-  // The host's owner auto-approving their own message runs the command at once, without either card.
   const auto = await start("limitless-auto", "test:alice", "echo auto-unlimited-marker");
   await auto.submit({ ...await ticket("limitless-auto", "submit"), connectorId }, { content: "TEST_BASH echo auto-unlimited-marker", requestId: "auto", admissionId, options: { access: "auto" } }, "write");
   const first = await permissionRequest(auto);
@@ -577,12 +553,9 @@ test("the host's owner lets their own commands run without the resource limits t
 
 test("a member granted host commands runs commands in the sandbox without the limits the host lacks, decided as host commands are, while the grant lasts", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
-  // May approve the session's work, but holds no host command authority.
   grants["test:carol"] = ["read", "ask", "write", "approve"];
-  // The host's owner, with approve access to the session.
   grants["test:host"] = ["read", "approve"];
   const connectorId = "granted-shell-connector";
-  // What the control plane reports of alice's grant on test:host's host.
   const grant: { hostCommands?: "approve" | "auto" } = { hostCommands: "approve" };
   const asked: AuthorizationRequest[] = [];
   const authorize = async (input: AuthorizationRequest) => {
@@ -591,7 +564,6 @@ test("a member granted host commands runs commands in the sandbox without the li
     return { allowed, ownerId: input.ownerId, policyVersion: 1,
       ...(allowed && input.host && input.actorId === "test:alice" && grant.hostCommands ? { hostCommands: grant.hostCommands } : {}) };
   };
-  // Neither provisioned limits nor the test shell.
   const runner = new RunnerService({ ...service.config, connectorId, allowTestShell: false, authorize });
   await runner.initialize();
   t.after(() => runner.close());
@@ -606,13 +578,11 @@ test("a member granted host commands runs commands in the sandbox without the li
   const decide = async (approval: ApprovalRecord, actorId = "test:alice", decision: "approve" | "deny" = "approve") =>
     session.decide({ ...await ticket("granted-shell", "approve", actorId), connectorId }, approval.id, { decision, operation: approval.operation });
 
-  // With approve access to host commands, they allow running without limits as the host's owner would in theirs...
   await submit("approved", "echo granted-approved");
   const request = await permissionRequest(session);
   assert.deepEqual(request.operation, { kind: "permission", tool: "node", target: commandTarget("echo granted-approved"), needs: ["unbounded-shell"] });
   assert.ok(asked.some(input => input.actorId === "test:alice" && input.host), "the host checks their grant before the card asks");
   await decide(request);
-  // ...and the command waits for someone with host command authority: approve permission on the session isn't enough.
   const [command] = await operationRequests(session);
   assert.equal(command!.operation.kind, "program");
   assert.equal(command!.unbounded, true);
@@ -623,7 +593,6 @@ test("a member granted host commands runs commands in the sandbox without the li
   assert.match(ran.result ?? "", /granted-approved/);
   await idle(session);
 
-  // Their Auto-approve still asks for each command: they decide it themselves, or the host's owner does.
   await submit("approve-level-auto", "echo approve-level-auto", "auto");
   const [asking] = await operationRequests(session);
   assert.equal(asking!.unbounded, true);
@@ -631,7 +600,6 @@ test("a member granted host commands runs commands in the sandbox without the li
   assert.equal((await settledCard(session, asking!.id)).status, "denied");
   await idle(session);
 
-  // With automatic host commands, it runs at once, without either card.
   grant.hostCommands = "auto";
   await submit("automatic", "echo granted-automatic", "auto");
   await idle(session);
@@ -639,7 +607,6 @@ test("a member granted host commands runs commands in the sandbox without the li
   assert.deepEqual(autoApproved(automatic), [{ tool: "node", status: "executed", unbounded: true }]);
   assert.ok(toolOutput(automatic, /granted-automatic/));
 
-  // A card left waiting when the grant ends no longer runs, even approved by the host's owner.
   grant.hostCommands = "approve";
   await submit("waiting", "echo left-waiting");
   const unlimited = await permissionRequest(session);
@@ -653,7 +620,6 @@ test("a member granted host commands runs commands in the sandbox without the li
   assert.match(stopped.result ?? "", /members they granted host commands/);
   await idle(session);
 
-  // Once the grant has ended, the next command stops before any card asks anyone, and the agent learns why.
   const refusals = (view: SessionView) => view.entries.filter(entry => entry.role === "toolResult"
     && entry.text.includes("only in sessions of its owner and of members they granted host commands")).length;
   const before = await session.view();
@@ -666,7 +632,6 @@ test("a member granted host commands runs commands in the sandbox without the li
 
 test("a session its host's owner started on the host runs there while the host accepts that, and only host command authority decides it", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
-  // May approve the session's work, but holds no host command authority.
   grants["test:carol"] = ["read", "ask", "write", "approve"];
   const connectorId = "host-sessions-connector";
   let accepted = true;
@@ -693,7 +658,6 @@ test("a session its host's owner started on the host runs there while the host a
   assert.equal(ran.status, "executed", ran.result);
   assert.ok(ran.result?.includes(join(service.config.dataDir, "sessions", "host-own")), `it ran in the session's own worktree on the host: ${ran.result}`);
   await idle(session);
-  // Once its host stops accepting that, the session's next command stops before any card asks anyone.
   accepted = false;
   await session.submit({ ...await ticket("host-own", "submit"), connectorId }, { content: "TEST_BASH echo never-ran", requestId: "host-own-off", admissionId }, "write");
   await idle(session);
@@ -705,7 +669,6 @@ test("a session its host's owner started on the host runs there while the host a
 test("a member the host's owner granted sessions on the host runs one there only while their grant includes it, and without approval only with automatic host commands", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   const connectorId = "member-host-sessions-connector";
-  // What the control plane reports of alice's grant on test:host's host; asked for sessions on the host only by this host.
   const grant: { hostCommands?: "approve" | "auto"; hostSessions?: true } = { hostCommands: "approve", hostSessions: true };
   const asked: AuthorizationRequest[] = [];
   const authorize = async (input: AuthorizationRequest) => {
@@ -726,7 +689,6 @@ test("a member the host's owner granted sessions on the host runs one there only
   const session = await runner.provision(value, { ...await ticket("host-member", "create"), connectorId });
   assert.ok(session.sandbox instanceof HostWorkspace, "no sandbox is created for it");
 
-  // With approve access to host commands, their Auto-approve still asks: they decide each command themselves.
   await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo member-approved", requestId: "approved", admissionId, options: { access: "auto" } }, "write");
   const [command] = await operationRequests(session);
   assert.equal(command!.operation.kind, "program");
@@ -737,13 +699,11 @@ test("a member the host's owner granted sessions on the host runs one there only
   assert.ok(asked.some(input => input.actorId === "test:alice" && input.host && input.hostSessions), "the host checks the grant before their command");
   await idle(session);
 
-  // With automatic host commands, it runs at once.
   grant.hostCommands = "auto";
   await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo member-automatic", requestId: "automatic", admissionId, options: { access: "auto" } }, "write");
   await idle(session);
   assert.deepEqual(autoApproved(await session.view()), [{ tool: "node", status: "executed" }]);
 
-  // Once their grant no longer includes sessions on the host, the next command stops before any card asks anyone.
   delete grant.hostSessions;
   await session.submit({ ...await ticket("host-member", "submit"), connectorId }, { content: "TEST_BASH echo never-ran", requestId: "ended", admissionId, options: { access: "auto" } }, "write");
   await idle(session);
@@ -756,7 +716,6 @@ test("a member the host's owner granted sessions on the host runs one there only
 test("a workspace collaborator's own Auto-approve runs their sandboxed commands at once, only while the control plane says their role allows it", { skip: process.platform !== "linux" }, async t => {
   const { service, grants } = await fixture(t);
   const connectorId = "member-auto-connector";
-  // What the control plane reports of bob's workspace role; asked only by name, and only by this host.
   let allowed = true;
   const asked: AuthorizationRequest[] = [];
   const authorize = async (input: AuthorizationRequest) => {
@@ -778,24 +737,20 @@ test("a workspace collaborator's own Auto-approve runs their sandboxed commands 
     { ...await ticket(id, "submit", "test:bob"), connectorId },
     { content: `TEST_BASH ${command}`, requestId, admissionId: await sha256(`member auto ${requestId}`), ...(options ? { options } : {}) }, "write");
 
-  // Their Auto-approve runs their command at once, as the session's owner, without a card.
   await submit("auto", "echo member-auto-marker", { access: "auto" });
   await idle(session);
   const view = await session.view();
   assert.deepEqual(autoApproved(view), [{ tool: "node", status: "executed" }]);
   assert.ok(toolOutput(view, /member-auto-marker/));
   assert.ok(asked.length > 0 && asked.every(input => input.actorId === "test:bob"), "only another member's message asks");
-  // It never merges without asking: that is the owner's Auto-approve alone.
   await assert.rejects(submit("merge", "echo never", { access: "auto", autoMerge: true }), rejectedWith(422, /owner's Auto-approve merges/));
 
-  // Asking before acting, their command waits for a person.
   await submit("asking", "echo member-asking", { access: "approval" });
   const [card] = await operationRequests(session);
   assert.equal(card!.requestedBy, "test:bob");
   await session.decide({ ...await ticket(id, "approve"), connectorId }, card!.id, { decision: "deny", operation: card!.operation });
   await idle(session);
 
-  // Once the control plane no longer says their role allows it, their Auto-approve is refused.
   allowed = false;
   await assert.rejects(submit("demoted", "echo never", { access: "auto" }), rejectedWith(403, /can auto-approve/));
 });
@@ -803,7 +758,6 @@ test("a workspace collaborator's own Auto-approve runs their sandboxed commands 
 test("shell commands may reserve address space they never touch, as gh and node do when they start", { skip: process.platform !== "linux" }, async t => {
   const { service } = await fixture(t);
   const session = await service.provision(binding("reserve-session"), await ticket("reserve-session", "create"));
-  // Mapped PROT_NONE, 16 GiB commits no memory: only an address-space cap refuses it.
   const command = "python3 -I -c 'import mmap; mmap.mmap(-1, 16 << 30, flags=mmap.MAP_PRIVATE, prot=0); print(\"reserved\")'";
   assert.match(await session.sandbox.execute({ kind: "bash", command }, true, allowTestOperation, { allowTestShell: true }), /reserved/);
 });
@@ -818,7 +772,6 @@ test("a longer command time limit gives builds room; the default keeps the limit
   const [cpu, size, files] = await limits({ limits: commandLimits(600, 2) });
   assert.equal(cpu, "1200", "every CPU for the whole time limit");
   assert.equal(size, String(16 * 1024 * 1024), "16 GiB, in ulimit's 1024-byte blocks");
-  // Never more open files than the runner's own hard limit.
   assert.ok(Number(files) > 256 && Number(files) <= 8192, files);
 });
 
@@ -849,7 +802,6 @@ test("kernel runner lease admits one owner and releases without deleting stale f
   assert.equal(lost, false);
 });
 
-// Host mode needs only Git, so chat-option behavior is exercised on macOS and Linux alike.
 const hostMode = { skip: !["linux", "darwin"].includes(process.platform) || spawnSync("git", ["--version"]).status !== 0 };
 async function hostFixture(t: { after: (fn: () => Promise<void>) => void }, extra: Partial<RunnerService["config"]> = {}) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "runner-host-")));
@@ -905,10 +857,8 @@ test("read access asks the owner before a change, and auto access runs owner com
   view = await session.view();
   assert.equal(view.access, "auto");
   assert.deepEqual(autoApproved(view), [{ tool: "node", status: "executed" }]);
-  // The call's result is the whole record: who it ran for, and its output.
   assert.ok(toolOutput(view, /"automatic":true/) && toolOutput(view, /"decidedBy":"test:alice"/) && toolOutput(view, /auto-output-marker/));
 
-  // Without options the next run returns to per-command human approval: the call waits for it, then gets the output.
   await session.submit(await ticket("options-session", "submit"), { content: "TEST_BASH echo pending-marker", requestId: "default" }, "write");
   const [pending] = await operationRequests(session);
   assert.equal(pending!.operation.kind, "program");
@@ -918,7 +868,6 @@ test("read access asks the owner before a change, and auto access runs owner com
   assert.equal(view.busy, true, "the call waits on the card");
   assert.equal(view.activity, "waiting");
   assert.ok(!view.entries.some(entry => entry.role === "toolResult" && entry.text.includes("pending-marker")), "no result before the decision");
-  // Deciding doesn't wait for the message: the message waits for the decision.
   await session.decide(await ticket("options-session", "approve"), pending!.id, { decision: "approve", operation: pending!.operation });
   const ran = await settledCard(session, pending!.id);
   assert.equal(ran.status, "executed");
@@ -928,7 +877,6 @@ test("read access asks the owner before a change, and auto access runs owner com
   assert.ok(result, "the agent gets the command's outcome");
   assert.match(result.text, /"status":"executed"/);
 
-  // A denied command ends its call with the denial; nothing runs.
   await session.submit(await ticket("options-session", "submit"), { content: "TEST_BASH echo denied-marker", requestId: "denied" }, "write");
   const [refused] = await operationRequests(session);
   assert.equal((await session.decide(await ticket("options-session", "approve"), refused!.id, { decision: "deny", operation: refused!.operation })).status, "denied");
@@ -945,7 +893,6 @@ test("a tool outside the agent waits for its owner, who allows it once or for th
   const commands = () => session.view().then(view => view.approvals.filter(approval => approval.operation.kind === "program"));
   assert.equal((await session.view()).access, undefined, "no shared message has run at any access yet");
 
-  // Bob may write and approve here, but only the owner lets a call do more than the session allows.
   await session.submit(await ticket(id, "submit", "test:bob"), { content: "TEST_BASH echo once", requestId: "once" }, "write");
   const once = await permissionRequest(session);
   assert.deepEqual(once.operation, { kind: "permission", tool: "node", target: commandTarget("echo once"), needs: ["tool"] });
@@ -955,7 +902,6 @@ test("a tool outside the agent waits for its owner, who allows it once or for th
   const allowedOnce = await session.decide(await ticket(id, "approve"), once.id, { decision: "approve", operation: once.operation, scope: "call" });
   assert.equal(allowedOnce.status, "approved");
   assert.equal(allowedOnce.scope, "call");
-  // Allowing the tool doesn't run the command: it still gets its own approval.
   const deny = async () => {
     const [command] = await operationRequests(session);
     await session.decide(await ticket(id, "approve"), command!.id, { decision: "deny", operation: command!.operation });
@@ -969,16 +915,12 @@ test("a tool outside the agent waits for its owner, who allows it once or for th
   const again = await permissionRequest(session);
   assert.notEqual(again.id, once.id, "one call's permission doesn't cover the next");
   await session.decide(await ticket(id, "approve"), again.id, { decision: "approve", operation: again.operation, scope: "session" });
-  // Allowing the tool for the session also runs the owner's commands of it, this one included, without asking.
   await idle(session);
   await session.submit(await ticket(id, "submit"), { content: "TEST_BASH echo granted", requestId: "granted" }, "write");
   await idle(session);
-  // Someone else's message uses the tool without a permission card, but its command still needs approval.
   await session.submit(await ticket(id, "submit", "test:bob"), { content: "TEST_BASH echo bob", requestId: "bob" }, "write");
   await deny();
   const view = await session.view();
-  // The one-call permission is folded into its command's card. The commands the session grant ran have no card (their
-  // calls are marked in the transcript), so its permission stays listed; and the session grant asks no more.
   assert.deepEqual(view.approvals.filter(approval => approval.operation.kind === "permission").map(approval => [approval.id, approval.status, approval.scope]),
     [[again.id, "approved", "session"]]);
   assert.deepEqual((await commands()).map(approval => [approval.operation, approval.status, approval.permission]), [
@@ -986,7 +928,6 @@ test("a tool outside the agent waits for its owner, who allows it once or for th
     [commandOperation(session, "echo bob"), "denied", undefined],
   ]);
   assert.deepEqual(marks(view), [{ tool: "node", status: "executed" }, { tool: "node", status: "executed" }]);
-  // The last shared message named no access, so it asked before acting, and the view says so.
   assert.equal(view.access, "approval");
   assert.equal((await session.createApproval("test:alice", commandOperation(session, "echo explicit"))).status, "pending");
   await assert.rejects(session.decide(await ticket(id, "approve"), again.id, { decision: "approve", operation: again.operation }), rejectedWith(409, /already been decided/));
@@ -1003,7 +944,6 @@ test("auto access runs a tool outside the agent without a permission card", host
   assert.deepEqual(view.approvals.filter(approval => approval.operation.kind === "permission"), [], "auto-approve asks nothing");
   assert.deepEqual(autoApproved(view), [{ tool: "node", status: "executed" }]);
   assert.ok(toolOutput(view, /auto-tool-marker/));
-  // Auto-approve covers its own message only: the next one asks again.
   await session.submit(await ticket(id, "submit"), { content: "TEST_BASH echo after", requestId: "after" }, "write");
   const request = await permissionRequest(session);
   assert.deepEqual(request.operation, { kind: "permission", tool: "node", target: commandTarget("echo after"), needs: ["tool"] });
@@ -1014,7 +954,6 @@ test("auto access runs a tool outside the agent without a permission card", host
 test("allowing a tool for the session lets the round's other waiting calls of it go ahead", hostMode, async t => {
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   faux.setResponses([
-    // Two calls of a tool that runs in parallel (the program and write tools run one call at a time), both outside the agent.
     fauxAssistantMessage([fauxToolCall("list_files", { path: "." }), fauxToolCall("list_files", { path: "" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Both requested."),
   ]);
@@ -1025,7 +964,6 @@ test("allowing a tool for the session lets the round's other waiting calls of it
   const base = binding(id);
   const session = await service.provision({ ...base, agent: { ...base.agent, tools: ["identity", "read_file"] } }, await ticket(id, "create"));
   await session.submit(await ticket(id, "submit"), { content: "Run both.", requestId: "both" }, "write");
-  // Both calls of the round wait, each on its own card.
   let requests: ApprovalRecord[] = [];
   for (let count = 0; count < 500 && requests.length < 2; count++) {
     requests = (await session.view()).approvals.filter(approval => approval.operation.kind === "permission" && approval.status === "pending");
@@ -1033,10 +971,8 @@ test("allowing a tool for the session lets the round's other waiting calls of it
   }
   assert.equal(requests.length, 2);
   await session.decide(await ticket(id, "approve"), requests[0]!.id, { decision: "approve", operation: requests[0]!.operation, scope: "session" });
-  // Both calls then go ahead without asking: the session grant approves the owner's calls of the tool.
   await idle(session);
   const view = await session.view();
-  // Both permissions stay listed, and both calls listed the worktree.
   assert.deepEqual(view.approvals.filter(approval => approval.operation.kind === "permission").map(approval => [approval.status, approval.scope]), [["approved", "session"], ["approved", "session"]]);
   const results = view.entries.filter(entry => entry.role === "toolResult");
   assert.equal(results.length, 2);
@@ -1111,8 +1047,6 @@ test("failed model turns expose provider, model and HTTP status but never the pr
 });
 
 test("a stream that keeps dropping on a large conversation says so, and starts compacting its context", hostMode, async t => {
-  // Six answered messages of 100,000 characters make about 150K tokens; then every attempt of the seventh drops its
-  // stream, Pi's retries included (2 + 4 + 8 s), and the host compacts with the next response as the summary.
   const dropped = "Anthropic stream ended without a stop reason";
   const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow: 1_000_000 }] });
   faux.setResponses([
@@ -1143,7 +1077,6 @@ test("a stream that keeps dropping on a large conversation says so, and starts c
   for (const attempt of attempts) assert.deepEqual(attempt.error, { provider: "faux", modelId: "faux-1", cause: "incomplete_stream" });
   const failure = entries.find(entry => entry.kind === "workspace.run-failure");
   assert.deepEqual(failure?.error, { provider: "faux", modelId: "faux-1", cause: "incomplete_stream", compacting: true });
-  // The summary takes the next response: nothing else asked the provider for one.
   for (const end = Date.now() + 10_000; faux.getPendingResponseCount() > 0 && Date.now() < end;) await delay(50);
   assert.equal(faux.getPendingResponseCount(), 0, "the host asked for a compaction summary");
   let kinds: string[] = [];
@@ -1164,7 +1097,6 @@ test("the view tells how full the shared conversation's context window is, and w
   } });
   const id = "context-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
-  // Pi's own reserve: the host's settings keep no other for this model.
   assert.deepEqual((await session.view()).context, { tokens: 0, window: 200_000, compactsAt: 200_000 - 16_384 });
   await session.submit(await ticket(id, "submit"), { content: "x".repeat(4000), requestId: "long" }, "write");
   await idle(session);
@@ -1175,7 +1107,6 @@ test("the view tells how full the shared conversation's context window is, and w
 });
 
 test("a run Pi settles without an answer shows as a failed model turn instead of silence", hostMode, async t => {
-  // A model the host no longer offers ends the run like a failed compaction does: unanswered, with no entry for it.
   const { service } = await hostFixture(t, { resolveModels: async model => {
     const models = createModels();
     models.setProvider(fauxProvider({ models: [{ id: "another-model" }] }).provider);
@@ -1206,7 +1137,6 @@ test("a conversation starts at the host's level for its model, and a model switc
   await session.submit(await ticket(id, "submit"), { content: "switch", requestId: "switch", options: { model: { provider: "faux", modelId: "faux-2" } } }, "write");
   await idle(session);
   assert.deepEqual((await session.view()).agent, { provider: "faux", modelId: "faux-2", thinkingLevel: "low" });
-  // A level named with the switch wins over the model's own.
   await session.submit(await ticket(id, "submit"), { content: "back", requestId: "back", options: { model: { provider: "faux", modelId: "faux-1" }, thinkingLevel: "medium" } }, "write");
   await idle(session);
   assert.deepEqual((await session.view()).agent, { provider: "faux", modelId: "faux-1", thinkingLevel: "medium" });
@@ -1227,7 +1157,6 @@ test("edit_file replaces exact text in place, keeps a CRLF file CRLF, and refuse
   const base = binding(id);
   const session = await service.provision({ ...base, agent: { ...base.agent, tools: [...base.agent.tools, "edit_file"] } }, await ticket(id, "create"));
   await session.sandbox.writeFile("notes.txt", "alpha\r\nbeta\r\ngamma\r\n", allowTestOperation);
-  // Both edits match the file as it was, the second one across a line break the model wrote as LF.
   await session.submit(await ticket(id, "submit"), { content: "Edit it.", requestId: "edit" }, "write");
   await idle(session);
   assert.equal(await session.sandbox.readFile("notes.txt", allowTestOperation), "ALPHA\r\nBETA\r\ngamma\r\n");
@@ -1237,14 +1166,12 @@ test("edit_file replaces exact text in place, keeps a CRLF file CRLF, and refuse
   assert.ok(JSON.stringify((await session.view()).entries).includes("occurs 2 times in notes.txt"));
 });
 
-/** Real SQLite storage with faults switched on demand, as a full disk or an I/O error would cause them. */
 function faultyStorage(fault: { calls?: boolean; close?: boolean }) {
   return async (path: string): Promise<Storage> => {
     const storage = await openNodeSqliteStorage(path);
     return new Proxy(storage, { get(target, key) {
       const value: unknown = Reflect.get(target, key, target);
       if (typeof value !== "function") return value;
-      // Closing always releases the real database first, so no connection outlives a test.
       if (key === "close") return async (...args: unknown[]) => {
         await Reflect.apply(value, target, args);
         if (fault.close) throw new Error("disk I/O error");
@@ -1267,12 +1194,10 @@ test("a session whose storage failed is reopened from its SQLite file by the nex
   await assert.rejects(session.submit(await ticket(id, "submit"), { content: "TEST_IDENTITY", requestId: "during" }, "write"));
   for (let count = 0; count < 200 && !session.failed; count++) await delay(10);
   assert.equal(session.failed, true);
-  // While storage keeps failing, each request tries to reopen the session and reports the failure.
   await assert.rejects(service.get(id));
   assert.equal(session.failed, true);
 
   fault.calls = false;
-  // Requests arriving together share one reopen and all get the fully reopened session.
   assert.deepEqual(await Promise.all([service.get(id), service.get(id)]), [session, session]);
   assert.equal(session.failed, false);
   assert.deepEqual((await session.view()).entries, before);
@@ -1304,7 +1229,6 @@ test("entries carry how long each reply took and each tool ran", hostMode, async
   await idle(session);
   const entries = (await session.view()).entries;
   const timed = (role: string) => entries.filter(entry => entry.role === role).map(entry => typeof entry.durationMs === "number" && entry.durationMs >= 0);
-  // The identity call and the answer after it, then the identity tool's own run.
   assert.deepEqual(timed("assistant"), [true, true]);
   assert.deepEqual(timed("toolResult"), [true]);
   assert.deepEqual(timed("user"), [false]);

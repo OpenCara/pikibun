@@ -5,9 +5,7 @@ export interface LocalModelSummary {
   provider: string;
   modelId: string;
   name: string;
-  /** Reasoning levels the host's Pi supports for this model; absent from connectors older than chat options. */
   thinkingLevels?: ThinkingLevel[];
-  /** The level Pi on the host starts this model at, one of `thinkingLevels`; absent from connectors older than 0.5.1. */
   thinkingLevel?: ThinkingLevel;
 }
 
@@ -15,204 +13,56 @@ export interface ConnectorCapabilities {
   platform: string;
   sandbox: boolean;
   productionShell: boolean;
-  /** Owner explicitly opted out of isolation: approved work runs directly as the host user. Absent means false. */
   unsandboxed?: boolean;
-  /** The connector applies per-message model, reasoning and access choices. Absent on older connectors. */
   chatOptions?: boolean;
-  /**
-   * The connector gives the model the images pasted into a message. Absent on older connectors, which would drop them
-   * and run the text alone, so they are never sent any.
-   */
   chatImages?: boolean;
-  /** The connector accepts repositories from providers other than github.com (provider/host pins). Absent on older connectors. */
   gitProviders?: boolean;
-  /** The connector pushes session commits with control-plane minted credentials (git_push). Absent on older connectors. */
   gitPush?: boolean;
-  /**
-   * The connector accepts repositories on plain Git servers (provider `git`, any HTTPS host) in its sessions' egress
-   * grants. Absent on older connectors, which would refuse a whole grant naming one, so their grants leave them out.
-   */
   gitServers?: boolean;
-  /**
-   * A connector that predates host configuration was started with --git-credentials: pushes in its owner's own sessions
-   * may use this host's Git credentials. Absent means false. Connectors with `hostConfig` never advertise it: their
-   * owner turns this on in Pikibun (HostConfig.gitCredentials).
-   */
   gitCredentials?: boolean;
-  /** The connector reads GitHub issues and pull requests and merges pull requests through the control plane (github_read, github_merge). Absent on older connectors. */
   github?: boolean;
-  /** The connector opens GitHub issues through the control plane once a human approves each (github_issue). Absent on older connectors. */
   githubIssues?: boolean;
-  /** The connector's agents manage their session's scheduled prompts through the control plane (schedule). Absent on older connectors. */
   schedules?: boolean;
-  /**
-   * The connector's agents list, read, message, start, stop and archive the workspace's other sessions through the
-   * control plane, as the person whose message they work on (sessions; see cross-session.ts). Absent on older connectors.
-   */
   crossSessions?: boolean;
-  /**
-   * The connector reads the workspace's document sources (Notion, Google Drive, Dropbox, OneDrive, Feishu/Lark, Tencent Docs) through the control plane
-   * (source_read). Absent on older connectors. New kinds of source need no newer connector.
-   */
   sources?: boolean;
-  /**
-   * The connector keeps a mirror of each repository its sessions clone, which their clones borrow objects from (see
-   * docs/design/repository-cache.md). Absent on older connectors and on hosts whose cache is off, for this connection.
-   */
   repositoryCache?: boolean;
-  /**
-   * The connector accepts sessions moved to it from another host: it restores the source host's live snapshot into a
-   * successor session bound to this host and one of its models. Absent on older connectors.
-   */
   hostMigration?: boolean;
-  /**
-   * Sessions on this host start without pinned repositories: the agent clones the workspace's repositories with plain
-   * Git, through the session's egress proxy in the sandbox, or with the host's own Git where its owner runs the host
-   * unsandboxed. Advertised by every connector of this version, whatever `sandbox` says (isolation is verified per
-   * session); absent on older connectors, which can't run new sessions.
-   */
   plainGit?: boolean;
-  /**
-   * Backups and moves of this host's clone sessions keep each clone's local work as a Git bundle, and restoring one
-   * clones it again (see Sandbox.cloneBackup). A clone session moves only to a host that has it: an older connector
-   * would restore its other files and drop the clones.
-   */
   cloneBackups?: boolean;
-  /**
-   * The connector pushes a clone session's own branch under the name its binding carries (session.branch, named for the
-   * session's work), not only `pikibun/<session-id>`. Absent on older connectors, whose sessions keep the old name.
-   */
   sessionBranches?: boolean;
-  /**
-   * The connector takes conversation-only backups: the session's Pi conversation and state, without its files or clones.
-   * Absent on older connectors, which would take a full backup instead.
-   */
   conversationBackups?: boolean;
-  /**
-   * The connector packs an archived session's files when its owner asks, and unpacks them when it is unarchived
-   * (apps/runner/src/pack.ts). Advertised by sandboxed connectors only; absent on older ones.
-   */
   sessionPacking?: boolean;
-  /**
-   * The connector runs the session owner's GitHub comments, issues and merges under Auto-approve, through the control
-   * plane with the message's admission; merges only in a message marked `autoMerge`, as the apps mark each Auto-approve
-   * message to such a host (see ChatOptions). Absent on older connectors, which still ask for each.
-   */
   automaticGitHub?: boolean;
-  /**
-   * The connector runs the requests of members a session's owner auto-approves (SessionRecord.autoApprovedRequesters)
-   * without asking, as the control plane reports it (AuthorizationResult.autoApprove). Absent on older connectors,
-   * which still ask for each.
-   */
   requesterAutoApprove?: boolean;
-  /**
-   * The connector takes Auto-approve messages from members other than the session's owner whose workspace role allows
-   * it (memberAutoApproveRoles in policy.ts), and runs their sandboxed commands without asking (memberAutoApproves in
-   * host-operations.ts), as the control plane reports it before each one (AuthorizationResult.memberAutoApprove).
-   * Absent on older connectors, which take Auto-approve from the session's owner only.
-   */
   memberAutoApprove?: boolean;
-  /**
-   * The connector lets members its owner granted host commands to (HostCommandGrant) approve them, or auto-approve
-   * them in their own sessions, as the control plane reports. Absent on older connectors: only the owner decides them.
-   */
   hostGrants?: boolean;
-  /**
-   * The connector lets its owner decide the host commands (host_bash) of any session on it they can read, without
-   * approve permission on the session: the command runs as the host's OS user, so deciding it is theirs. Absent on older
-   * connectors, which check approve permission on every decision, so there the owner also needs it.
-   */
   hostOwnerDecides?: boolean;
-  /**
-   * The connector runs sessions directly on the host for members its owner granted that (HostCommandGrant.hostSessions),
-   * not only for its owner, checking the grant before each of their commands. Absent on older connectors, which run
-   * only their owner's sessions there.
-   */
   hostSessionGrants?: boolean;
-  /**
-   * On a host without resource limits (no `productionShell`), the connector runs the sandboxed shell commands of members
-   * its owner granted host commands (HostCommandGrant), without those limits, as it runs its owner's: decided only by
-   * someone with host command authority, and without approval only for a member holding automatic host commands. Absent
-   * on older connectors, which refuse every command of another member's session there.
-   */
   unboundedShellGrants?: boolean;
-  /**
-   * The connector lists the session worktree's directories and previews its files, read-only, for the session panel's
-   * file browser (the `files` runner action). Absent on older connectors, which refuse that request.
-   */
   fileBrowser?: boolean;
-  /**
-   * The connector takes files attached to a message (the `upload` runner action) into the session worktree's
-   * `attachments/` directory, in chunks (file-uploads.ts). Absent on older connectors, which refuse that request, so no
-   * file is attached to their sessions' messages.
-   */
   fileUploads?: boolean;
-  /**
-   * The connector also takes an upload's chunks straight from the desktop app on its own computer, with a grant the
-   * control plane signed for each (`LocalConnector.direct`), so the file's bytes never leave that computer. Absent on
-   * older connectors and on those a desktop app doesn't run.
-   */
   directUploads?: boolean;
-  /**
-   * Retired: connectors from before extensions carried the web tools (web_fetch, web_search), which extensions provide
-   * now. The control plane accepts the flag from them and offers neither tool.
-   */
   web?: boolean;
-  /**
-   * The connector runs the extensions its workspaces choose and it has installed (docs/design/host-extensions.md),
-   * reports them, and takes installs its owner asks for. Absent on older connectors, whose sessions run none.
-   */
   extensions?: boolean;
-  /**
-   * The connector's sessions run the Pi built-in extensions its configuration turns on (HostConfig.builtinExtensions).
-   * Absent on older connectors, whose sessions run none.
-   */
   builtinExtensions?: boolean;
-  /**
-   * The connector's sessions run the extensions its owner requires of every session on it (HostConfig.requiredExtensions),
-   * whatever their workspace chose, and refuse messages while one can't run; and they run extensions' `input` handlers
-   * on each message before accepting it, which a prompt audit such as `piki:prompt-audit` needs. Absent on older
-   * connectors, whose sessions run neither: their messages go unaudited.
-   */
   requiredExtensions?: boolean;
-  /**
-   * The connector runs as its owner and admins configure it in Pikibun (HostConfig: command time limit, GPU, Git
-   * credentials, repository cache), read from the control plane, rather than by connect options. Absent on older
-   * connectors, which keep their options.
-   */
   hostConfig?: boolean;
-  /**
-   * The connector's sessions summarize long conversations by the compaction token counts set in Pikibun
-   * (HostConfig.compaction) over its Pi settings. Absent on older connectors, which follow their Pi settings alone.
-   */
   compactionConfig?: boolean;
-  /** The GPU device this host can lend its sandboxed commands (HostConfig.gpu). Absent when it has none, or runs unsandboxed. */
   gpu?: GpuKind;
 }
 
-/** A member other than the owner who may manage the host's sharing: its workspace shares and host command grants. */
 export interface ConnectorAdmin {
   userId: string;
   name: string;
   createdAt: string;
 }
 
-/**
- * Host command authority the host's owner or an admin gave in one workspace the host is shared with: to one member
- * (`userId`), or to every member of the workspace (`userId` null). Expired grants are not listed.
- */
 export interface HostCommandGrant {
   workspaceId: string;
   userId: string | null;
-  /** The member's display name; absent for a workspace-wide grant. */
   userName?: string;
   level: HostCommandLevel;
-  /**
-   * The member may also start their own sessions directly on the host, without the sandbox (SessionRecord.hostEnvironment),
-   * where its configuration accepts those (HostConfig.hostSessions). Absent: they get the sandbox, as before.
-   */
   hostSessions?: true;
-  /** When the grant lapses; null for no expiry. */
   expiresAt: string | null;
   createdBy: string;
   createdAt: string;
@@ -226,48 +76,20 @@ export interface ConnectorInfo {
   createdAt: string;
   revokedAt: string | null;
   online: boolean;
-  /**
-   * The version its connector reported when it last connected, such as `0.24.0` or `desktop 0.9.0`. Absent where it
-   * reported none: connectors from before they did (0.23 and older) and development builds.
-   */
   version?: string;
-  /** The models it offers: those it advertises, less any its owner or an admin disabled. */
   models: LocalModelSummary[];
-  // Explicit runtime shares, not the owner's private workspace associations.
   workspaceIds: string[];
-  // Private associations are owner-scoped; shared listings expose only their workspace.
   connectedWorkspaceIds?: string[];
   capabilities: ConnectorCapabilities;
-  /** The viewer's part in managing it: its owner, or an admin of its sharing. Absent for everyone else. */
   role?: "owner" | "admin";
-  /** Listed to its owner and admins. */
   admins?: ConnectorAdmin[];
-  /** Listed to its owner and admins. */
   hostGrants?: HostCommandGrant[];
-  /** How the host runs its sessions; listed to its owner and admins. */
   config?: HostConfig;
-  /**
-   * Sessions the viewer starts on it may run directly on the host, without the sandbox: its configuration accepts them,
-   * its connector runs them, and the viewer owns it or holds a grant in the listed workspace that includes sessions on
-   * the host (see SessionRecord.hostEnvironment). Listed to nobody else.
-   */
   hostSessions?: true;
-  /**
-   * Models it advertises that its owner or an admin disabled (see HostModelSettings): no session starts from one and no
-   * message switches to one. Listed to its owner and admins, who can enable them again.
-   */
   disabledModels?: LocalModelSummary[];
-  /**
-   * The viewer's own authority over host commands on it in the listed workspace: owner, or a grant's level. Absent when
-   * they hold none.
-   */
   hostCommandAccess?: "owner" | HostCommandLevel;
 }
 
-/**
- * A host's models as its owner and admins manage them (PATCH /api/connectors/:id/models): what it offers, and what it
- * advertises but they disabled.
- */
 export interface HostModelSettings {
   models: LocalModelSummary[];
   disabledModels: LocalModelSummary[];
@@ -318,11 +140,6 @@ export const connectorLimits = {
   models: 200,
 } as const;
 
-/**
- * How long one relayed request may take, by its ticket's action: a backup or restore moves a whole session, everything
- * else is a single session operation. The relay and the host apply the same deadline, and missing it ends only that
- * request, never the connection.
- */
 export function connectorRequestTimeoutMs(action: string): number {
   return action === "backup" || action === "restore" ? 90_000 : 30_000;
 }
@@ -334,14 +151,21 @@ export interface RestoreDescriptor {
   sha256: string;
   size: number;
   downloadToken: string;
-  /**
-   * Present (true) when the snapshot comes from another host: the target then runs its own agent and model on the
-   * same owner, workspace and repository pins, instead of the source's exact binding. `backupId` is the migration id.
-   */
   migration?: true;
 }
 
 export interface RestoreInput {
   binding: RunnerBinding;
   restore: RestoreDescriptor;
+}
+
+export function parseCapabilities(json: string | null | undefined): ConnectorCapabilities {
+  const none = {} as ConnectorCapabilities;
+  if (!json) return none;
+  try {
+    const value: unknown = JSON.parse(json);
+    return value && typeof value === "object" && !Array.isArray(value) ? value as ConnectorCapabilities : none;
+  } catch {
+    return none;
+  }
 }

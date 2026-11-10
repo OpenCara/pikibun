@@ -32,84 +32,35 @@ export function isSafeRelativePath(path: string): boolean {
   return path.split("/").every((segment) => segment !== ".." && segment !== "." && segment.length > 0 && segment.toLowerCase() !== ".git");
 }
 
-/** Roles that may create (or restore into) a session of their own; viewers only follow other people's. */
 export const sessionCreatorRoles: readonly WorkspaceRole[] = ["owner", "admin", "collaborator", "member"];
-/**
- * Roles that manage the workspace: its members, models, repositories and settings, and every session there, private ones
- * included (see workspaceSessionPermissions and managesSession).
- */
 export const workspaceManagerRoles: readonly WorkspaceRole[] = ["owner", "admin"];
-/** Roles an admin (not only the owner) may assign, change or remove. */
 export const adminManagedRoles: readonly WorkspaceRole[] = ["collaborator", "member", "viewer"];
 
-/**
- * What a workspace role alone allows on a session it doesn't own. The workspace's owner and admins manage every session
- * there, private ones included: they follow it, send side asks and messages, stop its work and manage it (see
- * managesSession), but decide its approvals only with a session role that allows that, since approved operations run as
- * the session's owner. On a session shared with the workspace, collaborators also send messages and side asks, and
- * members and viewers follow it read-only. A private session gives everyone else nothing.
- */
 export function workspaceSessionPermissions(role: WorkspaceRole, visibility: "private" | "workspace"): Permission[] {
   if (workspaceManagerRoles.includes(role)) return ["read", "ask", "write", "manage"];
   if (visibility !== "workspace") return [];
   return sharedSessionWriterRoles.includes(role) ? ["read", "ask", "write"] : ["read"];
 }
 
-/**
- * Whether `userId`, whose role in the session's workspace is `role`, manages the session as a whole as its owner does:
- * renames, archives and unarchives it, changes its visibility and tool output, and turns off its share link. Its owner
- * does, and so do its workspace's owner and admins; a session admin role manages only who holds a session role.
- * What acts as the session's owner or takes their work elsewhere stays theirs alone: Auto-approve beyond sandboxed
- * commands (see mayAutoApprove), auto-approving another member's requests (where the workspace allows it; see
- * requester-auto-approve.ts), permission requests,
- * scheduled prompts, restarts, backups, restores, moves, exports and creating a share link.
- */
 export function managesSession(userId: string, ownerId: string, role: WorkspaceRole | undefined): boolean {
   return userId === ownerId || (role !== undefined && workspaceManagerRoles.includes(role));
 }
-/** Roles that send messages to any session shared with the workspace (see workspaceSessionPermissions). */
 export const sharedSessionWriterRoles: readonly WorkspaceRole[] = ["owner", "admin", "collaborator"];
-/**
- * Workspace roles whose members may send their own messages with Auto-approve to a session they write to but don't own.
- * Approved operations run as the session's owner, so such a message runs without asking only the commands that stay in
- * the sandbox, within the host's limits (memberAutoApproves in host-operations.ts); its pushes, GitHub effects, host
- * commands and anything the session doesn't allow yet still ask, as they do in any of their messages.
- */
 export const memberAutoApproveRoles: readonly WorkspaceRole[] = ["owner", "admin", "collaborator"];
 
-/**
- * Whether `userId`, whose role in the session's workspace is `role`, may choose Auto-approve for their messages to a
- * session owned by `ownerId`: its owner always (with everything Auto-approve covers), and a member whose workspace role
- * is one of memberAutoApproveRoles (for their sandboxed commands only). Write permission on the session is checked apart.
- */
 export function mayAutoApprove(userId: string, ownerId: string, role: WorkspaceRole | undefined): boolean {
   return userId === ownerId || (role !== undefined && memberAutoApproveRoles.includes(role));
 }
-/** Roles whose explicit session grants are capped at read (see roleSessionCeiling). */
 export const readOnlyRoles: readonly WorkspaceRole[] = ["viewer"];
 
-/**
- * A role's ceiling on any session it doesn't own, whatever its explicit grants: a viewer only ever reads.
- * Null means no ceiling beyond the grants themselves.
- */
 export function roleSessionCeiling(role: WorkspaceRole): readonly Permission[] | null {
   return readOnlyRoles.includes(role) ? ["read"] : null;
 }
 
-/** Whether a role may start sessions; a workspace listing without a role (an older server) counts as a member. */
 export function canCreateSessions(role: WorkspaceRole | undefined): boolean {
   return sessionCreatorRoles.includes(role ?? "member");
 }
 
-/**
- * The four tiers of access a session's owner (or anyone who manages it) gives one workspace member, named after the
- * workspace roles they mirror. Each tier holds the permissions of the tiers below it:
- * - `viewer`: follows the session (read).
- * - `member`: also asks side questions (ask), without sending messages to the agent.
- * - `collaborator`: also sends messages and stops work (write), as a workspace collaborator does on shared sessions.
- * - `admin`: also decides approvals and manages the session's people (approve, manage).
- * A grant is stored as its permissions, so a grant from before tiers that matches none shows as custom.
- */
 export const sessionRolePermissions: Readonly<Record<SessionRole, readonly Permission[]>> = {
   viewer: ["read"],
   member: ["read", "ask"],
@@ -117,7 +68,6 @@ export const sessionRolePermissions: Readonly<Record<SessionRole, readonly Permi
   admin: ["read", "ask", "write", "approve", "manage"],
 };
 
-/** The tier a grant's permissions are exactly, or null for a custom grant that matches none. */
 export function sessionRoleOf(grants: readonly Permission[]): SessionRole | null {
   const held = new Set<Permission>(grants);
   if (held.size) held.add("read");
@@ -127,13 +77,11 @@ export function sessionRoleOf(grants: readonly Permission[]): SessionRole | null
   }) ?? null;
 }
 
-/** Whether a member with this workspace role can hold a session tier: a viewer is capped at read (roleSessionCeiling). */
 export function sessionRoleAllowed(role: SessionRole, workspaceRole: WorkspaceRole | undefined): boolean {
   const ceiling = workspaceRole ? roleSessionCeiling(workspaceRole) : null;
   return !ceiling || sessionRolePermissions[role].every((permission) => ceiling.includes(permission));
 }
 
-/** Whether someone holding `held` on a session can give a tier: nobody grants a permission they don't hold. */
 export function sessionRoleGrantable(role: SessionRole, held: readonly Permission[]): boolean {
   return sessionRolePermissions[role].every((permission) => hasPermission(held, permission));
 }

@@ -19,7 +19,6 @@ test("a message's images are checked for shape, type and size before they go any
   const largest = "A".repeat(chatImageLimits.imageBase64);
   assert.deepEqual(parseChatImages([{ ...image, data: largest }]), { images: [{ ...image, data: largest }] });
   assert.match((parseChatImages([{ ...image, data: `${largest}AAAA` }]) as { error: string }).error, /512 KiB/);
-  // Each within its own bound, together over the message's.
   assert.match((parseChatImages([{ ...image, data: largest }, { ...image, data: largest }]) as { error: string }).error, /720 KiB together/);
 });
 

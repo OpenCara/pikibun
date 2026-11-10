@@ -1,9 +1,11 @@
 import type { Hono } from 'hono';
+import { hostCapabilities } from './authority/index.js';
+import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import { constantTimeEqual, sha256 } from '../../../packages/shared/src/crypto.js';
 import type { RunnerBinding } from '../../../packages/shared/src/types.js';
 import { permissions } from '../../../packages/shared/src/types.js';
 import type { RestoreInput } from '../../../packages/shared/src/connector.js';
-import type { AppContext, SessionRow, WorkerEnv } from './types.js';
+import type { AppContext, SessionRow, AppEnv } from './types.js';
 import {
   auditStatement, authenticateConnector, requireConnectorSession, requireSessionCreator, sessionAccess, sessionCreatorSQL,
 } from './authority/index.js';
@@ -58,7 +60,7 @@ function result(c: AppContext, job: RestoreJob, target: SessionRow, created: boo
   } }, created ? 201 : 200);
 }
 
-export function registerRestoreRoutes(app: Hono<WorkerEnv>): void {
+export function registerRestoreRoutes(app: Hono<AppEnv>): void {
   app.post('/api/sessions/:sourceId/backups/:backupId/restore', async c => {
     const sourceId = identifier(c.req.param('sourceId'));
     const backupId = identifier(c.req.param('backupId'), 'backupId');
@@ -72,10 +74,8 @@ export function registerRestoreRoutes(app: Hono<WorkerEnv>): void {
     const access = await sessionAccess(c.env, sourceId, ownerId);
     if (!access) fail(404, 'not_found', 'Source session not found.');
     if (access.row.owner_id !== ownerId) fail(403, 'owner_required', 'Only the original session owner can restore its backups.');
-    // A restore creates a new session, which a viewer can't.
     await requireSessionCreator(c.env, access.row.workspace_id, ownerId);
     const source = await sourceAuthority(c, sourceId, ownerId);
-    // A session that pinned its repositories keeps its backups for download, not for restoring.
     requireUnfrozen(source);
     let job = await c.env.DB.query<RestoreJob>('SELECT * FROM restore_jobs WHERE owner_id = ? AND request_id = ?')
       .bind(ownerId, requestId).first();
@@ -83,23 +83,18 @@ export function registerRestoreRoutes(app: Hono<WorkerEnv>): void {
     if (!job) {
       const backup = await backupFor(c, source, backupId);
       const sourceBinding = await bindingForSession(c, source);
-      // Validate before creating any target; downloads independently repeat this check at use time.
       await loadBackupSnapshot(c.env, backup, sourceBinding);
       await sourceAuthority(c, sourceId, ownerId);
       const target: SessionRow = { id: id(), workspace_id: source.workspace_id, owner_id: ownerId,
         agent_version_id: source.agent_version_id, connector_id: source.connector_id ?? null,
         connector_owner_id: source.connector_owner_id ?? null, title: title ?? `Restored: ${source.title}`.slice(0, 200),
         repositories_json: source.repositories_json, repository_mode: source.repository_mode ?? null, visibility: 'private', policy_version: 1,
-        // Like a move to another host, a restored copy shows tool output as its source does.
         status: 'provisioning', created_at: now(), tool_output: source.tool_output === 'brief' ? 'brief' : 'full' };
       if (target.connector_id) {
-        const host = await c.env.DB.query<{ capabilities_json: string }>('SELECT capabilities_json FROM connectors WHERE id = ?').bind(target.connector_id).first();
-        target.branch = successorBranch(target, JSON.parse(host?.capabilities_json ?? '{}') as ConnectorCapabilities);
+        target.branch = successorBranch(target, await hostCapabilities(c.env, target.connector_id) ?? parseCapabilities(null));
       }
       const binding: RunnerBinding = { ...sourceBinding, session: runnerSessionRecord(target) };
       const restoreId = id();
-      // Batches are transactional. The conditional insert prevents a losing concurrent
-      // request from leaving an orphan target; the unique receipt selects one winner.
       await c.env.DB.batch([
         c.env.DB.query(`INSERT INTO sessions (id, workspace_id, owner_id, agent_version_id, connector_id,
           connector_owner_id, repositories_json, title, policy_version, status, created_at, visibility, repository_mode, branch, tool_output)
@@ -151,7 +146,6 @@ export function registerRestoreRoutes(app: Hono<WorkerEnv>): void {
       if (receipt.restore?.id !== job.id || receipt.restore.sha256 !== job.sha256 || receipt.restore.targetSessionId !== target.id) {
         fail(502, 'invalid_restore_receipt', 'The runner did not confirm the pinned restore target.');
       }
-      // A delayed response may not commit after another attempt has acquired the job.
       await c.env.DB.batch([
         c.env.DB.query(`UPDATE sessions SET status = 'ready' WHERE id = ? AND status <> 'archived'
           AND EXISTS (SELECT 1 FROM restore_jobs WHERE id = ? AND status = 'pending' AND download_token_hash = ?)`)
@@ -166,8 +160,6 @@ export function registerRestoreRoutes(app: Hono<WorkerEnv>): void {
         { restoreId: job.id, sourceSessionId: sourceId, backupId }).run();
       return result(c, completed, await jobTarget(c, completed), created);
     } catch (error) {
-      // Unknown outcomes retain the exact target and receipt. Only the same durable
-      // runner restore marker can reconcile a retry; never provision a replacement.
       await c.env.DB.batch([
         c.env.DB.query(`UPDATE sessions SET status = 'error' WHERE id = ? AND status <> 'archived'
           AND EXISTS (SELECT 1 FROM restore_jobs WHERE id = ? AND status = 'pending' AND download_token_hash = ?)`)
@@ -180,8 +172,6 @@ export function registerRestoreRoutes(app: Hono<WorkerEnv>): void {
   });
 }
 
-// Register ONLY behind connector bearer + CURRENT connection-token authentication,
-// or the legacy shared-secret middleware. null means strictly legacy routing.
 export async function downloadRestoreSnapshot(c: AppContext, expectedConnectorId: string | null): Promise<Response> {
   if (expectedConnectorId !== null) {
     const connector = await authenticateConnector(c, true);
@@ -202,7 +192,6 @@ export async function downloadRestoreSnapshot(c: AppContext, expectedConnectorId
   const token = text(input.downloadToken, 'downloadToken', 43, 43);
   const job = await c.env.DB.query<RestoreJob>('SELECT * FROM restore_jobs WHERE id = ?').bind(restoreId).first();
   if (!job) {
-    // A host asks for a session moved to it the same way it asks for a backup it restores.
     const moved = await downloadMigrationSnapshot(c, expectedConnectorId, restoreId, input, token);
     if (moved) return moved;
   }

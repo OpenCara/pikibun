@@ -18,7 +18,6 @@ const permissionNeedText: Record<PermissionNeed, string> = {
   "unbounded-shell": "No resource limits: this host has none set up for commands. The command still runs in the sandbox, offline and for at most the host's command time limit, but with no cap on CPU, memory, processes or disk.",
   audience: "Sharing another session: this session's readers would see what the agent reads from a session they can't open themselves.",
 };
-/** Tools whose effect gets its own approval card after the permission, unless the message auto-approves. */
 const approvedTools: readonly string[] = ["bash", "git", "node", "python", "rust", "go", "dotnet", "browser", "make", "git_commit", "git_push", "github_comment", "github_merge", "github_issue", "host_bash", "git_repin"];
 
 const mergeMethodLabels: Record<GitHubMergeMethod, string> = { merge: "Merge commit", squash: "Squash and merge", rebase: "Rebase and merge" };
@@ -33,7 +32,6 @@ function Code(props: { children?: JSX.Element; testID?: string }) {
 
 type Operation = ApprovalRecord["operation"];
 
-/** What a card asks, in a few words, and its icon. */
 function heading(op: Operation): { icon: IconName; title: string } {
   switch (op.kind) {
     case "program": return { icon: "terminal", title: `Run ${op.tool}` };
@@ -53,11 +51,6 @@ function heading(op: Operation): { icon: IconName; title: string } {
   }
 }
 
-/**
- * The exact text an operation runs or writes, when the card can show the whole operation by it: the command of a
- * program, shell or host command (with the program's tool in the title), a commit's message. Other operations show
- * their JSON as it is.
- */
 function exactText(op: Operation): string | null {
   switch (op.kind) {
     case "program": case "bash": return op.command;
@@ -78,7 +71,6 @@ function Detail(props: { label: string; children?: JSX.Element }) {
   );
 }
 
-/** The server hides what looks like a secret from everyone; a decision still uses the real value. */
 function HiddenSecretNote() {
   return (
     <Text testID="approval-secret-note" style={{ fontSize: 13, lineHeight: 18, color: palette().text }}>
@@ -141,7 +133,6 @@ function GitHubMergeSummary(props: { operation: GitHubMergeOperation }) {
   );
 }
 
-/** The session a repin created, from the executed approval's result; nothing unless it holds a valid session ID. */
 function repinnedSession(result?: string): string | null {
   try {
     const value = JSON.parse(result ?? "null");
@@ -151,10 +142,6 @@ function repinnedSession(result?: string): string | null {
   }
 }
 
-/**
- * One approval record with the exact operation it covers; decision controls, when allowed, come in as children.
- * `onOpenSession` opens the session an executed repin created.
- */
 export function ApprovalCard(props: { approval: ApprovalRecord; onOpenSession?: (id: string) => void; children?: JSX.Element }) {
   const name = createUsername();
   const operation = () => props.approval.operation;

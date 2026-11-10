@@ -1,69 +1,31 @@
 import { EXTENSION_ARGUMENTS_SHOWN, type ExtensionToolOperation, type GitRepinOperation, type HostCommandOperation } from "./types.js";
 
-// Declared next to their operations, by interface merging, so the base capability list stays as it was.
 declare module "./connector.js" {
   interface ConnectorCapabilities {
-    /** The connector runs host_bash commands outside the sandbox, each approved by the host's owner. Absent on older connectors. */
     hostCommands?: boolean;
   }
 }
 
-/** What deciding a session's operations needs to know of the session: its owner, its host's owner, and where it runs. */
 export interface HostCommandSession {
   ownerId?: string;
-  /** The owner of the session's host; absent where none is recorded. */
   connectorOwnerId?: string | null;
-  /** The session runs directly on its host (SessionRecord.hostEnvironment), not in the sandbox. */
   hostEnvironment?: boolean;
 }
 
-/**
- * Whether a command without the resource limits the session's host lacks (ApprovalRecord.unbounded) runs there on the
- * strength of the session owner's host command grant: in a session whose owner isn't the host's owner, who lets their
- * own commands run so with a permission request. A member the host's owner granted host commands can already run any
- * command on the host itself, so theirs may run in the sandbox without limits too, as host commands do: only while they
- * hold the grant, decided only by someone with host command authority (see decidedAsHostCommand), and without approval
- * only for a member holding automatic host commands.
- */
 export function grantedShell(session: HostCommandSession): boolean {
   return session.connectorOwnerId !== session.ownerId;
 }
 
-/**
- * Whether deciding `operation` takes host command authority on the session's host: its owner's, or a member's its owner
- * or one of its admins granted host commands, as the control plane reports it (hostAuthority). Those are host_bash and
- * every command of a session that runs directly on its host, which run outside the sandbox, and a command without the
- * limits the host lacks (`unbounded`) that runs on the strength of a grant (see grantedShell), which still runs in the
- * sandbox, as the session's owner. The control plane, the host and the apps all decide by this one rule, so none of
- * them offers or takes a decision another refuses. Such an operation runs without approval only for a session owner
- * who holds automatic host commands there.
- */
 export function decidedAsHostCommand(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
-  // An extension's tool runs in the connector, as the host's OS user, as a host command does.
   if (operation.kind === "host.bash" || operation.kind === "extension.tool") return true;
   return (operation.kind === "bash" || operation.kind === "program") && (session.hostEnvironment === true || (unbounded && grantedShell(session)));
 }
 
-/**
- * Whether `operation` runs without asking when the session's owner auto-approves the requests of the member whose message
- * asked for it (see SessionRecord.autoApprovedRequesters): a sandboxed command with the host's limits, a push, or a GitHub
- * comment or issue. A merge, a host command, every command of a session that runs on its host and a command without the
- * host's limits still ask, as does anything the session doesn't allow yet (a permission request). The control plane,
- * the host and the apps all decide by this one rule.
- */
 export function requesterAutoApproves(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
   if (operation.kind === "bash" || operation.kind === "program") return !unbounded && !decidedAsHostCommand(operation, session, unbounded);
   return operation.kind === "git.push" || operation.kind === "github.comment" || operation.kind === "github.issue";
 }
 
-/**
- * Whether `operation` runs without asking in an Auto-approve message of a member who isn't the session's owner, which
- * their workspace role lets them send (memberAutoApproveRoles in policy.ts): a command that stays in the sandbox, with
- * the host's limits (bash and the program tools: git, node, python, cargo, the browser). Pushes, GitHub comments, issues
- * and merges, host commands, every command of a session that runs on its host, a command without the host's limits and
- * anything the session doesn't allow yet (a permission request) still ask. The control plane, the host and the apps all
- * decide by this one rule.
- */
 export function memberAutoApproves(operation: { kind: string }, session: HostCommandSession, unbounded = false): boolean {
   return (operation.kind === "bash" || operation.kind === "program") && requesterAutoApproves(operation, session, unbounded);
 }
@@ -87,11 +49,9 @@ export function validHostOperation(value: unknown): value is HostCommandOperatio
     && !op.repository.split("/").some(part => [".", "..", ".git"].includes(part.toLowerCase())) && validRepinRef(op.ref);
 }
 
-/** An extension tool call's card, with the exact keys and bounds the runner and the control plane both check. */
 export function validExtensionToolOperation(value: unknown): value is ExtensionToolOperation {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const op = value as Record<string, unknown>;
-  // Exactly these keys, in any order, as validHostOperation takes them; both sides then build the canonical order.
   return op.kind === "extension.tool" && Object.keys(op).sort().join() === "arguments,digest,kind,source,tool"
     && typeof op.source === "string" && op.source.length > 0 && op.source.length <= 1024 && !op.source.includes("\0")
     && typeof op.tool === "string" && /^[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,127}$/.test(op.tool)

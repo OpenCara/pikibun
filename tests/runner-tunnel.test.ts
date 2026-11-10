@@ -18,13 +18,6 @@ import { HostTunnels } from "../apps/runner/src/tunnel-host.js";
 import { fakeCloudflared } from "./helpers/fake-cloudflared.js";
 import { linuxSandboxMissing } from "./helpers/workspaces.js";
 
-/*
- * The tunnel tool in a session (piki:tunnel): off until the workspace turns it on, offered only in the Linux sandbox
- * with cloudflared on the host, each start an extension tool card decided as a host command is and never run
- * automatically, refused in a Read-only message; its server runs as a session service, online through the connector's
- * quick tunnel (a stand-in cloudflared here, as the real one can't reach Cloudflare from a test), until something stops it.
- */
-
 const HOST = "host-1";
 
 function binding(id: string, connector = false): RunnerBinding {
@@ -93,7 +86,6 @@ test("the tunnel is off until the workspace turns it on, and a session on its ho
   t.after(() => service.close());
   const id = "tunnel-host-session";
   const session = await service.provision(binding(id), await ticket(id, "create"));
-  // Off: not offered, a call by name is refused, and the session's people aren't told of a tool their workspace didn't turn on.
   await session.submit(await ticket(id, "submit"), { content: "Put it online.", requestId: "off", admissionId: await sha256("tunnel off") }, "write");
   await idle(session);
   let view = await session.view();
@@ -101,7 +93,6 @@ test("the tunnel is off until the workspace turns it on, and a session on its ho
   assert.match(view.entries.map(entry => entry.text).join("\n"), /Tool tunnel is not available/);
   const tunnelReason = () => view.extensions?.unavailable?.filter(item => item.source === "piki:tunnel");
   assert.deepEqual(tunnelReason(), []);
-  // On in the workspace, but this session runs on its host: still not offered, and everyone is told why.
   answer = { extensions: [{ source: "piki:tunnel", enabled: true, tools: "approval", settings: {} }], automaticTools: false };
   await session.submit(await ticket(id, "submit"), { content: "Now?", requestId: "on-host", admissionId: await sha256("tunnel on host") }, "write");
   await idle(session);
@@ -113,7 +104,6 @@ test("the tunnel is off until the workspace turns it on, and a session on its ho
   assert.equal(view.approvals.length, 0, "nothing asked anyone");
   assert.equal(opened, 0);
   assert.equal(view.tunnel, undefined);
-  // The panel's Stop, with nothing online; and only a stop is taken.
   assert.deepEqual(await session.tunnelAction(await ticket(id, "tunnel"), { action: "stop" }), { stopped: false });
   await assert.rejects(session.tunnelAction(await ticket(id, "tunnel"), { action: "start" }), /Invalid tunnel request/);
   await assert.rejects(session.tunnelAction(await ticket(id, "tunnel"), { action: "stop", reason: "whim" }), /Invalid tunnel request/);
@@ -131,7 +121,6 @@ test("a tunnel start is a host command card, never automatic and refused in Read
     start(), fauxAssistantMessage("Again."), start(), fauxAssistantMessage("Last.")]);
   const models = createModels();
   models.setProvider(faux.provider);
-  // The connector's quick tunnels, with a stand-in cloudflared: the real one can't reach Cloudflare from a test.
   const lines: string[] = [];
   const executable = await fakeCloudflared(directory);
   const hostTunnels = new HostTunnels({ cloudflared: () => ({ executable }), directory: join(directory, "connector-tunnels"), log: line => lines.push(line), connectMs: 5000 });
@@ -139,7 +128,6 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   const reports: SessionTunnelReport[] = [];
   const service = new RunnerService({
     dataDir: directory, sharedSecret: "runner-tunnel-test-secret-not-a-production-secret", controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true, connectorId: HOST,
-    // Nobody but the host's owner holds host commands here.
     authorize: async (input: AuthorizationRequest) => ({ allowed: true, ownerId: input.ownerId, policyVersion: 1 }),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
     extensions: { installed: () => [], workspace: async () => ({ extensions: [{ source: "piki:tunnel", enabled: true, tools: "automatic", settings: {} }], automaticTools: true }) },
@@ -157,7 +145,6 @@ test("a tunnel start is a host command card, never automatic and refused in Read
     { content: "Put the site online.", requestId, admissionId: await sha256(`tunnel ${requestId}`), ...(options ? { options } : {}) }, "write");
   const edge = async () => Number(lines.map(line => /^FAKE_EDGE=(\d+)$/.exec(line)?.[1]).filter(Boolean).at(-1));
 
-  // A start is an extension tool card of piki:tunnel's, which only the host's owner, or a member granted host commands, decides.
   await send("first");
   const approval = await pendingApproval(session);
   assert.equal(approval.operation.kind, "extension.tool");
@@ -174,17 +161,14 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   assert.deepEqual([view.tunnel!.command, view.tunnel!.port, view.tunnel!.startedBy], [`node server.js ${port}`, port, "test:alice"]);
   assert.match(view.entries.map(entry => entry.text).join("\n"), /fake-quick-tunnel\.trycloudflare\.com/);
   assert.deepEqual(reports.map(report => [report.sessionId, report.event, report.url, report.actorId]), [[id, "started", url, "test:alice"]]);
-  // It keeps serving after the call that started it: through the connector's forwarding into the sandbox.
   assert.equal(await (await fetch(`http://127.0.0.1:${await edge()}/phone`)).text(), "hello from the sandbox /phone");
 
-  // Refused in a Read-only message, before any card.
   await send("read", { access: "read" });
   await idle(session);
   view = await session.view();
   assert.match(view.entries.map(entry => entry.text).join("\n"), /a Read-only message doesn't take/);
   assert.equal(view.approvals.filter(item => item.operation.kind === "extension.tool").length, 1);
 
-  // Never automatic, even under the owner's Auto-approve on their own host; a denied start leaves the one online.
   await send("auto", { access: "auto" });
   const auto = await pendingApproval(session);
   assert.equal(auto.status, "pending");
@@ -194,13 +178,11 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   assert.match(view.entries.map(entry => entry.text).join("\n"), /wasn't approved/);
   assert.equal(view.tunnel?.url, url);
 
-  // The panel's Stop.
   assert.deepEqual(await session.tunnelAction(await ticket(id, "tunnel", "test:alice", true), { action: "stop" }), { stopped: true, url });
   assert.equal((await session.view()).tunnel, undefined);
   assert.deepEqual(reports.at(-1), { sessionId: id, event: "stopped", url, reason: "stop", actorId: "test:alice" });
   await assert.rejects(fetch(`http://127.0.0.1:${await edge()}/`), "offline");
 
-  // Stopping the session's work takes it offline too.
   await send("again");
   const again = await pendingApproval(session);
   await session.decide(await ticket(id, "approve", "test:alice", true), again.id, { decision: "approve", operation: again.operation });
@@ -210,7 +192,6 @@ test("a tunnel start is a host command card, never automatic and refused in Read
   assert.equal((await session.view()).tunnel, undefined);
   assert.equal(reports.at(-1)!.reason, "session-stop");
 
-  // And so does the session closing.
   await send("last");
   const last = await pendingApproval(session);
   await session.decide(await ticket(id, "approve", "test:alice", true), last.id, { decision: "approve", operation: last.operation });

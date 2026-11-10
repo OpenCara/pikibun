@@ -7,14 +7,11 @@ const KEY = "pikibun.appearance";
 
 const isPreference = (value: unknown): value is Exclude<ThemePreference, "system"> => value === "light" || value === "dark" || value === "pikibun";
 
-/** Shows a theme: the palette (theme.ts) and the platform's own light or dark chrome under it. */
 function show(value: ThemePreference) {
   themePreference.set(value);
-  // The night theme is a dark one: the platform's own controls, scroll bars and status bar follow it.
   setColorScheme(value === "pikibun" ? "dark" : value);
 }
 
-/** The appearance this device chose, applied at start. */
 export async function applyStoredAppearance(): Promise<void> {
   const stored = await Storage.getItem(KEY).catch(() => null);
   if (isPreference(stored)) show(stored);

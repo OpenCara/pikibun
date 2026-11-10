@@ -3,52 +3,30 @@ import { accessSync, closeSync, constants, openSync, readSync, realpathSync, sta
 import { chmod, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 
-/*
- * The cloudflared the tunnel tool runs (piki:tunnel; docs/design/tunnel.md): the host's own, as its owner installed it,
- * at a path they give, or one the connector downloads from Cloudflare's releases. It runs in the connector, on the host,
- * never in a session's sandbox: it is the one part that must reach Cloudflare's edge (port 7844), which the sandbox's
- * egress proxy never tunnels, and it holds the tunnel, which nothing in the sandbox should. It is found:
- * - PIKIBUN_CLOUDFLARED, the path of a cloudflared executable, set for the connector by the host's owner;
- * - else cloudflared on the connector's PATH, or where packages install it (/usr/local/bin, /usr/bin, Homebrew's);
- * - else the newest one the connector downloaded.
- * Only a real executable is taken (on Linux an ELF, not a wrapper script). Unlike the browser's Chromium, nothing of it
- * is given to sessions: the connector runs it as it is, so it may be anywhere, a home's ~/.local/bin included.
- */
-
 export interface CloudflaredToolchain {
-  /** The cloudflared executable on the host, through links. */
   executable: string;
-  /** Its version, where the connector knows it: one it downloaded. */
   version?: string;
 }
 
-/** Where packages and installers put cloudflared, after the connector's PATH. */
 export const SYSTEM_CLOUDFLAREDS: readonly string[] = Object.freeze([
   "/usr/local/bin/cloudflared", "/usr/bin/cloudflared", "/opt/homebrew/bin/cloudflared", "/home/linuxbrew/.linuxbrew/bin/cloudflared",
 ]);
 
-/** Cloudflare's releases of cloudflared, on GitHub. */
 export const CLOUDFLARED_RELEASES = "https://api.github.com/repos/cloudflare/cloudflared/releases/latest";
-/** Where its downloads are; one from anywhere else is refused. */
 const DOWNLOAD_PREFIX = "https://github.com/cloudflare/cloudflared/releases/download/";
-/** Where GitHub sends a release's downloads. */
 const DOWNLOAD_HOSTS: readonly string[] = ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"];
 const VERSION = /^\d{4}\.\d{1,2}\.\d{1,3}$/;
-/** The lone executables Cloudflare builds, by Node's platform and architecture. */
 const ASSETS: Readonly<Record<string, string>> = Object.freeze({ "linux x64": "cloudflared-linux-amd64", "linux arm64": "cloudflared-linux-arm64" });
 
 export const cloudflaredLimits = Object.freeze({
-  /** The executable, about 40 MB today. */
   bytes: 256 * 1024 * 1024,
   releaseBytes: 2 * 1024 * 1024,
 });
 
-/** The release asset this connector would download, or undefined where Cloudflare builds none it takes. */
 export function cloudflaredAsset(platform: NodeJS.Platform = process.platform, arch: string = process.arch): string | undefined {
   return ASSETS[`${platform} ${arch}`];
 }
 
-/** Whether `path` starts as a Linux executable does, rather than a script that runs one. */
 function elf(path: string): boolean {
   let fd: number | undefined;
   try {
@@ -59,10 +37,6 @@ function elf(path: string): boolean {
   finally { if (fd !== undefined) closeSync(fd); }
 }
 
-/**
- * The executable `path` names, or why it isn't one: a real executable file, an ELF on Linux. The reasons are for the
- * host's owner, who chose the path.
- */
 export function inspectCloudflared(path: string, options: { platform?: NodeJS.Platform } = {}): { cloudflared: CloudflaredToolchain } | { error: string } {
   const platform = options.platform ?? process.platform;
   let executable: string;
@@ -75,18 +49,15 @@ export function inspectCloudflared(path: string, options: { platform?: NodeJS.Pl
   return { cloudflared: { executable } };
 }
 
-/** The cloudflared `path` names, or undefined where it isn't one (inspectCloudflared). */
 export function cloudflaredAt(path: string, options: { platform?: NodeJS.Platform } = {}): CloudflaredToolchain | undefined {
   const found = inspectCloudflared(path, options);
   return "cloudflared" in found ? found.cloudflared : undefined;
 }
 
-/** The host's cloudflared, or undefined where it has none. `env` and `platform`: the connector's, unless a test gives others. */
 export function hostCloudflared(options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {}): CloudflaredToolchain | undefined {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const at = (path: string) => cloudflaredAt(path, { platform });
-  // A path the host's owner chose is that one or none: never another cloudflared than they named.
   if (env.PIKIBUN_CLOUDFLARED) return at(env.PIKIBUN_CLOUDFLARED);
   const name = platform === "win32" ? "cloudflared.exe" : "cloudflared";
   const onPath = (env.PATH ?? "").split(delimiter).filter(entry => entry.startsWith("/") || /^[A-Za-z]:\\/.test(entry)).map(entry => join(entry, name));
@@ -97,12 +68,10 @@ export function hostCloudflared(options: { env?: NodeJS.ProcessEnv; platform?: N
   return undefined;
 }
 
-/** A cloudflared release: its version, and the one asset this host downloads with its SHA-256, as the release lists it. */
 export interface CloudflaredRelease { version: string; asset: string; url: string; sha256: string }
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
-/** `url`, or an error that names the host it couldn't reach and why, for the host's owner (a firewall, a proxy). */
 async function reach(fetcher: typeof fetch, url: string, signal: AbortSignal | undefined, what: string): Promise<Response> {
   try { return await fetcher(url, { headers: { accept: "application/vnd.github+json, application/octet-stream" }, ...(signal ? { signal } : {}) }); }
   catch (error) {
@@ -112,10 +81,6 @@ async function reach(fetcher: typeof fetch, url: string, signal: AbortSignal | u
   }
 }
 
-/**
- * The latest cloudflared release for `asset`: its version, its download (only at Cloudflare's releases on GitHub) and
- * the SHA-256 its release notes list for it. A release that lists none is refused: the download is checked against it.
- */
 export async function latestCloudflared(asset: string, options: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<CloudflaredRelease> {
   const response = await reach(options.fetch ?? fetch, CLOUDFLARED_RELEASES, options.signal, "cloudflared's releases");
   if (!response.ok) throw new Error(`cloudflared's releases answered ${response.status}`);
@@ -134,7 +99,6 @@ export async function latestCloudflared(asset: string, options: { fetch?: typeof
   return { version, asset, url, sha256 };
 }
 
-/** The cloudflareds downloaded under `root`, newest first. */
 export async function downloadedCloudflareds(root: string): Promise<CloudflaredToolchain[]> {
   const names = await readdir(root).catch(() => [] as string[]);
   const newer = (a: string, b: string) => { const x = a.split(".").map(Number); const y = b.split(".").map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return y[i]! - x[i]!; return 0; };
@@ -144,10 +108,6 @@ export async function downloadedCloudflareds(root: string): Promise<CloudflaredT
   });
 }
 
-/**
- * Downloads `release` to `root`/<version>/cloudflared unless it is there already, and answers it. It is fetched beside
- * that, checked against the release's SHA-256, and moved into place only whole.
- */
 export async function downloadCloudflared(root: string, release: CloudflaredRelease, options: { fetch?: typeof fetch; signal?: AbortSignal } = {}): Promise<CloudflaredToolchain> {
   if (!VERSION.test(release.version) || release.url !== `${DOWNLOAD_PREFIX}${release.version}/${release.asset}` || !/^[0-9a-f]{64}$/.test(release.sha256)) {
     throw new Error("Not a cloudflared release");
@@ -161,7 +121,6 @@ export async function downloadCloudflared(root: string, release: CloudflaredRele
   try {
     const response = await reach(options.fetch ?? fetch, release.url, options.signal, "cloudflared's download");
     if (!response.ok || !response.body) throw new Error(`The download answered ${response.status}`);
-    // GitHub sends a release's download on to its own storage: only there.
     if (response.url && !DOWNLOAD_HOSTS.includes(new URL(response.url).host)) throw new Error("cloudflared's download went somewhere else than GitHub");
     const declared = Number(response.headers.get("content-length") ?? 0);
     if (declared > cloudflaredLimits.bytes) throw new Error("The download is larger than cloudflared");
@@ -188,7 +147,6 @@ export async function downloadCloudflared(root: string, release: CloudflaredRele
   return { ...found, version: release.version };
 }
 
-/** Removes from `root` every download but those of the versions in `keep`, and anything a stopped one left. */
 export async function pruneCloudflareds(root: string, keep: readonly string[]): Promise<void> {
   for (const name of await readdir(root).catch(() => [] as string[])) {
     if (!keep.includes(name)) await rm(join(root, name), { recursive: true, force: true }).catch(() => {});

@@ -3,15 +3,8 @@ import { feishuDomains, feishuItem, sourceLimits, sourceReadLimits, type Documen
 import { fail } from '../../http.js';
 import { accountRejected, clean, json, notFound, outsideSource, rateLimited, upstream, type BoundItem, type DocumentAdapter, type ItemView } from './document-http.js';
 
-/**
- * Feishu (open.feishu.cn) or Lark (open.larksuite.com) as a custom app: its owner adds the app to the folders, documents
- * or wiki spaces it may read, and sessions read what is under the bound one with the app's tenant token. The app's
- * secret and tokens never leave the control plane. Docx documents read as plain text; folders and wiki nodes list
- * what is in them. Older docs, sheets, bases and files are listed but not read.
- */
 export const feishuOrigins: Record<FeishuDomain, string> = { feishu: 'https://open.feishu.cn', lark: 'https://open.larksuite.com' };
 const share = 'the Feishu/Lark app';
-/** A search for an item under the bound folder or wiki node lists at most this many folders or nodes. */
 const searchListings = 40;
 
 type Json = Record<string, unknown>;
@@ -37,7 +30,6 @@ async function tenantToken(secret: string): Promise<string> {
   return body.tenant_access_token;
 }
 
-/** One Feishu API call: its `data`, or null where `missing` is 'null' and Feishu refuses the item. */
 async function call(secret: string, path: string, missing: 'fail' | 'null' = 'fail'): Promise<Json | null> {
   const app = JSON.parse(secret) as AppSecret;
   const answer = await upstream('Feishu', `${feishuOrigins[app.domain]}/open-apis${path}`, {
@@ -48,7 +40,6 @@ async function call(secret: string, path: string, missing: 'fail' | 'null' = 'fa
   const body = json('Feishu', answer);
   const code = typeof body.code === 'number' ? body.code : -1;
   if (code === 0) return body.data && typeof body.data === 'object' ? body.data as Json : {};
-  // Token and app errors (999916xx), the app lacking a scope, and rate limits; everything else is an item it can't see.
   if (code === 99991400) rateLimited('Feishu');
   if (code === 99991672 || code === 99991679) fail(403, 'source_account_scope', 'The Feishu/Lark app lacks a permission it needs (drive, docx and wiki read). Add it in the developer console and publish a new version.');
   if (code >= 99991600 && code < 99991700) accountRejected('Feishu');
@@ -91,7 +82,6 @@ async function folderListing(secret: string, folder: string): Promise<Listing> {
 
 interface WikiNode { token: string; spaceId: string; objToken: string; objType: string; title: string; hasChild: boolean }
 
-/** A wiki node; `space` is the space it was listed in, for list items that don't repeat their space_id. */
 function wikiNode(raw: unknown, space?: string): WikiNode | null {
   const node = raw as Json | null;
   const spaceId = node && typeof node.space_id === 'string' ? node.space_id : space;
@@ -122,10 +112,6 @@ async function nodeListing(secret: string, node: WikiNode): Promise<Listing> {
   return listing;
 }
 
-/**
- * Requires `target` to be the bound item or under it. Feishu doesn't name a file's parent folder, so this searches down
- * from the bound folder or wiki node, through at most `searchListings` listings.
- */
 async function requireUnder(secret: string, root: FeishuItem, target: FeishuItem): Promise<void> {
   if (root.type === target.type && root.token === target.token) return;
   if (root.type === 'document') outsideSource();
@@ -139,7 +125,6 @@ async function requireUnder(secret: string, root: FeishuItem, target: FeishuItem
     }
     outsideSource();
   }
-  // A wiki node: its descendants, matched by node, or by the document a node holds.
   const queue = [await getNode(secret, root.token)];
   for (let listed = 0; queue.length && listed < searchListings; listed++) {
     const node = queue.shift()!;

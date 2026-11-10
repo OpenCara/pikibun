@@ -36,13 +36,10 @@ test('the next run comes after the given time, in the schedule\'s time zone', ()
   assert.equal(iso(nextCronTime('0 9 * * 1-5', 'UTC', at('2026-03-06T10:00:00Z'))), '2026-03-09T09:00:00.000Z', 'Friday after nine: Monday');
   assert.equal(iso(nextCronTime('0 9 * * *', 'Asia/Tokyo', monday)), '2026-03-03T00:00:00.000Z', '09:00 in Tokyo is midnight UTC');
   assert.equal(iso(nextCronTime('0 0 1 * *', 'UTC', at('2026-01-31T12:00:00Z'))), '2026-02-01T00:00:00.000Z');
-  // Both day fields restricted: either runs, as in cron.
   assert.equal(iso(nextCronTime('0 0 13 * fri', 'UTC', at('2026-03-01T00:00:00Z'))), '2026-03-06T00:00:00.000Z');
   assert.equal(nextCronTime('0 0 31 2 *', 'UTC', monday), null, 'never comes round');
-  // Berlin moves to summer time at 02:00 on 29 March 2026: 02:30 doesn't exist that day, and 09:00 is 07:00 UTC after.
   assert.equal(iso(nextCronTime('30 2 * * *', 'Europe/Berlin', at('2026-03-28T12:00:00Z'))), '2026-03-30T00:30:00.000Z');
   assert.equal(iso(nextCronTime('0 9 * * *', 'Europe/Berlin', at('2026-03-28T12:00:00Z'))), '2026-03-29T07:00:00.000Z');
-  // And back at 03:00 on 25 October: 02:30 comes twice, and runs once.
   const first = nextCronTime('30 2 * * *', 'Europe/Berlin', at('2026-10-24T12:00:00Z'))!;
   assert.equal(new Date(first).getUTCHours() === 0 || new Date(first).getUTCHours() === 1, true);
   assert.equal(iso(nextCronTime('30 2 * * *', 'Europe/Berlin', first)), '2026-10-26T01:30:00.000Z');
@@ -58,7 +55,6 @@ test('a session at rest with a schedule shows as scheduled, unless what its agen
   assert.equal(sessionStatus({ ...ready, activity: 'failed' }).label, 'Failed');
   assert.equal(sessionStatus({ ...ready, status: 'archived' }).label, 'Archived');
   assert.equal(sessionStatus({ status: 'ready', activity: 'done' }).label, 'Done', 'no schedule');
-  // An open session's live activity wins over the list's.
   assert.equal(sessionStatus({ ...ready, activity: 'done' }, 'working').label, 'In progress');
 });
 
@@ -93,7 +89,6 @@ async function fixture(t: TestContext) {
     .run('scheduled-session', workspace.id, owner.user.id, agent.id, 'scheduled', 'ready', new Date().toISOString());
   assert.equal((await owner.request('POST', '/api/sessions/scheduled-session/grants', { userId: collaborator.user.id, role: 'collaborator' })).status, 200);
   env.RUNNER_URL = 'https://runner.example.test';
-  // The host: records what it is sent.
   const submitted: { path: string; body: Record<string, unknown> }[] = [];
   const previousFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = previousFetch; });
@@ -125,7 +120,6 @@ test('only the session owner schedules prompts; everyone who can view the sessio
     assert.equal(response.status, 400, JSON.stringify(bad));
     assert.equal((await response.json() as { code: string }).code, code, JSON.stringify(bad));
   }
-  // Read-only and auto-approve are options a host must take; this session's runner takes none.
   const unsupported = await f.owner.request('POST', base, { ...body, access: 'read' });
   assert.equal(unsupported.status, 400);
   assert.equal((await unsupported.json() as { code: string }).code, 'options_unsupported');
@@ -145,7 +139,6 @@ test('only the session owner schedules prompts; everyone who can view the sessio
   assert.equal((await f.collaborator.request('PATCH', `${base}/${schedule.id}`, { enabled: false })).status, 403);
   assert.equal((await f.collaborator.request('DELETE', `${base}/${schedule.id}`)).status, 403);
 
-  // Paused: lists no longer show it waiting.
   const paused = await (await f.owner.request('PATCH', `${base}/${schedule.id}`, { enabled: false })).json() as { schedule: SessionSchedule };
   assert.equal(paused.schedule.nextRunAt, null);
   assert.equal((await f.session(f.owner)).nextScheduledAt, undefined);
@@ -182,20 +175,17 @@ test('the sweep sends due prompts as the owner, once, skips a busy session, and 
   assert.equal(listed.lastError, null);
   assert.equal((await f.session(f.owner)).nextScheduledAt, listed.nextRunAt);
 
-  // Busy at the next run: skipped, not queued, and the schedule still moves on.
   f.sqlite.prepare("UPDATE sessions SET activity = 'working' WHERE id = 'scheduled-session'").run();
   const busy = await runScheduledPrompts(f.env, due + 3600_000);
   assert.deepEqual(busy, [{ scheduleId: created.schedule.id, sessionId: 'scheduled-session', error: 'session_busy' }]);
   assert.equal(f.submitted.length, 1);
   f.sqlite.prepare("UPDATE sessions SET activity = 'done' WHERE id = 'scheduled-session'").run();
-  // Missed runs aren't caught up: a day later, one run, then the next hour from then.
   const late = due + 30 * 3600_000 + 60_000;
   assert.equal((await runScheduledPrompts(f.env, late)).length, 1);
   assert.equal(f.submitted.length, 2);
   const after = (await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] }).schedules[0]!;
   assert.equal(after.nextRunAt, new Date(due + 31 * 3600_000).toISOString());
 
-  // An archived session sends nothing.
   f.sqlite.prepare("UPDATE sessions SET status = 'archived', archived_status = 'ready' WHERE id = 'scheduled-session'").run();
   assert.deepEqual(await runScheduledPrompts(f.env, due + 40 * 3600_000), []);
 });
@@ -210,7 +200,6 @@ test('a refused run is recorded on its schedule, and Run now sends at once witho
   assert.equal(result.schedule.nextRunAt, schedule.nextRunAt);
   assert.equal((await f.collaborator.request('POST', `${base}/${schedule.id}/run`)).status, 403);
 
-  // The owner lost the session's host: the sweep records why nothing was sent.
   globalThis.fetch = async () => Response.json({ error: 'offline', code: 'connector_relay_error' }, { status: 503 });
   const [outcome] = await runScheduledPrompts(f.env, Date.parse(schedule.nextRunAt!) + 1000);
   assert.ok(outcome && 'error' in outcome, JSON.stringify(outcome));
@@ -235,7 +224,6 @@ test('an edit never brings back a run a sweep claimed while it was being saved',
   const f = await fixture(t);
   const { schedule } = await (await f.owner.request('POST', base, { cron: '0 9 * * *', content: 'Report' })).json() as { schedule: SessionSchedule };
   const claimed = new Date(Date.parse(schedule.nextRunAt!) + 86400_000).toISOString();
-  // A sweep claims the run between the edit's read and its write.
   const claim = (sql: string) => {
     if (!sql.startsWith('UPDATE session_schedules SET name')) return;
     f.setBeforeQuery(undefined);
@@ -247,7 +235,6 @@ test('an edit never brings back a run a sweep claimed while it was being saved',
   assert.equal((await renamed.json() as { schedule: SessionSchedule }).schedule.nextRunAt, claimed, 'a rename leaves the next run alone');
   assert.equal(f.sqlite.prepare('SELECT next_run_at FROM session_schedules WHERE id = ?').get(schedule.id)!.next_run_at, claimed);
 
-  // A change of when it runs replaces only the next run it read: here it read one the sweep has claimed since.
   f.setBeforeQuery(sql => { if (sql.startsWith('UPDATE session_schedules SET name')) { f.setBeforeQuery(undefined);
     f.sqlite.prepare('UPDATE session_schedules SET next_run_at = ? WHERE id = ?').run(new Date(Date.parse(claimed) + 86400_000).toISOString(), schedule.id); } });
   const moved = await f.owner.request('PATCH', `${base}/${schedule.id}`, { cron: '0 10 * * *' });
@@ -281,11 +268,9 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   const create = { action: 'create', cron: '0 9 * * 1-5', timeZone: 'Europe/Berlin', content: 'Check the nightly build' };
   const write = admit(ownerId);
 
-  // The agent was made without the tool, and the owner hasn't allowed it.
   await refused(tool(write, create), 403, 'tool_not_allowed');
   f.sqlite.prepare('INSERT INTO session_tool_grants (session_id,tool,call_id,approval_id,granted_by,created_at) VALUES (?,?,?,?,?,?)')
     .run('scheduled-session', 'schedule', '', 'permission-any', ownerId, new Date().toISOString());
-  // A collaborator's message, an ask, an expired message or another's admission schedule nothing: schedules run as the owner.
   await refused(tool(admit(f.collaborator.user.id), create, f.collaborator.user.id), 403, 'owner_required');
   for (const admission of [admit(ownerId, { mode: 'ask' }), admit(ownerId, { expiresAt: Math.floor(Date.now() / 1000) - 1 }), admit(f.collaborator.user.id), 'unknown']) {
     await refused(tool(admission, create), 403, 'schedule_not_admitted');
@@ -302,7 +287,6 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   const schedule = created.body.schedule as SessionSchedule;
   assert.deepEqual([schedule.name, schedule.cron, schedule.timeZone, schedule.access, schedule.enabled, schedule.createdBy],
     ['Check the nightly build', '0 9 * * 1-5', 'Europe/Berlin', 'approval', true, ownerId]);
-  // The owner sees it in the Schedules tab, and the session list shows it waiting.
   const listed = await (await f.owner.request('GET', base)).json() as { schedules: SessionSchedule[] };
   assert.deepEqual(listed.schedules.map(item => item.id), [schedule.id]);
   assert.equal((await f.session(f.owner)).nextScheduledAt, schedule.nextRunAt);
@@ -313,16 +297,13 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   assert.deepEqual([(paused.body.schedule as SessionSchedule).name, (paused.body.schedule as SessionSchedule).nextRunAt], ['Build check', null]);
   await refused(tool(write, { action: 'update', scheduleId: 'missing', enabled: true }), 404, 'not_found');
 
-  // Auto-approved schedules come only from the owner's Auto-approve message: not created, and not changed, by any other.
   await refused(tool(write, { ...create, access: 'auto' }), 403, 'automatic_schedule_not_admitted');
   await refused(tool(write, { action: 'update', scheduleId: schedule.id, access: 'auto' }), 403, 'automatic_schedule_not_admitted');
-  // An Auto-approve message passes that check; this session's host takes no access options, so the schedule still can't be auto.
   await refused(tool(admit(ownerId, { access: 'auto' }), { ...create, access: 'auto' }), 400, 'options_unsupported');
   f.sqlite.prepare("UPDATE session_schedules SET access = 'auto' WHERE id = ?").run(schedule.id);
   for (const change of [{ content: 'Do anything' }, { enabled: true }, { enabled: false, content: 'Do anything' }, { access: 'auto' }]) {
     await refused(tool(write, { action: 'update', scheduleId: schedule.id, ...change }), 403, 'automatic_schedule_not_admitted');
   }
-  // Pausing it, or lowering its access, takes away only what it could do unattended.
   const pausedAuto = await tool(write, { action: 'update', scheduleId: schedule.id, enabled: false });
   assert.equal(pausedAuto.status, 200, JSON.stringify(pausedAuto.body));
   const lowered = await tool(write, { action: 'update', scheduleId: schedule.id, access: 'approval', content: 'Check the build again' });
@@ -330,7 +311,6 @@ test('the owner\'s agent manages schedules with the schedule tool, for a live wr
   assert.deepEqual([(lowered.body.schedule as SessionSchedule).access, (lowered.body.schedule as SessionSchedule).content], ['approval', 'Check the build again']);
   f.sqlite.prepare("UPDATE session_schedules SET access = 'auto' WHERE id = ?").run(schedule.id);
 
-  // Deleting takes no more access than it had.
   const deleted = await tool(write, { action: 'delete', scheduleId: schedule.id });
   assert.deepEqual([deleted.status, deleted.body], [200, { deleted: schedule.id }]);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_schedules').get()!.n, 0);

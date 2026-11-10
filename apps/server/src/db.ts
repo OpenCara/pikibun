@@ -5,17 +5,11 @@ import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
 import type { AgentRow, Env, ModelRow, SessionRow, UserRow } from './types.js';
 import { fail } from './http.js';
 
-/*
- * Rows to records, and the session states every request checks (frozen, archived, restoring, moving). Who may do what
- * is the authority's (authority/access.ts), and so is the audit log (authority/audit.ts).
- */
-
 export async function getUser(env: Env, userId: string): Promise<UserRow | null> {
   return env.DB.query<UserRow>(`SELECT u.*, EXISTS(SELECT 1 FROM github_tokens t WHERE t.user_id = u.id) AS github_connected,
     EXISTS(SELECT 1 FROM password_credentials p WHERE p.user_id = u.id) AS has_password FROM users u WHERE u.id = ?`).bind(userId).first();
 }
 export function userProfile(row: UserRow): UserProfile {
-  // A password account's username is the name in its ID, also where its row predates the username column's backfill.
   const username = row.username ?? (row.auth_kind === 'password' && row.id.startsWith('password:') ? row.id.slice('password:'.length) : null);
   return { id: row.id, username, githubId: row.github_id, githubLogin: row.github_login, displayName: row.display_name,
     gitName: row.git_name, gitEmail: row.git_email, env: JSON.parse(row.env_json), githubConnected: row.auth_kind === 'github' && !!row.github_connected };
@@ -28,10 +22,6 @@ export function agentVersion(row: AgentRow): AgentVersion {
   return { id: row.id, agentId: row.agent_id, authorId: row.author_id, workspaceId: row.workspace_id, version: row.version,
     name: row.name, description: row.description, instructions: row.instructions, tools: JSON.parse(row.tools_json), modelId: row.model_id, createdAt: row.created_at };
 }
-/**
- * A session that pinned its repositories when it started, as sessions did before they cloned them: it stays readable
- * (transcript, approvals, backups, exports) but runs nothing. Sessions without pins and clone sessions are not frozen.
- */
 export function frozenSession(row: Pick<SessionRow, 'repository_mode' | 'repositories_json'>): boolean {
   if (row.repository_mode === 'clone') return false;
   try {
@@ -46,7 +36,6 @@ export function requireUnfrozen(row: Pick<SessionRow, 'repository_mode' | 'repos
   }
 }
 
-/** A recorded pull request URL as lists show it: its number from the last path segment (GitHub, GitLab, Bitbucket, Gitea, Azure). */
 export function sessionPullRequest(url: string | null | undefined, state?: string | null): SessionPullRequest | undefined {
   if (!url) return undefined;
   let parsed: URL;
@@ -56,17 +45,11 @@ export function sessionPullRequest(url: string | null | undefined, state?: strin
   return { url: parsed.href, ...(number ? { number: Number(number) } : {}), ...(isPullRequestState(state) ? { state } : {}) };
 }
 
-/**
- * The own branch of a session restored or moved to a host with these capabilities: named for its work (sessionBranchName)
- * where the host pushes named branches, otherwise none (pikibun/<id>). A successor never takes its source's branch, so
- * two sessions never push the same one.
- */
 export function successorBranch(row: Pick<SessionRow, 'id' | 'title' | 'repository_mode'>, capabilities: ConnectorCapabilities): string | null {
   return row.repository_mode === 'clone' && capabilities.sessionBranches === true ? sessionBranchName(row.title, row.id) : null;
 }
 
 export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRecord {
-  // A session pushes through Pikibun or, on a host, with the host's own Git (session-branches.ts); a push's comes first.
   const pullRequest = row.pull_request_url ? sessionPullRequest(row.pull_request_url, row.pull_request_state)
     : sessionPullRequest(row.branch_pull_request_url, row.branch_pull_request_state);
   return { id: row.id, workspaceId: row.workspace_id, ownerId: row.owner_id, agentVersionId: row.agent_version_id,
@@ -84,19 +67,13 @@ export function sessionRecord(row: SessionRow, grants?: Permission[]): SessionRe
     ...(row.parent_session_id ? { parentSessionId: row.parent_session_id } : {}),
     ...(row.packed_at ? { packed: true as const } : {}),
     ...(pullRequest ? { pullRequest } : {}),
-    // An archived session is never online, whatever a host that was away when it was archived said.
     ...(row.tunnel_url && row.tunnel_expires_at && row.status !== 'archived' && Date.parse(row.tunnel_expires_at) > Date.now() ? { tunnel: { url: row.tunnel_url, expiresAt: row.tunnel_expires_at } } : {}) };
 }
 export function runnerSessionRecord(row: SessionRow): Omit<SessionRecord, 'visibility' | 'permissions' | 'activity' | 'frozen' | 'pullRequest' | 'toolOutput' | 'nextScheduledAt' | 'parentSessionId' | 'packed' | 'tunnel'> {
-  // Visibility is live control-plane policy, activity and the pull request are what the host and pushes report, tool
-  // output is how the control plane shows the transcript, the next scheduled prompt is the owner's schedule, the parent
-  // session is how the control plane links sessions, and whether its files are packed and whether it is online are the
-  // host's state, so none of them is part of the immutable runner binding.
   const { visibility: _visibility, permissions: _permissions, activity: _activity, frozen: _frozen, pullRequest: _pullRequest,
     toolOutput: _toolOutput, nextScheduledAt: _nextScheduledAt, parentSessionId: _parentSessionId, packed: _packed, tunnel: _tunnel, ...record } = sessionRecord(row);
   return record;
 }
-/** What anything but a read of a session waits for: it isn't archived, being restored into, or moving to another host. */
 export async function requireActiveSession(env: Env, row: Pick<SessionRow, 'id' | 'status'>): Promise<void> {
   if (row.status === 'archived') fail(409, 'session_archived', 'Session is archived.');
   if (await env.DB.query("SELECT 1 FROM restore_jobs WHERE target_session_id = ? AND status <> 'completed'").bind(row.id).first()) {
@@ -104,10 +81,6 @@ export async function requireActiveSession(env: Env, row: Pick<SessionRow, 'id' 
   }
   await requireNoMigration(env, row.id);
 }
-/**
- * A session moving to another host, and its successor until the move completes, accept nothing but reads.
- * `asTarget` admits only the move's own restore into its successor.
- */
 export async function requireNoMigration(env: Env, sessionId: string, asTarget = false): Promise<void> {
   if (await env.DB.query("SELECT 1 FROM host_migrations WHERE status = 'pending' AND (source_session_id = ? OR (target_session_id = ? AND ? = 0))")
     .bind(sessionId, sessionId, asTarget ? 1 : 0).first()) {

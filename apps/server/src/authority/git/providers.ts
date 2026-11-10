@@ -7,19 +7,14 @@ import { boundedRepositoryBody, repositoryRef } from '../repositories.js';
 import { defaultBranch, readAdvertisement, resolveRef, type AdvertisedService, type Advertisement, type AdvertisementFailure } from './smart-http.js';
 import type { GitCredential, GitProviderAdapter, RepositoryRef } from './types.js';
 
-// GitHub, GitHub Enterprise Server, GitLab and Bitbucket serve at most 100 repositories per list page.
 export const listPageSize = 100;
-// One list page of full repository objects; GitHub's run about 6 KiB each.
 export const listBytes = 2 * 1024 * 1024;
-// Gitea clamps `limit` to its MAX_RESPONSE_ITEMS setting and a short page ends the listing, so keep its default.
 const giteaPageSize = 30;
 const jsonBytes = 512 * 1024;
-// Azure DevOps lists every repository of an organization in one response (no server paging).
 const azureListBytes = 4 * 1024 * 1024;
 const remoteTimeout = 20_000;
 const userAgent = 'OpenCara-Agent-Workspace';
 const deniedStatuses: readonly number[] = [401, 403, 404];
-// Azure DevOps answers unauthenticated requests with 203 (sign-in HTML) or a 302 to its sign-in service.
 const azureDeniedStatuses: readonly number[] = [203, 302, 401, 403, 404];
 const sha1 = /^[0-9a-f]{40}$/;
 const sha256 = /^[0-9a-f]{64}$/;
@@ -50,7 +45,6 @@ async function discard(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => {});
 }
 
-/** Every upstream request: no automatic redirects, bounded time, no cookies, fixed User-Agent. */
 async function request(provider: TokenGitProvider, url: string, headers: Headers): Promise<Response> {
   try {
     return await fetch(url, { headers: { ...headers, 'User-Agent': userAgent }, redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout) });
@@ -88,7 +82,6 @@ function list(provider: TokenGitProvider, value: unknown): unknown[] {
   if (!Array.isArray(value)) invalidResponse(provider);
   return value;
 }
-/** One list page: an array of at most the `size` entries requested. */
 function pageItems(provider: TokenGitProvider, value: unknown, size: number): unknown[] {
   const items = list(provider, value);
   if (items.length > size) invalidResponse(provider);
@@ -129,10 +122,6 @@ function target(provider: TokenGitProvider, repository: RepositoryRef): Reposito
   }
   return repository;
 }
-/**
- * Requests pages 1, 2, ... of `size` entries until the provider reports no more, keeping at most
- * repositoryLimits.pickerRepositories. The page count is bounded too, so skipped entries cannot extend a listing.
- */
 export async function collectRepositories(size: number,
   page: (number: number) => Promise<{ repositories: ProviderRepository[]; hasMore: boolean }>): Promise<ProviderRepositoryList> {
   const limit = repositoryLimits.pickerRepositories;
@@ -145,7 +134,6 @@ export async function collectRepositories(size: number,
   }
   return { repositories, truncated: true };
 }
-/** Origin of a self-hosted provider; only validated public DNS names over HTTPS. */
 function selfHostedOrigin(credential: GitCredential): URL {
   if (!validGitHost(credential.host)) fail(400, 'invalid_git_host', 'The connected account has an invalid host.');
   return new URL(`https://${credential.host}`);
@@ -156,7 +144,6 @@ export function basic(user: string, password: string): string {
   return `Basic ${btoa(binary)}`;
 }
 
-// GitHub Enterprise Server: REST v3 under /api/v3.
 function githubEnterpriseApi(credential: GitCredential): { origin: URL; base: string; headers: Headers } {
   const origin = selfHostedOrigin(credential);
   return { origin, base: `${origin.origin}/api/v3`, headers: { Authorization: `Bearer ${credential.token}`, Accept: 'application/vnd.github+json' } };
@@ -191,7 +178,6 @@ const githubEnterprise: GitProviderAdapter = {
   async commit(credential, repository, ref) {
     const api = githubEnterpriseApi(credential);
     const { fullName } = target('github-enterprise', repository);
-    // The sha media type answers with the bare commit id instead of the full commit (and its file list).
     const response = await request('github-enterprise', `${api.base}/repos/${fullName}/commits/${encodeURIComponent(repositoryRef(ref))}`,
       { ...api.headers, Accept: 'application/vnd.github.sha' });
     await expectOk('github-enterprise', response, { denied: [...deniedStatuses, 422] });
@@ -199,7 +185,6 @@ const githubEnterprise: GitProviderAdapter = {
   },
 };
 
-// GitLab (gitlab.com and self-managed): REST v4.
 function gitlabApi(credential: GitCredential): { base: string; headers: Headers } {
   return { base: `${selfHostedOrigin(credential).origin}/api/v4`, headers: { Authorization: `Bearer ${credential.token}` } };
 }
@@ -219,7 +204,6 @@ const gitlab: GitProviderAdapter = {
   async list(credential) {
     const api = gitlabApi(credential);
     return collectRepositories(listPageSize, async page => {
-      // simple=true omits `visibility`, so the full representation is requested.
       const { body, response } = await getJson('gitlab',
         `${api.base}/projects?membership=true&per_page=${listPageSize}&page=${page}&order_by=path&sort=asc`, api.headers, { limit: listBytes });
       const items = pageItems('gitlab', body, listPageSize);
@@ -245,7 +229,6 @@ const gitlab: GitProviderAdapter = {
   },
 };
 
-// Gitea and Forgejo: REST v1.
 function giteaApi(credential: GitCredential): { base: string; headers: Headers } {
   return { base: `${selfHostedOrigin(credential).origin}/api/v1`, headers: { Authorization: `token ${credential.token}` } };
 }
@@ -286,8 +269,6 @@ const gitea: GitProviderAdapter = {
   },
 };
 
-// Bitbucket Cloud: REST 2.0. Cross-workspace listing (GET /2.0/repositories) was removed by CHANGE-2770, so
-// repositories are listed per workspace from GET /2.0/user/workspaces.
 const bitbucketApi = 'https://api.bitbucket.org/2.0';
 const bitbucketWeb = 'https://bitbucket.org';
 const bitbucketWorkspacePages = 10;
@@ -323,7 +304,6 @@ const bitbucket: GitProviderAdapter = {
     const headers = bitbucketHeaders(credential);
     const response = await request('bitbucket', `${bitbucketApi}/user`, { Accept: 'application/json', ...headers });
     if ((response.status === 401 || response.status === 403) && !credential.username) {
-      // Workspace/project/repository access tokens have no user; they authenticate but cannot read /user.
       await discard(response);
       await getJson('bitbucket', `${bitbucketApi}/user/workspaces?pagelen=1`, headers, { verify: true });
       return { login: 'access token' };
@@ -338,7 +318,6 @@ const bitbucket: GitProviderAdapter = {
     const headers = bitbucketHeaders(credential);
     const limit = repositoryLimits.pickerRepositories;
     const repositories: ProviderRepository[] = [];
-    // Workspaces sorted by slug, each listed by full_name.
     const workspaces = await bitbucketWorkspaces(headers);
     for (const [index, workspace] of workspaces.entries()) {
       for (let page = 1; ; page++) {
@@ -349,7 +328,6 @@ const bitbucket: GitProviderAdapter = {
           const repository = bitbucketRepository(value);
           if (repository) repositories.push(repository);
         }
-        // An empty page ends the workspace even when it links another.
         const more = result.next && result.values.length > 0;
         if (repositories.length >= limit) {
           return { repositories: repositories.slice(0, limit), truncated: repositories.length > limit || more || index < workspaces.length - 1 };
@@ -372,7 +350,6 @@ const bitbucket: GitProviderAdapter = {
   },
 };
 
-// Azure DevOps Services: REST 7.1 under https://dev.azure.com/{organization}.
 function azureApi(credential: GitCredential): { organization: string; base: string; headers: Headers } {
   const organization = credential.organization;
   if (!azureOrganization.test(organization)) fail(400, 'invalid_git_account', 'The connected Azure DevOps account has an invalid organization.');
@@ -405,7 +382,6 @@ async function azureRefs(api: { base: string; headers: Headers; id: string }, fi
 const azureDevOps: GitProviderAdapter = {
   async verify(credential) {
     const api = azureApi(credential);
-    // connectionData only exists as a preview API; any failure other than an auth rejection falls back to projects.
     const response = await request('azure-devops', `${api.base}/_apis/connectionData?api-version=7.1-preview`, { Accept: 'application/json', ...api.headers });
     if (azureDeniedStatuses.includes(response.status)) { await discard(response); accessFailure('azure-devops', true); }
     if (response.status === 200) {
@@ -445,7 +421,6 @@ const azureDevOps: GitProviderAdapter = {
       if (commitSha('azure-devops', record('azure-devops', body).commitId) !== name) invalidResponse('azure-devops');
       return name;
     }
-    // refs filters are prefix matches; only an exact branch, then tag, name is accepted.
     const head = (await azureRefs(api, `heads/${name}`, false)).find(item => item.name === `refs/heads/${name}`);
     if (head) return commitSha('azure-devops', head.objectId);
     const tag = (await azureRefs(api, `tags/${name}`, true)).find(item => item.name === `refs/tags/${name}`);
@@ -454,16 +429,10 @@ const azureDevOps: GitProviderAdapter = {
   },
 };
 
-// Plain Git servers: no forge API, only Git's own smart HTTP. The account is a user name with a password or token
-// (HTTP Basic), a repository is its path on the server, and its identity is derived from that path, since nothing else
-// names it: moving a repository reads as a new one, as a rename does elsewhere.
-
-/** The identity of a plain Git server's repository: the first 40 hex digits of the SHA-256 of its path. */
 export async function plainRepositoryId(fullName: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(fullName)));
   return [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 40);
 }
-/** The account's credential as a smart HTTP Authorization header. */
 export function plainAuthorization(credential: Pick<GitCredential, 'username' | 'token'>): string {
   return basic(credential.username ?? '', credential.token);
 }
@@ -478,7 +447,6 @@ function plainFailure(failure: AdvertisementFailure): never {
     case 'unavailable': return providerUnavailable('git');
   }
 }
-/** The advertisement of `service` for one repository, read with the account's credential (or none, with `anonymous`). */
 export async function plainAdvertisement(credential: GitCredential, fullName: string, service: AdvertisedService,
   anonymous = false): Promise<{ ok: true; advertisement: Advertisement } | { ok: false; failure: AdvertisementFailure }> {
   const origin = selfHostedOrigin(credential);
@@ -491,10 +459,6 @@ async function readableRefs(credential: GitCredential, fullName: string): Promis
   if (result.advertisement.sha256) fail(422, 'unsupported_repository_format', `This ${label('git')} repository uses SHA-256 object names, which are not supported.`);
   return result.advertisement;
 }
-/**
- * Whether the account may push to the repository: smart HTTP servers advertise receive-pack only to credentials allowed
- * to push (git http-backend, for one, never anonymously). Branch rules beyond that are the server's to enforce at the push.
- */
 export async function plainPushAllowed(credential: GitCredential, fullName: string): Promise<boolean> {
   const result = await plainAdvertisement(credential, fullName, 'git-receive-pack');
   if (result.ok) return true;
@@ -502,14 +466,11 @@ export async function plainPushAllowed(credential: GitCredential, fullName: stri
   return plainFailure(result.failure);
 }
 const gitServer: GitProviderAdapter = {
-  // Nothing on a plain Git server answers for an account as such: its credential is checked on the first repository it
-  // reads, when a repository is added.
   async verify(credential) {
     selfHostedOrigin(credential);
     if (!credential.username) fail(400, 'invalid_git_username', 'Enter the user name for this Git server.');
     return { login: login('git', credential.username) };
   },
-  // There is no listing: the repository picker looks a repository up by its path instead (`repository`).
   async list() {
     return { repositories: [], truncated: false };
   },
@@ -518,7 +479,6 @@ const gitServer: GitProviderAdapter = {
     const refs = await readableRefs(credential, fullName);
     const branch = defaultBranch(refs);
     if (branch === null) return emptyRepository('git');
-    // Public when the server lets anyone read it; anything but a readable advertisement counts as private.
     const anonymous = await plainAdvertisement(credential, fullName, 'git-upload-pack', true).catch(() => null);
     return { id: await plainRepositoryId(fullName), fullName, defaultBranch: repositoryRef(branch), private: anonymous?.ok !== true };
   },
@@ -528,7 +488,6 @@ const gitServer: GitProviderAdapter = {
     const refs = await readableRefs(credential, fullName);
     const commit = resolveRef(refs, name);
     if (commit) return commitSha('git', commit);
-    // A commit id can't be looked up without fetching; the clone resolves it.
     if (sha1.test(name)) return name;
     return accessFailure('git', false);
   },

@@ -58,7 +58,6 @@ try {
   const testSecret = Buffer.from(randomBytes(32)).toString("base64url");
   const backups = join(temporary, "backups");
   await mkdir(backups, { recursive: true });
-  // SQLite and backups stay in this disposable directory unless TEST_DATABASE_URL points the whole run at Postgres.
   const environment: NodeJS.ProcessEnv = {
     ...process.env, CI: "true",
     DATABASE_URL: process.env.TEST_DATABASE_URL || `sqlite://${join(temporary, "db.sqlite")}`,
@@ -89,7 +88,7 @@ try {
       const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1_000) });
       const health = await response.json() as { testMode?: boolean; connectorsConfigured?: boolean; backupsConfigured?: boolean };
       ready = response.ok && health.testMode === true && health.connectorsConfigured === true && health.backupsConfigured === true;
-    } catch { /* Wait only for this child server's bounded startup. */ }
+    } catch { }
     if (!ready) await delay(100);
   }
   if (!ready) throw new Error("Local connected server did not become ready");

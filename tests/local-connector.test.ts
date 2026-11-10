@@ -17,7 +17,6 @@ import { verifyRunnerTicket } from '../apps/runner/src/protocol.js';
 import { HostExtensions } from '../apps/runner/src/extensions/host.js';
 import { ExtensionStore } from '../apps/runner/src/extensions/store.js';
 
-// Linux connectors also accept sessions moved from another host.
 const hostMigration = process.platform === 'linux' ? { hostMigration: true } : {};
 
 const origin = 'https://control.fixture.invalid';
@@ -32,7 +31,6 @@ const providerSecret = 'fixture-provider-secret-never-on-wire';
 const verifierSecret = 'fixture-local-verifier-not-a-worker-secret';
 const summary: LocalModelSummary = { provider: 'native.fixture', modelId: 'region/model', name: 'Local fixture model' };
 const model: ModelDefinition = { ...summary, id: 'model', workspaceId: 'workspace', connectorId: credentials.connectorId };
-// As the CLI and the desktop host advertise it: isolation is verified per session, not claimed up front.
 const publicCapabilities: ConnectorCapabilities = { platform: 'linux', sandbox: false, productionShell: false };
 const authorizationRequest: AuthorizationRequest = { sessionId: 'session', actorId: 'owner', ownerId: 'owner', permission: 'write' };
 function localModels(entries: LocalModelSummary[] = [summary]): LocalModels {
@@ -121,7 +119,6 @@ test('connector state refuses permissive files/directories, symlinks, hard links
   await assert.rejects(readConnectorState(stateDir, origin), /Cannot safely open connector state/);
   await assert.rejects(writeConnectorState(stateDir, credentials), { code: 'EEXIST' });
   assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), { version: 1, credentials });
-  // A forced re-pairing swaps the link itself for a private file and never writes through it.
   await writeConnectorState(stateDir, replacement, false, true);
   assert.deepEqual(JSON.parse(await readFile(target, 'utf8')), { version: 1, credentials });
   assert.deepEqual(await readConnectorState(stateDir, origin), replacement);
@@ -364,22 +361,14 @@ type FixtureOptions = {
   github?: (request: Request) => Response | Promise<Response>;
   execute?: (request: Request, generation: number) => Response | Promise<Response>;
   unblock?: () => void;
-  /** The control plane's answer to the host's configuration request; the defaults without it. */
   hostConfig?: () => Response | Promise<Response>;
-  /** The GPU device the host could lend; none unless given, whatever this machine has. */
   gpu?: 'dxg' | 'render';
-  /** What the host's Pi settings add to its models. */
   piSettings?: Pick<LocalModels, 'compaction' | 'identity'>;
-  /** The control plane's check of a direct-upload grant the desktop app handed the host. */
   uploadVerify?: (request: Request) => Response | Promise<Response>;
-  /** The host's extensions, and the control plane's answer to each sync of them; none to install without it. */
   extensions?: HostExtensions;
   extensionsSync?: (body: unknown) => Response | Promise<Response>;
-  /** How the host's browser is found; none unless given, whatever this machine has. */
   browser?: NonNullable<Parameters<typeof createConnector>[0]['browser']>;
-  /** How the host's cloudflared is found; none unless given, whatever this machine has. */
   tunnel?: NonNullable<Parameters<typeof createConnector>[0]['tunnel']>;
-  /** The version it reports; none unless given, as an unbundled (development) build reports none. */
   version?: string;
 };
 
@@ -431,11 +420,9 @@ async function connectorFixture(t: TestContext, options: FixtureOptions = {}) {
       const request = new Request(input, init);
       const call = { request, body: await request.text() };
       allCalls.push(call);
-      // Asked for at every connection, before the runtime starts: kept out of the ordered calls the tests step through.
       if (request.url === `${origin}/api/connectors/self/config`) {
         return options.hostConfig?.() ?? Response.json({ config: { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off' } });
       }
-      // Extensions sync in the background of each connection: kept out of the ordered calls too.
       if (request.url === `${origin}/api/connectors/self/extensions`) return options.extensionsSync?.(JSON.parse(call.body)) ?? Response.json({ requests: [] });
       workerCalls.push(call);
       if (request.url === `${origin}/api/connectors/self/manifest`) {
@@ -552,7 +539,6 @@ test('fake WebSocket readiness requires welcome and acknowledged manifest; stop 
   const config = fixture.runtimes[0]!.config;
   assert.equal(config.dataDir, join(fixture.dataDir, 'runner'));
   assert.equal(config.connectorId, credentials.connectorId);
-  // The host's Git credentials stay unused until its owner turns them on in Pikibun.
   await assert.rejects(config.hostGitCredential!('https://github.com/acme/alpha.git'), /hasn't turned on its Git credentials/);
   assert.deepEqual(await config.hostConfig!(), { commandTimeoutSeconds: 30, gpu: false, gitCredentials: false, repositoryCache: 'off', hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: 'auto' }, serviceLifetimeSeconds: 14400, tunnel: { source: 'auto' } });
   assert.equal(config.allowFaux, false);
@@ -578,11 +564,9 @@ test('a host configured in Pikibun uses its Git credentials for pushes only whil
   const fixture = await connectorFixture(t, { gpu: 'dxg', hostConfig: () => Response.json({ config: configured }), pushCredential: () => Response.json(issued) });
   await startFixture(fixture);
   const manifest = fixture.allCalls.find(call => call.request.url === `${origin}/api/connectors/self/manifest`)!;
-  // It takes its configuration from Pikibun and says which GPU device it could lend; Git credentials are no capability.
   assert.deepEqual(JSON.parse(manifest.body).capabilities, { ...advertisedBase, gpu: 'dxg' });
   const config = fixture.runtimes[0]!.config;
   assert.deepEqual(await config.hostConfig!(), configured);
-  // The connection asked for it before its runtime started, as every callback is asked: over the current connection.
   const asked = fixture.allCalls.filter(call => call.request.url === `${origin}/api/connectors/self/config`);
   assert.equal(asked.length, 1);
   assert.ok(fixture.allCalls.indexOf(asked[0]!) < fixture.allCalls.indexOf(manifest));
@@ -592,7 +576,6 @@ test('a host configured in Pikibun uses its Git credentials for pushes only whil
   const host = { credentialId: 'credential-1', remote: 'https://github.com/acme/alpha.git', hostCredentials: true, expiresAt: new Date().toISOString() };
   issued = host;
   assert.deepEqual(await config.pushCredential!(request), host);
-  // A credential is either a token or the host's own: never both.
   issued = { ...host, authorization: 'Basic eDp5' };
   await assert.rejects(config.pushCredential!(request));
 });
@@ -602,7 +585,6 @@ test('a host names its version in its manifest, and a development build names no
   const released = await connectorFixture(t, { version: '0.24.0' });
   await startFixture(released);
   assert.equal(manifest(released).request.headers.get('x-pikibun-version'), '0.24.0');
-  // Only a header: the manifest itself is what older servers take, which reject fields they don't know.
   assert.deepEqual(Object.keys(JSON.parse(manifest(released).body)).sort(), ['capabilities', 'models']);
   const development = await connectorFixture(t);
   await startFixture(development);
@@ -657,7 +639,6 @@ test('github reads and merges reach the control plane over the connection, pass 
   await startFixture(fixture);
   const config = fixture.runtimes[0]!.config;
   const read = { sessionId: 'session', actorId: 'owner', admissionId: 'admission', callId: 'call-1', repository: 'acme/alpha', issue: 7 };
-  // A long pull request thread stays readable: the view is bounded by the control plane at 96 KiB, above other callbacks' 64 KiB.
   const view = { repository: 'acme/alpha', number: 7, url: 'https://github.com/acme/alpha/pull/7', title: 'Fix', state: 'open', author: 'a',
     createdAt: '2026-10-01T00:00:00Z', body: 'x'.repeat(90 * 1024), labels: [], comments: [] };
   answer = request => {
@@ -678,15 +659,12 @@ test('github reads and merges reach the control plane over the connection, pass 
   };
   assert.deepEqual(await config.githubMerge!(merge), { sha: 'b'.repeat(40), url: 'https://github.com/acme/alpha/pull/7' });
   assert.deepEqual(JSON.parse(fixture.allCalls.at(-1)!.body), merge);
-  // GitHub's reason not to merge reaches the session as a definite 422.
   answer = () => Response.json({ error: 'GitHub did not merge acme/alpha#7: Head branch was modified.', code: 'github_merge_refused' }, { status: 422 });
   await assert.rejects(config.githubMerge!(merge), (error: Error & { status?: number }) =>
     error.status === 422 && error.message === 'GitHub did not merge acme/alpha#7: Head branch was modified.');
-  // A merge result that doesn't name a commit on github.com is refused.
   answer = () => Response.json({ sha: 'b'.repeat(40), url: 'https://evil.example/acme/alpha/pull/7' });
   await assert.rejects(config.githubMerge!(merge));
 
-  // A brokered tool's call (source_read) goes to the route its definition names, with the same bound, and refusals pass on.
   const sourceRead = { sessionId: 'session', actorId: 'owner', admissionId: 'admission', callId: 'call-2', source: 'source-1', item: '0123abcd-0123-4567-89ab-0123456789ab' };
   const page = { source: 'Specs', kind: 'notion', id: sourceRead.item, type: 'page', title: 'Specs', url: 'https://www.notion.so/x', lastEdited: '', content: 'y'.repeat(90 * 1024), entries: [], truncated: false };
   answer = request => {
@@ -697,7 +675,6 @@ test('github reads and merges reach the control plane over the connection, pass 
   assert.deepEqual(JSON.parse(fixture.allCalls.at(-1)!.body), sourceRead);
   answer = () => Response.json({ error: 'That page is not under this source, the page or database bound to the workspace.', code: 'source_outside' }, { status: 403 });
   await assert.rejects(config.brokered!('sources/read', sourceRead), (error: Error & { status?: number }) => error.status === 403 && /not under this source/.test(error.message));
-  // An answer that isn't a JSON object is refused, and so is a route no definition may name.
   answer = () => Response.json(['no', 'object']);
   await assert.rejects(config.brokered!('sources/read', sourceRead));
   await assert.rejects(config.brokered!('../internal/sources/read', sourceRead), /Invalid brokered tool route/);
@@ -710,13 +687,11 @@ test('a chunk the desktop app hands the host runs once, as relayed, after the co
     uploadVerify: () => verify(),
     execute: request => request.url.endsWith('/upload') ? Response.json({ received: 2, path: 'attachments/a.txt' }) : Response.json({ ok: true }),
   });
-  // Not connected yet: nothing is checked or run.
   assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 503);
   await startFixture(fixture);
   const granted = (await rpc('upload', body, 'direct-1')).ticket;
   verify = async () => Response.json({ ticket: granted, size: 2, path: '/v1/sessions/session/upload' });
   const reply = await fixture.connector.direct({ grant: 'grant', body });
-  // Checked by the control plane (whatever the host reports meanwhile, such as its extensions).
   assert.deepEqual(JSON.parse(fixture.allCalls.filter(call => call.request.url.endsWith('/api/connectors/self/uploads/verify')).at(-1)!.body), { grant: 'grant' });
   assert.deepEqual([reply.status, JSON.parse(reply.body)], [200, { received: 2, path: 'attachments/a.txt' }]);
   const executed = fixture.runtimes[0]!.requests.at(-1)!;
@@ -724,17 +699,14 @@ test('a chunk the desktop app hands the host runs once, as relayed, after the co
   assert.equal(await executed.text(), body);
   const config = fixture.runtimes[0]!.config;
   assert.deepEqual(await verifyRunnerTicket(executed.headers.get('authorization')!.slice(7), config.sharedSecret, 'upload', 'session', body), granted);
-  // A grant goes in once.
   assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 409);
   const runs = fixture.runtimes[0]!.requests.length;
-  // The chunk must be the one the grant is for: its body, and the file size the control plane checked.
   const other = (await rpc('upload', body, 'direct-2')).ticket;
   verify = async () => Response.json({ ticket: other, size: 3, path: '/v1/sessions/session/upload' });
   assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 400);
   const changed = (await rpc('upload', body, 'direct-3')).ticket;
   verify = async () => Response.json({ ticket: changed, size: 2, path: '/v1/sessions/session/upload' });
   assert.equal((await fixture.connector.direct({ grant: 'grant', body: body.replace('aGk=', 'aGl=') })).status, 400);
-  // Grants for another host, or another action, or that the control plane refuses, run nothing.
   const foreign = { ...(await rpc('upload', body, 'direct-4')).ticket, connectorId: 'another-host' };
   verify = async () => Response.json({ ticket: foreign, size: 2, path: '/v1/sessions/session/upload' });
   assert.equal((await fixture.connector.direct({ grant: 'grant', body })).status, 403);
@@ -785,16 +757,13 @@ test('a forced pairing claims the new code first, then replaces the saved token 
     return connector;
   };
 
-  // Without --force a paired machine refuses before the code reaches the server.
   await assert.rejects(pairedConnector(false).start(), /already paired/);
   assert.equal(claims, 0);
 
-  // A rejected code leaves the saved pairing in place.
   await assert.rejects(pairedConnector(true).start(), /Pairing rejected/);
   assert.equal(claims, 1);
   assert.deepEqual(await readConnectorState(dataDir, origin), credentials);
 
-  // The saved pairing may even belong to another server: replacing never reads it.
   await writeConnectorState(dataDir, { ...credentials, controlPlaneUrl: 'https://old.fixture.invalid' }, false, true);
   claim = () => Response.json({ credentials: replacement }, { status: 201 });
   const starting = pairedConnector(true).start();
@@ -829,7 +798,6 @@ test('small concurrent requests fill the pending limit and complete FIFO on the 
   assert.equal(socket.readyState, 1);
   assert.equal(fixture.allSockets.length, 1);
 
-  // A drained queue releases its count and byte reservations.
   const fresh = await rpc('view', '', 'after-fifo-drain');
   socket.receive(fresh);
   const execution = await runtime.started.next();
@@ -859,7 +827,6 @@ test('one request beyond the active plus queued count limit disconnects without 
   assert.deepEqual(socket.sent, []);
 });
 
-// #100: a large reply still draining to the relay and more requests behind it used to end the connection.
 test('requests arriving while socket output is backed up queue behind it instead of ending the connection', { timeout: 10000 }, async t => {
   const runtime = deferredRuntime();
   const fixture = await connectorFixture(t, runtime);
@@ -873,7 +840,6 @@ test('requests arriving while socket output is backed up queue behind it instead
   assert.equal(socket.readyState, 1, 'queued requests are not the relay overrunning its budget');
 
   first.response.resolve(new Response('first response'));
-  // The reply waits for output to drain to its own size.
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.deepEqual(socket.sent, []);
   assert.equal(fixture.runtimes[0]!.requests.length, 1, 'later requests stay behind the waiting reply');
@@ -893,7 +859,6 @@ test('a small reply is sent as soon as it fits, not once a worst-case reply woul
   const runtime = deferredRuntime();
   const fixture = await connectorFixture(t, runtime);
   const socket = await startFixture(fixture);
-  // Room for this reply, not for a full responseBytes one: the old reservation waited here for a drain.
   socket.bufferedAmount = connectorLimits.bufferedBytes - connectorLimits.responseBytes + 1;
   const request = await rpc('view', '', 'small-reply');
   socket.receive(request);
@@ -909,7 +874,6 @@ test('a reply that cannot be relayed is answered as an error for that request an
     execute: () => {
       switch (calls++) {
         case 0: return new Response('x'.repeat(connectorLimits.responseBytes + 1));
-        // Within responseBytes, but over frameBytes once escaped into the reply frame.
         case 1: return new Response('"'.repeat(16 * 1024 * 1024));
         case 2: return new Response(new Uint8Array([0xff, 0xfe]));
         case 3: return Promise.reject(new Error('runtime detail that must not reach the relay'));
@@ -978,7 +942,6 @@ test('a ticket that expires in the queue is refused on its own before runtime di
     socket.receive(active);
     const execution = await runtime.started.next();
     assert.ok(queued.ticket.exp * 1000 > now, 'the queued ticket is valid when admitted');
-    // Observe the post-validation waiter so expiry cannot race initial async ticket validation.
     const { generation } = fixture.connector as unknown as { generation: { waiting: Set<unknown> } };
     const validated = Promise.withResolvers<void>();
     const add = generation.waiting.add.bind(generation.waiting);
@@ -1052,7 +1015,6 @@ test('reconnect keeps the runner: an ambiguous in-flight effect drains without r
   const runtime = fixture.runtimes[0]!;
   const config = runtime.config;
   assert.ok(config.authorize);
-  // A callback under way when its connection ends fails: its answer came under that connection's authority.
   const oldAuthorization = assert.rejects(config.authorize(authorizationRequest), /generation is no longer authorized|aborted/i);
   const callback = await fixture.workerCalls.next();
   assert.equal(callback.request.url, `${origin}/api/connectors/self/authorize`);
@@ -1084,7 +1046,6 @@ test('reconnect keeps the runner: an ambiguous in-flight effect drains without r
   assert.equal(runtime.requests.length, 1);
   authorizeFinished.resolve();
   await oldAuthorization;
-  // A callback made while the host reconnects waits for the next connection instead of failing the work it serves.
   holdAuthorize = false;
   const waiting = config.authorize(authorizationRequest);
   effectFinished.resolve(Response.json({ effect: 'already-applied' }));
@@ -1111,7 +1072,6 @@ test('reconnect keeps the runner: an ambiguous in-flight effect drains without r
   await nextTurn();
   assert.equal(runtime.requests.length, 1);
 
-  // A new request ID cannot reuse an already-dispatched ticket after reconnect.
   second.receive({ ...request, id: 'new-envelope-same-ticket' });
   await second.closed.promise;
   assert.equal(runtime.requests.length, 1);
@@ -1121,13 +1081,11 @@ test('reconnect keeps the runner: an ambiguous in-flight effect drains without r
   third.welcome('fixture_third_connection_token_0123456789abcdef');
   await fixture.connected.next();
   await fixture.workerCalls.next();
-  // A fresh ticket cannot reuse the original request ID either.
   const freshTicket = await rpc('submit', request.body, 'fresh-ticket');
   third.receive({ ...freshTicket, id: request.id });
   await third.closed.promise;
   assert.equal(runtime.requests.length, 1);
 
-  // Admission burns queued IDs too, even though disconnect prevented their runtime execution.
   const freshQueuedTicket = await rpc('submit', queued.body, 'fresh-queued-ticket');
   for (const replay of [{ ...queued, id: 'new-envelope-queued-ticket' }, { ...freshQueuedTicket, id: queued.id }]) {
     const socket = await fixture.sockets.next();
@@ -1145,7 +1103,6 @@ test('reconnect keeps the runner: an ambiguous in-flight effect drains without r
   await fixture.connector.stop();
   assert.equal(runtime.closed, true, 'the runner closes when the connector stops');
   assert.deepEqual(fixture.leases, { acquired: 1, released: 1 });
-  // A stopped connector's callbacks fail at once, before any Worker fetch.
   const count = fixture.allCalls.length;
   await assert.rejects(async () => config.authorize!(authorizationRequest), /not connected/);
   await assert.rejects(async () => config.resolveModels!(model), /Connector has stopped/);
@@ -1176,7 +1133,6 @@ test('a request that misses its deadline is answered as timed out on its own; th
   assert.equal(timedOut.status, 504);
   assert.match((JSON.parse(timedOut.body) as { error: string }).error, /did not answer in time; inspect the session before retrying/);
   assert.equal(socket.readyState, 1, 'one slow request must not end every session\'s requests');
-  // The request behind it waited 30s in the queue, which doesn't count against its own deadline.
   const nextExecution = await runtime.started.next();
   assert.equal(nextExecution.request.url, 'http://local.invalid/v1/sessions/session/view');
   t.mock.timers.tick(29_000);
@@ -1185,7 +1141,6 @@ test('a request that misses its deadline is answered as timed out on its own; th
   nextExecution.response.resolve(Response.json({ view: true }));
   const answered = JSON.parse(await socket.messages.next()) as ConnectorRpcResponse;
   assert.deepEqual([answered.id, answered.status, answered.body], [next.id, 200, '{"view":true}']);
-  // The slow request's work may still finish; its late answer is not sent, and the runner closes only once it is done.
   const stopping = fixture.connector.stop();
   await socket.closed.promise;
   await nextTurn();
@@ -1223,7 +1178,6 @@ test('the runner is replaced only when a new connection brings another repositor
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(fixture.runtimes[0]!.config.repositoryCache, undefined);
   assert.equal(fixture.runtimes[0]!.resumes, 1);
-  // Reconnecting with the same configuration keeps the runner, and with it its sessions' work.
   first.close();
   const second = await fixture.sockets.next();
   second.open();
@@ -1232,7 +1186,6 @@ test('the runner is replaced only when a new connection brings another repositor
   await fixture.workerCalls.next();
   assert.equal(fixture.runtimes.length, 1);
   assert.equal(fixture.runtimes[0]!.closed, false);
-  // The cache changed in Pikibun while the host was away: the next connection asks again and opens a runner for it.
   repositoryCache = 'owner';
   second.close();
   const third = await fixture.sockets.next();
@@ -1253,7 +1206,6 @@ test('a reconnect whose configuration can\'t be read keeps the runner and its re
   const fixture = await connectorFixture(t, { hostConfig: () => answer() });
   const first = await startFixture(fixture);
   assert.equal(fixture.runtimes[0]!.config.repositoryCache?.scope, 'owner');
-  // Away long enough that the last configuration is too old to serve, so a failed read falls back to the defaults.
   const now = Date.now() + 6 * 60_000;
   const clock = t.mock.method(Date, 'now', () => now);
   try {
@@ -1282,7 +1234,6 @@ test('while the runner is replaced, a request is told at once that it is restart
   });
   const first = await startFixture(fixture);
   await asked.next();
-  // Work that outlives its deadline keeps the runner from closing until it is done.
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const slow = await rpc('submit', '{}', 'restart-slow');
   first.receive(slow);
@@ -1290,7 +1241,6 @@ test('while the runner is replaced, a request is told at once that it is restart
   t.mock.timers.tick(30_001);
   assert.equal((JSON.parse(await first.messages.next()) as ConnectorRpcResponse).status, 504);
   t.mock.timers.reset();
-  // The cache changed in Pikibun: the next connection replaces the runner, which waits for that work.
   repositoryCache = 'owner';
   first.close();
   const second = await fixture.sockets.next();
@@ -1328,13 +1278,11 @@ test('a request answered at once still keeps the requests behind it after those 
   const behind = await rpc('view', '', 'order-behind');
   socket.receive(before);
   const execution = await runtime.started.next();
-  // Stand in for a replacement starting while `before` runs: only `refused` arrives during it.
   const connector = fixture.connector as unknown as { restarting: boolean };
   connector.restarting = true;
   socket.receive(refused);
   assert.equal((JSON.parse(await socket.messages.next()) as ConnectorRpcResponse).id, refused.id);
   connector.restarting = false;
-  // Once the request behind is validated and queued, nothing but the request before the refused one holds it.
   const { generation } = fixture.connector as unknown as { generation: { waiting: Set<unknown> } };
   const queued = Promise.withResolvers<void>();
   const add = generation.waiting.add.bind(generation.waiting);
@@ -1362,7 +1310,6 @@ test('a request already waiting when the runner is replaced is told it is restar
   let answer: () => Response | Promise<Response> = () => configured('off');
   const fixture = await connectorFixture(t, { ...runtime, hostConfig: () => answer() });
   const first = await startFixture(fixture);
-  // The next connection's configuration names another cache, and is still on its way when a request arrives.
   const config = Promise.withResolvers<Response>();
   answer = () => config.promise;
   first.close();
@@ -1397,7 +1344,6 @@ test('a request already waiting when the runner is replaced is told it is restar
 test('a connected host reports its extensions, carries out the installs its owner asked for, and reports how they went', { timeout: 10000 }, async t => {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-extensions-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  // npm, as far as the store sees it: the package lands in the project's node_modules.
   const store = new ExtensionStore(join(root, 'extensions'), async (args, cwd) => {
     const spec = args.at(-1)!;
     await mkdir(join(cwd, 'node_modules', 'pi-hello'), { recursive: true });
@@ -1414,10 +1360,8 @@ test('a connected host reports its extensions, carries out the installs its owne
     return Response.json({ requests });
   } });
   await startFixture(fixture);
-  // With how its browser stands: none found here, and none chosen.
   assert.deepEqual(await syncs.next(), { report: { installed: [], remoteInstalls: true, browser: { source: 'auto', state: 'missing', downloadable: true,
     error: 'No Chromium found on this host: install your distribution\'s chromium or Google Chrome, give the path of one, or download one here' },
-    // And its cloudflared: none found here either.
     tunnel: { source: 'auto', state: 'missing', downloadable: true,
       error: 'No cloudflared found on this host: install Cloudflare\'s cloudflared package, give the path of one, or download one here' } }, results: [] });
   const second = await syncs.next();
@@ -1429,7 +1373,6 @@ test('a connected host reports its extensions, carries out the installs its owne
 test('a connected host\'s sessions get the browser its owner chose, and its report says how that stands, its path included', { timeout: 10000 }, async t => {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'local-connector-browser-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  // A Chromium installation as the connector checks one: an ELF executable beside Chromium's own files.
   const directory = join(root, 'chromium');
   await mkdir(directory);
   await writeFile(join(directory, 'chrome'), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]), { mode: 0o755 });
@@ -1444,13 +1387,11 @@ test('a connected host\'s sessions get the browser its owner chose, and its repo
     extensionsSync: body => { syncs.push(body as never); return Response.json({ requests: [] }); },
   });
   await startFixture(fixture);
-  // Applied as the host connects, before its sessions open: they get it, looked up for each command.
   const config = fixture.runtimes[0]!.config;
   assert.equal(typeof config.browser, 'function');
   assert.deepEqual((config.browser as () => unknown)(), { executable: join(directory, 'chrome'), directory });
   assert.deepEqual((await syncs.next()).report.browser, { source: 'path', state: 'ready', executable: join(directory, 'chrome'), downloadable: true });
   assert.equal(config.browserStatus!()!.state, 'ready');
-  // A path that isn't a Chromium installation is none, never another browser, and the report says why.
   await rm(join(directory, 'icudtl.dat'));
   browser = { source: 'path', path: join(directory, 'chrome') };
   const connector = fixture.connector as unknown as { browser: { apply(config: unknown): Promise<unknown> } };
@@ -1458,7 +1399,6 @@ test('a connected host\'s sessions get the browser its owner chose, and its repo
   assert.equal((config.browser as () => unknown)(), undefined);
   assert.deepEqual(config.browserStatus!(), { source: 'path', state: 'missing', downloadable: true,
     error: `${directory} doesn't hold Chromium's own files (icudtl.dat or its .pak files) beside chrome` });
-  // Found on the host; or off.
   await connector.browser.apply({ source: 'auto' });
   assert.deepEqual((config.browser as () => unknown)(), { executable: '/usr/lib/chromium/chromium', directory: '/usr/lib/chromium' });
   await connector.browser.apply({ source: 'off' });
@@ -1481,9 +1421,7 @@ test('a browser status the control plane refuses is left out only until it chang
     extensionsSync: body => {
       const report = (body as { report: { browser?: { state: string } } }).report;
       syncs.push(report);
-      // This control plane takes browser statuses, but refuses this one (say, one it finds too long).
       if (report.browser?.state === 'missing') return Response.json({ error: 'Invalid browser status' }, { status: 400 });
-      // A request makes the next round come at once; meanwhile Chromium is installed on the host.
       found = { executable: '/usr/lib/chromium/chromium', directory: '/usr/lib/chromium' };
       return Response.json({ requests: round++ ? [] : [{ id: 'request-1', action: 'install', source: 'npm:pi-hello@1.0.0' }] });
     } });
@@ -1499,7 +1437,6 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
   const syncs = mailbox<{ report: { installed: { source: string }[]; browser?: unknown } }>();
   const fixture = await connectorFixture(t, { extensions: new HostExtensions(new ExtensionStore(join(root, 'extensions')), { remoteInstalls: true }), extensionsSync: body => {
     syncs.push(body as never);
-    // A control plane that predates Pikibun extensions refuses a report that names one, or the browser's status.
     const report = (body as { report: { installed: { source: string }[]; browser?: unknown } }).report;
     const refused = report.browser !== undefined || report.installed.some(item => item.source.startsWith('piki:'));
     return refused ? Response.json({ error: 'Invalid extension source' }, { status: 400 }) : Response.json({ requests: [] });
@@ -1508,7 +1445,6 @@ test('a connected host reports its Pikibun extensions, and leaves them out for a
   const all = ['piki:gh', 'piki:glab', 'piki:azure-cli', 'piki:schedule', 'piki:host-shell', 'piki:shell', 'piki:git', 'piki:node', 'piki:python', 'piki:rust', 'piki:go', 'piki:dotnet', 'piki:make', 'piki:browser', 'piki:tunnel', 'piki:files', 'piki:github', 'piki:sources', 'piki:notion', 'piki:google-drive', 'piki:dropbox', 'piki:onedrive', 'piki:feishu', 'piki:tencent-docs', 'piki:sessions', 'piki:prompt-audit', 'piki:pr-flow'];
   const first = (await syncs.next()).report;
   assert.deepEqual([first.installed.map(item => item.source), (first.browser as { state: string }).state], [all, 'missing']);
-  // A control plane that has Pikibun extensions but predates the browser's status takes this one.
   const second = (await syncs.next()).report;
   assert.deepEqual([second.installed.map(item => item.source), second.browser], [all, undefined], 'tried again at once, without the browser\'s status');
   assert.deepEqual((await syncs.next()).report, { installed: [], remoteInstalls: true }, 'and again, without them');

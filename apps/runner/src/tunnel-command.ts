@@ -2,21 +2,13 @@ import type { BrowserServe } from "../../../packages/shared/src/browser.js";
 import { tunnelActions, type TunnelAction } from "../../../packages/shared/src/tunnel.js";
 import { serveRequest } from "./browser-command.js";
 
-/*
- * The tunnel tool's calls (piki:tunnel; docs/design/tunnel.md). `start` runs `serve` as the session's service, checked
- * exactly as the browser tool's `serve` is (one of the node and python tools' programs, refused as those tools refuse
- * it, started without a shell), and puts its port online; `status` says how they stand; `stop` ends both.
- */
-
 export interface TunnelRequest {
   action: TunnelAction;
-  /** start only: the server to run, and the port it listens on in the sandbox. */
   serve?: BrowserServe;
 }
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
-/** The tunnel tool's call as it runs, or an error saying what it refused. */
 export function tunnelRequest(input: unknown): TunnelRequest {
   if (!object(input)) throw new Error("the tunnel tool takes {action, serve?}");
   for (const key of Object.keys(input)) if (key !== "action" && key !== "serve" && input[key] !== undefined) throw new Error(`the tunnel tool takes action and serve, not ${key}`);
@@ -30,7 +22,6 @@ export function tunnelRequest(input: unknown): TunnelRequest {
   return { action, serve: serveRequest(input.serve) };
 }
 
-/** What a start puts online, for its card and the panel: the program and its arguments, and the port. */
 export function serveCommand(serve: BrowserServe): string {
   return [serve.program, ...(serve.args ?? [])].join(" ").slice(0, 2000);
 }

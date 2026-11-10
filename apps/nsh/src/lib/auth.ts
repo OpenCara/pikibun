@@ -4,84 +4,59 @@ import { clearDrafts } from "./drafts";
 import { createPkce } from "./pkce";
 import { currentOrigin, DEFAULT_ORIGIN, usesBrowserSession } from "./server";
 
-/** Why the server refused a new account (its SIGNUP setting), by the code it returns to the app's callback. */
 const signInRefusals: Record<string, string> = {
   invite_required: "This server takes new accounts only through a workspace's invite link. Open the link in a browser to create your account, then sign in here.",
   signup_closed: "This server doesn't take new accounts. Ask its operator to add you.",
   too_many_pending: "The workspace that invited you has too many people waiting to join. Ask an owner or admin.",
 };
 
-// NSH's Storage is the app's own key-value file, not the Keychain or Keystore (longbridge/nsh#1061): a sign-in kept
-// here is readable by anything that can read the app's data directory. The Expo app keeps it in expo-secure-store.
 const TOKEN_KEY = "pikibun.token";
 const EXPIRES_KEY = "pikibun.tokenExpires";
-/** The server is a preference, not a credential: it stays after sign-out so signing in again goes to the same place. */
 const ORIGIN_KEY = "pikibun.origin";
-/**
- * Where the server hands a sign-in back after GitHub when asked with `callback=page` (see the native sign-in API): a
- * page of its own the web view navigates to, since NSH's web views load only http and https and the app has no URL
- * scheme to be sent to.
- */
 const CALLBACK_PATH = "/api/auth/native/done";
-/** The name a native sign-in is listed under in Settings → Profile → Signed-in apps. */
 const deviceName = () => `Pikibun NSH (${platform.os})`;
 
-/** Who may create an account with a method, as /api/health reports it (the server's SIGNUP). */
 export type SignupMode = "open" | "invite" | "off";
 
-/** What the server offers on its sign-in page (GET /api/health). */
 export interface SignInMethods {
   githubConfigured?: boolean;
   githubSignup?: SignupMode;
   passwordAuth?: boolean;
   passwordSignup?: SignupMode;
   testMode?: boolean;
-  /** A Pikibun running on this computer (`pikibun serve`): whether it has an owner yet. */
   localServer?: { claimed: boolean };
 }
 
 export type AuthState =
   | { status: "loading" }
-  /** `notice` explains why the app signed out on its own, or what the last sign-out could not do. */
   | { status: "signedOut"; origin: string; notice?: string }
-  /** A stored sign-in whose server could not be reached at launch; nothing is known about the user yet. */
   | { status: "unreachable"; origin: string; error: string }
-  /** `token` is null for the web's browser session (cookies). */
   | { status: "signedIn"; origin: string; token: string | null; expiresAt: string | null; user: UserProfile; api: Api };
 
 export type SignedIn = Extract<AuthState, { status: "signedIn" }>;
 
 const authState = signal<AuthState>({ status: "loading" });
-/** Where sign-in stands (reactive). Only this module changes it, through setAuth. */
 export const auth: Accessor<AuthState> = authState;
 
-/** Whose sign-in a state is: the server and the user, or null while nobody is signed in. */
 const account = (value: AuthState) => (value.status === "signedIn" ? `${value.origin} ${value.user.id}` : null);
 
-/**
- * Every change of sign-in goes through here. What belongs to the account signed in until now (unsent drafts) goes when
- * it signs out, its sign-in ends or another account signs in, so the next person on this device never sees it.
- */
 function setAuth(next: AuthState) {
   const previous = account(untracked(authState));
   if (previous !== null && previous !== account(next)) clearDrafts();
   authState.set(next);
 }
 
-/** The signed-in state; only screens behind the signed-in guard call it (untracked use in handlers is fine). */
 export function session(): SignedIn {
   const state = auth();
   if (state.status !== "signedIn") throw new Error("This screen needs a signed-in user.");
   return state;
 }
 
-/** The signed-in user's profile as the server returned it after a change (Settings → Profile). */
 export function updateUser(user: UserProfile): void {
   const current = untracked(authState);
   if (current.status === "signedIn" && current.user.id === user.id) authState.set({ ...current, user });
 }
 
-/** The token whose 401 may sign out: an answer to an older sign-in's request must not end a newer one. */
 let liveToken: string | null = null;
 const EXPIRED = "Your sign-in expired or was revoked. Sign in again to continue.";
 
@@ -97,7 +72,6 @@ function expire(token: string | null) {
   if (current.status === "signedIn" && current.token === token) setAuth({ status: "signedOut", origin: current.origin, notice: EXPIRED });
 }
 
-/** An API client whose 401 answers sign the app out: the sign-in is gone. */
 function guarded(inner: Api, token: string | null): Api {
   return async function api<T>(path: string, options?: RequestOptions): Promise<T> {
     try {
@@ -109,7 +83,6 @@ function guarded(inner: Api, token: string | null): Api {
   };
 }
 
-/** The origin the web client was served from, as an absolute URL (the requests themselves stay relative). */
 async function pageOrigin(): Promise<string> {
   try {
     const response = await fetch("/api/health", { credentials: "same-origin" });
@@ -139,7 +112,6 @@ async function establish(origin: string, token: string, expiresAt: string | null
   setAuth({ status: "signedIn", origin, token, expiresAt, user: profile, api });
 }
 
-/** The web: the page's own browser session, if it has one. */
 async function establishBrowserSession(): Promise<boolean> {
   const origin = await pageOrigin();
   const api = browserApi();
@@ -158,7 +130,6 @@ async function establishBrowserSession(): Promise<boolean> {
   }
 }
 
-/** Reads the stored sign-in and checks it with the server; the app shows nothing until it knows. */
 export async function restore(): Promise<void> {
   setAuth({ status: "loading" });
   if (usesBrowserSession) {
@@ -167,7 +138,6 @@ export async function restore(): Promise<void> {
   }
   const [storedOrigin, token, expiresAt] = await Promise.all([Storage.getItem(ORIGIN_KEY), Storage.getItem(TOKEN_KEY), Storage.getItem(EXPIRES_KEY)]);
   const origin = storedOrigin == null ? DEFAULT_ORIGIN : currentOrigin(storedOrigin);
-  // A server that moved keeps its sign-ins: they go to its new address, with the same token, from now on.
   if (storedOrigin != null && origin !== storedOrigin) await Storage.setItem(ORIGIN_KEY, origin);
   if (!token) return setAuth({ status: "signedOut", origin });
   try {
@@ -182,25 +152,16 @@ export async function restore(): Promise<void> {
   }
 }
 
-/** What the server's sign-in page offers. */
 export async function signInMethods(origin: string): Promise<SignInMethods> {
   return createApi({ baseUrl: origin, auth: () => null })<SignInMethods>("/api/health");
 }
 
-/** A native GitHub sign-in in progress: the page to show, and how to finish once the web view reaches its callback. */
 export interface GitHubSignIn {
   url: string;
-  /** Whether the web view's address is the server's callback page, which finishes the sign-in. */
   isCallback(url: string): boolean;
   finish(callbackUrl: string): Promise<void>;
 }
 
-/**
- * Starts the native GitHub sign-in (PKCE). NSH has no system authentication session (longbridge/nsh#1065) and no deep
- * links, so the page runs in the app's own web view, which watches for the server's callback page; the web view can see
- * what is typed into it, unlike ASWebAuthenticationSession. The code it gets back is worth nothing without the verifier,
- * which never leaves the app.
- */
 export async function startGitHubSignIn(origin: string): Promise<GitHubSignIn> {
   const health = await signInMethods(origin);
   if (health.githubConfigured === false) {
@@ -213,7 +174,6 @@ export async function startGitHubSignIn(origin: string): Promise<GitHubSignIn> {
     async finish(callbackUrl: string) {
       if (!isCallbackPage(origin, callbackUrl)) throw new Error("The sign-in ended somewhere unexpected. Try again.");
       const params = new URL(callbackUrl).searchParams;
-      // A callback for another attempt must never complete this one.
       if (params.get("state") !== state) throw new Error("The sign-in response did not match this attempt. Try again.");
       const error = params.get("error");
       if (error) throw new Error(signInRefusals[error] ?? `GitHub sign-in did not complete: ${error.slice(0, 300)}`);
@@ -226,7 +186,6 @@ export async function startGitHubSignIn(origin: string): Promise<GitHubSignIn> {
   };
 }
 
-/** Whether `url` is `origin`'s callback page: the same origin and path, never a page of another site that names it. */
 function isCallbackPage(origin: string, url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -236,15 +195,10 @@ function isCallbackPage(origin: string, url: string): boolean {
   }
 }
 
-/** A test-mode server's token (POST /api/auth/test), for development and tests. */
 export async function signInWithToken(origin: string, token: string): Promise<void> {
   await establish(origin, token.trim(), null);
 }
 
-/**
- * A signed-out request of the web's to the server's own sign-in API: there is no CSRF token to fetch yet, so the server
- * checks the request's origin instead. Answers its JSON; throws the server's reason when it refused.
- */
 async function signedOutRequest<T>(path: string, body: Record<string, string>, failed: string): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
@@ -260,10 +214,6 @@ async function signedOutRequest<T>(path: string, body: Record<string, string>, f
   return answer as T;
 }
 
-/**
- * A username and password on a server that allows them. On the web the server sets the browser session's cookie; a
- * native build gets a bearer token for `origin`, as GitHub's native sign-in does, kept like that one.
- */
 export async function signInWithPassword(origin: string, username: string, password: string): Promise<void> {
   if (!usesBrowserSession) {
     const signIn = await createApi({ baseUrl: origin, auth: () => null })<{ token: string; expiresAt: string; user: UserProfile }>(
@@ -275,29 +225,19 @@ export async function signInWithPassword(origin: string, username: string, passw
   if (!await establishBrowserSession()) throw new Error("Signed in, but the server did not keep the session. Check that cookies are allowed.");
 }
 
-/**
- * The web: a new account with a username and password, where the server takes them (its SIGNUP for passwords). With
- * `inviteToken`, the invite link it was created from, it also asks to join that workspace.
- */
 export async function signUpWithPassword(username: string, password: string, inviteToken?: string): Promise<void> {
   await signedOutRequest("/api/auth/password/signup", { username, password, ...(inviteToken !== undefined ? { inviteToken } : {}) }, "Creating the account failed");
   if (!await establishBrowserSession()) throw new Error("Account created, but the server did not keep the session. Check that cookies are allowed.");
 }
 
-/**
- * The web: GitHub's sign-in from an invite link, which carries the link's token in a request body, never in a URL, so
- * a new account can ask to join that workspace. Answers GitHub's authorization page to send the browser to.
- */
 export async function startGitHubInviteSignIn(inviteToken: string): Promise<string> {
   const { url } = await signedOutRequest<{ url?: unknown }>("/api/auth/github/start", { inviteToken }, "GitHub sign-in could not start");
   if (typeof url !== "string") throw new Error("GitHub sign-in could not start.");
   return url;
 }
 
-/** The web: the browser session may have started in another tab (GitHub's redirect lands on the web app). */
 export const checkBrowserSession = establishBrowserSession;
 
-/** How long signing out waits for the server to revoke the sign-in. */
 const LOGOUT_TIMEOUT_MS = 10_000;
 
 export async function signOut(): Promise<void> {
@@ -310,18 +250,15 @@ export async function signOut(): Promise<void> {
     liveToken = null;
     logout = signal => state.api("/api/auth/logout", { method: "POST", signal });
   } else if (!usesBrowserSession) {
-    // The server may be back by now: revoke the stored sign-in there too.
     const token = await Storage.getItem(TOKEN_KEY);
     if (token) logout = signal => createApi({ baseUrl: origin, auth: () => token })("/api/auth/logout", { method: "POST", signal });
   }
   if (logout) {
-    // A server that doesn't answer must not hold up signing out on this device.
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), LOGOUT_TIMEOUT_MS);
     try {
       await logout(timeout.signal);
     } catch (reason) {
-      // Signing out must work offline; the sign-in stays valid on the server until revoked there.
       if (!(reason instanceof ApiError && reason.status === 401)) {
         const why = timeout.signal.aborted ? "it didn't answer" : errorMessage(reason);
         notice = `Signed out on this device, but the server could not revoke the sign-in (${why}). Revoke it under Settings › Profile on the web.`;

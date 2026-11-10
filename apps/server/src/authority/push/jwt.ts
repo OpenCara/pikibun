@@ -4,7 +4,6 @@ const encoder = new TextEncoder();
 const algorithm = { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' } as const;
 const maxPemLength = 16_384;
 const keyError = 'The private key must be an unencrypted RSA key (PEM) of at least 2048 bits.';
-// AlgorithmIdentifier for rsaEncryption: SEQUENCE { OID 1.2.840.113549.1.1.1, NULL }.
 const rsaAlgorithm = [0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00];
 
 export interface RsaPublicJwk { kty: 'RSA'; n: string; e: string; alg: 'RS256'; use: 'sig'; kid: string }
@@ -29,7 +28,6 @@ function derLength(length: number): number[] {
   return [0x80 | bytes.length, ...bytes];
 }
 
-/** PKCS#1 RSAPrivateKey → PKCS#8 PrivateKeyInfo: SEQUENCE { INTEGER 0, rsaEncryption, OCTET STRING pkcs1 }. */
 function wrapPkcs1(pkcs1: Uint8Array): Uint8Array<ArrayBuffer> {
   const octets = [0x04, ...derLength(pkcs1.byteLength)];
   const bodyLength = 3 + rsaAlgorithm.length + octets.length + pkcs1.byteLength;
@@ -42,7 +40,6 @@ function wrapPkcs1(pkcs1: Uint8Array): Uint8Array<ArrayBuffer> {
 
 function pkcs8(pem: string): Uint8Array<ArrayBuffer> {
   if (typeof pem !== 'string' || pem.length > maxPemLength) throw new Error(keyError);
-  // Secrets pasted through dashboards often carry escaped newlines.
   const match = /^\s*-----BEGIN (RSA )?PRIVATE KEY-----([A-Za-z0-9+/=\s]+)-----END \1PRIVATE KEY-----\s*$/
     .exec(pem.replace(/\\n/g, '\n'));
   if (!match) throw new Error(keyError);
@@ -62,7 +59,6 @@ async function importKey(pem: string, extractable: boolean): Promise<CryptoKey> 
   return key;
 }
 
-/** Imports a PKCS#8 or PKCS#1 RSA private key (≥ 2048 bits) for RS256 signing; throws a fixed error otherwise. */
 export function importRsaPrivateKey(pem: string): Promise<CryptoKey> {
   return importKey(pem, false);
 }
@@ -73,7 +69,6 @@ export async function signJwt(key: CryptoKey, header: Record<string, unknown>, c
   return `${message}.${base64urlEncode(signature)}`;
 }
 
-/** The public half of `pem` as an RS256 JWK; `kid` is the RFC 7638 thumbprint. */
 export async function publicJwk(pem: string): Promise<RsaPublicJwk> {
   const exported = await crypto.subtle.exportKey('jwk', await importKey(pem, true)) as JsonWebKey;
   if (typeof exported.n !== 'string' || typeof exported.e !== 'string') throw new Error(keyError);

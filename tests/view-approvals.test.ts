@@ -16,7 +16,6 @@ test("commands auto-approve ran are left to the transcript, which marks their ca
     auto("tool-1", "executed", { result: "x".repeat(8000) }),
     auto("tool-2", "executing", { unbounded: true }),
     auto("tool-3", "interrupted", { operation: { kind: "host.bash", command: "make", timeoutSeconds: 10 } }),
-    // Automatic commits, pushes and repins stay listed: their results are what people look for.
     auto("tool-4", "executed", { operation: { kind: "git.repin", repository: "acme/alpha", ref: "main" }, result: "{\"sessionId\":\"s2\"}" }),
     card("tool-5", "pending", { callId: "call-tool-5" }),
   ];
@@ -38,7 +37,6 @@ test("an allowed permission request is folded into its operation's card", () => 
     card("tool-1", "pending"),
     permission("2", "approved", { decidedBy: "test:bob" }),
     card("tool-2", "executed", { decidedBy: "test:alice" }),
-    // Refused, or allowed with no operation card yet (or ever, for tools without one): the permission is the card.
     permission("3", "denied", { decidedBy: "test:alice" }),
     permission("4", "approved", { decidedBy: "test:alice", scope: "call" }),
     permission("5", "pending"),
@@ -62,7 +60,6 @@ test("a view lists every approval in play and only the newest settled ones, with
   const { approvals, olderApprovals } = viewApprovals(stored);
   assert.equal(approvals.length, 3 + 50);
   assert.equal(olderApprovals, 120 + 1 - 50);
-  // In metadata order, the oldest pending card first however old it is.
   assert.deepEqual(approvals.slice(0, 2).map(approval => approval.id), ["old-pending", "tool-71"]);
   assert.deepEqual(approvals.slice(-3).map(approval => approval.id), ["running", "working", "short"]);
   assert.equal(approvals.at(-1)!.result, "short");

@@ -10,7 +10,6 @@ const directory = fileURLToPath(new URL("../apps/server/migrations/sqlite/", imp
 const passwordMigration = "0038_password_sign_in.sql";
 const migrationFiles = readdirSync(directory).filter(name => name.endsWith(".sql")).sort();
 
-/** A database migrated up to (not including) the password migration, through the server's own runner. */
 async function before(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), "pikibun-password-migration-"));
   const migrations = join(root, "migrations");
@@ -46,14 +45,11 @@ test("rebuilding users keeps every row that references it, also those whose refe
   assert.equal(db.handle.prepare("SELECT COUNT(*) AS n FROM auth_sessions").get()!.n, 1);
   assert.equal(db.handle.prepare("SELECT COUNT(*) AS n FROM workspace_members").get()!.n, 2);
   assert.deepEqual(db.handle.prepare("PRAGMA foreign_key_check").all(), []);
-  // Foreign keys are on again, and the references still point at users.
   assert.equal(db.handle.prepare("PRAGMA foreign_keys").get()!.foreign_keys, 1);
   assert.throws(() => db.handle.exec("INSERT INTO auth_sessions (token_hash, user_id, csrf_token, expires_at, created_at, client) VALUES ('x', 'nobody', 'c', 1, '2026-01-01', 'browser')"), /FOREIGN KEY/);
   db.handle.exec("DELETE FROM users WHERE id = 'github:1' AND NOT EXISTS (SELECT 1 FROM workspaces WHERE owner_id = 'github:1')");
-  // Password accounts are allowed now; other kinds still aren't.
   db.handle.exec("INSERT INTO users (id, display_name, git_name, git_email, auth_kind, created_at) VALUES ('password:alice', 'A', 'A', 'a@example.test', 'password', '2026-03-01')");
   assert.throws(() => db.handle.exec("INSERT INTO users (id, display_name, git_name, git_email, auth_kind, created_at) VALUES ('x', 'X', 'X', 'x@example.test', 'saml', '2026-03-01')"), /CHECK/);
-  // The unique GitHub ID survived the rebuild.
   assert.throws(() => db.handle.exec("INSERT INTO users (id, github_id, display_name, git_name, git_email, auth_kind, created_at) VALUES ('github:2', '1', 'X', 'X', 'x@example.test', 'github', '2026-03-01')"), /UNIQUE/);
 });
 

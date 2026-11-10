@@ -1,3 +1,4 @@
+import { workspaceManagerRolesSQL } from './authority/index.js';
 import type { Hono } from 'hono';
 import { assignableWorkspaceRoles, retiredToolNames, toolNames } from '../../../packages/shared/src/types.js';
 import type { AnyToolName, AssignableWorkspaceRole, Workspace, WorkspaceRole } from '../../../packages/shared/src/types.js';
@@ -10,7 +11,7 @@ import {
 } from './authority/index.js';
 import { modelDefinition } from './db.js';
 import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
-import type { AgentRow, Env, ModelRow, WorkerEnv } from './types.js';
+import type { AgentRow, Env, ModelRow, AppEnv } from './types.js';
 import { ConstraintError, type Query } from './db/types.js';
 import { ownerHostStatements } from './connectors.js';
 import { modelEnabledSQL } from './host-models.js';
@@ -74,16 +75,12 @@ async function requireMemberManagement(
   if (!owner && targetId === actorId) {
     fail(403, 'forbidden', 'Administrators cannot change or remove their own membership. Ask the workspace owner.');
   }
-  // Admins manage collaborators, members and viewers; only the owner assigns, changes or removes an admin.
   if (!owner && ((role && !adminManagedRoles.includes(role)) || (authority.targetRole && !adminManagedRoles.includes(authority.targetRole)))) {
     fail(403, 'forbidden', 'Only the workspace owner can manage administrators.');
   }
   return authority.targetRole;
 }
 
-// Keep discovery and atomic version writes on the same live model authorization.
-// The two bindings are the test-mode flag (provider, then connector owner). A model its host's owner or an admin
-// disabled is unavailable, unless `disabled` asks whether it would be available but for that.
 function modelAccessSQL(actor: 'member.user_id' | 'actor.user_id' | 'a.author_id', disabled: 'excluded' | 'included' = 'excluded'): string {
   return `m.available = 1 AND (? = 1 OR m.provider <> 'faux')
     AND (m.connector_id IS NULL OR EXISTS (
@@ -102,7 +99,6 @@ function modelAccessSQL(actor: 'member.user_id' | 'actor.user_id' | 'a.author_id
     ))`;
 }
 
-/** The models of a workspace the actor may start a session on now, oldest first, as its New session lists them. */
 export async function usableModels(env: Env, workspaceId: string, actorId: string): Promise<ModelRow[]> {
   return env.DB.query<ModelRow>(`SELECT m.* FROM models m
     INNER JOIN workspace_members actor ON actor.workspace_id = m.workspace_id AND actor.user_id = ?
@@ -118,7 +114,6 @@ export async function requireModel(env: Env, modelId: string, actorId: string): 
     .bind(actorId, modelId, testMode(env) ? 1 : 0, testMode(env) ? 1 : 0).first();
   const model = await usable('excluded');
   if (model) return model;
-  // Only someone who could otherwise use the model learns that its host disabled it.
   if (await usable('included')) fail(403, 'model_disabled', 'This model is disabled on its host. Choose another model.');
   fail(404, 'not_found', 'Model not found.');
 }
@@ -126,7 +121,6 @@ export async function requireModel(env: Env, modelId: string, actorId: string): 
 function privateVersionStatement(
   env: Env, actorId: string, agentId: string, versionId: string, input: AgentInput, createdAt: string,
 ): Query<AgentRow> {
-  // Allocate the sequence in the INSERT, not from a potentially stale application read.
   return env.DB.query<AgentRow>(`INSERT INTO agent_versions
       (id, agent_id, author_id, workspace_id, version, name, description, instructions, tools_json, model_id, created_at)
     SELECT ?, a.id, a.author_id, NULL,
@@ -141,8 +135,6 @@ function privateVersionStatement(
       createdAt, input.modelId, agentId, actorId, testMode(env) ? 1 : 0, testMode(env) ? 1 : 0);
 }
 
-// SQLite: 'UNIQUE constraint failed: agent_versions.agent_id, agent_versions.version';
-// Postgres: 'duplicate key value violates unique constraint "agent_versions_agent_id_version_key"'.
 const VERSION_CONFLICT = /agent_versions\.agent_id,\s*agent_versions\.version|agent_versions_agent_id_version_key/;
 
 function versionConflict(error: unknown): boolean {
@@ -167,13 +159,8 @@ async function versionBatch(env: Env, statements: Query<AgentRow>[], versionInde
   }
 }
 
-/**
- * The tools a session's agent may list: Pikibun's own, then those this server defines as data (tool-definitions.ts) by
- * other names. A connector that doesn't know one doesn't offer it; one that reads it from this server does.
- */
 const agentToolNames: readonly AnyToolName[] = [...toolNames, ...bundledToolDefinitions.map(item => item.name).filter(name => !(toolNames as readonly string[]).includes(name))];
 
-/** New broker and host tools require an explicit connector capability. */
 function carries(capabilities: ConnectorCapabilities, tool: AnyToolName): boolean {
   if ((retiredToolNames as readonly string[]).includes(tool)) return false;
   if (tool === 'git_push') return capabilities.gitPush === true;
@@ -185,11 +172,6 @@ function carries(capabilities: ConnectorCapabilities, tool: AnyToolName): boolea
   return true;
 }
 
-/**
- * The agent of a new session, which starts from a model: every tool the host can carry, since the message's access mode
- * still gates writes, commands and pushes, and no instructions beyond the runner's own context. Each session gets its
- * own chat agent.
- */
 export async function chatAgentVersion(env: Env, ownerId: string, model: ModelRow, capabilities: ConnectorCapabilities): Promise<AgentRow> {
   const agentId = id();
   const createdAt = now();
@@ -205,11 +187,6 @@ export async function chatAgentVersion(env: Env, ownerId: string, model: ModelRo
   ], 1);
 }
 
-/**
- * The agent of a session moved to another host: the source agent's name, description and instructions on a model of the
- * new host, with the tools that host can carry. Like a chat agent it belongs to that one session. Only sessions started
- * from a saved agent, before agents were removed, have instructions or fewer tools; moving keeps them as they were.
- */
 export async function migratedAgentVersion(env: Env, ownerId: string, source: AgentRow, model: ModelRow, capabilities: ConnectorCapabilities): Promise<AgentRow> {
   const agentId = id();
   const createdAt = now();
@@ -227,7 +204,6 @@ export async function migratedAgentVersion(env: Env, ownerId: string, source: Ag
   ], 1);
 }
 
-/** The statements that create a workspace owned by `ownerId`, in order, as New workspace does. */
 function newWorkspaceStatements(env: Env, workspace: { id: string; name: string; ownerId: string }, createdAt: string, detail: Record<string, unknown> = {}): Query<never>[] {
   return [
     env.DB.query<never>('INSERT INTO workspaces (id, name, owner_id, created_at) VALUES (?, ?, ?, ?)')
@@ -235,21 +211,14 @@ function newWorkspaceStatements(env: Env, workspace: { id: string; name: string;
     env.DB.query<never>("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES (?, ?, 'owner', ?)")
       .bind(workspace.id, workspace.ownerId, createdAt),
     auditStatement(env, workspace.ownerId, 'workspace.create', workspace.id, null, detail),
-    // Popular Pi extensions, turned off, for its owners and admins to turn on.
     ...defaultWorkspaceExtensions.map((source, index) => env.DB.query<never>(`INSERT INTO workspace_extensions
         (workspace_id, package_key, source, position, enabled, tools_mode, settings_json, updated_by, updated_at)
         VALUES (?, ?, ?, ?, 0, 'approval', '{}', ?, ?)`)
       .bind(workspace.id, extensionPackageKey(source), source, index + 1, workspace.ownerId, createdAt)),
-    // The creator's hosts are theirs wherever they work: connect them here, privately.
     ...ownerHostStatements(env, workspace.ownerId, workspace.id),
   ];
 }
 
-/**
- * Every user has a private workspace of their own, made the first time they list their workspaces: existing accounts
- * get theirs on their next visit, new ones on their first, whichever way they signed up. Two lists at once may both try;
- * the user's single personal_workspaces row lets one win, and the other's whole batch rolls back.
- */
 export async function ensurePersonalWorkspace(env: Env, userId: string): Promise<void> {
   if (await env.DB.query('SELECT 1 AS found FROM personal_workspaces WHERE user_id = ?').bind(userId).first()) return;
   const workspace = { id: id(), name: personalWorkspaceName, ownerId: userId };
@@ -261,14 +230,12 @@ export async function ensurePersonalWorkspace(env: Env, userId: string): Promise
         .bind(userId, workspace.id, createdAt),
     ]);
   } catch (error) {
-    // A concurrent list made it first.
     if (error instanceof ConstraintError && await env.DB.query('SELECT 1 AS found FROM personal_workspaces WHERE user_id = ?').bind(userId).first()) return;
     throw error;
   }
 }
 
-export function registerCatalog(app: Hono<WorkerEnv>): void {
-  // The caller's workspaces, their private one first (made here if they have none yet), then the others oldest first.
+export function registerCatalog(app: Hono<AppEnv>): void {
   app.get('/api/workspaces', async c => {
     const userId = c.get('auth').userId;
     await ensurePersonalWorkspace(c.env, userId);
@@ -290,7 +257,6 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
     return c.json({ workspace }, 201);
   });
 
-  // Its owner or an admin renames a workspace. The audit records that it was renamed, never the names.
   app.patch('/api/workspaces/:id', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const actorId = c.get('auth').userId;
@@ -299,13 +265,11 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
     onlyFields(body, ['name']);
     const name = nameInput(body.name);
     const result = await c.env.DB.batch<Omit<Workspace, 'personal'> & { personal: number }>([
-      // The authority is checked again in the write: a demotion racing the rename changes nothing.
       c.env.DB.query<never>(`UPDATE workspaces SET name = ?
         WHERE id = ? AND EXISTS (SELECT 1 FROM workspace_members actor
-          WHERE actor.workspace_id = workspaces.id AND actor.user_id = ? AND actor.role IN ('owner', 'admin'))`)
+          WHERE actor.workspace_id = workspaces.id AND actor.user_id = ? AND actor.role IN (${workspaceManagerRolesSQL}))`)
         .bind(name, workspaceId, actorId),
       auditAfterChange(c.env, actorId, 'workspace.renamed', workspaceId, {}),
-      // As the workspace list shows it, private or not: a private workspace's owner renames it as any owner does.
       c.env.DB.query<Omit<Workspace, 'personal'> & { personal: number }>(`SELECT w.id, w.name, w.owner_id AS ownerId, member.role,
           CASE WHEN p.workspace_id IS NULL THEN 0 ELSE 1 END AS personal
         FROM workspaces w
@@ -336,9 +300,7 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
     const role = body.role;
     if (typeof role !== 'string' || !(assignableWorkspaceRoles as readonly string[]).includes(role)) fail(400, 'invalid_input', 'Invalid role.');
     const previous = await requireMemberManagement(c.env, workspaceId, actorId, targetId, role as AssignableWorkspaceRole);
-    // A private workspace is its owner's alone.
     await requireSharedWorkspace(c.env, workspaceId);
-    // Saving a member with the role they hold changes nothing, so it neither writes nor disturbs the workspace's sessions.
     if (previous === role) return c.json({ members: await membersStatement(c.env, workspaceId, actorId).all() });
     const user = await c.env.DB.query<{ id: string }>('SELECT id FROM users WHERE id = ?').bind(targetId).first();
     if (!user) fail(404, 'not_found', 'User not found.');
@@ -355,27 +317,21 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
             OR (actor.role = 'admin' AND ? IN (${adminManagedRoles.map(item => `'${item}'`).join(', ')}) AND (target.role IS NULL OR target.role IN (${adminManagedRoles.map(item => `'${item}'`).join(', ')}))))
         ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = excluded.role
           WHERE workspace_members.role = ?`)
-        // Only from the role authorized above: a concurrent change (or a racing add, '') leaves no row changed.
         .bind(role, now(), actorId, targetId, workspaceId, role, previous ?? ''),
       auditAfterChange(c.env, actorId, 'workspace.member.upsert', workspaceId, { userId: targetId, role }, auditId),
-      // A role decides what its member can do in the workspace's sessions, so changing an existing member's role
-      // invalidates tickets and capabilities issued under the previous one, as a removal does. A new member loses nothing.
       c.env.DB.query<never>(`UPDATE sessions SET policy_version = policy_version + 1
         WHERE workspace_id = ? AND ? = 1 AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, previous ? 1 : 0, auditId),
       membersStatement(c.env, workspaceId, actorId),
-      // Someone added directly no longer waits to join through the invite link.
       c.env.DB.query<never>(`DELETE FROM workspace_join_requests WHERE workspace_id = ? AND user_id = ?
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, targetId, auditId),
-      // A member's own hosts follow them into the workspace, for their private use only: sharing stays the owner's choice.
       ...ownerHostStatements(c.env, targetId, workspaceId),
     ]);
     if (result[0].changes !== 1) fail(409, 'membership_changed', 'Membership changed. Refresh and try again.');
     return c.json({ members: result[3].results });
   });
 
-  // Changes an existing member's role, never adds one: a change racing the member's removal fails rather than re-adding them.
   app.patch('/api/workspaces/:id/members/:userId', async c => {
     const workspaceId = identifier(c.req.param('id'), 'workspaceId');
     const targetId = userIdentifier(c.req.param('userId'));
@@ -397,10 +353,8 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
             WHERE w.id = workspace_members.workspace_id AND w.owner_id <> workspace_members.user_id
               AND ((actor.role = 'owner' AND actor.user_id = w.owner_id)
                 OR (actor.role = 'admin' AND ? IN (${managed}) AND workspace_members.role IN (${managed}))))`)
-        // Only from the role authorized above: a concurrent change or removal leaves no row changed.
         .bind(role, workspaceId, targetId, previous, actorId, role),
       auditAfterChange(c.env, actorId, 'workspace.member.role', workspaceId, { userId: targetId, from: previous, role }, auditId),
-      // Tickets and capabilities issued under the previous role no longer hold.
       c.env.DB.query<never>(`UPDATE sessions SET policy_version = policy_version + 1
         WHERE workspace_id = ? AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, auditId),
@@ -427,16 +381,13 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
                 OR (actor.role = 'admin' AND workspace_members.role IN (${adminManagedRoles.map(item => `'${item}'`).join(', ')}))))`)
         .bind(workspaceId, targetId, actorId),
       auditAfterChange(c.env, actorId, 'workspace.member.remove', workspaceId, { userId: targetId }, auditId),
-      // The audit marker gates cleanup on a successful, authorized removal in this transaction.
       c.env.DB.query(`DELETE FROM session_grants WHERE user_id = ?
         AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ?)
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(targetId, workspaceId, auditId),
-      // A former member's confirmation of the workspace database doesn't outlive the membership.
       c.env.DB.query(`DELETE FROM workspace_database_consents WHERE workspace_id = ? AND user_id = ?
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
         .bind(workspaceId, targetId, auditId),
-      // Their hosts leave with them: the private connection doesn't outlive the membership (joining again restores it).
       c.env.DB.query(`DELETE FROM connector_workspaces WHERE workspace_id = ?
         AND connector_id IN (SELECT id FROM connectors WHERE owner_id = ?)
         AND EXISTS (SELECT 1 FROM audit WHERE id = ?)`)
@@ -446,7 +397,6 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
         .bind(workspaceId, auditId),
     ]);
     if (result[0].changes !== 1) fail(409, 'membership_changed', 'Membership changed. Refresh and try again.');
-    // Never reassign owned sessions; sessionAccess also requires their owner's live membership.
     return c.body(null, 204);
   });
 
@@ -475,7 +425,7 @@ export function registerCatalog(app: Hono<WorkerEnv>): void {
     const result = await c.env.DB.batch<ModelRow>([
       c.env.DB.query<ModelRow>(`INSERT INTO models (id, workspace_id, name, provider, model_id, created_at)
         SELECT ?, member.workspace_id, ?, ?, ?, ? FROM workspace_members member
-        WHERE member.workspace_id = ? AND member.user_id = ? AND member.role IN ('owner', 'admin')
+        WHERE member.workspace_id = ? AND member.user_id = ? AND member.role IN (${workspaceManagerRolesSQL})
         RETURNING *`).bind(modelId, name, provider, providerModelId, now(), workspaceId, actorId),
       auditAfterChange(c.env, actorId, 'model.create', workspaceId, { modelId, provider }),
     ]);

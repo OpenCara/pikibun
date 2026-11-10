@@ -3,23 +3,16 @@ import { Button as BaseButton } from "nsh/base";
 import { Icon } from "../icons";
 import { palette, radius, text, weight } from "../theme";
 
-/** The app draws its pages' headers on the desktops and the web; iOS and Android show their system header. */
 export const drawsHeaders = platform.desktop || platform.os === "web";
 
-/**
- * A stack page's own background. Pages are transparent by default, so one pushed over another showed the page under it
- * through its content, while it slid in and after.
- */
 export const pageStyle = () => ({ backgroundColor: palette().background });
 
-/** A page's header props, with its background: the app's own header where it draws one, the system header's items elsewhere. */
 export function headerProps(options: { title: string; subtitle?: string; onBack?: () => void; actions?: JSX.Element; leading?: JSX.Element }) {
   return drawsHeaders
     ? { style: pageStyle(), header: <PageHeader title={options.title} subtitle={options.subtitle} onBack={options.onBack} actions={options.actions} leading={options.leading} /> }
     : { style: pageStyle(), headerLeft: options.leading, headerRight: options.actions };
 }
 
-/** The back button of a page's header. */
 export function BackButton(props: { onPress: () => void; label?: string }) {
   return (
     <BaseButton testID="header-back" accessibilityLabel={props.label ?? "Back"} onPress={props.onPress} hitSlop={8}
@@ -31,11 +24,6 @@ export function BackButton(props: { onPress: () => void; label?: string }) {
   );
 }
 
-/**
- * A page's header on the desktops and the web, which have no system header (iOS and Android show their own, from the
- * page's title and header items), as the web app's .screen-header: one bottom border, a back button, the title light
- * with what it belongs to muted beside it, and the page's actions at the end.
- */
 export function PageHeader(props: { title: string; subtitle?: string; onBack?: () => void; actions?: JSX.Element; leading?: JSX.Element; testID?: string }) {
   return (
     <View testID={props.testID} desktop={{ windowDrag: true }}

@@ -39,7 +39,6 @@ test("search on an unsandboxed host: a pattern that backtracks without end stops
   await assert.rejects(searchInWorker(directory, ".", searchRequest({ pattern: "^(a+)+$" }), 1000), /search took too long/);
   assert.ok(Date.now() - started < 5000, "stopped at its time limit");
   assert.ok(ticks >= 10, "the connector's own work went on meanwhile");
-  // An ordinary search in a worker answers as the helpers do.
   await writeFile(join(directory, "a.ts"), "export const answer = 42;\n");
   assert.deepEqual(await searchInWorker(directory, ".", searchRequest({ pattern: "answer", glob: "*.ts" })),
     { matches: [{ path: "a.ts", line: 1, text: "export const answer = 42;" }], files: 1, truncated: false });

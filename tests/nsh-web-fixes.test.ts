@@ -10,7 +10,6 @@ import { BEFORE_BOOTSTRAP, DRAWN_WIDTH, EARLY_MAP, LATE_MAP, MEASURE_TEXT, PATCH
 
 const LOADER = `import(\`./browser.991ab24c49/runtime.js\`);const imports={nsh:{${MEASURE_TEXT},measure_numeric_text:()=>0}};`;
 
-// Native Shell 0.4's site, reduced to what the fix reads: the runtime around its two spots, its loader and the page.
 async function site(t: test.TestContext, runtime = `async run(e){try{${BEFORE_BOOTSTRAP}let O=1;${LATE_MAP}}catch{}}`, loader = LOADER) {
   const root = await mkdtemp(join(tmpdir(), "nsh-site-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -49,10 +48,6 @@ test("a loader without the measure_text it patches fails the build", async t => 
   assert.throws(() => fixWebSite(root), /no single measure_text/);
 });
 
-/**
- * DRAWN_WIDTH's `__pikibunTextWidth` against a page where `drawn(font, text)` is what a span draws and `measured` what
- * the canvas measures; `body: false` is a page without a body yet.
- */
 function textWidth(drawn: (font: string, text: string) => number, measured: (font: string, text: string) => number, { body = true } = {}) {
   type Node = {
     style: Record<string, string>; textContent: string; isConnected: boolean;
@@ -87,14 +82,12 @@ test("text in a font the canvas measures as the page draws it is measured on the
   const page = textWidth((_, text) => text.length * 7, (_, text) => text.length * 7);
   assert.equal(page.measure(SYSTEM, "repositories"), 84);
   assert.equal(page.context.font, SYSTEM);
-  // The sample is drawn once to decide; the text itself never.
   page.spans.at(-1)!.textContent = "";
   assert.equal(page.measure(SYSTEM, "and"), 21);
   assert.equal(page.spans.at(-1)!.textContent, "");
 });
 
 test("text in a font the canvas measures narrower than the page draws it is measured as the page draws it", () => {
-  // The system font as the screenshot had it: the canvas measures 10% narrower; the code font agrees.
   const inDom: string[] = [];
   const drawn = (font: string, text: string) => {
     if (!text.startsWith("The quick")) inDom.push(text);
@@ -144,7 +137,6 @@ test("the early map maps the entry, chunks and every native module, whose export
   assert.equal(map["https://pikibun.test/chunk.js"], "https://pikibun.test/chunk.0123456789.js");
   assert.deepEqual(urls, [map["nsh"], map["nsh:rt"]]);
 
-  // The `nsh` module, run as the browser would once the bootstrap has set up the realm.
   const source = await resolveObjectURL(map["nsh"])!.text();
   const watchers: (() => void)[] = [];
   const nsh: Record<string, unknown> = { signal: 1 };

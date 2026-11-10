@@ -37,7 +37,6 @@ test("collaborators see a transcript's images in place of the lines that stand f
   assert.deepEqual(shownImages({ ...entry, images: undefined }, true), [], "an older host lists none: its lines stay");
   assert.equal(textBesideImages(entry.text, 2), "Look");
   assert.equal(textBesideImages("[image image/png]", 1), "");
-  // Only the lines that stand for the entry's images, its last ones: a line typed to look like one stays.
   assert.equal(textBesideImages("Like this:\n[image image/png]\nsee?\n[image image/png]", 1), "Like this:\n[image image/png]\nsee?");
   assert.equal(withoutImageLines("[image] is text\n[image image/png]"), "[image] is text");
   assert.equal(entryImageHref("s 1", "0:4", 1, "thumbnail"), "/api/sessions/s%201/images?entry=0%3A4&index=1&size=thumbnail");
@@ -59,7 +58,6 @@ test("a client reads each image once, keeps the latest, and asks again for one t
   fail = false;
   assert.equal(await cache.get("b"), source);
   await cache.get("c");
-  // Two are kept: "a" was the least recently asked for.
   assert.equal(cache.loaded("a"), undefined);
   assert.deepEqual(asked, ["a", "b", "b", "c"]);
 });

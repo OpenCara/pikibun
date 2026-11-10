@@ -9,35 +9,13 @@ import { mxcEntry, mxcInstallHint, validWindowsLimits, type WindowsJobLimits } f
 import type { SandboxRequest } from "./sandbox.js";
 import { WindowsJob } from "./windows-job.js";
 
-/**
- * Native Windows 11 as a session's boundary: every step runs the Node helper (node-helper.ts) in an OS process
- * container (PSEC, "base-container") created through Microsoft's MXC SDK, inside a job object with the host's limits.
- *
- *   connector ──spawn──▶ node runner.mjs   (put in a new job before it is told anything)
- *                           └─ MXC SDK ──▶ container: node.exe helper.mjs ──▶ bash.exe / git.exe
- *
- * The runner is a separate process so MXC's native code never runs inside the connector, and so the job holds
- * everything the step starts. It refuses to run unless MXC would use the OS container: never MXC's AppContainer
- * fallbacks, which would rewrite the host's folder permissions (the SDK has no setting to forbid them, so the runner
- * probes first).
- *
- * The container may read the system, node.exe's directory and Git for Windows, and the session's own files; it may write
- * only the session's home and worktree (and its Git directory in Git steps). Its only network is the session's egress
- * proxy on a loopback port (MXC's proxy-only egress: everything else is blocked by a per-container WFP filter), which
- * also wants the session's token.
- *
- * Needs Windows 11 24H2 or later with the October 2026 update, which `--experimental-sandbox` checks by asking Windows
- * (WINDOWS_SUPPORT_CHECK). See docs/design/windows-sandbox.md for the runs on Windows.
- */
 export const WINDOWS_RUNNER = String.raw`
 import { pathToFileURL } from "node:url";
 
-// Line 1: the configuration (sent only once this process is in its job). Then the helper's request, passed through.
 const pending = [];
 let config;
 let buffered = Buffer.alloc(0);
 const first = new Promise((resolve, reject) => {
-  // Reads only the configuration: once it is in, input waits in the stream (paused) until the container takes it.
   const onData = chunk => {
     buffered = Buffer.concat([buffered, chunk]);
     const end = buffered.indexOf(10);
@@ -83,14 +61,6 @@ await Promise.all(copies);
 process.exitCode = result.timedOut ? 124 : result.exitCode;
 `;
 
-/**
- * What `--experimental-sandbox` checks before it pairs, run by node in a process of its own (MXC's native code never loads
- * in the connector). It asks MXC for a session's network policy (proxy-only egress, identity-less loopback proxy) on
- * the OS container, then starts one container and resolves its working directory to a drive-letter path. Git (its
- * working directory) and Node (realpath) need that, and Windows only allows it in a container from its October 2026
- * update: build 26200.9457 refused it, 26300.9711 allows it. The build number alone doesn't tell, so this asks Windows.
- * Arguments: the SDK's entry, a scratch directory, the system directory. Prints one JSON line.
- */
 export const WINDOWS_SUPPORT_CHECK = String.raw`
 import { pathToFileURL } from "node:url";
 import { dirname } from "node:path";
@@ -126,7 +96,6 @@ try {
 } catch (error) { done({ ...result, error: "the process container could not start: " + (error && error.message || "unknown error") }); }
 `;
 
-/** The Windows build with its update level (UBR), e.g. "26300.9711", from the registry. */
 export function windowsBuild(): string | undefined {
   if (process.platform !== "win32") return undefined;
   const result = spawnSync("reg", ["query", "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "/v", "CurrentBuild"], { encoding: "utf8", windowsHide: true });
@@ -137,22 +106,17 @@ export function windowsBuild(): string | undefined {
 }
 
 export interface WindowsSandboxSupport {
-  /** MXC would run sessions in the OS container (base-container) with proxy-only egress to an unpackaged proxy. */
   container: boolean;
-  /** A process in the container can resolve its working directory to a drive-letter path (Git, Node). */
   paths: boolean;
-  /** Why not, for the setup message. */
   detail?: string;
 }
 
-/** Runs WINDOWS_SUPPORT_CHECK with the SDK at `sdk` (its entry point) on `node`, the Node.js sessions' steps run on (sandboxNodePath). */
 export async function windowsSandboxSupport(sdk: string, node: string): Promise<WindowsSandboxSupport> {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-sandbox-check-")));
   try {
     const system = process.env.SystemRoot ?? "C:\\Windows";
     const run = spawnSync(node, ["--input-type=module", "-e", WINDOWS_SUPPORT_CHECK, sdk, directory, system], {
       encoding: "utf8", windowsHide: true, timeout: 60_000, cwd: directory,
-      // As the runner's: only what Node and MXC need to start (MXC runs `whoami`, which must be Windows' own).
       env: { SystemRoot: system, windir: system, PATH: [join(system, "System32"), system].join(";"), TEMP: directory, TMP: directory,
         ...(process.env.LOCALAPPDATA ? { LOCALAPPDATA: process.env.LOCALAPPDATA } : {}), ...(process.env.SystemDrive ? { SystemDrive: process.env.SystemDrive } : {}) },
     });
@@ -171,7 +135,6 @@ export async function windowsSandboxSupport(sdk: string, node: string): Promise<
 }
 
 export interface WindowsBackendOptions {
-  /** Where MXC is installed (see windowsRuntimeDirectory). */
   runtime: string;
   limits: WindowsJobLimits;
 }
@@ -205,7 +168,6 @@ export class WindowsBackend implements HelperBackend {
     this.#git = join(gitRoot, "cmd", "git.exe");
     this.#bash = bash;
     const system = process.env.SystemRoot ?? "C:\\Windows";
-    // Git for Windows' Unix tools first, as in its own Git Bash.
     this.path = [join(gitRoot, "usr", "bin"), join(gitRoot, "mingw64", "bin"), join(gitRoot, "cmd"), dirname(node),
       join(system, "System32"), system, join(system, "System32", "WindowsPowerShell", "v1.0")].join(";");
   }
@@ -213,10 +175,8 @@ export class WindowsBackend implements HelperBackend {
   supports(kind: SandboxRequest["kind"]): boolean { return NODE_HELPER_KINDS.has(kind); }
 
   async prepare(layout: HelperLayout): Promise<void> {
-    // Written afresh at every open: they may be from an older connector, and the session can only read them.
     for (const [name, source] of [["helper.mjs", NODE_HELPER], ["runner.mjs", WINDOWS_RUNNER]] as const) {
       const path = join(layout.bin, name);
-      // Windows keeps the read-only attribute in the way of deleting it; clear it first.
       await chmod(path, 0o600).catch(() => undefined);
       await rm(path, { force: true });
       await writeFile(path, source, { mode: 0o400 });
@@ -232,34 +192,22 @@ export class WindowsBackend implements HelperBackend {
       SANDBOX_GITDIR: layout.git, SANDBOX_GIT: this.#git, SANDBOX_BASH: this.#bash, SANDBOX_OWNER_CONFIG: layout.ownerConfig,
       SystemRoot: system, windir: system, PATH: this.path,
       TEMP: join(layout.home, ".tmp"), TMP: join(layout.home, ".tmp"), USERPROFILE: layout.home,
-      // MXC refuses to start a process container whose environment lacks LOCALAPPDATA (presence-only); keep it in home.
       LOCALAPPDATA: join(layout.home, "AppData", "Local"), APPDATA: join(layout.home, "AppData", "Roaming"),
-      // Git for Windows' bash starts in HOME and keeps its /tmp in TEMP.
       MSYSTEM: "MINGW64", CHERE_INVOKING: "1",
-      // Node's module loader resolves every script and module with the JavaScript realpath, which lstats each folder
-      // from the drive root; the container may not see those, so `node script.js` would fail (EPERM, lstat 'C:\').
-      // Tools that call fs.realpathSync themselves still can (see docs/design/windows-sandbox.md, third run).
       NODE_OPTIONS: "--preserve-symlinks --preserve-symlinks-main",
-      // MXC replaces the proxy variables with its own URL, without the session's token, and empties NO_PROXY (so even
-      // loopback goes to the proxy); the helper puts the session's back.
       ...(port !== undefined ? { SANDBOX_EGRESS_PROXY: context.environment.HTTPS_PROXY!, SANDBOX_EGRESS_NO_PROXY: context.environment.NO_PROXY ?? "" } : {}),
     };
-    // The shell is granted alone: it may sit in a folder with other things, such as the user's own programs.
     const readonly = [system, dirname(this.#node), this.#gitRoot, this.#bash, layout.bin, layout.ownerConfig, layout.caBundle, join(layout.worktree, ".git"),
       ...(context.gitWritable ? [] : [layout.git])];
     const readwrite = context.readOnly ? [] : [layout.home, layout.worktree, ...(context.gitWritable ? [layout.git] : [])];
     if (context.readOnly) readonly.push(layout.home, layout.worktree);
     const containerRequest = {
-      // The container can't lstat the drive root, which Node's realpath of the entry script needs; skip that walk.
       command: `"${this.#node}" --preserve-symlinks-main --preserve-symlinks "${join(layout.bin, "helper.mjs")}"`,
       containment: { type: "processcontainer" },
       filesystem: { readwritePaths: readwrite, readonlyPaths: readonly, deniedPaths: [] },
-      // Proxy-only egress (MXC's "Model 2"): the container reaches only the session's loopback proxy; no proxy, no network.
       network: port !== undefined
         ? { egress: { default: "deny" }, ingress: { default: "allow", hostLoopback: "allow" }, runtimeConfig: { networkProxy: `http://127.0.0.1:${port}` } }
         : { egress: { default: "deny" }, ingress: { default: "deny", hostLoopback: "deny" } },
-      // `disable: true` turns Win32k off, and node.exe, git.exe and whoami.exe then die in DLL init (0xC0000142). The
-      // rest of MXC's UI policy (own desktop, no clipboard, no input injection) still applies.
       ui: { disable: false },
       workingDirectory: layout.worktree,
       environment,
@@ -272,7 +220,6 @@ export class WindowsBackend implements HelperBackend {
       command: this.#node,
       args: [join(layout.bin, "runner.mjs")],
       cwd: layout.root,
-      // The runner gets nothing of the connector's environment: only what Node and MXC need to start.
       env: { SystemRoot: system, windir: system, PATH: [join(system, "System32"), system].join(";"), TEMP: join(layout.home, ".tmp"), TMP: join(layout.home, ".tmp"),
         ...(process.env.LOCALAPPDATA ? { LOCALAPPDATA: process.env.LOCALAPPDATA } : {}), ...(process.env.SystemDrive ? { SystemDrive: process.env.SystemDrive } : {}) },
       started: async child => {

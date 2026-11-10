@@ -6,38 +6,22 @@ import { control, palette, radius, text } from "../theme";
 import { Small } from "../ui";
 import { AttachButton, AttachmentStrip } from "./Attachments";
 
-/** How tall the message grows before it scrolls. */
 const MAX_TEXT_HEIGHT = 220;
 
-/**
- * The chat box, as the web app's .composer: one bordered field, the message on top and, along its bottom edge, its
- * option pickers (`tools`), the hint and the send button. `onStop`, while the agent works and the person may stop it,
- * puts a stop button beside send; messages can still be queued. `hint` says who the message runs as, or why it can't
- * be sent. With `attachments`, images and files picked with its attach button or pasted into it go with the message,
- * which may then have no text; a pasted image is attached, and the paste's text, if any, still goes into the box. On the desktops and in a desktop browser Return sends and Shift+Return adds a line, as
- * in the web app; on phones, whose keyboards have no Shift, Return adds a line and the send button sends.
- */
 export function Composer(props: {
   value: string; onChange: (value: string) => void; onSubmit: () => void; onStop?: () => void; stopping?: boolean; busy: boolean; disabled?: boolean;
   placeholder: string; sendLabel: string; hint: string; tools?: JSX.Element; minHeight?: number; testID?: string; sendTestID?: string;
-  /** Sending is possible without a message (starting a session): the caller says when it's ready. */
   ready?: boolean;
-  /** The send button's words, for a button that says what it does (Start session); an arrow otherwise. */
   sendText?: string;
   attachments?: Attachments;
-  /** While a message of the person's waits in the queue: what ↑ in the empty box does (take it back to edit). */
   onRecall?: () => void;
 }) {
   const focused = signal(false);
   const dragging = signal(false);
   const accepting = () => Boolean(props.attachments && !props.disabled && !props.busy);
-  // Files copied in a file manager arrive as their `file:` URLs (with, on some desktops, an icon as an image): those are
-  // what the person meant. Dropped ones are the same; both stand in for a chooser of any file natively.
   const attachLocal = (uris: readonly string[]) => { if (accepting() && uris.length) void props.attachments!.attachLocal(uris); };
   const canSend = () => !props.disabled && !props.busy && (props.ready ?? (props.value.trim() !== "" || (props.attachments?.count() ?? 0) > 0));
   const submit = () => { if (canSend()) props.onSubmit(); };
-  // ↑ is bound only while the box has the focus and is empty, so it still moves the caret through text being written
-  // and every other input keeps it.
   effect(() => {
     const recall = props.onRecall;
     if (!recall || !focused() || props.value || props.disabled || props.busy || (props.attachments?.count() ?? 0) > 0) return;
@@ -53,8 +37,6 @@ export function Composer(props: {
       onFileDragEnter={() => dragging.set(accepting())} onFileDragLeave={() => dragging.set(false)}
       onFileDrop={event => { dragging.set(false); attachLocal(event.uris); }}>
       <If when={props.attachments}>{attachments => <AttachmentStrip attachments={attachments()} disabled={props.busy || props.disabled} />}</If>
-      {/* The box around the text holds its height too: NSH (0.4) sizes an input's parent by the whole text, past the input's
-          maxHeight, so a long message left the box far taller than the text, its pickers and send button halfway down it. */}
       <View style={{ maxHeight: MAX_TEXT_HEIGHT }}>
         <Input testID={props.testID ?? "composer-input"} value={props.value} onChange={event => props.onChange(event.value)} multiline readonly={props.busy || props.disabled}
           placeholder={props.placeholder} accessibilityLabel={props.placeholder}
@@ -70,7 +52,6 @@ export function Composer(props: {
       </View>
       <If when={props.attachments?.notice()}>{notice => <Small testID="composer-notice" tone="warning">{notice()}</Small>}</If>
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", rowGap: 4, columnGap: 8 }}>
-        {/* The pickers wrap rather than scroll: what a message runs with (Auto-approve above all) must never be out of sight. */}
         <If when={props.tools || (props.attachments && !props.disabled)}>
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4, flexShrink: 1,
             ...(props.hint ? {} : { flexGrow: 1, flexBasis: 0, minWidth: 0 }) }}>
@@ -80,8 +61,6 @@ export function Composer(props: {
             {props.tools}
           </View>
         </If>
-        {/* .composer-hint: what is left of the row; on a narrow one it wraps to its own line rather than truncating. Without
-            one, the send button keeps to the pickers' last line. */}
         <If when={props.hint}>
           <Text style={{ flexGrow: 1, flexShrink: 1, flexBasis: 160, fontSize: text.caption, color: palette().muted }}>{props.hint}</Text>
         </If>

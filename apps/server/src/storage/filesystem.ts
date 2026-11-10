@@ -5,7 +5,6 @@ import type { ObjectMetadata, ObjectStorage, StoredObject } from './types.js';
 const keyPattern = /^[A-Za-z0-9._:-]+(\/[A-Za-z0-9._:-]+)*$/;
 const metadataSuffix = '.meta.json';
 
-/** Rejects keys that are not plain relative paths of safe segments; `..` and absolute paths never reach the filesystem. */
 export function validateObjectKey(key: string): string {
   if (!keyPattern.test(key) || key.split('/').some(segment => segment === '..' || segment === '.' || segment.endsWith(metadataSuffix))) {
     throw new Error('Invalid object key.');
@@ -13,10 +12,6 @@ export function validateObjectKey(key: string): string {
   return key;
 }
 
-/**
- * Objects live at `<root>/<key>` with a `<root>/<key>.meta.json` sidecar. Writes go to a temporary
- * file in the same directory and are renamed into place, so readers never see partial bodies.
- */
 export class FilesystemStorage implements ObjectStorage {
   readonly provider = 'filesystem' as const;
   private readonly root: string;

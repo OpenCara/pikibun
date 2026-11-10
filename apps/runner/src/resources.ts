@@ -1,17 +1,6 @@
 import { spawn } from "node:child_process";
 import { isAbsolute, resolve } from "node:path";
 
-/**
- * Operator-provisioned resources, never a request/model-controlled configuration.
- * cgroupRoot: exclusive delegated v2 subtree with cpu/memory/pids enabled, no tasks.
- * controlRoot: private runner-owned directory, outside session/runtime mounts.
- * Each sandbox root must be an exclusive ext4 or tmpfs mount, not a subdirectory
- * or bind alias. Its TOTAL blocks and inodes must fit the configured ceilings.
- * ext4 supports durable sessions; tmpfs does not survive host reboot. Provisioning,
- * mounting, restore-to-volume and volume removal remain operator responsibilities.
- * The runner must be non-root, in an unlimited leaf beside cgroupRoot beneath the
- * SAME enclosing budget. No ancestor controls, mounts or unrelated tasks are changed.
- */
 export interface ResourceConfig {
   cgroupRoot: string;
   controlRoot: string;
@@ -48,12 +37,6 @@ export function validateResourceConfig(config: ResourceConfig): Readonly<Resourc
   return Object.freeze({ ...config });
 }
 
-/* This is a trusted, isolated Python supervisor, not the untrusted command. It
- * stays outside the child cgroup so memory.max/pids.max cannot prevent cleanup.
- * Child exec is pipe-gated until the kernel confirms membership. The supervisor
- * holds a flock through kill+empty verification; SIGKILL recovery takes that same
- * lock before killing only named domains with our private ownership marker.
- */
 const SUPERVISOR = String.raw`
 import fcntl, json, os, re, select, signal, stat, sys, time
 
@@ -162,7 +145,6 @@ def verify_host():
     current_path = os.path.normpath(mount['path'] + current[0])
     parent = os.path.dirname(current_path)
     require(current_path != mount['path'] and beneath(config['cgroupRoot'], parent) and not beneath(config['cgroupRoot'], current_path), 'delegation must stay beneath the runner leaf parent budget')
-    # Moving our freshly forked child may skip ONLY this unlimited runner leaf.
     leaf = os.open(current_path, DIR)
     try:
         require(read_at(leaf, 'cpu.max').split()[0] == 'max', 'would bypass runner leaf CPU budget')
@@ -225,8 +207,6 @@ def lock(cg, control, name, create=False):
             previous = None
         if previous != record:
             require(previous is None or (isinstance(previous, dict) and previous.get('root') == config['cgroupRoot'] and previous.get('name') == name), 'resource ownership marker does not match delegated root')
-            # Interrupted marker writes and recreated delegated roots may be
-            # repaired ONLY when no group exists. Never adopt unknown host tasks.
             try:
                 os.stat(name, dir_fd=cg, follow_symlinks=False)
             except FileNotFoundError:
@@ -254,8 +234,6 @@ def kill_empty(group):
 
 
 def recover(cg, control):
-    # Never inspect/migrate arbitrary host tasks. Private markers and the dedicated
-    # namespace are both required. A live supervisor retains its exclusive lock.
     failures = []
     for name in os.listdir(control):
         if not KEY.fullmatch(name):
@@ -286,7 +264,6 @@ def recover(cg, control):
 def run(cg, control, entries):
     name = PREFIX + sys.argv[3]
     require(KEY.fullmatch(name), 'invalid resource session key')
-    # The command's time limit, from the host's configuration: the runner's own deadline is the same.
     require(re.fullmatch(r'[1-9][0-9]{0,4}', sys.argv[4]) is not None and int(sys.argv[4]) <= 86400, 'invalid resource deadline')
     seconds = int(sys.argv[4])
     verify_storage(8, entries)
@@ -297,8 +274,6 @@ def run(cg, control, entries):
     group = None
     child = None
     gate = None
-    # Keep the per-session cgroup after exit: cached file pages remain charged to
-    # this session instead of being reparented by rmdir between shell commands.
     try:
         try:
             os.mkdir(name, 0o700, dir_fd=cg)
@@ -322,7 +297,6 @@ def run(cg, control, entries):
         if child == 0:
             try:
                 os.close(gate)
-                # On supervisor SIGKILL, gate EOF prevents any uncharged exec.
                 if os.read(gate_read, 1) != b'1':
                     os._exit(125)
                 for fd in list(map(int, os.listdir('/proc/self/fd'))):
@@ -335,7 +309,6 @@ def run(cg, control, entries):
             except BaseException:
                 os._exit(125)
         os.close(gate_read)
-        # Only this new, gated child is moved. Its descendants inherit membership.
         write_at(group, 'cgroup.procs', child)
         require(str(child) in read_at(group, 'cgroup.procs').splitlines(), 'child cgroup membership not confirmed')
         require(not stopped, 'resource launch cancelled')
@@ -359,7 +332,6 @@ def run(cg, control, entries):
             if group is not None:
                 kill_empty(group)
             if child is not None:
-                # The gated child may not yet have joined the cgroup on failure.
                 try:
                     os.kill(child, signal.SIGKILL)
                 except ProcessLookupError:
@@ -397,7 +369,6 @@ except Exception as error:
     sys.exit(125)
 `;
 
-/** `deadlineSeconds`: the command's time limit; the supervisor kills the whole domain once it passes. */
 export function resourceLaunch(config: ResourceConfig, sessionKey: string, args: string[], deadlineSeconds = 30): { command: string; args: string[] } {
   if (!/^[0-9a-f]{64}$/.test(sessionKey)) throw new Error("Invalid resource session key");
   if (!Number.isSafeInteger(deadlineSeconds) || deadlineSeconds < 1 || deadlineSeconds > 86_400) throw new Error("Invalid resource deadline");
@@ -423,7 +394,6 @@ async function controlCommand(config: ResourceConfig, mode: "probe" | "recover",
   });
 }
 
-/** Read-only preflight, not authority to execute; every launch verifies again. */
 export async function probeResources(config?: ResourceConfig, storageRoot?: string): Promise<ResourceAvailability> {
   if (!config) return { available: false, reason: "Production bash requires explicitly provisioned cgroup and filesystem resources" };
   if (!storageRoot) return { available: false, reason: "A provisioned per-session filesystem must be supplied for verification" };
@@ -435,12 +405,6 @@ export async function probeResources(config?: ResourceConfig, storageRoot?: stri
   }
 }
 
-/** Call on runner startup to reap orphaned OWNED domains; active locks are skipped.
- * Each resource-backed command independently kills its own stale domain before
- * admission; this eager hook also reaps sessions that are not reopened. Corrupt
- * ownership is quarantined, never adopted; recovery reports those failures after
- * attempting the other domains. Callers may keep non-shell APIs available.
- */
 export async function recoverResourceOrphans(config: ResourceConfig): Promise<void> {
   await controlCommand(config, "recover");
 }

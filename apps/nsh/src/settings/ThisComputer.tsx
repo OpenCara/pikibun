@@ -1,7 +1,7 @@
 import { effect, signal, untracked, View } from "nsh";
 import type { ConnectorPairing } from "../../../../packages/shared/src/connector";
 import { listedPrerequisites } from "../../../../packages/shared/src/host-prerequisites";
-import type { HostInspection, HostState, LoginMethodType, PrerequisiteFix } from "../../../runner/src/desktop-protocol";
+import type { HostInspection, HostState, LoginMethodType, PrerequisiteFix } from "../../../runner/src/app-host-protocol";
 import { session } from "../lib/auth";
 import { openExternal } from "../lib/links";
 import { createAction } from "../lib/resource";
@@ -16,17 +16,11 @@ import {
 } from "../ui";
 import { SectionPage, type SectionProps } from "./parts";
 
-// Settings › This Mac (This Computer elsewhere), in the desktop builds: this computer as one of your hosts. The app runs
-// Pikibun's command (`pikibun host --stdio`, lib/this-computer.ts) to pair this computer with the server you're signed
-// in to in one step, start and stop its host, choose its sandbox and models, and sign Pi in to a provider; what this
-// computer lacks to host is listed with how to get it.
-
 const stateLabels: Record<HostState, string> = {
   stopped: "Stopped", starting: "Starting", connecting: "Connecting", connected: "Online", disconnected: "Reconnecting", stopping: "Stopping",
 };
 const hostOf = (origin: string) => { try { return new URL(origin).host; } catch { return origin; } };
 
-// The consent dialog: the CLI's own --unsafe-no-sandbox warning.
 setUnsandboxedConsent((warning, server, missing) => confirm({
   title: `Run ${hostOf(server)}'s agent work directly on ${computerName}?`,
   message: `${missing.length ? `The isolated sandbox needs ${missing.join(", ")}, so the host would run unsandboxed.\n\n` : ""}${warning || "Approved commands run as you, with access to your files, credentials and network, and no resource limits."}`,
@@ -34,7 +28,6 @@ setUnsandboxedConsent((warning, server, missing) => confirm({
   destructive: true,
 }));
 
-/** The section, for the server this app is signed in to. */
 export function ThisComputer(_props: SectionProps) {
   const { origin } = untracked(session);
   return (
@@ -43,7 +36,6 @@ export function ThisComputer(_props: SectionProps) {
   );
 }
 
-/** How the host isolates its sessions: as it runs, else as it would start. */
 function isolation(host: ThisComputerHost): string {
   const inspection = host.inspection();
   if (inspection?.unsupported) return inspection.unsupported;
@@ -62,10 +54,6 @@ function stateBadge(host: ThisComputerHost) {
   return <Badge testID="this-computer-state" tone={tone} dot={host.state() === "connected"}>{failed ? "Stopped (error)" : stateLabels[host.state()]}</Badge>;
 }
 
-/**
- * This computer as a host of `server`, with `createPairing` making a pairing for the signed-in person there. The host is
- * the app's own (`thisComputer()`), or a test's.
- */
 export function ThisComputerPanel(props: { host: ThisComputerHost; server: string; createPairing: (name: string) => Promise<{ id: string; code: string }> }) {
   const host = props.host;
   void host.load().then(() => host.refresh(props.server));
@@ -84,11 +72,6 @@ export function ThisComputerPanel(props: { host: ThisComputerHost; server: strin
   );
 }
 
-/**
- * Pikibun's command isn't installed, is too old for this app, or couldn't start: what to do about it. Install (or
- * Update) runs npm for the owner, into the app's own folder; the command to run in a terminal shows only when that
- * didn't work.
- */
 function CommandProblem(props: { problem: LaunchProblem; host: ThisComputerHost; server: string }) {
   const host = props.host;
   const update = () => props.problem.kind === "outdated";
@@ -124,21 +107,17 @@ function CommandProblem(props: { problem: LaunchProblem; host: ThisComputerHost;
   );
 }
 
-/** This computer as a host of this very server: paired in one step, with a pairing made here for you. */
 function ThisServerSection(props: { host: ThisComputerHost; server: string; createPairing: (name: string) => Promise<{ id: string; code: string }> }) {
   const host = props.host;
   const name = signal(computerTitle === "This Mac" ? "My Mac" : "My computer");
   const action = createAction();
   const paired = () => host.inspection()?.pairedServer === props.server;
-  /** Paired with another server, or with a pairing that can't be read: pairing again replaces it. */
   const otherPairing = () => { const inspection = host.inspection(); return Boolean(inspection && !paired() && (inspection.pairedServer || inspection.pairingError)); };
-  /** Running for another server (the one it was paired with when the app started, say). */
   const elsewhere = () => { const running = host.running(); return running && running.server !== props.server ? running.server : null; };
   function pair() {
     if (action.busy() || !name().trim()) return;
     const hostName = name().trim();
     void action.run(async () => {
-      // Made once the host is about to start, and handed straight to it, which keeps the code nowhere.
       const outcome = await host.start(props.server, { create: () => props.createPairing(hostName), replace: otherPairing() });
       if (!outcome.ok) throw new Error(outcome.error ?? "The host didn't start.");
     }, `${computerTitle} is pairing with ${hostOf(props.server)}. It appears under Hosts once it is online.`);
@@ -194,7 +173,6 @@ function ThisServerSection(props: { host: ThisComputerHost; server: string; crea
   );
 }
 
-/** macOS: its own sandbox (experimental) or none. Linux uses bubblewrap where it is installed; Windows its own. */
 function SandboxSection(props: { host: ThisComputerHost; server: string }) {
   const host = props.host;
   const action = createAction();
@@ -225,11 +203,9 @@ function SandboxSection(props: { host: ThisComputerHost; server: string }) {
 
 const modelKey = (model: { provider: string; modelId: string }) => `${model.provider}/${model.modelId}`;
 
-/** The models this host offers: Pi's choice, or the ones checked here. */
 function ModelsSection(props: { host: ThisComputerHost }) {
   const host = props.host;
   const available = () => host.inspection()?.models ?? [];
-  /** The checkboxes as the owner left them, until saved. */
   const draft = signal<Set<string> | null>(null);
   const chosen = () => draft() ?? new Set(host.models()?.map(modelKey) ?? available().map(modelKey));
   const toggle = (key: string, on: boolean) => {
@@ -267,7 +243,6 @@ function ModelsSection(props: { host: ThisComputerHost }) {
   );
 }
 
-/** Pi's own sign-in to a provider, run on this computer: the credential stays in Pi's configuration here. */
 function SignInSection(props: { host: ThisComputerHost }) {
   const host = props.host;
   const provider = signal<string | undefined>(undefined);
@@ -280,7 +255,6 @@ function SignInSection(props: { host: ThisComputerHost }) {
   const methods = () => current()?.methods ?? [];
   const chosenMethod = () => methods().find(entry => entry.type === method())?.type ?? methods()[0]?.type;
   const running = () => host.signIn()?.state === "running";
-  // A new question starts empty, so an answer (an API key) never carries over to another.
   let shown: number | undefined;
   effect(() => {
     const prompt = host.signIn()?.prompt;
@@ -294,7 +268,6 @@ function SignInSection(props: { host: ThisComputerHost }) {
     const how = chosenMethod();
     if (!chosen || !how || running()) return;
     feedback.set("");
-    // Not an action: the sign-in lasts until the owner finishes it in the browser, and answering must stay possible.
     void host.startSignIn(chosen.id, how, openExternal).then(outcome => { if (!outcome.ok && outcome.error) feedback.set(outcome.error); });
   }
   function submit() {
@@ -377,7 +350,6 @@ function SignInSection(props: { host: ThisComputerHost }) {
   );
 }
 
-/** How to get something missing: what to do, its command to copy, and its page. */
 function Fix(props: { fix: PrerequisiteFix }) {
   return (
     <View style={{ gap: 6 }}>
@@ -388,7 +360,6 @@ function Fix(props: { fix: PrerequisiteFix }) {
   );
 }
 
-/** What this computer needs to host, each missing one with its fix (a fix shared by several shown once). */
 function PrerequisitesSection(props: { host: ThisComputerHost }) {
   const inspection = () => props.host.inspection() as HostInspection;
   const listed = () => {
@@ -420,7 +391,6 @@ function PrerequisitesSection(props: { host: ThisComputerHost }) {
   );
 }
 
-/** Where its state lives, a refresh, and what the host said lately. */
 function ActivitySection(props: { host: ThisComputerHost; server: string }) {
   const host = props.host;
   return (

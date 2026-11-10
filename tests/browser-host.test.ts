@@ -13,7 +13,6 @@ const ELF = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, ...Array(56).fill(0
 
 interface Entry { name: string; data?: Buffer; mode?: number; deflate?: boolean; crc?: number; flags?: number }
 
-/** A zip archive as Chrome for Testing's are made: Unix modes in each central directory entry. */
 function zip(entries: Entry[]): Buffer {
   const parts: Buffer[] = [];
   const central: Buffer[] = [];
@@ -40,7 +39,6 @@ function zip(entries: Entry[]): Buffer {
   return Buffer.concat([...parts, directory, end]);
 }
 
-/** A headless shell's zip, as Chrome for Testing publishes it (with far fewer files). */
 const shellZip = (extra: Entry[] = []) => zip([
   { name: "chrome-headless-shell-linux64/" },
   { name: "chrome-headless-shell-linux64/chrome-headless-shell", data: ELF, mode: 0o100755, deflate: true },
@@ -55,7 +53,6 @@ const versions = (version: string, url = download(version)) => ({ timestamp: "20
     "chrome-headless-shell": [{ platform: "mac-arm64", url: url.replace("linux64", "mac-arm64") }, { platform: "linux64", url }] } },
   Beta: { channel: "Beta", version: "999.0.0.0", revision: "2", downloads: {} } } });
 
-/** Chrome for Testing, as the connector fetches it: its versions, and one zip per version. */
 function chromeForTesting(state: { version: string; zips: Record<string, Buffer>; fail?: boolean; fetched: string[] }): typeof fetch {
   return (async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -84,7 +81,6 @@ test("a zip is extracted entry by entry: names inside it, regular files and dire
   assert.equal((await stat(join(shell, "icudtl.dat"))).mode & 0o777, 0o644);
   assert.equal(await readFile(join(shell, "icudtl.dat"), "utf8"), "icu".repeat(1000));
 
-  // Nothing outside it, no links or devices, nothing that doesn't match its checksum, nothing encrypted.
   for (const [entries, error] of [
     [[{ name: "../escape", data: Buffer.from("x") }], /may not/],
     [[{ name: "/etc/escape", data: Buffer.from("x") }], /may not/],
@@ -130,7 +126,6 @@ test("a downloaded headless shell is moved into place only whole, and found agai
   state.fetched.length = 0;
   assert.deepEqual(await downloadHeadlessShell(root, { version: "131.0.6778.85", url: download("131.0.6778.85") }, { fetch }), browser);
   assert.deepEqual(state.fetched, []);
-  // An archive without a headless shell in it leaves nothing behind.
   await assert.rejects(downloadHeadlessShell(root, { version: "132.0.0.1", url: download("132.0.0.1") }, { fetch }), /holds no headless shell/);
   await assert.rejects(downloadHeadlessShell(root, { version: "133.0.0.1", url: download("133.0.0.1") }, { fetch }), /answered 404/);
   await assert.rejects(downloadHeadlessShell(root, { version: "133.0.0.1", url: "https://example.com/shell.zip" }, { fetch }), /Not a Chrome for Testing build/);
@@ -143,7 +138,6 @@ test("a host set to download Chromium downloads it in the background, keeps it u
   let now = 1_000_000;
   const state = { version: "131.0.6778.85", zips: { "131.0.6778.85": shellZip(), "132.0.6834.83": shellZip() } as Record<string, Buffer>, fail: true, fetched: [] as string[] };
   const source = new HostBrowserSource({ root, supported: true, platform: "linux", arch: "x64", detect: () => undefined, fetch: chromeForTesting(state), now: () => now });
-  // Its first download fails (the host is offline): it says so, and tries again in ten minutes, or when chosen again.
   assert.deepEqual(await source.apply({ source: "download" }), { source: "download", state: "downloading", downloadable: true });
   await source.settled();
   assert.deepEqual(source.status(), { source: "download", state: "failed", downloadable: true, error: "Couldn't reach googlechromelabs.github.io for Chrome for Testing's versions (ENOTFOUND)" });
@@ -157,7 +151,6 @@ test("a host set to download Chromium downloads it in the background, keeps it u
   const executable = join(root, "131.0.6778.85", "chrome-headless-shell-linux64", "chrome-headless-shell");
   assert.deepEqual(source.status(), { source: "download", state: "ready", version: "131.0.6778.85", executable, downloadable: true });
   assert.equal(source.current()?.executable, executable);
-  // Checked against the Stable version once a day: the newer one replaces it once downloaded whole.
   state.version = "132.0.6834.83";
   state.fetched.length = 0;
   assert.equal((await source.apply({ source: "download" })).version, "131.0.6778.85");
@@ -167,20 +160,16 @@ test("a host set to download Chromium downloads it in the background, keeps it u
   await source.settled();
   assert.equal(source.status().version, "132.0.6834.83");
   assert.equal(source.current()?.executable, join(root, "132.0.6834.83", "chrome-headless-shell-linux64", "chrome-headless-shell"));
-  // The one it replaced stays, whole, while commands that started with it may still run it.
   assert.deepEqual((await readdir(root)).sort(), ["131.0.6778.85", "132.0.6834.83"]);
   assert.ok((await stat(executable)).isFile());
-  // At the next check, a day later, it goes; a failed update leaves the one in use.
   state.version = "133.0.0.1";
   now += 24 * 3600_000;
   await source.apply({ source: "download" });
   await source.settled();
   assert.deepEqual([source.status().state, source.status().version], ["ready", "132.0.6834.83"]);
   assert.deepEqual(await readdir(root), ["132.0.6834.83"]);
-  // Found on the host, the download is what `auto` falls back on.
   assert.deepEqual(await source.apply({ source: "auto" }), { source: "auto", state: "ready", version: "132.0.6834.83",
     executable: join(root, "132.0.6834.83", "chrome-headless-shell-linux64", "chrome-headless-shell"), downloadable: true });
-  // Off is none, whatever there is.
   assert.deepEqual([await source.apply({ source: "off" }), source.current()], [{ source: "off", state: "off", downloadable: true }, undefined]);
 });
 
@@ -194,7 +183,6 @@ test("a host's browser stands as its sandbox and platform allow: none outside th
   const status = await arm.apply({ source: "download" });
   assert.deepEqual([status.state, status.downloadable], ["missing", false]);
   assert.match(status.error!, /x86-64 only/);
-  // A path that isn't a Chromium installation says why, for the host's owner.
   const directory = join(root, "chrome");
   await mkdir(directory);
   await writeFile(join(directory, "chrome"), "#!/bin/sh\nexec chromium \"$@\"\n", { mode: 0o755 });
@@ -209,7 +197,6 @@ test("a host's browser stands as its sandbox and platform allow: none outside th
   await chmod(join(directory, "chrome"), 0o755);
   assert.match((await home.apply({ source: "path", path: join(directory, "chrome") })).error!, /home directory/);
   assert.deepEqual(await path.apply({ source: "path", path: join(directory, "chrome") }), { source: "path", state: "ready", executable: join(directory, "chrome"), downloadable: true });
-  // However long the path its owner gave, what the connector reports is within what the control plane takes.
   const long = await path.apply({ source: "path", path: `/${"a".repeat(4000)}/chrome` });
   assert.deepEqual([long.state, long.error!.length, long.error!.startsWith("Nothing is at /aaa"), long.error!.endsWith("…")], ["missing", hostBrowserStatusLimits.text, true, true]);
   assert.deepEqual(parseHostBrowserStatus(long), long);

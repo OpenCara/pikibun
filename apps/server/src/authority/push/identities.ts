@@ -1,9 +1,10 @@
+import { workspaceAdminSQL } from '../access.js';
 import type { Hono } from 'hono';
 import type { GitProvider } from '../../../../../packages/shared/src/repositories.js';
 import { gitProviders, pushIdentityKindsByProvider } from '../../../../../packages/shared/src/repositories.js';
 import type { PushIdentity, PushIdentityKind } from '../../../../../packages/shared/src/types.js';
 import { sha256 } from '../../../../../packages/shared/src/crypto.js';
-import type { PushIdentityRow, WorkerEnv } from '../../types.js';
+import type { PushIdentityRow, AppEnv } from '../../types.js';
 import { auditStatement } from '../audit.js';
 import { requireMember } from '../access.js';
 import { appOrigin, fail, id, identifier, jsonObject, now, randomToken } from '../../http.js';
@@ -21,9 +22,7 @@ const stateTtl = 10 * 60 * 1000;
 const opaqueToken = /^[A-Za-z0-9_-]{43}$/;
 const printable = /^[\x21-\x7e]{1,255}$/;
 const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Owner/admin authority, re-checked inside every write (binds workspace id, user id). */
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
-// Public settings per kind: [field, pattern, lowercase?]. The owner's account and the host's credentials need none.
+const adminSql = workspaceAdminSQL;
 const configFields: Record<PushIdentityKind, readonly (readonly [string, RegExp, boolean])[]> = {
   'github-app': [['appId', /^[1-9]\d{0,15}$/, false], ['slug', /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/, false]],
   'entra-federation': [['tenantId', guid, true], ['clientId', guid, true]],
@@ -64,7 +63,6 @@ function identityInput(input: Record<string, unknown>): IdentityInput {
     if (typeof value !== 'string' || !pattern.test(value)) invalid(`Invalid ${field}.`);
     config[field] = lower ? value.toLowerCase() : value;
   }
-  // Entra's federation audience would let this workspace's assertions double as Azure DevOps credentials.
   if (kind === 'forgejo-integration' && config.audience!.trim().toLowerCase() === 'api://azureadtokenexchange') {
     invalid('Choose an audience other than api://AzureADTokenExchange.');
   }
@@ -86,7 +84,7 @@ export function publicIdentity(row: PushIdentityRow): PushIdentity {
     config: JSON.parse(row.config_json) as Record<string, string>, status: row.status, createdBy: row.created_by, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
-export function registerPushIdentities(app: Hono<WorkerEnv>): void {
+export function registerPushIdentities(app: Hono<AppEnv>): void {
   app.get('/api/workspaces/:id/push-identities', async c => {
     const workspaceId = identifier(c.req.param('id'));
     await requireMember(c.env, workspaceId, c.get('auth').userId);
@@ -109,7 +107,6 @@ export function registerPushIdentities(app: Hono<WorkerEnv>): void {
     await assertVaultConfigured(c.env);
     const config = await verifyIdentity(c.env, { workspaceId, ...input });
     await requireMember(c.env, workspaceId, actor, ['owner', 'admin']);
-    // Replacing keeps the row id: the secret's vault context is bound to it.
     const existing = await c.env.DB.query<{ id: string }>('SELECT id FROM push_identities WHERE workspace_id = ? AND provider = ? AND host = ? AND scope = ?')
       .bind(workspaceId, input.provider, input.host, input.scope).first();
     const identityId = existing?.id ?? id();
@@ -129,7 +126,6 @@ export function registerPushIdentities(app: Hono<WorkerEnv>): void {
       .first();
     if (!row) fail(409, 'push_identity_conflict', 'The push identity or workspace authority changed. Try again.');
     await c.env.DB.batch([
-      // Pending authorizations were started for the replaced settings.
       c.env.DB.query('DELETE FROM push_oauth_states WHERE identity_id = ?').bind(row.id),
       auditStatement(c.env, actor, 'push.identity.saved', workspaceId, null, { identityId: row.id, provider: row.provider, host: row.host, scope: row.scope, kind: row.kind }),
     ]);
@@ -174,7 +170,6 @@ export function registerPushIdentities(app: Hono<WorkerEnv>): void {
     const states = c.req.queries('state');
     const state = states?.length === 1 ? states[0] : undefined;
     if (!state || !opaqueToken.test(state)) fail(400, 'invalid_oauth_state', 'Invalid or expired OAuth state.');
-    // Single use: DELETE RETURNING makes replays and concurrent callbacks fail before the code exchange.
     const saved = await c.env.DB.query<{ identity_id: string; verifier: string; expires_at: number }>('DELETE FROM push_oauth_states WHERE state_hash = ? AND user_id = ? RETURNING identity_id, verifier, expires_at')
       .bind(await sha256(state), actor).first();
     if (!saved || !Number.isSafeInteger(saved.expires_at) || saved.expires_at <= Date.now() || !opaqueToken.test(saved.verifier)) {

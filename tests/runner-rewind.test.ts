@@ -13,8 +13,6 @@ import { RunnerError } from "../apps/runner/src/protocol.js";
 import type { AuthorizationRequest, EntryView, RunnerAction, RunnerBinding, RunnerTicket, SessionView, SubmitInput } from "../packages/shared/src/types.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 
-// Going back to an earlier message of the shared conversation (revert), and starting a new session from one (fork), on
-// a real Harness and SQLite. The model answers with the user messages it was given, so each test sees the model's context.
 const ALICE = "test:alice";
 const BOB = "test:bob";
 
@@ -40,8 +38,6 @@ function text(content: unknown): string {
 async function fixture(t: TestContext) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "pikibun-rewind-")));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  // "TOOL" makes a tool call and then answers; "HOLD" waits for `release`; anything else is answered with every user
-  // message the model was given.
   let release = Promise.withResolvers<void>();
   const faux = fauxProvider({ models: [{ id: "faux-1", reasoning: true }, { id: "faux-2", reasoning: true }] });
   const respond: FauxResponseFactory = async context => {
@@ -58,7 +54,6 @@ async function fixture(t: TestContext) {
   const models = createModels();
   models.setProvider(faux.provider);
   const backups = new Map<string, Uint8Array>();
-  // Who the control plane admits to which session: everyone, unless `refuse` says otherwise.
   let refuse: (input: AuthorizationRequest) => boolean = () => false;
   const config = {
     readBackup: async (descriptor: { backupId: string }) => backups.get(descriptor.backupId)!,
@@ -102,12 +97,10 @@ async function send(session: RunnerSession, content: string, options?: SubmitInp
   return idle(session);
 }
 
-/** What the session reports it is doing (as its activity reporter reads it). */
 function activity(session: RunnerSession): Promise<string> {
   return (session as unknown as { activity(): Promise<string> }).activity();
 }
 
-/** The shared conversation as people read it, without the empty bookkeeping entries the apps leave out. */
 function shared(view: SessionView): EntryView[] {
   const write = new Set(view.conversations.filter(conversation => conversation.mode === "write").map(conversation => conversation.id));
   return view.entries.filter(entry => entry.conversationId !== undefined && write.has(entry.conversationId) && !(entry.role === "system" && !entry.text.trim()));
@@ -143,7 +136,6 @@ test("going back to a message keeps the shared conversation up to it, for the mo
   assert.equal(view.memberForks, true, "anyone who may write to it forks it");
   const original = view.conversations.find(conversation => conversation.mode === "write")!.id;
 
-  // Before a user message: it and everything after it leave the conversation, which the next message continues.
   const { conversationId } = await session.revert(await ticket(session, "revert"), { entryId: find(view, "user", "two").id });
   assert.notEqual(conversationId, original);
   view = await session.view();
@@ -152,19 +144,16 @@ test("going back to a message keeps the shared conversation up to it, for the mo
   assert.equal(find(view, "user", "one").actorId, ALICE, "kept messages keep who sent them");
   view = await send(session, "four");
   assert.deepEqual(lines(view), ["user: one", "assistant: saw one", "user: four", "assistant: saw one|four"]);
-  // A side ask starts from the conversation as it is now.
   const ask = await session.submit(await ticket(session, "ask"), { content: "aside", requestId: randomUUID() }, "ask");
   view = await idle(session);
   assert.equal(view.entries.filter(entry => entry.conversationId === ask.conversationId).at(-1)!.text, "saw one|four|aside");
   assert.deepEqual(lines(view).at(-1), "assistant: saw one|four", "the side ask stays out of the shared conversation");
 
-  // After a final reply; going back to the latest one changes nothing.
   assert.deepEqual(await session.revert(await ticket(session, "revert"), { entryId: find(view, "assistant", "saw one|four").id }), { conversationId });
   await session.revert(await ticket(session, "revert"), { entryId: find(view, "assistant", "saw one").id });
   view = await send(session, "five");
   assert.deepEqual(lines(view), ["user: one", "assistant: saw one", "user: five", "assistant: saw one|five"]);
 
-  // Before the first message: the conversation starts again, with the session's tools.
   await session.revert(await ticket(session, "revert"), { entryId: find(view, "user", "one").id });
   assert.deepEqual(lines(await session.view()), []);
   view = await send(session, "six");
@@ -172,7 +161,6 @@ test("going back to a message keeps the shared conversation up to it, for the mo
   view = await send(session, "TOOL");
   assert.ok(shared(view).some(entry => entry.role === "toolResult"), "the restarted conversation still has its tools");
 
-  // A reopened session continues where it went back to.
   const reopened = await runner.reopen("rewind-session");
   view = await reopened.view();
   assert.deepEqual(lines(view).slice(0, 2), ["user: six", "assistant: saw six"]);
@@ -213,7 +201,6 @@ test("a fork starts a new session with the shared conversation up to a message, 
   const view = await send(source, "three");
   const target = await runner.provision("fork-target");
 
-  // Up to the reply to TOOL: its tool call and result come along, so the model's context is whole.
   const entryId = find(view, "assistant", "Tool done.").id;
   const input = { sourceSessionId: "fork-source", entryId };
   const result = await runner.service.fork(target, await ticket(target, "fork"), input);
@@ -222,25 +209,21 @@ test("a fork starts a new session with the shared conversation up to a message, 
   assert.deepEqual(lines(forked).filter(line => !line.startsWith("assistant: identity(")), ["user: one", "assistant: saw one", "user: TOOL", "toolResult: " + shared(view).find(entry => entry.role === "toolResult")!.text, "assistant: Tool done."]);
   assert.ok(shared(forked).every(entry => entry.kind === "workspace.forked"));
   assert.ok(!forked.entries.some(entry => entry.role === "system"), "the source's system prompt stays behind: the fork renders its own");
-  // The same fork again is answered as before; another one is refused.
   assert.deepEqual(await runner.service.fork(target, await ticket(target, "fork"), input), result);
   await assert.rejects(runner.service.fork(target, await ticket(target, "fork"), { sourceSessionId: "fork-source", entryId: find(view, "assistant", "saw one").id }), refused(409, /already forked/));
   forked = await send(target, "four");
   assert.equal(shared(forked).at(-1)!.text, "saw one|TOOL|four");
   assert.deepEqual(lines(await source.view()).at(-1), "assistant: saw one|TOOL|three", "the source session is unchanged");
 
-  // Before the first message, a fork starts empty; only a new session takes one.
   const empty = await runner.provision("fork-empty");
   assert.deepEqual(await runner.service.fork(empty, await ticket(empty, "fork"), { sourceSessionId: "fork-source", entryId: find(view, "user", "one").id }), { conversationId: (await empty.view()).conversations[0]!.id, entries: 0 });
   await assert.rejects(runner.service.fork(source, await ticket(source, "fork"), { sourceSessionId: "fork-target", entryId: shared(forked)[0]!.id }), refused(409, /Only a new session/));
   await assert.rejects(runner.service.fork(target, await ticket(target, "fork"), { sourceSessionId: "fork-target", entryId }), refused(400, /into itself/));
   await assert.rejects(runner.service.fork(target, await ticket(target, "fork"), { sourceSessionId: "fork-source" }), refused(400, /Invalid fork request/));
 
-  // A fork lands only in the forking person's own session.
   const other = await runner.provision("fork-other");
   await assert.rejects(runner.service.fork(other, await ticket(other, "fork", BOB), input), refused(403, /owner/));
 
-  // Someone who may write to another's session forks it into their own, as the control plane admits them.
   const bobs = await runner.provision("fork-bob", BOB);
   const asked: AuthorizationRequest[] = [];
   runner.refuse(request => { asked.push(request); return false; });
@@ -248,13 +231,11 @@ test("a fork starts a new session with the shared conversation up to a message, 
   assert.equal(bobResult.entries, result.entries);
   assert.ok(asked.some(request => request.sessionId === "fork-source" && request.actorId === BOB && request.permission === "write"), JSON.stringify(asked));
   assert.deepEqual(lines(await bobs.view()), lines(await target.view()).slice(0, -2), "what Alice's fork had before its own message");
-  // One it no longer admits to the source, such as a reader, doesn't.
   runner.refuse(request => request.sessionId === "fork-source" && request.actorId === BOB);
   const bobsAgain = await runner.provision("fork-bob-again", BOB);
   await assert.rejects(runner.service.fork(bobsAgain, await ticket(bobsAgain, "fork"), input), refused(403, /Authorization/));
   runner.refuse(() => false);
 
-  // Only within the session's workspace.
   const elsewhere = await runner.provision("fork-elsewhere", BOB, undefined, "another-workspace");
   await assert.rejects(runner.service.fork(elsewhere, await ticket(elsewhere, "fork"), input), refused(403, /same workspace/));
 });
@@ -267,7 +248,6 @@ test("a backup of a session that went back keeps the conversation it went back f
   await source.revert(await ticket(source, "revert"), { entryId: find(view, "user", "two").id });
   const backup = await source.backup(await ticket(source, "backup"), { conversationOnly: true });
   assert.deepEqual(backup.manifest.branches.map(branch => [branch.mode, branch.superseded ?? false]), [["write", true], ["write", false]]);
-  // Restored history names exactly one current shared conversation, and nothing else as superseded.
   const restore = async (branches: unknown[], id: string) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ ...backup, manifest: { ...backup.manifest, branches } }));
     runner.backups.set(id, bytes);
@@ -307,11 +287,9 @@ test("a fork on the conversation's current model goes on with its reasoning; on 
   const view = await send(source, "two", { model: { provider: "faux", modelId: "faux-2" }, thinkingLevel: "high" });
   assert.deepEqual(view.agent, { provider: "faux", modelId: "faux-2", thinkingLevel: "high" });
   const entryId = find(view, "assistant", "saw one|two").id;
-  // The control plane starts the fork on the current model when it still may.
   const current = await runner.provision("fork-model-current", ALICE, "faux-2");
   await runner.service.fork(current, await ticket(current, "fork"), { sourceSessionId: "fork-model-source", entryId });
   assert.deepEqual((await current.view()).agent, { provider: "faux", modelId: "faux-2", thinkingLevel: "high" });
-  // Else on the source's own model, which the host never changes back to the one the control plane refused.
   const own = await runner.provision("fork-model-own");
   const before = (await own.view()).agent;
   await runner.service.fork(own, await ticket(own, "fork"), { sourceSessionId: "fork-model-source", entryId });

@@ -1,45 +1,31 @@
+import { workspaceAdminSQL } from './access.js';
 import type { Hono } from 'hono';
 import type { Database } from '../db/types.js';
-import type { Env, SessionRow, WorkerEnv } from '../types.js';
+import type { Env, SessionRow, AppEnv } from '../types.js';
 import { auditStatement } from './audit.js';
 import { requireMember, requireSession, sessionAccess } from './access.js';
 import { fail, identifier, jsonObject, now, userIdentifier } from '../http.js';
 import { hasPermission } from '../../../../packages/shared/src/policy.js';
 import { sessionChanged } from './changes.js';
 
-/**
- * Auto-approving other members' requests. Approved operations run as the session's owner, so only the owner chooses whose
- * requests run without asking, from one of that member's approval cards ("Always approve"), and stops it in the session
- * panel. The workspace's owner and admins decide whether its session owners may choose that at all
- * (`requesterAutoApprove`); turned off, every such choice rests until it is turned on again. What runs without asking is
- * what `requesterAutoApproves` says, never a merge, a host command or anything the session doesn't allow yet.
- */
 export interface WorkspaceApprovalSettings {
-  /** Session owners here may auto-approve the requests of members who write to their sessions. Off by default. */
   requesterAutoApprove: boolean;
 }
 
-/** Owner/admin authority, re-checked inside the write, on insert and on update alike (binds workspace id, user id). */
-const adminSql = `EXISTS (SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ? AND role IN ('owner','admin'))`;
+const adminSql = workspaceAdminSQL;
 
-/** The workspace's approval settings; the defaults until an owner or admin saves some. */
 export async function workspaceApprovalSettings(db: Database, workspaceId: string): Promise<WorkspaceApprovalSettings> {
   const row = await db.query<{ requester_auto_approve: number }>('SELECT requester_auto_approve FROM workspace_approval_settings WHERE workspace_id = ?')
     .bind(workspaceId).first();
   return { requesterAutoApprove: Number(row?.requester_auto_approve ?? 0) === 1 };
 }
 
-/** The members whose requests the session's owner auto-approves now (not stopped), whether or not the workspace allows it today. */
 export async function autoApprovedRequesters(db: Database, sessionId: string): Promise<string[]> {
   const rows = await db.query<{ user_id: string }>(`SELECT user_id FROM session_auto_approved_requesters
     WHERE session_id = ? AND revoked_at IS NULL ORDER BY created_at, user_id`).bind(sessionId).all();
   return rows.map(row => row.user_id);
 }
 
-/**
- * Whether the session's owner auto-approves `actorId`'s requests at this moment: the actor isn't the owner and can still
- * write to the session, which isn't archived, the workspace allows it, and the owner chose it and hasn't stopped.
- */
 export async function autoApprovesRequester(env: Env, row: Pick<SessionRow, 'id' | 'owner_id' | 'workspace_id'>, actorId: string): Promise<boolean> {
   if (actorId === row.owner_id) return false;
   const chosen = await env.DB.query(`SELECT 1 AS chosen FROM session_auto_approved_requesters r
@@ -50,11 +36,6 @@ export async function autoApprovesRequester(env: Env, row: Pick<SessionRow, 'id'
   return !!access && access.row.owner_id === row.owner_id && access.row.status !== 'archived' && hasPermission(access.permissions, 'write');
 }
 
-/**
- * Of `userIds`, those whose requests the session's owner chose to auto-approve at some time, stopped since or not: an
- * operation that ran without asking on the strength of that choice stays a valid record of the session's history, as
- * automatic host commands stay valid after their grant lapses. Whether one may run now is `autoApprovesRequester`.
- */
 export async function everAutoApproved(db: Database, sessionId: string, userIds: readonly string[]): Promise<Set<string>> {
   if (!userIds.length) return new Set();
   const rows = await db.query<{ user_id: string }>(`SELECT user_id FROM session_auto_approved_requesters
@@ -62,10 +43,6 @@ export async function everAutoApproved(db: Database, sessionId: string, userIds:
   return new Set(rows.map(row => row.user_id));
 }
 
-/**
- * Records that the session's owner (`actorId`, checked again as it writes) auto-approves `userId`'s requests from now on,
- * as they chose on the approval card `approvalId`; the caller has checked the rest (see the approvals route).
- */
 export async function chooseAutoApprovedRequester(env: Env, row: SessionRow, actorId: string, userId: string, approvalId: string): Promise<void> {
   const saved = await env.DB.query<{ user_id: string }>(`INSERT INTO session_auto_approved_requesters
       (session_id, user_id, approval_id, granted_by, created_at, revoked_at)
@@ -77,8 +54,7 @@ export async function chooseAutoApprovedRequester(env: Env, row: SessionRow, act
   await auditStatement(env, actorId, 'session.requester_auto_approve.started', row.workspace_id, row.id, { userId, approvalId }).run();
 }
 
-export function registerRequesterAutoApprove(app: Hono<WorkerEnv>): void {
-  // Every member may see whether session owners can auto-approve other members' requests; owners and admins change it.
+export function registerRequesterAutoApprove(app: Hono<AppEnv>): void {
   app.get('/api/workspaces/:id/approvals', async c => {
     const workspaceId = identifier(c.req.param('id'));
     await requireMember(c.env, workspaceId, c.get('auth').userId);
@@ -104,8 +80,6 @@ export function registerRequesterAutoApprove(app: Hono<WorkerEnv>): void {
     await auditStatement(c.env, actor, 'workspace.approvals.updated', workspaceId, null, { requesterAutoApprove: enabled }).run();
     return c.json({ settings: { requesterAutoApprove: Number(saved.requester_auto_approve) === 1 } satisfies WorkspaceApprovalSettings });
   });
-  // The session's owner stops auto-approving a member's requests; their next ones ask again. Archived sessions too: it
-  // only takes something away.
   app.delete('/api/sessions/:id/auto-approved-requesters/:userId', async c => {
     const { row } = await requireSession(c, identifier(c.req.param('id')), 'read');
     const actor = c.get('auth').userId;

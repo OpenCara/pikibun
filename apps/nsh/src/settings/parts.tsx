@@ -4,15 +4,11 @@ import { layout } from "../theme";
 import type { Action } from "../lib/resource";
 import { Button, EmptyState, Feedback } from "../ui";
 
-/** What every settings section is given. */
 export interface SectionProps {
-  /** The item the address names within the section (`#/settings/hosts/<id>`): a host, a workspace. */
   id?: string;
-  /** Goes to another place in the app, as a link would: another section or item, a session. */
   go: (route: PageRoute) => void;
 }
 
-/** A section's scrolling column, as wide as settings read best (the web's .content-column). */
 export function SectionPage(props: { children?: JSX.Element; testID?: string }) {
   return (
     <Scroll testID={props.testID} style={{ flex: 1 }}
@@ -22,7 +18,6 @@ export function SectionPage(props: { children?: JSX.Element; testID?: string }) 
   );
 }
 
-/** A part of the web app's settings this client doesn't have yet; each is ported into its own section file. */
 export function NotYetHere(props: { what: string }) {
   return (
     <EmptyState title="Coming to this app">
@@ -31,7 +26,6 @@ export function NotYetHere(props: { what: string }) {
   );
 }
 
-/** .settings-actions: a form's outcome beside its one accent button, under its sections. */
 export function SettingsActions(props: { action: Action; label: string; onPress: () => void; testID?: string; disabled?: boolean }) {
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 12 }}>

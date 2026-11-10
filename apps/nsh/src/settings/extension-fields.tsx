@@ -2,13 +2,8 @@ import type { ExtensionFlag, ExtensionSettings } from "../../../../packages/shar
 import { Checkbox, Field, TextField } from "../form";
 import { Button, Row } from "../ui";
 
-/** The longest text a setting takes (parseExtensionSettings). */
 const SETTING_TEXT = 4096;
 
-/**
- * An extension's settings (its Pi flags) as a form, as the web app's ExtensionSettingsFields: a check box for each boolean
- * flag, text for each string one, and the settings it no longer declares, kept until cleared.
- */
 export function ExtensionSettingsFields(props: {
   flags: readonly ExtensionFlag[]; settings: ExtensionSettings; onChange: (settings: ExtensionSettings) => void; busy: boolean; multiline?: readonly string[];
 }) {

@@ -1,13 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { AuthInteraction } from "@earendil-works/pi-ai";
-import type { HostInspection, LoginEvent } from "../apps/runner/src/desktop-protocol.js";
+import type { HostInspection, LoginEvent } from "../apps/runner/src/app-host-protocol.js";
 import { aptFix, fixes } from "../apps/runner/src/prerequisite-fixes.js";
 import { LoginError, LoginSession, loginEvent, loginFailure, loginProviders, runLogin, type LoginRuntime } from "../apps/runner/src/pi-login.js";
 import { listedPrerequisites } from "../packages/shared/src/host-prerequisites.js";
-
-// Getting a computer ready to host from the app (pikibun host --stdio): each missing prerequisite's fix, and signing Pi
-// in to a provider through Pi's own sign-in, so no separate Pi install or terminal is needed.
 
 test("missing Linux packages share one fix, with apt where the system has it", () => {
   assert.deepEqual(aptFix(["bubblewrap", "git", "bubblewrap"], true), { text: "Install bubblewrap, git with apt.", command: "sudo apt install bubblewrap git", action: { kind: "apt", packages: ["bubblewrap", "git"] } });
@@ -16,7 +13,6 @@ test("missing Linux packages share one fix, with apt where the system has it", (
   assert.match(fixes.mxcSdk("C:\\mxc").command!, /npm install --prefix "C:\\mxc" @microsoft\/mxc-sdk@1\.0\.1/);
 });
 
-/** A Pi runtime with one OAuth provider whose sign-in asks two questions, and one ambient-only provider. */
 function fakeRuntime(login: (interaction: AuthInteraction) => Promise<void>): LoginRuntime & { saved: string[] } {
   const saved: string[] = [];
   return {
@@ -85,7 +81,6 @@ test("a cancelled sign-in ends its questions, and a provider's errors and links 
 test("a host that runs unsandboxed until its sandbox is ready lists what the sandbox lacks", () => {
   const git = { name: "Git for Windows (git on PATH)", ok: true, fix: fixes.gitForWindows };
   const mxc = { name: "Microsoft MXC SDK 1.0.1", ok: false, fix: fixes.mxcSdk("C:\\mxc") };
-  // Native Windows with Git but without the MXC SDK: it runs unsandboxed, needing only Git, until the SDK is there.
   const inspection: HostInspection = { platform: "win32", stateDir: "C:\\state", mode: "unsandboxed", models: [], prerequisites: [git], sandboxPrerequisites: [git, mxc] };
   assert.deepEqual(listedPrerequisites(inspection), [{ entry: git, sandbox: false }, { entry: mxc, sandbox: true }]);
   assert.deepEqual(listedPrerequisites(inspection).at(-1)?.entry.fix?.action, { kind: "mxc-sdk" });

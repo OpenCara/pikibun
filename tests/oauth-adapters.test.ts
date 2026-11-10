@@ -16,7 +16,6 @@ async function code(promise: Promise<unknown>): Promise<{ status: number; code: 
   return assert.fail('expected a refusal');
 }
 
-/** A minimal .docx: a ZIP with word/document.xml (deflated) and one stored part before it. */
 function docx(xml: string): Uint8Array<ArrayBuffer> {
   const parts = [{ name: '[Content_Types].xml', data: Buffer.from('<Types/>'), method: 0 }, { name: 'word/document.xml', data: Buffer.from(xml), method: 8 }];
   const locals: Buffer[] = []; const centrals: Buffer[] = [];
@@ -74,7 +73,6 @@ test('a token response becomes what Pikibun stores: expiry from now, and refresh
 
 const graph = 'https://graph.microsoft.com/v1.0';
 
-/** A fake Graph: drive d1 with root → Specs → Design → spec.docx and notes.txt; payroll.txt elsewhere in d1. */
 function graphFake(t: TestContext) {
   const items: Record<string, { name: string; parent: string | null; folder?: boolean; mimeType?: string; body?: Uint8Array<ArrayBuffer> | string }> = {
     root: { name: 'root', parent: null, folder: true },
@@ -131,7 +129,6 @@ test('OneDrive and SharePoint read folders, Word documents and text files under 
   assert.deepEqual(await code(onedriveAdapter.read(secret, root, 'd1~payroll')), { status: 403, code: 'source_outside' });
   assert.deepEqual(await code(onedriveAdapter.read(secret, root, 'd2~spec')), { status: 404, code: 'source_item_not_found' });
   assert.deepEqual(await code(onedriveAdapter.read(JSON.stringify({ mode: 'oauth', accessToken: 'stale' }), root, null)), { status: 403, code: 'source_account_rejected' });
-  // The pre-authenticated download URL never gets the member's token.
   assert.ok(fake.downloads.length === 2 && fake.downloads.every(download => download.authorization === null));
 });
 

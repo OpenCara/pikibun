@@ -1,21 +1,16 @@
-// Git smart-HTTP client that pushes session commits to the forge and fills the host's repository cache from it. The
-// credential lives only in this object.
 export const ZERO_OID = "0".repeat(40);
 const OID = /^[0-9a-f]{40}$/;
 const MAX_PKT = 65520;
 const MAX_ADVERTISEMENT = 8 * 1024 * 1024;
 const MAX_REPORT = 1024 * 1024;
-/** Bounds for one full-history cache fetch; the request body stays well under typical forge limits. */
 const MAX_WANTS = 50_000;
 const MAX_HAVES = 4096;
 
-/** Structured progress, parsed from Git's own progress lines; raw remote text is never forwarded. */
 export type GitProgressPhase = "enumerating" | "counting" | "compressing" | "receiving" | "resolving";
 export interface GitProgress { phase: GitProgressPhase; percent: number | null; done: number | null; total: number | null }
 
 const PROGRESS = /^(?:remote: )?(Enumerating|Counting|Compressing|Receiving|Resolving) (?:objects|deltas):\s+(?:(\d{1,3})% \((\d{1,12})\/(\d{1,12})\)|(\d{1,12}))/;
 
-/** Parses one Git progress line ("Counting objects:  45% (450/1000)" or "Enumerating objects: 1000, done."). */
 export function parseGitProgress(line: string): GitProgress | null {
   const match = PROGRESS.exec(line);
   if (!match) return null;
@@ -24,7 +19,6 @@ export function parseGitProgress(line: string): GitProgress | null {
   return { phase, percent: Math.min(100, Number(match[2])), done: Number(match[3]), total: Number(match[4]) };
 }
 
-/** Splits a byte stream of progress output into lines at CR or LF, bounding any single line. */
 export class ProgressLines {
   private pending = "";
   private readonly onLine: (line: string) => void;
@@ -37,7 +31,6 @@ export class ProgressLines {
   end(): void { if (this.pending) this.onLine(this.pending); this.pending = ""; }
 }
 
-/** Branch and tag names a cache may mirror; anything Git itself would refuse to store is skipped. */
 function mirrorableRef(ref: string): boolean {
   return /^refs\/(?:heads|tags)\/./.test(ref) && ref.length <= 1024 && !/[\x00-\x20\x7f~^:?*[\\]/.test(ref)
     && !ref.includes("..") && !ref.includes("@{") && !ref.endsWith("/") && !ref.endsWith(".")
@@ -45,10 +38,6 @@ function mirrorableRef(ref: string): boolean {
 }
 
 export class GitRemoteError extends Error {
-  /**
-   * Whether another attempt may get past it: the connection failed or broke off, or the remote was busy or failing (HTTP
-   * 5xx, 408, 429). A refusal, or a response Git can't use, is final.
-   */
   readonly retryable: boolean;
   constructor(message: string, readonly status?: number, retryable?: boolean) {
     super(message);
@@ -59,7 +48,6 @@ export class GitRemoteError extends Error {
 
 export interface GitRemoteOptions {
   url: string;
-  /** Sent as the Authorization header; without it, the remote is read anonymously (a public repository). */
   authorization?: string;
   fetch?: typeof fetch; signal?: AbortSignal; userAgent?: string;
 }
@@ -99,7 +87,6 @@ function oid(value: string): string {
   return value;
 }
 
-/** Buffered pkt-line reader over a byte stream; never holds more than one pkt (or one chunk) in memory. */
 class PktReader {
   private buffer: Uint8Array = new Uint8Array(0);
   private offset = 0;
@@ -125,7 +112,6 @@ class PktReader {
     return out;
   }
 
-  /** Next pkt, or null at a clean end of stream. */
   async read(): Promise<Pkt | null> {
     if (!(await this.fill(4))) {
       if (this.buffer.length > this.offset) throw new GitRemoteError("Git remote response ended mid-packet", undefined, true);
@@ -150,7 +136,6 @@ class PktReader {
     return next;
   }
 
-  /** Remaining raw bytes (no pkt framing). */
   async *rest(): AsyncGenerator<Uint8Array> {
     if (this.buffer.length > this.offset) yield this.take(this.buffer.length - this.offset).slice();
     for (;;) {
@@ -160,7 +145,6 @@ class PktReader {
     }
   }
 
-  /** Side-band-64k payload of band 1 until flush; band 2 goes to `progress` (or is dropped), band 3 is fatal. */
   async *sideband(progress?: ProgressLines): AsyncGenerator<Uint8Array> {
     for (;;) {
       const next = await this.read();
@@ -182,14 +166,12 @@ async function* chunks(body: ReadableStream<Uint8Array>, signal?: AbortSignal): 
   try {
     for (;;) {
       let next: Awaited<ReturnType<typeof reader.read>>;
-      // A connection that breaks off mid-response may pass another time, unless the caller cancelled it.
       try { next = await reader.read(); }
       catch { throw new GitRemoteError("Git remote response broke off", undefined, !signal?.aborted); }
       if (next.done) return;
       yield next.value;
     }
   } finally {
-    // Early exits (errors, abandoned packs) release the connection instead of leaving it half-read.
     await reader.cancel().catch(() => {});
   }
 }
@@ -254,7 +236,6 @@ export class GitRemote {
       } as RequestInit);
     } catch (error) {
       if (error instanceof GitRemoteError) throw error;
-      // Aborted by the caller's own signal: final. Otherwise the connection failed, which another attempt may get past.
       throw new GitRemoteError("Git remote request failed", undefined, !this.signal?.aborted);
     }
     if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
@@ -321,7 +302,6 @@ export class GitRemote {
     return { refs, capabilities };
   }
 
-  /** Branch and tag tips (unpeeled) the remote advertises for upload-pack; names Git could not store are skipped. */
   async listRefs(): Promise<Map<string, string>> {
     const advertised = await this.advertisement("git-upload-pack", true);
     const refs = new Map<string, string>();
@@ -353,11 +333,6 @@ export class GitRemote {
     return refs;
   }
 
-  /**
-   * Full-history pack of `wants` minus what `haves` already reach: no depth, no filter, no thin pack, so a
-   * repository that holds the haves can index it with no further remote access. Band 2 progress lines go to
-   * `onProgress`; the remote must allow wanting non-tip commits when a want is not an advertised tip.
-   */
   async fetchHistory(input: { wants: readonly string[]; haves: readonly string[]; onProgress?: (line: string) => void }): Promise<AsyncIterable<Uint8Array>> {
     const wants = [...new Set(input.wants.map(oid))];
     const haves = [...new Set(input.haves.map(oid))].slice(0, MAX_HAVES);
@@ -415,7 +390,6 @@ export class GitRemote {
     }, "application/x-git-upload-pack-result");
     const reader = bodyReader(response, this.signal);
     try {
-      // Without multi_ack the server answers with one ACK for the first common object, or NAK if there is none.
       const answer = text(await reader.expect());
       if (answer !== "NAK" && !(answer?.startsWith("ACK ") && OID.test(answer.slice(4, 44)))) throw new GitRemoteError("Git remote sent a malformed fetch response");
     } catch (error) {

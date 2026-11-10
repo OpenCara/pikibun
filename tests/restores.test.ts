@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { Env, WorkerEnv } from '../apps/server/src/types.js';
+import type { Env, AppEnv } from '../apps/server/src/types.js';
 import type { RunnerBinding, RunnerTicket } from '../packages/shared/src/types.js';
 import type { RestoreInput } from '../packages/shared/src/connector.js';
 import type { GitHubSessionRepository, SessionRepository } from '../packages/shared/src/repositories.js';
@@ -78,8 +78,7 @@ async function fixture(t: TestContext, connected = false, repositories: SessionR
   let raw = JSON.stringify(snapshot);
   objects.set(key, new TextEncoder().encode(raw));
   sqlite.prepare('INSERT INTO backups (id,session_id,owner_id,object_key,sha256,size,created_at) VALUES (?,?,?,?,?,?,?)').run('backup', 'source', 'test:owner', key, await sha256(raw), Buffer.byteLength(raw), '2026-01-01');
-  const app = new Hono<WorkerEnv>();
-  // Cookie/CSRF are covered by control-plane tests; this seam supplies an authenticated actor.
+  const app = new Hono<AppEnv>();
   app.use('/api/sessions/*', async (c, next) => {
     c.set('auth', { userId: c.req.header('x-test-user') ?? 'test:owner', tokenHash: 'test', csrfToken: 'test', client: 'browser' });
     await next();
@@ -183,7 +182,7 @@ test('restore pins one new target, uses current owner profile and copies no gran
   assert.equal(await sessionAccess(f.env, targetId, 'test:manager'), null);
   assert.deepEqual(f.sqlite.prepare("SELECT * FROM sessions WHERE id='source'").get(), sourceBefore);
   assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM session_grants WHERE session_id=?').get(targetId)!.n, 0);
-  f.objects.clear(); // Completed receipts must not depend on another storage read or runner RPC.
+  f.objects.clear();
   const replay = await f.request(restorePath, { requestId: 'request', title: 'Restored title' });
   assert.equal(replay.status, 200);
   assert.deepEqual(await replay.json(), await f.request(restorePath, { requestId: 'request', title: 'Restored title' }).then(r => r.json()));
@@ -278,7 +277,6 @@ test('ambiguous runner failure and invalid receipt retry the same target and imm
     return runnerReceipt(body);
   });
   assert.equal((await f.request(restorePath, { requestId: 'stable' })).status, 503);
-  // Membership/share revocation can increment target policy even while direct grants are blocked.
   f.sqlite.exec("UPDATE sessions SET policy_version=2 WHERE id <> 'source'");
   assert.equal((await f.request(restorePath, { requestId: 'stable' })).status, 502);
   assert.equal((await f.request(restorePath, { requestId: 'stable' })).status, 200);

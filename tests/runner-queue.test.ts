@@ -18,15 +18,11 @@ import { RunnerService } from "../apps/runner/src/server.js";
 import { RunnerSession, WORK_MARKER, type RunnerConfig } from "../apps/runner/src/session.js";
 import { defaultHostConfig, type HostCompaction } from "../packages/shared/src/host-config.js";
 
-// These are integration-style source tests: real pi Harness, SQLite and sandbox tools.
-// Linux needs working bwrap FD mounts/user namespaces, Python 3 and Git, as in runner.test.ts.
-// provider.ts accepts TEST_HOLD (not TEST_DELAY); no timed provider hold is needed here.
 const options = { skip: process.platform !== "linux", timeout: 60_000 };
 const OWNER = "test:alice";
 const WRITER = "test:bob";
 const SECRET = "queue-test-secret-not-a-production-secret-123456";
 type Mode = "write" | "ask";
-// Only the fields inspected/changed by the offline crash fixture; preserve the rest.
 type Metadata = {
   runs: Record<string, {
     key: string; conversationId: number; sequence?: number; status: string; submissionId?: number;
@@ -56,8 +52,6 @@ async function submit(session: RunnerSession, actorId: string, mode: Mode, input
 }
 
 async function idle(session: RunnerSession): Promise<SessionView> {
-  // Real Harness tasks and sandbox processes cannot be advanced with fake timers.
-  // Poll the public busy condition, as runner.test.ts does; gates establish ordering.
   for (let count = 0; count < 500; count++) {
     const view = await session.view();
     if (!view.busy) return view;
@@ -72,7 +66,6 @@ function queue(view: SessionView) {
 }
 
 function sameReceipt(actual: SubmitResult, expected: SubmitResult): void {
-  // Status and queuePosition are observations, not part of the stable receipt identity.
   assert.equal(actual.submissionId, expected.submissionId);
   assert.equal(actual.conversationId, expected.conversationId);
 }
@@ -99,14 +92,11 @@ function toolResult(view: SessionView, receipt: SubmitResult, predicate: (value:
 }
 
 function file(session: RunnerSession, name: string): Promise<string> {
-  // Observe the backing file only; all effects under test go through actual pi tools.
   return readFile(join(session.directory, "sandbox", "worktree", name), "utf8");
 }
 
 async function pauseQueue(session: RunnerSession): Promise<() => void> {
   await session.exclusive(async () => {});
-  // A scheduling-only seam for queued-only snapshots. Admission, documents, branches,
-  // authorization and pi execution are never mocked. Restore the real drain to run jobs.
   const scheduler = session as unknown as { drainQueue(): void };
   const drain = scheduler.drainQueue;
   scheduler.drainQueue = () => {};
@@ -125,7 +115,6 @@ async function fixture(t: TestContext, { reportActivity = false, config: overrid
   const reports: [string, SessionActivity][] = [];
   const config: RunnerConfig = {
     dataDir: directory, sharedSecret: SECRET, controlPlaneUrl: "http://127.0.0.1:8787", allowFaux: true,
-    // As a connected runner reports to the control plane.
     ...(reportActivity ? { reportActivity: async (sessionId: string, activity: SessionActivity) => { reports.push([sessionId, activity]); } } : {}),
     authorize: async request => {
       calls.push({ ...request });
@@ -150,14 +139,11 @@ async function fixture(t: TestContext, { reportActivity = false, config: overrid
   const session = await service.provision(input, await ticket(input.session.id, "create"));
   return {
     session, grants, calls, reports,
-    /** Waits for the runner to report `activity`; reports follow each change once it settles. */
     async reported(activity: SessionActivity) {
       for (let count = 0; count < 250 && reports.at(-1)?.[1] !== activity; count++) await delay(20);
       assert.deepEqual(reports.at(-1), [input.session.id, activity], `reports so far: ${JSON.stringify(reports)}`);
     },
     gateTool(actorId: string, mode: Mode) {
-      // A fresh submit authorizes admission, activation, then its first tool. Blocking
-      // the third call leaves the runner lock free, so other jobs can be durably queued.
       const gate = { actorId, permission: mode, remaining: 3, entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
       gates.push(gate);
       return {
@@ -175,7 +161,6 @@ async function fixture(t: TestContext, { reportActivity = false, config: overrid
       await service.initialize();
       return service.get(input.session.id);
     },
-    /** Starts a runner again as a connector does: nothing asks for the session, the runner resumes what was at work. */
     async restart() {
       assert.equal(service, undefined, "close the previous service before opening its SQLite database");
       service = new RunnerService(config);
@@ -187,7 +172,6 @@ async function fixture(t: TestContext, { reportActivity = false, config: overrid
 }
 
 async function stored<T>(session: RunnerSession, operation: (harness: Harness) => Promise<T>): Promise<T> {
-  // Only call with RunnerService closed. Harness.open and document reads do not resume tasks.
   const storage = await openNodeSqliteStorage(session.sqlitePath);
   let harness: Harness;
   try { harness = await Harness.open(storage, { models: runnerModels(session.binding.model, true), registry: createRegistry() }, context); }
@@ -450,7 +434,6 @@ test("a session at work when its runner stops resumes when a runner starts again
   const marked = () => lstat(marker).then(stat => stat.isFile(), () => false);
   await f.reported("idle");
   assert.equal(await marked(), false, "an idle session has nothing to resume");
-  // Queued when the runner stops: durable, but nothing would run it until someone opened the session.
   await pauseQueue(f.session);
   await submit(f.session, OWNER, "write", { content: "TEST_WRITE resumed.txt\nran after the restart", requestId: "resumed" });
   await f.reported("working");
@@ -461,7 +444,6 @@ test("a session at work when its runner stops resumes when a runner starts again
   await f.reported("done");
   assert.equal(await file(f.session, "resumed.txt"), "ran after the restart");
   assert.equal(await marked(), false, "done, so nothing to resume next time");
-  // A runner that starts again now opens nothing, and passes over what isn't a session.
   await f.stop();
   await writeFile(join(f.session.directory, "..", "not-a-session"), "");
   assert.equal((await f.restart()).size, 0);
@@ -494,7 +476,6 @@ test("stopping ends the running message and those queued behind it, holds new on
   assert.deepEqual(await stop(WRITER), { stopped: 2 });
   let view = await f.session.view();
   assert.equal(view.stoppable, true);
-  // The running call is still in its tool, so its host has not finished stopping it.
   assert.deepEqual(queue(view).map(run => run.status), ["stopping", "stopped"]);
   assert.equal(view.busy, true);
   assert.equal(view.activity, "working");
@@ -508,7 +489,6 @@ test("stopping ends the running message and those queued behind it, holds new on
   await assert.rejects(file(f.session, "stopped.txt"), { code: "ENOENT" });
   assert.equal(await file(f.session, "after.txt"), "ran");
   toolResult(view, next, result => result.written === "after.txt" && result.initiatedBy === WRITER);
-  // The stop follows the stopped message's own entries, before the next message's.
   const marker = view.entries.findIndex(entry => entry.kind === "workspace.run-stopped");
   assert.deepEqual(view.entries[marker], { id: `${running.conversationId}:stopped:${running.submissionId}`, kind: "workspace.run-stopped", role: "system", text: "Stopped", actorId: WRITER, conversationId: running.conversationId });
   assert.ok(view.entries.slice(0, marker).some(entry => entry.role === "user" && entry.text === "TEST_IDENTITY"));
@@ -528,7 +508,6 @@ test("a stop the host had not finished before it closed is finished on reopen, a
   assert.deepEqual(await f.session.stop(await ticket(f.session.binding.session.id, "stop", OWNER, "{}")), { stopped: 1 });
   const next = await submit(f.session, WRITER, "write", { content: "TEST_WRITE reopened.txt\nran", requestId: "held" });
   assert.deepEqual(queue(await f.session.view()).map(run => run.status), ["stopping", "queued"]);
-  // Closing waits for the gated tool call to return.
   const closing = f.stop();
   gate.release();
   await closing;
@@ -541,7 +520,6 @@ test("a stop the host had not finished before it closed is finished on reopen, a
 
 test("stopping interrupts the stopped message's pending cards, so a later decision cannot run them", options, async t => {
   const f = await fixture(t);
-  // A write in a read-only message asks the owner first and waits on that card.
   await submit(f.session, OWNER, "write", { content: "TEST_WRITE asked.txt\nmust-not-run", requestId: "asks", options: { access: "read" } });
   let card: SessionView["approvals"][number] | undefined;
   for (let count = 0; count < 250 && !card; count++) {
@@ -572,7 +550,6 @@ test("an operation requested outside a message cannot run while a stop is still 
   await assert.rejects(decide(), runnerError(409, /queue to finish/));
   gate.release();
   await idle(f.session);
-  // Past the queue check once the stopped work has ended: only the comment's missing broker capability refuses it now.
   await assert.rejects(decide(), runnerError(403, /broker capability/));
 });
 
@@ -626,7 +603,6 @@ test("queued asks remain read-only after recovery even when their actor also has
   const askEntries = view.entries.filter(entry => entry.conversationId === ask.conversationId);
   const askStart = askEntries.findIndex(entry => entry.role === "user" && entry.text === input.content);
   assert.notEqual(askStart, -1);
-  // The fork legitimately inherits the seed's write_file call; inspect only this ask.
   const askTurn = askEntries.slice(askStart + 1);
   assert.ok(askTurn.some(entry => entry.role === "assistant" && entry.text.includes("Denied: write_file is not available")));
   assert.equal(askTurn.some(entry => entry.role === "assistant" && entry.text.includes("write_file(")), false);
@@ -686,8 +662,6 @@ test("synthetic post-submit activation crash window reuses pi requestId rather t
     const persisted = await conversation.commit(tx => tx.submissionByRequest(conversation.id, run.key), context);
     assert.ok(persisted, "the real pi submission must carry the runner's request key");
     assert.equal(persisted.id, run.submissionId);
-    // Model the durable cut after pi admission but before RunnerSession saves its numeric
-    // submission ID. Keep the real pi receipt/transcript/effect; do not fabricate pi rows.
     await conversation.commit(async tx => {
       const doc = await tx.doc(RunnerState);
       const current = JSON.parse(doc.json) as Metadata;
@@ -716,10 +690,6 @@ test("synthetic post-submit activation crash window reuses pi requestId rather t
   });
 });
 
-/**
- * Storage a test can crash: from `crash()` on, every call fails, which fails the Harness without the close that would
- * write its running tasks back, as a host that died mid-message would. `crash()` then reopens the session.
- */
 function crashableStorage() {
   let crashed = () => {};
   return {
@@ -735,7 +705,6 @@ function crashableStorage() {
     },
     async crash(session: RunnerSession) {
       crashed();
-      // A commit fails the Harness, unless running work hit the crash first.
       await assert.rejects(session.consumeTicket(await ticket(session.binding.session.id, "view")), /simulated host crash|Session failed/);
       for (let count = 0; count < 250 && !session.failed; count++) await delay(20);
       assert.equal(session.failed, true);
@@ -744,12 +713,10 @@ function crashableStorage() {
   };
 }
 
-/** A test seam: the open Harness's own view of its tasks. */
 async function tasks(session: RunnerSession): Promise<readonly TaskInspection[]> {
   return (await (session as unknown as { harness: Harness }).harness.inspect(context)).tasks;
 }
 
-/** Waits until a task `which` picks is running. */
 async function running(session: RunnerSession, which: (task: TaskInspection) => boolean, what: string): Promise<void> {
   const found = async () => (await tasks(session)).some(task => task.state.kind === "running" && which(task));
   for (let count = 0; count < 250 && !(await found()); count++) await delay(20);
@@ -764,11 +731,9 @@ test("a message whose work host crashes cut off again and again ends, says why, 
   const answering = async () => (await tasks(f.session)).some(task => task.state.kind === "running");
   let crashes = 0;
   for (;;) {
-    // Pi tries a request the host's crash cut off again after a backoff (2s, 4s, 8s), or ends the message.
     for (let count = 0; count < 500 && !(await ended()) && !(await answering()); count++) await delay(20);
     if (await ended()) break;
     assert.ok(crashes < 10, "the runner must end the message");
-    // The host goes down while the model answers the message (it takes a second), not while Pi records the last crash.
     await delay(300);
     if (!(await answering())) continue;
     await storage.crash(f.session);
@@ -795,12 +760,10 @@ test("sessions compact by the host's Pi compaction settings, per model where it 
       await submit(f.session, OWNER, "write", { content: "TEST_HOLD 0", requestId });
       await idle(f.session);
     }
-    // The second message's request compacts the first message's entries before it is sent.
     const view = await f.session.view();
     await f.stop();
     return view.entries.filter(entry => entry.kind === "pi.compaction").length;
   };
-  // A threshold no context fits under, keeping nothing verbatim, compacts before every request with older entries.
   const always = { reserveTokens: Number.MAX_SAFE_INTEGER, keepRecentTokens: 0 };
   assert.ok(await compactions({ modelOverrides: { "faux/queue-faux": always } }) > 0, "the session's model compacts by its override");
   assert.equal(await compactions({ modelOverrides: { "faux/other-model": always } }), 0, "another model's override does not apply");
@@ -810,7 +773,6 @@ test("sessions compact by the host's Pi compaction settings, per model where it 
 
 test("sessions compact by the token counts set in Pikibun over the host's Pi settings, from their next message on", options, async t => {
   let configured: HostCompaction = {};
-  // The host's Pi never compacts this conversation; Pikibun's configuration of the host decides.
   const f = await fixture(t, { config: { compaction: { reserveTokens: 0 }, hostConfig: async () => ({ ...defaultHostConfig, compaction: configured }) } });
   const compactions = async () => (await f.session.view()).entries.filter(entry => entry.kind === "pi.compaction").length;
   for (const requestId of ["first", "second"]) {
@@ -818,7 +780,6 @@ test("sessions compact by the token counts set in Pikibun over the host's Pi set
     await idle(f.session);
   }
   assert.equal(await compactions(), 0, "the host's Pi settings apply while Pikibun sets nothing");
-  // A threshold no context fits under, keeping nothing verbatim, for the session's model alone.
   configured = { modelOverrides: { "faux/queue-faux": { reserveTokens: 10_000_000, keepRecentTokens: 0 } } };
   await submit(f.session, OWNER, "write", { content: "TEST_HOLD 0", requestId: "third" });
   await idle(f.session);
@@ -832,7 +793,6 @@ test("sessions compact by the token counts set in Pikibun over the host's Pi set
 
 test("background work host crashes cut off again and again, such as a compaction, ends without ending the message that is running", options, async t => {
   const storage = crashableStorage();
-  // A model that takes a second to summarize, and to answer "hold"; it answers anything else at once.
   const faux = fauxProvider({ models: [{ id: "queue-faux", name: "Deterministic test provider (not an LLM)" }] });
   const respond: FauxResponseFactory = async request => {
     faux.appendResponses([respond]);
@@ -847,14 +807,12 @@ test("background work host crashes cut off again and again, such as a compaction
   models.setProvider(faux.provider);
   const f = await fixture(t, { config: { openStorage: path => storage.open(path),
     resolveModels: async model => ({ models, provider: model.provider, modelId: model.modelId }),
-    // Every request with older entries starts a compaction in the background, keeping nothing verbatim.
     compaction: { reserveTokens: 1000, keepRecentTokens: 0, backgroundTokens: Number.MAX_SAFE_INTEGER } } });
   for (const requestId of ["first", "second"]) {
     await submit(f.session, OWNER, "write", { content: requestId, requestId });
     await idle(f.session);
   }
   const compacting = (task: TaskInspection) => task.record.background;
-  // The host goes down four times while the second message's compaction summarizes, then a fifth while a message runs too.
   for (let crash = 0; crash < 4; crash++) {
     await running(f.session, compacting, "the background compaction");
     await storage.crash(f.session);
@@ -867,7 +825,6 @@ test("background work host crashes cut off again and again, such as a compaction
   assert.deepEqual(queue(view).map(run => run.status), ["settled", "settled", "settled"], "only the message's own work ends it");
   assert.equal(view.entries.some(entry => entry.kind === "workspace.run-crashed"), false);
   assert.ok(view.entries.some(entry => entry.conversationId === held.conversationId && entry.role === "assistant" && entry.text === "Answered."));
-  // Pi ended the compaction at its restart limit (settings.restartLimit), so no later open finds it.
   for (let count = 0; count < 250 && (await tasks(f.session)).length; count++) await delay(20);
   assert.deepEqual(await tasks(f.session), []);
 });
@@ -918,6 +875,5 @@ test("a session whose only message was taken back is idle, as its host reports t
   assert.deepEqual(queue(view).map(run => run.status), ["withdrawn", "withdrawn"]);
   assert.equal(view.activity, "idle");
   assert.equal(view.entries.length, 0);
-  // The control plane's session list says the same as the view: not failed.
   await f.reported("idle");
 });

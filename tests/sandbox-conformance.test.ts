@@ -7,27 +7,9 @@ import { searchRequest } from "../apps/runner/src/search.js";
 import { fileOperationRequest } from "../apps/runner/src/file-operations.js";
 import { workspaceKinds } from "./helpers/workspaces.js";
 
-/*
- * One set of rules for a session's files, held against every implementation of them (tests/helpers/workspaces.ts): the
- * Linux sandbox's and macOS sandbox's Python helper, the Windows sandbox's Node helper, and the unsandboxed host's
- * TypeScript. A new file operation, or a fix to one, adds its cases here, so each implementation is checked by the same
- * table rather than reviewed three times. A kind that can't run on this machine is skipped with its reason.
- *
- * Each worktree starts with:
- *   inside/a.txt                a file
- *   in-dir -> inside, in-file -> inside/a.txt, nested/in-file -> ../inside/a.txt
- *   out-dir -> ../outside, out-file -> ../outside/secret.txt, up -> .., dangling -> ../outside/new.txt (missing)
- * Links are relative, as a repository's are: the Linux sandbox mounts the worktree at another path than the host's.
- *   git-link -> .git, loop -> loop
- *   hard.txt                    a hard link to ../outside/secret.txt
- *   clone/README, clone/.git/HEAD   a repository the agent cloned
- * beside an `outside` directory holding secret.txt, which nothing may read, change or add to.
- */
-
 const allow = async () => {};
 
 type Operation = (workspace: SessionWorkspace) => Promise<unknown>;
-/** A case: what it does, and what it gives (`ok`, or a refusal whose message matches). */
 type Case = [name: string, operation: Operation, expected: { ok: unknown } | { refused: RegExp }];
 
 const read = (path: string): Operation => workspace => workspace.readFile(path, allow);
@@ -41,7 +23,6 @@ const move = (from: string, to: string): Operation => workspace => workspace.fil
 const copy = (from: string, to: string): Operation => workspace => workspace.fileOperation(fileOperationRequest("copy", { from, to }), allow);
 const remove = (path: string, recursive = false): Operation => workspace => workspace.fileOperation(fileOperationRequest("delete", { path, recursive }), allow);
 const names = (path: string): Operation => async workspace => (await workspace.listFiles(path, allow)).filter(name => name !== "n");
-/** Only the matches, where how many files a search read depends on what earlier cases left. */
 const found = (args: Parameters<typeof searchRequest>[0]): Operation => async workspace => (await workspace.search(searchRequest(args), allow)).matches;
 
 const TRAVERSAL = /path traversal is not allowed/;
@@ -49,11 +30,9 @@ const ABSOLUTE = /invalid relative path/;
 const GIT = /Git metadata is protected/;
 const ESCAPES = /path escapes the worktree/;
 const NOT_REGULAR = /only regular, non-hardlinked files are supported/;
-/** Refused, for a reason each implementation words its own way (its platform's error, say). */
 const REFUSED = /./;
 
 const cases: Case[] = [
-  // Paths are plain relative paths in the worktree: nothing that climbs out, no absolute paths, nothing empty.
   ["writes a file, making its directories", write("new/deeper/file.txt"), { ok: undefined }],
   ["reads it back", read("new/deeper/file.txt"), { ok: "written" }],
   ["refuses ./ in a path", read("./inside/a.txt"), { refused: TRAVERSAL }],
@@ -68,14 +47,12 @@ const cases: Case[] = [
   ["refuses an empty path", read(""), { refused: /Invalid path/ }],
   ["refuses a NUL in a path", read("a\0b"), { refused: /Invalid path/ }],
 
-  // Git's metadata is the session's own, never the agent's to write, in any spelling or through any link.
   ["protects .git/config", write(".git/config"), { refused: GIT }],
   ["protects .git itself", write(".git"), { refused: GIT }],
   ["protects .git in another case", write(".GIT/x"), { refused: GIT }],
   ["protects a nested repository's .git", write("inside/.git/config"), { refused: GIT }],
   ["protects .git through a link to it", write("git-link/config"), { refused: REFUSED }],
 
-  // Symlinks are followed only while they stay in the worktree.
   ["reads through a link to a file inside", read("in-file"), { ok: "A" }],
   ["reads through a link climbing back into the worktree", read("nested/in-file"), { ok: "A" }],
   ["reads through a link to a directory inside", read("in-dir/a.txt"), { ok: "A" }],
@@ -92,14 +69,12 @@ const cases: Case[] = [
   ["refuses writing through a dangling link to outside", write("dangling"), { refused: REFUSED }],
   ["refuses a link to itself", read("loop"), { refused: REFUSED }],
 
-  // Only regular files, never one hard-linked from elsewhere.
   ["refuses reading a hard link", read("hard.txt"), { refused: NOT_REGULAR }],
   ["refuses writing a hard link", write("hard.txt"), { refused: NOT_REGULAR }],
   ["refuses reading a directory as a file", read("inside"), { refused: NOT_REGULAR }],
   ["refuses writing over a directory", write("inside"), { refused: NOT_REGULAR }],
   ["refuses a missing file", read("missing.txt"), { refused: REFUSED }],
 
-  // Attached files go only into a real directory of the worktree, as a new file: never over another one.
   ["imports into a directory", upload("inside", "report.pdf", "first"), { ok: "inside/report.pdf" }],
   ["imports a second file of that name beside it, leaving the first", upload("inside", "report.pdf", "second"), { ok: "inside/report (2).pdf" }],
   ["kept the first import as it was", read("inside/report.pdf"), { ok: "first" }],
@@ -112,11 +87,9 @@ const cases: Case[] = [
   ["refuses an import named with a path", upload("inside", "a/b.txt"), { refused: /Invalid file import/ }],
   ["refuses an import named .git", upload(".", ".git"), { refused: /Invalid file import/ }],
 
-  // Writing through a link inside the worktree changes its target, which is in the worktree too.
   ["writes through a link to a directory inside", write("in-dir/through.txt", "through"), { ok: undefined }],
   ["wrote into the directory the link names", read("inside/through.txt"), { ok: "through" }],
 
-  // search: the same matches everywhere, from inside the worktree only, never through a link or a hard link.
   ["writes files to search", async workspace => {
     await workspace.writeFile("src/app.ts", "const a = 1;\nexport function hello() {\n  return \"hi\";\n}\n", allow);
     await workspace.writeFile("src/lib/util.ts", "export const HELLO = 2;\r\n", allow);
@@ -139,7 +112,7 @@ const cases: Case[] = [
     for (let index = 0; index < 10; index++) await workspace.writeFile(`wide/${index}.txt`, `${"\u{1F600}".repeat(300)}\n`.repeat(100), allow);
     const result = await workspace.search(searchRequest({ pattern: ".", path: "wide", max_results: 500, context: 5 }), allow);
     return { matches: result.matches.length, truncated: result.truncated };
-  }, { ok: { matches: 80, truncated: true } }],  // 256K characters: 301 per line, 6 to 11 lines a match
+  }, { ok: { matches: 80, truncated: true } }],
   ["shortens a long line", found({ pattern: "needle", path: "long.txt" }), { ok: [{ path: "long.txt", line: 1, text: `${"x".repeat(300)}\u2026` }] }],
   ["skips node_modules", find({ pattern: "dep", glob: "*.js" }), { ok: { matches: [], files: 0, truncated: false } }],
   ["searches node_modules with all", found({ pattern: "dep", glob: "*.js", all: true }), { ok: [{ path: "node_modules/dep/index.js", line: 1, text: "hello dep" }] }],
@@ -150,7 +123,6 @@ const cases: Case[] = [
   ["refuses searching through a link outside", find({ pattern: "secret", path: "out-dir" }), { refused: ESCAPES }],
   ["refuses an invalid regular expression", find({ pattern: "(", path: "src" }), { refused: /invalid regular expression/ }],
 
-  // move_file, copy_file and delete_file: entries in the worktree, never .git, never over something, never into themselves.
   ["writes a tree to copy", write("tree/x/y.txt", "Y"), { ok: undefined }],
   ["copies a file, making its directories", copy("inside/a.txt", "copies/a.txt"), { ok: { entries: 1, bytes: 1 } }],
   ["copied it", read("copies/a.txt"), { ok: "A" }],
@@ -188,7 +160,6 @@ const cases: Case[] = [
   ["moves a directory", move("tree-copy", "moved/tree"), { ok: { entries: 1, bytes: 0 } }],
   ["moved everything in it", read("moved/tree/x/y.txt"), { ok: "Y" }],
   ["moves a hard link, never touching what it shares", move("hard.txt", "moved/hard.txt"), { ok: { entries: 1, bytes: 0 } }],
-  // A refused move or copy makes nothing, not even the destination's directories (review of #185).
   ["refuses a copy into itself before making anything", copy("tree", "tree/sub/x"), { refused: /the destination is the source or inside it/ }],
   ["made no directory for it", names("tree"), { ok: ["x"] }],
   ["refuses a move of what isn't there before making anything", move("missing.txt", "made-for-nothing/x"), { refused: /no such file or directory/ }],
@@ -246,7 +217,6 @@ for (const kind of workspaceKinds) {
       }
     }
 
-    // Nothing outside the worktree, nor its Git metadata, changed.
     assert.deepEqual(await readdir(outside), ["secret.txt"]);
     assert.equal(await readFile(join(outside, "secret.txt"), "utf8"), "secret");
     assert.deepEqual(await readdir(join(root, ".git")).catch(() => readFile(join(root, ".git"), "utf8")), git);

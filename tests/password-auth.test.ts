@@ -12,7 +12,6 @@ const password = "correct horse battery";
 async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
   const { db, sqlite, setBeforeQuery } = await testDatabase();
   t.after(() => db.close());
-  // Test mode only allows plain HTTP on localhost; password accounts work without it.
   const env: Env = { DB: db, APP_ORIGIN: origin, TEST_AUTH_ENABLED: "true", TEST_AUTH_SECRET: "password-auth-test-secret-not-for-deployment",
     TEST_AUTH_EXPIRES_AT: new Date(Date.now() + 3600000).toISOString(), RUNNER_SHARED_SECRET: "r".repeat(43),
     VAULT_KEY: Buffer.alloc(32, 7).toString("base64url"), PASSWORD_AUTH: "true", SIGNUP: "open", ...overrides };
@@ -26,12 +25,10 @@ async function fixture(t: TestContext, overrides: Partial<Env> = {}) {
   async function signIn(username: string, typed: string) {
     return request("POST", "/api/auth/password/login", { headers: { Origin: origin }, body: { username, password: typed } });
   }
-  /** A signed-in browser: its cookie and a fresh CSRF token for changes. */
   async function browser(cookie: string) {
     const csrf = await (await request("GET", "/api/auth/csrf", { headers: { Cookie: cookie } })).json() as { csrfToken: string };
     return { Cookie: cookie, Origin: origin, "X-CSRF-Token": csrf.csrfToken };
   }
-  /** A test-mode owner's workspace with its invite link turned on: its id and the link's token. */
   async function invitingWorkspace() {
     const login = await request("POST", "/api/auth/test", { headers: { Authorization: `Bearer ${env.TEST_AUTH_SECRET}`, Origin: origin }, body: { id: "inviter" } });
     const owner = cookieOf(login);
@@ -55,7 +52,6 @@ test("hashes are salted scrypt that verify only the same password, and refuse ma
   assert.notEqual(first, second);
   assert.equal(await verifyPassword(password, first), true);
   assert.equal(await verifyPassword(password + "!", first), false);
-  // The same password in another Unicode form (a precomposed é against e + combining accent) matches.
   const accented = await hashPassword("caf\u00e9 au lait, s'il vous pla\u00eet");
   assert.equal(await verifyPassword("cafe\u0301 au lait, s'il vous pla\u00eet", accented), true);
   const [, , r, p, salt, key] = first.split("$");
@@ -83,7 +79,6 @@ test("signing up creates a password account signed in with a cookie, and the use
   const me = await f.request("GET", "/api/me", { headers: { Cookie: cookie } });
   assert.equal(me.status, 200);
   assert.equal((await me.json() as { user: UserProfile }).user.id, "password:alice");
-  // Only the hash is stored.
   const stored = f.sqlite.prepare("SELECT password_hash FROM password_credentials WHERE user_id = 'password:alice'").get() as { password_hash: string };
   assert.ok(!stored.password_hash.includes(password));
 
@@ -108,7 +103,6 @@ test("sign-up refuses weak passwords, bad usernames, extra fields and cross-site
     assert.equal(response.status, 400, JSON.stringify(body));
     assert.equal(await errorCode(response), code, JSON.stringify(body));
   }
-  // The username equals the password, ignoring case: refused as well.
   assert.equal(await errorCode(await f.signUp({ username: "longusername1", password: "LongUsername1" })), "weak_password");
   const crossSite = await f.request("POST", "/api/auth/password/signup", { headers: { Origin: "https://evil.example" }, body: { username: "bob", password } });
   assert.equal(crossSite.status, 403);
@@ -139,7 +133,6 @@ test("five failed sign-ins in a row are allowed, then the account pauses even fo
   const f = await fixture(t);
   assert.equal((await f.signUp({ username: "dave", password })).status, 201);
   for (let attempt = 0; attempt < 4; attempt++) assert.equal((await f.signIn("dave", "wrong password " + attempt)).status, 401);
-  // A success resets the count.
   assert.equal((await f.signIn("dave", password)).status, 200);
   for (let attempt = 0; attempt < 5; attempt++) assert.equal((await f.signIn("dave", "wrong password " + attempt)).status, 401);
   const locked = await f.signIn("dave", password);
@@ -148,7 +141,6 @@ test("five failed sign-ins in a row are allowed, then the account pauses even fo
   const row = f.sqlite.prepare("SELECT failed_attempts, locked_until FROM password_credentials WHERE user_id = 'password:dave'").get() as { failed_attempts: number; locked_until: number };
   assert.equal(row.failed_attempts, 5);
   assert.ok(row.locked_until > Date.now() + 20_000 && row.locked_until <= Date.now() + 30_000);
-  // Once the pause is over the right password works again, and clears the count.
   f.sqlite.prepare("UPDATE password_credentials SET locked_until = ? WHERE user_id = 'password:dave'").run(Date.now() - 1);
   assert.equal((await f.signIn("dave", password)).status, 200);
   assert.deepEqual({ ...f.sqlite.prepare("SELECT failed_attempts, locked_until FROM password_credentials WHERE user_id = 'password:dave'").get() },
@@ -169,14 +161,11 @@ test("a native app signs in with a username and password for a bearer token, lis
   assert.ok(Date.parse(answer.expiresAt) > Date.now() + 29 * 24 * 3600_000);
   const bearer = { Authorization: `Bearer ${answer.token}` };
   assert.equal((await (await f.request("GET", "/api/me", { headers: bearer })).json() as { user: UserProfile }).user.id, "password:nora");
-  // A bearer changes things without a CSRF token, and is listed under Signed-in apps.
   assert.equal((await f.request("PATCH", "/api/me", { headers: bearer, body: { displayName: "Nora N." } })).status, 200);
   const devices = await (await f.request("GET", "/api/me/devices", { headers: { Cookie: browserCookie } })).json() as { devices: { name: string }[] };
   assert.deepEqual(devices.devices.map(device => device.name), ["Nora's iPhone"]);
-  // The token is a bearer's only, never a cookie's.
   assert.equal((await f.request("GET", "/api/me", { headers: { Cookie: `test-auth=${answer.token}` } })).status, 401);
 
-  // The same answers, and the same count of failures, as the browser's sign-in.
   for (const body of [{ username: "nora", password: "not the password at all" }, { username: "nobody", password }, { username: "no body", password }]) {
     const refused = await nativeSignIn(body);
     assert.equal(refused.status, 401);
@@ -185,10 +174,8 @@ test("a native app signs in with a username and password for a bearer token, lis
   assert.equal(f.sqlite.prepare("SELECT failed_attempts FROM password_credentials WHERE user_id = 'password:nora'").get()!.failed_attempts, 1);
   assert.equal(await errorCode(await nativeSignIn({ username: "nora", password, inviteToken: "x" })), "invalid_input");
   assert.equal((await nativeSignIn({ username: "nora", password, deviceName: "\u0000" })).status, 400);
-  // An app with no name for its device leaves it out.
   assert.equal((await nativeSignIn({ username: "nora", password })).status, 200);
 
-  // Changing the password from the browser signs the app out; so does turning PASSWORD_AUTH off, which hides the route.
   const changed = await f.request("POST", "/api/me/password", { headers: await f.browser(browserCookie), body: { currentPassword: password, newPassword: "a brand new passphrase" } });
   assert.equal(changed.status, 200);
   assert.equal((await f.request("GET", "/api/me", { headers: bearer })).status, 401);
@@ -228,7 +215,6 @@ test("an account without a username has no password to change, and chooses a use
   const response = await f.request("POST", "/api/me/password", { headers: await f.browser(cookie), body: { currentPassword: password, newPassword: "a brand new passphrase" } });
   assert.equal(response.status, 409);
   assert.equal(await errorCode(response), "username_required");
-  // Test accounts aren't asked for one (GitHub accounts are: account-usernames.test.ts), but may choose it.
   assert.equal((await (await f.request("GET", "/api/me", { headers: { Cookie: cookie } })).json() as { user: UserProfile }).user.usernameRequired, undefined);
   assert.equal((await f.request("POST", "/api/me/username", { headers: await f.browser(cookie), body: { username: "frank" } })).status, 200);
   const removed = await f.request("DELETE", "/api/me/password", { headers: await f.browser(cookie), body: {} });
@@ -244,7 +230,6 @@ test("without PASSWORD_AUTH the routes don't exist, and turning it off ends pass
   assert.equal((await f.signIn("grace", password)).status, 404);
   assert.equal((await f.signUp({ username: "heidi", password })).status, 404);
   assert.equal(((await (await f.request("GET", "/api/health")).json()) as { passwordAuth: boolean }).passwordAuth, false);
-  // A local server never offers it, whatever PASSWORD_AUTH says.
   f.env.PASSWORD_AUTH = "true";
   f.env.LOCAL_MODE = "true";
   f.env.LOCAL_CLAIM_SECRET = "c".repeat(43);
@@ -267,7 +252,6 @@ test("ADMIN_USER_IDS may list a password account, which nobody can sign up as wh
   const reserved = await f.signUp({ username: "Root", password });
   assert.equal(reserved.status, 409);
   assert.equal(await errorCode(reserved), "username_reserved");
-  // Signed up while not listed, then listed: that account is the administrator.
   f.env.ADMIN_USER_IDS = "";
   const created = await f.signUp({ username: "root", password });
   assert.equal(created.status, 201);
@@ -307,13 +291,11 @@ test("by default sign-up needs a workspace's invite link, and files the request 
     [{ workspace_id: id, user_id: "password:kim" }]);
   const requests = await f.request("GET", `/api/workspaces/${id}/join-requests`, { headers: { Cookie: owner } });
   assert.deepEqual((await requests.json() as { requests: { userId: string }[] }).requests.map(request => request.userId), ["password:kim"]);
-  // The new account sees its request, and nothing of the workspace yet.
   const own = await f.request("GET", "/api/join-requests", { headers: { Cookie: f.cookieOf(invited) } });
   assert.equal((await own.json() as { requests: unknown[] }).requests.length, 1);
   assert.equal((await f.request("GET", `/api/workspaces/${id}/members`, { headers: { Cookie: f.cookieOf(invited) } })).status, 404);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'workspace.join.request' AND actor_id = 'password:kim'").get()!.n, 1);
 
-  // A link turned off admits nobody new; signing in still works.
   await f.request("DELETE", `/api/workspaces/${id}/invite-link`, { headers: await f.browser(owner) });
   assert.equal((await f.signUp({ username: "lee", password, inviteToken: token })).status, 404);
   assert.equal((await f.signIn("kim", password)).status, 200);
@@ -355,10 +337,6 @@ test("open sign-up through an invite link also asks to join its workspace", asyn
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workspace_join_requests WHERE workspace_id = ? AND user_id = 'password:pat'").get(id)!.n, 1);
 });
 
-/**
- * Runs `reset` (synchronously, as the operator's --reset-password lands) once, just before a statement starting with
- * `prefix` is built: after the request checked the password, before its final write.
- */
 function resetBefore(f: { setBeforeQuery(hook?: (sql: string) => void): void }, prefix: string, reset: () => void) {
   let done = false;
   f.setBeforeQuery(sql => {
@@ -400,7 +378,6 @@ test("a password change doesn't overwrite a reset that landed while it was hashi
   assert.equal((await f.signIn("riley", "the operator's new passphrase")).status, 200);
   assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'account.password.changed'").get()!.n, 0);
 
-  // Signed out (this browser's session removed) while hashing: the change doesn't land either.
   const fresh = f.cookieOf(await f.signIn("riley", "the operator's new passphrase"));
   const freshHeaders = await f.browser(fresh);
   resetBefore(f, "UPDATE password_credentials SET password_hash", () => {
@@ -414,18 +391,14 @@ test("a password change doesn't overwrite a reset that landed while it was hashi
 
 test("password rules judge the password as it is hashed: a fullwidth username or composing characters don't slip through", async t => {
   const f = await fixture(t);
-  // NFKC turns fullwidth letters into ASCII, so this is the username.
   const fullwidth = await f.signUp({ username: "samuelson", password: "\uff53\uff41\uff4d\uff55\uff45\uff4c\uff53\uff4f\uff4e" });
   assert.equal(await errorCode(fullwidth), "weak_password");
-  // Fourteen code points that compose into seven characters.
   const composed = await f.signUp({ username: "samuelson", password: "e\u0301".repeat(7) });
   assert.equal(await errorCode(composed), "weak_password");
-  // Twelve composed characters typed as 24 code points pass, and sign in typed either way.
   const accented = "e\u0301".repeat(12);
   assert.equal((await f.signUp({ username: "samuelson", password: accented })).status, 201);
   assert.equal((await f.signIn("samuelson", accented)).status, 200);
   assert.equal((await f.signIn("samuelson", "\u00e9".repeat(12))).status, 200);
-  // A password of 256 characters typed as 512 code points still signs in.
   const longest = "e\u0301".repeat(256);
   assert.equal((await f.signUp({ username: "longest", password: longest })).status, 201);
   assert.equal((await f.signIn("longest", longest)).status, 200);

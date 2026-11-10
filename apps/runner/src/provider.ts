@@ -15,17 +15,14 @@ export function runnerModels(model: ModelDefinition, allowFaux: boolean) {
     if (!allowFaux) throw new RunnerError(403, "The deterministic faux test provider is disabled");
     const faux = fauxProvider({ models: [{ id: model.modelId, name: "Deterministic test provider (not an LLM)" }] });
     const respond: FauxResponseFactory = async (context) => {
-      // The same stateless script handles every turn, including recovered/forked turns.
       faux.appendResponses([respond]);
       const latest = context.messages.findLast(message => message.role !== "system");
       if (latest?.role === "toolResult") {
-        // An image is named by its type and digest, so tests can tell which bytes the model received.
         const text = latest.content.map(part => part.type === "text" ? part.text
           : `image ${part.mimeType} sha256:${createHash("sha256").update(Buffer.from(part.data, "base64")).digest("hex")}`).join("\n");
         return fauxAssistantMessage(`Deterministic test provider result:\n${text}`);
       }
       const lastUser = context.messages.findLast(message => message.role === "user");
-      // A message with images is answered with what the model received of it, its images named as for tool results.
       if (latest?.role === "user" && typeof latest.content !== "string" && latest.content.some(part => part.type === "image")) {
         const text = latest.content.map(part => part.type === "text" ? part.text
           : `image ${part.mimeType} sha256:${createHash("sha256").update(Buffer.from(part.data, "base64")).digest("hex")}`).join("\n");
@@ -41,13 +38,11 @@ export function runnerModels(model: ModelDefinition, allowFaux: boolean) {
         tool = "write_file";
         args = { path: prompt.slice(11, newline), content: prompt.slice(newline + 1) };
       } else if (/^TEST_BASH [^\r\n]+$/.test(prompt)) {
-        // There is no bash tool any more (#163): the command runs through the node tool, as testCommandArgs says.
         tool = "node";
         args = testCommandArgs(prompt.slice(10));
       }
       else if (/^TEST_COMMIT [^\r\n]+$/.test(prompt)) { tool = "git_commit"; args = { message: prompt.slice(12) }; }
       else if (/^TEST_BROWSER \{[\s\S]*\}$/.test(prompt)) {
-        // The browser tool's call as JSON, such as TEST_BROWSER {"url": "http://localhost:5173/"}.
         try { tool = "browser"; args = JSON.parse(prompt.slice(13)) as typeof args; } catch { tool = undefined; }
       }
       else if (/^TEST_HOLD (?:0|[1-9][0-9]{0,3})$/.test(prompt)) {
@@ -74,10 +69,6 @@ export function runnerModels(model: ModelDefinition, allowFaux: boolean) {
   return models;
 }
 
-/**
- * The node tool's arguments the deterministic test provider calls for TEST_BASH <command>: Node.js runs the command in
- * a shell, its output the call's. Tests compare cards and results against these (testCommandOperation in the tests).
- */
 export function testCommandArgs(command: string): { program: "node"; args: string[] } {
   return { program: "node", args: ["-e", `require("child_process").execSync(${JSON.stringify(command)}, { stdio: "inherit", shell: "/bin/sh" })`] };
 }

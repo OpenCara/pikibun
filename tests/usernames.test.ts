@@ -10,13 +10,11 @@ const carol = { id: "test:carol", githubLogin: null };
 test("people are named by username, or username(id) where the exact person matters", () => {
   assert.equal(username(alice), "alice");
   assert.equal(usernameWithId(alice), "alice(github:1)");
-  // Without a username, the user ID is all there is to show.
   assert.equal(username(carol), "test:carol");
   assert.equal(usernameWithId(carol), "test:carol");
   assert.deepEqual(memberPerson({ userId: "github:2", role: "member", displayName: "Bob B", githubLogin: "Bob" }), { ...bob, role: "member" });
   const person = peopleDirectory([alice, bob]);
   assert.deepEqual(person("github:2"), bob);
-  // Someone the directory lacks, such as a former member, keeps their ID.
   assert.equal(usernameWithId(person("github:3")), "github:3");
 });
 
@@ -28,7 +26,6 @@ test("a typed or pasted member names a user ID by username(id), username or the 
   assert.equal(userIdFromInput("@BOB", people), "github:2");
   assert.equal(userIdFromInput("github:7", people), "github:7");
   assert.equal(userIdFromInput("test:carol", people), "test:carol");
-  // GitHub logins aren't unique here after a rename; an ambiguous or unknown one is left for the server to refuse.
   assert.equal(userIdFromInput("alice", [...people, { id: "github:9", githubLogin: "Alice" }]), "alice");
   assert.equal(userIdFromInput("dave", people), "dave");
   assert.equal(userIdFromInput("alice(github:1", people), "alice(github:1");
@@ -43,7 +40,6 @@ test("a username chosen on the server names a person ahead of their GitHub login
   assert.deepEqual(memberPerson({ userId: "github:4", role: "admin", username: "dana", githubLogin: "DanaOnGitHub" }), { ...dana, role: "admin" });
   assert.equal(userIdFromInput("@Dana", [dana, alice]), "github:4");
   assert.equal(userIdFromInput("danaongithub", [dana]), "github:4");
-  // Chosen usernames are unique on the server, GitHub logins not: one wins over someone else's login.
   assert.equal(userIdFromInput("dana", [{ id: "github:5", githubLogin: "dana" }, dana]), "github:4");
 });
 

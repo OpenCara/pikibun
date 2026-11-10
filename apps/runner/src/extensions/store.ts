@@ -7,33 +7,19 @@ import { promisify } from "node:util";
 import { extensionLimits, extensionPackageKey, extensionSourceString, ExtensionSourceError, parseExtensionSourceSpec,
   type ExtensionSourceSpec } from "../../../../packages/shared/src/host-extensions.js";
 
-/*
- * The extensions installed on this host (docs/design/host-extensions.md), in `<state-dir>/extensions`:
- * - `sources.json`: every installed source, in order.
- * - `packages/<digest>/`: one private npm project per npm or Git source, so versions sit side by side and a new one loads
- *   without restarting the connector (Node caches modules by path).
- * Local paths (dev extensions) load in place. `pikibun extensions` on the host and, unless the connector runs with
- * `--no-remote-installs`, its owner in Pikibun change it.
- */
-
 const run = promisify(execFile);
 
-/** What a host installs: an npm or Git source, or a local path. Pikibun extensions come with the connector. */
 export type ExtensionSource = Exclude<ExtensionSourceSpec, { kind: "piki" }> | { kind: "local"; path: string };
 
 export interface InstalledSource {
-  /** Normalized: `npm:<name>@<version>`, `git:<url>@<commit>` or `local:<absolute path>`. */
   source: string;
-  /** npm and Git: the project directory, under `packages/`, and the package's name in its node_modules. */
   directory?: string;
   package?: string;
-  /** Dev extensions: the file or directory. */
   path?: string;
 }
 
 export { ExtensionSourceError };
 
-/** What `pikibun extensions add` takes: `npm:<name>@<version>`, `git:<https url>@<commit>`, or a path (a dev extension). */
 export function parseExtensionSource(spec: string, cwd = process.cwd()): ExtensionSource {
   if (spec.startsWith("piki:")) throw new ExtensionSourceError(`${spec} is built into the connector: every host has it, and a workspace that uses it runs it. Update the connector for newer ones.`);
   if (spec.startsWith("npm:") || spec.startsWith("git:")) return parseExtensionSourceSpec(spec) as ExtensionSource;
@@ -66,14 +52,12 @@ export class ExtensionStore {
     return value as InstalledSource[];
   }
 
-  /** Where an installed source's code is: its package in its project, or the dev extension's file or directory. */
   location(installed: InstalledSource): string {
     if (installed.path) return installed.path;
     if (!installed.directory || !installed.package || !/^[0-9a-f]{16}$/.test(installed.directory)) throw new ExtensionSourceError(`Invalid installed source ${installed.source}`);
     return join(this.directory, "packages", installed.directory, "node_modules", ...installed.package.split("/"));
   }
 
-  /** Installs `source`; one already installed is left as it is. Another version of the same package stays too. */
   add(source: ExtensionSource, options: { allowScripts?: boolean } = {}): Promise<InstalledSource> {
     if ((source as { kind: string }).kind === "piki") return Promise.reject(new ExtensionSourceError("Pikibun extensions come with the connector: they aren't installed."));
     return this.exclusive(async () => {
@@ -94,8 +78,6 @@ export class ExtensionStore {
       await writeFile(join(project, "package.json"), `${JSON.stringify({ name: "pikibun-extension", private: true, dependencies: {} }, null, 2)}\n`, { mode: 0o600 });
       const spec = source.kind === "npm" ? `${source.package}@${source.version}` : `git+${source.url}.git#${source.commit}`;
       try {
-        // No install scripts unless asked, no peer dependencies (the loader provides Pi's own packages, as Pi does), and
-        // no Git dependencies of the extension's own (npm 12 refuses them unless told; `root` allows the extension itself).
         await this.npm(["install", "--save-exact", "--no-audit", "--no-fund", "--legacy-peer-deps", ...(options.allowScripts ? [] : ["--ignore-scripts"]), spec], project,
           source.kind === "git" ? { npm_config_allow_git: "root" } : undefined);
         const dependencies = (JSON.parse(await readFile(join(project, "package.json"), "utf8")) as { dependencies?: Record<string, string> }).dependencies ?? {};
@@ -112,10 +94,6 @@ export class ExtensionStore {
     });
   }
 
-  /**
-   * Removes the source named `name`: its normalized source, a dev extension's path, or a package name (`npm:<name>` or
-   * the bare name), which must then match one installed version.
-   */
   remove(name: string): Promise<InstalledSource> {
     if (name.startsWith("piki:")) return Promise.reject(new ExtensionSourceError(`${name} is built into the connector: it can't be removed. A workspace that doesn't want it removes it from its extensions.`));
     return this.exclusive(async () => {
@@ -154,29 +132,18 @@ async function defaultNpm(args: string[], cwd: string, env?: Record<string, stri
   catch (error) { throw npmFailure(error, args); }
 }
 
-/**
- * stderr when npm or node itself isn't found: Windows' cmd for npm.cmd, a POSIX shell for npm, and npm's
- * `#!/usr/bin/env node` without node. Each names npm or node at the start of a line, as the shell or env print it.
- */
 const NPM_MISSING = [
   /^'npm(\.cmd)?' is not recognized as an internal or external command/im,
   /^(\S*sh: )?((line )?\d+: )?npm(\.cmd)?: (command )?not found/im,
   /^env: '?node'?: No such file or directory/im,
 ];
 
-/** How to install Node.js, which brings npm, on this platform. */
 export function nodeInstallHint(platform: NodeJS.Platform = process.platform): string {
   return platform === "darwin" ? "Install Node.js (brew install node, or the installer from https://nodejs.org), then quit and reopen Pikibun, or restart the connector."
     : platform === "win32" ? "Install Node.js from https://nodejs.org (or winget install OpenJS.NodeJS.LTS), then quit and reopen Pikibun, or restart the connector."
     : "Install Node.js and npm (from https://nodejs.org or this system's packages), then restart the connector.";
 }
 
-/**
- * Why npm failed, as the owner reads it: npm missing from PATH (a Mac app started from Finder sees only the system's
- * PATH) says so and how to get it, rather than an empty failure. Only npm or node itself missing counts: the spawn's
- * ENOENT, or the shell or `env` naming npm or node. Anything else (an install script's own missing command, say) keeps
- * npm's output.
- */
 export function npmFailure(error: unknown, args: readonly string[], platform: NodeJS.Platform = process.platform, path = process.env.PATH ?? ""): ExtensionSourceError {
   const failed = error as { code?: unknown; stderr?: string };
   const stderr = failed.stderr?.trim() ?? "";

@@ -2,7 +2,6 @@ import type { PullRequestState, SessionPullRequest } from "./types.js";
 
 export const pullRequestStates: readonly PullRequestState[] = ["draft", "open", "failing", "changes_requested", "merged", "closed"];
 
-/** How lists and headers name a pull request's state. */
 export const pullRequestStateLabels: Record<PullRequestState, string> = {
   draft: "Draft",
   open: "Open",
@@ -12,7 +11,6 @@ export const pullRequestStateLabels: Record<PullRequestState, string> = {
   closed: "Closed",
 };
 
-/** The tone a state shows in: needing work is danger, merged is its own (purple, as on GitHub). */
 export const pullRequestStateTones: Record<PullRequestState, "neutral" | "success" | "danger" | "merged"> = {
   draft: "neutral",
   open: "success",
@@ -26,15 +24,10 @@ export function isPullRequestState(value: unknown): value is PullRequestState {
   return typeof value === "string" && (pullRequestStates as readonly string[]).includes(value);
 }
 
-/** "#12", or "PR" for a pull request URL with no number. */
 export function pullRequestLabel(pull: SessionPullRequest): string {
   return pull.number === undefined ? "PR" : `#${pull.number}`;
 }
 
-/**
- * The repository a pull request URL names, as "owner/repo", or undefined when its path isn't one of the known shapes:
- * GitHub, Gitea, GitLab, Bitbucket Cloud and Server, Azure DevOps.
- */
 export function pullRequestRepository(url: string): string | undefined {
   let path: string[];
   try { path = new URL(url).pathname.split("/").filter(Boolean).map(decodeURIComponent); } catch { return undefined; }

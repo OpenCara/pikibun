@@ -1,18 +1,4 @@
 #!/usr/bin/python3 -I
-# The session service's driver (piki:tunnel; see apps/runner/src/session-service.ts and docs/design/tunnel.md), embedded
-# in the connector through sandbox-python.generated.ts (`pnpm python:embed` writes it; tests/sandbox-python.test.ts
-# checks it is current).
-#
-# It runs only in the session's Linux sandbox, as a session service: one sandboxed command that outlives the tool call
-# that started it, until its session stops it. It starts the session's web server, one of the node or python tools'
-# programs, without a shell, in a process group of its own and with that tool's environment, as the browser driver's
-# `serve` does; waits for its port; then listens on a Unix socket in a directory the connector shares with the sandbox
-# and relays each connection there, byte for byte, to that port on the sandbox's loopback. The connector, on the host,
-# connects cloudflared to that socket: nothing in the sandbox reaches the tunnel, and only the declared port is reachable
-# through it. The program's output goes to standard output, line by line, for the tool's status; the driver's own
-# notices are lines that start with MARK.
-#
-# Only the standard library: it runs with the sandbox's /usr/bin/python3, 3.9 or newer.
 import json
 import os
 import signal
@@ -23,17 +9,12 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-# The node and python tools' programs, and what they run with: node-command.ts nodePrograms and NODE_ENVIRONMENT,
-# python-command.ts pythonPrograms and PYTHON_ENVIRONMENT (tests/sandbox-python.test.ts checks them).
 NODE_PROGRAMS = ('node', 'npm', 'npx', 'pnpm', 'yarn', 'corepack')
 NODE_ENVIRONMENT = 'NO_COLOR=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0 npm_config_yes=true'
 PYTHON_PROGRAMS = ('python3', 'pip', 'pip3', 'uv', 'uvx', 'poetry', 'pytest')
 PYTHON_ENVIRONMENT = 'NO_COLOR=1 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 POETRY_NO_INTERACTION=1 UV_NO_PROGRESS=1'
-# How the driver's own notices start: session-service.ts SERVICE_MARK (tests/sandbox-python.test.ts checks it).
 MARK = '\x1epikibun-service '
-# Connections relayed at once: more wait in the listener's backlog.
 MAX_CONNECTIONS = 256
-# How long a server may go on answering a connection once the connector has sent all of its request.
 RELAY_DRAIN_SECONDS = 60
 
 
@@ -47,7 +28,6 @@ def notice(kind: str, **fields: Any) -> None:
 
 
 def launch(spec: Dict[str, Any], node_bin: Optional[str]) -> Tuple[List[str], str, Dict[str, str]]:
-    """What starts the program, as its own tool would run it: its arguments, where, and with what environment."""
     program = spec.get('program')
     directory = os.path.abspath(spec.get('directory') or '.')
     env = dict(os.environ)
@@ -105,13 +85,11 @@ def stop_group(process: 'subprocess.Popen[bytes]') -> None:
 
 
 def copy_output(process: 'subprocess.Popen[bytes]') -> None:
-    # The program's output, line by line, as it comes: the runner keeps the last lines for the tool's status.
     stream = process.stdout
     if stream is None:
         return
     for line in iter(stream.readline, b''):
         text = line.decode('utf-8', 'replace').rstrip('\n')
-        # The program can't make its lines look like the driver's notices.
         sys.stdout.write(text.replace('\x1e', ' ') + '\n')
         sys.stdout.flush()
 
@@ -140,8 +118,6 @@ def relay(client: socket.socket, port: int, slots: threading.Semaphore) -> None:
         back = threading.Thread(target=pump, args=(upstream, client), daemon=True)
         back.start()
         pump(client, upstream)
-        # The server has the rest of a minute to finish its answer once the connector is done sending; then both ends
-        # are shut, which wakes the other pump, so a server that keeps its side open never holds the connection's slot.
         back.join(RELAY_DRAIN_SECONDS)
         for end in (upstream, client):
             try:
@@ -156,7 +132,6 @@ def relay(client: socket.socket, port: int, slots: threading.Semaphore) -> None:
 
 
 def listen(path: str, port: int) -> socket.socket:
-    # Only the declared port is reachable through the socket: each connection goes there and nowhere else.
     try:
         os.unlink(path)
     except FileNotFoundError:
@@ -211,7 +186,6 @@ def main() -> int:
     stopping: List[bool] = []
 
     def stop(_signal: int, _frame: Any) -> None:
-        # The main loop stops the program: a handler that waited here would wait on the main loop's own wait.
         stopping.append(True)
 
     signal.signal(signal.SIGTERM, stop)

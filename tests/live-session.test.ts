@@ -5,7 +5,6 @@ import { ApiError } from "../packages/client/src/api.js";
 import { createViewCache, liveTiming, startLiveSession, type EventStream, type StreamStatus, type ViewCache } from "../packages/client/src/live-session.js";
 
 const record = { id: "s1" } as SessionRecord;
-/** The metadata of a server that says the viewer may read the view now. */
 const viewable = { ...record, viewable: true } as SessionRecord;
 const idleView = { sessionId: "s1", busy: false, queue: [] } as unknown as SessionView;
 const activeView = { sessionId: "s1", busy: false, queue: [{ submissionId: "q1", actorId: "u1", mode: "write", status: "running" }] } as unknown as SessionView;
@@ -23,11 +22,8 @@ class FakeStream implements EventStream {
 interface Backend {
   session: SessionRecord | ApiError;
   view: SessionView | ApiError;
-  /** Snapshots each new /events stream sends before the Worker ends it (none: it ends empty), or "hold" to keep it open. */
   stream: SessionView[] | "hold";
-  /** Answers reads of earlier entries (`/entries?...`). */
   entries?: (path: string) => unknown;
-  /** The session's metadata waits for this, as a slow network would. */
   metadataGate?: Promise<void>;
 }
 
@@ -95,7 +91,6 @@ test("a session whose host stays offline backs off to one stream a minute instea
   assert.equal(gaps[0], liveTiming.firstBackoffMs);
   assert.ok(gaps.every((gap, index) => index === 0 || gap >= gaps[index - 1]!), `gaps never shrink while every stream fails: ${gaps.join(",")}`);
   assert.equal(gaps.at(-1), liveTiming.maxBackoffMs);
-  // One open tab used to make about 3,100 requests an hour against an offline host.
   assert.ok(live.requests.length < 400, `${live.requests.length} requests in an hour`);
   assert.equal(live.state.status, "reconnecting");
   assert.equal(live.state.error, offline.message);
@@ -114,7 +109,6 @@ test("a hidden page makes no requests until it is visible again", async t => {
 
 test("opening a session asks for its metadata and its stream at once, and the stream's snapshot is the view", async t => {
   const live = await liveSession(t, { session: record, view: idleView, stream: [idleView] });
-  // No GET /view between them: it used to cost a whole round trip, and the host's, before anything showed.
   assert.deepEqual(live.requests.map(request => `${request.at} ${request.path}`), ["0 /api/sessions/s1", "0 /api/sessions/s1/events?since="]);
   assert.deepEqual(live.state.session, record);
   assert.deepEqual(live.state.view, idleView);
@@ -130,7 +124,6 @@ test("idle sessions reopen slowly, running ones quickly, and snapshots render wi
   await live.advance(250);
   assert.equal(live.opens().length, 2);
 
-  // A user action (sending a message) looks for the new run without waiting out the idle delay.
   backend.stream = [activeView];
   const before = live.opens().length;
   live.live.refresh();
@@ -141,7 +134,6 @@ test("idle sessions reopen slowly, running ones quickly, and snapshots render wi
   await live.advance(liveTiming.activeReopenMs);
   assert.equal(live.opens().at(-1), lastOpen + liveTiming.activeReopenMs);
 
-  // Every view came from the stream.
   assert.equal(live.requests.filter(request => request.path.endsWith("/view")).length, 0);
 });
 
@@ -150,7 +142,6 @@ test("a refresh while a stream is open looks again as soon as that stream ends",
   const live = await liveSession(t, backend);
   const open = live.streams.at(-1)!;
   open.emit("view", JSON.stringify({ view: idleView }));
-  // The user sends a message while the open stream's snapshots may predate it.
   live.live.refresh();
   await flush();
   assert.equal(live.opens().length, 1);
@@ -174,7 +165,6 @@ test("losing access clears the session and stops every request", async t => {
 });
 
 test("a host preparing repositories reopens the stream quickly before any message, then slows down once ready", async t => {
-  // Not busy and nothing queued: only the preparation itself keeps the pace up.
   const preparing = { ...idleView, repositories: { status: "preparing", items: [] } } as unknown as SessionView;
   const backend: Backend = { session: record, view: preparing, stream: [preparing] };
   const live = await liveSession(t, backend);
@@ -205,7 +195,6 @@ test("streams ask for what changed since the held revision and apply patches to 
     lists: { entries: [1, reply], approvals: [], conversations: [], queue: [] } } }));
   assert.equal(live.state.view?.busy, true);
   assert.deepEqual(live.state.view?.entries, [entry, reply]);
-  // The unchanged entry is the very object shown before.
   assert.equal(live.state.view?.entries[0], held);
   const shown = live.state.view;
   open.emit("patch", JSON.stringify({ patch: { base: second, revision: second } }));
@@ -214,7 +203,6 @@ test("streams ask for what changed since the held revision and apply patches to 
   await live.advance(liveTiming.activeReopenMs);
   assert.equal(live.requests.at(-1)!.path, `/api/sessions/s1/events?since=${second}`);
 
-  // A patch from a revision this client does not hold is not applied, and the next stream asks for a whole view.
   const next = live.streams.at(-1)!;
   next.emit("patch", JSON.stringify({ patch: { base: first, revision: "c".repeat(32), view: { sessionId: "s1", busy: false },
     lists: { entries: [], approvals: [], conversations: [] } } }));
@@ -242,7 +230,6 @@ test("a paged view reads earlier entries a page at a time, once per conversation
   const reads = () => live.requests.filter(request => request.path.includes("/entries?")).map(request => request.path);
   assert.deepEqual(ids(), ["0:5", "0:6", "0:7"]);
 
-  // Scrolling asks again and again while a page is on its way: one read.
   await Promise.all([live.live.loadOlder("0"), live.live.loadOlder("0")]);
   assert.deepEqual(reads(), ["/api/sessions/s1/entries?conversation=0&before=0%3A5&limit=50"]);
   assert.deepEqual(ids(), ["0:3", "0:4", "0:5", "0:6", "0:7"]);
@@ -254,11 +241,9 @@ test("a paged view reads earlier entries a page at a time, once per conversation
   await live.live.loadOlder("unknown");
   assert.equal(reads().length, 2, "Nothing more to read, so nothing is asked");
 
-  // New entries push the window on; what slid out of it stays shown.
   const stream = live.streams.at(-1)!;
   stream.emit("view", JSON.stringify({ view: paged(6, 8, 5) }));
   assert.deepEqual(ids(), ["0:1", "0:2", "0:3", "0:4", "0:5", "0:6", "0:7", "0:8"]);
-  // A history that no longer joins up (after a compaction) starts again from the window, with earlier pages to read.
   stream.emit("view", JSON.stringify({ view: paged(20, 21, 9) }));
   assert.deepEqual(ids(), ["0:20", "0:21"]);
   assert.equal(live.state.view!.conversations[0]!.olderEntries, 9);
@@ -276,13 +261,11 @@ test("a session opened again shows its cached view once its metadata says it is 
   const gate = Promise.withResolvers<void>();
   const live = await liveSession(t, { session: viewable, view: idleView, stream: "hold", metadataGate: gate.promise }, cache);
   assert.equal(live.requests.at(-1)!.path, `/api/sessions/s1/events?since=${first}`);
-  // Nothing from the cache shows before access is checked again.
   assert.equal(live.state.view, undefined);
   gate.resolve();
   await flush();
   assert.deepEqual(live.state.view, cached);
   assert.equal(live.state.status, undefined, "Still connecting: the stream hasn't answered");
-  // The stream brings it up to date with a patch on the cached view.
   const reply = { id: "0:2", kind: "message", role: "assistant", text: "hi" };
   live.streams.at(-1)!.emit("patch", JSON.stringify({ patch: { base: first, revision: second, view: { sessionId: "s1", busy: false },
     lists: { entries: [1, reply], approvals: [], conversations: [], queue: [] } } }));
@@ -293,7 +276,6 @@ test("a session opened again shows its cached view once its metadata says it is 
 });
 
 test("a cached view never shows on metadata alone: the server must say the view is viewable", async t => {
-  // A server that predates `viewable` leaves the cached view to the stream, which the server checks as it does /view.
   const cache = createViewCache();
   cache.set("s1", { view: activeView, revision: "a".repeat(32) });
   const live = await liveSession(t, { session: record, view: idleView, stream: "hold" }, cache);
@@ -307,12 +289,10 @@ test("a view refused though its session is readable (its host no longer shared) 
   const unshared = new ApiError(403, "connector_unavailable", "The connector or its workspace sharing is no longer authorized.");
   const cache = createViewCache();
   cache.set("s1", { view: idleView, revision: "a".repeat(32) });
-  // The stream is refused too: it ends without a snapshot, and /view says why.
   const live = await liveSession(t, { session: { ...record, viewable: false }, view: unshared, stream: [] }, cache);
   await live.advance(liveTiming.firstBackoffMs);
   assert.equal(live.state.view, undefined, "The cached view never showed");
   assert.equal(cache.get("s1"), undefined);
-  // The session stays, to say why its conversation is unavailable.
   assert.deepEqual(live.state.session, { ...record, viewable: false });
   assert.equal(live.state.error, unshared.message);
 });
@@ -322,14 +302,12 @@ test("a /view refusal after the metadata passed drops the shown view and the cac
   const backend: Backend = { session: record, view: idleView, stream: [idleView] };
   const live = await liveSession(t, backend, cache);
   assert.deepEqual(live.state.view, idleView);
-  // An offline host: streams end empty and /view fails, which may pass.
   backend.stream = [];
   backend.view = offline;
   await live.advance(liveTiming.idleReopenMs);
   assert.equal(live.state.error, offline.message);
   assert.deepEqual(live.state.view, idleView);
   assert.ok(cache.get("s1"));
-  // The host's owner stops sharing it: the metadata still passes, the view is refused.
   backend.view = new ApiError(403, "connector_unavailable", "The connector or its workspace sharing is no longer authorized.");
   await live.advance(liveTiming.maxBackoffMs);
   assert.equal(live.state.view, null);

@@ -35,9 +35,7 @@ const user = (text: string) => ({ role: "user", content: text, timestamp: 0 }) a
 test("a context counts what the provider counted for its last answer, and about 4 characters a token after it", () => {
   assert.equal(contextTokens([]), 0);
   assert.equal(contextTokens([user("x".repeat(400))]), 100, "no answer yet: characters alone");
-  // The last answered request held 150K tokens (most of them cached); a 4,000-character message followed it.
   assert.equal(contextTokens([user("hi"), assistant(usage(1000, 149_000, 0)), user("y".repeat(4000))]), 151_000);
-  // A failed attempt's usage doesn't count: the one before it does.
   assert.equal(contextTokens([user("hi"), assistant(usage(200_000)), user("again"), assistant(usage(0), "error", "")]), 200_002);
 });
 

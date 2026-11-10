@@ -5,10 +5,6 @@ import { session as signedIn } from "./auth";
 import { onClearDrafts } from "./drafts";
 import { inBackground } from "./resource";
 
-/**
- * The views of the sessions opened most recently, in memory only, so going back to one shows it as soon as its access
- * is confirmed instead of after the host answers. They belong to the signed-in account and go with its drafts.
- */
 const viewCache = createViewCache(8);
 onClearDrafts(() => viewCache.clear());
 
@@ -22,10 +18,6 @@ export interface LiveSessionState {
   reconnect: () => void;
 }
 
-/**
- * The session's metadata and live view over its /events stream, read with NSH's streaming fetch (its runtime has no
- * EventSource). Native platforms send the bearer token; the web sends the page's own cookies.
- */
 export function createLiveSession(id: string): LiveSessionState {
   const session = signal<SessionRecord | null>(null);
   const view = signal<SessionView | null>(null);
@@ -34,7 +26,6 @@ export function createLiveSession(id: string): LiveSessionState {
   const revision = signal(0);
   let refreshNow = () => {};
   let loadOlderNow = async (_conversationId: string) => {};
-  // Visibility listeners, told when the app goes to or comes back from the background.
   const visibility = new Set<() => void>();
   effect(() => {
     lifecycle();

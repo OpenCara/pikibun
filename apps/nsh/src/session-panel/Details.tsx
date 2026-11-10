@@ -26,8 +26,6 @@ import { Checkbox, CheckControl, Field, RadioRow, Select, TextField } from "../f
 import { Badge, Banner, Button, CardBody, CollapsibleRow, confirm, CopyField, Feedback, IconButton, Note, Row, Section, Small } from "../ui";
 import type { PanelTabProps } from "./parts";
 
-// The session panel's Details, as the web app's (session-panel.tsx PanelDetails and the sections it holds).
-
 export interface DetailsProps extends PanelTabProps {
   actions: SessionActions;
   hosts: () => ConnectorInfo[] | null;
@@ -103,18 +101,12 @@ function TunnelSection(props: Part & { canStop: boolean }) {
   );
 }
 
-/**
- * How full the shared conversation's context window is (SessionView.context): its tokens against its model's window, as a
- * meter that turns to a warning near where Pi compacts it, and where that is.
- */
 export function ContextSection(props: { usage: SessionContextView }) {
   const usage = () => props.usage;
   const percent = () => (usage().window ? Math.round(usage().tokens / usage().window! * 100) : undefined);
-  /** Where the meter warns: near compaction where Pi compacts, else near the window's end. */
   const tone = (): Tone => {
     const limit = usage().compactsAt ?? usage().window;
     if (limit === undefined) return "running";
-    // A reserve as large as the window compacts at 0: always due.
     const ratio = limit > 0 ? usage().tokens / limit : Infinity;
     return ratio >= 1 ? "danger" : ratio >= 0.8 ? "warning" : "running";
   };
@@ -301,7 +293,6 @@ function PeopleSection(props: Part & { workspaceRole: WorkspaceRole | undefined 
       props.refresh();
     }, `${usernameWithId(people().person(requester))}'s requests ask again.`);
   }
-  // The share link: its owner manages it; everyone else learns from the session that one exists.
   const linkResource = createResource<{ link: SessionLink | null }>(() => (isOwner() ? `${base()}/link` : null));
   const link = () => (linkResource.data() ? linkResource.data()!.link : undefined);
   const linkShared = () => (isOwner() && link() !== undefined ? link() !== null : Boolean(props.current.linkShared));
@@ -442,7 +433,6 @@ const notifyLabel: Record<NonNullable<CrossSessionMessage["notify"]>, { label: s
   failed: { label: "Notification failed", tone: "danger" }, expired: { label: "Notification expired", tone: "neutral" },
 };
 
-/** The sessions this one is linked with through the sessions tool, and the messages either way. */
 function ConnectionsSection(props: Part) {
   const connections = createResource<SessionConnections>(() => `/api/sessions/${segment(props.current.id)}/connections`);
   const name = createUsername();
@@ -470,11 +460,8 @@ function ConnectionsSection(props: Part) {
   );
 }
 
-/* ---------- Backups ---------- */
-
 const backupLocationLabel = (backup: Backup) => `${backup.location === "workspace-database" ? " · Workspace database" : ""}${backup.automatic ? " · Automatic" : ""}${backup.conversationOnly ? " · Conversation only" : ""}`;
 const everyLabel = (minutes: number) => (minutes === 15 ? "every 15 minutes" : minutes === 60 ? "every hour" : minutes === 360 ? "every 6 hours" : minutes === 1440 ? "every day" : `every ${minutes} minutes`);
-/** Restores asked for, by source and backup: a retry reuses its request so it never makes a second session. */
 const restores = new Map<string, { requestId: string; title?: string; targetSessionId?: string }>();
 
 function BackupsSection(props: Part) {
@@ -599,8 +586,6 @@ function BackupItem(props: Part & { backup: Backup }) {
   );
 }
 
-/* ---------- Moving to another host ---------- */
-
 type MigrationInfo = { id: string; status: "pending" | "completed" | "cancelled"; sourceSessionId: string; targetSessionId: string; sourceConnectorId: string; targetConnectorId: string };
 type MigrationListing = { migrations: (MigrationInfo & { requestId: string; modelId: string; title: string | null; createdAt: string })[] };
 
@@ -715,7 +700,6 @@ function MoveHostSection(props: Part) {
   );
 }
 
-/** A person's request for an operation, which runs once approved in the session: a GitHub comment. */
 function OperationSection(props: Part) {
   const form = createAction();
   const approval = signal<Pick<ApprovalRecord, "id" | "status"> | null>(null);

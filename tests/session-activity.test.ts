@@ -14,7 +14,6 @@ const approval = (status: ApprovalRecord["status"], kind: "bash" | "permission" 
 test("a session is idle until its first shared message, then working while any message is queued or running", () => {
   assert.equal(sessionActivity([], []), "idle");
   for (const status of ["queued", "admitting", "running"] as const) assert.equal(sessionActivity([run("settled", 0), run(status, 1)], []), "working", status);
-  // Side asks share the queue, so the session works on them too.
   assert.equal(sessionActivity([run("settled", 0), run("running", 1, { mode: "ask" })], []), "working");
   assert.equal(sessionActivity([run("settled", 0)], [approval("executing")]), "working", "an approved operation runs");
 });
@@ -40,7 +39,6 @@ test("the latest shared message decides done or failed; side asks and earlier me
   assert.equal(sessionActivity([run("settled", 0), run("interrupted", 1, { stopped: {} })], []), "idle", "someone stopped it");
   assert.equal(sessionActivity([run("interrupted", 0, { stopped: { pending: true } })], []), "working", "its host is still stopping it");
   assert.equal(sessionActivity([run("interrupted", 0, { stopped: { pending: true } })], [approval("pending")]), "working", "a card the stop is about to interrupt");
-  // Runs from before sequence numbers keep their submission order.
   const legacy = (status: ActivityRun["status"]): ActivityRun => ({ mode: "write", status, startEntry: 0 });
   assert.equal(sessionActivity([legacy("interrupted"), legacy("settled")], []), "done");
   assert.equal(sessionActivity([legacy("settled"), legacy("interrupted")], []), "failed");
@@ -127,7 +125,6 @@ test("session lists show the lifecycle while a session starts, fails to start or
   assert.deepEqual(sessionStatus({ status: "provisioning", activity: "done" }), { tone: "running", label: "Starting" });
   assert.deepEqual(sessionStatus({ status: "error", activity: "done" }), { tone: "danger", label: "Not started" });
   assert.deepEqual(sessionStatus({ status: "archived", activity: "working" }), { tone: "neutral", label: "Archived" });
-  // The session on screen passes its live view's activity, which comes from its host unchecked.
   assert.deepEqual(sessionStatus(ready("done"), "working"), { tone: "running", label: "In progress" });
   assert.deepEqual(sessionStatus(ready("done"), undefined), { tone: "success", label: "Done" });
   assert.deepEqual(sessionStatus(ready(), "toString" as string as SessionActivity), { tone: "success" });

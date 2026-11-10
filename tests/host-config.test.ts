@@ -14,13 +14,8 @@ import type { RunnerBinding } from "../packages/shared/src/types.js";
 const MiB = 1024 * 1024;
 const sandboxed = process.platform === "linux" && spawnSync("bwrap", ["--version"]).status === 0;
 
-/** The sysfs directory of the stand-in GPU below a test's root, as the host's /sys/devices names it. */
 const GPU_DEVICE = "sys/devices/pci0000:00/0000:00:02.0";
 
-/**
- * A Linux GPU below `root` as gpuMounts finds one: DRM nodes in /dev/dri (a KMS card0; renderD128 with its sysfs entry,
- * renderD129 without one) and the /sys/class/drm link to renderD128's entry in its device's sysfs directory.
- */
 async function standInGpu(root: string): Promise<void> {
   await mkdir(join(root, "dev/dri"), { recursive: true });
   for (const name of ["card0", "renderD128", "renderD129"]) await writeFile(join(root, "dev/dri", name), "");
@@ -60,12 +55,10 @@ test("a host configuration is whole and within bounds, or refused", () => {
     { ...config, builtinExtensions: ["pi:codemode", "codemode"] },
     { ...config, requiredExtensions: undefined }, { ...config, requiredExtensions: [{ source: "npm:cc-safety-net" }] },
     { commandTimeoutSeconds: 60, gpu: false, gitCredentials: false, repositoryCache: "off", hostSessions: false },
-    // The browser comes from a known source, with an absolute path for `path` only.
     { ...config, browser: undefined }, { ...config, browser: "auto" }, { ...config, browser: { source: "anywhere" } }, { ...config, browser: { source: "path" } },
     { ...config, browser: { source: "path", path: "chromium" } }, { ...config, browser: { source: "path", path: "/opt/chrome\n--flag" } },
     { ...config, browser: { source: "path", path: `/${"x".repeat(4096)}` } }, { ...config, browser: { source: "download", path: "/opt/chrome/chrome" } },
     { ...config, browser: { source: "auto", version: "131" } },
-    // A service runs from 5 minutes to a day; cloudflared comes from a known source, with an absolute path for `path` only.
     { ...config, serviceLifetimeSeconds: undefined }, { ...config, serviceLifetimeSeconds: 299 }, { ...config, serviceLifetimeSeconds: 86_401 },
     { ...config, serviceLifetimeSeconds: "3600" }, { ...config, serviceLifetimeSeconds: 600.5 },
     { ...config, tunnel: undefined }, { ...config, tunnel: { source: "everywhere" } }, { ...config, tunnel: { source: "path" } },
@@ -89,10 +82,8 @@ test("a host requires extensions by normalized source, one version of each packa
     assert.throws(() => parseRequiredExtensions(invalid), /required extension|requires|setting/i, JSON.stringify(invalid));
   }
   assert.ok(ownerOnlyHostConfig.includes("requiredExtensions"));
-  // Whether sessions publish from the host's network is its owner's; how long a service runs, its admins' too.
   assert.ok(ownerOnlyHostConfig.includes("tunnel"));
   assert.ok(!ownerOnlyHostConfig.includes("serviceLifetimeSeconds"));
-  // Within what one configuration answer holds, beside compaction counts for every model.
   const big = Array.from({ length: 9 }, (_, index) => ({ source: `npm:guard-${index}@1.0.0`, settings: { policy: "x".repeat(4000) } }));
   assert.throws(() => parseRequiredExtensions(big), /at most 32 KB/);
 });
@@ -107,7 +98,6 @@ test("the extensions a host requires are kept from the control plane's last answ
   const required = [{ source: "piki:prompt-audit", settings: {} }];
   answers.push({ ...defaultHostConfig, requiredExtensions: required });
   assert.deepEqual(await source.required(), required);
-  // Long past the stale window, the rest of the configuration falls back to the defaults; what is required doesn't.
   now += 3_600_000;
   answers.push(new Error("control plane unreachable"));
   assert.deepEqual((await source.current()).requiredExtensions, []);
@@ -132,13 +122,11 @@ test("a connector reads what it knows of a configuration: newer settings are lef
     builtinExtensions: ["pi:codemode"], requiredExtensions: [{ source: "piki:prompt-audit", settings: {} }], browser: { source: "download" },
     serviceLifetimeSeconds: 3600, tunnel: { source: "download" } };
   assert.deepEqual(readHostConfig({ ...sent, someLaterSetting: "on" }), sent);
-  // Built-in extensions it doesn't ship are left out too, not a reason to drop the whole configuration.
   assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["tool-search", "pi:codemode"] }), sent);
   assert.deepEqual(readHostConfig({ ...sent, builtinExtensions: ["codemode"] }), sent, "a control plane of before pi: names names them bare");
   assert.deepEqual(readHostConfig({ commandTimeoutSeconds: 120, gpu: true, gitCredentials: false, repositoryCache: "host" }), { ...sent, hostSessions: false, compaction: {}, builtinExtensions: [], requiredExtensions: [], browser: { source: "auto" }, serviceLifetimeSeconds: 14400, tunnel: { source: "auto" } },
     "a control plane that predates required extensions sends none: the host requires none");
   assert.deepEqual(readHostConfig({}), defaultHostConfig);
-  // What it does read must hold, or none of it is used.
   for (const invalid of [undefined, null, [], { ...sent, hostSessions: "yes" }, { ...sent, commandTimeoutSeconds: 5 }, { ...sent, compaction: { reserveTokens: 1.5 } }]) {
     assert.throws(() => readHostConfig(invalid));
   }
@@ -147,7 +135,6 @@ test("a connector reads what it knows of a configuration: newer settings are lef
 test("compaction token counts are whole numbers in bounds, for every model and per provider/modelId, kept in one order", () => {
   assert.deepEqual(parseHostCompaction({}), {});
   assert.deepEqual(parseHostCompaction({ keepRecentTokens: 0, reserveTokens: 10_000_000 }), { reserveTokens: 10_000_000, keepRecentTokens: 0 });
-  // Models are sorted, and one with no counts is left out.
   const parsed = parseHostCompaction({ modelOverrides: { "openai/gpt-5": { reserveTokens: 30_000 }, "anthropic/claude-opus-4": { keepRecentTokens: 1, reserveTokens: 65_536 },
     "relay/org/model": {}, "openrouter/meta/llama-4": { keepRecentTokens: 2000 } } });
   assert.deepEqual(parsed, { modelOverrides: { "anthropic/claude-opus-4": { reserveTokens: 65_536, keepRecentTokens: 1 }, "openai/gpt-5": { reserveTokens: 30_000 },
@@ -168,7 +155,6 @@ test("a longer command time limit gives builds room; the default keeps the short
   assert.deepEqual(commandLimits(30, 8), short);
   assert.deepEqual(commandLimits(600, 8), { seconds: 600, cpuSeconds: 4800, fileBytes: 16 * 1024 * MiB, openFiles: 8192 });
   assert.equal(commandLimits(120, 0).cpuSeconds, 120, "at least one CPU");
-  // Whatever arrives is kept within the bounds the control plane enforces.
   assert.deepEqual(commandLimits(5, 8), short);
   assert.deepEqual(commandLimits(Number.NaN, 8), short);
   assert.equal(commandLimits(99_999, 2).seconds, 3600);
@@ -194,7 +180,6 @@ test("the host's configuration is asked for again only after a while, and its la
   assert.equal(loads, 1, "a fresh answer is reused");
   now += 2_000;
   answers.push(second);
-  // Callers that ask at the same time share one request.
   assert.deepEqual(await Promise.all([source.current(), source.current()]), [second, second]);
   assert.equal(loads, 2);
   now += 31_000;
@@ -244,7 +229,6 @@ test("a GPU is lent as its render device only: WSL's /dev/dxg, or DRM render nod
   assert.equal(detectGpu(root), undefined);
   assert.equal(gpuMounts(join(root, "missing")), undefined);
 
-  // Linux: render nodes, never card (KMS) nodes; a node whose sysfs entry is missing is left out.
   const device = GPU_DEVICE;
   await standInGpu(root);
   assert.deepEqual(gpuMounts(root), { kind: "render", env: {}, args: [
@@ -253,14 +237,12 @@ test("a GPU is lent as its render device only: WSL's /dev/dxg, or DRM render nod
     "--symlink", `/${device}/drm/renderD128`, "/sys/dev/char/226:128",
   ] });
   assert.equal(detectGpu(root), "render");
-  // A sysfs link that leads outside /sys/devices is not followed into the sandbox.
   await rm(join(root, "sys/class/drm/renderD128"));
   await mkdir(join(root, "elsewhere"), { recursive: true });
   await writeFile(join(root, "elsewhere/dev"), "226:128\n");
   await symlink("../../../elsewhere", join(root, "sys/class/drm/renderD128"));
   assert.equal(gpuMounts(root), undefined);
 
-  // WSL: /dev/dxg wins, with the Windows driver's libraries on the library path when they are there.
   await writeFile(join(root, "dev/dxg"), "");
   assert.deepEqual(gpuMounts(root), { kind: "dxg", args: ["--dev-bind", join(base, "dev/dxg"), "/dev/dxg"], env: {} });
   await mkdir(join(root, "usr/lib/wsl/lib"), { recursive: true });
@@ -278,14 +260,11 @@ test("a sandboxed command lent the GPU finds its render node, the node's sysfs d
   const shell = async (command: string, gpu: boolean) =>
     (await sandbox.execute({ kind: "bash", command }, true, async () => {}, { allowTestShell: true, gpu })).trim().split("\n");
   const device = `/${GPU_DEVICE}`;
-  // Nothing else makes /sys/dev/char in the sandbox: bubblewrap creates the link's missing parents, as it does for
-  // every mount's. The link leads through the read-only sysfs directory to the node's entry and back to its device.
   assert.deepEqual(await shell([
     "readlink /sys/dev/char/226:128", "cat /sys/dev/char/226:128/dev", "(cd -P /sys/dev/char/226:128/device && pwd)",
     "test -e /dev/dri/renderD128 && echo render-node", "test -e /dev/dri/card0 || echo no-card-node",
     "test -e /dev/dri/renderD129 || echo no-node-without-sysfs", `touch ${device}/written 2>/dev/null || echo read-only`,
   ].join("; "), true), [`${device}/drm/renderD128`, "226:128", device, "render-node", "no-card-node", "no-node-without-sysfs", "read-only"]);
-  // A command not lent the GPU has none of it.
   assert.deepEqual(await shell("if [ ! -e /sys/dev/char ] && [ ! -e /sys/devices ] && [ ! -e /dev/dri ]; then echo none; fi", false), ["none"]);
 });
 
