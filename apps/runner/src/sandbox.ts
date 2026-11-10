@@ -63,6 +63,10 @@ export interface SandboxOptions {
 export interface MirrorMount { source: string; target: string }
 export const MIRROR_ROOT = "/repository-mirrors";
 const SHIM_DIRECTORY = "/opt/pikibun/bin";
+// The session's temporary directory, ~/.tmp, seen at a short path: its own (/sessions/<64 hex digits>/home/.tmp) leaves
+// too little of a Unix socket path's 107 bytes for the sockets test suites, language servers and browsers make there, and
+// programs that fall back to /tmp find it.
+export const SANDBOX_TMP = "/tmp";
 export const CA_BUNDLE_FILE = "ca-certificates.crt";
 export const PACK_SKIPPED_HOME: readonly string[] = Object.freeze([".tmp", ".cache", ".npm", ".pnpm-store", ".yarn", ".bun", ".local/share/pnpm",
   ".cargo/registry", ".cargo/git", "go/pkg/mod", ".m2/repository", ".gradle/caches", ".nuget/packages"]);
@@ -357,7 +361,7 @@ export class Sandbox implements IsolatedWorkspace {
     const base = `/sessions/${key}`;
     this.#root = resolve(root);
     this.#identity = Object.freeze({ ownerId, githubLogin, gitName, gitEmail, home: `${base}/home`, worktree: `${base}/worktree`, env });
-    this.#environment = sessionEnvironment(this.#identity, { path: "/usr/bin:/bin", gitConfig: `${this.home}/.gitconfig` });
+    this.#environment = Object.freeze({ ...sessionEnvironment(this.#identity, { path: "/usr/bin:/bin", gitConfig: `${this.home}/.gitconfig` }), TMPDIR: SANDBOX_TMP });
   }
 
   get home(): string { return this.#identity.home; }
@@ -676,6 +680,7 @@ export class Sandbox implements IsolatedWorkspace {
       "--ro-bind", "/lib", "/lib",
       "--ro-bind", "/lib64", "/lib64",
       "--symlink", "usr/bin", "/bin",
+      "--symlink", `${this.home}/.tmp`, SANDBOX_TMP,
       "--proc", "/proc", "--dev", "/dev",
       mount, "3", this.home,
       mount, "4", this.worktree,
