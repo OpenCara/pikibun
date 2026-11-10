@@ -117,6 +117,10 @@ test("each call's auto-approve mark goes with its own row", () => {
   const calls = entry("0:1", "assistant", [call("read_file", { path: "a" }), call("node", { program: "npm", args: ["test"] }), call("git", { args: ["log"] })].join("\n"),
     { autoApproved: [{ tool: "node", status: "executed" }, { tool: "git", status: "failed" }] });
   assert.deepEqual(toolCallRows(calls).map(row => row.autoApproved?.status), [undefined, "executed", "failed"]);
+  // Two calls of one tool, only the second auto-approved: the mark names it.
+  const twice = entry("0:2", "assistant", [call("bash", { command: "a" }), call("bash", { command: "b" })].join("\n"),
+    { toolCalls: [{ id: "c1", name: "bash" }, { id: "c2", name: "bash" }], autoApproved: [{ tool: "bash", callId: "c2", status: "executed", unbounded: true }] });
+  assert.deepEqual(toolCallRows(twice).map(row => row.autoApproved?.callId), [undefined, "c2"]);
 });
 
 test("in brief tool output, a result's line is what came of it, and stays marked where it failed", () => {

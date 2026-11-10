@@ -68,7 +68,8 @@ function besideImages(entry: EntryView, sees: boolean): { text: string; images: 
  * then what came of it, and the tool's time. `actor`: who sent the message, where it isn't the viewer.
  */
 function callItems(entry: EntryView, results: readonly (EntryView | undefined)[], actor: string, sees: boolean): ToolItem[] {
-  return toolCallRows(entry, results).map(row => {
+  const rows = toolCallRows(entry, results);
+  return rows.map((row, index) => {
     const result = row.result;
     const shown = result ? besideImages(result, sees) : undefined;
     // The call's entry carries the model's time; its result, the tool's.
@@ -78,7 +79,8 @@ function callItems(entry: EntryView, results: readonly (EntryView | undefined)[]
       label: `${callHeadline(row.name, row.target)}${row.outcome?.text ? ` → ${row.outcome.text}` : ""}`,
       meta: [took, actor, autoApprovedSuffix(row.autoApproved ? [row.autoApproved] : undefined).replace(/^ · /, "")].filter(Boolean).join(" · "),
       ...(result && shown ? { output: resultOutput(result, shown.text), ...(shown.images ? { imageEntry: result } : {}) } : {}),
-      ...(result?.trimmed ?? entry.trimmed ? { trimmed: result?.trimmed ?? entry.trimmed } : {}),
+      // A shortened result says so on its row; calls cut short, once, on their entry's last row.
+      ...(result?.trimmed ? { trimmed: result.trimmed } : index === rows.length - 1 && entry.trimmed ? { trimmed: entry.trimmed } : {}),
     };
   });
 }

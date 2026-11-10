@@ -68,7 +68,14 @@ function commandOperation(session: RunnerSession, command: string) {
 
 function autoApproved(view: SessionView) {
   assert.deepEqual(view.approvals.filter(approval => approval.automatic && approval.operation.kind === "program"), [], "no card repeats an auto-approved command");
-  return view.entries.flatMap(entry => entry.autoApproved ?? []);
+  return marks(view);
+}
+/** Each entry's auto-approve marks, each checked to name one of its entry's calls, without that id. */
+function marks(view: SessionView) {
+  return view.entries.flatMap(entry => (entry.autoApproved ?? []).map(({ callId, ...mark }) => {
+    assert.ok(callId && entry.toolCalls?.some(call => call.id === callId && call.name === mark.tool), "the mark names its call");
+    return mark;
+  }));
 }
 const toolOutput = (view: SessionView, marker: RegExp) => view.entries.some(entry => entry.role === "toolResult" && marker.test(entry.text));
 
@@ -931,7 +938,7 @@ test("a tool outside the agent waits for its owner, who allows it once or for th
     [commandOperation(session, "echo once"), "denied", { decidedBy: "test:alice", scope: "call" }],
     [commandOperation(session, "echo bob"), "denied", undefined],
   ]);
-  assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "node", status: "executed" }, { tool: "node", status: "executed" }]);
+  assert.deepEqual(marks(view), [{ tool: "node", status: "executed" }, { tool: "node", status: "executed" }]);
   // The last shared message named no access, so it asked before acting, and the view says so.
   assert.equal(view.access, "approval");
   assert.equal((await session.createApproval("test:alice", commandOperation(session, "echo explicit"))).status, "pending");

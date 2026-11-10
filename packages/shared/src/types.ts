@@ -778,19 +778,21 @@ export interface ApprovalRecord {
  */
 export interface AutoApprovedCall {
   tool: string;
+  /** The model's id of the call (`EntryView.toolCalls`); absent from older runners, whose marks only follow call order. */
+  callId?: string;
   status: ApprovalRecord["status"];
   /** It ran without resource limits, on the owner's own host or with their host command grant there. */
   unbounded?: true;
 }
-/**
- * Why Pi could not compact a conversation's context before answering, from Pi's own fixed messages: its summary hit the
- * summarizer's token limit, the summarizer called a tool, wrote no text, or compaction was aborted. Never provider text.
- */
 /** A tool call of an assistant entry: the model's id of it and its tool's name. */
 export interface ToolCallRef {
   id: string;
   name: string;
 }
+/**
+ * Why Pi could not compact a conversation's context before answering, from Pi's own fixed messages: its summary hit the
+ * summarizer's token limit, the summarizer called a tool, wrote no text, or compaction was aborted. Never provider text.
+ */
 export type CompactionFailure = "token_limit" | "tool_call" | "no_text" | "aborted";
 export const COMPACTION_FAILURES: readonly CompactionFailure[] = ["token_limit", "tool_call", "no_text", "aborted"];
 export interface EntryView {

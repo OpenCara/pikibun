@@ -31,7 +31,7 @@ export function pairToolResults(entries: readonly EntryView[]): PairedTranscript
     if (entry.role !== "assistant" || typeof entry.text !== "string") continue;
     const calls = splitToolCalls(entry.text).calls;
     if (!calls.length) continue;
-    const ids = Array.isArray(entry.toolCalls) && entry.toolCalls.length === calls.length ? entry.toolCalls.map(call => call.id) : undefined;
+    const ids = callIds(entry, calls.length);
     const answered: (EntryView | undefined)[] = calls.map(() => undefined);
     let next = index + 1;
     for (; next < entries.length; next++) {
@@ -66,12 +66,19 @@ export interface ToolCallRow {
 }
 
 /**
- * Which of `names`' calls each auto-approve mark is: the marks follow the calls' order and name their tools, so each
- * goes to the next call of its tool.
+ * Which of the calls each auto-approve mark is: the one it names, where the entry names its calls (`ids`); otherwise,
+ * from an older host, the next call of its tool, as the marks follow the calls' order.
  */
-function callMarks(names: readonly string[], marks: EntryView["autoApproved"]): (AutoApprovedCall | undefined)[] {
+function callMarks(names: readonly string[], ids: readonly string[] | undefined, marks: EntryView["autoApproved"]): (AutoApprovedCall | undefined)[] {
   const shown: (AutoApprovedCall | undefined)[] = names.map(() => undefined);
   if (!Array.isArray(marks)) return shown;
+  if (ids && marks.every(mark => typeof mark.callId === "string")) {
+    for (const mark of marks) {
+      const index = ids.indexOf(mark.callId!);
+      if (index >= 0 && shown[index] === undefined) shown[index] = mark;
+    }
+    return shown;
+  }
   let next = 0;
   names.forEach((name, index) => {
     if (marks[next]?.tool === name) shown[index] = marks[next++];
@@ -79,10 +86,15 @@ function callMarks(names: readonly string[], marks: EntryView["autoApproved"]): 
   return shown;
 }
 
+/** The ids of an entry's calls, where it names each of its `count` calls. */
+function callIds(entry: EntryView, count: number): string[] | undefined {
+  return Array.isArray(entry.toolCalls) && entry.toolCalls.length === count ? entry.toolCalls.map(call => call.id) : undefined;
+}
+
 /** An assistant entry's tool calls, each with the result `results` pairs it with. */
 export function toolCallRows(entry: EntryView, results: readonly (EntryView | undefined)[] = []): ToolCallRow[] {
   const calls = splitToolCalls(entry.text).calls;
-  const marks = callMarks(calls.map(call => call.name), entry.autoApproved);
+  const marks = callMarks(calls.map(call => call.name), callIds(entry, calls.length), entry.autoApproved);
   return calls.map((call, index) => {
     const args = callArguments(call.line);
     const result = results[index];
