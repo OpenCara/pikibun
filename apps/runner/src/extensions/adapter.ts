@@ -11,6 +11,7 @@ import type { ExtensionSettings } from "../../../../packages/shared/src/host-ext
 import { loadSource, type LoadedSource } from "./load.js";
 import { connectorPikiExtension } from "./piki/index.js";
 import { noPikiSession, type PikiSession } from "./piki/command.js";
+import { wholeForScripts } from "../script-output.js";
 
 export interface ExtensionHost {
   readonly directory: string;
@@ -297,7 +298,7 @@ function build(source: string, dev: boolean, runner: ExtensionRunner, offered: S
     try { if (await active()) await timed(event, work); }
     catch (error) { host.warn(source, `${event}: ${describe(error)}`); }
   };
-  const tools = runner.getAllRegisteredTools().filter(tool => offered.has(tool.definition.name)).map(({ definition }) => defineTool({
+  const tools = runner.getAllRegisteredTools().filter(tool => offered.has(tool.definition.name)).map(({ definition }) => wholeForScripts(defineTool({
     name: definition.name, description: definition.description, parameters: definition.parameters,
     ...(definition.executionMode ? { executionMode: definition.executionMode } : {}),
     ...(definition.prepareArguments ? { prepareArguments: definition.prepareArguments } : {}),
@@ -306,7 +307,7 @@ function build(source: string, dev: boolean, runner: ExtensionRunner, offered: S
       return host.runTool({ source, tool: definition.name, arguments: args as Record<string, unknown>, api, signal: call.abortSignal ?? new AbortController().signal, context: call },
         async signal => toResult(await definition.execute(api.callId, args, signal, undefined, runner.createToolContext(api.callId, signal))));
     },
-  }));
+  })));
 
   const hooks: HookRegistration[] = [];
   const has = (...events: string[]) => events.some(event => runner.hasHandlers(event));

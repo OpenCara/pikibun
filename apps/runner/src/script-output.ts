@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context } from "@earendil-works/chord/context";
 import { boundOutput as boundText } from "@earendil-works/chord/output";
 import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
-import { MODEL_OUTPUT, SAVED_OUTPUT_BYTES, savedOutput } from "./tool-output.js";
+import { MODEL_OUTPUT, SAVED_OUTPUT_BYTES, scriptOutput } from "./tool-output.js";
 
 type Limits = { maxBytes: number; maxLines: number; retain: "head" | "tail" };
 type Content = NonNullable<ToolExecutionResult["output"]>;
@@ -33,6 +33,16 @@ export async function calledByScript(api: ToolExecutionApi, context: Context): P
   }
 }
 
+/** The output with its text items replaced by one, `text`, where `keep` was; images stay. */
+function withText(output: Content, keep: Content[number] | undefined, text: string): Content {
+  const content: Content[number][] = [];
+  for (const item of output) {
+    if (item.type !== "text") content.push(item);
+    else if (item === keep) content.push({ ...item, text });
+  }
+  return content;
+}
+
 /** The Harness's own bound of a result for the model: its joined text cut to the limits, with its truncation diagnostic. */
 export function boundForModel(result: ToolExecutionResult, limits: Limits): ToolExecutionResult {
   const output = result.output;
@@ -41,7 +51,7 @@ export function boundForModel(result: ToolExecutionResult, limits: Limits): Tool
   const bounded = boundText(texts.map(item => item.text).join(""), limits);
   if (bounded.droppedBytes === 0) return result;
   const keep = limits.retain === "head" ? texts[0] : texts.at(-1);
-  const content: Content = output.flatMap(item => item.type !== "text" ? [item] : item === keep ? [{ ...item, text: bounded.text }] : []);
+  const content = withText(output, keep, bounded.text);
   const kept = limits.retain === "head" ? "beginning" : "end";
   return { ...result, output: content, diagnostics: [...(result.diagnostics ?? []),
     { severity: "warn", code: "truncated", message: `Output truncated to its ${kept}: ${bounded.droppedLines} lines, ${bounded.droppedBytes} bytes dropped` }] };
@@ -53,9 +63,9 @@ export function capForScript(result: ToolExecutionResult): ToolExecutionResult {
   if (!output) return result;
   const texts = output.filter(item => item.type === "text");
   const joined = texts.map(item => item.text).join("");
-  const capped = savedOutput(joined);
+  const capped = scriptOutput(joined);
   if (capped === joined) return result;
-  return { ...result, output: output.flatMap(item => item.type !== "text" ? [item] : item === texts[0] ? [{ ...item, text: capped }] : []) };
+  return { ...result, output: withText(output, texts[0], capped) };
 }
 
 /**

@@ -14,6 +14,7 @@ import { ExtensionStore, parseExtensionSource } from "../apps/runner/src/extensi
 import { createRegistry, defineExtension, defineTool, Harness, MemoryStorage, ToolResultEntry } from "@earendil-works/pi-durable";
 import { CODEMODE_SESSION_WORKERS, LimitedCodemodeSandbox, SessionBuiltins } from "../apps/runner/src/extensions/builtin.js";
 import { RunnerService } from "../apps/runner/src/server.js";
+import { inScriptCall, wholeForScripts } from "../apps/runner/src/script-output.js";
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { defaultHostConfig, type HostConfig } from "../packages/shared/src/host-config.js";
 import { parseWorkspaceExtensions } from "../packages/shared/src/host-extensions.js";
@@ -69,6 +70,70 @@ test("a script's VM stops once it has computed too long, while time its calls ta
   const path = /Full output: (codemode-output\/[0-9a-f]{8}\/output\.txt)/.exec(cut)?.[1];
   assert.ok(path, cut);
   assert.match(files.get(path)!, /^line 0\nline 1\n[\s\S]*line 1999$/);
+});
+
+test("a script gets a tool's whole output, up to about 1 MB, while the model's own call of the tool is still bounded", async t => {
+  const context = BACKGROUND_CONTEXT;
+  const builtins = new SessionBuiltins();
+  t.after(() => builtins.close());
+  const items = Array.from({ length: 6000 }, (_, index) => ({ id: index, title: `item ${index}` }));
+  const pretty = JSON.stringify({ items }, null, 2);
+  const line = JSON.stringify({ items });
+  assert.ok(Buffer.byteLength(pretty) > 100 * 1024 && Buffer.byteLength(pretty) < 1024 * 1024 && pretty.split("\n").length > 2000);
+  const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
+  const tools = [
+    defineTool({ name: "pretty", description: "Pretty JSON.", parameters: obj({}, { open: true }), execute: async () => text(pretty) }),
+    defineTool({ name: "line", description: "One line of JSON.", parameters: obj({}, { open: true }), execute: async () => text(line) }),
+    defineTool({ name: "where", description: "Who called.", parameters: obj({}, { open: true }), execute: async () => text(inScriptCall() ? "script" : "model") }),
+    defineTool({ name: "huge", description: "Two megabytes.", parameters: obj({}, { open: true }), execute: async () => text(`start\n${`${"x".repeat(99)}\n`.repeat(20_000)}end`) }),
+  ].map(wholeForScripts);
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] });
+  const respond: FauxResponseFactory = async request => {
+    faux.appendResponses([respond]);
+    const last = request.messages.findLast(message => message.role !== "system");
+    if (last?.role === "toolResult") return fauxAssistantMessage("done");
+    const content = typeof last?.content === "string" ? last.content : "";
+    return content.startsWith("direct:") ? fauxAssistantMessage(fauxToolCall(content.slice("direct:".length), {}), { stopReason: "toolUse" })
+      : fauxAssistantMessage(fauxToolCall("codemode", { code: content }), { stopReason: "toolUse" });
+  };
+  faux.setResponses([respond]);
+  const models = createModels(); models.setProvider(faux.provider);
+  const registry = createRegistry();
+  const workspace = defineExtension({ name: "workspace-tools", tools });
+  registry.install(workspace);
+  const codemode = builtins.extensions.get("pi:codemode")!;
+  registry.install(codemode);
+  const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
+  t.after(() => harness.close(context));
+  const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" }, extensions: [workspace, codemode], tools: [...tools, ...codemode.tools!] } });
+  const run = async (content: string) => {
+    const settled = await (await root.submit({ type: "input", content }, context)).wait(context);
+    assert.equal(settled.status, "done");
+    const entry = (await root.context(context)).entries.filter(item => item.kind === ToolResultEntry.kind).at(-1) as unknown as { model: { content: { type: string; text?: string }[] }[] };
+    return entry.model[0]!.content.map(part => part.text ?? "").join("\n");
+  };
+  const script = async (code: string) => {
+    const shown = await run(code);
+    assert.match(shown, /^Script completed\n[\s\S]*?Output:\n\n/, shown.slice(0, 2000));
+    return shown.replace(/^[\s\S]*?Output:\n\n/, "");
+  };
+
+  assert.equal(await script("const data = JSON.parse(await tools.pretty({}));\nreturn data.items.length + ' ' + data.items.at(-1).title;"), "6000 item 5999",
+    "past the model's 2000 lines and 50 KB");
+  assert.equal(await script("const data = JSON.parse(await tools.line({}));\nreturn data.items.length + ' ' + data.items.at(-1).title;"), "6000 item 5999");
+  const huge = await script("const out = await tools.huge({});\nreturn [out.length, out.startsWith('start\\n'), out.endsWith('\\nend'), /bytes of the output left out here/.test(out)].join(' ');");
+  const [length, ...flags] = huge.split(" ");
+  assert.ok(Number(length) > 900 * 1024 && Number(length) <= 1024 * 1024, huge);
+  assert.deepEqual(flags, ["true", "true", "true"], "past about 1 MB, its start and end");
+
+  assert.equal(await script("return await tools.where({});"), "script", "what the tool runs knows a script called it");
+  assert.equal(await run("direct:where"), "model");
+
+  const direct = await run("direct:pretty");
+  assert.ok(Buffer.byteLength(direct) < 52 * 1024, `${Buffer.byteLength(direct)}`);
+  assert.ok(direct.startsWith(pretty.slice(0, 1000)));
+  assert.match(direct, /Output truncated to its beginning: \d+ lines, \d+ bytes dropped/, "the model's own call is bounded as the Harness bounds it");
+  assert.match(await run("direct:line"), /^\{"items":[\s\S]*Output truncated to its beginning: 0 lines, \d+ bytes dropped/);
 });
 
 test("a session runs at most a few scripts at once", async t => {
