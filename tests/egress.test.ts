@@ -110,8 +110,10 @@ test("network policies parse strictly and match hosts by mode", () => {
   assert.equal(hostAllowed({ ...policy, packageRegistries: false }, "registry.npmjs.org"), false);
   assert.equal(hostAllowed({ ...policy, mode: "off" }, "docs.example.com"), false);
   assert.equal(hostAllowed({ ...policy, mode: "open" }, "anything.example.org"), true);
-  // The hosts a policy names itself: in open mode, only the package registries.
-  assert.equal(hostNamed(policy, "a.cdn.example.net"), true);
+  // The hosts a policy names itself, exactly: never a subdomain a `*.` entry lets a session pick; in open mode, only the
+  // package registries.
+  assert.equal(hostNamed(policy, "docs.example.com"), true);
+  assert.equal(hostNamed(policy, "a.cdn.example.net"), false);
   assert.equal(hostNamed(policy, "registry.npmjs.org"), true);
   assert.equal(hostNamed({ ...policy, packageRegistries: false }, "registry.npmjs.org"), false);
   assert.equal(hostNamed({ ...policy, mode: "open" }, "anything.example.org"), false);
@@ -314,7 +316,8 @@ test("tunnels take a local proxy's fake-IP answers for hosts the policy names, n
   // Clash, sing-box and Surge in fake-IP mode answer from 198.18.0.0/15 for every name.
   const lookups: Record<string, string[]> = {
     "registry.npmjs.org": ["198.18.0.206"], "pypi.org": ["198.18.3.32"], "docs.example.com": ["198.18.0.7", "93.184.216.34"],
-    "anything.example.org": ["198.18.0.9"], "mixed.example.com": ["198.18.0.10", "10.0.0.8"],
+    "anything.example.org": ["198.18.0.9"], "mixed.example.com": ["198.18.0.10", "10.0.0.8"], "x.cdn.example.net": ["198.18.0.11"],
+    "y.cdn.example.net": ["93.184.216.36"],
   };
   const connected: string[] = [];
   const open = async (policy: EgressGrant["policy"]) => {
@@ -336,7 +339,7 @@ test("tunnels take a local proxy's fake-IP answers for hosts the policy names, n
     return result;
   };
 
-  const allowlist = await open({ mode: "allowlist", domains: ["docs.example.com", "mixed.example.com"], packageRegistries: true });
+  const allowlist = await open({ mode: "allowlist", domains: ["docs.example.com", "mixed.example.com", "*.cdn.example.net"], packageRegistries: true });
   assert.equal((await through(allowlist, "registry.npmjs.org:443")).status, 200);
   assert.equal((await through(allowlist, "pypi.org:443")).status, 200);
   assert.equal((await through(allowlist, "docs.example.com:443")).status, 200);
@@ -346,6 +349,12 @@ test("tunnels take a local proxy's fake-IP answers for hosts the policy names, n
   assert.equal(mixed.status, 403);
   assert.match(mixed.body!, /does not resolve to a public address/);
   assert.equal((await through(allowlist, "198.18.0.206:443")).status, 403);
+  // Under a `*.` entry the session picks the name: its subdomains go to public addresses only.
+  const wildcard = await through(allowlist, "x.cdn.example.net:443");
+  assert.equal(wildcard.status, 403);
+  assert.match(wildcard.body!, /x\.cdn\.example\.net resolves to 198\.18\.0\.11, a fake-IP address/);
+  assert.equal((await through(allowlist, "y.cdn.example.net:443")).status, 200);
+  assert.deepEqual(connected, ["198.18.0.206", "198.18.3.32", "198.18.0.7", "93.184.216.36"]);
 
   // In open mode a session names any host: only the package registries, fixed names, may go to fake-IP addresses.
   connected.length = 0;

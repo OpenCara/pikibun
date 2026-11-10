@@ -71,17 +71,18 @@ export function hostAllowed(policy: NetworkPolicy, host: string): boolean {
 }
 
 /**
- * Whether the policy names `host` itself, rather than letting it through as any host: an allowlist's domains and
- * package registries, and in open mode the package registries alone, fixed names whose DNS no session controls. The
+ * Whether the policy names `host` itself, exactly, rather than letting it through as any host or any subdomain: an
+ * allowlist's exact domains (not its `*.` entries, under which the session picks the name, `127.0.0.1.nip.io` say) and
+ * package registries, and in open mode the package registries alone: fixed names whose DNS no session controls. The
  * egress proxy tunnels to a local proxy's fake-IP addresses (198.18.0.0/15) only for these: such a proxy resolves the
- * name again on its own side, where the proxy can't check the address, so an arbitrary name could lead it into the
- * host's networks.
+ * name again on its own side, where the proxy can't check the address, so a name the session chose could lead it into
+ * the host's networks.
  */
 export function hostNamed(policy: NetworkPolicy, host: string): boolean {
   switch (policy.mode) {
     case "off": return false;
     case "open": return packageRegistryDomains.includes(host);
-    case "allowlist": return hostAllowed(policy, host);
+    case "allowlist": return policy.domains.includes(host) || (policy.packageRegistries && packageRegistryDomains.includes(host));
   }
 }
 
