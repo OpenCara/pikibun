@@ -12,6 +12,7 @@ import type { ConnectorCredentials, ConnectorPairing } from '../packages/shared/
 import type { ExtensionAvailability, HostExtensionsReport, WorkspaceExtension } from '../packages/shared/src/host-extensions.js';
 import { sha256 } from '../packages/shared/src/crypto.js';
 import { defaultWorkspaceExtensions, withSessionToolsListed } from '../packages/shared/src/host-extensions.js';
+import { retiredGroupTools } from '../packages/shared/src/tool-groups.js';
 
 const origin = 'http://localhost:8787';
 const testSecret = 'extensions-test-secret-not-for-deployment';
@@ -194,7 +195,9 @@ test('a host\'s sessions get their workspace\'s extensions and its owner\'s swit
   assert.deepEqual(await json<Answer>(await ask(s.workspaceId)), { extensions: [
     { source: 'npm:pi-memory@0.4.2', enabled: true, tools: 'automatic', settings: {} },
     { source: 'npm:off@1.0.0', enabled: false, tools: 'approval', settings: {} },
-  ], automaticTools: false });
+  ], automaticTools: false, toolGroups: {
+    'test:bob': { name: 'Members', off: ['git_push', 'tunnel', 'github_comment', 'github_issue', 'github_merge', 'schedule', 'sessions', ...retiredGroupTools] },
+  } }, 'a member\'s sessions lack the tools their role leaves out, which the host learns with the extensions');
   await denied(await s.carol.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }), 404, 'not_found');
   await json(await s.alice.request('PATCH', `/api/connectors/${s.connector.connectorId}/extensions`, { automaticTools: true }));
   assert.equal((await json<Answer>(await ask(s.workspaceId))).automaticTools, true);

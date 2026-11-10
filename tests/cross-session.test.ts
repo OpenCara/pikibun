@@ -10,6 +10,7 @@ import {
 } from '../packages/shared/src/cross-session.js';
 import type { EntryView, SessionRecord, SessionView } from '../packages/shared/src/types.js';
 import { nestSessions } from '../packages/client/src/session-tree.js';
+import type { ToolGroupSettings } from '../packages/shared/src/tool-groups.js';
 import { fakeHub, seedAgentVersion, testDatabase } from './helpers/control-plane.js';
 
 test('a delivered message names its origin and sender, and its outcome is the answer after it in its own conversation', () => {
@@ -347,6 +348,10 @@ test('the workspace\'s owner and admins read every session there, so content pas
   assert.equal(f.sqlite.prepare("SELECT actor_id FROM run_admissions WHERE session_id = 'member-private' AND request_id LIKE 'xs:%'").get()!.actor_id, adminId);
 
   const memberWrite = f.admit('member-private', memberId);
+  await f.refused(f.tool('member-private', memberId, memberWrite, { action: 'list' }), 403, 'tool_not_in_group');
+  const grouped = await (await f.owner.request('POST', `/api/workspaces/${f.workspace.id}/tool-groups`, { name: 'Coordinators', tools: ['read_file', 'sessions'] })).json() as ToolGroupSettings;
+  const coordinators = grouped.groups.find(group => group.name === 'Coordinators')!;
+  assert.equal((await f.owner.request('PUT', `/api/workspaces/${f.workspace.id}/members/${memberId}/tool-group`, { groupId: coordinators.id })).status, 200);
   await f.refused(f.tool('member-private', memberId, memberWrite, { action: 'read', targetSessionId: 'admin-private' }), 404, 'not_found');
   const created = await f.tool('member-private', memberId, memberWrite, { action: 'create', title: 'Sub-task', message: 'Do it', notify: true });
   assert.equal(created.status, 201, JSON.stringify(created.body));

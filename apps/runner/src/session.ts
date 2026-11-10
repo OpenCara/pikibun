@@ -50,6 +50,7 @@ import { githubInstructions, githubWaitLimits, githubWaits, waitForGitHub } from
 import { fileOperationLimits, fileOperationRequest, type FileOperationRequest } from "./file-operations.js";
 import { lineRange } from "./edits.js";
 import { documentKindsOff, extensionSwitchOn, sessionToolExtensions, sessionToolsOff } from "../../../packages/shared/src/piki-extensions.js";
+import { unknownToolGroup, type MemberToolGroup } from "../../../packages/shared/src/tool-groups.js";
 import { runnerModels } from "./provider.js";
 import { HostWorkspace } from "./host-workspace.js";
 import { isolatedWorkspace, type SessionWorkspace } from "./workspace.js";
@@ -1186,10 +1187,27 @@ export class RunnerSession {
     const answer = config ? await config.workspace(workspaceId).catch(() => undefined) : undefined;
     const extensions = answer?.extensions ?? [];
     const off = this.definedToolsOff(sessionToolsOff(extensions), extensions);
+    for (const tool of (await this.ownerToolGroup())?.off ?? []) off.add(tool);
     if (!config) return off;
     const last = config.lastKnown?.(workspaceId);
     if (last) for (const tool of sessionToolsOff(last.extensions, { failClosedOnly: true })) off.add(tool);
     return off;
+  }
+
+  /**
+   * The tool group of the session's owner, where it leaves out some of Pikibun's tools: a ceiling on the session's tools, for
+   * every message, Auto-approve included. It follows the last answer the connector read, however old, so a failed fetch
+   * lifts nothing; and until the connector has read one, the session only reads its files.
+   */
+  private async ownerToolGroup(): Promise<MemberToolGroup | undefined> {
+    const config = this.config.extensions;
+    if (!config) return undefined;
+    const workspaceId = this.binding.session.workspaceId;
+    const answer = await config.workspace(workspaceId).catch(() => undefined);
+    const owner = this.binding.owner.id;
+    if (!config.lastKnown) return answer?.toolGroups?.[owner];
+    const last = config.lastKnown(workspaceId);
+    return last ? last.toolGroups?.[owner] : unknownToolGroup;
   }
 
   private async documentKindsOff(): Promise<Set<DocumentKind>> {
@@ -1201,6 +1219,10 @@ export class RunnerSession {
 
   private async requireSessionTool(tool: string): Promise<void> {
     if (!(await this.sessionToolsOff()).has(tool)) return;
+    const group = await this.ownerToolGroup();
+    if (group?.off.includes(tool)) {
+      throw new RunnerError(403, `${tool} isn't among the tools of this session's owner (${group.name}). Workspace owners and admins choose each member's tools under Settings → Workspaces → Tool groups. Nothing ran.`);
+    }
     const defined = this.#definitions.find(item => item.name === tool);
     const extensions = defined ? [...defined.extensions] : sessionToolExtensions(tool).map(item => item.source);
     throw new RunnerError(403, `${tool} is turned off in this workspace${extensions.length ? ` (${extensions.join(", ")})` : ""}. Its owners and admins add it under Settings → Workspaces → Extensions.`);

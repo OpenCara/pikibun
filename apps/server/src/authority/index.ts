@@ -23,6 +23,7 @@ export { crossSessionCall, permissionCall, presentApprovals, requireOperationToo
 export { autoApprovedRequesters, chooseAutoApprovedRequester, registerRequesterAutoApprove, workspaceApprovalSettings, type WorkspaceApprovalSettings } from './requester-auto-approve.js';
 export { issueRunAdmission } from './run-admissions.js';
 export { automaticTools, sessionToolSources, workspaceExtensions } from './extension-policy.js';
+export { memberToolGroup, memberToolGroups, requireOwnerTool } from './tool-groups.js';
 
 export { assertVaultConfigured, decryptToken, encryptToken } from './vault.js';
 export {

@@ -1,6 +1,6 @@
 # Workspaces and members
 
-Every account also has a [private workspace](#your-private-workspace) of its own, pinned at the top of the sidebar. Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Transcripts**, **Approvals**, **Sub-task sessions**, **Session database**, **Members** and, for owners and admins, **Data export**.
+Every account also has a [private workspace](#your-private-workspace) of its own, pinned at the top of the sidebar. Create a workspace with **New workspace** in the sidebar or on the home screen; you become its owner. Its page under **Settings → Workspaces** has these sections: **General**, **Setup**, **Sources**, **Push access**, **Network access**, **Extensions**, **Tool groups**, **Members' tools**, **Transcripts**, **Approvals**, **Sub-task sessions**, **Session database**, **Members** and, for owners and admins, **Data export**.
 
 Owners and admins rename a workspace with **General → Rename** (`PATCH /api/workspaces/:id` with `{"name": "…"}`); everyone in it sees the new name. The audit log records who renamed it, not the names.
 
@@ -27,6 +27,27 @@ Owners and admins add people with **Members → Add member**, entering the perso
 | Add, change or remove admins | ✓ | | | | |
 | Connect the session database, import dumps | ✓ | | | | |
 | Export the workspace | ✓ | ✓ | | | |
+| Create, change and delete tool groups; choose the group of collaborators, members and viewers | ✓ | ✓ | | | |
+| Choose admins' tool group | ✓ | | | | |
+
+## Tool groups
+
+A session has the tools of its owner's **tool group**, whoever writes in it and whatever access their messages use. That includes Auto-approve and permission requests. A tool outside the group isn't offered to the agent, and a call to it is refused, on the host and for the actions Pikibun brokers (pushes, GitHub comments, issues and merges, schedules, other sessions, document sources). Changes take effect on a session's next tool call, within half a minute.
+
+Each member's sessions get the tools of their role, unless an owner or admin puts them in a group of the workspace's own:
+
+| Role | Tools of their sessions |
+|---|---|
+| Owner, admin | Every tool |
+| Collaborator | Every tool but merging pull requests (`github_merge`) and putting web apps online (`tunnel`) |
+| Member | Work in the sandbox: the file tools, `git` (commits and pushes to the session branch), `node`, `python`, `rust`, `go`, `dotnet`, `make`, `browser`, reading GitHub (`github_read`) and document sources (`source_read`). No `git_push` to other branches or pull requests, GitHub comments, issues or merges, `schedule`, `sessions` or `tunnel` |
+| Viewer | Reading files (viewers don't start sessions) |
+
+Owners and admins create groups under **Settings → Workspaces →** the workspace **→ Tool groups → New group**: a name and the tools it has, from Pikibun's own session tools. They then pick each member's group under **Members' tools**, or **(role)** to go back to the role's tools. A group replaces the role's tools: it can give a member more than their role, or less. Admins choose the group of collaborators, members and viewers; only the owner chooses admins'. The workspace's owner always has every tool. Deleting a group sends its members back to their role's tools, and a member who leaves the workspace leaves their group. A member's group stays when their role changes, as it replaces the role's tools: put them back on **(role)** to follow their new role. Pikibun's retired tools, such as `bash`, which sessions pinned to old agent versions may still have, stay only in sessions whose owner has every tool. Each change is recorded in the workspace's activity (`workspace.tool_group.created`, `.updated`, `.deleted`, `workspace.member.tool_group`).
+
+The API is `GET /api/workspaces/:id/tool-groups` (every member), `POST /api/workspaces/:id/tool-groups` with `{"name", "tools"}`, `PATCH` and `DELETE /api/workspaces/:id/tool-groups/:groupId`, and `PUT /api/workspaces/:id/members/:userId/tool-group` with `{"groupId": "…"}` or `{"groupId": null}`.
+
+Tool groups cover Pikibun's own tools. The tools of other extensions are switched for everyone under **Extensions**. A host learns each member's group with the workspace's extensions and keeps the last answer it read, so a failed fetch lifts nothing; until it has read one, its sessions only read their files. A connector from before tool groups doesn't hide the left-out tools from the agent or refuse them in the sandbox (files and commands); Pikibun still refuses the actions it brokers (pushes, GitHub, schedules, other sessions, document sources), so update connectors (`npx pikibun@latest connect`) before relying on groups for sandboxed tools.
 
 Approving tool calls still takes an explicit grant from the session's owner, whatever the role. For collaborators, members and viewers, so does opening or managing someone else's private session.
 
