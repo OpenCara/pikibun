@@ -163,6 +163,8 @@ await check("unauthenticated APIs fail closed; test accounts are explicit and is
 
 await check("workspace membership is required before associating a private Pi", async () => {
   workspace = (await alice.request("POST", "/api/workspaces", { name: `Integration ${run}` })).workspace;
+  // The node tool runs the commands the checks below send; sessions get it with piki:node from their start.
+  await alice.request("PUT", `/api/workspaces/${workspace.id}/extensions`, { source: "piki:node" });
   await bob.request("GET", `/api/workspaces/${workspace.id}/models`, undefined, [403, 404]);
   await alice.request("POST", `/api/workspaces/${workspace.id}/members`, { userId: bob.user.id, role: "member" });
 });
@@ -398,7 +400,6 @@ await check("collaborative writes execute as owner; another user's worktree stay
 });
 
 await check("a writer's command runs at once, asking nobody, and git commits use the owner's identity", async () => {
-  await alice.request("PUT", `/api/workspaces/${workspace.id}/extensions`, { source: "piki:node" });
   /** Sends a command as a message and returns the tool results that came after it, once its message settled. */
   const ran = async (client: Client, command: string): Promise<string[]> => {
     await client.submit(aliceSession.id, `TEST_BASH ${command}`);
