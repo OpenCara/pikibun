@@ -12,7 +12,6 @@ export function entryView(entry: EntryRecord, branch: number, actorId?: string, 
     const mark = block.type === "toolCall" ? autoApproved?.get(block.id) : undefined;
     return mark && block.type === "toolCall" ? [{ tool: block.name, callId: callId(block.id), ...mark }] : [];
   }));
-  // Which call each result answers, so clients show a call and its result together (`EntryView.toolCalls`).
   const calls = messages.flatMap(message => message.role !== "assistant" ? []
     : message.content.flatMap(block => block.type === "toolCall" ? [{ id: callId(block.id), name: block.name }] : []));
   const result = toolResultOf(messages);
@@ -33,23 +32,19 @@ export function entryView(entry: EntryRecord, branch: number, actorId?: string, 
     ...(images.length ? { images } : {}), ...(calls.length ? { toolCalls: calls } : {}), ...(result ? { toolResult: result } : {}) };
 }
 
-/** A call's id as the view carries it: the provider's, which is short, kept short whatever it is. */
 function callId(id: unknown): string {
   return String(id).slice(0, 256);
 }
 
-/** The call a tool result answers, its tool and whether it failed: only those, never its details. */
 function toolResultOf(messages: NonNullable<EntryRecord["model"]>): SessionView["entries"][number]["toolResult"] {
   const message = messages.find(item => item.role === "toolResult");
   if (!message) return undefined;
-  // Pi's tool result message, read as data: only what has the expected type leaves the host.
   const { toolCallId, toolName, isError } = message as unknown as { toolCallId?: unknown; toolName?: unknown; isError?: unknown };
   const result = {
     ...(typeof toolCallId === "string" && toolCallId ? { callId: callId(toolCallId) } : {}),
     ...(typeof toolName === "string" && toolName ? { tool: toolName.slice(0, 128) } : {}),
     ...(isError === true ? { error: true as const } : {}),
   };
-  // None of it read: absent, as from older runners, rather than empty.
   return Object.keys(result).length ? result : undefined;
 }
 

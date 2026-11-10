@@ -62,7 +62,6 @@ export function SharedSession(props: { token: string; origin?: string }) {
     void load();
     return () => { controller.abort(); clearTimeout(timer); };
   });
-  // Each tool call shows with the result that answered it, which isn't an entry of its own then.
   const transcript = computed(() => pairToolResults((view()?.entries ?? []).filter(entry => entry.role !== "system" || entry.text.trim())));
   const entries = () => transcript().entries;
   const toggle = (id: string) => expanded.update(current => {

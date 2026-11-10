@@ -58,10 +58,8 @@ async function requireLinkedSession(c: AppContext, token: string | undefined): P
   return row;
 }
 
-/** Short strings only: a call's id or a tool's name, from what a host sent. */
 const label = (value: unknown, limit: number): value is string => typeof value === 'string' && value.length > 0 && value.length <= limit;
 
-/** Which call each result answers, so the link shows them together: ids and tool names only, checked. */
 function sharedToolFields({ toolCalls, toolResult }: EntryView): Pick<EntryView, 'toolCalls' | 'toolResult'> {
   const calls = Array.isArray(toolCalls) && toolCalls.length <= 256
     && toolCalls.every(call => !!call && typeof call === 'object' && label(call.id, 256) && label(call.name, 128))

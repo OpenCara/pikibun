@@ -438,7 +438,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const shownConversation = (conversation: { id: string; mode?: string; actorId?: string } | undefined) => (actualMode() === "ask"
     ? conversation?.mode === "ask" && (!conversation.actorId || conversation.actorId === user.id) && (!conversationId() || conversation.id === conversationId())
     : conversation?.mode !== "ask");
-  // Each tool call shows with the result that answered it, which isn't an entry of its own then.
   const transcript = computed(() => {
     const conversations = view().conversations;
     return pairToolResults(view().entries.filter(entry => {
@@ -447,7 +446,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     }));
   });
   const entries = () => transcript().entries;
-  // In a workspace that loads transcripts latest first: the shown conversations with earlier entries still to read.
   const olderConversations = () => view().conversations.filter(conversation => (conversation.olderEntries ?? 0) > 0 && shownConversation(conversation));
   const olderCount = () => olderConversations().reduce((total, conversation) => total + (conversation.olderEntries ?? 0), 0);
   const loadingOlder = signal(false);

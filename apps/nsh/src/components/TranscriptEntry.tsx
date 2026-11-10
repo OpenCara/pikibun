@@ -28,10 +28,6 @@ const toolIcons: Record<string, IconName> = {
 };
 const toolIcon = (name: string): IconName => toolIcons[name] ?? "terminal";
 
-/**
- * One row of tool work: a call and what came of it, a result whose call isn't shown, or a system note. `input` is what
- * it was asked (a call's arguments, a note's text) and `output` what came of it, each shown when the row is opened.
- */
 type ToolItem = {
   key: string;
   icon: IconName;
@@ -39,10 +35,8 @@ type ToolItem = {
   meta: string;
   failed: boolean;
   input: string;
-  /** Undefined for a call no result answered (yet). */
   output?: string;
   trimmed?: EntryView["trimmed"];
-  /** The entry whose images show under the output, as thumbnails. */
   imageEntry?: EntryView;
 };
 
@@ -53,39 +47,27 @@ type Shown =
   | { kind: "user"; text: string; meta: string }
   | { kind: "assistant"; prose: string; tools: ToolItem[]; meta: string };
 
-/** A result's text beside the thumbnails of its images, where they show. */
 function besideImages(entry: EntryView, sees: boolean): { text: string; images: number } {
   const images = shownImages(entry, sees).length;
   return { text: images ? textBesideImages(entry.text, images) : entry.text, images };
 }
 
-/**
- * An assistant entry's tool calls, a row each with the result `results` pairs it with (pairToolResults): what it did,
- * then what came of it, and the tool's time. `actor`: who sent the message, where it isn't the viewer.
- */
 function callItems(entry: EntryView, results: readonly (EntryView | undefined)[], actor: string, sees: boolean): ToolItem[] {
   const rows = toolCallRows(entry, results);
   return rows.map((row, index) => {
     const result = row.result;
     const shown = result ? besideImages(result, sees) : undefined;
-    // The call's entry carries the model's time; its result, the tool's.
     const took = result?.durationMs !== undefined ? formatDuration(result.durationMs) : "";
     return {
       key: row.key, icon: row.outcome?.failed ? "alert" : toolIcon(row.name), failed: row.outcome?.failed === true, input: row.args,
       label: `${callHeadline(row.name, row.target)}${row.outcome?.text ? ` → ${row.outcome.text}` : ""}`,
       meta: [took, actor, autoApprovedSuffix(row.autoApproved ? [row.autoApproved] : undefined).replace(/^ · /, "")].filter(Boolean).join(" · "),
       ...(result && shown ? { output: resultOutput(result, shown.text), ...(shown.images ? { imageEntry: result } : {}) } : {}),
-      // A shortened result says so on its row; calls cut short, once, on their entry's last row.
       ...(result?.trimmed ? { trimmed: result.trimmed } : index === rows.length - 1 && entry.trimmed ? { trimmed: entry.trimmed } : {}),
     };
   });
 }
 
-/**
- * What an entry shows, as the Expo app's TranscriptEntry decided it. `shared`: a share link's, whose readers get no advice.
- * `sees`: its viewer sees the transcript's images, as thumbnails in place of their `[image <type>]` lines. `results`: the
- * results of its tool calls, shown with them.
- */
 function describe(entry: EntryView, userId: string, name: (id: string, you?: boolean) => string, shared = false, sees = false, results: readonly (EntryView | undefined)[] = []): Shown {
   const actor = entry.actorId ? name(entry.actorId, true) : "";
   const other = actor && actor !== "you" ? actor : "";
@@ -93,7 +75,6 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
     return { kind: "stopped", text: entry.kind === "workspace.run-stopped" ? `Stopped${actor ? ` by ${actor}` : ""}` : entry.text };
   }
   if (entry.role === "toolResult") {
-    // A result whose call isn't shown with it (an older page holds it): what came of it, and which tool where it says.
     const outcome = resultOutcome(entry);
     const shown = besideImages(entry, sees);
     const tool = entry.toolResult?.tool;
@@ -127,7 +108,6 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
   };
 }
 
-/** Text as it is, in the transcript's code style, to select and copy. */
 function CodeBlock(props: { text: string }) {
   return (
     <View selectable style={{ borderRadius: radius.medium, backgroundColor: palette().code, padding: 12 }}>
@@ -136,11 +116,6 @@ function CodeBlock(props: { text: string }) {
   );
 }
 
-/**
- * One quiet line for a tool call and what came of it, a result or a system note (the web's .entry-tool): its icon, what
- * it did and its outcome, muted, or in the danger tone where it failed, and a chevron that turns as pressing it shows
- * what it was asked and what came of it.
- */
 function ToolRow(props: { item: ToolItem; open: boolean; onToggle: () => void; images?: JSX.Element }) {
   const tone = () => (props.item.failed ? palette().tones.danger.text : palette().muted);
   const line = () => `${props.item.label}${props.item.meta ? ` · ${props.item.meta}` : ""}`;
@@ -232,18 +207,11 @@ function Footer(props: { entry: EntryView; meta: string; actions?: MessageAction
   );
 }
 
-/**
- * User messages are bubbles; assistant text is Markdown, shown by NSH's native TextView; each tool call is one quiet
- * line with the result that answered it (`results`, from pairToolResults), as are results whose call isn't shown and
- * system entries. List rows are recycled, so `entry` changes under a row: everything here reads it in bindings, and
- * what is expanded is kept outside the row, by entry id, or by `<entry id>#<call>` for a call's row.
- */
 export function TranscriptEntry(props: {
   entry: EntryView; userId: string; expanded: (id: string) => boolean; toggle: (id: string) => void; shared?: boolean;
   onCopy?: (entry: EntryView) => Promise<void>;
   actions?: MessageActions;
   imagesOf?: string;
-  /** The results of this entry's tool calls, in call order, shown with them (pairToolResults). */
   results?: readonly (EntryView | undefined)[];
 }) {
   const name = createUsername();
@@ -254,7 +222,6 @@ export function TranscriptEntry(props: {
       {sessionId => <EntryImages sessionId={sessionId()} entryId={props.entry.id} images={images()} end={end} />}
     </If>
   );
-  /** The thumbnails under a tool row's output: its result's images. */
   const resultThumbnails = (item: ToolItem) => {
     const entry = item.imageEntry;
     const sessionId = props.imagesOf;
@@ -269,7 +236,6 @@ export function TranscriptEntry(props: {
       {item => <ToolRow item={item()} open={props.expanded(item().key)} onToggle={() => props.toggle(item().key)} images={resultThumbnails(item())} />}
     </Each>
   );
-  // Every entry sits 16 points from the next, as the web app's transcript spaces them; consecutive tool lines closer.
   const gapAfter = () => (shown().kind === "tools" ? 8 : 16);
   return (
     <View style={{ gap: 6, paddingBottom: gapAfter() }}>

@@ -30,7 +30,6 @@ test("brief tool output keeps a tool result's first line and says how long the w
   }
   const screenshot = entry("0:6", "0", { role: "toolResult", text: "{\"path\":\"shot.png\"}\n[image image/png]", images: [{ mimeType: "image/png" }] });
   assert.deepEqual(briefEntry(screenshot), { id: "0:6", kind: "message", role: "toolResult", conversationId: "0", text: "path: shot.png · 1 image", trimmed: { lines: 2, chars: screenshot.text.length } });
-  // A screenshot alone: its line is its first, and it shows that line, not the image.
   const alone = entry("0:8", "0", { role: "toolResult", text: "[image image/png]", images: [{ mimeType: "image/png" }] });
   assert.deepEqual(briefEntry(alone), { id: "0:8", kind: "message", role: "toolResult", conversationId: "0", text: "[image image/png]" });
   const pasted = entry("0:7", "0", { role: "user", text: "Look\n[image image/png]", images: [{ mimeType: "image/png" }] });
@@ -45,7 +44,6 @@ test("share links show the lines that stand for images, never the images' list",
 test("share links keep which call each result answers, and nothing else of it", () => {
   const calls = entry("0:1", "0", { text: 'bash({"command":"ls"})', toolCalls: [{ id: "c1", name: "bash" }] });
   const result = entry("0:2", "0", { role: "toolResult", text: "a", toolResult: { callId: "c1", tool: "bash", error: true } });
-  // What a misbehaving host might send: ids that aren't short strings, and fields no link decided to show.
   const odd = entry("0:3", "0", { role: "toolResult", text: "b", toolCalls: [{ id: 7, name: "x" }] as never,
     toolResult: { callId: "x".repeat(300), tool: "bash", note: "secret" } as never });
   assert.deepEqual(sharedView(view([calls, result, odd])).entries, [
@@ -71,7 +69,6 @@ test("brief tool output cuts long tool calls but keeps them tool calls, and leav
   const { prose, calls } = splitToolCalls(shown.text);
   assert.deepEqual(calls.map(item => item.name), ["write", "bash"]);
   assert.ok(calls[0]!.line.startsWith('write({"path":"src/a.ts","content":"xxx'), calls[0]!.line);
-  // Its long strings are cut, so its arguments are still JSON that clients read.
   assert.ok(calls[0]!.line.endsWith('…"})') && calls[0]!.line.length < briefChars + 20, calls[0]!.line);
   assert.equal((JSON.parse(calls[0]!.line.slice("write(".length, -1)) as { path: string }).path, "src/a.ts");
   assert.equal(calls[1]!.line, 'bash({"command":"ls"})');
@@ -79,7 +76,6 @@ test("brief tool output cuts long tool calls but keeps them tool calls, and leav
   assert.deepEqual(shown.trimmed, { lines: text.split("\n").length, chars: text.length });
   const plain = entry("0:2", "0", { text: `Short answer\nbash({"command":"ls"})` });
   assert.equal(briefEntry(plain), plain);
-  // Arguments too many to fit even cut short: the line itself is cut, still a call line.
   const many = `run(${JSON.stringify(Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`key${index}`, "value".repeat(30)])))})`;
   const [line] = splitToolCalls(briefEntry(entry("0:3", "0", { text: many })).text).calls;
   assert.ok(line!.line.endsWith("…})") && line!.line.length < briefChars + 20, line!.line);
@@ -93,12 +89,10 @@ test("brief tool output shows what came of each tool call, and marks the ones th
   assert.deepEqual(read.toolResult, { callId: "c1", tool: "read_file" });
   const card = (status: string, output: string) => JSON.stringify({ id: "tool-1", operation: { kind: "program", tool: "git", command: "git status" }, status, result: output, ...attribution });
   assert.equal(result(card("executed", "line one\n\nall done\n")).text, "all done");
-  // A command that failed says so in its card: the line alone doesn't, so the entry does.
   const failed = result(card("failed", "Sandbox process failed (exit 1)\nnpm error 403"), { toolResult: { callId: "c2", tool: "node" } });
   assert.equal(failed.text, "Sandbox process failed (exit 1)");
   assert.deepEqual(failed.toolResult, { callId: "c2", tool: "node", error: true });
   assert.deepEqual(result(card("denied", "")).toolResult, { error: true });
-  // A tool's own error stays marked, with its first line.
   const error = result("Tool bash is not available\nmore", { toolResult: { tool: "bash", error: true } });
   assert.equal(error.text, "Tool bash is not available");
   assert.deepEqual(error.toolResult, { tool: "bash", error: true });
