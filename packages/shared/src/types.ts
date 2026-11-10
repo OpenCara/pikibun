@@ -471,9 +471,20 @@ export interface ApprovalRecord {
 }
 export interface AutoApprovedCall {
   tool: string;
+  /** The model's id of the call (`EntryView.toolCalls`); absent from older runners, whose marks only follow call order. */
+  callId?: string;
   status: ApprovalRecord["status"];
   unbounded?: true;
 }
+/** A tool call of an assistant entry: the model's id of it and its tool's name. */
+export interface ToolCallRef {
+  id: string;
+  name: string;
+}
+/**
+ * Why Pi could not compact a conversation's context before answering, from Pi's own fixed messages: its summary hit the
+ * summarizer's token limit, the summarizer called a tool, wrote no text, or compaction was aborted. Never provider text.
+ */
 export type CompactionFailure = "token_limit" | "tool_call" | "no_text" | "aborted";
 export const COMPACTION_FAILURES: readonly CompactionFailure[] = ["token_limit", "tool_call", "no_text", "aborted"];
 export interface EntryView {
@@ -486,6 +497,22 @@ export interface EntryView {
   error?: { provider?: string; modelId?: string; status?: number; compaction?: CompactionFailure };
   durationMs?: number;
   autoApproved?: AutoApprovedCall[];
+  /**
+   * An assistant entry's tool calls, in the order of their call lines in `text`: the model's id of each, which the
+   * results that answer them name (`toolResult`), and its tool. Absent from older runners, whose results follow their
+   * calls in the same order.
+   */
+  toolCalls?: ToolCallRef[];
+  /**
+   * A tool result's call: the model's id of the call it answers (`toolCalls`), its tool, and whether the tool said it
+   * failed. Absent from older runners; brief tool output can mark a result failed that its whole answer says failed.
+   */
+  toolResult?: { callId?: string; tool?: string; error?: true };
+  /**
+   * The images this entry gave the model, in the order of the `[image <type>]` lines that stand for them in `text`; absent
+   * from entries without images and from older runners. Their data stays on the host: collaborators' clients read each
+   * from `GET /api/sessions/:id/images` (entry-images.ts).
+   */
   images?: { mimeType: string }[];
   trimmed?: { lines: number; chars: number };
 }

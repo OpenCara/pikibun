@@ -128,7 +128,7 @@ test("in a session from before the git tool, allowing git for the session runs t
   await idle(session);
   const view = await session.view();
   assert.deepEqual(view.approvals.filter(approval => approval.operation.kind !== "permission"), [], "no command card");
-  assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "git", status: "executed" }, { tool: "git", status: "executed" }]);
+  assert.deepEqual(view.entries.flatMap(entry => (entry.autoApproved ?? []).map(({ callId: _, ...mark }) => mark)), [{ tool: "git", status: "executed" }, { tool: "git", status: "executed" }]);
   assert.match(await session.sandbox.readFile("first/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
   assert.match(await session.sandbox.readFile("second/.git/HEAD", async () => {}), /^ref: refs\/heads\//);
 });
@@ -206,7 +206,7 @@ test("the python tool runs Python without a shell, in a virtual environment it n
   await session.submit(await ticket(id, "submit"), { content: "Run it.", requestId: "run", admissionId: await sha256("python admission"), options: { access: "auto" } }, "write");
   await idle(session);
   let view = await session.view();
-  assert.deepEqual(view.entries.flatMap(entry => entry.autoApproved ?? []), [{ tool: "python", status: "executed" }, { tool: "python", status: "executed" }],
+  assert.deepEqual(view.entries.flatMap(entry => (entry.autoApproved ?? []).map(({ callId: _, ...mark }) => mark)), [{ tool: "python", status: "executed" }, { tool: "python", status: "executed" }],
     "the refused call ran nothing; the others ran under Auto-approve");
   assert.match(view.entries.map(entry => entry.text).join("\n"), /venv-python True True/);
   assert.match(view.entries.map(entry => entry.text).join("\n"), /uv publish acts on a package index as an account/);

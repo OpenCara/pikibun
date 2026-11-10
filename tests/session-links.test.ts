@@ -443,7 +443,7 @@ test('brief tool output and paged transcripts change what views carry, not what 
   const briefView = await read();
   assert.deepEqual(shown(briefView, '0:2'), { ...entries[1], text: 'first of 2', trimmed: { lines: 3, chars: entries[1]!.text.length } });
   const cut = shown(briefView, '0:59').text;
-  assert.ok(cut.startsWith('Writing it.\nwrite({"path":"a.txt","content":"xxx') && cut.endsWith('…})') && cut.length < 260, cut);
+  assert.ok(cut.startsWith('Writing it.\nwrite({"path":"a.txt","content":"xxx') && cut.endsWith('…"})') && cut.length < 260, cut);
   assert.equal(shown(briefView, '0:1').text, 'answer 1', 'Prose is never shortened');
 
   const settingsPath = `/api/workspaces/${s.team.id}/transcripts`;
