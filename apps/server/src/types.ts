@@ -95,6 +95,7 @@ export interface SessionRow {
   activity?: SessionActivity | null;
   next_scheduled_at?: string | null;
   parent_session_id?: string | null;
+  schedule_id?: string | null;
   tool_output?: 'full' | 'brief';
   tunnel_url?: string | null;
   tunnel_expires_at?: string | null;

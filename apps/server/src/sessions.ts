@@ -142,7 +142,8 @@ async function withCurrentModel(c: AppContext, row: SessionRow, options: Record<
   return own ? { ...options, model: { provider: own.provider, modelId: own.model_id } } : options;
 }
 
-export async function createSession(c: AppContext, input: Record<string, unknown>, link: { parentSessionId?: string } = {}): Promise<{ row: SessionRow; notice?: string }> {
+export async function createSession(c: AppContext, input: Record<string, unknown>,
+  link: { parentSessionId?: string; scheduleId?: string; inserted?: (sessionId: string) => void } = {}): Promise<{ row: SessionRow; notice?: string }> {
   if (['ownerId', 'permissions', 'githubId', 'repositories', 'repositories_json', 'pins'].some(key => key in input)) fail(400, 'server_owned_identity', 'Session identity, repository pins, and permissions are assigned by the server.');
   const workspaceId = identifier(input.workspaceId, 'workspaceId');
   if (input.agentVersionId !== undefined) fail(400, 'invalid_input', 'Sessions start from a model; agents were removed.');
@@ -228,12 +229,14 @@ export async function createSession(c: AppContext, input: Record<string, unknown
       testMode(c.env) ? 1 : 0, gitPush,
       onHost ? 1 : 0, row.connector_id ?? null).first();
   if (!inserted) fail(409, 'session_configuration_changed', 'Workspace repositories, Git account access, membership, or connector authority changed. Try again.');
+  link.inserted?.(row.id);
   if (link.parentSessionId) {
-    await c.env.DB.query('UPDATE sessions SET parent_session_id = ? WHERE id = ?').bind(link.parentSessionId, row.id).run();
+    await c.env.DB.query('UPDATE sessions SET parent_session_id = ?, schedule_id = ? WHERE id = ?').bind(link.parentSessionId, link.scheduleId ?? null, row.id).run();
     row.parent_session_id = link.parentSessionId;
+    row.schedule_id = link.scheduleId ?? null;
   }
   await auditStatement(c.env, ownerId, 'session.created', workspaceId, row.id, { agentVersionId: agent.id, ...(onHost ? { hostEnvironment: true } : {}),
-    ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}) }).run();
+    ...(link.parentSessionId ? { parentSessionId: link.parentSessionId } : {}), ...(link.parentSessionId && link.scheduleId ? { scheduleId: link.scheduleId } : {}) }).run();
   try {
     const binding = await bindingForSession(c, row);
     const response = await runnerRequest(c, row, 'create', '', binding);

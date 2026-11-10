@@ -294,7 +294,7 @@ async function createChild(call: Call, options: { message?: string; access?: Acc
   visibility?: 'private' | 'workspace' }): Promise<Response> {
   const { c, origin, actorId } = call;
   await requireSessionCreator(c.env, origin.workspace_id, actorId);
-  const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ?').bind(origin.id).first();
+  const children = await c.env.DB.query<{ n: number }>('SELECT COUNT(*) AS n FROM sessions WHERE parent_session_id = ? AND schedule_id IS NULL').bind(origin.id).first();
   if (Number(children?.n ?? 0) >= crossSessionLimits.children) fail(429, 'cross_session_limit', `A session starts at most ${crossSessionLimits.children} sessions.`);
   if (options.message !== undefined) await requireSendable(call, null);
   if (options.access === 'auto' && actorId !== origin.owner_id) fail(403, 'owner_required', 'Only the session owner sends an auto-approved message.');
@@ -356,7 +356,7 @@ async function advertised(env: Env, model: Pick<ModelRow, 'provider' | 'model_id
   return offer.models.find(item => item.provider === model.provider && item.modelId === model.model_id) ?? { provider: model.provider, modelId: model.model_id, name: model.model_id };
 }
 
-async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
+export async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | 'model_id' | 'connector_id'>, chosen: ThinkingLevel | undefined,
   inherited: ThinkingLevel | undefined): Promise<ThinkingLevel | undefined> {
   if (chosen === undefined && inherited === undefined) return undefined;
   const offered = await advertised(env, model);
@@ -368,19 +368,22 @@ async function childThinkingLevel(env: Env, model: Pick<ModelRow, 'provider' | '
 }
 
 async function parentModel(call: Call): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
-  const { c, origin, actorId } = call;
+  return sessionCurrentModel(call.c.env, call.origin, call.actorId);
+}
+
+export async function sessionCurrentModel(env: Env, origin: SessionRow, actorId: string): Promise<{ modelId?: string; thinkingLevel?: ThinkingLevel }> {
   let agent: SessionView['agent'];
   try {
-    agent = (await asActor(c.env, actorId, inner => sessionView(inner, origin))).view.agent;
+    agent = (await asActor(env, actorId, inner => sessionView(inner, origin))).view.agent;
   } catch {
     agent = undefined;
   }
   if (agent) {
-    const current = (await usableModels(c.env, origin.workspace_id, actorId))
+    const current = (await usableModels(env, origin.workspace_id, actorId))
       .find(model => (model.connector_id ?? null) === (origin.connector_id ?? null) && model.provider === agent.provider && model.model_id === agent.modelId);
     if (current) return { modelId: current.id, ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) };
   }
-  const started = await c.env.DB.query<{ model_id: string }>('SELECT model_id FROM agent_versions WHERE id = ?').bind(origin.agent_version_id).first();
+  const started = await env.DB.query<{ model_id: string }>('SELECT model_id FROM agent_versions WHERE id = ?').bind(origin.agent_version_id).first();
   return started ? { modelId: started.model_id } : {};
 }
 

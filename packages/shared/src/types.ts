@@ -111,6 +111,8 @@ export interface SessionPullRequest {
   number?: number;
   state?: PullRequestState;
 }
+export const scheduleRunIns = ["session", "child"] as const;
+export type ScheduleRunIn = (typeof scheduleRunIns)[number];
 export interface SessionSchedule {
   id: string;
   sessionId: string;
@@ -119,10 +121,12 @@ export interface SessionSchedule {
   timeZone: string;
   content: string;
   access: AccessMode;
+  runIn?: ScheduleRunIn;
   enabled: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastSubmissionId: string | null;
+  lastSessionId?: string | null;
   lastError: string | null;
   createdBy: string;
   createdAt: string;
@@ -315,6 +319,7 @@ export interface ScheduleToolRequest {
   timeZone?: string;
   content?: string;
   access?: AccessMode;
+  runIn?: ScheduleRunIn;
   enabled?: boolean;
 }
 export type ScheduleToolResult = { schedules: SessionSchedule[] } | { schedule: SessionSchedule } | { deleted: string };
