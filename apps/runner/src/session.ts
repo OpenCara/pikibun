@@ -14,7 +14,7 @@ import type { ApprovalRecord, AuthorizationRequest, AuthorizationResult, ChatOpt
 import { EXTENSION_ARGUMENTS_SHOWN, GITHUB_ISSUE_BODY_LIMIT, GITHUB_ISSUE_TITLE_LIMIT, accessModes, githubMergeMethods, repositoryPreparationPhases, scheduleToolActions, thinkingLevels } from "../../../packages/shared/src/types.js";
 import { scheduleToolTarget } from "../../../packages/shared/src/cron.js";
 import { crossSessionLimits, sessionsToolActions, sessionsToolTarget, sessionsWriteActions, type SessionsToolRequest, type SessionsToolResult } from "../../../packages/shared/src/cross-session.js";
-import type { CompactionFailure } from "../../../packages/shared/src/types.js";
+import type { CompactionFailure, ModelFailureCause } from "../../../packages/shared/src/types.js";
 import type { RestoreDescriptor } from "../../../packages/shared/src/connector.js";
 import { bindingRemote, repositoryPath, validCloneDirectory, validPushTag } from "../../../packages/shared/src/repositories.js";
 import { sha256 } from "../../../packages/shared/src/crypto.js";
@@ -78,6 +78,7 @@ import type { RestoreManifest } from "./restore.js";
 import { isPacked, packBytes, packRefusal } from "./pack.js";
 import { applyEdits } from "./edits.js";
 import { compactionFailure, configuredCompaction, hostCompaction } from "./compaction.js";
+import { compactionEnabled, compactsAfterFailure, contextTokens, modelFailureCause } from "./model-failure.js";
 import { ActivityReporter, sessionActivity, type ActivityEntry } from "./activity.js";
 import { autoApprovedCalls, viewApprovals, type StoredApproval } from "./approval-view.js";
 import { EgressProxy, egressEnvironment, egressSocketPath, parseEgressGrant, relayGitRequest, relayPath, repositoryForRemote, type MirrorProgress, type RelayRequest } from "./egress.js";
@@ -107,8 +108,13 @@ export type Run = {
   images?: { count: number; bytes: number };
   /** Its images were gone or unreadable on the host when it was to run, so it ended without reaching Pi (see endLostInputs). */
   inputsLost?: true;
-  /** Pi ended the run without an answer or any entry: its model was unavailable, or its context could not be compacted. */
-  failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure };
+  /**
+   * Pi ended the run without an answer or any entry: its model was unavailable, or its context could not be compacted.
+   * `cause` is which fixed cause Pi's own text gave; `compacting`, that the host started compacting the conversation's
+   * context for it (see compactsAfterFailure).
+   */
+  failure?: { reason: "model_error" | "no_model" | "compaction_failed"; provider?: string; modelId?: string; compaction?: CompactionFailure;
+    cause?: ModelFailureCause; compacting?: true };
   /** Who stopped it (see stop); `pending` until its conversation's work has ended, which holds the queue. */
   stopped?: { by: string; pending?: true };
   /**
@@ -181,7 +187,7 @@ const readOnlyTools = ["identity", "read_file", "list_files", "search"];
 const WAIT_POLL_MS = 3000;
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
   + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
-  + "read {session, limit?, message_id?}: a session's latest shared-conversation entries and pending approvals; with message_id, also the outcome of a message this session sent it (status, done, reply). "
+  + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells) and pending approvals; with message_id, also the outcome of a message this session sent it (status, done, reply). "
   + "ask {session, message, notify?}: a read-only side question to that session's agent. "
   + "send {session, message, access?, notify?}: a message to that session's agent, as if typed in its chat (access approval, the default: its commands wait for people there; read: inspect only; auto: only in a message the session owner sent with auto-approve, to a session they own); refused while it is busy. "
   + "wait {session, message_id, timeout_seconds?}: block until a message this session sent finishes (default 300 seconds), then return its outcome and reply. "
@@ -1302,13 +1308,23 @@ export class RunnerSession {
       const conversation = await harness.conversation(state.runs[key]!.conversationId as ConversationId, context);
       await conversation?.waitForIdle(context);
       const compaction = settled.status === "unanswered" && settled.reason === "model_error" ? compactionFailure(settled.detail) : undefined;
-      const failure: Run["failure"] = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model")
-        ? { reason: compaction ? "compaction_failed" : settled.reason, ...(await conversation?.agent(context))?.model, ...(compaction ? { compaction } : {}) } : undefined;
+      const cause = settled.status === "unanswered" && settled.reason === "model_error" && !compaction ? modelFailureCause(settled.detail) : undefined;
+      const failed = settled.status === "unanswered" && (settled.reason === "model_error" || settled.reason === "no_model");
+      // Only a failure names its model: a run that answered asks the conversation nothing more.
+      const model = failed ? (await conversation?.agent(context))?.model : undefined;
+      const failure: Run["failure"] = failed
+        ? { reason: compaction ? "compaction_failed" : settled.reason, ...model, ...(compaction ? { compaction } : {}), ...(cause ? { cause } : {}) } : undefined;
+      const compacts = !!failure && !!conversation && await this.compactsAfterFailure(conversation, state.runs[key]!.mode, cause, model);
       // Pi ends a run that host crashes cut off again and again rather than crash the host once more; sending it again runs
       // it afresh.
       const crashed = settled.status === "unanswered" && (settled.reason === "restart_limit" || settled.reason === "interrupted");
       await this.exclusive(async () => {
         if (generation !== this.generation || this.closing) return;
+        // Compaction starts only for a run nobody stopped: `stop` holds the same lock, so none can come between.
+        if (compacts && !(await this.metadata()).runs[key]?.stopped) {
+          try { await conversation!.compact(undefined, context); failure!.compacting = true; }
+          catch { /* A compaction that can't start leaves the failure as it was. */ }
+        }
         await this.mutate(meta => {
           const run = meta.runs[key]!;
           // A stopped run stays stopped, whatever its aborted submission came to.
@@ -1320,6 +1336,22 @@ export class RunnerSession {
       });
       if (generation === this.generation && !this.closing) this.drainQueue();
     })().catch(() => { /* Recovery reconciles the durable active record; never replay effects here. */ });
+  }
+
+  /**
+   * Whether a conversation whose run just failed should start compacting (see compactsAfterFailure): a dropped stream on a
+   * large context, so the next message sends less. Pi then summarizes in the background and places the summary while the
+   * conversation is idle. A context it can't read compacts nothing.
+   */
+  private async compactsAfterFailure(conversation: Conversation, mode: Run["mode"], cause: ModelFailureCause | undefined,
+    model: { provider: string; modelId: string } | undefined): Promise<boolean> {
+    if (cause !== "incomplete_stream" || mode !== "write") return false;
+    try {
+      const enabled = compactionEnabled(configuredCompaction(this.config.compaction, this.#configuredCompaction), model);
+      const tokens = contextTokens((await conversation.context(context)).messages);
+      return compactsAfterFailure({ cause, mode, tokens, enabled });
+    }
+    catch { return false; }
   }
 
   private drainQueue(): void {

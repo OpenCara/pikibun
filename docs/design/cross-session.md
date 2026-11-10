@@ -11,7 +11,7 @@ call as if the person behind it had made it themselves. Shared types, limits and
 | Action | Does | Needs on the other session | Message mode |
 |---|---|---|---|
 | `list` | Sessions of this workspace the actor can see, and the models `create` can use | read (only those) | any |
-| `read` | Latest shared-conversation entries (cut to 2000 characters each, up to 50), pending approvals, busy; with `message_id`, that message's outcome | read | any |
+| `read` | Latest shared-conversation entries (cut to 2000 characters each, up to 50; a failed model turn with its provider, model, HTTP status and fixed failure codes, never provider text), pending approvals, busy; with `message_id`, that message's outcome | read | any |
 | `ask` | A side ask (read-only thread) | ask | any |
 | `send` | A shared message, access `approval` (default), `read` or `auto` | write; refused while the target is working or waiting on a card | Read only needs the owner's permission |
 | `wait` | The runner reads one message's outcome every 3 seconds until it is done (default 300 s, at most 1800 s) | read | any |

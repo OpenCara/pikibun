@@ -1063,6 +1063,50 @@ test("failed model turns expose provider, model and HTTP status but never the pr
   assert.equal(JSON.stringify(view).includes("acct-private"), false);
 });
 
+test("a stream that keeps dropping on a large conversation says so, and starts compacting its context", hostMode, async t => {
+  // Six answered messages of 100,000 characters make about 150K tokens; then every attempt of the seventh drops its
+  // stream, Pi's retries included (2 + 4 + 8 s), and the host compacts with the next response as the summary.
+  const dropped = "Anthropic stream ended without a stop reason";
+  const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow: 1_000_000 }] });
+  faux.setResponses([
+    ...Array.from({ length: 6 }, () => fauxAssistantMessage("ok")),
+    ...Array.from({ length: 4 }, () => fauxAssistantMessage("", { stopReason: "error", errorMessage: dropped })),
+    fauxAssistantMessage("The conversation so far, summarized."),
+  ]);
+  const { service } = await hostFixture(t, { resolveModels: async model => {
+    const models = createModels();
+    models.setProvider(faux.provider);
+    return { models, provider: model.provider, modelId: model.modelId };
+  } });
+  const id = "dropped-stream-session";
+  const session = await service.provision(binding(id), await ticket(id, "create"));
+  const settled = async (seconds: number) => {
+    for (const end = Date.now() + seconds * 1000; Date.now() < end; await delay(50)) if (!(await session.view()).busy) return;
+    assert.fail("runner did not settle");
+  };
+  for (let index = 0; index < 6; index++) {
+    await session.submit(await ticket(id, "submit"), { content: `${index} ${"x".repeat(99_990)}`, requestId: `large-${index}` }, "write");
+    await settled(10);
+  }
+  await session.submit(await ticket(id, "submit"), { content: "and now?", requestId: "dropped" }, "write");
+  await settled(40);
+  const entries = (await session.view()).entries;
+  const attempts = entries.filter(entry => entry.kind !== "workspace.run-failure" && entry.error);
+  assert.equal(attempts.length, 4, "the first attempt and Pi's three retries");
+  for (const attempt of attempts) assert.deepEqual(attempt.error, { provider: "faux", modelId: "faux-1", cause: "incomplete_stream" });
+  const failure = entries.find(entry => entry.kind === "workspace.run-failure");
+  assert.deepEqual(failure?.error, { provider: "faux", modelId: "faux-1", cause: "incomplete_stream", compacting: true });
+  // The summary takes the next response: nothing else asked the provider for one.
+  for (const end = Date.now() + 10_000; faux.getPendingResponseCount() > 0 && Date.now() < end;) await delay(50);
+  assert.equal(faux.getPendingResponseCount(), 0, "the host asked for a compaction summary");
+  let kinds: string[] = [];
+  for (const end = Date.now() + 10_000; Date.now() < end; await delay(50)) {
+    kinds = (await session.view()).entries.map(entry => entry.kind);
+    if (kinds.some(kind => /compaction/.test(kind))) break;
+  }
+  assert.ok(kinds.some(kind => /compaction/.test(kind)), `the summary is in the transcript: ${kinds.join(", ")}`);
+});
+
 test("a run Pi settles without an answer shows as a failed model turn instead of silence", hostMode, async t => {
   // A model the host no longer offers ends the run like a failed compaction does: unanswered, with no entry for it.
   const { service } = await hostFixture(t, { resolveModels: async model => {

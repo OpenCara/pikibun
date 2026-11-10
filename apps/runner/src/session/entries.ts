@@ -2,6 +2,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { entryImageLimits } from "../../../../packages/shared/src/entry-images.js";
 import type { SessionView } from "../../../../packages/shared/src/types.js";
 import type { autoApprovedCalls } from "../approval-view.js";
+import { modelFailureCause } from "../model-failure.js";
 import type { Run } from "../session.js";
 
 /*
@@ -33,8 +34,11 @@ export function entryView(entry: EntryRecord, branch: number, actorId?: string, 
   const failed = messages.find(message => message.role === "assistant" && message.stopReason === "error");
   // Provider error text can carry account or endpoint details; only the HTTP status leaves the host.
   const status = failed?.role === "assistant" ? Number(/^(\d{3})\b/.exec(failed.errorMessage ?? "")?.[1]) : NaN;
+  // And which fixed cause it was, when the text is exactly one of Pi's own.
+  const cause = failed?.role === "assistant" ? modelFailureCause(failed.errorMessage) : undefined;
   const error = failed?.role === "assistant" ? {
     provider: String(failed.provider).slice(0, 128), modelId: String(failed.model).slice(0, 256), ...(status >= 100 && status <= 599 ? { status } : {}),
+    ...(cause ? { cause } : {}),
   } : undefined;
   // Pi measures the model's response for assistant messages and each tool run for tool results.
   const durations = messages.flatMap(message => (message.role === "assistant" || message.role === "toolResult") && message.durationMs !== undefined ? [message.durationMs] : []);
@@ -84,11 +88,12 @@ export function refusedView(run: Run, branch: number): SessionView["entries"][nu
 }
 
 /**
- * A run Pi settled without an answer, shown as a failed model turn after its entries: provider and model, and which
- * fixed compaction failure it was, never Pi's detail.
+ * A run Pi settled without an answer, shown as a failed model turn after its entries: provider and model, which fixed
+ * compaction failure or cause it was, and whether the host started compacting the context for it, never Pi's detail.
  */
 export function failureView(run: Run, branch: number): SessionView["entries"][number] {
-  const { provider, modelId, compaction } = run.failure!;
+  const { provider, modelId, compaction, cause, compacting } = run.failure!;
   return { id: `${branch}:failure:${run.key}`, kind: "workspace.run-failure", role: "assistant", text: "", actorId: run.initiatedBy, conversationId: String(branch),
-    error: { ...(provider ? { provider } : {}), ...(modelId ? { modelId } : {}), ...(compaction ? { compaction } : {}) } };
+    error: { ...(provider ? { provider } : {}), ...(modelId ? { modelId } : {}), ...(compaction ? { compaction } : {}), ...(cause ? { cause } : {}),
+      ...(compacting ? { compacting } : {}) } };
 }

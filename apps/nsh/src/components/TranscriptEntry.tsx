@@ -119,7 +119,8 @@ function describe(entry: EntryView, userId: string, name: (id: string, you?: boo
   if (entry.error) {
     return entry.error.compaction
       ? { kind: "error", title: COMPACTION_FAILED_TITLE, text: compactionFailureText(entry.error.compaction, { advice: !shared }), by: actor }
-      : { kind: "error", title: "Model request failed", text: modelFailure(entry.error, { advice: !shared }), by: actor };
+      : { kind: "error", title: entry.error.cause === "incomplete_stream" ? "Model response cut off" : "Model request failed",
+        text: modelFailure(entry.error, { advice: !shared }), by: actor };
   }
   const images = shownImages(entry, sees).length;
   const text = images ? textBesideImages(entry.text, images) : entry.text;
