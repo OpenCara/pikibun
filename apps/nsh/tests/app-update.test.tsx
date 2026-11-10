@@ -51,13 +51,13 @@ describe("finding a newer release", () => {
     expect(newerRelease([release("app-v0.20.0-rc.1")], "0.17.0", "windows", "x86_64")).toBe(undefined);
   });
 
-  test("picks this computer's package, and the release page where the release has none", () => {
+  test("picks this computer's package, and the release page where the release has none, or none GitHub published a checksum for", () => {
     expect(newerRelease(releases, "0.16.0", "windows", "x86_64")?.asset?.name).toBe("Pikibun-0.17.0-windows-x64-setup.exe");
     expect(newerRelease(releases, "0.16.0", "linux", "x86_64")?.asset?.size).toBe(21_444_047);
     expect(newerRelease(releases, "0.16.0", "macos", "x86_64")).toMatchObject({ version: "0.17.0", asset: null });
     expect(newerRelease([release("app-v0.17.0", { assets: [] })], "0.16.0", "macos", "aarch64")?.asset).toBe(null);
     expect(newerRelease([release("app-v0.17.0", { assets: [asset("Pikibun-0.17.0-macos-arm64.dmg", { state: "starter" })] })], "0.16.0", "macos", "aarch64")?.asset).toBe(null);
-    expect(newerRelease([release("app-v0.17.0", { assets: [asset("Pikibun-0.17.0-macos-arm64.dmg", { digest: null })] })], "0.16.0", "macos", "aarch64")?.asset?.sha256).toBe(undefined);
+    expect(newerRelease([release("app-v0.17.0", { assets: [asset("Pikibun-0.17.0-macos-arm64.dmg", { digest: null })] })], "0.16.0", "macos", "aarch64")?.asset).toBe(null);
     expect(assetSuffix("ios", "aarch64")).toBe(null);
   });
 
@@ -128,6 +128,15 @@ describe("updating the app", () => {
     await app.waitFor("id:app-update-button");
     await app.press("id:app-update-button");
     await app.waitUntil(() => sent().includes("restart"));
+  });
+
+  test("an update started right after launch waits for the last one's leftovers to be cleared first", async () => {
+    const { app, sent } = await openUpdater({ cleanUp: "slow" });
+    await app.waitFor("id:sidebar-update-button");
+    await app.press("id:sidebar-update-button");
+    await app.waitUntil(() => sent().includes("restart"));
+    const order = sent();
+    expect(order.indexOf("cleaned up")).toBeLessThan(order.findIndex(line => line.startsWith("download ")));
   });
 
   test("a failed update says why, and can be tried again", async () => {

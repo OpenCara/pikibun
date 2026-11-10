@@ -21,7 +21,7 @@ const PROGRESS_EVERY_MS = 100;
 const FIRST_CHECK_MS = 5_000;
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 
-export interface ReleaseAsset { name: string; url: string; size: number; sha256?: string }
+export interface ReleaseAsset { name: string; url: string; size: number; sha256: string }
 
 export interface AvailableUpdate {
   version: string;
@@ -75,7 +75,8 @@ function releaseAsset(assets: unknown, tag: string, version: string, os: string,
     if (entry.name !== name || (entry.state !== undefined && entry.state !== "uploaded")) continue;
     const size = typeof entry.size === "number" && Number.isSafeInteger(entry.size) && entry.size > 0 ? entry.size : 0;
     const sha256 = typeof entry.digest === "string" ? DIGEST.exec(entry.digest)?.[1] : undefined;
-    return { name, url: `${REPOSITORY}/releases/download/${tag}/${name}`, size, ...(sha256 ? { sha256 } : {}) };
+    if (!sha256) return null;
+    return { name, url: `${REPOSITORY}/releases/download/${tag}/${name}`, size, sha256 };
   }
   return null;
 }
@@ -187,7 +188,7 @@ export async function downloadInto(dir: string, asset: ReleaseAsset, progress: (
   await flush();
   progress(loaded, total);
   if (asset.size && loaded !== asset.size) throw new Error(`The download stopped early (${loaded} of ${asset.size} bytes). Try again.`);
-  if (asset.sha256 && hash.digest("hex") !== asset.sha256) throw new Error("The download doesn't match the checksum GitHub published for it. Try again.");
+  if (hash.digest("hex") !== asset.sha256) throw new Error("The download doesn't match the checksum GitHub published for it. Try again.");
   if (!parts.length) throw new Error("The download was empty.");
   await joinParts(dir, parts, asset.name);
   const file = inFolder(dir, asset.name);
@@ -294,6 +295,7 @@ export class AppUpdater {
   readonly notice = signal("");
   private timers: ReturnType<typeof setTimeout>[] = [];
   private started = false;
+  private cleaned: Promise<void> = Promise.resolve();
 
   constructor(readonly options: UpdaterOptions) {}
 
@@ -328,7 +330,7 @@ export class AppUpdater {
   start(delay = FIRST_CHECK_MS, interval = CHECK_EVERY_MS): void {
     if (this.started || !this.offered) return;
     this.started = true;
-    void this.options.runner.cleanUp(this.options.current).then(result => {
+    this.cleaned = this.options.runner.cleanUp(this.options.current).then(result => {
       if (result.installed) this.notice.set(`Pikibun was updated to ${result.installed}.`);
       else if (result.failed && untracked(this.phase).name === "idle") {
         this.phase.set({ name: "failed", error: `The update to ${result.failed} didn't install${this.options.os === "windows" ? `: its installer's log is ${INSTALL_LOG} in Pikibun's updates folder` : ""}. Try again, or install it from its release page.` });
@@ -357,6 +359,7 @@ export class AppUpdater {
     this.notice.set("");
     try {
       this.phase.set({ name: "downloading", loaded: 0, total: asset.size });
+      await this.cleaned;
       const file = await runner.download(asset, (loaded, total) => this.phase.set({ name: "downloading", loaded, total }));
       this.phase.set({ name: "installing" });
       await runner.install(file, update);

@@ -373,6 +373,14 @@ jobs:
           node scripts/nsh.mjs package App.tsx --target linux --app-version "$APP_VERSION" --build "$BUILD" --out "$RUNNER_TEMP/app"
           mkdir -p "$RUNNER_TEMP/release"
           mv "$RUNNER_TEMP/app/Pikibun.tar.gz" "$RUNNER_TEMP/release/Pikibun-$VERSION-linux-x86_64.tar.gz"
+      # The layout the app's own update unpacks and swaps in (LINUX_INSTALL in apps/nsh/src/lib/update-scripts.ts).
+      - name: The tarball has the app's folder as the update expects it
+        run: |
+          listing=$(tar -tzvf "$RUNNER_TEMP/release/Pikibun-$VERSION-linux-x86_64.tar.gz")
+          echo "$listing" | awk '$NF == "Pikibun/Pikibun" && $1 ~ /^-..x/ { found = 1 } END { exit !found }' \
+            || { echo "::error::The tarball has no executable Pikibun/Pikibun, which the app's update starts."; exit 1; }
+          echo "$listing" | awk '$NF == "Pikibun/nsh/" { found = 1 } END { exit !found }' \
+            || { echo "::error::The tarball has no Pikibun/nsh/ folder, by which the app's update knows its folder."; exit 1; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: app-linux

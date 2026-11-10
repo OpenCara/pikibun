@@ -31,6 +31,7 @@ const runner: UpdateRunner = {
   async restart() { say("restart"); },
   async cleanUp(current): Promise<CleanUp> {
     say(`clean up ${current}`);
+    if (params.cleanUp === "slow") { await later(300); say("cleaned up"); }
     return params.cleanUp === "installed" ? { installed: current } : params.cleanUp === "failed" ? { failed: "0.17.0" } : {};
   },
 };
