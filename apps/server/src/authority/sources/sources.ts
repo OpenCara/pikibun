@@ -12,7 +12,7 @@ import { fail, id, identifier, jsonObject, now, text, userIdentifier } from '../
 import { decryptToken, encryptToken } from '../vault.js';
 import { requireCallbackScope } from '../hosts.js';
 import { requireToolCall } from '../approval-reviews.js';
-import { workspaceExtensions } from '../extension-policy.js';
+import { addDocumentSourceExtension, workspaceExtensions } from '../extension-policy.js';
 import { documentKindsOff, documentSourceExtensionOf } from '../../../../../packages/shared/src/piki-extensions.js';
 import { fit, type DocumentAdapter } from './document-http.js';
 import { notionAdapter } from './notion.js';
@@ -115,7 +115,7 @@ export async function sourceRead(c: AppContext, connectorId: string | null): Pro
     if (!source) fail(404, 'source_not_found', 'This workspace has no such source, or it is a repository (clone those with Git).');
     if (documentKindsOff(await workspaceExtensions(c.env, access.row.workspace_id)).has(source.kind)) {
       fail(403, 'source_kind_off', `Reading ${documentKindNames[source.kind]} sources is turned off in this workspace (${documentSourceExtensionOf(source.kind)?.source ?? 'its extension'}). `
-        + 'Its owners and admins turn it on under Settings → Workspaces → Extensions.');
+        + 'Its owners and admins add it under Settings → Workspaces → Extensions.');
     }
     return { row: access.row, source };
   };
@@ -227,8 +227,9 @@ export function registerSources(app: Hono<AppEnv>): void {
       limit();
     }
     await auditStatement(c.env, actor, 'workspace.source.added', workspaceId, null, { source: sourceId, kind, type: item.type, item: item.id, readAs }).run();
+    const extensions = await addDocumentSourceExtension(c.env, workspaceId, kind, actor);
     return c.json({ source: publicSource({ source_id: sourceId, workspace_id: workspaceId, kind, item_id: item.id, item_type: item.type,
-      title: item.title, url: item.url, created_by: actor, created_at: created, read_as: readAs }) }, 201);
+      title: item.title, url: item.url, created_by: actor, created_at: created, read_as: readAs }), ...(extensions.length ? { extensions } : {}) }, 201);
   });
   app.delete('/api/workspaces/:id/sources/:sourceId', async c => {
     const workspaceId = identifier(c.req.param('id')); const actor = c.get('auth').userId;

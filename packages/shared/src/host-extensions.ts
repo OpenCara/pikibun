@@ -1,4 +1,4 @@
-import { pikiExtension, pikiSessionToolExtensions } from "./piki-extensions.js";
+import { pikiExtension, pikiExtensions, pikiSessionToolExtensions } from "./piki-extensions.js";
 import { parseHostBrowserStatus, type HostBrowserStatus } from "./browser.js";
 import { parseHostTunnelStatus, type HostTunnelStatus } from "./tunnel.js";
 
@@ -115,6 +115,13 @@ export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([
   "npm:pi-web-search@1.7.0",
   "npm:cc-safety-net@2.7.2",
 ]);
+
+export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]): WorkspaceExtension[] {
+  const listed = new Set(extensions.map(item => extensionPackageKey(item.source)));
+  const replaced = new Set<string>(pikiExtensions.flatMap(item => item.replaces ? [item.replaces] : []));
+  const unlisted = pikiSessionToolExtensions().filter(item => !item.core && !replaced.has(item.source) && !listed.has(item.source));
+  return [...extensions, ...unlisted.map(item => ({ source: item.source, enabled: false, tools: "approval" as const, settings: {} }))];
+}
 
 export const extensionLimits = Object.freeze({
   workspace: 32,

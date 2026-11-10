@@ -118,6 +118,7 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     vanishing `schedule` would surprise more than one that a workspace turned off showing for a while. So there is no
     migration. Turning one on removes the workspace's entry; turning it off saves it disabled. A tool whose being off
     protects something (`host_bash`) will need its connector to keep the workspace's last answer and fail closed instead.
+    Note 38 later made them added rather than on by default, without changing how connectors read the list.
 18. **No tool mode, settings or host requirement.** The control plane saves a session-tool extension with approval and
     no settings, doesn't count it towards a workspace's 32, and refuses a host's requiring one. Connectors that predate
     one offer its tools whatever the workspace chose; its page says so.
@@ -327,6 +328,30 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     has no command for, and `github_comment`, `github_issue` and `github_merge` for the writes `gh` refuses (rule 8:
     another's host, read-only, a call the workspace ran automatically). Without `gh` they say what they said before.
     The tools' descriptions say the same, since a description can't tell whether the other tool is there.
+
+38. **Added with a source, or by hand, not by default.** A new workspace listed every session tool as on, Notion's
+    reader in a workspace with no Notion page, Node.js where nobody runs it. Now a workspace has a session-tool
+    extension only once it is added: `piki:git` with its first repository (`providers` lists every Git provider),
+    `piki:github` with its first GitHub repository (as `piki:gh`, note 6; `addPikiExtensions`), a document source's
+    with its first source of that kind (`addDocumentSourceExtension`), and the others by its owners and admins (**Add
+    extension → Pikibun tools**); `piki:files` stays core. One a workspace turned off stays off, and one it removed comes
+    back only with a later first source of its kind. Removing one turns it off.
+    - **Connectors read the list as before.** Every connector, and pages from before, read a session-tool extension a
+      workspace doesn't list as on (note 17), and connectors keep doing so when they can't reach the control plane. So
+      the control plane doesn't change what "unlisted" means on the wire: it lists every session-tool extension a
+      workspace hasn't added, turned off (`withSessionToolsListed`, host-extensions.ts, in `workspaceExtensions`),
+      after its own, to its pages and its connectors alike, which take them as they take an off one now. Left out:
+      `piki:files`, and `piki:sources`, which the kinds replace (`connectorWorkspaceExtensions` still sends it to a
+      connector from before the split as whether any kind is on). The listed ones take none of the 32 places, and a
+      connector gets only those it reports, so no parser of before gets more than it takes.
+    - **Existing workspaces keep their tools.** Migration sqlite/0058 (postgres/0051) gives each, turned on, the
+      session-tool extensions it didn't list (they were on), but `piki:github` only with a GitHub repository and a
+      kind's only with a source of that kind and unless it had turned `piki:sources` off: without one they offer
+      nothing. Retired `piki:shell` and `piki:host-shell` are kept on where they were, for the connectors that still
+      have the tools; new workspaces send them off.
+    - **Pages.** The workspace page lists the session-tool extensions it has, each with **Remove**, and offers the
+      others in **Add extension**. A page from before still shows them, as on or off, and turns one off, but turns one on
+      by removing its entry, which now leaves it off: it needs this release.
 
 Next: other ecosystems as usage asks for them (`jvm`).
 
@@ -555,6 +580,7 @@ kept by the session rather than the agent, so a long one survives the session cl
 | The proxy's credentials and leases | `apps/runner/src/api-access.ts`; `apps/server/src/authority/api-access.ts` |
 | Loading from factories, reports | `apps/runner/src/extensions/load.ts`, `host.ts`; `connector.ts` (report without them) |
 | Added on binding; a connector's list; install requests refused | `apps/server/src/authority/extension-policy.ts` (`addPikiExtensions`), called from `authority/repositories.ts`; `apps/server/src/extensions.ts`; migrations `0048`/`0041` |
+| Session tools added with a source or by hand, listed off until then (note 38) | `packages/shared/src/host-extensions.ts` (`withSessionToolsListed`); `extension-policy.ts` (`workspaceExtensions`, `addPikiExtensions`, `addDocumentSourceExtension`, called from `authority/sources/sources.ts`); migrations `0058`/`0051`; tests in `tests/extensions.test.ts`, `tests/session-tool-extensions-migration.test.ts` |
 | Workspace and host pages | `apps/nsh/src/settings/workspace-extensions.tsx`, `host-extensions.tsx` |
 | Tests | `tests/piki-extensions.test.ts`, `api-access.test.ts`, and in `push-broker`, `host-extensions`, `extensions`, `repositories`, `local-connector` |
 

@@ -1202,7 +1202,7 @@ export class RunnerSession {
     if (!(await this.sessionToolsOff()).has(tool)) return;
     const defined = this.#definitions.find(item => item.name === tool);
     const extensions = defined ? [...defined.extensions] : sessionToolExtensions(tool).map(item => item.source);
-    throw new RunnerError(403, `${tool} is turned off in this workspace${extensions.length ? ` (${extensions.join(", ")})` : ""}. Its owners and admins turn it on under Settings → Workspaces → Extensions.`);
+    throw new RunnerError(403, `${tool} is turned off in this workspace${extensions.length ? ` (${extensions.join(", ")})` : ""}. Its owners and admins add it under Settings → Workspaces → Extensions.`);
   }
 
   private async chosenExtensions(): Promise<SessionExtension[]> {
