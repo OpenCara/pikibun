@@ -36,7 +36,7 @@ test("Actions deployment serves NSH from the origin, removes the preview origin 
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const env = await readFile(join(f.root, ".env"), "utf8");
   assert.doesNotMatch(env, /^STATIC_CLIENT=/m);
-  assert.match(env, /^STATIC_DIR=dist\/preview$/m);
+  assert.match(env, /^STATIC_DIR=dist\/client$/m);
   assert.doesNotMatch(env, /^PREVIEW_/m);
   assert.match(env, /^PIKIBUN_IMAGE=ghcr.io\/opencara\/pikibun:0.26.0$/m);
   assert.match(env, /^APP_ORIGIN=https:\/\/pikibun.com$/m);
@@ -49,7 +49,7 @@ test("deploying NSH replaces the removed React client's settings", { skip: proce
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const env = await readFile(join(f.root, ".env"), "utf8");
   assert.doesNotMatch(env, /^STATIC_CLIENT=/m);
-  assert.match(env, /^STATIC_DIR=dist\/preview$/m);
+  assert.match(env, /^STATIC_DIR=dist\/client$/m);
   assert.equal(env.match(/^STATIC_DIR=/gm)?.length, 1);
 });
 
