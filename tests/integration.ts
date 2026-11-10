@@ -407,14 +407,22 @@ await check("a writer's command runs at once, asking nobody, and git commits use
     while (Date.now() < deadline) {
       last = await client.view(aliceSession.id);
       const at = last.entries.findLastIndex(entry => entry.role === "user" && entry.text.includes(command));
-      const after = at >= 0 ? last.entries.slice(at + 1) : [];
-      if (!last.busy && after.some(entry => entry.role === "assistant")) return after.filter(entry => entry.role === "toolResult").map(entry => entry.text);
+      const conversation = at >= 0 ? last.entries[at]!.conversationId : undefined;
+      const after: SessionView["entries"] = [];
+      for (const entry of at >= 0 ? last.entries.slice(at + 1) : []) {
+        if (entry.conversationId !== conversation) continue;
+        if (entry.role === "user") break;
+        after.push(entry);
+      }
+      if (!last.busy && after.some(entry => entry.role === "assistant" && !entry.toolCalls?.length)) {
+        return after.filter(entry => entry.role === "toolResult" || entry.role === "assistant").map(entry => `${entry.role}: ${entry.text}`);
+      }
       await delay(200);
     }
     throw new Error(`no outcome for ${command}: ${JSON.stringify(last?.entries.slice(-4)).slice(0, 2000)}`);
   };
   const committed = await ran(bob, `git init -q integration && cd integration && git commit -q --allow-empty -m 'Integration ${run}'`);
-  assert.ok(committed.length > 0 && committed.every(text => !/refused|not available|isn't/i.test(text)), committed.join("\n---\n").slice(0, 3000));
+  assert.ok(committed.some(text => text.startsWith("toolResult:")) && committed.every(text => !/refused|not available|Denied/i.test(text)), committed.join("\n---\n").slice(0, 3000));
   const logged = await ran(alice, "cd integration && git log -1 --format='%an <%ae>|%cn <%ce>'");
   assert.ok(logged.some(text => text.includes("Alice Integration <alice@example.invalid>|Alice Integration <alice@example.invalid>")),
     `git commits use the owner's identity: ${logged.join("\n---\n").slice(0, 3000)}`);
