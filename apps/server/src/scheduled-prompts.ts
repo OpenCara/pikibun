@@ -153,13 +153,13 @@ async function startChild(c: AppContext, parent: SessionRow, schedule: ScheduleR
     if (await openScheduledChildren(c.env, parent.id) > MAX_SCHEDULED_CHILDREN) tooManyChildren();
     await auditStatement(c.env, ownerId, 'session.schedule.child_started', parent.workspace_id, parent.id,
       { scheduleId: schedule.id, childSessionId: child.id, trigger }).run();
+    if (Number(schedule.one_shot ?? 1) === 1) await c.env.DB.query('UPDATE sessions SET one_shot = 1 WHERE id = ?').bind(child.id).run();
     const options: ChatOptions = { ...(schedule.access === 'approval' ? {} : { access: schedule.access }), ...(thinkingLevel ? { thinkingLevel } : {}) };
     const submission = await submitMessage(c, child, 'submit', {
       content: schedule.content,
       requestId: `schedule:${schedule.id}:${at}`,
       ...(Object.keys(options).length ? { options } : {}),
     }, { scheduleId: schedule.id, trigger, parentSessionId: parent.id }, { currentModel: true });
-    if (Number(schedule.one_shot ?? 1) === 1) await c.env.DB.query('UPDATE sessions SET one_shot = 1 WHERE id = ?').bind(child.id).run();
     return { ...submission, childSessionId: child.id };
   } catch (error) {
     if (started.id) await archiveSession(c, started.id, { scheduleId: schedule.id }).catch(() => undefined);
@@ -167,22 +167,22 @@ async function startChild(c: AppContext, parent: SessionRow, schedule: ScheduleR
   }
 }
 
-export type OneShotOutcome = { sessionId: string; archived: true } | { sessionId: string; error: string };
+export type OneShotOutcome = { sessionId: string; archived: true } | { sessionId: string; skipped: true } | { sessionId: string; error: string };
 
 export async function archiveFinishedOneShots(env: Env): Promise<OneShotOutcome[]> {
   const finished = await env.DB.query<{ id: string; owner_id: string; schedule_id: string | null }>(
     "SELECT id, owner_id, schedule_id FROM sessions WHERE one_shot = 1 AND activity = 'done' AND status = 'ready' ORDER BY id LIMIT ?").bind(oneShotSweepLimit).all();
   const outcomes: OneShotOutcome[] = [];
   for (const session of finished) {
+    const claimed = await env.DB.query("UPDATE sessions SET one_shot = 0 WHERE id = ? AND one_shot = 1 AND activity = 'done' AND status = 'ready'").bind(session.id).run();
+    if (claimed.changes !== 1) {
+      outcomes.push({ sessionId: session.id, skipped: true });
+      continue;
+    }
     try {
-      await asSessionOwner(env, session, async c => {
-        const fresh = await c.env.DB.query<{ one_shot: number; activity: string | null }>('SELECT one_shot, activity FROM sessions WHERE id = ?').bind(session.id).first();
-        if (Number(fresh?.one_shot) !== 1 || fresh?.activity !== 'done') return;
-        await archiveSession(c, session.id, { oneShot: true, ...(session.schedule_id ? { scheduleId: session.schedule_id } : {}) });
-      }, 'one-shot-session');
+      await asSessionOwner(env, session, c => archiveSession(c, session.id, { oneShot: true, ...(session.schedule_id ? { scheduleId: session.schedule_id } : {}) }), 'one-shot-session');
       outcomes.push({ sessionId: session.id, archived: true });
     } catch (error) {
-      await env.DB.query('UPDATE sessions SET one_shot = 0 WHERE id = ?').bind(session.id).run();
       outcomes.push({ sessionId: session.id, error: await errorCode(error) });
     }
   }

@@ -88,7 +88,11 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
     sweep('pull request states', 30_000, () => refreshPullRequestStates(env)),
     sweep('automatic backups', 60_000, async () => { if (env.WORKSPACE_DATABASES) await runAutomaticBackups(env); }),
     sweep('scheduled prompts', 30_000, () => runScheduledPrompts(env)),
-    sweep('one-shot sessions', 30_000, () => archiveFinishedOneShots(env)),
+    sweep('one-shot sessions', 30_000, async () => {
+      for (const outcome of await archiveFinishedOneShots(env)) {
+        if ('error' in outcome) console.error(`pikibun: one-shot session ${outcome.sessionId} was not archived (${outcome.error}); it stays open.`);
+      }
+    }),
     sweep('cross-session notifications', 15_000, () => runCrossSessionNotifications(env)),
   ];
 

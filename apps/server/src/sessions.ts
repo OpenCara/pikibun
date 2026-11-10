@@ -122,14 +122,14 @@ export async function submitMessage(c: AppContext, row: SessionRow, mode: 'submi
     fail(413, 'message_too_large', 'This message and its images are too large to send together. Remove an image or shorten the message.');
   }
   const admissionId = mode === 'submit' ? await issueRunAdmission(c, row, content, requestId, options?.access, images, options?.autoMerge === true) : undefined;
-  if (mode === 'submit' && Number(row.one_shot) === 1) {
-    await c.env.DB.query('UPDATE sessions SET one_shot = 0 WHERE id = ? AND one_shot = 1').bind(row.id).run();
-    row.one_shot = 0;
-  }
   const result = await runnerJSON<SubmitResult>(await runnerRequest(c, row, mode, '', { content, requestId, ...(admissionId ? { admissionId } : {}), ...(options ? { options } : {}),
     ...(images ? { images } : {}) }));
   invalidateSessionView(c, row.id);
   if (typeof result?.submissionId !== 'string' || typeof result.conversationId !== 'string' || typeof result.status !== 'string') fail(502, 'invalid_runner_response', 'The runner returned an invalid submission.');
+  if (mode === 'submit' && Number(row.one_shot) === 1) {
+    await c.env.DB.query('UPDATE sessions SET one_shot = 0 WHERE id = ? AND one_shot = 1').bind(row.id).run();
+    row.one_shot = 0;
+  }
   await auditStatement(c.env, c.get('auth').userId, `session.${mode}`, row.workspace_id, row.id, { submissionId: result.submissionId, ...(options ? { options } : {}),
     ...(images ? { images: images.length } : {}), ...audit }).run();
   return result;

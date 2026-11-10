@@ -320,12 +320,28 @@ test('a child session is one-shot by default: archived once its run is done, unl
   const failed = await run();
   report(failed, 'failed');
   const takenOver = await run();
+  const host = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ error: 'offline', code: 'connector_relay_error' }, { status: 503 });
+  const refusedByHost = await f.owner.request('POST', `/api/sessions/${takenOver}/submit`, { content: 'Also look at the flaky test', requestId: 'by-hand-1' });
+  assert.ok(refusedByHost.status >= 400, String(refusedByHost.status));
+  assert.equal(state(takenOver).one_shot, 1, 'a message its host never took takes nothing over');
+  globalThis.fetch = host;
   const sent = await f.owner.request('POST', `/api/sessions/${takenOver}/submit`, { content: 'Also look at the flaky test', requestId: 'by-hand' });
   assert.equal(sent.status, 202, await sent.clone().text());
   assert.equal(state(takenOver).one_shot, 0, 'a message of someone\'s own takes it over');
   report(takenOver, 'done');
   assert.deepEqual(await archiveFinishedOneShots(f.env), []);
   assert.deepEqual([state(failed).status, state(takenOver).status], ['ready', 'ready'], 'a failed run, and one taken over, stay open');
+
+  const raced = await run();
+  report(raced, 'done');
+  f.setBeforeQuery(sql => {
+    if (!sql.startsWith('UPDATE sessions SET one_shot = 0 WHERE id = ? AND one_shot = 1 AND activity')) return;
+    f.setBeforeQuery(undefined);
+    f.sqlite.prepare('UPDATE sessions SET one_shot = 0 WHERE id = ?').run(raced);
+  });
+  assert.deepEqual(await archiveFinishedOneShots(f.env), [{ sessionId: raced, skipped: true }], 'taken over as the sweep came to it');
+  assert.equal(state(raced).status, 'ready');
 
   const unarchived = await f.owner.request('POST', `/api/sessions/${done}/unarchive`);
   assert.equal(unarchived.status, 200, await unarchived.clone().text());
