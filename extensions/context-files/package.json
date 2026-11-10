@@ -1,0 +1,20 @@
+{
+  "name": "@opencara/pi-context-files",
+  "version": "0.1.0",
+  "description": "A Pi extension that adds the files you choose to each message's system prompt: AGENTS.md or CLAUDE.md, other files in the repository, files on the host, or pages on the web.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi-extension", "agents-md", "claude-md", "context", "system-prompt"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OpenCara/pikibun.git",
+    "directory": "extensions/context-files"
+  },
+  "files": ["index.ts", "context-files.ts", "README.md"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
