@@ -13,6 +13,10 @@ export function ownerViewRequest(c: AppContext, row: SessionRow): Promise<Respon
   return actorRequest(c, row.owner_id, row, 'view');
 }
 
+export function ownerRequest(c: AppContext, row: SessionRow, action: 'unpack' | 'restart', body: unknown = {}): Promise<Response> {
+  return actorRequest(c, row.owner_id, row, action, '', body);
+}
+
 async function actorRequest(c: AppContext, actorId: string, row: SessionRow, action: RunnerAction, suffix = '', body?: unknown, pin?: ConnectionPin): Promise<Response> {
   const current = await requireRunnerAccess(c, actorId, row, action);
   if (current.connector_id) return connectorRequest(c, current, action, suffix, body, actorId, pin);

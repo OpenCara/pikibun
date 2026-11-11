@@ -114,17 +114,17 @@ describe("swiping a session's row on a phone", () => {
     await app.waitUntil(() => !app.shows("id:swipe-more-m5"));
   });
 
-  test("offers no Unarchive tile where only its owner can unarchive it, and its menu says why", async () => {
+  test("offers Unarchive on someone else's packed session to whoever manages it, as its host unpacks it as its owner", async () => {
     const packed = { ...sessionRecord, id: "s6", ownerId: "u2", title: "Packed spike", status: "archived", activity: "idle", packed: true };
     const app = await phone({ [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [sessionRecord, packed] } } });
     await app.press("id:toggle-archived");
     await app.waitFor("id:session-row-s6");
     await app.drag("id:session-row-s6", { x: -160 });
     await app.waitFor("id:swipe-more-s6");
-    expect(app.shows("id:swipe-unarchive-s6")).toBe(false);
+    expect(app.shows("id:swipe-unarchive-s6")).toBe(true);
     await app.press("id:swipe-more-s6");
     await app.waitFor("id:menu-unarchive");
-    expect(app.shows("text:Its files are packed: only its owner can")).toBe(true);
+    expect(app.shows("text:Its files are packed: only its owner can")).toBe(false);
   });
 
   test("an open row keeps showing the tiles it still has when they change", async () => {

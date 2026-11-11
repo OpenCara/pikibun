@@ -11,6 +11,7 @@ import { requestUrl, trustForwardedHeaders } from './forwarded.js';
 import { app } from './index.js';
 import { createStaticHandler } from './static.js';
 import { runAutomaticBackups } from './automatic-backups.js';
+import { runAutomaticPacking } from './automatic-packing.js';
 import { archiveFinishedOneShots, runScheduledPrompts } from './scheduled-prompts.js';
 import { runCrossSessionNotifications } from './cross-session.js';
 
@@ -95,6 +96,11 @@ export async function startServer(config: ServerConfig): Promise<RunningServer> 
       }
     }),
     sweep('cross-session notifications', 15_000, () => runCrossSessionNotifications(env)),
+    sweep('automatic packing', 5 * 60_000, async () => {
+      for (const outcome of await runAutomaticPacking(env)) {
+        if ('refused' in outcome) console.error(`pikibun: archived session ${outcome.sessionId} was not packed (${outcome.refused}); its files stay as they are.`);
+      }
+    }),
   ];
 
   const serveStatic = createStaticHandler(staticDir);

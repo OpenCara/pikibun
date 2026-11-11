@@ -203,7 +203,7 @@ function capabilities(value?: ConnectorCapabilities, mode: { unsandboxed?: boole
     github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, sessionBranches: true, conversationBackups: true, hostConfig: true, compactionConfig: true, ...cache };
   return { platform: result.platform, sandbox: result.sandbox, productionShell: result.productionShell, chatOptions: true, chatImages: true, gitProviders: true, gitServers: true, gitPush: true,
     github: true, githubIssues: true, sources: true, schedules: true, crossSessions: true, plainGit: true, cloneBackups: true, sessionBranches: true, conversationBackups: true, hostConfig: true, compactionConfig: true, ...cache,
-    sessionPacking: true, ...(mode.gpu ? { gpu: mode.gpu } : {}) };
+    sessionPacking: true, packIgnoredFiles: true, ...(mode.gpu ? { gpu: mode.gpu } : {}) };
 }
 
 export async function claimConnectorPairing(options: {

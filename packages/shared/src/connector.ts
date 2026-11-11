@@ -32,6 +32,7 @@ export interface ConnectorCapabilities {
   sessionBranches?: boolean;
   conversationBackups?: boolean;
   sessionPacking?: boolean;
+  packIgnoredFiles?: boolean;
   approvalFree?: boolean;
   automaticGitHub?: boolean;
   requesterAutoApprove?: boolean;

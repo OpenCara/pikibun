@@ -52,7 +52,6 @@ export function createSessionMenu(): SessionMenu {
     const manages = managesSession(user.id, current.ownerId, role);
     const archived = current.status === "archived";
     const busy = action.busy();
-    const packedForOthers = Boolean(current.packed) && current.ownerId !== user.id;
     const editable = manages && !archived;
     return {
       openTab: pageAvailable()
@@ -67,10 +66,9 @@ export function createSessionMenu(): SessionMenu {
         : null,
       archive: editable ? { label: "Archive", icon: "archive", testID: "menu-archive", disabled: busy, onSelect: () => void archive(current) } satisfies MenuAction : null,
       unarchive: manages && archived
-        ? { label: "Unarchive", icon: "archive", testID: "menu-unarchive", disabled: busy || packedForOthers, hint: packedForOthers ? "Its files are packed: only its owner can" : undefined,
+        ? { label: "Unarchive", icon: "archive", testID: "menu-unarchive", disabled: busy,
           onSelect: () => void action.run(async () => { await session().api(`${base(current)}/unarchive`, { method: "POST" }); changed(); }, unarchiveNotice(current)) } satisfies MenuAction
         : null,
-      packedForOthers,
     };
   }
 
@@ -83,10 +81,10 @@ export function createSessionMenu(): SessionMenu {
   }
 
   function swipe(current: SessionRecord, more: () => void): { leading: SwipeAction[]; trailing: SwipeAction[] } {
-    const { copyLink, rename, archive, unarchive, packedForOthers } = actions(current);
+    const { copyLink, rename, archive, unarchive } = actions(current);
     const tile = (item: MenuAction, tone: SwipeAction["tone"], name: string): SwipeAction =>
       ({ label: item.label, icon: item.icon ?? "more", tone, disabled: item.disabled, testID: `swipe-${name}-${current.id}`, onPress: item.onSelect });
-    const shelve = archive ? tile(archive, "warning", "archive") : unarchive && !packedForOthers ? tile(unarchive, "info", "unarchive") : null;
+    const shelve = archive ? tile(archive, "warning", "archive") : unarchive ? tile(unarchive, "info", "unarchive") : null;
     return {
       leading: [tile(copyLink, "accent", "copy-link"), ...(rename ? [tile(rename, "info", "rename")] : [])],
       trailing: [{ label: "More", icon: "more", testID: `swipe-more-${current.id}`, onPress: more }, ...(shelve ? [shelve] : [])],
