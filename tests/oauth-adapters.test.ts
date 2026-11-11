@@ -71,8 +71,6 @@ test('a token response becomes what Pikibun stores: expiry from now, and refresh
   assert.equal(forever.expiresAt, undefined);
 });
 
-const graph = 'https://graph.microsoft.com/v1.0';
-
 function graphFake(t: TestContext) {
   const items: Record<string, { name: string; parent: string | null; folder?: boolean; mimeType?: string; body?: Uint8Array<ArrayBuffer> | string }> = {
     root: { name: 'root', parent: null, folder: true },

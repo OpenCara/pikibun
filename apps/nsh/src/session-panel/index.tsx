@@ -7,7 +7,7 @@ import { createResource } from "../lib/resource";
 import type { SessionActions } from "../lib/session-actions";
 import { withUsernames, type Person } from "../../../../packages/client/src/usernames";
 import { palette, radius } from "../theme";
-import { CollapsibleRow, EmptyState, IconButton, Note, ResourceState, Section, Segmented, Value } from "../ui";
+import { CollapsibleRow, EmptyState, IconButton, ResourceState, Section, Segmented, Value } from "../ui";
 import { Browser } from "./Browser";
 import { Details } from "./Details";
 import { Files } from "./Files";

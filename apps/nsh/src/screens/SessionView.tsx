@@ -1,9 +1,9 @@
-import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, windowSize, type Accessor, type JSX, type ListRef } from "nsh";
-import { Button as BaseButton, NavPage, Sheet } from "nsh/base";
+import { cleanup, Clipboard, computed, effect, Keyboard, keyboardFrame, List, platform, safeArea, Scroll, signal, Text, untracked, View, type Accessor, type JSX, type ListRef } from "nsh";
+import { Button as BaseButton, NavPage } from "nsh/base";
 import {
   accessUnavailable, activeStatuses, browserUnavailableText, chatOptionsBody, copyText,
   initialSelection, managesSession, messageCut, modelUnavailable, pairToolResults, preparingRepositories,
-  REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, username, type ChatSelection, type ConnectorInfo, type EntryView,
+  REDACTED, redactSecrets, resendText, rewindable, seesEntryImages, segment, type ChatSelection, type ConnectorInfo, type EntryView,
   type SessionRecord, type SubmitResult,
 } from "../shared";
 import { RenameSheet } from "../components/SessionMenu";
@@ -281,7 +281,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
   const actualMode = () => (mode() === "ask" && !canAsk() ? "write" : mode());
   const readOnly = () => current().status === "archived" || current().frozen === true;
   const permitted = () => !readOnly() && (actualMode() === "write" ? canWrite() : canAsk());
-  const unsandboxed = () => Boolean(current().hostUnsandboxed || props.host()?.capabilities.unsandboxed);
   const queue = () => view().queue ?? [];
   const activeQueue = computed(() => queue().filter(item => activeStatuses.includes(item.status)));
   const recentSubmissions = () => queue().filter(item => !activeStatuses.includes(item.status)).slice(-5).reverse();

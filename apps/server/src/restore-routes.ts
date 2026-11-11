@@ -10,7 +10,6 @@ import {
   auditStatement, authenticateConnector, requireConnectorSession, requireSessionCreator, sessionAccess, sessionCreatorSQL,
 } from './authority/index.js';
 import { requireUnfrozen, runnerSessionRecord, sessionRecord, successorBranch } from './db.js';
-import type { ConnectorCapabilities } from '../../../packages/shared/src/connector.js';
 import { fail, id, identifier, jsonObject, now, randomToken, testMode, text } from './http.js';
 import { bindingForSession } from './sessions.js';
 import { runnerJSON, runnerRequest } from './runner.js';

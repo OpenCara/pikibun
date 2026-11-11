@@ -11,7 +11,7 @@ export function redactSmokeOutput(line: string): string {
   return line.replace(/\b(?:https?|pikibun):\/\/[^\s<>"']+/g, url => {
     const query = url.search(/[?#]/);
     return query < 0 ? url : `${url.slice(0, query)}?[redacted]`;
-  }).replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [redacted]');
+  }).replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]');
 }
 
 export function smokeOrigin(input: string): string {

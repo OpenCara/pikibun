@@ -7,7 +7,6 @@ import type { Env } from '../apps/server/src/types.js';
 import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
 import { userIdentifier } from '../apps/server/src/http.js';
 import { sessionAccess } from '../apps/server/src/authority/access.js';
-import { sha256 } from '../packages/shared/src/crypto.js';
 import type { SessionView } from '../packages/shared/src/types.js';
 import { applyViewPatch, diffView, type SessionViewPatch } from '../packages/shared/src/view-patch.js';
 import { seedAgentVersion, testDatabase } from './helpers/control-plane.js';

@@ -18,7 +18,7 @@ import { inScriptCall, wholeForScripts } from "../apps/runner/src/script-output.
 import { sha256 } from "../packages/shared/src/crypto.js";
 import { defaultHostConfig, type HostConfig } from "../packages/shared/src/host-config.js";
 import { parseWorkspaceExtensions } from "../packages/shared/src/host-extensions.js";
-import type { ApprovalRecord, RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
+import type { RunnerAction, RunnerBinding } from "../packages/shared/src/types.js";
 
 test("code mode is core: every session runs it, whatever the host's configuration lists, unless a workspace's extension offers its tool", async t => {
   const builtins = new SessionBuiltins();

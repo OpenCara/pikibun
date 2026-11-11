@@ -1,5 +1,5 @@
 import { describe, expect, open, test } from "nsh/test";
-import { approval, ORIGIN, server, sessionRecord, signedIn, TOKEN, user, view } from "./fixtures";
+import { ORIGIN, server, sessionRecord, signedIn, TOKEN, user, view } from "./fixtures";
 
 const bodyOf = (app: { requests(): { method: string; url: string; body?: string | null }[] }, method: string, url: string) => {
   const request = app.requests().find(item => item.method === method && item.url === url);

@@ -3,22 +3,21 @@ import { parseCapabilities } from '../../../packages/shared/src/connector.js';
 import type { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
-import type { ApprovalRecord, ChatOptions, Operation, Permission, RunnerBinding, SessionRole, SessionView, SubmitResult, WithdrawResult, WorkspaceRole } from '../../../packages/shared/src/types.js';
+import type { ChatOptions, Permission, RunnerBinding, SessionRole, SessionView, SubmitResult, WithdrawResult, WorkspaceRole } from '../../../packages/shared/src/types.js';
 import { accessModes, permissions, sessionRoles, thinkingLevels } from '../../../packages/shared/src/types.js';
 import { connectorLimits, type ConnectorCapabilities, type LocalModelSummary } from '../../../packages/shared/src/connector.js';
 import { parseChatImages, type ChatImage } from '../../../packages/shared/src/chat-images.js';
-import { sha256 } from '../../../packages/shared/src/crypto.js';
 import { isRevision } from '../../../packages/shared/src/view-patch.js';
 import { hasPermission, managesSession, normalizePermissions, roleSessionCeiling, sessionRoleOf, sessionRolePermissions, validateUserEnv } from '../../../packages/shared/src/policy.js';
 import type { AgentRow, AppContext, Env, ModelRow, SessionAccess, SessionRow, AppEnv } from './types.js';
-import { agentVersion, getUser, modelDefinition, requireActiveSession, requireUnfrozen, runnerSessionRecord, sessionRecord, userProfile } from './db.js';
+import { agentVersion, getUser, modelDefinition, requireUnfrozen, runnerSessionRecord, sessionRecord, userProfile } from './db.js';
 import {
   auditStatement, cloneRepositories, hostAuthority, issueRunAdmission, legacyRepositoryFixture, listSessionAccess, requireConnectorSession, requireMember,
-  requireRunnerAccess, requireSession, requireSessionCreator, requireSessionManager, runsShellCommands, sessionAccess, sessionCreatorSQL, sessionManagerSQL,
+  requireRunnerAccess, requireSession, requireSessionCreator, requireSessionManager, runsShellCommands, sessionCreatorSQL, sessionManagerSQL,
   audienceSharing,
 } from './authority/index.js';
 import { sessionBranchName } from '../../../packages/shared/src/git-push.js';
-import { fail, id, identifier, jsonObject, now, randomToken, testMode, text, userIdentifier } from './http.js';
+import { fail, id, identifier, jsonObject, now, testMode, text, userIdentifier } from './http.js';
 import { runnerJSON, runnerRequest } from './runner.js';
 import { connectorUtf8Bytes } from './connector-transport.js';
 import { hostSessionsNeedConsent, hostSessionsSupported } from './connectors.js';

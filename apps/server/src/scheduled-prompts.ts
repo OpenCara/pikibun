@@ -4,7 +4,7 @@ import {
   accessModes, scheduleRunIns, scheduleToolActions, type AccessMode, type ChatOptions, type ScheduleRunIn, type ScheduleToolAction, type ScheduleToolResult,
   type SessionSchedule, type SubmitResult,
 } from '../../../packages/shared/src/types.js';
-import { CronError, isTimeZone, nextCronTime, parseCron, scheduleToolTarget } from '../../../packages/shared/src/cron.js';
+import { CronError, isTimeZone, nextCronTime, parseCron } from '../../../packages/shared/src/cron.js';
 import { hasPermission } from '../../../packages/shared/src/policy.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import { auditStatement, requireCallbackScope, requireSession, requireToolCall, sessionAccess } from './authority/index.js';
@@ -367,8 +367,6 @@ export async function agentSchedules(c: AppContext, connectorId: string | null):
   if (fields.runIn !== undefined) validRunIn(fields.runIn);
   if (fields.oneShot !== undefined) validOneShot(fields.oneShot);
   if (fields.enabled !== undefined) validEnabled(fields.enabled);
-  const target = scheduleToolTarget({ action, scheduleId, ...fields as { name?: string; cron?: string; timeZone?: string; content?: string; access?: AccessMode;
-    runIn?: ScheduleRunIn; oneShot?: boolean; enabled?: boolean } });
   const access = await sessionAccess(c.env, sessionId, actorId);
   if (!access || access.row.status === 'archived' || !hasPermission(access.permissions, 'write')) {
     fail(403, 'permission_revoked', 'The requester can no longer write to this session.');

@@ -1,13 +1,17 @@
 name: CI
-# Pull requests run it on their pushes, and version tags through their release workflow before publishing; nothing runs
-# it on main's own pushes, whose changes their pull request already checked (merged into main as it was then). Run it by
-# hand (workflow_dispatch) for any branch.
+# Pull requests run it on their pushes, a merge queue on the merge it is about to make, main on each of its pushes (a pull
+# request was checked against main as it was then, and two that passed alone can break it together), and version tags
+# through their release workflow before publishing. Run it by hand (workflow_dispatch) for any branch.
 #
 # A pull request runs only what its changes need: one that changes only documentation (Markdown, docs/images, the licence)
 # runs none of it, and the container image is built only when something it is built from changes. A release or a run
-# by hand checks everything. `verify` is the one result to wait for: it passes once every job passed or was not needed.
+# by hand checks everything, as do main's pushes and the merge queue. `verify` is the one result to wait for, and the one a
+# branch protection rule or ruleset for main should require: it passes once every job passed or was not needed.
 on:
   pull_request:
+  push:
+    branches: [main]
+  merge_group:
   workflow_dispatch:
   workflow_call:
 permissions:
@@ -71,6 +75,8 @@ jobs:
           key: nsh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/nsh.mjs') }}
       - name: Connector shrinkwrap matches package.json
         run: node packages/cli/scripts/shrinkwrap.mjs --check
+      # oxlint's correctness rules, as .oxlintrc.json sets them; any finding fails.
+      - run: pnpm lint
       - run: pnpm typecheck
       # The sandbox's Python programs: Ruff and Pyright, from npm (embedded as checked by tests/sandbox-python.test.ts).
       - run: pnpm python:check
@@ -109,7 +115,19 @@ jobs:
             --cap-drop ALL --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
             --symlink usr/bin /bin --proc /proc --dev /dev -- /usr/bin/true
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      # The tests with Node's own coverage of apps, packages and extensions: its table goes to the job's summary, and
+      # lcov.info to an artifact for editors and coverage services.
+      - run: pnpm test:coverage
+      - name: Coverage summary
+        if: ${{ !cancelled() }}
+        run: node scripts/coverage-summary.mjs lcov.info >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          if-no-files-found: ignore
+          retention-days: 14
       - run: pnpm test:connected
 
   # The client on Native Shell and in a browser, the web build and the published CLI.
@@ -140,6 +158,27 @@ jobs:
       # The published CLI, with the web app and migrations `pikibun serve` ships, and its server chunk loading.
       - run: pnpm --filter pikibun run build
       - run: node packages/cli/dist/pikibun.js serve --help
+
+  # The sandboxes' shared rules on macOS and Windows: every file tool case through each workspace the platform has (on
+  # macOS, Seatbelt itself, with sandbox-exec), and the native sandboxes' own tests.
+  platforms:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --import tsx --test tests/sandbox-conformance.test.ts tests/native-sandboxes.test.ts
 
   # TRUST_PROXY with forwarded requests, on the image's own Node: its health check sends no forwarded headers, so it
   # stayed healthy while every request through a TLS proxy was a 500 (#71).
@@ -174,7 +213,7 @@ jobs:
 
   # The one result: every job passed, or was skipped as the changes didn't need it.
   verify:
-    needs: [changes, checks, tests, client, image]
+    needs: [changes, checks, tests, client, platforms, image]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -23,7 +23,7 @@ export function runsOnHost(operation: { kind: string }, session: HostCommandSess
 
 export function validRepinRef(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 255
-    && !/[\s\x00-\x1f\x7f\\~^:?*\[]/.test(value) && !/[\uD800-\uDFFF]/u.test(value)
+    && !/[\s\x00-\x1f\x7f\\~^:?*[]/.test(value) && !/[\uD800-\uDFFF]/u.test(value)
     && value !== "@" && !value.includes("..") && !value.includes("@{") && !value.endsWith(".")
     && !value.split("/").some(part => !part || part.startsWith(".") || part.endsWith(".lock"));
 }

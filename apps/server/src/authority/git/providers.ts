@@ -270,7 +270,6 @@ const gitea: GitProviderAdapter = {
 };
 
 const bitbucketApi = 'https://api.bitbucket.org/2.0';
-const bitbucketWeb = 'https://bitbucket.org';
 const bitbucketWorkspacePages = 10;
 function bitbucketHeaders(credential: GitCredential): Headers {
   return { Authorization: credential.username ? basic(credential.username, credential.token) : `Bearer ${credential.token}` };

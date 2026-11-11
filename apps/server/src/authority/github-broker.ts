@@ -420,7 +420,7 @@ export async function githubRead(c: AppContext, connectorId: string | null): Pro
   const sessionId = identifier(input.sessionId, 'sessionId');
   const actorId = userIdentifier(input.actorId, 'actorId');
   const admissionId = text(input.admissionId, 'admissionId', 128);
-  const callId = identifier(input.callId, 'callId');
+  identifier(input.callId, 'callId');
   const repository = githubRepositoryName(input.repository);
   const number = issueNumber(input.issue);
   const authorize = async (): Promise<SessionRow> => {

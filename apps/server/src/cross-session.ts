@@ -8,7 +8,7 @@ import {
 } from '../../../packages/shared/src/cross-session.js';
 import { asSessionOwner, errorCode } from './automatic-backups.js';
 import {
-  auditStatement, hostCapabilities, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
+  auditStatement, requireCallbackScope, requireSession, requireSessionCreator, requireToolCall, sessionAccess, sessionReaders,
   sessionsNeedGranted, workspaceSessionAccess,
 } from './authority/index.js';
 import { getUser } from './db.js';
