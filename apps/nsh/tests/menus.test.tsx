@@ -104,7 +104,6 @@ describe("a session's right-click menu", () => {
     await app.longPress("id:session-row-s1");
     await app.waitFor("id:menu-copy-id");
     expect(app.shows("id:menu-rename")).toBe(true);
-    // The platforms report the held finger's lift as a press of the row, which hears no long presses itself.
     await app.press("id:session-row-s1");
     expect(app.shows("id:menu-copy-id")).toBe(true);
     expect(app.shows("id:session-actions")).toBe(false);
@@ -112,7 +111,6 @@ describe("a session's right-click menu", () => {
     expect(app.clipboard()).toBe("s1");
     await app.waitUntil(() => !app.shows("id:menu-copy-id"));
 
-    // Once the menu is gone, a tap opens the session again.
     await app.press("id:session-row-s1");
     await app.waitFor("id:session-actions");
   });
