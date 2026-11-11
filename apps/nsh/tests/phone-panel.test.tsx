@@ -5,7 +5,7 @@ const sizes: [string, { width?: number; height?: number }][] = [
   ["phone", {}],
   ["phone landscape", { width: 932, height: 430 }],
   ["ipad", { width: 1024, height: 1366 }],
-  ["ipad portrait small", { width: 744, height: 1133 }],
+  ["ipad mini portrait", { width: 744, height: 1133 }],
 ];
 
 describe("a session's panel on iOS", () => {
