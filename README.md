@@ -74,6 +74,7 @@ The [quick start](docs/quick-start.md) walks through it step by step.
   - [Host commands](docs/host-commands.md)
   - [Backups, restores and moving sessions](docs/backups.md)
   - [iPhone, iPad, Mac and Windows apps](docs/apps.md)
+  - [Desktop app user guide](docs/desktop/README.md): use it as a [client](docs/desktop/client.md), a [host](docs/desktop/host.md), or [self host](docs/desktop/self-host.md) all of Pikibun on your computer
 - [Running Pikibun on your own computer](docs/local.md)
 - [Running the server](docs/self-hosting.md): Docker, configuration, administration and storage
 - [Development](docs/development.md): building, testing, releasing and the repository layout
