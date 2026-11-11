@@ -115,6 +115,8 @@ export const defaultWorkspaceExtensions: readonly string[] = Object.freeze([
   "npm:pi-web-access@0.46.0",
   "npm:pi-web-search@1.7.0",
   "npm:cc-safety-net@2.7.2",
+  "piki:prompt-audit",
+  "piki:context-files",
 ]);
 
 export function withSessionToolsListed(extensions: readonly WorkspaceExtension[]): WorkspaceExtension[] {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
@@ -234,13 +234,13 @@ test('every workspace starts with popular extensions, turned off, and existing o
   const f = await fixture(t);
   const alice = await f.client('alice');
   const off = (source: string) => ({ source, enabled: false, tools: 'automatic' as const, settings: {} });
-  const expected = ['npm:pi-web-access@0.46.0', 'npm:pi-web-search@1.7.0', 'npm:cc-safety-net@2.7.2'];
+  const expected = ['npm:pi-web-access@0.46.0', 'npm:pi-web-search@1.7.0', 'npm:cc-safety-net@2.7.2', 'piki:prompt-audit', 'piki:context-files'];
   assert.deepEqual(defaultWorkspaceExtensions, expected);
   const { workspace } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'New' }), 201);
   const path = `/api/workspaces/${workspace.id}/extensions`;
   assert.deepEqual((await json<{ extensions: WorkspaceExtension[] }>(await alice.request('GET', path))).extensions, withSessionToolsListed(expected.map(off)));
   const sources = await sessionExtensionSources(f.env, { workspace_id: workspace.id, owner_id: alice.user.id, connector_owner_id: alice.user.id });
-  assert.deepEqual(expected.map(sources), [false, false, false]);
+  assert.deepEqual(expected.map(sources), [false, false, false, false, false]);
 
   const { workspace: older } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'Older' }), 201);
   const { workspace: full } = await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name: 'Full' }), 201);
@@ -257,11 +257,38 @@ test('every workspace starts with popular extensions, turned off, and existing o
     off('npm:pi-web-access@0.46.0'),
     off('npm:cc-safety-net@2.7.2'),
   ]);
-  assert.deepEqual(await listed(workspace.id), expected.map(off), 'a workspace that has them is left as it is');
+  assert.deepEqual(await listed(workspace.id), expected.filter(source => !source.startsWith('piki:')).map(off), 'a workspace that has them is left as it is');
   assert.equal((await listed(full.id)).length, 32, 'a workspace at the limit gets no more');
   const row = f.sqlite.prepare('SELECT updated_by, updated_at FROM workspace_extensions WHERE workspace_id = ? AND package_key = ?').get(older.id, 'npm:pi-web-access') as { updated_by: string; updated_at: string };
   assert.equal(row.updated_by, alice.user.id, 'set by the workspace\'s owner');
   assert.match(row.updated_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+});
+
+test('existing workspaces got the prompt audit and context files, turned off, after their own', async t => {
+  const f = await fixture(t);
+  const alice = await f.client('alice');
+  const off = (source: string) => ({ source, enabled: false, tools: 'automatic' as const, settings: {} });
+  const create = async (name: string) => (await json<{ workspace: { id: string } }>(await alice.request('POST', '/api/workspaces', { name }), 201)).workspace.id;
+  const [older, own, full, untouched] = [await create('Older'), await create('Own'), await create('Full'), await create('Untouched')];
+  f.sqlite.prepare("DELETE FROM workspace_extensions WHERE workspace_id IN (?, ?, ?) AND package_key IN ('piki:prompt-audit', 'piki:context-files')").run(older, own, full);
+  await json(await alice.request('PUT', `/api/workspaces/${own}/extensions`, { source: 'piki:prompt-audit', enabled: true, settings: { audit: 'all' } }));
+  for (let index = 0; index < 28; index++) await json(await alice.request('PUT', `/api/workspaces/${full}/extensions`, { source: `npm:extension-${index}@1.0.0` }));
+  await json(await alice.request('PUT', `/api/workspaces/${full}/extensions`, { source: 'piki:node' }));
+  await json(await alice.request('PUT', `/api/workspaces/${older}/extensions`, { source: 'piki:node' }));
+  assert.ok(readdirSync(new URL('../apps/server/migrations/postgres/', import.meta.url)).includes('0057_default_audit_context_extensions.sql'), 'Postgres has the same migration');
+  f.sqlite.exec(readFileSync(new URL('../apps/server/migrations/sqlite/0064_default_audit_context_extensions.sql', import.meta.url), 'utf8'));
+  const listed = async (id: string) => (await json<{ extensions: WorkspaceExtension[] }>(await alice.request('GET', `/api/workspaces/${id}/extensions`))).extensions
+    .filter(item => !pikiSessionToolExtensions().some(tools => tools.source === item.source));
+  const defaults = ['npm:pi-web-access@0.46.0', 'npm:pi-web-search@1.7.0', 'npm:cc-safety-net@2.7.2'].map(off);
+  assert.deepEqual(await listed(older), [...defaults, off('piki:prompt-audit'), off('piki:context-files')]);
+  assert.deepEqual(await listed(own), [...defaults, { source: 'piki:prompt-audit', enabled: true, tools: 'automatic', settings: { audit: 'all' } }, off('piki:context-files')],
+    'a workspace that has one keeps its own');
+  assert.deepEqual((await listed(full)).map(item => item.source).slice(-2), ['npm:extension-27@1.0.0', 'piki:prompt-audit'],
+    'Pikibun\'s session tools take none of its 32 places, and a workspace at the limit gets no more');
+  assert.equal((await listed(full)).length, 32);
+  assert.deepEqual(await listed(untouched), [...defaults, off('piki:prompt-audit'), off('piki:context-files')], 'a new workspace has them already');
+  const sources = await sessionExtensionSources(f.env, { workspace_id: older, owner_id: alice.user.id, connector_owner_id: alice.user.id });
+  assert.deepEqual(['piki:prompt-audit', 'piki:context-files'].map(sources), [false, false]);
 });
 
 test('piki:sources, split into one extension per kind of document source, reaches connectors that have only it as whether any kind is on', async () => {
@@ -321,7 +348,8 @@ test('Pikibun\'s session tools are in no workspace by default: pages and connect
   const { workspace } = await json<{ workspace: { id: string } }>(await s.alice.request('POST', '/api/workspaces', { name: 'Fresh' }), 201);
   const fresh = await workspaceExtensions(f.env, workspace.id);
   assert.deepEqual(fresh.filter(item => item.source.startsWith('piki:') && item.enabled), []);
-  assert.equal(f.sqlite.prepare("SELECT COUNT(*) AS n FROM workspace_extensions WHERE workspace_id = ? AND package_key LIKE 'piki:%'").get(workspace.id)!.n, 0);
+  assert.deepEqual(f.sqlite.prepare("SELECT package_key FROM workspace_extensions WHERE workspace_id = ? AND package_key LIKE 'piki:%' ORDER BY position").all(workspace.id)
+    .map(row => row.package_key), ['piki:prompt-audit', 'piki:context-files'], 'none of the session tools, only the default extensions');
 });
 
 test('a workspace\'s first repository brings piki:git (and piki:github on GitHub), its first source of a kind that kind\'s extension; one turned off stays off', async t => {

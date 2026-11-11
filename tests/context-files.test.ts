@@ -259,6 +259,8 @@ test("a clone made during a message gets its files in the result of the call tha
   assert.equal(await handlers.get("tool_result")!(result("Cloning into 'bare'..."), { cwd }), undefined, "a clone without the files adds nothing");
 });
 
-test("the package's module is the extension", async () => {
+test("the package's module is the extension, and the connector's piki:context-files", async () => {
   assert.equal((await import("../extensions/context-files/index.ts")).default, contextFilesExtension);
+  const { connectorPikiExtension } = await import("../apps/runner/src/extensions/piki/index.ts");
+  assert.equal(connectorPikiExtension("piki:context-files")!.factory, contextFilesExtension);
 });

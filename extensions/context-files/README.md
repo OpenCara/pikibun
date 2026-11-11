@@ -63,11 +63,13 @@ you trust.
 
 ## In Pikibun
 
-This is a Pi package of its own, not built into the connector. A host installs it like any other extension, and a
-workspace then turns it on and sets its settings under **Settings → Workspaces →** the workspace **→ Extensions**:
+Every connector has it built in as `piki:context-files`, at the connector's version, so hosts install nothing. Every
+workspace has it among its extensions, turned off: its owners and admins turn it on and set its settings under
+**Settings → Workspaces →** the workspace **→ Extensions**. See [the design](../../docs/design/piki-extensions.md#the-context-files-pikicontext-files).
+
+A host can also run this directory as a dev extension instead, to try changes in the host owner's own sessions:
 
 ```sh
-npx pikibun@latest extensions add npm:@opencara/pi-context-files@0.1.0   # once it is published
 npx pikibun@latest extensions add ./extensions/context-files             # dev mode, from a clone: the host owner's own sessions only
 ```
 
