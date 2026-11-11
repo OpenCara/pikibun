@@ -236,7 +236,7 @@ export async function runScheduledPrompts(env: Env, at = Date.now()): Promise<Sc
   try {
     await Promise.allSettled(Array.from({ length: Math.min(hostConcurrency, queue.length) }, worker));
   } finally {
-    for (const key of hosts.keys()) busy.delete(key);
+    for (const [key] of queue.splice(0)) busy.delete(key);
   }
   return outcomes.filter((outcome): outcome is ScheduledPromptOutcome => outcome !== undefined);
 }
