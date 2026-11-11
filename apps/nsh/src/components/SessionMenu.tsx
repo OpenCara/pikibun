@@ -70,6 +70,7 @@ export function createSessionMenu(): SessionMenu {
         ? { label: "Unarchive", icon: "archive", testID: "menu-unarchive", disabled: busy || packedForOthers, hint: packedForOthers ? "Its files are packed: only its owner can" : undefined,
           onSelect: () => void action.run(async () => { await session().api(`${base(current)}/unarchive`, { method: "POST" }); changed(); }, unarchiveNotice(current)) } satisfies MenuAction
         : null,
+      packedForOthers,
     };
   }
 
@@ -82,10 +83,10 @@ export function createSessionMenu(): SessionMenu {
   }
 
   function swipe(current: SessionRecord, more: () => void): { leading: SwipeAction[]; trailing: SwipeAction[] } {
-    const { copyLink, rename, archive, unarchive } = actions(current);
+    const { copyLink, rename, archive, unarchive, packedForOthers } = actions(current);
     const tile = (item: MenuAction, tone: SwipeAction["tone"], name: string): SwipeAction =>
       ({ label: item.label, icon: item.icon ?? "more", tone, disabled: item.disabled, testID: `swipe-${name}-${current.id}`, onPress: item.onSelect });
-    const shelve = archive ? tile(archive, "warning", "archive") : unarchive ? tile(unarchive, "info", "unarchive") : null;
+    const shelve = archive ? tile(archive, "warning", "archive") : unarchive && !packedForOthers ? tile(unarchive, "info", "unarchive") : null;
     return {
       leading: [tile(copyLink, "accent", "copy-link"), ...(rename ? [tile(rename, "info", "rename")] : [])],
       trailing: [{ label: "More", icon: "more", testID: `swipe-more-${current.id}`, onPress: more }, ...(shelve ? [shelve] : [])],

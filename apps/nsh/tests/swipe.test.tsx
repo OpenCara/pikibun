@@ -114,6 +114,35 @@ describe("swiping a session's row on a phone", () => {
     await app.waitUntil(() => !app.shows("id:swipe-more-m5"));
   });
 
+  test("offers no Unarchive tile where only its owner can unarchive it, and its menu says why", async () => {
+    const packed = { ...sessionRecord, id: "s6", ownerId: "u2", title: "Packed spike", status: "archived", activity: "idle", packed: true };
+    const app = await phone({ [`GET ${ORIGIN}/api/sessions`]: { body: { sessions: [sessionRecord, packed] } } });
+    await app.press("id:toggle-archived");
+    await app.waitFor("id:session-row-s6");
+    await app.drag("id:session-row-s6", { x: -160 });
+    await app.waitFor("id:swipe-more-s6");
+    expect(app.shows("id:swipe-unarchive-s6")).toBe(false);
+    await app.press("id:swipe-more-s6");
+    await app.waitFor("id:menu-unarchive");
+    expect(app.shows("text:Its files are packed: only its owner can")).toBe(true);
+  });
+
+  test("an open row keeps showing the tiles it still has when they change", async () => {
+    const team = { id: "w2", name: "Difference Engine", ownerId: "u2", role: "member" };
+    let handedOver = false;
+    const mine = () => ({ ...sessionRecord, id: "s7", workspaceId: "w2", ownerId: handedOver ? "u2" : "u1", title: "Busy work", activity: "working" });
+    const app = await phone({
+      [`GET ${ORIGIN}/api/workspaces`]: { body: { workspaces: [workspace, team] } },
+      [`GET ${ORIGIN}/api/sessions`]: () => ({ body: { sessions: [mine()] } }),
+    });
+    await app.waitFor("id:session-row-s7");
+    await app.drag("id:session-row-s7", { x: 160 });
+    await app.waitFor("id:swipe-rename-s7");
+    handedOver = true;
+    await app.waitUntil(() => !app.shows("id:swipe-rename-s7"), { timeout: 15_000 });
+    expect(app.shows("id:swipe-copy-link-s7")).toBe(true);
+  });
+
   test("offers only copying its link and the menu to someone who doesn't manage the session", async () => {
     const team = { id: "w2", name: "Difference Engine", ownerId: "u2", role: "member" };
     const theirs = { ...sessionRecord, id: "s5", workspaceId: "w2", ownerId: "u2", title: "Babbage's notes", visibility: "workspace", permissions: ["read"] };

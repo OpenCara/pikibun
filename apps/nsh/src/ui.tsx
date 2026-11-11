@@ -599,6 +599,14 @@ export function SwipeRow(props: {
   effect(() => {
     if (!props.open && untracked(() => rest !== 0)) settle(0, rest);
   });
+  effect(() => {
+    const leadingOpen = leadingWidth();
+    const trailingOpen = -trailingWidth();
+    untracked(() => {
+      const side = rest > 0 ? leadingOpen : rest < 0 ? trailingOpen : 0;
+      if (rest !== side) settle(side, rest);
+    });
+  });
   const run = (action: SwipeAction) => {
     settle(0, rest);
     action.onPress();
