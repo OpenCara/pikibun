@@ -9,6 +9,7 @@ import { type ConnectorRelayEnvelope } from '../apps/server/src/connector-transp
 import type { Env } from '../apps/server/src/types.js';
 import { decryptToken, encryptToken } from '../apps/server/src/authority/vault.js';
 import { runScheduledPrompts } from '../apps/server/src/scheduled-prompts.js';
+import { runAutomaticPacking } from '../apps/server/src/automatic-packing.js';
 import { fakeHub, seedAgentVersion, seedSavedAgentSession, testDatabase, type FakeHub } from './helpers/control-plane.js';
 import type { ConnectorCredentials, ConnectorInfo, ConnectorPairing, HostCommandGrant, HostModelSettings } from '../packages/shared/src/connector.js';
 import type { AgentVersion, GitHubIssueView, ModelDefinition, Operation, RunnerBinding, SessionRecord, SessionView } from '../packages/shared/src/types.js';
@@ -1621,7 +1622,7 @@ test('owners rename and archive sessions; archived sessions are read-only and un
   assert.equal(s.hub.requests.length, 1, 'Renaming and archiving must not contact the host');
 });
 
-test('owners pack an archived session\'s files on its host, and unarchiving unpacks them first, which only the owner does then', async t => {
+test('owners pack an archived session\'s files on its host, and unarchiving unpacks them first, as its owner, whoever of those who manage it unarchives it', async t => {
   const f = await fixture(t); const s = await privateHostSession(f);
   const path = `/api/sessions/${s.session.id}`;
   const actions: string[] = [];
@@ -1661,8 +1662,7 @@ test('owners pack an archived session\'s files on its host, and unarchiving unpa
   assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', path))).session.packed, true);
   await denied(await s.owner.request('POST', `${path}/submit`, { content: 'hi', requestId: 'packed-request' }), 409, 'session_archived');
 
-  await denied(await s.member.request('POST', `${path}/unarchive`), 403, 'owner_required');
-  const restored = await json<{ session: SessionRecord }>(await s.owner.request('POST', `${path}/unarchive`));
+  const restored = await json<{ session: SessionRecord }>(await s.member.request('POST', `${path}/unarchive`));
   assert.equal(restored.session.status, 'ready');
   assert.equal(restored.session.packed, undefined);
   assert.deepEqual(actions, ['pack', 'unpack', 'restart']);
@@ -1691,6 +1691,83 @@ test('owners pack an archived session\'s files on its host, and unarchiving unpa
   await json(await s.owner.request('POST', `${path}/archive`));
   await json(await s.owner.request('POST', `${path}/unarchive`));
   assert.equal(actions.length, 8);
+});
+
+test('archived sessions are packed a week on, where their host is online and keeps ignored files, as their owners would, unless their workspace turned it off', async t => {
+  const f = await fixture(t); const s = await privateHostSession(f);
+  const path = `/api/sessions/${s.session.id}`;
+  const settings = `/api/workspaces/${s.team.id}/packing`;
+  const actions: string[] = [];
+  let packReply = () => Response.json({ packed: true, files: 3, clones: 1, bytes: 2048 });
+  rpcHub(f, s.connector, envelope => {
+    const { action } = envelope.request.ticket;
+    actions.push(action);
+    assert.equal(envelope.request.ticket.actorId, s.owner.user.id);
+    if (action === 'pack') return packReply();
+    if (action === 'unpack') return Response.json({ unpacked: true });
+    if (action === 'restart') return Response.json({ ok: true, sessionId: s.session.id });
+    return Response.json({ error: 'Unexpected test relay request' }, { status: 503 });
+  });
+  const row = () => ({ ...f.sqlite.prepare('SELECT pack_due_at, packed_at FROM sessions WHERE id = ?').get(s.session.id) as { pack_due_at: string | null; packed_at: string | null } });
+  const capabilities = JSON.parse((f.sqlite.prepare('SELECT capabilities_json FROM connectors WHERE id = ?').get(s.connector.connectorId) as { capabilities_json: string }).capabilities_json);
+  const host = (extra: Record<string, unknown>) => f.sqlite.prepare('UPDATE connectors SET capabilities_json = ? WHERE id = ?')
+    .run(JSON.stringify({ ...capabilities, ...extra }), s.connector.connectorId);
+  const audits = (action: string) => (f.sqlite.prepare('SELECT detail_json FROM audit WHERE session_id = ? AND action = ? ORDER BY created_at, rowid')
+    .all(s.session.id, action) as { detail_json: string }[]).map(entry => JSON.parse(entry.detail_json));
+  const week = 7 * 24 * 3600_000; const hour = 3600_000;
+  const id = s.session.id;
+
+  const before = Date.now();
+  await json(await s.owner.request('POST', `${path}/archive`));
+  const due = Date.parse(row().pack_due_at!);
+  assert.ok(due >= before + week && due <= Date.now() + week, 'a week after archiving');
+  await json(await s.owner.request('POST', `${path}/unarchive`));
+  assert.equal(row().pack_due_at, null, 'unarchiving calls it off');
+  await json(await s.owner.request('POST', `${path}/archive`));
+  let at = Date.parse(row().pack_due_at!);
+  assert.deepEqual(await runAutomaticPacking(f.env, at - 1000), [], 'not before its week is out');
+
+  host({ sessionPacking: true });
+  assert.deepEqual(await runAutomaticPacking(f.env, at), [{ sessionId: id, deferred: 'connector_outdated' }], 'an older host would drop ignored files');
+  assert.equal(row().pack_due_at, new Date(at + 24 * hour).toISOString());
+  host({ sessionPacking: true, packIgnoredFiles: true });
+  at += 24 * hour;
+
+  assert.deepEqual(await json<{ settings: { automatic: boolean } }>(await s.member.request('GET', settings)), { settings: { automatic: true } });
+  await denied(await s.member.request('PUT', settings, { automatic: false }), 403, 'forbidden');
+  assert.equal((await s.owner.request('PUT', settings, { automatic: 'no' })).status, 400);
+  assert.deepEqual(await json(await s.owner.request('PUT', settings, { automatic: false })), { settings: { automatic: false } });
+  assert.deepEqual(await runAutomaticPacking(f.env, at), [], 'turned off for the workspace');
+  await json(await s.owner.request('PUT', settings, { automatic: true }));
+
+  const connection = (f.sqlite.prepare('SELECT connection_hash FROM connectors WHERE id = ?').get(s.connector.connectorId) as { connection_hash: string }).connection_hash;
+  f.sqlite.prepare('UPDATE connectors SET connection_hash = NULL WHERE id = ?').run(s.connector.connectorId);
+  assert.deepEqual(await runAutomaticPacking(f.env, at), [], 'its host is offline');
+  assert.equal(row().packed_at, null, 'never marked packed while its host is away');
+  f.sqlite.prepare('UPDATE connectors SET connection_hash = ? WHERE id = ?').run(connection, s.connector.connectorId);
+
+  packReply = () => Response.json({ error: 'Packing requires an idle session including queued work' }, { status: 409 });
+  assert.deepEqual(await runAutomaticPacking(f.env, at), [{ sessionId: id, deferred: 'runner_error' }]);
+  assert.deepEqual(row(), { pack_due_at: new Date(at + hour).toISOString(), packed_at: null }, 'tried again an hour on');
+  assert.deepEqual(await runAutomaticPacking(f.env, at + hour - 1000), []);
+  packReply = () => Response.json({ packed: true, files: 3, clones: 1, bytes: 2048 });
+  assert.deepEqual(await runAutomaticPacking(f.env, at + hour), [{ sessionId: id, packed: true }]);
+  assert.equal(row().pack_due_at, null);
+  assert.ok(row().packed_at);
+  assert.deepEqual(audits('session.packed'), [{ files: 3, clones: 1, bytes: 2048, automatic: true }]);
+  assert.equal((await json<{ session: SessionRecord }>(await s.owner.request('GET', path))).session.packed, true);
+  assert.deepEqual(await runAutomaticPacking(f.env, at + 30 * week), []);
+
+  await json(await s.owner.request('POST', `${path}/unarchive`));
+  await json(await s.owner.request('POST', `${path}/archive`));
+  at = Date.parse(row().pack_due_at!);
+  packReply = () => Response.json({ error: 'One of this session\'s clones has stashed changes (git stash), which a pack can\'t keep. Unarchive it to apply or drop them, or leave it unpacked' }, { status: 422 });
+  assert.deepEqual(await runAutomaticPacking(f.env, at), [{ sessionId: id, refused: 'runner_error' }]);
+  assert.deepEqual(row(), { pack_due_at: null, packed_at: null }, 'a refusal is final: its files stay as they are');
+  assert.deepEqual(audits('session.pack_refused'), [{ automatic: true, code: 'runner_error',
+    reason: 'One of this session\'s clones has stashed changes (git stash), which a pack can\'t keep. Unarchive it to apply or drop them, or leave it unpacked' }]);
+  assert.deepEqual(await runAutomaticPacking(f.env, at + week), []);
+  assert.deepEqual(actions, ['pack', 'pack', 'unpack', 'restart', 'pack'], 'each made as the owner');
 });
 
 test('the host\'s authorization callback admits reads of an archived session, packing and unpacking it, and nothing else of it', async t => {

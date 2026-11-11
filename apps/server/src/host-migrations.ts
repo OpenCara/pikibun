@@ -15,6 +15,7 @@ import { runnerJSON, runnerRequest } from './runner.js';
 import { boundedSnapshotText, MAX_BACKUP_BYTES, repositoryIdentity, validateSnapshot } from './restore-snapshot.js';
 import { migratedAgentVersion, requireModel } from './catalog.js';
 import { ConstraintError } from './db/types.js';
+import { packDueAfterArchiving } from './automatic-packing.js';
 
 interface MigrationJob {
   id: string; request_id: string; owner_id: string; workspace_id: string;
@@ -197,8 +198,8 @@ export function registerHostMigrations(app: Hono<AppEnv>): void {
       await c.env.DB.batch([
         c.env.DB.query(`UPDATE sessions SET status = 'ready' WHERE id = ? AND status <> 'archived' AND ${held}`)
           .bind(target.id, job.id, tokenHash),
-        c.env.DB.query(`UPDATE sessions SET archived_status = status, status = 'archived', policy_version = policy_version + 1
-          WHERE id = ? AND status <> 'archived' AND ${held}`).bind(sourceId, job.id, tokenHash),
+        c.env.DB.query(`UPDATE sessions SET archived_status = status, status = 'archived', policy_version = policy_version + 1, pack_due_at = ?
+          WHERE id = ? AND status <> 'archived' AND ${held}`).bind(packDueAfterArchiving(), sourceId, job.id, tokenHash),
         c.env.DB.query(`UPDATE host_migrations SET status = 'completed', completed_at = ?, snapshot = NULL, download_token_hash = NULL,
           download_expires_at = 0, lease_until = 0 WHERE id = ? AND status = 'pending' AND download_token_hash = ?`)
           .bind(now(), job.id, tokenHash),
@@ -252,9 +253,9 @@ export function registerHostMigrations(app: Hono<AppEnv>): void {
         c.env.DB.query(`UPDATE host_migrations SET status = 'cancelled', completed_at = ?, snapshot = NULL, download_token_hash = NULL,
           download_expires_at = 0, lease_until = 0 WHERE id = ? AND status = 'pending' AND lease_until <= ?`)
           .bind(now(), job.id, timestamp),
-        c.env.DB.query(`UPDATE sessions SET archived_status = 'error', status = 'archived', policy_version = policy_version + 1
+        c.env.DB.query(`UPDATE sessions SET archived_status = 'error', status = 'archived', policy_version = policy_version + 1, pack_due_at = ?
           WHERE id = ? AND status <> 'archived' AND EXISTS (SELECT 1 FROM host_migrations WHERE id = ? AND status = 'cancelled')`)
-          .bind(job.target_session_id, job.id),
+          .bind(packDueAfterArchiving(), job.target_session_id, job.id),
       ]);
       const latest = await c.env.DB.query<MigrationJob>('SELECT * FROM host_migrations WHERE id = ?').bind(job.id).first();
       if (latest?.status === 'completed') fail(409, 'migration_completed', 'This move has already completed.');

@@ -224,6 +224,79 @@ for pack in (False, True):
   }
 });
 
+test("a pack keeps a clone's ignored files, except dependencies and build output that installing again brings back", { skip: spawnSync("git", ["--version"]).status !== 0 }, async t => {
+  const { HELPER } = await import("../apps/runner/src/sandbox.js");
+  const root = await directory(t);
+  const home = join(root, "home"), work = join(root, "work"), app = join(work, "app");
+  await mkdir(home);
+  await mkdir(join(work, ".git"), { recursive: true });
+  const env = { HOME: home, SANDBOX_WORKTREE: work, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Alice", GIT_AUTHOR_EMAIL: "alice@example.test", GIT_COMMITTER_NAME: "Alice", GIT_COMMITTER_EMAIL: "alice@example.test" };
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync("git", args, { cwd, env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  git(root, "init", "-q", "--bare", "-b", "main", "origin.git");
+  git(root, "clone", "-q", join(root, "origin.git"), app);
+  await writeFile(join(app, ".gitignore"), "node_modules/\ndist/\n.env*\n.data/\n*.sqlite\n*.log\n__pycache__/\nvendor/\n");
+  await writeFile(join(app, "a.txt"), "one");
+  git(app, "add", ".");
+  git(app, "commit", "-qm", "one");
+  git(app, "push", "-q", "origin", "main");
+  const put = async (path: string, text: string) => {
+    await mkdir(join(app, path, ".."), { recursive: true });
+    await writeFile(join(app, path), text);
+  };
+  await put(".env", "SECRET=1");
+  await put("server/.env.local", "PORT=1");
+  await put(".data/state/db.sqlite", "rows");
+  await put(".data/state/node_modules/pkg/index.js", "rebuilt");
+  await put("local.sqlite", "rows");
+  await put("notes.txt", "untracked, as before");
+  await put("node_modules/pkg/index.js", "rebuilt");
+  await put("web/node_modules/pkg/index.js", "rebuilt");
+  await put("dist/app.js", "built");
+  await put("server.log", "noise");
+  await put("py/__pycache__/m.cpython-312.pyc", "compiled");
+  await put("vendor/lib.php", "kept: vendor isn't on the list");
+  const program = HELPER.replace(/\ntry:\n    main\(\)[\s\S]*$/, "\n") + `
+for pack in (False, True):
+    try:
+        print(clone_backup(pack)['clones'][0]['worktree'])
+    except ValueError as error:
+        print(error)
+`;
+  const backups = () => {
+    const result = spawnSync("/usr/bin/python3", ["-I", "-c", program], { env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim().split("\n") as [string, string];
+  };
+  const files = (commit: string) => git(app, "ls-tree", "-r", "--name-only", commit).trim().split("\n").sort();
+  const [backup, pack] = backups();
+  assert.deepEqual(files(backup), [".gitignore", "a.txt", "notes.txt"], "a backup keeps what it kept before");
+  assert.deepEqual(files(pack), [".data/state/db.sqlite", ".env", ".gitignore", "a.txt", "local.sqlite", "notes.txt", "server/.env.local", "vendor/lib.php"]);
+  assert.equal(git(app, "show", `${pack}:.env`), "SECRET=1");
+  assert.equal(git(app, "status", "--porcelain"), "?? notes.txt\n", "the clone's own index is untouched");
+
+  await put(".data/big.sqlite", "x".repeat(17 * 1024 * 1024));
+  assert.match(backups()[1], /has ignored files too large to pack/);
+  await rm(join(app, ".data", "big.sqlite"));
+  git(root, "init", "-q", join(app, ".data", "checkout"));
+  assert.deepEqual(files(backups()[1]), files(pack), "a clone among them is backed up as a clone of its own");
+  await rm(join(app, ".data", "checkout"), { recursive: true });
+  git(root, "init", "-q", join(app, ".data", "a", "b", "checkout"));
+  assert.match(backups()[1], /has a Git repository among its ignored files/, "deeper than clones are looked for, it would be lost");
+  await rm(join(app, ".data", "a"), { recursive: true });
+  assert.deepEqual(files(backups()[1]), files(pack));
+  for (const message of ["the clone app has ignored files too large to pack", "the clone app has too many ignored files to pack",
+    "the clone app has a Git repository among its ignored files, which a pack can't keep"]) {
+    const error = packRefusal(new Error(`Sandbox process failed (exit 1): sandbox: ${message}`));
+    assert.ok(error instanceof RunnerError && error.status === 422 && /^[\w .,:'()-]{1,300}$/.test(error.message), message);
+    assert.match(error.message, /ignored/);
+  }
+});
+
 const isolation = process.platform !== "linux" ? "Linux only"
   : spawnSync("/usr/bin/bwrap", ["--unshare-all", "--unshare-user", "--die-with-parent", "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
     "--ro-bind", "/lib64", "/lib64", "--symlink", "usr/bin", "/bin", "--proc", "/proc", "--dev", "/dev", "--", "/usr/bin/true"], { timeout: 5000 }).status === 0

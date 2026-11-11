@@ -92,6 +92,7 @@ export interface SessionRow {
   visibility?: 'private' | 'workspace';
   archived_status?: 'provisioning' | 'ready' | 'error' | null;
   packed_at?: string | null;
+  pack_due_at?: string | null;
   activity?: SessionActivity | null;
   next_scheduled_at?: string | null;
   parent_session_id?: string | null;
