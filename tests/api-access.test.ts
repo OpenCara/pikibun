@@ -189,6 +189,23 @@ test("without a credential from Pikibun, the proxy says why", async t => {
   assert.equal((await call(failing.socketPath, "/repos/acme/app")).status, 403);
 });
 
+test("with the network open, a request Pikibun had no credential for that GitHub turns away says why, rather than look like GitHub's own limit", async t => {
+  const reason = "GitHub no longer accepts Pikibun's sign-in for the session owner (its token was revoked or replaced): they sign in to Pikibun with GitHub again";
+  const { socketPath, upstream, log } = await proxy(t, { policy: { mode: "open" }, credential: async () => ({ available: false, reason, cacheSeconds: 60 }),
+    answer: request => request.url.pathname === "/repos/acme/app" ? { status: 200, body: "{\"id\":1701}" }
+      : { status: 403, headers: { "x-ratelimit-remaining": "0" }, body: "{\"message\":\"API rate limit exceeded for 203.0.113.9.\"}" } });
+  const fine = await call(socketPath, "/repos/acme/app");
+  assert.equal(fine.status, 200, "what GitHub answers without a credential still passes");
+  assert.equal(fine.body, "{\"id\":1701}");
+  const limited = await call(socketPath, "/repos/acme/app/actions/runs/7");
+  assert.equal(limited.status, 403);
+  const message = JSON.parse(limited.body).message as string;
+  assert.ok(message.startsWith(`${reason}. So this request reached GitHub without a credential, and it answered 403, its limit for requests without one`), message);
+  assert.doesNotMatch(message, /203\.0\.113\.9/);
+  assert.deepEqual(upstream.map(request => request.headers.authorization), [undefined, undefined]);
+  assert.deepEqual(log().map(entry => entry.reason), ["without a credential (200)", "without a credential (403)"]);
+});
+
 test("downloads GitHub redirects to its storage are fetched by the proxy without the credential; other redirects pass", async t => {
   const { socketPath, upstream } = await proxy(t, { answer: (request): Answer => {
     if (request.url.pathname.endsWith("/logs")) return { status: 302, headers: { location: "https://results-receiver.actions.githubusercontent.com/logs/1?sig=abc" } };

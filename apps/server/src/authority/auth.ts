@@ -11,6 +11,7 @@ import { appOrigin, fail, id, identifier, jsonObject, localMode, localOwnerQuery
 import type { AppContext, AuthIdentity, Env, UserRow, AppEnv } from '../types.js';
 import { assertVaultConfigured, encryptToken } from './vault.js';
 import { joinRequestStatement, requireInvitedWorkspace } from './invites.js';
+import { forgetDeadGitHubToken } from './github-sign-in.js';
 
 const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
 const NATIVE_SESSION_TTL = 30 * 24 * 60 * 60 * 1000;
@@ -235,19 +236,26 @@ async function githubJson(url: string, init: RequestInit): Promise<unknown> {
 export async function resetGitHubToken(env: Env, userId: string, token: string, ciphertext: string): Promise<boolean> {
   const { GITHUB_CLIENT_ID: clientId, GITHUB_CLIENT_SECRET: clientSecret } = env;
   if (!clientId || !clientSecret) return false;
-  const request = (method: 'PATCH' | 'DELETE', accessToken: string) => githubRequest(`https://api.github.com/applications/${encodeURIComponent(clientId)}/token`, {
+  const request = (method: 'PATCH' | 'DELETE' | 'POST', accessToken: string) => githubRequest(`https://api.github.com/applications/${encodeURIComponent(clientId)}/token`, {
     method, body: JSON.stringify({ access_token: accessToken }),
     headers: { Accept: 'application/vnd.github+json', Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`, 'Content-Type': 'application/json',
       'User-Agent': 'pikibun', 'X-GitHub-Api-Version': '2022-11-28' },
   });
+  const dead = async (): Promise<true> => {
+    await forgetDeadGitHubToken(env, userId, ciphertext, 'token reset');
+    return true;
+  };
   let replacement: string;
   try {
     const reset = await request('PATCH', token);
-    if (reset.status === 404) return true;
+    if (reset.status === 404) return await dead();
     const issued = record(reset.body) ? reset.body.token : undefined;
     if (reset.status !== 200 || typeof issued !== 'string' || !issued || issued.length > 16_384 || /[^\x21-\x7e]/.test(issued)) return false;
     replacement = issued;
   } catch {
+    try {
+      if ((await request('POST', token)).status === 404) return await dead();
+    } catch { }
     return false;
   }
   const stored = await env.DB.query('UPDATE github_tokens SET ciphertext = ?, updated_at = ? WHERE user_id = ? AND ciphertext = ? RETURNING user_id')

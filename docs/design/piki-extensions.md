@@ -385,6 +385,26 @@ extension's tool named like one of Pikibun's own (`load.ts`). A **session-tool e
     with no requests left or a `Retry-After`) now says so (`github_rate_limited`; the grant's reason), rather than that
     access couldn't be verified, which sent agents and people to reconnect accounts that were fine.
 
+40. **A dead sign-in, said as one.** The session in note 39 kept failing for hours, as "rate limited", with its owner's
+    quota almost untouched: the GitHub token Pikibun kept for them no longer worked. A push with the owner's account
+    resets that token afterwards (`resetGitHubToken`), and a reset GitHub carried out but whose answer never arrived left
+    the old, dead token in the vault; the retry then got `404` for it and counted that as done. With every check as the
+    owner failing, the credential grant had nothing to give, so under an open network policy the sandbox's `gh` went to
+    GitHub without a credential, whose 60 requests an hour per address ran out at once; git said its access "could not
+    be verified". Nothing healed with time. So:
+    - **GitHub refusing the token (`401`) forgets it** (`github-sign-in.ts`, `forgetDeadGitHubToken`, through
+      `GitHubAccess.expired`): `verifyRepository`, `github_read`, `github_comment` and the pull request states delete the
+      vault's row if it still holds that token, audited as `git.account.expired`, and say
+      `github_sign_in_expired`: the owner signs in to Pikibun with GitHub again. The account then shows as not connected,
+      and every tool says it has no GitHub connection, until they do.
+    - **A reset that dies with the token forgets it too.** A `404` for the old token, or no answer and then a `404`
+      from GitHub's check of it (`POST /applications/{client_id}/token`), forget the row if it still holds the old
+      token; a newer sign-in or reset is left alone. An unanswered reset whose token still works is retried as before.
+    - **The proxy says why GitHub turned a request away** (`ApiAccess`, `unaided`): a request that went without a
+      credential because Pikibun had none to give, and that GitHub answers `401`, `403`, `404` or `429`, gets
+      Pikibun's reason, and whether GitHub's limit for anonymous requests was the one used up, instead of GitHub's
+      answer. What GitHub serves without a credential still passes.
+
 Next: other ecosystems as usage asks for them (`jvm`).
 
 ## A browser: piki:browser

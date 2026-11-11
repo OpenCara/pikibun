@@ -4,6 +4,7 @@ import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, remember
 import { now } from '../http.js';
 import type { Env } from '../types.js';
 import { decryptToken } from './vault.js';
+import { forgetDeadGitHubToken } from './github-sign-in.js';
 
 const githubApi = 'https://api.github.com';
 const remoteTimeout = 20000;
@@ -50,7 +51,11 @@ export function pullRequestState(facts: PullRequestFacts): PullRequestState {
   return 'open';
 }
 
-class ReadError extends Error {}
+class ReadError extends Error {
+  constructor(message: string, readonly status?: number) { super(message); }
+}
+
+const rejected = (error: unknown) => error instanceof ReadError && error.status === 401;
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ReadError('unexpected GitHub response');
@@ -73,7 +78,7 @@ async function githubGet(token: string, path: string): Promise<unknown> {
   if (response.status !== 200) {
     if (!githubRateLimited(response)) forgetRead(token, url);
     await response.body?.cancel();
-    throw new ReadError(`GitHub answered ${response.status}`);
+    throw new ReadError(`GitHub answered ${response.status}`, response.status);
   }
   const bytes = await boundedBytes(response, pageBytes);
   const value = parse(bytes);
@@ -153,7 +158,9 @@ export async function refreshPullRequestStates(env: Env, limit = sweepLimit): Pr
     if (pull) {
       try {
         state = await readPullRequestState(await decryptToken(env, row.owner_id, row.ciphertext), pull.fullName, pull.number);
-      } catch { }
+      } catch (error) {
+        if (rejected(error)) await forgetDeadGitHubToken(env, row.owner_id, row.ciphertext, 'pull request states').catch(() => {});
+      }
     }
     await env.DB.query('UPDATE push_credentials SET pull_request_state = COALESCE(?, pull_request_state), pull_request_checked_at = ? WHERE id = ?')
       .bind(state, pull ? now() : neverStale, row.id).run();
@@ -180,7 +187,9 @@ async function refreshBranchPullRequests(env: Env, at: number, limit: number): P
       const token = await decryptToken(env, row.owner_id, row.ciphertext);
       found = await findBranchPullRequest(token, row.repository, row.branch, row.created_at);
       if (found) state = await readPullRequestState(token, row.repository, found.number);
-    } catch { }
+    } catch (error) {
+      if (rejected(error)) await forgetDeadGitHubToken(env, row.owner_id, row.ciphertext, 'pull request states').catch(() => {});
+    }
     const checkedAt = now();
     if (found && found.url !== row.pull_request_url) {
       await env.DB.query(`UPDATE session_branches SET pull_request_url = ?, pull_request_state = ?, pull_request_found_at = ?, pull_request_checked_at = ?

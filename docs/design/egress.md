@@ -476,6 +476,10 @@ could use it. Instead the proxy adds the credential, the way the Git relay does,
   workspace's repositories (`/user`) still go as the owner, and so does a read the App's token is refused (`403` or
   `404` without a rate limit's headers, as where the installation lacks a permission the owner has): the proxy asks
   once more with the owner's credential, as the lease's reads went before.
+- **Requests that go without a credential because Pikibun had none to give** (the grant was unavailable, and the
+  network policy lets them through) pass on what the API serves, but a `401`, `403`, `404` or `429` is answered with
+  Pikibun's reason instead (`unaided`), saying whether the API's limit for anonymous requests was used up: otherwise a
+  dead sign-in looks like a rate limit that never lifts.
 - **The credential** (`apps/server/src/authority/api-access.ts`, `apiCredential`; `POST /api/connectors/self/api/credential` or
   `/api/internal/api/credential`, with `access: write` for a lease's). The session's authority as for its Git requests
   (owner, not archived, connector and connection), a clone session, then the workspace's repositories of the host's

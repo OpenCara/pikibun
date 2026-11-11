@@ -8,6 +8,7 @@ import { authenticateConnector, requireConnectorSession, type ConnectorRow } fro
 import { recheckAccess, repositoryAccess, verifyRepository, type RepositoryAccess } from './repositories.js';
 import { credentialOrganization, loadCredential, recheckCredential, type LoadedCredential } from './git/accounts.js';
 import { mintGitHubApiReadTokens } from './push/mint.js';
+import { failureCode, githubSignInExpired } from './github-sign-in.js';
 
 export function sandboxGitHubApiMode(env: Env): 'on' | 'own-hosts' | 'off' {
   const value = env.SANDBOX_GITHUB_API?.trim().toLowerCase();
@@ -29,6 +30,7 @@ export function sessionApis(env: Env, session: SessionRow, repositories: Pick<Re
 }
 
 const OWN_CREDENTIAL_SECONDS = 3600;
+const signInExpired = 'GitHub no longer accepts Pikibun\'s sign-in for the session owner (its token was revoked or replaced): they sign in to Pikibun with GitHub again';
 
 export async function apiCredential(c: AppContext, connector: ConnectorRow | null): Promise<Response> {
   const input = await jsonObject(c, 4096);
@@ -97,17 +99,20 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
 
   let owner: RepositoryAccess;
   try { owner = await repositoryAccess(c.env, original.owner_id, 'github', 'github.com', bindings[0]!.full_name); }
-  catch { return unavailable('The session owner has no GitHub connection, which reaching the GitHub API with the workspace\'s repositories needs'); }
+  catch { return unavailable('The session owner has no GitHub connection, which reaching the GitHub API with the workspace\'s repositories needs: they sign in to Pikibun with GitHub again'); }
   const readable: { fullName: string; repositoryId: string }[] = [];
   let limited = false;
+  let expired = false;
   for (const binding of bindings.slice(0, 100)) {
     try {
       await verifyRepository(owner, { repositoryId: binding.repository_id, fullName: binding.full_name });
       readable.push({ fullName: binding.full_name, repositoryId: binding.repository_id });
     } catch (error) {
       if (error instanceof HTTPException && error.status === 429) { limited = true; break; }
+      if (await failureCode(error) === githubSignInExpired) { expired = true; break; }
     }
   }
+  if (expired) return unavailable(signInExpired);
   if (!readable.length) {
     return unavailable(limited ? 'The session owner\'s GitHub rate limit is used up, so Pikibun can\'t check their access to this workspace\'s repositories now; try again after it resets'
       : 'The session owner can read none of this workspace\'s github.com repositories');
