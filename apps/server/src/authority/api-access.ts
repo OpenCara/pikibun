@@ -1,5 +1,6 @@
 import { API_CREDENTIAL_CACHE_SECONDS, credentialedApiHosts, credentialedApiProviders, type ApiAccessKind, type ApiCredential, type ApiCredentialGrant,
   type CredentialedApiProvider } from '../../../../packages/shared/src/network.js';
+import { HTTPException } from 'hono/http-exception';
 import type { AppContext, Env, RepositoryRow, SessionRow } from '../types.js';
 import { sessionAccess } from './access.js';
 import { fail, identifier, jsonObject } from '../http.js';
@@ -98,13 +99,19 @@ export async function apiCredential(c: AppContext, connector: ConnectorRow | nul
   try { owner = await repositoryAccess(c.env, original.owner_id, 'github', 'github.com', bindings[0]!.full_name); }
   catch { return unavailable('The session owner has no GitHub connection, which reaching the GitHub API with the workspace\'s repositories needs'); }
   const readable: { fullName: string; repositoryId: string }[] = [];
+  let limited = false;
   for (const binding of bindings.slice(0, 100)) {
     try {
       await verifyRepository(owner, { repositoryId: binding.repository_id, fullName: binding.full_name });
       readable.push({ fullName: binding.full_name, repositoryId: binding.repository_id });
-    } catch { }
+    } catch (error) {
+      if (error instanceof HTTPException && error.status === 429) limited = true;
+    }
   }
-  if (!readable.length) return unavailable('The session owner can read none of this workspace\'s github.com repositories');
+  if (!readable.length) {
+    return unavailable(limited ? 'The session owner\'s GitHub rate limit is used up, so Pikibun can\'t check their access to this workspace\'s repositories now; try again after it resets'
+      : 'The session owner can read none of this workspace\'s github.com repositories');
+  }
   await recheckAccess(c.env, owner);
   await authorize();
   if (access === 'write') {

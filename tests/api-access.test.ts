@@ -314,6 +314,30 @@ test("an approved call's write lease writes as the session owner, and only while
   assert.equal(upstream.length, 2);
 });
 
+test("under a write lease, reads of the workspace's repositories keep the App's token, so watching a run doesn't spend the owner's rate limit", async t => {
+  const { instance, socketPath, upstream, asked, log } = await proxy(t, { credential: async (_host, access) => access === "write" ? owners : credentials });
+  const lease = instance.apiLease()!;
+  t.after(() => lease.release());
+  for (const path of ["/repos/acme/app/actions/runs/7", "/repos/acme/app/actions/runs/7/jobs", "/repos/acme/app/pulls/2"]) {
+    assert.equal((await call(socketPath, path, { headers: { authorization: `token ${lease.token}` } })).status, 200);
+  }
+  assert.deepEqual(upstream.map(request => request.headers.authorization), ["Bearer ghs_acme", "Bearer ghs_acme", "Bearer ghs_acme"]);
+  assert.deepEqual(asked, ["api.github.com"], "no read asks for the owner's credential");
+  assert.deepEqual(log().map(entry => entry.reason), ["read-only token for acme (200)", "read-only token for acme (200)", "read-only token for acme (200)"]);
+
+  const query = await call(socketPath, "/graphql", { method: "POST", headers: { "content-type": "application/json", authorization: `bearer ${lease.token}` },
+    body: JSON.stringify({ query: "query { viewer { login } }" }) });
+  assert.equal(query.status, 200);
+  assert.equal(upstream[3]!.headers.authorization, "Bearer gho_owner", "GraphQL, which may ask about the owner, goes as the owner");
+  const merge = await call(socketPath, "/repos/acme/app/pulls/2/merge", { method: "PUT", body: "{}", headers: { authorization: `token ${lease.token}` } });
+  assert.equal(merge.status, 200);
+  assert.equal(upstream[4]!.headers.authorization, "Bearer gho_owner");
+  assert.equal((await call(socketPath, "/user", { headers: { authorization: `token ${lease.token}` } })).status, 200);
+  assert.equal(upstream[5]!.headers.authorization, "Bearer gho_owner", "a read outside the repositories goes as the owner");
+  assert.equal((await call(socketPath, "/repos/acme/app/issues/3")).status, 200);
+  assert.equal(upstream[6]!.headers.authorization, "Bearer ghs_acme");
+});
+
 test("a write lease on a host that doesn't get the owner's credential reads as before, and its writes say why", async t => {
   const reason = "Writes through the API act as the session owner, so Pikibun allows them only on the session owner's own hosts";
   const { instance, socketPath, upstream } = await proxy(t, { credential: async (_host, access) => access === "write" ? { available: false, reason, cacheSeconds: 60 } : credentials });

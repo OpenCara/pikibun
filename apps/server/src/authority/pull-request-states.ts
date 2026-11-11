@@ -1,5 +1,6 @@
 import type { PullRequestState } from '../../../../packages/shared/src/types.js';
-import { boundedJson } from './github-broker.js';
+import { boundedBytes } from './github-broker.js';
+import { conditionalHeaders, forgetRead, recallRead, rememberRead } from './github-reads.js';
 import { now } from '../http.js';
 import type { Env } from '../types.js';
 import { decryptToken } from './vault.js';
@@ -58,14 +59,26 @@ function object(value: unknown): Record<string, unknown> {
 const string = (value: unknown): string => typeof value === 'string' ? value : '';
 
 async function githubGet(token: string, path: string): Promise<unknown> {
-  const response = await fetch(`${githubApi}${path}`, { redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout), headers: {
+  const url = `${githubApi}${path}`;
+  const remembered = recallRead(token, url);
+  const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(remoteTimeout), headers: {
     Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'OpenCara-Agent-Workspace',
+    ...conditionalHeaders(remembered),
   } });
+  const parse = (bytes: Uint8Array): unknown => JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  if (response.status === 304 && remembered) {
+    await response.body?.cancel();
+    return parse(remembered.bytes);
+  }
   if (response.status !== 200) {
+    forgetRead(token, url);
     await response.body?.cancel();
     throw new ReadError(`GitHub answered ${response.status}`);
   }
-  return boundedJson(response, pageBytes);
+  const bytes = await boundedBytes(response, pageBytes);
+  const value = parse(bytes);
+  rememberRead(token, url, response, bytes);
+  return value;
 }
 
 async function pages(token: string, path: string, key?: string): Promise<Record<string, unknown>[]> {

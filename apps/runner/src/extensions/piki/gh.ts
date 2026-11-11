@@ -23,6 +23,17 @@ const READS: Record<string, readonly string[] | true> = {
   help: true,
 };
 
+export const GH_WATCH_INTERVAL_SECONDS = 30;
+
+export function watchInterval(args: readonly string[]): readonly string[] {
+  const [group, command] = commandWords(args);
+  const watching = (group === "run" && command === "watch") || (group === "pr" && command === "checks" && hasOption(args, ["--watch"]));
+  if (!watching || hasOption(args, ["--interval"]) || hasShortOption(args, "i")) return args;
+  const end = args.indexOf("--");
+  const at = end === -1 ? args.length : end;
+  return [...args.slice(0, at), "--interval", String(GH_WATCH_INTERVAL_SECONDS), ...args.slice(at)];
+}
+
 export const ghSpec: CliSpec = {
   info: pikiExtension("piki:gh")!,
   command: "gh",
@@ -34,6 +45,7 @@ export const ghSpec: CliSpec = {
     "Name the repository with --repo owner/name: it runs in the session's worktree, or in directory, a clone in it.",
     "Use it rather than github_read, which spends the session owner's own GitHub rate limit: to read issues and pull requests (issue view, pr view --comments, pr checks),",
     "and to wait for a pull request's CI (pr checks <n> --watch, run watch <id>, with a timeout_seconds long enough); github_read with wait: \"change\" still waits for any other change (a comment, review or push).",
+    `A watch reads again every ${GH_WATCH_INTERVAL_SECONDS} seconds unless it names its own --interval: don't make it shorter, and don't poll in a loop instead, since every read counts against a GitHub rate limit that all of the owner's sessions share.`,
     "It reads the workspace's repositories always. It writes (comments, pull requests, merges, reruns) only on the session owner's own host, outside read-only;",
     "where it refuses a write, comment, open issues and merge with github_comment, github_issue and github_merge.",
     "Where the workspace set it read-only, only commands that read run.",
@@ -42,6 +54,7 @@ export const ghSpec: CliSpec = {
   passEnv: name => ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST", "GH_CONFIG_DIR"].includes(name),
   tokenEnv: ["GH_TOKEN", "GITHUB_TOKEN"],
   setEnv: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_NO_EXTENSION_UPDATE_NOTIFIER: "1", GH_SPINNER_DISABLED: "1", GH_PAGER: "cat" },
+  prepare: watchInterval,
   refused(args) {
     const words = positionals(args);
     if (words.includes("auth") && words.includes("token")) return "gh auth token would show its token";

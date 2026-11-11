@@ -1140,6 +1140,9 @@ test('sandboxed GitHub API reads follow SANDBOX_GITHUB_API and the session\'s au
   globalThis.fetch = async (input, init) => new URL(String(input)).pathname === '/repos/owner/repo' ? Response.json({ message: 'Not Found' }, { status: 404 }) : previousFetch(input, init);
   try {
     assert.deepEqual((await apiCredential(f)).body, { available: false, reason: 'The session owner can read none of this workspace\'s github.com repositories', cacheSeconds: 60 });
+    globalThis.fetch = async (input, init) => new URL(String(input)).pathname === '/repos/owner/repo'
+      ? Response.json({ message: 'API rate limit exceeded' }, { status: 403, headers: { 'x-ratelimit-remaining': '0' } }) : previousFetch(input, init);
+    assert.match((await apiCredential(f)).body.reason, /^The session owner's GitHub rate limit is used up/);
   } finally { globalThis.fetch = previousFetch; }
 
   f.sqlite.prepare("UPDATE sessions SET status = 'archived' WHERE id = 'session'").run();

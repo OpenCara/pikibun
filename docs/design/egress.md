@@ -466,10 +466,14 @@ could use it. Instead the proxy adds the credential, the way the Git relay does,
 - **Write leases** (`ApiAccess.lease`, `EgressProxy.apiLease`). A session's call of a Pikibun extension's command
   (`piki:gh`, `piki:glab`, `piki:azure-cli`; see [their design](piki-extensions.md), rule 8) that a person decided, outside
   the workspace's read-only setting, gets a lease for as long as it runs: 32 random bytes, which its token variables hold
-  instead of the plain placeholder (`apiWriteToken`). The proxy knows a lease only until the call ends; its requests,
-  reads and writes alike, then go with the session's **write** credential where the control plane gives one, and a write
-  without a lease, or with one it doesn't know, is refused. Sandbox operations run one at a time per session, so no
-  other command of the session runs while a lease holds.
+  instead of the plain placeholder (`apiWriteToken`). The proxy knows a lease only until the call ends; its requests
+  then go with the session's **write** credential where the control plane gives one, and a write without a lease, or
+  with one it doesn't know, is refused. Sandbox operations run one at a time per session, so no other command of the
+  session runs while a lease holds. GitHub REST reads of a repository the read credential covers keep that credential
+  under a lease: the owner's sign-in has one hourly quota for all of their sessions and Pikibun's own reads, and a
+  lease's call is usually one that mostly reads (`gh run watch` polls; `gh pr create` reads before it writes), so those
+  reads go on the App's quota instead. GraphQL, which may ask about the owner (`viewer`), and reads outside the
+  workspace's repositories (`/user`) still go as the owner.
 - **The credential** (`apps/server/src/authority/api-access.ts`, `apiCredential`; `POST /api/connectors/self/api/credential` or
   `/api/internal/api/credential`, with `access: write` for a lease's). The session's authority as for its Git requests
   (owner, not archived, connector and connection), a clone session, then the workspace's repositories of the host's
