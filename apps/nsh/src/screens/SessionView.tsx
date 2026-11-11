@@ -440,8 +440,6 @@ function Conversation(props: { id: string; live: LiveSessionState; host: Accesso
     : !permitted() ? (canAsk() ? "Read-only · switch to Side ask to ask questions" : "Read-only · submitting needs write permission")
     : actualMode() === "ask" ? "Read-only · anyone who can view this session can see side asks"
     : `Runs as ${view().owner.displayName}${view().owner.id === user.id ? " (you)" : ""}`;
-  // Only "Runs as … (you)" goes unsaid on a phone, where the chat box's controls have one line: every other hint warns or
-  // says whose work a message becomes.
   const runsAsYou = () => hint().startsWith("Runs as") && view().owner.id === user.id;
   const bottomInset = () => (platform.desktop ? 12 : Math.max(keyboardFrame().height, safeArea().bottom, 12));
 
