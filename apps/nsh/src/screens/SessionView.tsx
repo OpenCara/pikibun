@@ -90,7 +90,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
       items.push({ label: "Archive", icon: "archive", testID: "session-archive", disabled: actions.action.busy(), onSelect: actions.archive });
     }
     if (current && manages() && archived()) {
-      items.push({ label: "Unarchive", icon: "archive", disabled: actions.action.busy() || (Boolean(current.packed) && !isOwner()), onSelect: actions.unarchive });
+      items.push({ label: "Unarchive", icon: "archive", disabled: actions.action.busy(), onSelect: actions.unarchive });
       if (isOwner() && !current.packed && !current.frozen && !current.hostEnvironment) items.push({ label: "Pack files", icon: "archive", disabled: actions.action.busy(), onSelect: actions.pack });
     }
     const workspaceId = known()?.workspaceId;
@@ -118,8 +118,8 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
   const archivedText = () => {
     const current = live.session();
     if (current?.packed) {
-      return isOwner() ? "This session is read-only. Its files are packed on its host. Unarchiving unpacks them and clones its repositories again, so its host must be online."
-        : "This session is read-only. Its files are packed on its host, so only its owner can unarchive it.";
+      return manages() ? "This session is read-only. Its files are packed on its host. Unarchiving unpacks them and clones its repositories again, so its host must be online."
+        : "This session is read-only. Its files are packed on its host. Only its owner, or the workspace's owner or an admin, can unarchive it.";
     }
     return `This session is read-only. ${manages() ? "Unarchive it to continue the work." : "Only its owner, or the workspace's owner or an admin, can unarchive it."}`;
   };
@@ -210,7 +210,7 @@ export function SessionView(props: { id: string; page: boolean; openSession: (id
               {reason => <Banner testID="session-clone-unavailable" tone="warning" title="Can't clone repositories">{reason()}</Banner>}
             </If>
             <If when={archived()}>
-              <Banner title="Archived" actions={<If when={manages() && (!live.session()?.packed || isOwner())}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
+              <Banner title="Archived" actions={<If when={manages()}><Button small variant="outline" label="Unarchive" disabled={action.busy()} onPress={unarchive} /></If>}>
                 {archivedText()}
               </Banner>
             </If>

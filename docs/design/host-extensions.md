@@ -216,7 +216,7 @@ has without installing them and a workspace gets with its first repository on th
 ## Context files (`extensions/context-files`)
 
 Pi adds a project's `AGENTS.md` or `CLAUDE.md` to its system prompt as its agent session starts. Pikibun's sessions
-don't run that session, so they load neither. `@opencara/pi-context-files` (`extensions/context-files/`, tests in
+don't run that session, so they load neither. `@pikibun/pi-context-files` (`extensions/context-files/`, tests in
 `tests/context-files.test.ts`) brings them back. It is a separate Pi package, also built into the connector as
 `piki:context-files`, like the prompt audit, so a host installs nothing and every workspace has it, turned off, among
 its default extensions (rule 11). Its `context-files` setting chooses the files: paths in each clone (alternatives

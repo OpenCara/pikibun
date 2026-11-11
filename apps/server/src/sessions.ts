@@ -30,6 +30,7 @@ import { stopSessionTunnel } from './session-tunnels.js';
 import { toolOutputs, transcriptPage, type ToolOutput } from '../../../packages/shared/src/transcript-display.js';
 import { newSessionToolOutput } from './transcript-settings.js';
 import { packSession, reopenUnpacked, unpackSession } from './session-packing.js';
+import { packDueAfterArchiving } from './automatic-packing.js';
 
 async function chatOptions(c: AppContext, row: SessionRow, mode: 'submit' | 'ask', value: unknown): Promise<ChatOptions | undefined> {
   if (value === undefined) return undefined;
@@ -242,9 +243,9 @@ export async function archiveSession(c: AppContext, sessionId: string, audit: Re
   const actorId = c.get('auth').userId;
   if (row.tunnel_url && row.connector_id) await stopSessionTunnel(c, row, 'archived').catch(() => false);
   const archived = await c.env.DB.query<SessionRow>(`UPDATE sessions SET archived_status = status, status = 'archived', policy_version = policy_version + 1,
-    tunnel_url = NULL, tunnel_expires_at = NULL
+    tunnel_url = NULL, tunnel_expires_at = NULL, pack_due_at = ?
     WHERE id = ? AND owner_id = ? AND policy_version = ? AND status <> 'archived' AND ${sessionManagerSQL('sessions')}
-    RETURNING *`).bind(row.id, row.owner_id, row.policy_version, actorId).first();
+    RETURNING *`).bind(packDueAfterArchiving(), row.id, row.owner_id, row.policy_version, actorId).first();
   if (!archived) fail(409, 'policy_changed', 'Session status or permissions changed; reload and retry.');
   await auditStatement(c.env, actorId, 'session.archived', row.workspace_id, row.id, { previousStatus: row.status, ...audit }).run();
   return { ...access, row: archived };
@@ -489,7 +490,7 @@ export function registerSessions(app: Hono<AppEnv>): void {
     if (access.row.status !== 'archived') fail(409, 'session_not_archived', 'Session is not archived.');
     const row = await unpackSession(c, access);
     const restored = await c.env.DB.query<SessionRow>(`UPDATE sessions SET status = COALESCE(archived_status, 'ready'), archived_status = NULL, one_shot = 0,
-        policy_version = policy_version + 1
+        pack_due_at = NULL, policy_version = policy_version + 1
       WHERE id = ? AND owner_id = ? AND policy_version = ? AND status = 'archived' AND packed_at IS NULL AND ${sessionManagerSQL('sessions')}
       RETURNING *`).bind(row.id, row.owner_id, row.policy_version, actorId).first();
     if (!restored) fail(409, 'policy_changed', 'Session status or permissions changed; reload and retry.');

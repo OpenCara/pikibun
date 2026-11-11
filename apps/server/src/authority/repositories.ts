@@ -16,6 +16,7 @@ import {
 import { collectRepositories, gitProviderAdapters, listBytes, listPageSize } from './git/providers.js';
 import { workspaceGitAccess } from './workspace-connections.js';
 import { addPikiExtensions } from './extension-policy.js';
+import { conditionalHeaders, forgetRead, githubRateLimited, recallRead, rememberRead } from './github-reads.js';
 
 export interface GitHubAccess { token: string; ciphertext: string; userId: string; githubId: string }
 export type RepositoryAccess = { provider: 'github'; github: GitHubAccess } | { provider: TokenGitProvider; account: LoadedCredential };
@@ -151,15 +152,30 @@ export async function boundedRepositoryBody(response: Response, limit: number): 
   return bytes.slice(0, size);
 }
 async function githubJSON(access: GitHubAccess, path: string, limit = jsonBytes): Promise<unknown> {
-  const response = await remoteFetch(`${apiOrigin}${path}`, { headers: headers(access) });
-  if (!response.ok || response.status !== 200) {
+  const url = `${apiOrigin}${path}`;
+  const remembered = recallRead(access.token, url);
+  const response = await remoteFetch(url, { headers: { ...headers(access), ...conditionalHeaders(remembered) } });
+  const parse = (bytes: Uint8Array): unknown => {
+    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+    catch { return fail(502, 'invalid_github_response', 'GitHub returned invalid repository metadata.'); }
+  };
+  if (response.status === 304 && remembered) {
     await response.body?.cancel();
+    return parse(remembered.bytes);
+  }
+  if (!response.ok || response.status !== 200) {
+    if (!githubRateLimited(response)) forgetRead(access.token, url);
+    await response.body?.cancel();
+    if (githubRateLimited(response)) {
+      fail(429, 'github_rate_limited', 'The session owner\'s GitHub rate limit is used up, so Pikibun can\'t check their access to the repository now. Try again after it resets.');
+    }
     fail(response.status === 403 || response.status === 404 || response.status === 401 ? 403 : 502,
       'github_repository_unavailable', 'GitHub repository access could not be verified. Check repository access and try again.');
   }
   const bytes = await boundedRepositoryBody(response, limit);
-  try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
-  catch { return fail(502, 'invalid_github_response', 'GitHub returned invalid repository metadata.'); }
+  const value = parse(bytes);
+  rememberRead(access.token, url, response, bytes);
+  return value;
 }
 function githubRepository(value: unknown): ProviderRepository {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(502, 'invalid_github_response', 'GitHub returned invalid repository metadata.');

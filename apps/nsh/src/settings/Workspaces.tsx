@@ -27,7 +27,7 @@ import { SectionPage, type SectionProps } from "./parts";
 import { WorkspaceDatabaseSection } from "./workspace-database";
 import { WorkspaceExtensions } from "./workspace-extensions";
 import { ToolGroups } from "./workspace-tool-groups";
-import { AttachmentSettings, ChildSessionSettings, NetworkAccess, TranscriptSettings } from "./workspace-options";
+import { AttachmentSettings, ChildSessionSettings, NetworkAccess, PackingSettings, TranscriptSettings } from "./workspace-options";
 import {
   connectionLabel, createWorkspaceConnections, DocumentSources, gitConnectionFor, gitProviderLabel, PushAccess, ReadAsControl, WorkspaceConnections,
 } from "./workspace-sources";
@@ -113,6 +113,7 @@ function WorkspaceDetail(props: { workspace: Workspace; workspaceOf: () => Works
       <TranscriptSettings workspace={workspace()} admin={admin()} />
       <ChildSessionSettings workspace={workspace()} admin={admin()} />
       <AttachmentSettings workspace={workspace()} admin={admin()} />
+      <PackingSettings workspace={workspace()} admin={admin()} />
       <WorkspaceDatabaseSection workspace={workspace()} owner={role() === "owner"} />
       <Members workspace={workspace()} admin={admin()} owner={role() === "owner"} />
       <If when={admin()}>

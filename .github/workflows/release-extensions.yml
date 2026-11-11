@@ -1,0 +1,88 @@
+name: Release Pi extensions (npm)
+# Pushing an ext-<name>-v1.2.3 tag (ext-<name>-v1.2.3-beta.1 for a prerelease) on a commit in main runs CI, then
+# publishes the Pi package in extensions/<name> to npm, a prerelease to the `next` dist-tag: ext-pr-flow-v0.2.0
+# publishes @pikibun/pi-pr-flow 0.2.0. Each extension is a release line of its own, with its own version. The tag
+# decides the version: scripts/set-release-version.mjs sets it in the extension's package.json before publishing, so no
+# version bump needs committing first. scripts/check-extension-packages.mjs --release checks what npm would pack (its
+# modules, what they import, pi.extensions, the LICENSE copied in) before it is published.
+# npm auth: a trusted publisher on npmjs.com for each package, this workflow file (release-extensions.yml, keep its
+# name) and environment `release`, or an NPM_TOKEN secret. npm sets up a trusted publisher only for a package that
+# exists, so an extension's first release needs NPM_TOKEN, with publish rights to the @pikibun scope.
+on:
+  push:
+    tags: ["ext-*-v*.*.*"]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.name.outputs.name }}
+      prefix: ${{ steps.name.outputs.prefix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Extension from the tag
+        id: name
+        run: |
+          if ! [[ "$GITHUB_REF_NAME" =~ ^ext-([a-z0-9][a-z0-9-]*)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not ext-<name>-v1.2.3 (or ext-<name>-v1.2.3-beta.1 for a prerelease)."
+            exit 1
+          fi
+          name="${BASH_REMATCH[1]}"
+          if [ ! -f "extensions/$name/package.json" ]; then
+            echo "::error::There is no Pi extension extensions/$name: tag one of $(ls extensions | tr '\n' ' ')"
+            exit 1
+          fi
+          { echo "name=$name"; echo "prefix=ext-$name-"; } >> "$GITHUB_OUTPUT"
+          echo "Releasing extensions/$name"
+
+  check:
+    needs: extension
+    uses: ./.github/workflows/release-check.yml
+    with:
+      prefix: ${{ needs.extension.outputs.prefix }}
+
+  ci:
+    needs: check
+    uses: ./.github/workflows/ci.yml
+
+  npm:
+    needs: [extension, check, ci]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      # TypeScript, which the package check reads the modules' imports with.
+      - run: pnpm install --frozen-lockfile
+      - name: Set the extension's version from the tag
+        env:
+          NAME: ${{ needs.extension.outputs.name }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: node scripts/set-release-version.mjs "$VERSION" "extension:$NAME"
+      # npm packs a package's LICENSE whatever its files say; the extensions share the repository's.
+      - name: The repository's licence in the package
+        env:
+          NAME: ${{ needs.extension.outputs.name }}
+        run: cp LICENSE "extensions/$NAME/LICENSE"
+      - name: Check the package
+        env:
+          NAME: ${{ needs.extension.outputs.name }}
+        run: node scripts/check-extension-packages.mjs --release "$NAME"
+      - name: Publish the extension
+        working-directory: extensions/${{ needs.extension.outputs.name }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ needs.check.outputs.prerelease == 'true' && 'next' || 'latest' }}
+        run: npm publish --provenance --access public --tag "$DIST_TAG"

@@ -103,6 +103,12 @@ export function packRefusal(error: unknown): unknown {
   if (/non-hardlinked files/.test(message)) return new RunnerError(422, "This session has hardlinked files outside its clones, which a pack can't keep");
   if (/too many files|too many entries|nesting limit/.test(message)) return new RunnerError(422, "This session has too many files to pack: a pack holds at most 10,000 files outside its clones");
   if (/exceeds size limit|byte output limit/.test(message)) return new RunnerError(422, "This session's files are too large to pack: a pack holds at most 24 MiB");
+  if (/has ignored files too large to pack|has too many ignored files to pack/.test(message)) {
+    return new RunnerError(422, "One of this session's clones has more ignored files than a pack keeps (at most 16 MiB and 5,000 files, other than dependencies and build output). Remove the ones you don't need, or leave it unpacked");
+  }
+  if (/has a Git repository among its ignored files/.test(message)) {
+    return new RunnerError(422, "One of this session's clones has a Git repository among its ignored files, which a pack can't keep. Remove it, or leave the session unpacked");
+  }
   if (/too many clones|too many branches/.test(message)) return new RunnerError(422, "This session has too many clones or branches to pack");
   if (/has stashed changes/.test(message)) {
     return new RunnerError(422, "One of this session's clones has stashed changes (git stash), which a pack can't keep. Unarchive it to apply or drop them, or leave it unpacked");

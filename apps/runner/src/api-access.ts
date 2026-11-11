@@ -294,6 +294,7 @@ export class ApiAccess {
     let reason: string;
     let credential: ApiCredential | undefined;
     let access: ApiAccessKind = "read";
+    let ownerInstead: (() => Promise<ApiCredential | undefined>) | undefined;
     if (!isApi) {
       if (!open) return refuse(403, `This workspace's network policy doesn't allow ${host}; Pikibun answers only its API (${rules.name}'s command-line tool) for this session`);
       if (carried.own) {
@@ -312,7 +313,15 @@ export class ApiAccess {
       const none = (what: string): ApiCredentialGrant => ({ available: false, cacheSeconds: 0,
         reason: `Pikibun gives this session no credential for the ${rules.name} API (only sessions that clone their workspace's ${what} repositories get one)` });
       let available: ApiCredentialGrant = named ? await this.#credential(host, "read") : none(rules.name);
-      if (leased && named) {
+      const appRead = rules.provider === "github" && rule === "read" && scope.repository !== undefined && available.available
+        && credentialFor(available.credentials, scope) !== undefined;
+      if (leased && named && appRead) {
+        ownerInstead = async () => {
+          const write = await this.#credential(host, "write");
+          return write.available ? credentialFor(write.credentials, scope) : undefined;
+        };
+      }
+      if (leased && named && !appRead) {
         const write = await this.#credential(host, "write");
         if (write.available) { available = write; access = "write"; }
         else if (rule === "write" || mutates) {
@@ -332,6 +341,16 @@ export class ApiAccess {
     let upstream: UpstreamResponse;
     try {
       upstream = await this.#upstream({ url: new URL(`https://${host}${path}`), method, headers, ...(payload ? { body: payload } : {}) });
+      const refused = (upstream.status === 403 || upstream.status === 404) && upstream.headers["x-ratelimit-remaining"] !== "0"
+        && upstream.headers["retry-after"] === undefined;
+      const instead = refused && ownerInstead ? await ownerInstead() : undefined;
+      if (instead) {
+        upstream.body.resume();
+        credential = instead;
+        access = "write";
+        reason = `the session owner's token for ${instead.account}, as the read-only token was refused (${upstream.status})`;
+        upstream = await this.#upstream({ url: new URL(`https://${host}${path}`), method, headers: { ...headers, authorization: instead.authorization } });
+      }
       let current = new URL(`https://${host}${path}`);
       for (let hop = 0; isApi && method === "GET" && hop < REDIRECTS && [301, 302, 303, 307, 308].includes(upstream.status); hop++) {
         let location: URL;

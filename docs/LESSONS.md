@@ -26,7 +26,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 
 ## CI and logs
 
-- Wait for CI with `gh pr checks <n> --watch` and a long timeout. If the watch stops on a proxy or authentication error, that is not a failed check: poll the run's status from a codemode script that prints only the result.
+- Wait for CI with `gh pr checks <n> --watch` and a long timeout. If the watch stops on a proxy or authentication error, that is not a failed check: poll the run's status from a codemode script that prints only the result, at most once a minute. Every read counts against GitHub rate limits that all of the owner's sessions share, and `gh run watch` on its own reads every 3 seconds (the gh tool makes it 30).
 - A check may not be registered right after a push. Find the run with `gh run list` and watch that.
 - Long tool output is cut, and `gh run view --log-failed` can end before the failure. Filter the log for the failing lines in a codemode script, or fetch the job's log through `gh api`.
 - GitHub runs no pull request checks on a branch that conflicts with `main`. Merge `main` in and resolve the conflicts first.
@@ -41,6 +41,7 @@ This file is maintained by a daily scheduled session, which distils lessons from
 - Before tagging, look at what changed since each line's last tag to decide which lines need a release, and follow the earlier bumps (a minor version for a feature).
 - A release step that succeeds may not have delivered: an upload can be accepted and still be held by the store. Check the outcome where it lands before saying it shipped.
 - When git, `gh` and `github_read` all fail with "access could not be verified", the session's GitHub access is stale and the session can't repair it. Keep the commit, save any drafted text in the worktree, and tell the person to reconnect their GitHub account.
+- When they fail because the owner's GitHub rate limit is used up, nothing in the session can fix it either: retrying only spends the next hour's quota. Stop reading GitHub, say when it resets (`gh api rate_limit` shows `reset`, in Unix seconds), and carry on with work that doesn't need it.
 
 ## Sessions and schedules
 

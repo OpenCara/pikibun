@@ -3,12 +3,12 @@ import { hostCapabilities } from './authority/index.js';
 import type { AppContext, SessionAccess, SessionRow } from './types.js';
 import { auditStatement, requireSessionManager } from './authority/index.js';
 import { fail, now } from './http.js';
-import { runnerJSON, runnerRequest } from './runner.js';
+import { ownerRequest, runnerJSON, runnerRequest } from './runner.js';
 import { invalidateSessionView } from './view-feed.js';
 
 interface PackResult { packed: true; files?: number; clones?: number; bytes?: number }
 
-export async function packSession(c: AppContext, sessionId: string): Promise<SessionAccess> {
+export async function packSession(c: AppContext, sessionId: string, options: { automatic?: boolean } = {}): Promise<SessionAccess> {
   const access = await requireSessionManager(c, sessionId, 'read', 'Only the session owner can pack its files.');
   const { row } = access;
   const actorId = c.get('auth').userId;
@@ -34,17 +34,19 @@ export async function packSession(c: AppContext, sessionId: string): Promise<Ses
     }
     throw error;
   }
+  await c.env.DB.query('UPDATE sessions SET pack_due_at = NULL WHERE id = ?').bind(row.id).run();
+  marked.pack_due_at = null;
   invalidateSessionView(c, row.id);
   const summary = Object.fromEntries((['files', 'clones', 'bytes'] as const)
     .filter(key => Number.isSafeInteger(result[key]) && result[key]! >= 0).map(key => [key, result[key]]));
-  await auditStatement(c.env, actorId, 'session.packed', row.workspace_id, row.id, summary).run();
+  await auditStatement(c.env, actorId, 'session.packed', row.workspace_id, row.id, { ...summary, ...(options.automatic ? { automatic: true } : {}) }).run();
   return { ...access, row: marked };
 }
 
 export async function reopenUnpacked(c: AppContext, row: SessionRow): Promise<void> {
   if (row.status !== 'ready') return;
   try {
-    const response = await runnerRequest(c, row, 'restart', '', {});
+    const response = await ownerRequest(c, row, 'restart');
     await response.body?.cancel();
     invalidateSessionView(c, row.id);
   } catch { }
@@ -54,8 +56,7 @@ export async function unpackSession(c: AppContext, access: SessionAccess): Promi
   const { row } = access;
   if (!row.packed_at) return row;
   const actorId = c.get('auth').userId;
-  if (actorId !== row.owner_id) fail(403, 'owner_required', 'Only the session owner can unarchive it while its files are packed, as its host unpacks them first.');
-  const result = await runnerJSON<{ unpacked?: unknown }>(await runnerRequest(c, row, 'unpack', '', {}), 4096);
+  const result = await runnerJSON<{ unpacked?: unknown }>(await ownerRequest(c, row, 'unpack'), 4096);
   if (typeof result?.unpacked !== 'boolean') fail(502, 'invalid_runner_response', 'The host returned an invalid unpack result.');
   const unpacked = await c.env.DB.query<SessionRow>(`UPDATE sessions SET packed_at = NULL
     WHERE id = ? AND owner_id = ? AND status = 'archived' AND packed_at IS NOT NULL RETURNING *`).bind(row.id, row.owner_id).first();

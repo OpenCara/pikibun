@@ -1,9 +1,8 @@
 {
-  "name": "@opencara/pi-pr-flow",
+  "name": "@pikibun/pi-pr-flow",
   "version": "0.1.0",
   "description": "A Pi extension that has the agent carry each change through a pull request: a draft at the first change, ready for review once done, a review window for reviews and re-reviews whose valid points it fixes, then the merge.",
   "type": "module",
-  "private": true,
   "license": "MIT",
   "keywords": ["pi-package", "pi-extension", "git", "pull-request"],
   "repository": {

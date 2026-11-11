@@ -3,6 +3,7 @@ import type { Workspace } from "../shared";
 import { segment } from "../shared";
 import { transcriptPage, type ToolOutput } from "../../../../packages/shared/src/transcript-display";
 import type { ChildSessionSettings as ChildSettings } from "../../../../packages/shared/src/cross-session";
+import { automaticPackingDays, type PackingSettings as Packing } from "../../../../packages/shared/src/packing";
 import { fileUploadLimits, formatBytes } from "../../../../packages/shared/src/file-uploads";
 import { networkLimits, type NetworkMode, type NetworkPolicy } from "../../../../packages/shared/src/network";
 import { session } from "../lib/auth";
@@ -76,6 +77,31 @@ export function ChildSessionSettings(props: { workspace: Workspace; admin: boole
               hint={data().settings.childModels ? "Each session an agent starts runs on the model and reasoning level it chose for its task" : "Sessions agents start run on their parent's model and reasoning level"}
               onChange={next => put(path(), action, resource.refresh, { childModels: next }, next ? "Agents now choose the model and reasoning level of each session they start, to suit its task."
                 : "Sessions that agents start now run on their parent session's model and reasoning level.")} />
+          )}
+        </If>
+      </ResourceState>
+      <If when={action.error() || action.notice()}><CardBody><Feedback error={action.error()} notice={action.notice()} /></CardBody></If>
+    </Section>
+  );
+}
+
+export function PackingSettings(props: { workspace: Workspace; admin: boolean }) {
+  const path = () => `/api/workspaces/${segment(props.workspace.id)}/packing`;
+  const resource = createResource<{ settings: Packing }>(path);
+  const action = createAction();
+  return (
+    <Section title="Archived sessions" info={<View style={{ gap: 8 }}>
+      <If when={!props.admin}>{adminOnly}</If>
+      <Note>{`An archived session's files stay on its host: its clones, their dependencies and caches, often tens of thousands of files. With this on, ${automaticPackingDays} days after a session is archived its host packs them into one compressed file, as its owner can sooner with Pack files.`}</Note>
+      <Note>A pack keeps the clones' branches, uncommitted changes and ignored files such as .env files, and leaves out dependencies and build output (node_modules, .venv, dist and the like), which are installed again when needed. Unarchiving unpacks it. Sessions a pack can't keep in full, or whose host can't pack, are left as they are.</Note>
+    </View>}>
+      <ResourceState inline loading={resource.loading() && !resource.data()} error={resource.error()} retry={resource.refresh}>
+        <If when={resource.data()}>
+          {data => (
+            <Toggle title="Pack archived sessions" label="Pack archived sessions' files automatically" admin={props.admin} busy={action.busy()} value={data().settings.automatic}
+              hint={data().settings.automatic ? `Their files are packed on their hosts ${automaticPackingDays} days after archiving` : "Their files stay as they are until their owners pack them"}
+              onChange={next => put(path(), action, resource.refresh, { automatic: next }, next ? `Archived sessions' files are now packed ${automaticPackingDays} days after archiving.`
+                : "Archived sessions' files now stay as they are until their owners pack them.")} />
           )}
         </If>
       </ResourceState>
