@@ -67,13 +67,14 @@ This is a Pi package of its own, not built into the connector. A host installs i
 workspace then turns it on and sets its settings under **Settings → Workspaces →** the workspace **→ Extensions**:
 
 ```sh
-npx pikibun@latest extensions add npm:@opencara/pi-context-files@0.1.0   # once it is published
+npx pikibun@latest extensions add npm:@opencara/pi-context-files@0.1.0   # from npm
 npx pikibun@latest extensions add ./extensions/context-files             # dev mode, from a clone: the host owner's own sessions only
 ```
 
 ## In Pi
 
 ```bash
+pi install npm:@opencara/pi-context-files   # from npm
 pi install ./extensions/context-files      # from a clone of this repository
 pi -e ./extensions/context-files           # or for one run only
 ```

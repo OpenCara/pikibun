@@ -3,6 +3,7 @@ name: Release check
 #   cli-v1.2.3      release.yml          `pikibun` connector on npm
 #   server-v1.2.3   release-server.yml   server image (web and backend) on GHCR
 #   app-v1.2.3      release-app.yml      the NSH apps for Windows, macOS, Linux and Android; iOS to TestFlight
+#   ext-<name>-v1.2.3   release-extensions.yml   the Pi extension in extensions/<name> on npm, one line per extension
 # The removed Electron desktop app's desktop-v tags are no longer built or released.
 # A suffix such as -beta.1 makes a prerelease. This checks the tag is on main, reads the version from it and finds the
 # line's previous tag, from which a GitHub release's notes would start; a line's
