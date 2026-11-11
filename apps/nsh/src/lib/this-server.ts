@@ -144,7 +144,7 @@ export class ThisServer {
     const resume = this.resume;
     if (!resume) return undefined;
     const outcome = await this.start(undefined, resume);
-    if (!outcome.ok) this.setResume(undefined);
+    if (!outcome.ok) this.fail(outcome.error ?? `Pikibun on ${computerName} could not start again: see Recent activity.`);
     return outcome;
   }
 

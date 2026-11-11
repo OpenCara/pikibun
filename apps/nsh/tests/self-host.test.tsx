@@ -190,6 +190,17 @@ describe("Self host in the app", () => {
     expect(app.storage()["pikibun.thisServer"]).toBe(JSON.stringify({ resume: { unsandboxedConsent: false } }));
   });
 
+  test("a Pikibun that can't start again at launch says why, and isn't tried again", async () => {
+    const app = await open("./harness/self-host.tsx", { platform: "macos", width: 1280, height: 1400, host: { params: { app: true, saved: true } },
+      network: servedLocally(), storage: { "pikibun.token": TOKEN, "pikibun.origin": LOCAL, "pikibun.thisServer": JSON.stringify({ resume: { unsandboxedConsent: false } }) } });
+    await app.waitFor("text:Can't reach Pikibun");
+    await app.press("id:unreachable-self-host");
+    await app.waitFor("id:self-host-error");
+    expect(app.texts().some(text => text.startsWith("Pikibun was not started again: this Mac runs your sessions unsandboxed, which needs your consent."))).toBe(true);
+    expect(app.storage()["pikibun.thisServer"]).toBe("{}");
+    expect(app.dialogs().length).toBe(0);
+  });
+
   test("Settings lists Self host in the desktop builds only", async () => {
     const phone = await open("../App.tsx", { network: remote(), storage: signedIn, platform: "ios" });
     await phone.waitFor("id:session-row-s1");

@@ -33,7 +33,7 @@ let transport: Transport<ServerEvent>;
 let stateDir: string;
 let staticDir: string | undefined;
 let running: Running | undefined;
-let starting = false;
+let starting: Promise<void> | undefined;
 
 function emit(event: ServerEvent): void { transport.send(event); }
 function log(level: 'info' | 'warning' | 'error', text: string): void { emit({ type: 'log', level, message: text }); }
@@ -76,41 +76,44 @@ async function inspect(): Promise<ServerInspection> {
 
 async function start(request: ServerStartRequest): Promise<void> {
   if (running || starting) throw new ServerFailure('Pikibun is already running on this computer.');
-  starting = true;
-  try {
-    const github = request.github && { clientId: request.github.clientId.trim(), clientSecret: request.github.clientSecret.trim() };
-    request.github = undefined;
-    const { state, release } = await openLocalState(stateDir, github ? { github } : {});
-    if (!state.github) { await release(); throw new ServerFailure('Add your GitHub OAuth app first: Pikibun signs you in with it.'); }
-    const host = await hostCheck().catch(async (error: unknown) => { await release(); throw error; });
-    const server = await startLocalServer({ stateDir, state, release, mode: 'local', ...(staticDir ? { staticDir } : {}) });
-    const current: Running = { server, hostState: 'off', stopping: false };
-    running = current;
-    log('info', `Pikibun is running at ${server.origin}, reachable from this computer only.`);
-    const unsandboxed = host.mode === 'unsandboxed';
-    if (host.problem || !host.models || (unsandboxed && request.unsandboxedConsent !== true)) {
-      log('warning', host.problem || !host.models ? `This computer can't run sessions yet: ${host.problem ?? 'Pi has no models.'} Start Pikibun again once that is fixed.`
-        : 'This computer runs no sessions: running them without a sandbox needs your consent.');
-      void reportClaim(current);
-    } else {
-      const setHost = (next: ServerHostState) => { if (running === current) { current.hostState = next; void status(); } };
-      current.host = startLocalHost(server, stateDir, {
-        localModels: host.models, unsandboxed,
-        onWaiting: () => setHost('waiting'),
-        onStatus: (next, reason) => {
-          setHost(next);
-          if (next === 'disconnected' && reason) log('warning', `This computer's host disconnected: ${reason}`);
-        },
-        onWarning: () => log('warning', 'Some resource domains are unavailable; production bash remains fail-closed.'),
-      });
-      current.host.started.catch((error: unknown) => {
-        if (current.stopping || (error instanceof Error && error.name === 'AbortError')) return;
-        setHost('failed');
-        log('error', message(error, "This computer could not become Pikibun's host. Check its Pi configuration and prerequisites."));
-      });
-    }
-    await status();
-  } finally { starting = false; }
+  const launching = launch(request);
+  starting = launching;
+  try { await launching; } finally { if (starting === launching) starting = undefined; }
+}
+
+async function launch(request: ServerStartRequest): Promise<void> {
+  const github = request.github && { clientId: request.github.clientId.trim(), clientSecret: request.github.clientSecret.trim() };
+  request.github = undefined;
+  const { state, release } = await openLocalState(stateDir, github ? { github } : {});
+  if (!state.github) { await release(); throw new ServerFailure('Add your GitHub OAuth app first: Pikibun signs you in with it.'); }
+  const host = await hostCheck().catch(async (error: unknown) => { await release(); throw error; });
+  const server = await startLocalServer({ stateDir, state, release, mode: 'local', ...(staticDir ? { staticDir } : {}) });
+  const current: Running = { server, hostState: 'off', stopping: false };
+  running = current;
+  log('info', `Pikibun is running at ${server.origin}, reachable from this computer only.`);
+  const unsandboxed = host.mode === 'unsandboxed';
+  if (host.problem || !host.models || (unsandboxed && request.unsandboxedConsent !== true)) {
+    log('warning', host.problem || !host.models ? `This computer can't run sessions yet: ${host.problem ?? 'Pi has no models.'} Start Pikibun again once that is fixed.`
+      : 'This computer runs no sessions: running them without a sandbox needs your consent.');
+    void reportClaim(current);
+  } else {
+    const setHost = (next: ServerHostState) => { if (running === current) { current.hostState = next; void status(); } };
+    current.host = startLocalHost(server, stateDir, {
+      localModels: host.models, unsandboxed,
+      onWaiting: () => setHost('waiting'),
+      onStatus: (next, reason) => {
+        setHost(next);
+        if (next === 'disconnected' && reason) log('warning', `This computer's host disconnected: ${reason}`);
+      },
+      onWarning: () => log('warning', 'Some resource domains are unavailable; production bash remains fail-closed.'),
+    });
+    current.host.started.catch((error: unknown) => {
+      if (current.stopping || (error instanceof Error && error.name === 'AbortError')) return;
+      setHost('failed');
+      log('error', message(error, "This computer could not become Pikibun's host. Check its Pi configuration and prerequisites."));
+    });
+  }
+  await status();
 }
 
 async function reportClaim(current: Running): Promise<void> {
@@ -119,6 +122,7 @@ async function reportClaim(current: Running): Promise<void> {
 }
 
 async function stop(): Promise<void> {
+  await starting?.catch(() => {});
   const current = running;
   if (!current || current.stopping) return;
   current.stopping = true;
@@ -141,6 +145,7 @@ async function handle(request: ServerRequest): Promise<void> {
     }
   } catch (error) {
     emit({ type: 'result', id: request.id, ok: false, error: { message: message(error, request.type === 'stop' ? 'Pikibun did not stop cleanly.'
+      : request.type === 'inspect' ? 'This computer could not be checked. Check the state directory and Pi\'s configuration.'
       : 'Pikibun could not start on this computer. Check its state directory and port.') } });
   }
 }

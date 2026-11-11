@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -61,12 +61,11 @@ async function launch(home: string, stateDir: string, staticDir: string) {
     child.stdin.write(`${JSON.stringify({ ...message, id: requestId })}\n`);
     return next(event => event.type === "result" && event.id === requestId);
   };
-  const close = () => { child.stdin.end(); return exit; };
+  const close = () => { if (!child.stdin.writableEnded) child.stdin.end(); if (child.exitCode === null && child.signalCode === null) setTimeout(() => child.kill("SIGKILL"), 20_000).unref(); return exit; };
   return { events, output, next, request, close, write: (line: string) => child.stdin.write(`${line}\n`) };
 }
 
-test("pikibun serve --stdio runs the local server for the app: its GitHub app over stdin, its claim in its status, and stops with its stdin", async t => {
-  if (process.platform === "win32") { t.skip("runs a POSIX state directory"); return; }
+async function prepare(t: TestContext, saved?: typeof github) {
   const home = await realpath(await mkdtemp(join(tmpdir(), "pikibun-serve-stdio-")));
   t.after(() => rm(home, { recursive: true, force: true }));
   const stateDir = join(home, "server");
@@ -75,7 +74,13 @@ test("pikibun serve --stdio runs the local server for the app: its GitHub app ov
   await writeFile(join(web, "index.html"), "<!doctype html><title>Pikibun</title>");
   await writeFile(join(web, "nsh.0123456789.wasm"), new Uint8Array([0, 97, 115, 109]));
   const port = await freePort();
-  const { claimSecret } = await loadLocalState(stateDir, { port });
+  const { claimSecret } = await loadLocalState(stateDir, { port, ...(saved ? { github: saved } : {}) });
+  return { home, stateDir, web, port, claimSecret };
+}
+
+test("pikibun serve --stdio runs the local server for the app: its GitHub app over stdin, its claim in its status, and stops with its stdin", { timeout: 60_000 }, async t => {
+  if (process.platform === "win32") { t.skip("runs a POSIX state directory"); return; }
+  const { home, stateDir, web, port, claimSecret } = await prepare(t);
 
   const server = await launch(home, stateDir, web);
   let closed = false;
@@ -139,4 +144,28 @@ test("pikibun serve --stdio runs the local server for the app: its GitHub app ov
   closed = true;
   assert.equal(await server.close(), 0);
   await assert.rejects(fetch(`${origin}/api/health`));
+});
+
+test("a stop, or the end of stdin, while Pikibun is starting waits for the start, then stops it and releases its state", { timeout: 60_000 }, async t => {
+  if (process.platform === "win32") { t.skip("runs a POSIX state directory"); return; }
+  const { home, stateDir, web, port } = await prepare(t, github);
+  const origin = `http://127.0.0.1:${port}`;
+
+  const first = await launch(home, stateDir, web);
+  t.after(() => first.close());
+  const [started, stopped] = await Promise.all([first.request({ type: "start" }), first.request({ type: "stop" })]);
+  assert.ok(started.type === "result" && started.ok, JSON.stringify(started));
+  assert.ok(stopped.type === "result" && stopped.ok, JSON.stringify(stopped));
+  assert.equal(first.events.filter(event => event.type === "status").at(-1)?.type === "status" && (first.events.filter(event => event.type === "status").at(-1) as { state: string }).state, "stopped");
+  await assert.rejects(fetch(`${origin}/api/health`));
+
+  first.write(JSON.stringify({ type: "start", id: 99 }));
+  assert.equal(await first.close(), 0);
+  await assert.rejects(fetch(`${origin}/api/health`));
+
+  const second = await launch(home, stateDir, web);
+  t.after(() => second.close());
+  const again = await second.request({ type: "start" });
+  assert.ok(again.type === "result" && again.ok, `the state's lease was released: ${JSON.stringify(again)}`);
+  assert.equal((await fetch(`${origin}/api/health`)).status, 200);
 });
