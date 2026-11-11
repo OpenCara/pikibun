@@ -89,7 +89,7 @@ import { egressReadServices, type ApiAccessKind, type EgressGrant, type EgressRe
 import { sessionBranch } from "../../../packages/shared/src/git-push.js";
 import { documentKindNames, type DocumentKind, type GrantSource } from "../../../packages/shared/src/sources.js";
 import { defaultHostConfig, type HostCompaction, type HostConfig, type RequiredExtension } from "../../../packages/shared/src/host-config.js";
-import { commandLimits, type CommandLimits } from "./host-config.js";
+import { CALL_TIMEOUT_MAX_SECONDS, callLimits, callTimeout, commandLimits, type CommandLimits } from "./host-config.js";
 
 export type Run = {
   key: string; initiatedBy: string; ownerId: string; mode: "write" | "ask";
@@ -140,6 +140,8 @@ const RunnerState = defineDoc<{ json: string }>({ kind: "workspace.runner", vers
 const MAX_QUEUED_IMAGE_BYTES = 16 * 1024 * 1024;
 const readOnlyTools = ["identity", "read_file", "list_files", "search"];
 const WAIT_POLL_MS = 3000;
+const callTimeoutParameter = () => opt(int({ minimum: 1, maximum: CALL_TIMEOUT_MAX_SECONDS,
+  description: "End it after this many seconds, sooner than the host's command time limit (never later)" }));
 const SESSIONS_TOOL_DESCRIPTION = "Work with this workspace's other Pikibun sessions, as the person whose message you are working on, with exactly their permissions in each session. "
   + "action list: the sessions they can see (id, title, status, activity, their permissions, parent), the models create can use, with the thinking levels each offers, and whether this workspace lets create choose them (childModels). "
   + "read {session, limit?, message_id?}: a session's latest shared-conversation entries (a failed model turn with why, as far as the host tells); with message_id, also the outcome of a message this session sent it (status, done, reply). "
@@ -1650,9 +1652,9 @@ export class RunnerSession {
     return config;
   }
 
-  private async commandOptions(): Promise<{ limits: CommandLimits; gpu: boolean }> {
+  private async commandOptions(timeoutSeconds?: number): Promise<{ limits: CommandLimits; gpu: boolean }> {
     const config = await this.hostConfig();
-    return { limits: commandLimits(config.commandTimeoutSeconds), gpu: config.gpu };
+    return { limits: callLimits(commandLimits(config.commandTimeoutSeconds), timeoutSeconds), gpu: config.gpu };
   }
 
   private async checkCall(api: ToolExecutionApi, tool: AnyToolName, effect: { write?: boolean; shell?: boolean } = {}): Promise<{ unbounded: boolean }> {
@@ -1781,36 +1783,38 @@ export class RunnerSession {
           const result = await this.sandbox.fileOperation(request, () => this.recheckTool(attribution));
           return text({ ...attribution, deleted: args.path, entries: result.entries });
         } }),
-      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It stops at the host's command time limit.`,
+      defineTool({ name: "git", description: `Run Git in the session worktree without a shell: args is its arguments as a list, starting with the subcommand (${gitSubcommands.join(", ")}), such as ["commit", "-m", "Fix the parser"]; directory is where it runs, a clone such as app (the worktree by default). Git's own options before the subcommand (-C, -c) and options that run other programs (rebase --exec, clone --upload-pack or --config, --template) aren't taken. It runs with no pager, editor or password prompt. It stops at the host's command time limit, or sooner at timeout_seconds.`,
         executionMode: "sequential",
-        parameters: obj({ args: arr(str(), { minItems: 1, maxItems: gitLimits.arguments }), directory: opt(str()) }, { open: true }),
+        parameters: obj({ args: arr(str(), { minItems: 1, maxItems: gitLimits.arguments }), directory: opt(str()), timeout_seconds: callTimeoutParameter() }, { open: true }),
         execute: async (args, api, call) => {
           await this.requireSessionTool("git");
           let request: GitRequest;
           let command: string;
-          try { request = gitRequest(args); command = gitShellCommand(request); }
+          let timeoutSeconds: number | undefined;
+          try { request = gitRequest(args); command = gitShellCommand(request); timeoutSeconds = callTimeout(args.timeout_seconds); }
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid git call"}. Nothing ran.`); }
           const attribution = await this.toolActor(api, true);
           await this.hostCommands.requireHostEnvironment();
           const { unbounded } = await this.checkCall(api, "git", { write: true, shell: true });
-          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { unbounded }, call.abortSignal), api, "git");
+          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "git", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "git");
         } }),
-      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It stops at the host's command time limit.`,
+      ...(process.platform === "win32" && this.sandbox.isolated ? [] : [defineTool({ name: "python", description: `Run Python or its package and test tools in the session worktree without a shell: program is one of ${pythonPrograms.join(", ")}; args is its arguments as a list, such as ["-m", "venv", ".venv"], ["install", "-r", "requirements.txt"] or ["-m", "pytest", "-q"]; directory is where it runs, such as the clone app (the worktree by default); venv names a virtual environment there, such as .venv, whose python3, pip and pytest it runs instead of the host's (make one with python3 -m venv .venv first; the host's own Python can't be installed into; if that fails for want of ensurepip, the host lacks python3-venv, which its owner installs). In the Linux sandbox, uv, uvx, poetry and pytest outside a virtual environment are there only where the host installed them for the whole system: a call to one it lacks is refused, saying how the host's owner installs it. It runs with no colours or prompts; commands that act on a package index as an account (uv publish, uv auth, poetry publish, twine upload, poetry config of credentials) aren't taken. It stops at the host's command time limit, or sooner at timeout_seconds: give one to a run that could wait forever, such as a test suite or a server it starts. Make Unix sockets in /tmp (TMPDIR): the worktree's path leaves too little of a socket path's 107 bytes.`,
         executionMode: "sequential",
         parameters: obj({ program: StringEnum(pythonPrograms), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
-          venv: opt(str()) }, { open: true }),
+          venv: opt(str()), timeout_seconds: callTimeoutParameter() }, { open: true }),
         execute: async (args, api, call) => {
           await this.requireSessionTool("python");
           let request: PythonRequest;
           let command: string;
-          try { request = pythonRequest(args); command = pythonShellCommand(request); }
+          let timeoutSeconds: number | undefined;
+          try { request = pythonRequest(args); command = pythonShellCommand(request); timeoutSeconds = callTimeout(args.timeout_seconds); }
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : "Invalid python call"}. Nothing ran.`); }
           const missing = request.venv ? undefined : this.programMissing({ programs: pythonPrograms, path: "/usr/local/bin" }, request.program);
           if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
           const attribution = await this.toolActor(api, true);
           await this.hostCommands.requireHostEnvironment();
           const { unbounded } = await this.checkCall(api, "python", { write: true, shell: true });
-          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { unbounded }, call.abortSignal), api, "python");
+          return commandText(await this.runOperation(attribution.initiatedBy, { kind: "program", tool: "python", command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal), api, "python");
         } })]),
       defineTool({ name: "browser", description: "Drive a headless Chromium in the session's sandbox. It opens url (http, https, file, or about:blank; "
         + "without one, the page the last call left), runs actions in order, and answers with the page as it ends: a screenshot, its URL, title, "
@@ -2073,19 +2077,24 @@ export class RunnerSession {
     const text = (value: unknown) => ({ output: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
     if (definition.kind === "program") {
       return defineTool({ name: definition.name, description: definition.description, executionMode: "sequential",
-        parameters: obj({ program: StringEnum([...definition.programs]), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()) }, { open: true }),
+        parameters: obj({ program: StringEnum([...definition.programs]), args: opt(arr(str(), { maxItems: programLimits.arguments })), directory: opt(str()),
+          timeout_seconds: callTimeoutParameter() }, { open: true }),
         execute: async (args, api, call) => {
           await this.requireSessionTool(definition.name);
           let request: ProgramRequest;
           let command: string;
-          try { request = programRequest(definition, args); command = programCommand(definition, request, this.sandbox.nodeBin ? { nodeBin: this.sandbox.nodeBin } : {}); }
+          let timeoutSeconds: number | undefined;
+          try {
+            request = programRequest(definition, args); command = programCommand(definition, request, this.sandbox.nodeBin ? { nodeBin: this.sandbox.nodeBin } : {});
+            timeoutSeconds = callTimeout(args.timeout_seconds);
+          }
           catch (error) { throw new RunnerError(400, `${error instanceof Error ? error.message : `Invalid ${definition.name} call`}. Nothing ran.`); }
           const missing = this.programMissing(definition, request.program);
           if (missing) throw new RunnerError(400, `${missing} Nothing ran.`);
           const attribution = await this.toolActor(api, true);
           await this.hostCommands.requireHostEnvironment();
           const { unbounded } = await this.checkCall(api, definition.name, { write: true, shell: true });
-          const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId), { unbounded }, call.abortSignal);
+          const approval = await this.runOperation(attribution.initiatedBy, { kind: "program", tool: definition.name, command }, String(api.taskId), { unbounded, timeoutSeconds }, call.abortSignal);
           return text(await this.shownApproval(approval, api, definition.name));
         } });
     }
@@ -2156,7 +2165,8 @@ export class RunnerSession {
     return value;
   }
 
-  async runOperation(actorId: string, input: Operation, toolTaskId: string, consent: { unbounded?: boolean; hostChecked?: boolean } = {}, signal?: AbortSignal): Promise<StoredApproval> {
+  async runOperation(actorId: string, input: Operation, toolTaskId: string, consent: { unbounded?: boolean; hostChecked?: boolean; timeoutSeconds?: number } = {},
+    signal?: AbortSignal): Promise<StoredApproval> {
     this.requireUnfrozen();
     const operation = validateOperation(input);
     if (operation.kind === "permission") throw new RunnerError(400, "Permission requests were removed: a session runs its tools or refuses them");
@@ -2190,10 +2200,10 @@ export class RunnerSession {
     await this.mutate(meta => { if (!meta.approvals[id]) { meta.approvals[id] = record; created = true; } });
     if (!created) return this.#waits.whole((await this.metadata()).approvals[id]!);
     if (operation.kind === "extension.tool") return record;
-    return this.#waits.whole(await this.execute(id, actorId, signal));
+    return this.#waits.whole(await this.execute(id, actorId, signal, consent.timeoutSeconds));
   }
 
-  private async execute(id: string, actorId: string, signal?: AbortSignal): Promise<StoredApproval> {
+  private async execute(id: string, actorId: string, signal?: AbortSignal, timeoutSeconds?: number): Promise<StoredApproval> {
     const approval = (await this.metadata()).approvals[id]!;
     const operation = approval.operation;
     let status: ApprovalRecord["status"];
@@ -2231,7 +2241,7 @@ export class RunnerSession {
         if (onHost) await this.hostCommands.require(actorId, this.hostCommands.onHostMachine());
         await this.authorize(actorId, "write");
       }, { allowTestShell: this.testShell(), unbounded: approval.unbounded === true,
-        ...await this.commandOptions(), signal });
+        ...await this.commandOptions(timeoutSeconds), signal });
       status = "executed";
     } catch (error) {
       const refused = error instanceof RunnerError && error.status < 500;
