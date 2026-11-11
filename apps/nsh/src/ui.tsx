@@ -1,4 +1,4 @@
-import { cleanup, Clipboard, Image, Scroll, signal, Text, View, windowSize, type JSX, type ViewStyle } from "nsh";
+import { cleanup, Clipboard, computed, createAnimatedValue, effect, Image, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
 import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
 import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
@@ -477,16 +477,158 @@ export const rowPress = (action: () => void) => () => {
   action();
 };
 
-export function RowMenu(props: { items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string }) {
-  const menu = {};
-  const release = () => { if (heldMenu === menu) heldMenu = undefined; };
+export function RowMenu(props: {
+  items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string; open?: boolean; onOpenChange?: (open: boolean) => void; detached?: boolean;
+}) {
+  const held = {};
+  const release = () => { if (heldMenu === held) heldMenu = undefined; };
   cleanup(release);
-  return (
-    <ContextMenu testID={props.testID} trigger={props.children} disabled={!props.items().some(item => item !== "separator")} offset={2}
-      onOpenChange={change => { if (change.open && change.reason === "longPress") heldMenu = menu; else release(); }}
+  const menu = (trigger: JSX.Element) => (
+    <ContextMenu testID={props.testID} trigger={trigger} disabled={!props.items().some(item => item !== "separator")} offset={2} open={props.open}
+      onOpenChange={change => {
+        if (change.open && change.reason === "longPress") heldMenu = held;
+        else release();
+        props.onOpenChange?.(change.open);
+      }}
       backdropStyle={{ backgroundColor: palette().backdrop }} popupStyle={menuPopupStyle()}>
       <MenuActions items={props.items()} />
     </ContextMenu>
+  );
+  if (!untracked(() => props.detached)) return menu(props.children);
+  effect(() => {
+    if (props.open) heldMenu = held;
+    else release();
+  });
+  return <>{props.children}{menu(<View style={{ height: 0 }} />)}</>;
+}
+
+export interface SwipeAction {
+  label: string;
+  icon: IconName;
+  tone?: Tone | "accent";
+  disabled?: boolean;
+  testID?: string;
+  onPress: () => void;
+}
+
+export const swipesRows = !platform.desktop;
+
+const swipeTileWidth = 72;
+
+const swipeFling = 400;
+
+export function swipeRest(from: number, velocity: number, leading: number, trailing: number): number {
+  if (from < 0 && trailing > 0 && (from < -trailing / 2 ? velocity < swipeFling : velocity < -swipeFling)) return -trailing;
+  if (from > 0 && leading > 0 && (from > leading / 2 ? velocity > -swipeFling : velocity > swipeFling)) return leading;
+  return 0;
+}
+
+function swipeColors(tone: SwipeAction["tone"]): { background: string; text: string } {
+  const p = palette();
+  if (tone === "accent") return { background: p.accent, text: p.onAccent };
+  if (!tone || tone === "neutral") return { background: p.control, text: p.text };
+  return { background: p.tones[tone].text, text: p.background };
+}
+
+function SwipeTile(props: { action: SwipeAction; dense?: boolean; onPress: () => void }) {
+  const colors = () => swipeColors(props.action.tone);
+  return (
+    <BaseButton testID={props.action.testID} accessibilityLabel={props.action.label} disabled={props.action.disabled} onPress={props.onPress}
+      style={{ width: swipeTileWidth, alignItems: "center", justifyContent: "center", gap: 4, paddingHorizontal: 4, backgroundColor: colors().background }}
+      activeStyle={{ opacity: 0.8 }} disabledStyle={{ opacity: 0.5 }}>
+      <Icon name={props.action.icon} size={props.dense ? 16 : 18} color={colors().text} />
+      <If when={!props.dense}>
+        <Text style={{ fontSize: text.caption, color: colors().text, numberOfLines: 1 }}>{props.action.label}</Text>
+      </If>
+    </BaseButton>
+  );
+}
+
+export function SwipeRow(props: {
+  leading?: SwipeAction[]; trailing?: SwipeAction[]; open: boolean; onOpenChange: (open: boolean) => void;
+  background: string;
+  dense?: boolean;
+  testID?: string;
+  children: JSX.Element;
+}) {
+  if (!swipesRows) return props.children;
+  const x = createAnimatedValue(0);
+  const shown = signal<"both" | "leading" | "trailing" | null>(null);
+  let rest = 0;
+  let moves = 0;
+  let hiding: ReturnType<typeof setTimeout> | undefined;
+  cleanup(() => clearTimeout(hiding));
+  const leading = () => props.leading ?? [];
+  const trailing = () => props.trailing ?? [];
+  const leadingWidth = () => leading().length * swipeTileWidth;
+  const trailingWidth = () => trailing().length * swipeTileWidth;
+  const enabled = () => leadingWidth() + trailingWidth() > 0;
+  const track = computed(() => {
+    const low = -trailingWidth();
+    const high = leadingWidth();
+    if (low === high) return x.interpolate({ inputRange: [0, 1], outputRange: [0, 0] });
+    return x.interpolate({ inputRange: [low - 120, low, high, high + 120], outputRange: [low - 24, low, high, high + 24], extrapolate: "clamp" });
+  });
+  const leadingOpacity = x.interpolate({ inputRange: [0, 8], outputRange: [0, 1], extrapolate: "clamp" });
+  const trailingOpacity = x.interpolate({ inputRange: [-8, 0], outputRange: [1, 0], extrapolate: "clamp" });
+
+  function settle(target: number, from: number, velocity = 0) {
+    const move = ++moves;
+    rest = target;
+    x.setOffset(target);
+    x.set(from - target);
+    void x.spring(0, { stiffness: 380, damping: 38, velocity });
+    clearTimeout(hiding);
+    if (target > 0) shown.set("leading");
+    else if (target < 0) shown.set("trailing");
+    else hiding = setTimeout(() => { if (move === moves && rest === 0) shown.set(null); }, 450);
+    if ((target !== 0) !== untracked(() => props.open)) props.onOpenChange(target !== 0);
+  }
+  function start() {
+    if (!enabled()) return;
+    moves++;
+    clearTimeout(hiding);
+    void x.stop();
+    shown.set("both");
+  }
+  function end(event: PanEvent) {
+    if (!enabled()) return;
+    const from = rest + event.translation.x;
+    settle(event.cancelled ? 0 : swipeRest(from, event.velocity.x, leadingWidth(), trailingWidth()), from, event.velocity.x);
+  }
+  effect(() => {
+    if (!props.open && untracked(() => rest !== 0)) settle(0, rest);
+  });
+  effect(() => {
+    const leadingOpen = leadingWidth();
+    const trailingOpen = -trailingWidth();
+    untracked(() => {
+      const side = rest > 0 ? leadingOpen : rest < 0 ? trailingOpen : 0;
+      if (rest !== side) settle(side, rest);
+    });
+  });
+  const run = (action: SwipeAction) => {
+    settle(0, rest);
+    action.onPress();
+  };
+
+  return (
+    <View testID={props.testID} style={{ overflow: "hidden", borderRadius: radius.medium }}>
+      <If when={enabled() && shown()}>
+        <View style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, flexDirection: "row", justifyContent: "space-between" }}>
+          <View style={{ flexDirection: "row", opacity: leadingOpacity }}>
+            <Each of={shown() === "trailing" ? [] : leading()} key="index">{action => <SwipeTile action={action()} dense={props.dense} onPress={() => run(action())} />}</Each>
+          </View>
+          <View style={{ flexDirection: "row", opacity: trailingOpacity }}>
+            <Each of={shown() === "leading" ? [] : trailing()} key="index">{action => <SwipeTile action={action()} dense={props.dense} onPress={() => run(action())} />}</Each>
+          </View>
+        </View>
+      </If>
+      <View pan={enabled() ? { x } : undefined} panActivation={{ activeOffsetX: 12, failOffsetY: 12 }} onPanStart={start} onPanEnd={end}
+        style={{ backgroundColor: props.background, transform: [{ translateX: enabled() ? track() : 0 }] }}>
+        {props.children}
+      </View>
+    </View>
   );
 }
 

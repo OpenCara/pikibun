@@ -8,7 +8,7 @@ import { session } from "../lib/auth";
 import type { Action } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
-import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, StatusDot, type MenuAction } from "../ui";
+import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, rowPress, StatusDot, SwipeRow, swipesRows, type MenuAction } from "../ui";
 
 type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; canCreate: boolean }
@@ -36,6 +36,8 @@ export function SessionList(props: {
   const query = signal("");
   const showArchived = signal(false);
   const collapsed = signal<readonly string[]>([]);
+  const swiped = signal<string | null>(null);
+  const swipe = (id: string, open: boolean) => swiped.update(current => (open ? id : current === id ? null : current));
   const archivedCount = () => data.sessions().filter(item => item.status === "archived").length;
   const rows = computed<Row[]>(() => {
     const needle = query().trim().toLowerCase();
@@ -74,7 +76,7 @@ export function SessionList(props: {
   return (
     <If when={!data.sessionsLoading()} else={<Loading />}>
       <List each={rows()} keyExtractor={row => row.key} testID="session-list" style={{ flex: 1 }} refreshing={refreshing()} onRefresh={pullToRefresh}
-        contentStyle={{ paddingBottom: 16 }}
+        contentStyle={{ paddingBottom: 16 }} onScrollDragStart={() => { if (untracked(swiped)) swiped.set(null); }}
         header={() => (
           <View style={{ gap: 8, paddingHorizontal: inset(), paddingTop: 4, paddingBottom: 8 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8, borderRadius: radius.medium, paddingHorizontal: 10, height: props.compact ? 32 : 40,
@@ -146,7 +148,10 @@ export function SessionList(props: {
                   )}
                 </If>
               }>
-              {item => <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId} onOpen={props.onOpen} compact={props.compact} menu={menu} />}
+              {item => (
+                <SessionRow item={item().session} depth={item().depth} selected={item().session.id === props.selectedId} onOpen={props.onOpen} compact={props.compact} menu={menu}
+                  swiped={swiped() === item().session.id} onSwipe={open => swipe(item().session.id, open)} />
+              )}
             </If>
           </View>
         )}
@@ -192,9 +197,15 @@ function WorkspaceRow(props: {
 
 const statusColors: Partial<Record<Tone, Tone>> = { running: "info", info: "info", warning: "warning", danger: "danger" };
 
-function SessionRow(props: { item: SessionRecord; depth: number; selected: boolean; onOpen: (id: string) => void; compact?: boolean; menu: SessionMenu }) {
+function SessionRow(props: {
+  item: SessionRecord; depth: number; selected: boolean; onOpen: (id: string) => void; compact?: boolean; menu: SessionMenu;
+  swiped: boolean; onSwipe: (open: boolean) => void;
+}) {
   const data = useAppData();
   const { user } = untracked(session);
+  const menuOpen = signal(false);
+  const swipe = computed(() => props.menu.swipe(props.item, () => menuOpen.set(true)));
+  const press = rowPress(() => (props.swiped ? props.onSwipe(false) : props.onOpen(props.item.id)));
   const status = () => {
     const live = data.liveActivity();
     return sessionStatus(props.item, live?.sessionId === props.item.id ? live.activity : undefined);
@@ -206,54 +217,75 @@ function SessionRow(props: { item: SessionRecord; depth: number; selected: boole
     return tone ? palette().tones[tone].text : palette().muted;
   };
   const details = () => Boolean(status().label) || Boolean(props.item.pullRequest) || Boolean(props.item.tunnel) || Boolean(relation());
-  return (
-    <RowMenu items={() => props.menu.items(props.item)} testID={`session-menu-${props.item.id}`}>
-      <BaseButton testID={`session-row-${props.item.id}`} selected={props.selected} accessibilityLabel={props.item.title} onPress={rowPress(() => props.onOpen(props.item.id))}
-        style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8,
-          paddingLeft: 32 + props.depth * 12, borderRadius: radius.medium, backgroundColor: props.selected ? palette().selection : "transparent" }}
-        activeStyle={{ backgroundColor: palette().selection }} hoverStyle={{ backgroundColor: props.selected ? palette().selection : palette().hover }}>
-        <If when={status().icon === "clock"}
-          else={<StatusDot tone={status().tone} label={status().label ? undefined : props.item.status} />}>
-          <View testID={`session-scheduled-${props.item.id}`} accessibilityLabel={status().label}>
-            <Icon name="clock" size={11} color={status().tone === "info" || status().tone === "running" ? palette().tones.info.text : palette().faint} />
-          </View>
-        </If>
-        <View style={{ flex: 1, gap: 1 }}>
-          <Text style={{ numberOfLines: 1, fontSize: text.body, color: props.selected ? palette().text : palette().muted }}>
-            {`${props.depth > 0 ? "↳ " : ""}${props.item.title}`}
-          </Text>
-          <If when={details()}>
-            <Text style={{ numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>
-              <If when={status().label}>
-                <Text testID={`session-status-${props.item.id}`} style={{ color: statusColor() }}>{status().label}</Text>
-              </If>
-              <If when={props.item.tunnel}>
-                {tunnel => (
-                  <>
-                    <If when={status().label}><Text>{" · "}</Text></If>
-                    <Text testID={`session-tunnel-${props.item.id}`} accessibilityLabel={`Online at ${tunnel().url.replace(/^https:\/\//, "")}`}
-                      style={{ color: palette().tones.success.text }}>Online</Text>
-                  </>
-                )}
-              </If>
-              <If when={props.item.pullRequest}>
-                {pull => (
-                  <>
-                    <If when={status().label || props.item.tunnel}><Text>{" · "}</Text></If>
-                    <Text testID={`session-pull-${props.item.id}`} accessibilityLabel={pullRequestTitle(pull())} style={{ color: pullColor() }}>
-                      {`${pullRequestLabel(pull())}${pull().state ? ` ${pullRequestStateLabels[pull().state!]}` : ""}`}
-                    </Text>
-                  </>
-                )}
-              </If>
-              <If when={relation()}>
-                <Text>{`${status().label || props.item.pullRequest || props.item.tunnel ? " · " : ""}${relation()}`}</Text>
-              </If>
-            </Text>
-          </If>
+  const rowStyle = () => ({ flexDirection: "row" as const, alignItems: "center" as const, gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8,
+    paddingLeft: 32 + props.depth * 12, borderRadius: radius.medium, backgroundColor: props.selected ? palette().selection : "transparent" });
+  const pressedStyle = () => ({ backgroundColor: palette().selection });
+  const hoveredStyle = () => ({ backgroundColor: props.selected ? palette().selection : palette().hover });
+  const body = () => (
+    <>
+      <If when={status().icon === "clock"}
+        else={<StatusDot tone={status().tone} label={status().label ? undefined : props.item.status} />}>
+        <View testID={`session-scheduled-${props.item.id}`} accessibilityLabel={status().label}>
+          <Icon name="clock" size={11} color={status().tone === "info" || status().tone === "running" ? palette().tones.info.text : palette().faint} />
         </View>
-        <Text style={{ fontSize: text.caption, color: palette().muted }}>{shortAge(props.item.createdAt)}</Text>
+      </If>
+      <View style={{ flex: 1, gap: 1 }}>
+        <Text style={{ numberOfLines: 1, fontSize: text.body, color: props.selected ? palette().text : palette().muted }}>
+          {`${props.depth > 0 ? "↳ " : ""}${props.item.title}`}
+        </Text>
+        <If when={details()}>
+          <Text style={{ numberOfLines: 1, fontSize: text.caption, color: palette().muted }}>
+            <If when={status().label}>
+              <Text testID={`session-status-${props.item.id}`} style={{ color: statusColor() }}>{status().label}</Text>
+            </If>
+            <If when={props.item.tunnel}>
+              {tunnel => (
+                <>
+                  <If when={status().label}><Text>{" · "}</Text></If>
+                  <Text testID={`session-tunnel-${props.item.id}`} accessibilityLabel={`Online at ${tunnel().url.replace(/^https:\/\//, "")}`}
+                    style={{ color: palette().tones.success.text }}>Online</Text>
+                </>
+              )}
+            </If>
+            <If when={props.item.pullRequest}>
+              {pull => (
+                <>
+                  <If when={status().label || props.item.tunnel}><Text>{" · "}</Text></If>
+                  <Text testID={`session-pull-${props.item.id}`} accessibilityLabel={pullRequestTitle(pull())} style={{ color: pullColor() }}>
+                    {`${pullRequestLabel(pull())}${pull().state ? ` ${pullRequestStateLabels[pull().state!]}` : ""}`}
+                  </Text>
+                </>
+              )}
+            </If>
+            <If when={relation()}>
+              <Text>{`${status().label || props.item.pullRequest || props.item.tunnel ? " · " : ""}${relation()}`}</Text>
+            </If>
+          </Text>
+        </If>
+      </View>
+      <Text style={{ fontSize: text.caption, color: palette().muted }}>{shortAge(props.item.createdAt)}</Text>
+    </>
+  );
+  const row = swipesRows
+    ? (
+      <SwipeRow leading={swipe().leading} trailing={swipe().trailing} open={props.swiped} onOpenChange={props.onSwipe} dense={props.compact}
+        background={props.compact ? palette().sidebar : palette().background} testID={`session-swipe-${props.item.id}`}>
+        <View testID={`session-row-${props.item.id}`} role="button" accessibilityLabel={props.item.title} accessibilityState={{ selected: props.selected }}
+          onPress={press} onLongPress={() => { props.onSwipe(false); menuOpen.set(true); }} style={rowStyle()} activeStyle={pressedStyle()} hoverStyle={hoveredStyle()}>
+          {body()}
+        </View>
+      </SwipeRow>
+    )
+    : (
+      <BaseButton testID={`session-row-${props.item.id}`} selected={props.selected} accessibilityLabel={props.item.title} onPress={press}
+        style={rowStyle()} activeStyle={pressedStyle()} hoverStyle={hoveredStyle()}>
+        {body()}
       </BaseButton>
+    );
+  return (
+    <RowMenu items={() => props.menu.items(props.item)} testID={`session-menu-${props.item.id}`} open={menuOpen()} onOpenChange={open => menuOpen.set(open)}
+      detached={swipesRows}>
+      {row}
     </RowMenu>
   );
 }
