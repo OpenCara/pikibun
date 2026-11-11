@@ -1,4 +1,4 @@
-import { Clipboard, computed, createAnimatedValue, effect, Image, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
+import { cleanup, Clipboard, computed, createAnimatedValue, effect, Image, platform, Scroll, signal, Text, untracked, View, windowSize, type JSX, type PanEvent, type ViewStyle } from "nsh";
 import { AlertDialog, Button as BaseButton, Collapsible, ContextMenu, Dialog, Menu, MenuItem, Popover, Sheet, Tooltip } from "nsh/base";
 import logo from "./assets/logo.png";
 import { Icon, type IconName } from "./icons";
@@ -469,18 +469,23 @@ export function DropdownMenu(props: { label: string; items: (MenuAction | "separ
   );
 }
 
-/** A row's right-click menu, which a finger held on the row opens as a sheet on touch screens. `open` and `onOpenChange` control it, to open it from
- * elsewhere too (a swiped row's More). */
+/**
+ * A row's right-click menu, which a finger held on the row opens as a sheet on touch screens. `open` and `onOpenChange` control it, to open it
+ * from elsewhere too (a swiped row's More). `detached`, it doesn't wrap the row: the row opens it itself (`open`, from its own long press).
+ * A context menu's trigger takes every touch on touch screens, so a row that slides (`SwipeRow`) needs its menu beside it.
+ */
 export function RowMenu(props: {
-  items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string; open?: boolean; onOpenChange?: (open: boolean) => void;
+  items: () => (MenuAction | "separator")[]; children: JSX.Element; testID?: string; open?: boolean; onOpenChange?: (open: boolean) => void; detached?: boolean;
 }) {
-  return (
-    <ContextMenu testID={props.testID} trigger={props.children} disabled={!props.items().some(item => item !== "separator")} offset={2}
+  const menu = (trigger: JSX.Element) => (
+    <ContextMenu testID={props.testID} trigger={trigger} disabled={!props.items().some(item => item !== "separator")} offset={2}
       open={props.open} onOpenChange={event => props.onOpenChange?.(event.open)}
       backdropStyle={{ backgroundColor: palette().backdrop }} popupStyle={menuPopupStyle()}>
       <MenuActions items={props.items()} />
     </ContextMenu>
   );
+  if (untracked(() => props.detached)) return <>{props.children}{menu(<View style={{ height: 0 }} />)}</>;
+  return menu(props.children);
 }
 
 /** An action behind a `SwipeRow`: a tile with its icon and label. */
@@ -494,11 +499,25 @@ export interface SwipeAction {
   onPress: () => void;
 }
 
-/** Whether rows slide sideways under a finger to show actions: on phones, tablets and the web, not on the desktops, whose mouse
- * opens the rows' right-click menus instead. */
+/** Whether rows slide sideways under a finger to show actions: on phones and tablets, and browsers on them; not on the desktops (and
+ * browsers in their idiom), whose mouse opens the rows' right-click menus instead. */
 export const swipesRows = !platform.desktop;
 
 const swipeTileWidth = 72;
+
+/** Points a second past which a let-go swipe is a flick. */
+const swipeFling = 400;
+
+/**
+ * Where a swiped row comes to rest, let go `from` points off its place (negative: left) at `velocity` points a second, with `leading` and
+ * `trailing` points of tiles: open on the side it was dragged to past half of them unless flicked back, or flicked toward short of that;
+ * shut otherwise.
+ */
+export function swipeRest(from: number, velocity: number, leading: number, trailing: number): number {
+  if (from < 0 && trailing > 0 && (from < -trailing / 2 ? velocity < swipeFling : velocity < -swipeFling)) return -trailing;
+  if (from > 0 && leading > 0 && (from > leading / 2 ? velocity > -swipeFling : velocity > swipeFling)) return leading;
+  return 0;
+}
 
 function swipeColors(tone: SwipeAction["tone"]): { background: string; text: string } {
   const p = palette();
@@ -526,8 +545,8 @@ function SwipeTile(props: { action: SwipeAction; dense?: boolean; onPress: () =>
  * A row that slides sideways under a finger to show actions behind it, as mail and chat apps' lists do: dragged left it shows
  * `trailing` at its right edge, dragged right `leading` at its left. Let go past half of them (or flung) it stays open, else it
  * springs back. A tile runs its action and closes the row. `open` and `onOpenChange` let a list keep one row open at a time:
- * setting `open` false closes it. The drag only takes horizontal moves, so the list around it still scrolls; on the desktops
- * (`swipesRows`) the row stays put.
+ * setting `open` false closes it. The drag only takes horizontal moves, so the list around it still scrolls. On the desktops
+ * (`swipesRows`) it is the row alone. A `ContextMenu` wrapping it takes its drags: give its row a `detached` `RowMenu`.
  */
 export function SwipeRow(props: {
   leading?: SwipeAction[]; trailing?: SwipeAction[]; open: boolean; onOpenChange: (open: boolean) => void;
@@ -538,21 +557,27 @@ export function SwipeRow(props: {
   testID?: string;
   children: JSX.Element;
 }) {
+  if (!swipesRows) return props.children;
   // The offset is where the row rests (0, the leading tiles' width, or minus the trailing ones'); a drag moves the value by its
   // translation, and a settle springs the value back to 0 with the offset at its new rest.
   const x = createAnimatedValue(0);
-  const revealed = signal(false);
+  // The tiles there are: both sides while a finger drags it (the drag's direction is only known where it moves, natively), the open side
+  // once it rests open, none once it has closed.
+  const shown = signal<"both" | "leading" | "trailing" | null>(null);
   let rest = 0;
   let moves = 0;
+  let hiding: ReturnType<typeof setTimeout> | undefined;
+  cleanup(() => clearTimeout(hiding));
   const leading = () => props.leading ?? [];
   const trailing = () => props.trailing ?? [];
   const leadingWidth = () => leading().length * swipeTileWidth;
   const trailingWidth = () => trailing().length * swipeTileWidth;
-  const enabled = () => swipesRows && leadingWidth() + trailingWidth() > 0;
+  const enabled = () => leadingWidth() + trailingWidth() > 0;
   // Past its tiles the row gives a little, then stops.
   const track = computed(() => {
     const low = -trailingWidth();
     const high = leadingWidth();
+    if (low === high) return x.interpolate({ inputRange: [0, 1], outputRange: [0, 0] });
     return x.interpolate({ inputRange: [low - 120, low, high, high + 120], outputRange: [low - 24, low, high, high + 24], extrapolate: "clamp" });
   });
   const leadingOpacity = x.interpolate({ inputRange: [0, 8], outputRange: [0, 1], extrapolate: "clamp" });
@@ -563,25 +588,25 @@ export function SwipeRow(props: {
     rest = target;
     x.setOffset(target);
     x.set(from - target);
-    if (target !== 0) revealed.set(true);
-    void x.spring(0, { stiffness: 380, damping: 38, velocity }).then(() => { if (move === moves && rest === 0) revealed.set(false); });
+    void x.spring(0, { stiffness: 380, damping: 38, velocity });
+    clearTimeout(hiding);
+    if (target > 0) shown.set("leading");
+    else if (target < 0) shown.set("trailing");
+    // Once it has sprung shut.
+    else hiding = setTimeout(() => { if (move === moves && rest === 0) shown.set(null); }, 450);
     if ((target !== 0) !== untracked(() => props.open)) props.onOpenChange(target !== 0);
   }
   function start() {
+    if (!enabled()) return;
     moves++;
+    clearTimeout(hiding);
     void x.stop();
-    revealed.set(true);
+    shown.set("both");
   }
   function end(event: PanEvent) {
+    if (!enabled()) return;
     const from = rest + event.translation.x;
-    const velocity = event.velocity.x;
-    const trailingOpen = -trailingWidth();
-    const leadingOpen = leadingWidth();
-    let target = 0;
-    if (event.cancelled) target = 0;
-    else if (from < 0 && trailingOpen < 0 && (from < trailingOpen / 2 ? velocity < 600 : velocity < -400)) target = trailingOpen;
-    else if (from > 0 && leadingOpen > 0 && (from > leadingOpen / 2 ? velocity > -600 : velocity > 400)) target = leadingOpen;
-    settle(target, from, velocity);
+    settle(event.cancelled ? 0 : swipeRest(from, event.velocity.x, leadingWidth(), trailingWidth()), from, event.velocity.x);
   }
   effect(() => {
     if (!props.open && untracked(() => rest !== 0)) settle(0, rest);
@@ -593,19 +618,18 @@ export function SwipeRow(props: {
 
   return (
     <View testID={props.testID} style={{ overflow: "hidden", borderRadius: radius.medium }}>
-      <If when={enabled() && revealed()}>
+      <If when={enabled() && shown()}>
         <View style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, flexDirection: "row", justifyContent: "space-between" }}>
           <View style={{ flexDirection: "row", opacity: leadingOpacity }}>
-            <Each of={leading()} key="index">{action => <SwipeTile action={action()} dense={props.dense} onPress={() => run(action())} />}</Each>
+            <Each of={shown() === "trailing" ? [] : leading()} key="index">{action => <SwipeTile action={action()} dense={props.dense} onPress={() => run(action())} />}</Each>
           </View>
           <View style={{ flexDirection: "row", opacity: trailingOpacity }}>
-            <Each of={trailing()} key="index">{action => <SwipeTile action={action()} dense={props.dense} onPress={() => run(action())} />}</Each>
+            <Each of={shown() === "leading" ? [] : trailing()} key="index">{action => <SwipeTile action={action()} dense={props.dense} onPress={() => run(action())} />}</Each>
           </View>
         </View>
       </If>
-      <View pan={enabled() ? { x } : undefined} panActivation={enabled() ? { activeOffsetX: 12, failOffsetY: 12 } : undefined}
-        onPanStart={enabled() ? start : undefined} onPanEnd={enabled() ? end : undefined}
-        style={{ backgroundColor: enabled() ? props.background : undefined, transform: [{ translateX: enabled() ? track() : 0 }] }}>
+      <View pan={enabled() ? { x } : undefined} panActivation={{ activeOffsetX: 12, failOffsetY: 12 }} onPanStart={start} onPanEnd={end}
+        style={{ backgroundColor: props.background, transform: [{ translateX: enabled() ? track() : 0 }] }}>
         {props.children}
       </View>
     </View>

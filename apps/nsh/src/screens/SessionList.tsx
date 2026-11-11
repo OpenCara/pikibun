@@ -8,7 +8,7 @@ import { session } from "../lib/auth";
 import type { Action } from "../lib/resource";
 import { Icon } from "../icons";
 import { palette, radius, text, type Tone } from "../theme";
-import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, StatusDot, SwipeRow, type MenuAction } from "../ui";
+import { Banner, Button, DropdownMenu, EmptyState, Feedback, IconButton, IdentityBadge, Loading, RowMenu, StatusDot, SwipeRow, swipesRows, type MenuAction } from "../ui";
 
 type Row =
   | { kind: "workspace"; key: string; id: string; title: string; count: number; canCreate: boolean }
@@ -219,11 +219,15 @@ function SessionRow(props: {
     return tone ? palette().tones[tone].text : palette().muted;
   };
   const details = () => Boolean(status().label) || Boolean(props.item.pullRequest) || Boolean(props.item.tunnel) || Boolean(relation());
+  // Where the row slides, a finger held on it opens its menu itself, and the menu is beside it: a context menu's trigger would take its
+  // drags. The row is a view rather than a button for that, as a button hears no long press.
   return (
-    <SwipeRow leading={swipe().leading} trailing={swipe().trailing} open={props.swiped} onOpenChange={props.onSwipe} dense={props.compact}
-      background={props.compact ? palette().sidebar : palette().background} testID={`session-swipe-${props.item.id}`}>
-      <RowMenu items={() => props.menu.items(props.item)} testID={`session-menu-${props.item.id}`} open={menuOpen()} onOpenChange={open => menuOpen.set(open)}>
-        <BaseButton testID={`session-row-${props.item.id}`} selected={props.selected} accessibilityLabel={props.item.title} onPress={press}
+    <RowMenu items={() => props.menu.items(props.item)} testID={`session-menu-${props.item.id}`} open={menuOpen()} onOpenChange={open => menuOpen.set(open)}
+      detached={swipesRows}>
+      <SwipeRow leading={swipe().leading} trailing={swipe().trailing} open={props.swiped} onOpenChange={props.onSwipe} dense={props.compact}
+        background={props.compact ? palette().sidebar : palette().background} testID={`session-swipe-${props.item.id}`}>
+        <View testID={`session-row-${props.item.id}`} role="button" accessibilityLabel={props.item.title} accessibilityState={{ selected: props.selected }}
+          onPress={press} onLongPress={swipesRows ? () => { props.onSwipe(false); menuOpen.set(true); } : undefined}
           style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: props.compact ? 34 : 44, paddingVertical: 6, paddingRight: 8,
             paddingLeft: 32 + props.depth * 12, borderRadius: radius.medium, backgroundColor: props.selected ? palette().selection : "transparent" }}
           activeStyle={{ backgroundColor: palette().selection }} hoverStyle={{ backgroundColor: props.selected ? palette().selection : palette().hover }}>
@@ -268,8 +272,8 @@ function SessionRow(props: {
             </If>
           </View>
           <Text style={{ fontSize: text.caption, color: palette().muted }}>{shortAge(props.item.createdAt)}</Text>
-        </BaseButton>
-      </RowMenu>
-    </SwipeRow>
+        </View>
+      </SwipeRow>
+    </RowMenu>
   );
 }
