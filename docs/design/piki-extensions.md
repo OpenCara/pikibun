@@ -492,8 +492,9 @@ of the host check each message before the agent sees it, and refuses those that 
    owner's, in Pi those from RPC clients and other extensions; its `audit` flag set to `all` audits every message.
 11. **Required by the host's owner.** Hosts guard themselves by requiring it of every session on them (host extensions
    rule 11), with the owner's settings: `model` (`provider/modelId`, from `ctx.modelRegistry`; the session's model,
-   `ctx.model`, when empty) and `policy` (the owner's own words, added to the auditor's instructions). A workspace can
-   add it too, for its own sessions.
+   `ctx.model`, when empty) and `policy` (the owner's own words, added to the auditor's instructions). Every workspace
+   has it too, turned off, among its default extensions (`defaultWorkspaceExtensions`): its owners and admins turn it on
+   for its own sessions.
 12. **One model call, the message as data.** The auditor gets fixed instructions (credentials, host files, the host's
    environment, exfiltration and getting around safeguards, the owner's policy; ordinary work allowed) and the message
    between markers with a random nonce, so the message can't close them, plus its images; a model that can't see images
@@ -560,6 +561,16 @@ fixes the review points it judges valid, then the merge.
     `merge-method` picks `github_merge`'s method. What it saw is kept in memory, per session: a restarted connector
     forgets the notes, never the flow, which every message's prompt restates.
 
+## The context files: piki:context-files
+
+`extensions/context-files/` ([host extensions](host-extensions.md#context-files-extensionscontext-files)) adds a
+project's `AGENTS.md` or `CLAUDE.md`, and other files the workspace names, to each message's system prompt. Built into
+the connector as `piki:context-files`, at the connector's version, a host needs nothing installed, and every workspace
+has it, turned off, among its default extensions beside the prompt audit; its owners and admins turn it on and set
+`context-files` and `context-max-chars` under **Edit**. Like the prompt audit it registers no tool, only
+`before_agent_start` and `tool_result`, so it isn't a workflow the add sheet offers: a workspace that removed it adds it
+again by its source.
+
 Later: waiting on GitLab and Azure DevOps reviews without polling (a `wait` for the forges' own read tools); a window
 kept by the session rather than the agent, so a long one survives the session closing (a scheduled prompt at its end).
 
@@ -572,6 +583,8 @@ kept by the session rather than the agent, so a long one survives the session cl
 | The command tool, its environment and output, in the sandbox or on the host | `apps/runner/src/extensions/piki/command.ts` |
 | The prompt audit, a Pi package of its own | `extensions/prompt-audit/` (`prompt-audit.ts`, `index.ts`, `package.json`); tests in `tests/prompt-audit.test.ts` |
 | The pull request flow, a Pi package of its own | `extensions/pr-flow/` (`pr-flow.ts`, `index.ts`, `package.json`); tests in `tests/pr-flow.test.ts` |
+| The context files, a Pi package of its own | `extensions/context-files/` (`context-files.ts`, `index.ts`, `package.json`); tests in `tests/context-files.test.ts` |
+| The default workspace extensions | `defaultWorkspaceExtensions` (`packages/shared/src/host-extensions.ts`); migrations sqlite/0049 and 0064 (postgres/0042 and 0057); tests in `tests/extensions.test.ts` |
 | Draft pull requests and marking them ready | `apps/server/src/authority/push/targets.ts` (`openPullRequest`), `broker.ts`; `PullRequestRequest.draft` (types.ts); tests in `tests/pull-request-drafts.test.ts` |
 | The browser: the tool's request, card and report | `apps/runner/src/browser-command.ts`, `packages/shared/src/browser.ts`; `session.ts` (the `browser` tool, `browserOutcome`); tests in `tests/browser-command.test.ts`, `tests/runner-program-tools.test.ts` |
 | The browser's driver | `apps/runner/src/sandbox-python/browser.py` (embedded as `BROWSER_DRIVER`) |
